@@ -344,6 +344,11 @@ val androidModule = module {
         setOf(get<LastFmScrobbler>(), get<ListenBrainzScrobbler>(), get<LibreFmScrobbler>())
     }
 
+    // Loves push (issue #125) — orchestrates per-service loveTrack
+    // dispatch + idempotency cache for both single-track (live toggle)
+    // and bulk backfill paths.
+    singleOf(::LovesPushService)
+
     // ── Metadata ─────────────────────────────────────────────────────
 
     // MetadataService is constructed directly from the shared cascading
@@ -437,6 +442,7 @@ val androidModule = module {
     // the shared-side signature isn't tightly coupled to MbidEnrichmentService.
     single {
         val mbidEnrichment: com.parachord.android.data.metadata.MbidEnrichmentService = get()
+        val lovesPush: com.parachord.android.playback.LovesPushService = get()
         com.parachord.shared.repository.LibraryRepository(
             trackDao = get(),
             albumDao = get(),
@@ -458,6 +464,11 @@ val androidModule = module {
                     }
                 )
             },
+            // Issue #125 — fire love push when the user adds a track to
+            // their collection AND has the per-service toggle enabled.
+            // LovesPushService is fire-and-forget internally; this lambda
+            // returns immediately.
+            pushLovedTrack = { track -> lovesPush.pushLoved(track) },
         )
     }
     // ChartsRepository takes `lastFmApiKey` as a constructor parameter

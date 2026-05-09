@@ -79,6 +79,34 @@ class LastFmScrobbler constructor(
     }
 
     /**
+     * Push a love (track.love) to Last.fm. Issue #125 — opt-in cross-service
+     * love sync. One-way: no unlove. Throws on auth/network/API failures so
+     * the caller (LovesPushService) can decide whether to write the
+     * idempotency key.
+     *
+     * Last.fm `track.love` requires `artist` + `track` + session-key auth.
+     * `mbid` is optional and improves match accuracy on Last.fm's side
+     * (helps disambiguate covers / same-name tracks).
+     */
+    override suspend fun loveTrack(track: TrackEntity) {
+        val sessionKey = settingsStore.getLastFmSessionKey()
+            ?: throw IllegalStateException("Last.fm not authenticated (no session key)")
+        val params = buildMap {
+            put("method", "track.love")
+            put("artist", track.artist)
+            put("track", track.title)
+            put("api_key", BuildConfig.LASTFM_API_KEY)
+            put("sk", sessionKey)
+            track.recordingMbid?.let { put("mbid", it) }
+        }
+        val success = postSigned(params, API_URL, BuildConfig.LASTFM_SHARED_SECRET)
+        if (!success) {
+            throw RuntimeException("Last.fm track.love returned API error for '${track.artist} - ${track.title}'")
+        }
+        Log.d(TAG, "Loved on Last.fm: ${track.artist} — ${track.title}")
+    }
+
+    /**
      * POST signed request to a Last.fm-compatible API.
      * Signature = MD5 of sorted key+value pairs (excluding format) + shared secret.
      *

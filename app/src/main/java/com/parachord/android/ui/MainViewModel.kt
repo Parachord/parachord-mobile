@@ -180,7 +180,7 @@ class MainViewModel constructor(
             if (isCurrentTrackFavorited.value) {
                 libraryRepository.deleteTrackWithSync(track)
             } else {
-                libraryRepository.addTrack(track)
+                libraryRepository.addToCollection(track)
             }
         }
     }

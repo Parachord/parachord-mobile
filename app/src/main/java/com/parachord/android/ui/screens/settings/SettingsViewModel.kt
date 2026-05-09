@@ -8,11 +8,14 @@ import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.android.data.scanner.MediaScanner
 import com.parachord.android.data.scanner.ScanProgress
 import com.parachord.android.data.store.SettingsStore
+import com.parachord.android.data.repository.LibraryRepository
+import com.parachord.android.playback.LovesPushService
 import com.parachord.android.playback.QueuePersistence
 import com.parachord.android.playback.handlers.MusicKitWebBridge
 import com.parachord.android.playback.scrobbler.LibreFmScrobbler
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -28,6 +31,8 @@ class SettingsViewModel constructor(
     private val mediaScanner: MediaScanner,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
     private val pluginSyncService: com.parachord.shared.plugin.PluginSyncService,
+    private val lovesPushService: LovesPushService,
+    private val libraryRepository: LibraryRepository,
 ) : ViewModel() {
 
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
@@ -463,5 +468,46 @@ class SettingsViewModel constructor(
 
     fun setConcertLocation(lat: Double, lon: Double, city: String) {
         viewModelScope.launch { settingsStore.setConcertLocation(lat, lon, city) }
+    }
+
+    // --- Loved-tracks push (issue #125) ---
+
+    /**
+     * Per-service love-push toggle state. UI subscribes via
+     * `collectAsStateWithLifecycle()` and reflects flips immediately.
+     */
+    val lovePushEnabled: StateFlow<Map<String, Boolean>> =
+        settingsStore.getLovePushEnabledFlow()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** Backfill progress state for the Settings UI's per-service Backfill button. */
+    val loveBackfillState: StateFlow<LovesPushService.BackfillState> =
+        lovesPushService.backfillState
+
+    /** Toggle live love-push for [service] ("lastfm" / "listenbrainz"). */
+    fun setLovePushEnabled(service: String, enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setLovePushEnabled(service, enabled) }
+    }
+
+    /**
+     * Kick off the bulk backfill for [service]. Snapshots the current
+     * collection-tracks list once at the call point and hands it to
+     * `LovesPushService.runBackfill`. Service paces requests at 1 req/sec
+     * + writes idempotency keys per-track so resume-on-crash works.
+     */
+    fun runLoveBackfill(service: String) {
+        viewModelScope.launch {
+            try {
+                val tracks = libraryRepository.getAllTracks().first()
+                lovesPushService.runBackfill(service, tracks)
+            } catch (e: Exception) {
+                Log.w("SettingsVM", "Love backfill for $service failed: ${e.message}")
+            }
+        }
+    }
+
+    /** Reset the StateFlow → Idle (after the user has seen the Done summary). */
+    fun dismissLoveBackfillState() {
+        lovesPushService.resetBackfillState()
     }
 }

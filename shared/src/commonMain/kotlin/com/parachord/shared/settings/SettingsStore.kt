@@ -13,6 +13,12 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * KMP preferences store — successor to the desktop app's electron-store.
@@ -76,6 +82,20 @@ class SettingsStore(
         const val CONCERT_RADIUS = "concert_radius_miles"
         const val LAST_PLUGIN_SYNC = "last_plugin_sync_timestamp"
         const val DISABLED_PLUGINS = "disabled_plugins"
+
+        /** Per-service opt-in toggle for the loved-tracks push. Mirrors
+         *  desktop's `scrobbler_love_push_enabled` shape from the design
+         *  doc (`docs/plans/2026-05-03-loved-tracks-scrobbler-push-design.md`).
+         *  CSV format `service:bool,service:bool` (e.g. `lastfm:true,listenbrainz:false`).
+         *  Default for unset service = false (per desktop's "default OFF"). */
+        const val LOVE_PUSH_ENABLED = "scrobbler_love_push_enabled"
+
+        /** Idempotency cache: `trackId -> {service: epochMs}` of completed
+         *  love pushes. JSON-encoded `{ "<trackId>": { "lastfm": 1234, "listenbrainz": 1235 } }`.
+         *  Survives crashes mid-backfill (each successful push writes its
+         *  key before moving on, so resume picks up where it left off).
+         *  Mirrors desktop's `love_pushed_keys`. */
+        const val LOVE_PUSHED_KEYS = "love_pushed_keys"
 
         // Sync key family (Phase 9B Stage 2 — already KvStore-resident)
         const val SYNC_ENABLED = "sync_enabled"
@@ -842,6 +862,96 @@ class SettingsStore(
         val current = getDisabledPlugins().toMutableSet()
         if (enabled) current.remove(pluginId) else current.add(pluginId)
         kv.setString(DISABLED_PLUGINS, current.joinToString(","))
+    }
+
+    // ── Loved-tracks push (issue #125) ────────────────────────────────
+
+    /**
+     * Return the per-service love-push enabled map. Unrecognized keys are
+     * preserved (forward-compat) but only `lastfm` / `listenbrainz` are
+     * meaningful today. Default for any unset service = `false` (defaults
+     * OFF per desktop's design doc).
+     */
+    suspend fun getLovePushEnabled(): Map<String, Boolean> {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(LOVE_PUSH_ENABLED) ?: return emptyMap()
+        if (raw.isBlank()) return emptyMap()
+        return raw.split(",").mapNotNull { entry ->
+            val parts = entry.split(":")
+            if (parts.size != 2) return@mapNotNull null
+            val service = parts[0].trim().takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val flag = parts[1].trim().toBooleanStrictOrNull() ?: return@mapNotNull null
+            service to flag
+        }.toMap()
+    }
+
+    /** Flow variant for reactive Settings UI. */
+    fun getLovePushEnabledFlow(): Flow<Map<String, Boolean>> = migratedFlow().flatMapConcat {
+        kv.observeString(LOVE_PUSH_ENABLED, default = "").map { raw ->
+            if (raw.isBlank()) emptyMap()
+            else raw.split(",").mapNotNull { entry ->
+                val parts = entry.split(":")
+                if (parts.size != 2) return@mapNotNull null
+                val service = parts[0].trim().takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val flag = parts[1].trim().toBooleanStrictOrNull() ?: return@mapNotNull null
+                service to flag
+            }.toMap()
+        }
+    }
+
+    /** Set the toggle for a single service; preserves other services' state. */
+    suspend fun setLovePushEnabled(service: String, enabled: Boolean) {
+        ensureMigrated()
+        val current = getLovePushEnabled().toMutableMap()
+        current[service] = enabled
+        kv.setString(
+            LOVE_PUSH_ENABLED,
+            current.entries.joinToString(",") { (s, b) -> "$s:$b" },
+        )
+    }
+
+    /**
+     * Idempotency cache: `trackId -> {service: epochMs}` of completed pushes.
+     * JSON-encoded so per-service timestamps round-trip cleanly.
+     *
+     * Format:
+     * ```json
+     * { "<trackId>": { "lastfm": 1234567890123, "listenbrainz": 1234567891000 } }
+     * ```
+     *
+     * Returns an empty map on no entry / parse failure (corrupted prefs
+     * shouldn't block the love-push flow). Reads are infrequent — the
+     * service caches in-memory after the first read.
+     */
+    suspend fun getLovePushedKeys(): Map<String, Map<String, Long>> {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(LOVE_PUSHED_KEYS) ?: return emptyMap()
+        if (raw.isBlank()) return emptyMap()
+        return try {
+            val element = kotlinx.serialization.json.Json.parseToJsonElement(raw).jsonObject
+            element.mapValues { (_, inner) ->
+                inner.jsonObject.mapValues { (_, ts) ->
+                    ts.jsonPrimitive.long
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    /** Persist the idempotency map. Called per-track after each successful push. */
+    suspend fun setLovePushedKeys(map: Map<String, Map<String, Long>>) {
+        ensureMigrated()
+        val obj = kotlinx.serialization.json.buildJsonObject {
+            for ((trackId, services) in map) {
+                putJsonObject(trackId) {
+                    for ((service, ts) in services) {
+                        put(service, ts)
+                    }
+                }
+            }
+        }
+        kv.setString(LOVE_PUSHED_KEYS, obj.toString())
     }
 }
 

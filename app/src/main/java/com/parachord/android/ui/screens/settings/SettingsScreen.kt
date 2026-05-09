@@ -662,6 +662,12 @@ private fun PlugInsTab(
         item { Spacer(modifier = Modifier.height(32.dp)) }
     }
 
+    // ── Loved-tracks push state (issue #125) ─────────────────────────
+    // Sourced from the local SettingsViewModel reference (line above) —
+    // no need to plumb props all the way down from SettingsScreen.
+    val lovePushEnabled by settingsViewModel.lovePushEnabled.collectAsStateWithLifecycle()
+    val loveBackfillState by settingsViewModel.loveBackfillState.collectAsStateWithLifecycle()
+
     // Config bottom sheet
     selectedPlugin?.let { plugin ->
         PluginConfigSheet(
@@ -719,6 +725,11 @@ private fun PlugInsTab(
             onSongkickDisconnect = { settingsViewModel.clearPluginApiKey("songkick") },
             concertLocation = concertLocation,
             onConcertLocationSelected = onConcertLocationSelected,
+            lovePushEnabled = lovePushEnabled,
+            loveBackfillState = loveBackfillState,
+            onLovePushToggle = { service, enabled -> settingsViewModel.setLovePushEnabled(service, enabled) },
+            onLoveBackfillClick = { service -> settingsViewModel.runLoveBackfill(service) },
+            onLoveBackfillDismiss = { settingsViewModel.dismissLoveBackfillState() },
         )
     }
 }
@@ -978,6 +989,12 @@ private fun PluginConfigSheet(
     onSongkickDisconnect: () -> Unit = {},
     concertLocation: com.parachord.android.data.store.ConcertLocation = com.parachord.android.data.store.ConcertLocation(null, null, null, 50),
     onConcertLocationSelected: (Double, Double, String) -> Unit = { _, _, _ -> },
+    lovePushEnabled: Map<String, Boolean> = emptyMap(),
+    loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState =
+        com.parachord.android.playback.LovesPushService.BackfillState.Idle,
+    onLovePushToggle: (service: String, enabled: Boolean) -> Unit = { _, _ -> },
+    onLoveBackfillClick: (service: String) -> Unit = {},
+    onLoveBackfillDismiss: () -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -1105,7 +1122,17 @@ private fun PluginConfigSheet(
                     scanProgress = scanProgress,
                     onScanLocalFiles = onScanLocalFiles,
                 )
-                "lastfm" -> LastFmConfig(isConnected, onToggleConnection, scrobbling, onScrobblingChanged)
+                "lastfm" -> LastFmConfig(
+                    isConnected = isConnected,
+                    onToggle = onToggleConnection,
+                    scrobbling = scrobbling,
+                    onScrobblingChanged = onScrobblingChanged,
+                    lovePushEnabled = lovePushEnabled,
+                    loveBackfillState = loveBackfillState,
+                    onLovePushToggle = onLovePushToggle,
+                    onLoveBackfillClick = onLoveBackfillClick,
+                    onLoveBackfillDismiss = onLoveBackfillDismiss,
+                )
                 "listenbrainz" -> ListenBrainzConfig(
                     isConnected = isConnected,
                     onTokenSubmit = onListenBrainzTokenSubmit,
@@ -1113,6 +1140,11 @@ private fun PluginConfigSheet(
                     authError = listenBrainzAuthError,
                     scrobbling = scrobbling,
                     onScrobblingChanged = onScrobblingChanged,
+                    lovePushEnabled = lovePushEnabled,
+                    loveBackfillState = loveBackfillState,
+                    onLovePushToggle = onLovePushToggle,
+                    onLoveBackfillClick = onLoveBackfillClick,
+                    onLoveBackfillDismiss = onLoveBackfillDismiss,
                 )
                 "librefm" -> LibreFmConfig(
                     isConnected = isConnected,
@@ -1985,6 +2017,11 @@ private fun LastFmConfig(
     onToggle: () -> Unit,
     scrobbling: Boolean,
     onScrobblingChanged: (Boolean) -> Unit,
+    lovePushEnabled: Map<String, Boolean>,
+    loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState,
+    onLovePushToggle: (service: String, enabled: Boolean) -> Unit,
+    onLoveBackfillClick: (service: String) -> Unit,
+    onLoveBackfillDismiss: () -> Unit,
 ) {
     Spacer(modifier = Modifier.height(16.dp))
     HorizontalDivider()
@@ -2055,6 +2092,17 @@ private fun LastFmConfig(
             enabled = isConnected,
         )
     }
+
+    LovePushControls(
+        serviceId = "lastfm",
+        serviceLabel = "Last.fm",
+        isConnected = isConnected,
+        lovePushEnabled = lovePushEnabled,
+        backfillState = loveBackfillState,
+        onLovePushToggle = onLovePushToggle,
+        onBackfillClick = onLoveBackfillClick,
+        onBackfillDismiss = onLoveBackfillDismiss,
+    )
 }
 
 // ── ListenBrainz Config ────────────────────────────────────────────
@@ -2067,6 +2115,11 @@ private fun ListenBrainzConfig(
     authError: String? = null,
     scrobbling: Boolean,
     onScrobblingChanged: (Boolean) -> Unit,
+    lovePushEnabled: Map<String, Boolean>,
+    loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState,
+    onLovePushToggle: (service: String, enabled: Boolean) -> Unit,
+    onLoveBackfillClick: (service: String) -> Unit,
+    onLoveBackfillDismiss: () -> Unit,
 ) {
     Spacer(modifier = Modifier.height(16.dp))
     HorizontalDivider()
@@ -2182,6 +2235,125 @@ private fun ListenBrainzConfig(
             onCheckedChange = onScrobblingChanged,
             enabled = isConnected,
         )
+    }
+
+    LovePushControls(
+        serviceId = "listenbrainz",
+        serviceLabel = "ListenBrainz",
+        isConnected = isConnected,
+        lovePushEnabled = lovePushEnabled,
+        backfillState = loveBackfillState,
+        onLovePushToggle = onLovePushToggle,
+        onBackfillClick = onLoveBackfillClick,
+        onBackfillDismiss = onLoveBackfillDismiss,
+    )
+}
+
+// ── Love-Push Controls (issue #125) ────────────────────────────────
+
+/**
+ * Per-service "love-push" toggle row + manual backfill button. Used by
+ * both [LastFmConfig] and [ListenBrainzConfig] (Libre.fm has no
+ * equivalent endpoint per desktop's design doc and is excluded).
+ *
+ * Both rows are disabled until the service is connected (`isConnected =
+ * true`) — flipping them earlier would write a Settings entry that goes
+ * nowhere, the toggle goes back to false on the first push attempt
+ * because the scrobbler returns `isEnabled() = false`.
+ *
+ * Backfill state is shared across services (a single
+ * [LovesPushService.BackfillState] StateFlow) — running one service's
+ * backfill grays out the OTHER service's button mid-run, since the
+ * service serializes with a 1-req/sec pacing loop. Done state shows a
+ * compact summary line "Pushed N, skipped M, failed K" + a Dismiss
+ * button that resets to Idle.
+ */
+@Composable
+private fun LovePushControls(
+    serviceId: String,
+    serviceLabel: String,
+    isConnected: Boolean,
+    lovePushEnabled: Map<String, Boolean>,
+    backfillState: com.parachord.android.playback.LovesPushService.BackfillState,
+    onLovePushToggle: (service: String, enabled: Boolean) -> Unit,
+    onBackfillClick: (service: String) -> Unit,
+    onBackfillDismiss: () -> Unit,
+) {
+    val pushOn = lovePushEnabled[serviceId] == true
+    Spacer(modifier = Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(modifier = Modifier.height(16.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Push loved tracks to $serviceLabel",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = "When you favorite a track, send it as a love to $serviceLabel.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(
+            checked = pushOn,
+            onCheckedChange = { onLovePushToggle(serviceId, it) },
+            enabled = isConnected,
+        )
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    val running = backfillState as?
+        com.parachord.android.playback.LovesPushService.BackfillState.Running
+    val done = backfillState as?
+        com.parachord.android.playback.LovesPushService.BackfillState.Done
+    val isThisServiceRunning = running?.service == serviceId
+    val isThisServiceDone = done?.service == serviceId
+    val isOtherServiceRunning = running != null && running.service != serviceId
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Backfill loved tracks → $serviceLabel",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = when {
+                    isThisServiceRunning ->
+                        // running != null is implied by isThisServiceRunning (which is
+                        // running?.service == serviceId) but the compiler can't infer
+                        // it through the cast; the safe-call here keeps it null-safe.
+                        running?.let { "Pushing… ${it.pushed + it.skipped + it.failed} / ${it.total}" } ?: ""
+                    isThisServiceDone ->
+                        done?.let { "Pushed ${it.pushed}, skipped ${it.skipped}, failed ${it.failed}." } ?: ""
+                    else ->
+                        "One-time push of every track in your collection. Existing pushes are skipped via the per-track cache."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (isThisServiceDone) {
+            TextButton(onClick = onBackfillDismiss) {
+                Text("Dismiss")
+            }
+        } else {
+            TextButton(
+                onClick = { onBackfillClick(serviceId) },
+                enabled = isConnected && !isThisServiceRunning && !isOtherServiceRunning,
+            ) {
+                Text(if (isThisServiceRunning) "Running…" else "Backfill")
+            }
+        }
     }
 }
 

@@ -146,7 +146,7 @@ class WeeklyPlaylistViewModel constructor(
 
     fun addToCollection(track: TrackEntity) {
         viewModelScope.launch {
-            libraryRepository.addTrack(track)
+            libraryRepository.addToCollection(track)
         }
     }
 
@@ -155,7 +155,7 @@ class WeeklyPlaylistViewModel constructor(
             if (isInCollection) {
                 libraryRepository.deleteTrack(track)
             } else {
-                libraryRepository.addTrack(track)
+                libraryRepository.addToCollection(track)
             }
         }
     }

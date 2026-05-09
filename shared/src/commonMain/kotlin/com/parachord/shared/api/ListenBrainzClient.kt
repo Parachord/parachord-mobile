@@ -6,15 +6,18 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.put
 
 /**
  * ListenBrainz API client. Cross-platform (commonMain).
@@ -113,6 +116,52 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to unfollow $username", e)
             false
+        }
+    }
+
+    /**
+     * Submit a recording-level feedback ("love" / "hate" / "neutral") to LB.
+     *
+     * Used by the loved-tracks push (issue #125): when the user adds a track
+     * to their Parachord collection AND the LB push toggle is on, we POST
+     * `{ recording_mbid, score: 1 }` to set the love. `score` per LB API:
+     *   1 = love, -1 = hate, 0 = clear/neutral.
+     *
+     * Caller is responsible for ensuring `recordingMbid` is a valid 36-char
+     * UUID (the desktop's `loveTrack` validates `track.mbid` against
+     * `^[a-f0-9-]{36}$/i` before calling this — mirror that check here in
+     * the calling scrobbler since LB returns a 400 for malformed UUIDs and
+     * we don't want to retry those).
+     *
+     * Throws on hard errors (auth invalid, rate-limited 5xx). Callers in
+     * the love-push path catch and skip the per-track push, leaving the
+     * idempotency cache untouched so the next sync gets another shot.
+     */
+    suspend fun submitRecordingFeedback(
+        recordingMbid: String,
+        score: Int,
+        token: String,
+    ): Boolean {
+        return try {
+            val response = httpClient.post("$BASE_URL/1/feedback/recording-feedback") {
+                header("Authorization", "Token $token")
+                contentType(io.ktor.http.ContentType.Application.Json)
+                setBody(
+                    kotlinx.serialization.json.buildJsonObject {
+                        put("recording_mbid", recordingMbid)
+                        put("score", score)
+                    },
+                )
+            }
+            if (!response.status.isSuccess()) {
+                Log.w(TAG, "submitRecordingFeedback($recordingMbid, score=$score) → HTTP ${response.status.value}")
+            }
+            response.status.isSuccess()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "submitRecordingFeedback failed for $recordingMbid: ${e.message}")
+            throw e
         }
     }
 

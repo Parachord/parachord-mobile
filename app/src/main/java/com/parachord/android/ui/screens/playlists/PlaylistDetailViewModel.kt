@@ -249,7 +249,7 @@ class PlaylistDetailViewModel constructor(
 
     fun addToCollection(track: TrackEntity) {
         viewModelScope.launch {
-            libraryRepository.addTrack(track)
+            libraryRepository.addToCollection(track)
         }
     }
 

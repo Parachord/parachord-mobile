@@ -43,6 +43,16 @@ class LibraryRepository(
     private val mbidEnrichTrack: (trackId: String, artist: String, title: String) -> Unit,
     /** Fire-and-forget MBID enrichment for a batch of tracks. */
     private val mbidEnrichBatch: (tracks: List<Track>) -> Unit,
+    /**
+     * Fire-and-forget love-push trigger (issue #125). Called from
+     * [addToCollection] — i.e. only when the user explicitly toggles a
+     * track into their collection — NOT from the raw [addTrack] path
+     * (sync, MediaScanner local-file scan, etc. shouldn't auto-love).
+     *
+     * Wired to `LovesPushService.pushLoved` in `AndroidModule`. Default
+     * no-op so non-Android consumers and tests don't need to provide one.
+     */
+    private val pushLovedTrack: (Track) -> Unit = {},
 ) {
 
     /**
@@ -96,6 +106,23 @@ class LibraryRepository(
         // Background MBID enrichment
         mbidEnrichTrack(track.id, track.artist, track.title)
     }
+
+    /**
+     * User-intent collection add: writes the track AND fires the love-push
+     * (when enabled in Settings) — issue #125.
+     *
+     * **Use this from any user-driven "add to collection" / "love" action**
+     * (heart toggle, ViewModel `addToCollection`, etc). DON'T use it from
+     * sync paths, MediaScanner local-file scans, or any automated import —
+     * those should call [addTrack] directly so they don't generate phantom
+     * loves on tracks the user never touched.
+     */
+    suspend fun addToCollection(track: Track) {
+        addTrack(track)
+        // Fire-and-forget; LovesPushService handles its own coroutine + idempotency.
+        pushLovedTrack(track)
+    }
+
     suspend fun addTracks(tracks: List<Track>) {
         trackDao.insertAll(tracks)
         // Background MBID enrichment for batch imports
