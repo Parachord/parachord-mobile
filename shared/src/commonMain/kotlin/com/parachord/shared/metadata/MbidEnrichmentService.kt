@@ -130,6 +130,26 @@ class MbidEnrichmentService(
     }
 
     /**
+     * Look up a recording MBID from the cache or via the mapper.
+     * Returns null if not found at the mapper's confidence threshold.
+     * Does not persist to Room (no trackId context).
+     *
+     * Used by [com.parachord.android.bridge.NativeBridge.resolveMbidForLove]
+     * to back the JS bridge's `window.resolveMbidForLove(track)` Promise.
+     * The achordion plugin's `resolveMbid(track)` fallback calls this when
+     * `track.mbid` is absent. Same-shape mirror of [getArtistMbid].
+     */
+    suspend fun getRecordingMbid(artistName: String, recordingName: String): String? {
+        val key = cacheKey(artistName, recordingName)
+        val cached = getCachedEntry(key)
+        if (cached != null) return cached.recordingMbid
+
+        val result = mapperLookup(artistName, recordingName) ?: return null
+        putCache(key, result)
+        return result.recordingMbid
+    }
+
+    /**
      * Check if we have a cached artist MBID for any track by this artist.
      * Faster than a full mapper call — scans the disk cache for a match.
      */

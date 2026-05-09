@@ -6,10 +6,15 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.parachord.android.data.metadata.MbidEnrichmentService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -17,19 +22,30 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 private const val TAG = "NativeBridge"
 
+/** 36-char MusicBrainz Identifier (8-4-4-4-12 hex with dashes). Plugins
+ *  validate `track.mbid` against this same shape; we mirror the regex
+ *  here so [NativeBridge.resolveMbidForLove] can short-circuit when JS
+ *  already has a valid MBID. */
+private val MBID_PATTERN = Regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\$", RegexOption.IGNORE_CASE)
+
 /**
  * Native module bindings exposed to JavaScript via @JavascriptInterface.
  *
- * Provides fetch, storage, and logging to the JS runtime so .axe resolver
- * plugins and AI providers can call back into native code.
+ * Provides fetch, storage, logging, and MBID resolution to the JS
+ * runtime so .axe resolver plugins, AI providers, and the achordion
+ * playback-telemetry plugin can call back into native code.
  *
  * These methods are called synchronously from the WebView thread —
  * they must return without suspending (hence [runBlocking] for storage reads).
+ * Long-running calls (HTTP fetches, MBID lookups) use callback patterns
+ * keyed by a JS-generated id, with the result delivered back via
+ * `WebView.evaluateJavascript` on the main thread.
  */
 class NativeBridge(
     private val httpClient: OkHttpClient,
     private val scope: CoroutineScope,
     private val dataStore: DataStore<Preferences>,
+    private val mbidEnrichment: MbidEnrichmentService,
 ) {
     /** WebView reference for async fetch callbacks. Set by JsBridge after creation. */
     var webView: android.webkit.WebView? = null
@@ -157,6 +173,61 @@ class NativeBridge(
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 webView?.evaluateJavascript(
                     "window.__fetchCallbacks && window.__fetchCallbacks['$callbackId'] && window.__fetchCallbacks['$callbackId']('$escapedEnvelope')",
+                    null,
+                )
+            }
+        }
+    }
+
+    // ── MBID Resolver (for window.resolveMbidForLove) ─────────────────
+
+    /**
+     * Async MBID lookup. JS calls this with a `callbackId` (registered
+     * in `window.__resolveMbidCallbacks`) and a `trackJson` containing
+     * at minimum `{ title, artist, mbid? }`. We dispatch to a coroutine
+     * that:
+     *
+     * 1. If `track.mbid` is already a 36-char UUID, returns it directly.
+     * 2. Otherwise, calls [MbidEnrichmentService.getRecordingMbid] which
+     *    hits the disk cache first, then ListenBrainz's MBID Mapper at
+     *    its confidence threshold.
+     * 3. JS-callbacks the result (or null) on the main thread via
+     *    `window.__resolveMbidCallbacks[callbackId](mbid)`.
+     *
+     * Used by the achordion plugin's `resolveMbid(track)` fallback when
+     * `track.mbid` isn't present. Without this surface, the plugin
+     * silently skips submission for any track lacking an upstream MBID.
+     *
+     * Pattern mirrors [fetchAsync] — the same callback-id-keyed harness.
+     */
+    @JavascriptInterface
+    fun resolveMbidForLove(callbackId: String, trackJson: String) {
+        scope.launch {
+            val mbid = try {
+                val parsed = Json.parseToJsonElement(trackJson).jsonObject
+                val existingMbid = parsed["mbid"]?.jsonPrimitive?.contentOrNull
+                if (existingMbid != null && MBID_PATTERN.matches(existingMbid)) {
+                    existingMbid
+                } else {
+                    val title = parsed["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    val artist = parsed["artist"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                    if (title != null && artist != null) {
+                        mbidEnrichment.getRecordingMbid(artist, title)
+                    } else {
+                        null
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "resolveMbidForLove($callbackId) failed: ${e.message}")
+                null
+            }
+
+            // Deliver result back to JS on the main thread. Pass either the
+            // MBID string or `null` (literal — JS treats it as a null arg).
+            val payload = if (mbid != null) "'${mbid.replace("'", "\\'")}'" else "null"
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                webView?.evaluateJavascript(
+                    "window.__resolveMbidCallbacks && window.__resolveMbidCallbacks['$callbackId'] && window.__resolveMbidCallbacks['$callbackId']($payload)",
                     null,
                 )
             }

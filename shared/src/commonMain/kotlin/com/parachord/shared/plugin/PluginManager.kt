@@ -150,6 +150,35 @@ class PluginManager constructor(
             val hidden = pluginInfos.filter { it.capabilities["mobile"] == false }.map { it.id }
             Log.d(TAG, "Hidden ${hidden.size} plugins not supported on mobile: $hidden")
         }
+
+        // Invoke init() on plugins that need it. Per desktop CLAUDE.md
+        // `## Achordion Pre-resolution Plugin`, plugins with the
+        // `playbackTelemetry: true` capability self-register with
+        // `window.scrobbleManager` inside their `init()` function — without
+        // this call, they're loaded into the resolver-loader's registry but
+        // never run, so dispatch to JS plugins from `ScrobbleManager.kt`
+        // hits an empty plugin list. Mirrors desktop's capability-filtered
+        // initResolver() invocation in `initResolvers()` (the
+        // withGenerate/withChat/withConcerts pattern).
+        //
+        // Resolver-side native-first plugins (spotify, applemusic, etc.)
+        // intentionally don't init their .axe form — Android calls them via
+        // native Kotlin paths. AI plugin .axe init isn't needed either
+        // (native ChatGPT/Claude/Gemini providers handle the calls).
+        // PlaybackTelemetry plugins like achordion are the load-bearing
+        // case: they MUST init to register their hooks.
+        for (info in platformFiltered) {
+            if (info.capabilities["playbackTelemetry"] == true) {
+                try {
+                    jsRuntime.evaluate(
+                        "window.__resolverLoader && window.__resolverLoader.initResolver('${info.id}', {})",
+                    )
+                    Log.d(TAG, "Initialized playback-telemetry plugin: ${info.id}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to init plugin '${info.id}': ${e.message}")
+                }
+            }
+        }
     }
 
     private data class PluginEntry(val id: String, val version: String, val axeJson: String)

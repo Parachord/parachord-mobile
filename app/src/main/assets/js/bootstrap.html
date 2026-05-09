@@ -93,6 +93,135 @@
         set: function(key, value) { NativeBridge.storageSet('plugin._global.' + key, value); },
     };
 
+    // ── Client identifier ────────────────────────────────────────────
+    // Set BEFORE plugin init runs so plugins can read it for client-
+    // distinguishing telemetry headers. See parachord-plugins#3 — the
+    // achordion plugin is being updated to send `X-Parachord-Client:
+    // <window.__parachordClient>` on every fetch so Achordion's server
+    // can split metrics across desktop / android / future-ios.
+    window.__parachordClient = 'android';
+
+    // ── ScrobbleManager registry ─────────────────────────────────────
+    // Public, stable contract documented in desktop CLAUDE.md
+    // `## Scrobbling: inline core, plugin contract for the rest`
+    // (L712-754). Plugins call `registerPlugin({id, isEnabled,
+    // updateNowPlaying, scrobble})` to opt in to playback-telemetry
+    // dispatch. The achordion plugin is the canonical consumer; future
+    // additive write-targets (Maloja, custom analytics) use the same
+    // surface.
+    //
+    // Native dispatch path: `ScrobbleManager.kt` builds a desktop-
+    // shaped track JSON and calls
+    // `__scrobbleManagerDispatch('updateNowPlaying' | 'scrobble', json)`
+    // which iterates registered plugins, awaits `isEnabled()`, then
+    // calls the corresponding hook. Errors per-plugin are logged via
+    // `console.warn` and do not break the loop.
+    //
+    // Inherited filter from desktop scrobbleManager
+    // (scrobbler-loader.js:75): tracks with `duration < 30s` are
+    // excluded from BOTH hooks. Mirror that here so a 25s ambient
+    // interlude with a verified Spotify ID won't fire either hook,
+    // matching cross-platform behavior parity.
+    window.scrobbleManager = {
+        _plugins: [],
+        registerPlugin: function(plugin) {
+            if (!plugin || !plugin.id) {
+                console.warn('[scrobbleManager] registerPlugin rejected: missing id');
+                return;
+            }
+            // Replace any existing registration with the same id (re-register
+            // semantics on plugin reload).
+            window.scrobbleManager._plugins =
+                window.scrobbleManager._plugins.filter(function(p) { return p.id !== plugin.id; });
+            window.scrobbleManager._plugins.push(plugin);
+            console.log('[scrobbleManager] registered plugin:', plugin.id);
+        },
+        unregisterPlugin: function(id) {
+            var before = window.scrobbleManager._plugins.length;
+            window.scrobbleManager._plugins =
+                window.scrobbleManager._plugins.filter(function(p) { return p.id !== id; });
+            if (window.scrobbleManager._plugins.length < before) {
+                console.log('[scrobbleManager] unregistered plugin:', id);
+            }
+        },
+    };
+
+    /**
+     * Native → JS dispatch entry point. Called from
+     * `ScrobbleManager.kt`'s `dispatchNowPlaying` / `dispatchScrobble`
+     * via `JsBridge.evaluate(...)`. `eventName` is `"updateNowPlaying"`
+     * or `"scrobble"`. `trackJson` is a desktop-shaped track object
+     * with `id`, `title`, `artist`, `album`, `duration`, `mbid`,
+     * `_activeResolver`, and a `sources` map (resolverId → source with
+     * confidence + per-resolver IDs).
+     *
+     * Returns a Promise — fire-and-forget from the native side. Don't
+     * rely on the return value being readable from Kotlin (see
+     * CLAUDE.md Common Mistake #27 — async IIFE returns Promise object,
+     * not the resolved value). The WebView runs the loop independently.
+     */
+    window.__scrobbleManagerDispatch = async function(eventName, trackJson) {
+        try {
+            var track = JSON.parse(trackJson);
+            // <30s duration filter inherited from desktop scrobbleManager
+            // (scrobbler-loader.js:75). Match cross-platform behavior.
+            if (track.duration && track.duration < 30) return false;
+            for (var i = 0; i < window.scrobbleManager._plugins.length; i++) {
+                var plugin = window.scrobbleManager._plugins[i];
+                try {
+                    var enabled = true;
+                    if (typeof plugin.isEnabled === 'function') {
+                        enabled = await plugin.isEnabled();
+                    }
+                    if (!enabled) continue;
+                    if (typeof plugin[eventName] === 'function') {
+                        await plugin[eventName](track);
+                    }
+                } catch (e) {
+                    console.warn(
+                        '[scrobbleManager] plugin', plugin.id, eventName,
+                        'threw:', (e && e.message) ? e.message : e,
+                    );
+                }
+            }
+            return true;
+        } catch (e) {
+            console.warn('[scrobbleManager] dispatch failed:', (e && e.message) ? e.message : e);
+            return false;
+        }
+    };
+
+    // ── MBID resolver shim ────────────────────────────────────────────
+    // `window.resolveMbidForLove(track)` returns Promise<string|null>.
+    // Used by the achordion plugin's `resolveMbid(track)` fallback when
+    // `track.mbid` is absent. The Kotlin side calls
+    // `MbidEnrichmentService.getRecordingMbid` with the track's artist +
+    // title and returns a 36-char MBID at the mapper's confidence
+    // threshold, or null.
+    //
+    // Pattern mirrors the existing `__fetchCallbacks` async harness:
+    // JS registers a callback id, native dispatches to a coroutine,
+    // calls back via `evaluateJavascript` on the main thread.
+    window.__resolveMbidCallbacks = {};
+    var __resolveMbidIdCounter = 0;
+
+    window.resolveMbidForLove = function(track) {
+        return new Promise(function(resolve, reject) {
+            var callbackId = 'mbid_' + (++__resolveMbidIdCounter);
+            window.__resolveMbidCallbacks[callbackId] = function(mbidOrNull) {
+                delete window.__resolveMbidCallbacks[callbackId];
+                resolve(mbidOrNull || null);
+            };
+            try {
+                var trackJson = JSON.stringify(track || {});
+                NativeBridge.resolveMbidForLove(callbackId, trackJson);
+            } catch (e) {
+                delete window.__resolveMbidCallbacks[callbackId];
+                reject(e);
+            }
+        });
+    };
+
     console.log('Parachord JS runtime: polyfills loaded');
 </script>
 

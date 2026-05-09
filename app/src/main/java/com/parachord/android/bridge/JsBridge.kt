@@ -7,6 +7,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import com.parachord.android.data.metadata.MbidEnrichmentService
 import com.parachord.shared.plugin.JsRuntime
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -34,6 +35,7 @@ class JsBridge constructor(
     private val context: Context,
     private val httpClient: OkHttpClient,
     private val dataStore: DataStore<Preferences>,
+    private val mbidEnrichment: MbidEnrichmentService,
 ) : JsRuntime {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -54,7 +56,7 @@ class JsBridge constructor(
         if (webView != null) return@withContext
 
         val pageLoaded = CompletableDeferred<Unit>()
-        val nativeBridge = NativeBridge(httpClient, scope, dataStore)
+        val nativeBridge = NativeBridge(httpClient, scope, dataStore, mbidEnrichment)
 
         val wv = WebView(context).apply {
             settings.javaScriptEnabled = true
