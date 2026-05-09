@@ -13,6 +13,43 @@ sealed class DeepLinkAction {
     data class Shuffle(val enabled: Boolean) : DeepLinkAction()
     data class Volume(val level: Int) : DeepLinkAction()
 
+    // ── Protocol play handlers (#119 / #120 / #121) ──
+    /** `parachord://play/album` — start playback of one resolved album. */
+    data class PlayAlbum(val input: ProtocolPlayInput) : DeepLinkAction()
+
+    /**
+     * `parachord://play/playlist` — start playback of a hosted or inline
+     * playlist. Optional [title] / [creator] are display hints only;
+     * [shuffle] toggles shuffle on the new context.
+     */
+    data class PlayPlaylist(
+        val input: ProtocolPlayInput,
+        val title: String? = null,
+        val creator: String? = null,
+        val shuffle: Boolean = false,
+    ) : DeepLinkAction()
+
+    /**
+     * `parachord://play/radio` — start a radio context. [refillUrl] is the
+     * URL the radio engine polls for fresh tracks (Mode A). [input]
+     * supplies the initial pool / seed; [mode] selects Mode B (artist seed)
+     * or Mode C (pool-based) for non-URL modes.
+     */
+    data class PlayRadio(
+        val mode: RadioMode,
+        val input: ProtocolPlayInput? = null,
+        val refillUrl: String? = null,
+        val name: String? = null,
+        val shuffle: Boolean = false,
+    ) : DeepLinkAction()
+
+    /**
+     * `parachord://listen-along` — mirror another user's now-playing.
+     * [service] is the scrobbler id (`listenbrainz` / `lastfm`); [user] is
+     * the platform username. Wired in Phase 3 (#121).
+     */
+    data class ListenAlong(val service: String, val user: String) : DeepLinkAction()
+
     // ── Navigation ──
     data object NavigateHome : DeepLinkAction()
     data class NavigateArtist(val name: String, val tab: String? = null) : DeepLinkAction()
