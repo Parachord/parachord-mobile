@@ -124,11 +124,12 @@ class DeepLinkViewModel constructor(
                 message = "An external link wants to import a playlist from:\n\n${action.url}",
                 action = action,
             )
-            is DeepLinkAction.Play -> DeepLinkConfirmation(
-                title = "Play Track",
-                message = "An external link wants to play:\n\n${action.artist} – ${action.title}",
-                action = action,
-            )
+            // No confirmation prompt for any `play/*` family action — they're
+            // read-equivalent to clicking a Spotify/Apple Music share link
+            // (local playback only, no library writes, easily reversed by
+            // skip/pause). Dropped from the previously-prompted single-track
+            // `Play` for consistency with `PlayAlbum`/`PlayPlaylist`/`PlayRadio`.
+            // (Issue #120 item E.)
             else -> null
         }
     }

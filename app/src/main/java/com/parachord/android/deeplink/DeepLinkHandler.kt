@@ -4,6 +4,17 @@ import android.net.Uri
 import com.parachord.shared.platform.Log
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.ExternalUrlParser
+import com.parachord.shared.deeplink.ProtocolPlayInput
+import com.parachord.shared.deeplink.ProtocolTrack
+import com.parachord.shared.deeplink.RadioMode
+import com.parachord.shared.deeplink.decodeBase64Utf8Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 private const val TAG = "DeepLinkHandler"
 
@@ -54,10 +65,14 @@ class DeepLinkHandler constructor() {
         return when (host) {
             "auth" -> DeepLinkAction.OAuthCallback(uri.toString())
 
-            "play" -> {
-                val artist = uri.clampedParam("artist") ?: return DeepLinkAction.Unknown(uri.toString())
-                val title = uri.clampedParam("title") ?: return DeepLinkAction.Unknown(uri.toString())
-                DeepLinkAction.Play(artist, title)
+            "play" -> parsePlayHost(uri, pathSegments)
+
+            "listen-along" -> {
+                // parachord://listen-along?service=listenbrainz&user=jesse
+                // (Phase 3 will wire the actual mirror; the action is emitted now.)
+                val service = uri.clampedParam("service") ?: return DeepLinkAction.Unknown(uri.toString())
+                val user = uri.clampedParam("user") ?: return DeepLinkAction.Unknown(uri.toString())
+                DeepLinkAction.ListenAlong(service, user)
             }
 
             "control" -> {
@@ -148,6 +163,146 @@ class DeepLinkHandler constructor() {
 
             else -> DeepLinkAction.Unknown(uri.toString())
         }
+    }
+
+    // ── parachord://play[/album|/playlist|/radio] (#119–#121) ─────────
+
+    /**
+     * Dispatch the `parachord://play[/sub]` family by path segment.
+     *
+     * - Bare `parachord://play?artist=&title=` → existing single-track [DeepLinkAction.Play].
+     * - `parachord://play/album?…` → [DeepLinkAction.PlayAlbum].
+     * - `parachord://play/playlist?…` → [DeepLinkAction.PlayPlaylist].
+     * - `parachord://play/radio?…` → [DeepLinkAction.PlayRadio] (Phase 3 wiring).
+     *
+     * All input fields (`mbid`, `spotify`, `applemusic`, `url`, `tracks`,
+     * `artist`, `title`) flow through into [ProtocolPlayInput]. Per-command
+     * gating happens later in `resolveProtocolPlayInput` — the parser is
+     * permissive and forwards everything the URI carries.
+     */
+    private fun parsePlayHost(uri: Uri, pathSegments: List<String>): DeepLinkAction {
+        return when (pathSegments.firstOrNull()) {
+            null -> {
+                // Existing single-track shape: requires both fields.
+                val artist = uri.clampedParam("artist") ?: return DeepLinkAction.Unknown(uri.toString())
+                val title = uri.clampedParam("title") ?: return DeepLinkAction.Unknown(uri.toString())
+                DeepLinkAction.Play(artist, title)
+            }
+            "album" -> {
+                val input = parseProtocolPlayInput(uri) ?: return DeepLinkAction.Unknown(uri.toString())
+                DeepLinkAction.PlayAlbum(input)
+            }
+            "playlist" -> {
+                val input = parseProtocolPlayInput(uri) ?: return DeepLinkAction.Unknown(uri.toString())
+                DeepLinkAction.PlayPlaylist(
+                    input = input,
+                    title = uri.clampedParam("title"),
+                    creator = uri.clampedParam("creator"),
+                    shuffle = uri.clampedParam("shuffle") == "1",
+                )
+            }
+            "radio" -> parsePlayRadio(uri)
+            else -> DeepLinkAction.Unknown(uri.toString())
+        }
+    }
+
+    /**
+     * Build a [ProtocolPlayInput] from URI query params. Any combination
+     * of identifiers is allowed at this layer; the resolver enforces
+     * per-command gating downstream.
+     *
+     * `tracks=` is a UTF-8-base64 JSON array of `{artist,title,album?,mbid?,isrc?}`
+     * objects (per `decodeBase64Utf8Json` from #119). Decode failures
+     * return null → caller surfaces `Unknown` so the chooser doesn't
+     * silently drop the URI.
+     */
+    private fun parseProtocolPlayInput(uri: Uri): ProtocolPlayInput? {
+        val tracks = uri.clampedParam("tracks")?.let { encoded ->
+            try {
+                decodeInlineTracks(encoded)
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Failed to decode tracks= payload: ${e.message}")
+                return null
+            }
+        }
+        val input = ProtocolPlayInput(
+            mbid = uri.clampedParam("mbid"),
+            spotify = uri.clampedParam("spotify"),
+            applemusic = uri.clampedParam("applemusic"),
+            url = uri.clampedParam("url"),
+            tracks = tracks,
+            artist = uri.clampedParam("artist"),
+            title = uri.clampedParam("title"),
+        )
+        // Reject inputs that carry no usable identifier at all.
+        if (input.mbid.isNullOrBlank() && input.spotify.isNullOrBlank() &&
+            input.applemusic.isNullOrBlank() && input.url.isNullOrBlank() &&
+            input.tracks.isNullOrEmpty() && input.artist.isNullOrBlank()
+        ) {
+            return null
+        }
+        return input
+    }
+
+    /**
+     * Decode a base64 JSON `tracks=` payload into a list of [ProtocolTrack].
+     * Accepts either a bare array `[{artist,title,…},…]` or an object
+     * `{tracks:[…]}` for symmetry with [com.parachord.shared.deeplink.parseProtocolTracklist].
+     */
+    private fun decodeInlineTracks(encoded: String): List<ProtocolTrack> {
+        val element = decodeBase64Utf8Json(encoded)
+        val arr: JsonArray = when (element) {
+            is JsonArray -> element
+            is JsonObject -> (element["tracks"] as? JsonArray)
+                ?: throw IllegalArgumentException("tracks= JSON object must have a 'tracks' array")
+            else -> throw IllegalArgumentException("tracks= must be a JSON array or object")
+        }
+        return arr.mapNotNull { item ->
+            val obj = item as? JsonObject ?: return@mapNotNull null
+            val artist = (obj["artist"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            val title = (obj["title"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            ProtocolTrack(
+                artist = artist,
+                title = title,
+                album = (obj["album"] as? JsonPrimitive)?.contentOrNull,
+                mbid = (obj["mbid"] as? JsonPrimitive)?.contentOrNull,
+                isrc = (obj["isrc"] as? JsonPrimitive)?.contentOrNull,
+            )
+        }
+    }
+
+    /**
+     * Parse `parachord://play/radio?...` into [DeepLinkAction.PlayRadio].
+     *
+     * Mode selection (mirrors desktop `protocol-schema.md` §Radio):
+     * - `?refillUrl=` present → Mode A (URL-fed). [RadioMode.PoolBased] used as
+     *   placeholder for the sealed-class slot; the radio engine reads
+     *   `refillUrl` directly.
+     * - `?artist=` present (with optional `?title=`) → Mode B
+     *   ([RadioMode.ArtistSeed]).
+     * - `?tracks=` present → Mode C ([RadioMode.PoolBased]).
+     * - none of the above → [DeepLinkAction.Unknown].
+     */
+    private fun parsePlayRadio(uri: Uri): DeepLinkAction {
+        val input = parseProtocolPlayInput(uri)
+        val refillUrl = uri.clampedParam("refillUrl")
+        val name = uri.clampedParam("name")
+        val shuffle = uri.clampedParam("shuffle") == "1"
+        val artist = uri.clampedParam("artist")
+        val title = uri.clampedParam("title")
+        val mode: RadioMode = when {
+            refillUrl != null -> RadioMode.PoolBased
+            !artist.isNullOrBlank() -> RadioMode.ArtistSeed(artist, title)
+            input?.tracks?.isNotEmpty() == true -> RadioMode.PoolBased
+            else -> return DeepLinkAction.Unknown(uri.toString())
+        }
+        return DeepLinkAction.PlayRadio(
+            mode = mode,
+            input = input,
+            refillUrl = refillUrl,
+            name = name,
+            shuffle = shuffle,
+        )
     }
 
     private fun parseSpotifyUri(uri: Uri): DeepLinkAction {

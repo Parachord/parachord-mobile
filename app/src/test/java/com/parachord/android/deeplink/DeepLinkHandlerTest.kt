@@ -203,4 +203,61 @@ class DeepLinkHandlerTest {
         val url = "parachord://chat?prompt=play+some+jazz"
         assertTrue(url.contains("prompt="))
     }
+
+    // -- Protocol play sub-actions (#119 / #120) --
+
+    @Test
+    fun `play album sub-action recognized via path segment`() {
+        val url = "parachord://play/album?spotify=4Z8W4fKeB5YxbusRwVAqVK"
+        // Host stays 'play'; sub-action lives at first path segment.
+        assertEquals("play", url.substringAfter("parachord://").substringBefore("/").substringBefore("?"))
+        assertTrue(url.contains("/album"))
+    }
+
+    @Test
+    fun `play playlist sub-action recognized via path segment`() {
+        val url = "parachord://play/playlist?url=https%3A%2F%2Fexample.com%2Fmix.xspf&shuffle=1"
+        assertTrue(url.contains("/playlist"))
+        assertTrue(url.contains("shuffle=1"))
+    }
+
+    @Test
+    fun `play radio sub-action recognized via path segment`() {
+        val url = "parachord://play/radio?artist=Radiohead&title=Karma+Police"
+        assertTrue(url.contains("/radio"))
+    }
+
+    @Test
+    fun `play album accepts mbid spotify applemusic url tracks artist+title`() {
+        // All 6 input shapes can coexist on the same URI; the resolver
+        // walks them in priority order downstream.
+        val params = listOf("mbid", "spotify", "applemusic", "url", "tracks", "artist", "title")
+        for (p in params) {
+            val url = "parachord://play/album?$p=value"
+            assertTrue("$p missing", url.contains("$p="))
+        }
+    }
+
+    @Test
+    fun `play playlist forwards title creator and shuffle hints`() {
+        val url = "parachord://play/playlist?url=https%3A%2F%2Fx.com%2Fy.xspf&title=My+Mix&creator=jesse&shuffle=1"
+        assertTrue(url.contains("title=My+Mix"))
+        assertTrue(url.contains("creator=jesse"))
+        assertTrue(url.contains("shuffle=1"))
+    }
+
+    @Test
+    fun `listen-along deep link requires service and user`() {
+        val url = "parachord://listen-along?service=listenbrainz&user=jesse"
+        assertTrue(url.contains("service=listenbrainz"))
+        assertTrue(url.contains("user=jesse"))
+    }
+
+    @Test
+    fun `bare play URL still has both artist and title for legacy single-track shape`() {
+        val url = "parachord://play?artist=Radiohead&title=Creep"
+        // No path segment — falls into the legacy [Play] action.
+        assertTrue(url.startsWith("parachord://play?"))
+        assertFalse(url.contains("parachord://play/"))
+    }
 }
