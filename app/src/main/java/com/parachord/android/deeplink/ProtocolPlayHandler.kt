@@ -114,10 +114,12 @@ class ProtocolPlayHandler constructor(
         }
 
         // Display-name precedence: explicit action.name → input.title →
-        // resolver displayName → "Radio".
-        val displayName = action.name
-            ?: input.title
-            ?: resolved.displayName
+        // resolver displayName → "Radio". Treat blank strings as missing
+        // so an XSPF/JSPF parser that returns an empty title still falls
+        // through to the literal default rather than rendering "".
+        val displayName = action.name?.takeIf { it.isNotBlank() }
+            ?: input.title?.takeIf { it.isNotBlank() }
+            ?: resolved.displayName.takeIf { it.isNotBlank() }
             ?: "Radio"
 
         // Step 2: teardown — matches handle(PlayAlbum/PlayPlaylist) ordering
@@ -136,8 +138,10 @@ class ProtocolPlayHandler constructor(
             )
         }
 
-        // Step 4: pre-resolve the FIRST track so playback starts on a
-        // known-good source — same gate as runHandle.
+        // Step 4: pre-warm the resolver cache for the first track. This
+        // kicks off the resolver pipeline asynchronously — playTrackInternal's
+        // on-demand fallback would handle it anyway, but pre-warming
+        // reduces the time to first audio.
         try {
             trackResolverCache.resolveInBackground(listOf(entities.first()), backfillDb = false)
         } catch (e: Exception) {

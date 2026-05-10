@@ -154,8 +154,12 @@ class PlaybackController constructor(
     // (`parachord://play/radio?refill=…`). Only meaningful while the
     // current spinoff is pool-based (id == "pool-based"). For
     // seed-based spinoffs these stay null/0.
-    // TODO(#121 Task 5): reset poolRefillUrl / poolRefillEmptyCount /
-    //  poolLastRefillTs in `exitSpinoff()` once the refill loop lands.
+    //
+    // Reset on every [startPoolBasedSpinoff] entry AND on [exitSpinoff]
+    // to prevent cross-mode state leak — without the exit reset, a Mode B
+    // spinoff that follows a Mode C exit would see a leftover non-null
+    // poolRefillUrl. Task 5's refill loop only reads these fields; it
+    // doesn't need to write reset logic.
     private var poolRefillUrl: String? = null
     private var poolRefillEmptyCount: Int = 0
     private var poolLastRefillTs: Long = 0L
@@ -1658,11 +1662,8 @@ class PlaybackController constructor(
         displayName: String,
         refillUrl: String? = null,
     ) {
-        if (initialPool.isEmpty()) {
-            Log.w(TAG, "startPoolBasedSpinoff: empty pool, ignoring")
-            return
-        }
-
+        // Callers must pass a non-empty pool — empty pools are filtered
+        // upstream by ProtocolPlayHandler.handle(PlayRadio).
         spinoffJob?.cancel()
         spinoffPool.clear()
         // Pool-based has no source track — Task 6's banner branch keys off
@@ -1718,6 +1719,9 @@ class PlaybackController constructor(
         spinoffJob?.cancel()
         spinoffPool.clear()
         spinoffSourceTrack = null
+        poolRefillUrl = null
+        poolRefillEmptyCount = 0
+        poolLastRefillTs = 0L
 
         // Restore previous playback context (queue was never modified)
         queueManager.setContext(preSpinoffContext)

@@ -267,6 +267,36 @@ class PlayRadioModeCTest {
     }
 
     @Test
+    fun modeC_namePrecedence_radioFallback() = runTest {
+        // All four sources blank/null → literal "Radio" default. The
+        // resolver here returns a blank displayName (mirrors an XSPF/JSPF
+        // parser that didn't find a <title>); the chain's
+        // .takeIf { it.isNotBlank() } guards must fall through to "Radio".
+        val resolver = mockk<ProtocolInputResolver> {
+            coEvery { resolveByUrl(any()) } returns ResolvedProtocolPlay(
+                displayName = "",
+                tracks = sampleTracks,
+            )
+        }
+        val pc = mockk<PlaybackController>(relaxed = true)
+        val td = mockk<ProtocolPlayTeardown>()
+        coEvery { td.prepareForNewPlayback() } just runs
+        val handler = buildHandler(resolver = resolver, teardown = td, playbackController = pc)
+        val dispatcher = buildDispatcher(pc, td, handler)
+
+        val result = dispatcher.dispatch(
+            DeepLinkAction.PlayRadio(
+                mode = RadioMode.PoolBased,
+                input = ProtocolPlayInput(url = "https://example.com/p.jspf", title = null),
+                name = null,
+            )
+        )
+
+        assertTrue(result is PlayRadioResult.StartedModeC)
+        coVerify(exactly = 1) { pc.startPoolBasedSpinoff(any(), "Radio", any()) }
+    }
+
+    @Test
     fun modeC_teardownFiresBeforeStartPoolBasedSpinoff() = runTest {
         val resolver = mockk<ProtocolInputResolver> {
             coEvery { resolveByUrl(any()) } returns ResolvedProtocolPlay("X", sampleTracks)
