@@ -20,7 +20,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -67,9 +66,7 @@ class FriendsRepository(
      */
     suspend fun findByServiceAndUsername(service: String, username: String): Friend? =
         withContext(Dispatchers.Default) {
-            getAllFriends().first().firstOrNull {
-                it.service == service && it.username.equals(username, ignoreCase = true)
-            }
+            friendDao.findByServiceAndUsername(service, username)
         }
 
     /**

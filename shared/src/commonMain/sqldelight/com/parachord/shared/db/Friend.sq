@@ -24,6 +24,9 @@ SELECT * FROM friends WHERE pinnedToSidebar = 1 ORDER BY cachedTrackTimestamp DE
 getById:
 SELECT * FROM friends WHERE id = ?;
 
+findByServiceAndUsername:
+SELECT * FROM friends WHERE service = ? AND lower(username) = lower(?) LIMIT 1;
+
 upsert:
 INSERT OR REPLACE INTO friends (id, username, service, displayName, avatarUrl, addedAt, lastFetchedAt, cachedTrackName, cachedTrackArtist, cachedTrackAlbum, cachedTrackTimestamp, cachedTrackArtworkUrl, pinnedToSidebar, autoPinned)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

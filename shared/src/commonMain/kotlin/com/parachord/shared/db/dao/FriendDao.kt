@@ -55,6 +55,16 @@ class FriendDao(private val db: ParachordDb) {
         queries.getById(id).executeAsOneOrNull()?.toFriend()
     }
 
+    /**
+     * Look up a saved friend by `(service, username)` with a
+     * case-insensitive username match. One-shot query — does NOT
+     * round-trip through the live Flow used by [getAllFriends].
+     */
+    suspend fun findByServiceAndUsername(service: String, username: String): Friend? =
+        withContext(Dispatchers.Default) {
+            queries.findByServiceAndUsername(service, username).executeAsOneOrNull()?.toFriend()
+        }
+
     /* ---- Writes ---- */
 
     suspend fun upsert(friend: Friend): Unit = withContext(Dispatchers.Default) {

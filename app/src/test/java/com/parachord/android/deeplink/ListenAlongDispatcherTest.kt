@@ -88,7 +88,7 @@ class ListenAlongDispatcherTest {
 
         assertTrue(result is ListenAlongResult.Started)
         assertEquals(saved, (result as ListenAlongResult.Started).friend)
-        assertEquals("Rob", result.displayName)
+        assertEquals("Rob", result.friend.displayName)
         coVerify(exactly = 1) { teardown.prepareForListenAlongHandover() }
         // Critically: NOT the full prepareForNewPlayback (would race with
         // MainViewModel.startListenAlong's own stopListenAlong).
@@ -131,7 +131,7 @@ class ListenAlongDispatcherTest {
         val started = result as ListenAlongResult.Started
         assertTrue("transient flag must propagate", started.friend.transient)
         assertEquals("transient:listenbrainz:rob", started.friend.id)
-        assertEquals("rob", started.displayName)
+        assertEquals("rob", started.friend.displayName)
         coVerify(exactly = 1) { teardown.prepareForListenAlongHandover() }
     }
 

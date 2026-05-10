@@ -15,10 +15,11 @@ import com.parachord.shared.repository.FriendsRepository
 sealed class ListenAlongResult {
     /**
      * Found a Friend (saved OR transient). [friend] is the entity to
-     * pass to `MainViewModel.startListenAlong`; [displayName] is what
-     * the toast surface should show.
+     * pass to `MainViewModel.startListenAlong`. The toast surface uses
+     * `friend.displayName` directly — there's no separate field because
+     * the VM never reads anything else.
      */
-    data class Started(val friend: Friend, val displayName: String) : ListenAlongResult()
+    data class Started(val friend: Friend) : ListenAlongResult()
 
     /**
      * Calm "they're not on the air" outcome — user is reachable but
@@ -90,7 +91,7 @@ class ListenAlongDispatcher(
 
         if (saved != null) {
             teardown.prepareForListenAlongHandover()
-            return ListenAlongResult.Started(saved, saved.displayName)
+            return ListenAlongResult.Started(saved)
         }
 
         // 2. Transient fallback. The repo method returns null on both
@@ -111,7 +112,7 @@ class ListenAlongDispatcher(
         }
 
         teardown.prepareForListenAlongHandover()
-        return ListenAlongResult.Started(transient, action.user)
+        return ListenAlongResult.Started(transient)
     }
 
     companion object {

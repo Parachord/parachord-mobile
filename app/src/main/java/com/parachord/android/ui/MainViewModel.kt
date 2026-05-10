@@ -308,15 +308,44 @@ class MainViewModel constructor(
             // Play current track immediately
             playFriendCurrentTrack(friend, immediate = true)
 
-            // Poll for track changes (desktop uses 15s interval)
+            // Poll for track changes (desktop uses 15s interval).
+            //
+            // Transient-friend branch: B1 from Task 7 review. Saved friends use
+            // the DB lookup; transient friends (deeplink-spawned, never persisted)
+            // must refetch via fetchTransientFriendNowPlaying or the loop dies on
+            // the first poll because friendDao.getFriendById returns null for the
+            // synthetic id ("transient:{service}:{user}").
             while (isActive) {
                 delay(LISTEN_ALONG_POLL_MS)
                 try {
-                    // Refresh their activity from API
-                    friendsRepository.refreshFriendActivity(
-                        friendsRepository.getFriendById(friend.id) ?: break
-                    )
-                    val refreshed = friendsRepository.getFriendById(friend.id) ?: break
+                    val refreshed: FriendEntity? = if (friend.transient) {
+                        // Transient friend isn't in Room — refetch now-playing
+                        // via the same path used at deeplink-entry. Returns
+                        // null when they're not currently listening (or the
+                        // API call fails — the repo swallows internally).
+                        friendsRepository.fetchTransientFriendNowPlaying(friend.service, friend.username)
+                    } else {
+                        // Saved friend — refresh activity, then re-read the row.
+                        friendsRepository.refreshFriendActivity(
+                            friendsRepository.getFriendById(friend.id) ?: break
+                        )
+                        friendsRepository.getFriendById(friend.id)
+                    }
+
+                    if (refreshed == null) {
+                        // Saved friend deleted, OR transient friend stopped
+                        // listening. Mirror the !isOnAir branch below: defer
+                        // if a track is mid-play, otherwise calm exit.
+                        val state = playbackState.value
+                        if (state.isPlaying && state.currentTrack != null) {
+                            deferredStopFriendName = friend.displayName
+                            Log.d(TAG, "Friend ${friend.displayName} no longer present, deferring stop")
+                            continue
+                        }
+                        _toastEvents.emit("${friend.displayName} stopped listening")
+                        break
+                    }
+
                     _listenAlongFriend.value = refreshed
 
                     if (!refreshed.isOnAir) {
