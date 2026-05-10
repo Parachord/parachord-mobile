@@ -1664,13 +1664,25 @@ class PlaybackController constructor(
      * on Android since context is queue-level, not per-track).
      */
     private fun triggerPoolRefill() {
+        // Cheap fast-path so we don't pay for a snapshot copy or coroutine
+        // launch when the refiller is rate-limited / stopped / unconfigured.
+        if (!poolRefiller.canRefill()) return
+        // Snapshot on the caller's thread (controller scope = Main, same
+        // thread as skipNextInternal's removeAt(0)) so we don't race a
+        // concurrent modification of [spinoffPool] (a plain mutableListOf,
+        // not thread-safe) during toList().
+        val snapshot = spinoffPool.toList()
         scope.launch(Dispatchers.IO) {
             try {
-                val snapshot = spinoffPool.toList()
                 val fresh = poolRefiller.tryRefill(snapshot) ?: return@launch
-                spinoffPool.addAll(fresh)
-                Log.d(TAG, "Pool refill: appended ${fresh.size} tracks (pool now ${spinoffPool.size})")
+                // addAll back on Main — same dispatcher as skipNextInternal's
+                // removeAt(0). Pool mutations stay on a single thread.
+                withContext(Dispatchers.Main) {
+                    spinoffPool.addAll(fresh)
+                    Log.d(TAG, "Pool refill: appended ${fresh.size} tracks (pool now ${spinoffPool.size})")
+                }
                 // Pre-warm resolver cache so they're ready when consumed.
+                // Stays on IO — TrackResolverCache is internally thread-safe.
                 try {
                     trackResolverCache.resolveInBackground(fresh, backfillDb = false, priority = false)
                 } catch (e: Exception) {
@@ -1710,9 +1722,8 @@ class PlaybackController constructor(
      * pre-built from inline `?tracks=` JSON or a fetched JSPF/XSPF/M3U
      * tracklist. Mirrors desktop's "externally curated pool" path.
      *
-     * [refillUrl], when non-null, is captured for Task 5's refill loop to
-     * re-fetch from once `spinoffPool.size < 3`. Stored here; not read in
-     * this commit.
+     * [refillUrl], when non-null, is forwarded to [poolRefiller] so the
+     * refill loop fires when `spinoffPool.size < POOL_REFILL_THRESHOLD`.
      *
      * [displayName] is the station name shown in the banner. Pool-based
      * spinoffs have no source track, so the banner branch (Task 6) renders

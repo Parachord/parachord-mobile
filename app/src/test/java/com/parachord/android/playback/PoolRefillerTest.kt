@@ -272,24 +272,6 @@ class PoolRefillerTest {
     // ── Reset ────────────────────────────────────────────────────────
 
     @Test
-    fun reset_clearsAllState() = runTest {
-        val clock = FakeClock(initial = 100_000L)
-        val r = buildRefiller(clock = clock, fetcher = { emptyList() })
-        // Burn an empty.
-        assertNull(r.tryRefill(emptyList()))
-        assertEquals(1, r.emptyCountForTest)
-        assertTrue(r.lastFetchTsForTest > 0L)
-
-        r.reset()
-        assertNull(r.fetcher)
-        assertNull(r.refillUrl)
-        assertEquals(0, r.emptyCountForTest)
-        assertEquals(0L, r.lastFetchTsForTest)
-        // canRefill is false because fetcher + url cleared.
-        assertFalse(r.canRefill())
-    }
-
-    @Test
     fun resetCounters_clearsCountersButPreservesFetcherAndUrl() = runTest {
         val clock = FakeClock(initial = 100_000L)
         val r = buildRefiller(clock = clock, fetcher = { emptyList() })

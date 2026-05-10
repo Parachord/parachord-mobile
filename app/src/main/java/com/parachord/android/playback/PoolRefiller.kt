@@ -4,6 +4,8 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.shared.deeplink.ProtocolTrack
 import com.parachord.shared.platform.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private const val TAG = "PoolRefiller"
 
@@ -34,11 +36,14 @@ private const val TAG = "PoolRefiller"
  *    will be filtered, but ISRC-only matches go through (callers can
  *    upgrade if/when [TrackEntity] grows an `isrc` column). If every
  *    refilled track dedupes, the result counts as empty.
- *  - **State reset:** [reset] clears `fetcher`, `refillUrl`, the empty
- *    counter, and the last-fetch timestamp. [PlaybackController]
- *    calls this from `exitSpinoff()` and on every entry to
- *    `startPoolBasedSpinoff()` (via field assignment for fetcher /
- *    refillUrl + counter reset).
+ *  - **State reset:** [resetCounters] clears the empty counter +
+ *    last-fetch timestamp. [PlaybackController] calls this from both
+ *    `startPoolBasedSpinoff()` (so a fresh pool doesn't inherit the
+ *    previous pool's stop condition / rate-limit window) and
+ *    `exitSpinoff()` (which also nulls `refillUrl` directly). The
+ *    [fetcher] reference is process-lifetime — set once by
+ *    `PlayRadioDispatcher` at construction and preserved across
+ *    spinoff exit / re-enter.
  *
  * The [clock] parameter is a `() -> Long` injection seam so tests can
  * advance time deterministically without sleeping. Production callers
@@ -49,23 +54,27 @@ class PoolRefiller(
     val rateLimitMs: Long = REFILL_RATE_LIMIT_MS,
     val maxEmpty: Int = REFILL_MAX_EMPTY,
 ) {
+    // Written from outside [tryRefill] (PlaybackController.startPoolBasedSpinoff
+    // / setPoolFetcher), read inside [canRefill] / [tryRefill]. Keep
+    // @Volatile for cross-thread visibility.
     @Volatile var fetcher: (suspend (String) -> List<ProtocolTrack>)? = null
     @Volatile var refillUrl: String? = null
 
-    @Volatile private var emptyCount: Int = 0
-    @Volatile private var lastFetchTs: Long = 0L
+    // Mutated only inside [tryRefill]. The mutex below provides both
+    // atomicity (no torn read-modify-write on emptyCount += 1) AND
+    // visibility, so @Volatile would be redundant.
+    private var emptyCount: Int = 0
+    private var lastFetchTs: Long = 0L
+
+    // Serializes the gate-check + state-update + fetch path so concurrent
+    // callers can't race a compound emptyCount/lastFetchTs update. In
+    // practice the rate-limit gate already serializes calls in production,
+    // but the mutex makes the contract explicit.
+    private val refillMutex = Mutex()
 
     /** Visible for tests + log surfaces; not part of the operational API. */
     val emptyCountForTest: Int get() = emptyCount
     val lastFetchTsForTest: Long get() = lastFetchTs
-
-    /** Reset all transient + injected state. Call from `exitSpinoff()`. */
-    fun reset() {
-        fetcher = null
-        refillUrl = null
-        emptyCount = 0
-        lastFetchTs = 0L
-    }
 
     /**
      * Reset only the per-pool counters (empty counter + last-fetch
@@ -74,6 +83,11 @@ class PoolRefiller(
      * window — but the [fetcher] reference (process-lifetime) and any
      * already-set [refillUrl] (caller will overwrite anyway) are
      * preserved.
+     *
+     * `exitSpinoff()` clears the per-pool state directly (sets
+     * [refillUrl] to null + calls this method) and intentionally does
+     * NOT clear the [fetcher] — it's process-lifetime, set once by
+     * `PlayRadioDispatcher` and reused across spinoff exit/re-enter.
      */
     fun resetCounters() {
         emptyCount = 0
@@ -110,46 +124,47 @@ class PoolRefiller(
      * Caller is responsible for actually appending the returned list to
      * the spinoff pool and pre-warming via `TrackResolverCache`.
      */
-    suspend fun tryRefill(currentPoolSnapshot: List<TrackEntity>): List<TrackEntity>? {
-        if (!canRefill()) return null
-        val url = refillUrl ?: return null
-        val f = fetcher ?: return null
+    suspend fun tryRefill(currentPoolSnapshot: List<TrackEntity>): List<TrackEntity>? =
+        refillMutex.withLock {
+            if (!canRefill()) return@withLock null
+            val url = refillUrl ?: return@withLock null
+            val f = fetcher ?: return@withLock null
 
-        // Set timestamp BEFORE the fetch — a failing fetch still
-        // burns the rate-limit budget. Without this, an HTTP timeout
-        // in a busy refill loop would re-fire immediately on the next
-        // pool-drop tick.
-        lastFetchTs = clock()
+            // Set timestamp BEFORE the fetch — a failing fetch still
+            // burns the rate-limit budget. Without this, an HTTP timeout
+            // in a busy refill loop would re-fire immediately on the
+            // next pool-drop tick.
+            lastFetchTs = clock()
 
-        val fresh: List<ProtocolTrack> = try {
-            f(url)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "Pool refill fetch failed: ${e.message}")
-            emptyList()
+            val fresh: List<ProtocolTrack> = try {
+                f(url)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Pool refill fetch failed: ${e.message}")
+                emptyList()
+            }
+
+            val deduped = dedupAgainstPool(fresh, currentPoolSnapshot)
+            if (deduped.isEmpty()) {
+                emptyCount += 1
+                Log.d(TAG, "Pool refill: empty (count=$emptyCount/$maxEmpty)")
+                return@withLock null
+            }
+
+            emptyCount = 0
+            val ts = clock()
+            val entities = deduped.mapIndexed { idx, t ->
+                TrackEntity(
+                    id = "protocol-radio-$ts-$idx",
+                    title = t.title,
+                    artist = t.artist,
+                    album = t.album,
+                )
+            }
+            Log.d(TAG, "Pool refill: ${entities.size} fresh tracks ready to append")
+            entities
         }
-
-        val deduped = dedupAgainstPool(fresh, currentPoolSnapshot)
-        if (deduped.isEmpty()) {
-            emptyCount += 1
-            Log.d(TAG, "Pool refill: empty (count=$emptyCount/$maxEmpty)")
-            return null
-        }
-
-        emptyCount = 0
-        val ts = clock()
-        val entities = deduped.mapIndexed { idx, t ->
-            TrackEntity(
-                id = "protocol-radio-$ts-$idx",
-                title = t.title,
-                artist = t.artist,
-                album = t.album,
-            )
-        }
-        Log.d(TAG, "Pool refill: ${entities.size} fresh tracks ready to append")
-        return entities
-    }
 
     companion object {
         const val REFILL_RATE_LIMIT_MS: Long = 5_000L
