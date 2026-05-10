@@ -87,6 +87,7 @@
                 <data android:scheme="parachord" android:host="queue" />
                 <data android:scheme="parachord" android:host="shuffle" />
                 <data android:scheme="parachord" android:host="volume" />
+                <data android:scheme="parachord" android:host="listen-along" />
                 <!-- Navigation -->
                 <data android:scheme="parachord" android:host="home" />
                 <data android:scheme="parachord" android:host="artist" />
