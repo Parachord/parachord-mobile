@@ -62,6 +62,7 @@ class DeepLinkViewModel constructor(
     private val playlistImportManager: PlaylistImportManager,
     private val chatService: AiChatService,
     private val protocolPlayHandler: ProtocolPlayHandler,
+    private val protocolPlayTeardown: com.parachord.shared.deeplink.ProtocolPlayTeardown,
 ) : ViewModel() {
 
     private val _navEvents = MutableSharedFlow<DeepLinkNavEvent>()
@@ -143,13 +144,26 @@ class DeepLinkViewModel constructor(
                 // ── Playback ──────────────────────────────────────────────
 
                 is DeepLinkAction.Play -> {
+                    // Resolve FIRST so we can decline the teardown if there's
+                    // nothing to play — avoids tearing down the user's current
+                    // context only to discover we have nothing to replace it
+                    // with. (Mirrors desktop commit `71f9a4f`'s behavior.)
                     val sources = resolverManager.resolve(
                         "${action.artist} ${action.title}",
                         targetTitle = action.title,
                         targetArtist = action.artist,
                     )
                     val source = sources.firstOrNull()
-                    if (source != null) {
+                    if (source == null) {
+                        _navEvents.emit(DeepLinkNavEvent.Toast("Could not find: ${action.artist} - ${action.title}"))
+                    } else {
+                        // Apply the same teardown sequence as play/album +
+                        // play/playlist — exit spinoff, stop listen-along,
+                        // clear queue. Without this, single-track `play`
+                        // would inherit (and then immediately undo) the
+                        // prior context. Per issue #120 item D and desktop
+                        // parity rules.
+                        protocolPlayTeardown.prepareForNewPlayback()
                         val trackEntity = TrackEntity(
                             id = source.url,
                             title = action.title,
@@ -163,8 +177,6 @@ class DeepLinkViewModel constructor(
                             appleMusicId = source.appleMusicId,
                         )
                         playbackController.playTrack(trackEntity)
-                    } else {
-                        _navEvents.emit(DeepLinkNavEvent.Toast("Could not find: ${action.artist} - ${action.title}"))
                     }
                 }
 
