@@ -9,6 +9,7 @@ import com.parachord.shared.deeplink.ProtocolPlayInput
 import com.parachord.shared.deeplink.ProtocolPlayTeardown
 import com.parachord.shared.deeplink.ProtocolResolveOptions
 import com.parachord.shared.deeplink.ProtocolTrack
+import com.parachord.shared.deeplink.RadioMode
 import com.parachord.shared.deeplink.ResolvedProtocolPlay
 import com.parachord.shared.deeplink.resolveProtocolPlayInput
 import com.parachord.shared.platform.Log
@@ -67,12 +68,92 @@ class ProtocolPlayHandler constructor(
         allowMbid = false, allowProviderId = false, allowUrl = true,
         allowTracks = true, allowArtistTitleAlbum = false,
     )
+    /** Mode C accepts only `url=` (hosted tracklist) or `tracks=` (inline). */
+    private val radioPoolOpts = ProtocolResolveOptions(
+        allowMbid = false, allowProviderId = false, allowUrl = true,
+        allowTracks = true, allowArtistTitleAlbum = false,
+    )
 
     suspend fun handle(action: DeepLinkAction.PlayAlbum): ProtocolPlayResult =
         runHandle("album", action.input, albumOpts)
 
     suspend fun handle(action: DeepLinkAction.PlayPlaylist): ProtocolPlayResult =
         runHandle("playlist", action.input, playlistOpts)
+
+    /**
+     * `parachord://play/radio` — Mode C (pool-based) only.
+     *
+     * Mode B (artist seed) bypasses this handler entirely; it goes
+     * straight from [PlayRadioDispatcher] into
+     * [PlaybackController.startSpinoffWithSeed]. Mode C, by contrast,
+     * needs the resolver cascade (URL fetch → JSPF/XSPF/M3U parse OR
+     * inline tracks) before a pool can be built.
+     *
+     * Order of operations mirrors [runHandle]:
+     * resolve → empty-check → teardown → build entities (`protocol-radio-*`
+     * IDs) → pre-warm first track → handoff to
+     * [PlaybackController.startPoolBasedSpinoff].
+     */
+    suspend fun handle(action: DeepLinkAction.PlayRadio): ProtocolPlayResult {
+        require(action.mode is RadioMode.PoolBased) {
+            "ProtocolPlayHandler only handles PoolBased radio; ArtistSeed goes through PlaybackController.startSpinoffWithSeed directly"
+        }
+        val input = action.input
+            ?: return ProtocolPlayResult.Failed("Radio missing input")
+
+        // Step 1: resolve.
+        val resolved: ResolvedProtocolPlay = try {
+            resolveProtocolPlayInput(input, radioPoolOpts, resolver)
+                ?: return ProtocolPlayResult.Failed("Radio: nothing to play")
+        } catch (e: Exception) {
+            Log.w(TAG, "Radio resolve failed: ${e.message}")
+            return ProtocolPlayResult.Failed(e.message ?: "Radio fetch failed")
+        }
+        if (resolved.tracks.isEmpty()) {
+            return ProtocolPlayResult.Failed("Radio: empty pool")
+        }
+
+        // Display-name precedence: explicit action.name → input.title →
+        // resolver displayName → "Radio".
+        val displayName = action.name
+            ?: input.title
+            ?: resolved.displayName
+            ?: "Radio"
+
+        // Step 2: teardown — matches handle(PlayAlbum/PlayPlaylist) ordering
+        // (only fire after we know we have something to play).
+        teardown.prepareForNewPlayback()
+
+        // Step 3: build TrackEntity list with stable protocol-radio-{ts}-{idx} IDs.
+        val ts = currentTimeMillis()
+        val entities = resolved.tracks.mapIndexed { idx, t ->
+            TrackEntity(
+                id = "protocol-radio-$ts-$idx",
+                title = t.title,
+                artist = t.artist,
+                album = t.album,
+                artworkUrl = resolved.albumArt,
+            )
+        }
+
+        // Step 4: pre-resolve the FIRST track so playback starts on a
+        // known-good source — same gate as runHandle.
+        try {
+            trackResolverCache.resolveInBackground(listOf(entities.first()), backfillDb = false)
+        } catch (e: Exception) {
+            Log.w(TAG, "Pool first-track pre-resolve failed: ${e.message}")
+        }
+
+        // Step 5: hand off to the pool-based spinoff entry point. The
+        // controller does its own clearQueue() + spinoff context wiring
+        // atomically; refill URL captured for Task 5.
+        playbackController.startPoolBasedSpinoff(entities, displayName, action.refillUrl)
+        if (entities.size > 1) {
+            trackResolverCache.resolveInBackground(entities.drop(1), backfillDb = false)
+        }
+
+        return ProtocolPlayResult.Started(displayName, entities.size)
+    }
 
     private suspend fun runHandle(
         cmd: String,

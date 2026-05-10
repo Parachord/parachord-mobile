@@ -63,15 +63,11 @@ class DeepLinkViewModel constructor(
     private val chatService: AiChatService,
     private val protocolPlayHandler: ProtocolPlayHandler,
     private val protocolPlayTeardown: com.parachord.shared.deeplink.ProtocolPlayTeardown,
+    private val playRadioDispatcher: PlayRadioDispatcher,
 ) : ViewModel() {
 
     private val _navEvents = MutableSharedFlow<DeepLinkNavEvent>()
     val navEvents: SharedFlow<DeepLinkNavEvent> = _navEvents.asSharedFlow()
-
-    private val playRadioDispatcher = PlayRadioDispatcher(
-        playbackController = playbackController,
-        teardown = protocolPlayTeardown,
-    ) { msg -> _navEvents.emit(DeepLinkNavEvent.Toast(msg)) }
 
     private val _pendingConfirmation = MutableStateFlow<DeepLinkConfirmation?>(null)
     val pendingConfirmation: StateFlow<DeepLinkConfirmation?> = _pendingConfirmation.asStateFlow()
@@ -319,7 +315,7 @@ class DeepLinkViewModel constructor(
                 is DeepLinkAction.PlayPlaylist -> dispatchProtocolPlay(action)
 
                 // ── Phase 3 (#121) ──
-                is DeepLinkAction.PlayRadio -> playRadioDispatcher.dispatch(action)
+                is DeepLinkAction.PlayRadio -> dispatchPlayRadio(action)
                 is DeepLinkAction.ListenAlong -> {
                     Log.d(TAG, "Protocol handler not yet wired (Phase 3): $action")
                     _navEvents.emit(DeepLinkNavEvent.Toast("Coming soon"))
@@ -353,6 +349,32 @@ class DeepLinkViewModel constructor(
                 DeepLinkNavEvent.Toast("Playing ${r.displayName} (${r.trackCount} tracks)")
             )
             is ProtocolPlayResult.Failed -> _navEvents.emit(DeepLinkNavEvent.Toast(r.reason))
+        }
+    }
+
+    /**
+     * Dispatch a `parachord://play/radio` action through
+     * [PlayRadioDispatcher] and surface the result as a toast.
+     *
+     * The acknowledgment toast ("Building radio…") fires BEFORE the
+     * dispatcher runs since Mode C URL fetch can take seconds and the
+     * user needs feedback within ~500ms. Mode B doesn't need a follow-up
+     * toast (the banner shows the radio name); Mode C reports the track
+     * count once the pool is built.
+     */
+    private suspend fun dispatchPlayRadio(action: DeepLinkAction.PlayRadio) {
+        _navEvents.emit(DeepLinkNavEvent.Toast("Building radio…"))
+        when (val r = playRadioDispatcher.dispatch(action)) {
+            is PlayRadioResult.StartedModeB -> {
+                // Mode B doesn't need a follow-up toast — the banner shows
+                // the radio name. (The acknowledgment above is enough.)
+            }
+            is PlayRadioResult.StartedModeC -> _navEvents.emit(
+                DeepLinkNavEvent.Toast("Playing ${r.displayName} (${r.trackCount} tracks)")
+            )
+            is PlayRadioResult.Failed -> _navEvents.emit(
+                DeepLinkNavEvent.Toast("Radio failed: ${r.reason}")
+            )
         }
     }
 

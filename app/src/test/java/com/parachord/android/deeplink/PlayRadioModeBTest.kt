@@ -11,12 +11,18 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Unit tests for [PlayRadioDispatcher] (Mode B — artist seed). Mode C
- * (pool-based) lands in Task 4; only the stub-toast path is exercised
- * here.
+ * (pool-based) lives in [PlayRadioModeCTest].
+ *
+ * Updated for the result-type pattern (Task 4): the dispatcher no longer
+ * takes a toast lambda — the VM emits toasts based on the returned
+ * [PlayRadioResult]. Tests assert on the result shape + verify call
+ * ordering against the playback / teardown mocks.
  */
 class PlayRadioModeBTest {
 
@@ -25,8 +31,10 @@ class PlayRadioModeBTest {
         td: ProtocolPlayTeardown = mockk<ProtocolPlayTeardown>().also {
             coEvery { it.prepareForNewPlayback() } just runs
         },
-        toast: suspend (String) -> Unit = { /* no-op */ },
-    ): PlayRadioDispatcher = PlayRadioDispatcher(pc, td, toast)
+        // Mode B never invokes the handler — pass a relaxed mock so a
+        // stray call would surface as a verification failure, not a NPE.
+        handler: ProtocolPlayHandler = mockk(relaxed = true),
+    ): PlayRadioDispatcher = PlayRadioDispatcher(pc, td, handler)
 
     @Test
     fun modeB_callsTeardownBeforeStartSpinoffWithSeed() = runTest {
@@ -35,12 +43,13 @@ class PlayRadioModeBTest {
         coEvery { td.prepareForNewPlayback() } just runs
 
         val dispatcher = build(pc, td)
-        dispatcher.dispatch(
+        val result = dispatcher.dispatch(
             DeepLinkAction.PlayRadio(
                 mode = RadioMode.ArtistSeed("Slowdive", null),
             )
         )
 
+        assertTrue(result is PlayRadioResult.StartedModeB)
         coVerifyOrder {
             td.prepareForNewPlayback()
             pc.startSpinoffWithSeed("Slowdive", null, any(), any())
@@ -52,13 +61,14 @@ class PlayRadioModeBTest {
         val pc = mockk<PlaybackController>(relaxed = true)
         val dispatcher = build(pc = pc)
 
-        dispatcher.dispatch(
+        val result = dispatcher.dispatch(
             DeepLinkAction.PlayRadio(
                 mode = RadioMode.ArtistSeed("Slowdive", "Sugar For The Pill"),
                 name = "My Custom Station",
             )
         )
 
+        assertEquals("My Custom Station", (result as PlayRadioResult.StartedModeB).displayName)
         coVerify(exactly = 1) {
             pc.startSpinoffWithSeed("Slowdive", "Sugar For The Pill", "My Custom Station", any())
         }
@@ -69,13 +79,17 @@ class PlayRadioModeBTest {
         val pc = mockk<PlaybackController>(relaxed = true)
         val dispatcher = build(pc = pc)
 
-        dispatcher.dispatch(
+        val result = dispatcher.dispatch(
             DeepLinkAction.PlayRadio(
                 mode = RadioMode.ArtistSeed("Slowdive", "Sugar For The Pill"),
                 name = null,
             )
         )
 
+        assertEquals(
+            "Radio: Slowdive – Sugar For The Pill",
+            (result as PlayRadioResult.StartedModeB).displayName,
+        )
         coVerify(exactly = 1) {
             pc.startSpinoffWithSeed(
                 "Slowdive",
@@ -91,38 +105,16 @@ class PlayRadioModeBTest {
         val pc = mockk<PlaybackController>(relaxed = true)
         val dispatcher = build(pc = pc)
 
-        dispatcher.dispatch(
+        val result = dispatcher.dispatch(
             DeepLinkAction.PlayRadio(
                 mode = RadioMode.ArtistSeed("Slowdive", null),
                 name = null,
             )
         )
 
+        assertEquals("Radio: Slowdive", (result as PlayRadioResult.StartedModeB).displayName)
         coVerify(exactly = 1) {
             pc.startSpinoffWithSeed("Slowdive", null, "Radio: Slowdive", any())
-        }
-    }
-
-    @Test
-    fun modeB_emitsAcknowledgmentToastBeforeTeardown() = runTest {
-        val pc = mockk<PlaybackController>(relaxed = true)
-        val td = mockk<ProtocolPlayTeardown>()
-        coEvery { td.prepareForNewPlayback() } just runs
-        val toastFn = mockk<suspend (String) -> Unit>()
-        coEvery { toastFn(any()) } just runs
-
-        val dispatcher = PlayRadioDispatcher(pc, td, toastFn)
-        dispatcher.dispatch(
-            DeepLinkAction.PlayRadio(mode = RadioMode.ArtistSeed("Slowdive", null))
-        )
-
-        // Real ordering check: toast must fire BEFORE teardown AND
-        // before startSpinoffWithSeed. The earlier `toasts.firstOrNull()`
-        // assertion would have passed even if toast fired last.
-        coVerifyOrder {
-            toastFn("Building radio…")
-            td.prepareForNewPlayback()
-            pc.startSpinoffWithSeed(any(), any(), any(), any())
         }
     }
 
@@ -131,10 +123,8 @@ class PlayRadioModeBTest {
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
         coEvery { td.prepareForNewPlayback() } just runs
-        val toastFn = mockk<suspend (String) -> Unit>()
-        coEvery { toastFn(any()) } just runs
 
-        val dispatcher = PlayRadioDispatcher(pc, td, toastFn)
+        val dispatcher = build(pc, td)
         dispatcher.dispatch(
             DeepLinkAction.PlayRadio(
                 mode = RadioMode.ArtistSeed("Slowdive", null),
@@ -154,18 +144,20 @@ class PlayRadioModeBTest {
     }
 
     @Test
-    fun modeC_isStubbed_doesNotInvokeTeardownOrPlayback() = runTest {
+    fun modeB_doesNotCallProtocolPlayHandler() = runTest {
+        // Mode B is fully handled by the dispatcher + PlaybackController —
+        // never delegates to the protocol play handler. (The handler's
+        // `handle(PlayRadio)` requires PoolBased and would throw on
+        // ArtistSeed.)
         val pc = mockk<PlaybackController>(relaxed = true)
-        val td = mockk<ProtocolPlayTeardown>(relaxed = true)
-        val toasts = mutableListOf<String>()
-        val dispatcher = PlayRadioDispatcher(pc, td) { toasts += it }
+        val td = mockk<ProtocolPlayTeardown>()
+        coEvery { td.prepareForNewPlayback() } just runs
+        val handler = mockk<ProtocolPlayHandler>()  // strict — any call fails
 
+        val dispatcher = PlayRadioDispatcher(pc, td, handler)
         dispatcher.dispatch(
-            DeepLinkAction.PlayRadio(mode = RadioMode.PoolBased)
+            DeepLinkAction.PlayRadio(mode = RadioMode.ArtistSeed("Slowdive", null))
         )
-
-        coVerify(exactly = 0) { td.prepareForNewPlayback() }
-        coVerify(exactly = 0) { pc.startSpinoffWithSeed(any(), any(), any(), any()) }
-        assert(toasts.contains("Mode C coming next commit"))
+        // Strict mock — no verification block needed; any invocation throws.
     }
 }

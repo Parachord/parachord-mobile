@@ -149,6 +149,17 @@ class PlaybackController constructor(
     private var preSpinoffContext: PlaybackContext? = null
     private var spinoffJob: Job? = null
 
+    // ── Pool-based spinoff (Mode C) refill state ────────────────────────
+    // Captured by [startPoolBasedSpinoff]; read by Task 5's refill loop
+    // (`parachord://play/radio?refill=…`). Only meaningful while the
+    // current spinoff is pool-based (id == "pool-based"). For
+    // seed-based spinoffs these stay null/0.
+    // TODO(#121 Task 5): reset poolRefillUrl / poolRefillEmptyCount /
+    //  poolLastRefillTs in `exitSpinoff()` once the refill loop lands.
+    private var poolRefillUrl: String? = null
+    private var poolRefillEmptyCount: Int = 0
+    private var poolLastRefillTs: Long = 0L
+
     fun connect() {
         if (controllerFuture != null) return
 
@@ -1622,6 +1633,79 @@ class PlaybackController constructor(
                 stateHolder.update { copy(spinoffLoading = false) }
             }
         }
+    }
+
+    /**
+     * Pool-based spinoff (Mode C of `parachord://play/radio`).
+     *
+     * No Last.fm seed step — the caller supplies an already-resolved pool,
+     * pre-built from inline `?tracks=` JSON or a fetched JSPF/XSPF/M3U
+     * tracklist. Mirrors desktop's "externally curated pool" path.
+     *
+     * [refillUrl], when non-null, is captured for Task 5's refill loop to
+     * re-fetch from once `spinoffPool.size < 3`. Stored here; not read in
+     * this commit.
+     *
+     * [displayName] is the station name shown in the banner. Pool-based
+     * spinoffs have no source track, so the banner branch (Task 6) renders
+     * just this string instead of "Spun off from X by Y".
+     *
+     * The spinoff [PlaybackContext] uses `id = "pool-based"` as a sentinel
+     * so Task 6's banner branch can distinguish pool-based from seed-based.
+     */
+    fun startPoolBasedSpinoff(
+        initialPool: List<TrackEntity>,
+        displayName: String,
+        refillUrl: String? = null,
+    ) {
+        if (initialPool.isEmpty()) {
+            Log.w(TAG, "startPoolBasedSpinoff: empty pool, ignoring")
+            return
+        }
+
+        spinoffJob?.cancel()
+        spinoffPool.clear()
+        // Pool-based has no source track — Task 6's banner branch keys off
+        // `spinoffSourceTrack == null` to render "$displayName" rather
+        // than "Spun off from $title by $artist".
+        spinoffSourceTrack = null
+
+        // Save previous playback context (queue is NOT modified — desktop behavior)
+        preSpinoffContext = queueManager.playbackContext
+
+        spinoffPool.addAll(initialPool)
+
+        // Capture refill state for Task 5's refill loop. Reset siblings
+        // (every entry resets — harmless if exitSpinoff hasn't yet wired
+        // its own reset, since they're re-initialized here on every call).
+        poolRefillUrl = refillUrl
+        poolRefillEmptyCount = 0
+        poolLastRefillTs = 0L
+
+        val spinoffContext = PlaybackContext(
+            type = "spinoff",
+            name = displayName,
+            // Sentinel — Task 6's banner branch uses this to distinguish
+            // pool-based ("just show displayName") from seed-based
+            // ("Spun off from $title by $artist").
+            id = "pool-based",
+        )
+
+        stateHolder.update {
+            copy(
+                spinoffMode = true,
+                spinoffLoading = false,
+                spinoffAvailable = true,
+            )
+        }
+
+        // Kick-start: pull the first pool track and play it now. Mirrors
+        // the Mode B kick-start path in [startSpinoffWithSeed] — playTrack
+        // clearQueue()s atomically and re-applies the spinoff context, so
+        // a bare setContext() before playTrack() would get clobbered.
+        val first = spinoffPool.removeAt(0)
+        Log.d(TAG, "Pool spinoff: kicking off '$displayName' with '${first.title}' by ${first.artist} (${spinoffPool.size} remaining)")
+        playTrack(first, context = spinoffContext)
     }
 
     /**

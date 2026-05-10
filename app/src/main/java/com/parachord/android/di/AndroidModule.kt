@@ -723,6 +723,13 @@ val androidModule = module {
             trackResolverCache = get(),
         )
     }
+    single {
+        com.parachord.android.deeplink.PlayRadioDispatcher(
+            playbackController = get(),
+            teardown = get(),
+            protocolPlayHandler = get(),
+        )
+    }
 
     // ── Sync ─────────────────────────────────────────────────────────
 

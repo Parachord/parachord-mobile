@@ -4,9 +4,15 @@ import com.parachord.android.playback.PlaybackController
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.ProtocolPlayTeardown
 import com.parachord.shared.deeplink.RadioMode
-import com.parachord.shared.platform.Log
 
-private const val TAG = "PlayRadioDispatcher"
+/** One-shot result for the toast / log surface. Mirrors [ProtocolPlayResult]. */
+sealed class PlayRadioResult {
+    /** Mode B successfully kicked off (Last.fm fetch starts in background). */
+    data class StartedModeB(val displayName: String) : PlayRadioResult()
+    /** Mode C successfully kicked off — N tracks in pool. */
+    data class StartedModeC(val displayName: String, val trackCount: Int) : PlayRadioResult()
+    data class Failed(val reason: String) : PlayRadioResult()
+}
 
 /**
  * Orchestrator for `parachord://play/radio` (Phase 3, issue #121).
@@ -18,14 +24,15 @@ private const val TAG = "PlayRadioDispatcher"
  *    [PlaybackController.startSpinoffWithSeed]. Title-bearing seeds use
  *    Last.fm `track.getsimilar`; artist-only seeds fall back to
  *    `artist.getTopTracks`.
- *  - **Mode C (pool-based)** — `?url=`/`?tracks=`/`?refill=`. Wired in
- *    Task 4 (this file is left intentionally minimal until then).
+ *  - **Mode C (pool-based)** — `?url=`/`?tracks=`/`?refill=`. Delegates
+ *    to [ProtocolPlayHandler] for resolve + teardown + entity build, then
+ *    [PlaybackController.startPoolBasedSpinoff] for the pool kick-off.
+ *    The acknowledgment toast ("Building radio…") is the VM's
+ *    responsibility — emitted before [dispatch] runs since Mode C URL
+ *    fetch can take seconds and the user needs feedback.
  *
- * Acknowledgment toast ("Building radio…") fires before teardown so the
- * user gets immediate feedback that the deeplink was understood.
- *
- * **Teardown semantics**: Mode B clears the queue + exits any active
- * spinoff + stops listen-along, matching the Phase 2 album/playlist
+ * **Teardown semantics**: both modes clear the queue + exit any active
+ * spinoff + stop listen-along, matching the Phase 2 album/playlist
  * behavior. The in-app right-click → Spinoff path does NOT call teardown
  * (it preserves the queue and returns to it on exit), but the deeplink
  * path is "start fresh radio" semantics, so teardown is correct here.
@@ -33,19 +40,19 @@ private const val TAG = "PlayRadioDispatcher"
 class PlayRadioDispatcher(
     private val playbackController: PlaybackController,
     private val teardown: ProtocolPlayTeardown,
-    private val toast: suspend (String) -> Unit,
+    private val protocolPlayHandler: ProtocolPlayHandler,
 ) {
-    suspend fun dispatch(action: DeepLinkAction.PlayRadio) {
-        when (val mode = action.mode) {
+    suspend fun dispatch(action: DeepLinkAction.PlayRadio): PlayRadioResult {
+        return when (val mode = action.mode) {
             is RadioMode.ArtistSeed -> {
-                toast("Building radio…")
                 teardown.prepareForNewPlayback()
+                val displayName = action.name
+                    ?: mode.title?.let { "Radio: ${mode.artist} – $it" }
+                    ?: "Radio: ${mode.artist}"
                 playbackController.startSpinoffWithSeed(
                     seedArtist = mode.artist,
                     seedTitle = mode.title,
-                    displayName = action.name
-                        ?: mode.title?.let { "Radio: ${mode.artist} – $it" }
-                        ?: "Radio: ${mode.artist}",
+                    displayName = displayName,
                     // Mode B is "start fresh radio now" semantics — kick
                     // the first pool track immediately rather than
                     // waiting for an existing song to finish (the
@@ -53,11 +60,18 @@ class PlayRadioDispatcher(
                     // whatever's currently playing).
                     kickStartFirstTrack = true,
                 )
+                PlayRadioResult.StartedModeB(displayName)
             }
             is RadioMode.PoolBased -> {
-                // Wired in Task 4.
-                Log.d(TAG, "Mode C (pool-based) not yet wired: $action")
-                toast("Mode C coming next commit")
+                // Mode C delegates resolve + teardown + entity build to
+                // ProtocolPlayHandler. Translate its result into our
+                // result type so the VM only has one sealed match site.
+                when (val r = protocolPlayHandler.handle(action)) {
+                    is ProtocolPlayResult.Started ->
+                        PlayRadioResult.StartedModeC(r.displayName, r.trackCount)
+                    is ProtocolPlayResult.Failed ->
+                        PlayRadioResult.Failed(r.reason)
+                }
             }
         }
     }
