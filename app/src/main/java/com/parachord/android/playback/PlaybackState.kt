@@ -17,6 +17,16 @@ data class PlaybackState(
     val spinoffLoading: Boolean = false,
     val spinoffAvailable: Boolean? = null, // null=unchecked, true/false=checked
     /**
+     * True while a deeplink-initiated radio is fetching its pool
+     * (`parachord://play/radio?url=…` Mode C) and there's no current
+     * track yet. Drives the mini-player loading spinner so the user
+     * knows something is happening during the multi-second URL fetch.
+     * The dispatcher toggles this around the handler call. Cleared
+     * automatically when [currentTrack] is set, but the dispatcher
+     * also clears it in a finally-block to cover the failure paths.
+     */
+    val isPlaybarLoading: Boolean = false,
+    /**
      * Actual metadata from the streaming source (Spotify / Apple Music).
      * When non-null, the streaming service reported different track info than
      * what we queued — indicates a low-confidence match or mismatched track.

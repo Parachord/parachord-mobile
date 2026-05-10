@@ -179,3 +179,59 @@ fun MiniPlayer(
         }
     }
 }
+
+/**
+ * Loading-state stub of [MiniPlayer], rendered when
+ * `isPlaybarLoading && currentTrack == null` — i.e. a deeplink-initiated
+ * radio (`parachord://play/radio?url=…` Mode C) is mid-fetch and we
+ * haven't picked a first track yet. Same height + surface as the real
+ * mini-player so the bottom-bar layout doesn't jump when the first track
+ * lands. Spinner sits where album art would be; the placeholder text
+ * gives the user something to read during the multi-second fetch.
+ */
+@Composable
+fun MiniPlayerLoading(
+    label: String = "Loading…",
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(PlayerSurface),
+    ) {
+        // Same 2dp slot as the real progress bar so heights match exactly.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(2.dp)
+                .background(Color.White.copy(alpha = 0.1f)),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Spinner in the album-art slot (40dp).
+            Box(
+                modifier = Modifier.size(40.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = PurpleDark,
+                    strokeWidth = 2.dp,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = label,
+                color = PlayerTextSecondary,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}

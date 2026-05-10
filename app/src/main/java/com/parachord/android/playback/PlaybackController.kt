@@ -1716,6 +1716,18 @@ class PlaybackController constructor(
     }
 
     /**
+     * Toggle the playbar loading flag, used by the deeplink dispatcher
+     * to show a spinner in the mini-player while a Mode C radio pool
+     * is being fetched (multi-second URL fetch + parse + resolve).
+     * The flag clears automatically once a track lands in
+     * [PlaybackState.currentTrack], but the dispatcher also clears it
+     * via a finally-block so failure paths don't leave it stuck.
+     */
+    fun setPlaybarLoading(loading: Boolean) {
+        stateHolder.update { copy(isPlaybarLoading = loading) }
+    }
+
+    /**
      * Pool-based spinoff (Mode C of `parachord://play/radio`).
      *
      * No Last.fm seed step — the caller supplies an already-resolved pool,

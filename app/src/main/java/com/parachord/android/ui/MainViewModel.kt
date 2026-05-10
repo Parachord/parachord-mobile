@@ -435,6 +435,14 @@ class MainViewModel constructor(
         lastListenAlongTrackKey = trackKey
 
         try {
+            // Listen-along friend tracks must pass the resolver confidence
+            // floor (issue #121 §H, UX addendum). resolverScoring.selectBest
+            // filters sources below MIN_CONFIDENCE_THRESHOLD (0.60), so a
+            // null return here means no resolver had a real match — drop
+            // the track silently rather than play a wrong-song result.
+            // Contract anchor: ResolverScoringTest."selectBest filters
+            // below-floor confidence" + "selectBest null confidence
+            // filtered by floor when above-floor source present".
             val sources = resolverManager.resolveWithHints(query = "$trackArtist - $trackName", targetTitle = trackName, targetArtist = trackArtist)
             val best = resolverScoring.selectBest(sources) ?: return
 

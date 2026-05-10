@@ -40,7 +40,19 @@ sealed class DeepLinkNavEvent {
     data object Settings : DeepLinkNavEvent()
     data class Search(val query: String?) : DeepLinkNavEvent()
     data class Chat(val prompt: String?) : DeepLinkNavEvent()
-    data class Toast(val message: String) : DeepLinkNavEvent()
+
+    /**
+     * Acknowledgment toasts for slow operations (radio fetch, listen-along
+     * lookup) opt into [longDuration]=true so they read as ~3.5s rather
+     * than ~2s. Desktop uses a 30s clearing-on-event toast — Android Toast
+     * doesn't support arbitrary durations or programmatic dismiss-on-event,
+     * so we approximate via LENGTH_LONG. Future polish: convert to a
+     * Compose Snackbar with explicit duration + clear-on-track-change.
+     */
+    data class Toast(
+        val message: String,
+        val longDuration: Boolean = false,
+    ) : DeepLinkNavEvent()
 
     /**
      * `parachord://listen-along` resolved to a Friend (saved or
@@ -373,7 +385,7 @@ class DeepLinkViewModel constructor(
      * count once the pool is built.
      */
     private suspend fun dispatchPlayRadio(action: DeepLinkAction.PlayRadio) {
-        _navEvents.emit(DeepLinkNavEvent.Toast("Building radio…"))
+        _navEvents.emit(DeepLinkNavEvent.Toast("Building radio…", longDuration = true))
         when (val r = playRadioDispatcher.dispatch(action)) {
             is PlayRadioResult.StartedModeB -> {
                 // Mode B doesn't need a follow-up toast — the banner shows
@@ -396,7 +408,7 @@ class DeepLinkViewModel constructor(
      * lookup misses and we have to round-trip the now-playing API.
      */
     private suspend fun dispatchListenAlong(action: DeepLinkAction.ListenAlong) {
-        _navEvents.emit(DeepLinkNavEvent.Toast("Catching up to ${action.user}…"))
+        _navEvents.emit(DeepLinkNavEvent.Toast("Catching up to ${action.user}…", longDuration = true))
         when (val r = listenAlongDispatcher.dispatch(action)) {
             is ListenAlongResult.Started -> {
                 // MainActivity collects this and calls

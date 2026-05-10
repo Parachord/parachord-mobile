@@ -77,11 +77,22 @@ class PlayRadioDispatcher(
                 playbackController.setPoolFetcher { url ->
                     protocolPlayHandler.resolveTrackList(url)
                 }
-                when (val r = protocolPlayHandler.handle(action)) {
-                    is ProtocolPlayResult.Started ->
-                        PlayRadioResult.StartedModeC(r.displayName, r.trackCount)
-                    is ProtocolPlayResult.Failed ->
-                        PlayRadioResult.Failed(r.reason)
+                // Show the mini-player spinner during the URL fetch +
+                // parse + resolve cascade (can take multiple seconds).
+                // try/finally guarantees the flag clears on failure
+                // paths too, even though startPoolBasedSpinoff()'s
+                // playTrack call would otherwise clear it via the
+                // currentTrack=null → non-null transition.
+                playbackController.setPlaybarLoading(true)
+                try {
+                    when (val r = protocolPlayHandler.handle(action)) {
+                        is ProtocolPlayResult.Started ->
+                            PlayRadioResult.StartedModeC(r.displayName, r.trackCount)
+                        is ProtocolPlayResult.Failed ->
+                            PlayRadioResult.Failed(r.reason)
+                    }
+                } finally {
+                    playbackController.setPlaybarLoading(false)
                 }
             }
         }
