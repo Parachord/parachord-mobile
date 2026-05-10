@@ -28,8 +28,10 @@ import kotlinx.serialization.json.Json
  *  2. Logging — early, sees behavior post-content-negotiation; sanitizes Authorization
  *  3. DefaultRequest — sets User-Agent + baseline headers; before auth so it applies on retries
  *  4. OAuthRefreshPlugin — 401 → refresh + retry, single-flight per realm
- *  5. ListenBrainzAuthPlugin — auto-attach `Authorization: Token <token>` for api.listenbrainz.org;
- *                              after OAuthRefreshPlugin so the LB token applies on retries too
+ *  5. ListenBrainzAuthPlugin — auto-attach `Authorization: Token <token>` for api.listenbrainz.org.
+ *                              Order vs. OAuthRefreshPlugin doesn't matter (no host overlap — LB
+ *                              tokens are static and never refreshed by OAuthRefreshPlugin), but
+ *                              kept after OAuth for visual grouping with auth-related plugins.
  *  6. HttpTimeout — last, wraps everything in 60s/15s/30s budget
  */
 expect fun createHttpClient(

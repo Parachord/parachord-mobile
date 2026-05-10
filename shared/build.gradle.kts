@@ -80,4 +80,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        // Return defaults for unmocked Android stubs (e.g. android.util.Log.*) so
+        // shared production code paths that log via the platform Log expect/actual
+        // don't throw "Method not mocked" RuntimeExceptions in JVM unit tests.
+        // Mirrors the same setting on :app — see CLAUDE.md "Common Mistakes".
+        unitTests.isReturnDefaultValues = true
+    }
 }

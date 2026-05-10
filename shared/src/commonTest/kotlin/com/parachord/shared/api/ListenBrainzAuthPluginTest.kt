@@ -81,6 +81,9 @@ class ListenBrainzAuthPluginTest {
 
     @Test
     fun providerThrows_passesThroughWithoutAuthHeader() = runTest {
+        // We deliberately don't propagate the throwable — a thrown exception
+        // here would kill every LB call. The plugin logs the failure (Log.w)
+        // and falls through; callers see the natural 401 from the server.
         var seenAuth: String? = null
         val engine = MockEngine { req ->
             seenAuth = req.headers["Authorization"]

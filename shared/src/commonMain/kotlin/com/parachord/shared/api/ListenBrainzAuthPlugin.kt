@@ -1,7 +1,10 @@
 package com.parachord.shared.api
 
+import com.parachord.shared.platform.Log
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.http.HttpHeaders
+
+private const val TAG = "ListenBrainzAuthPlugin"
 
 /**
  * Ktor plugin that auto-attaches `Authorization: Token <token>` to every request
@@ -46,7 +49,10 @@ val ListenBrainzAuthPlugin = createClientPlugin("ListenBrainzAuth", ::ListenBrai
             tokenProvider()
         } catch (e: Throwable) {
             // SettingsStore lookup should never throw, but defend anyway —
-            // a thrown exception here would kill every LB call.
+            // a thrown exception here would kill every LB call. Log so a
+            // misconfigured SettingsStore produces a diagnostic trail rather
+            // than a silent 401.
+            Log.w(TAG, "tokenProvider threw, omitting Authorization: ${e.message}")
             null
         }
         if (!token.isNullOrBlank()) {
