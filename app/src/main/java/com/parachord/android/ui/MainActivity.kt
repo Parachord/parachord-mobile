@@ -329,6 +329,14 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                     navController.navigate(Routes.CHAT) { launchSingleTop = true }
                 is DeepLinkNavEvent.Toast ->
                     Toast.makeText(context, event.message, Toast.LENGTH_SHORT).show()
+                is DeepLinkNavEvent.StartListenAlong -> {
+                    // The dispatcher already ran the listen-along
+                    // handover teardown (exit-spinoff + clear-queue,
+                    // skipping listen-along stop). startListenAlong
+                    // calls stopListenAlong(silent=true) at its top so
+                    // the swap from any active friend is atomic.
+                    mainViewModel.startListenAlong(event.friend)
+                }
             }
         }
     }

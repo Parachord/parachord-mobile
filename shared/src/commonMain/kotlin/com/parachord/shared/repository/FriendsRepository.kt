@@ -20,6 +20,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,6 +54,120 @@ class FriendsRepository(
 
     /** Get a single friend by ID. */
     suspend fun getFriendById(id: String): Friend? = friendDao.getFriendById(id)
+
+    /**
+     * Look up a saved friend by `(service, username)`. Case-insensitive
+     * on the username so the deeplink user `?user=mrmonkey` finds a
+     * stored "MrMonkey".
+     *
+     * Used by the `parachord://listen-along` dispatcher to decide
+     * between calling [MainViewModel.startListenAlong] with a stored
+     * Friend (this returns non-null) versus minting a transient one
+     * via [fetchTransientFriendNowPlaying] (this returns null).
+     */
+    suspend fun findByServiceAndUsername(service: String, username: String): Friend? =
+        withContext(Dispatchers.Default) {
+            getAllFriends().first().firstOrNull {
+                it.service == service && it.username.equals(username, ignoreCase = true)
+            }
+        }
+
+    /**
+     * Fetch the target user's currently-playing track and build a
+     * synthetic, NON-PERSISTED [Friend] record for the
+     * `parachord://listen-along` deeplink path. Returns `null` when:
+     *
+     *  - LB user has no `playing-now` entry, OR
+     *  - Last.fm response's first track has `@attr.nowplaying != "true"`,
+     *    OR
+     *  - the API call fails (calm UX — caller surfaces a "not currently
+     *    listening" toast rather than an error).
+     *
+     * The returned Friend's id is `transient:{service}:{user}` and its
+     * `transient` flag is `true`. Callers pass it directly to
+     * `MainViewModel.startListenAlong(friend)` — that VM only reads
+     * cachedTrack* fields + id/displayName/service, none of which need
+     * a Room row to exist. `cachedTrackTimestamp` is stamped at "now"
+     * (seconds since epoch) so [Friend.isOnAir] returns true.
+     */
+    suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
+        withContext(Dispatchers.Default) {
+            try {
+                when (service) {
+                    "listenbrainz" -> {
+                        val listen = listenBrainzClient.getPlayingNow(user) ?: return@withContext null
+                        buildTransientFriend(
+                            service = service,
+                            user = user,
+                            trackName = listen.trackName,
+                            trackArtist = listen.artistName,
+                            trackAlbum = listen.releaseName,
+                            artworkUrl = null,
+                        )
+                    }
+                    "lastfm" -> {
+                        val response = lastFmClient.getUserRecentTracks(
+                            user = user,
+                            apiKey = lastFmApiKey,
+                            limit = 1,
+                        )
+                        val first = response.recenttracks?.track?.firstOrNull() ?: return@withContext null
+                        // Only treat the row as "now playing" when Last.fm
+                        // explicitly flags it. Unlike refreshLastFmActivity()
+                        // we don't sanity-check against a recent scrobble
+                        // here — the deeplink path is one-shot and the user
+                        // is already opting in by sharing the link; even a
+                        // slightly stale flag is acceptable, and the polling
+                        // loop will recover on the next tick.
+                        if (first.attr?.nowplaying != "true") return@withContext null
+                        val artist = first.artist?.name?.takeIf { it.isNotBlank() }
+                            ?: return@withContext null
+                        val title = first.name.takeIf { it.isNotBlank() }
+                            ?: return@withContext null
+                        buildTransientFriend(
+                            service = service,
+                            user = user,
+                            trackName = title,
+                            trackArtist = artist,
+                            trackAlbum = first.album?.name?.takeIf { it.isNotBlank() },
+                            artworkUrl = first.image.bestImageUrl(),
+                        )
+                    }
+                    else -> null
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "fetchTransientFriendNowPlaying failed for $service:$user", e)
+                null
+            }
+        }
+
+    private fun buildTransientFriend(
+        service: String,
+        user: String,
+        trackName: String,
+        trackArtist: String,
+        trackAlbum: String?,
+        artworkUrl: String?,
+    ): Friend = Friend(
+        id = "transient:$service:$user",
+        username = user,
+        service = service,
+        displayName = user,
+        avatarUrl = null,
+        addedAt = currentTimeMillis(),
+        lastFetchedAt = currentTimeMillis(),
+        cachedTrackName = trackName,
+        cachedTrackArtist = trackArtist,
+        cachedTrackAlbum = trackAlbum,
+        cachedTrackArtworkUrl = artworkUrl,
+        // Seconds since epoch — matches the timestamp scale used by
+        // refreshLastFmActivity and refreshListenBrainzActivity, so
+        // Friend.isOnAir's 10-min window evaluates correctly.
+        cachedTrackTimestamp = currentTimeMillis() / 1000,
+        pinnedToSidebar = false,
+        autoPinned = false,
+        transient = true,
+    )
 
     /** Remove a friend locally and unfollow on the service. */
     suspend fun removeFriend(friendId: String) = withContext(Dispatchers.Default) {

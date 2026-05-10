@@ -41,6 +41,18 @@ sealed class DeepLinkNavEvent {
     data class Search(val query: String?) : DeepLinkNavEvent()
     data class Chat(val prompt: String?) : DeepLinkNavEvent()
     data class Toast(val message: String) : DeepLinkNavEvent()
+
+    /**
+     * `parachord://listen-along` resolved to a Friend (saved or
+     * transient). MainActivity collects this and calls
+     * `MainViewModel.startListenAlong(friend)`.
+     *
+     * Event-based dispatch is preferred over a direct callback: it
+     * matches every other deeplink-driven nav transition, keeps the
+     * ViewModel free of an Activity-scoped reference, and survives
+     * recompositions cleanly.
+     */
+    data class StartListenAlong(val friend: com.parachord.shared.model.Friend) : DeepLinkNavEvent()
 }
 
 /**
@@ -64,6 +76,7 @@ class DeepLinkViewModel constructor(
     private val protocolPlayHandler: ProtocolPlayHandler,
     private val protocolPlayTeardown: com.parachord.shared.deeplink.ProtocolPlayTeardown,
     private val playRadioDispatcher: PlayRadioDispatcher,
+    private val listenAlongDispatcher: ListenAlongDispatcher,
 ) : ViewModel() {
 
     private val _navEvents = MutableSharedFlow<DeepLinkNavEvent>()
@@ -316,10 +329,7 @@ class DeepLinkViewModel constructor(
 
                 // ── Phase 3 (#121) ──
                 is DeepLinkAction.PlayRadio -> dispatchPlayRadio(action)
-                is DeepLinkAction.ListenAlong -> {
-                    Log.d(TAG, "Protocol handler not yet wired (Phase 3): $action")
-                    _navEvents.emit(DeepLinkNavEvent.Toast("Coming soon"))
-                }
+                is DeepLinkAction.ListenAlong -> dispatchListenAlong(action)
             }
         }
     }
@@ -374,6 +384,39 @@ class DeepLinkViewModel constructor(
             )
             is PlayRadioResult.Failed -> _navEvents.emit(
                 DeepLinkNavEvent.Toast("Radio failed: ${r.reason}")
+            )
+        }
+    }
+
+    /**
+     * Dispatch a `parachord://listen-along` action through
+     * [ListenAlongDispatcher]. Acknowledgment toast fires immediately
+     * (per issue #121's "UX polish" addendum — feedback within ~500ms
+     * of the deeplink) so the user sees something even if the local
+     * lookup misses and we have to round-trip the now-playing API.
+     */
+    private suspend fun dispatchListenAlong(action: DeepLinkAction.ListenAlong) {
+        _navEvents.emit(DeepLinkNavEvent.Toast("Catching up to ${action.user}…"))
+        when (val r = listenAlongDispatcher.dispatch(action)) {
+            is ListenAlongResult.Started -> {
+                // MainActivity collects this and calls
+                // mainViewModel.startListenAlong(friend), which
+                // internally runs stopListenAlong(silent=true) before
+                // starting the new loop — the swap is atomic.
+                _navEvents.emit(DeepLinkNavEvent.StartListenAlong(r.friend))
+            }
+            is ListenAlongResult.NotPlaying -> {
+                val serviceLabel = when (r.service) {
+                    "lastfm" -> "Last.fm"
+                    "listenbrainz" -> "ListenBrainz"
+                    else -> r.service
+                }
+                _navEvents.emit(
+                    DeepLinkNavEvent.Toast("${r.username} is not currently listening on $serviceLabel")
+                )
+            }
+            is ListenAlongResult.Failed -> _navEvents.emit(
+                DeepLinkNavEvent.Toast("Listen along failed: ${r.reason}")
             )
         }
     }

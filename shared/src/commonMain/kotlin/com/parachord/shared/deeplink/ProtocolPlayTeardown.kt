@@ -35,4 +35,21 @@ interface ProtocolPlayTeardown {
      * for the queue clear to settle before submitting new tracks.
      */
     suspend fun prepareForNewPlayback()
+
+    /**
+     * Half-teardown for `parachord://listen-along` friend-A → friend-B
+     * handover. Runs steps **(1) exit spinoff** and **(3) clear queue**,
+     * but DELIBERATELY SKIPS step (2) "stop listen-along".
+     *
+     * The reason: `MainViewModel.startListenAlong(friend)` already calls
+     * `stopListenAlong(silent = true)` at its top, so the swap is atomic.
+     * Calling [prepareForNewPlayback] here would tear down the very
+     * listen-along loop we're about to replace — a stop+start race that
+     * occasionally lets the dying loop's last poll tick clobber the new
+     * friend's track right after `startListenAlong` set it.
+     *
+     * Use this method, NOT [prepareForNewPlayback], from any code path
+     * that's about to call `MainViewModel.startListenAlong`.
+     */
+    suspend fun prepareForListenAlongHandover()
 }

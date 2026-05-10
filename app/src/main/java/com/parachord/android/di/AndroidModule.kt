@@ -730,6 +730,12 @@ val androidModule = module {
             protocolPlayHandler = get(),
         )
     }
+    single {
+        com.parachord.android.deeplink.ListenAlongDispatcher(
+            friendsRepository = get(),
+            teardown = get(),
+        )
+    }
 
     // ── Sync ─────────────────────────────────────────────────────────
 

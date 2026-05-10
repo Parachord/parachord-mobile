@@ -198,6 +198,50 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         }
     }
 
+    /**
+     * Fetch a user's currently-playing track (if any).
+     *
+     * Endpoint: `GET /1/user/{name}/playing-now`. The response shape is
+     * identical to `/listens` but capped to at most one entry — reuse
+     * [ListensWire] and pluck `listens.firstOrNull()`. Returns `null`
+     * when the user isn't currently scrobbling, when track metadata is
+     * blank, or on any HTTP error.
+     *
+     * Auth required as of mid-2026; the [ListenBrainzAuthPlugin] (Phase
+     * 3 Task 2) auto-attaches the configured token, so this method
+     * doesn't need a token parameter. If no token is configured the
+     * request will 401 and we return null.
+     *
+     * Used by the `parachord://listen-along` transient-friend fallback
+     * when the target user isn't in the local friends list.
+     */
+    suspend fun getPlayingNow(username: String): LbListen? {
+        return try {
+            val response = httpClient.get("$BASE_URL/1/user/$username/playing-now")
+            if (!response.status.isSuccess()) {
+                Log.w(TAG, "playing-now returned ${response.status.value} for $username")
+                return null
+            }
+            val parsed = json.decodeFromString<ListensWire>(response.bodyAsText())
+            val listen = parsed.payload?.listens?.firstOrNull() ?: return null
+            val md = listen.trackMetadata ?: return null
+            val artist = md.artistName.orEmpty()
+            val title = md.trackName.orEmpty()
+            if (artist.isBlank() || title.isBlank()) return null
+            LbListen(
+                artistName = artist,
+                trackName = title,
+                releaseName = md.releaseName?.ifBlank { null },
+                listenedAt = listen.listenedAt ?: 0L,
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "playing-now failed for $username", e)
+            null
+        }
+    }
+
     /** Fetch user's top artists. range: week, month, quarter, half_yearly, year, all_time. */
     suspend fun getUserTopArtists(
         username: String,

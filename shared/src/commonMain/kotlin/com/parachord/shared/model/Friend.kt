@@ -15,6 +15,17 @@ data class Friend(
     val cachedTrackArtworkUrl: String? = null,
     val pinnedToSidebar: Boolean = false,
     val autoPinned: Boolean = false,
+    /**
+     * `true` for synthetic Friend records minted on the fly by the
+     * `parachord://listen-along?service=…&user=…` deeplink for users who
+     * are not in the local friends DB. Transient friends are NEVER
+     * persisted via [com.parachord.shared.db.dao.FriendDao] (the DAO's
+     * `upsert` doesn't read this field, and the listen-along path goes
+     * directly to `MainViewModel.startListenAlong(friend)` without
+     * touching Room). Default `false` keeps every existing call site
+     * — DB hydration, sync, friend-add — untouched.
+     */
+    val transient: Boolean = false,
 ) {
     /** Friend is "on air" if their cached track was played within the last 10 minutes. */
     val isOnAir: Boolean

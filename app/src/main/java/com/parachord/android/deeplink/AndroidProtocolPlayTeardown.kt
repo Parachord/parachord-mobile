@@ -72,4 +72,29 @@ class AndroidProtocolPlayTeardown constructor(
             Log.w(TAG, "clearQueue failed: ${e.message}")
         }
     }
+
+    override suspend fun prepareForListenAlongHandover() {
+        // Step 1 — exit spinoff. Same rationale as [prepareForNewPlayback]:
+        // a leftover spinoff parent would shape the new friend's playback.
+        try {
+            playbackController.exitSpinoff()
+        } catch (e: Exception) {
+            Log.w(TAG, "exitSpinoff failed: ${e.message}")
+        }
+
+        // Step 2 (stop listen-along) is INTENTIONALLY OMITTED — see
+        // [ProtocolPlayTeardown.prepareForListenAlongHandover] KDoc.
+        // MainViewModel.startListenAlong handles its own swap.
+
+        // Step 3 — clear the queue. Without this, the previous context's
+        // tracks remain queued behind the listen-along ticker's first
+        // play, then surface as soon as the user is no longer in sync
+        // with the friend. Mirrors the desktop's listen-along entry
+        // path which also wipes the queue.
+        try {
+            playbackController.clearQueue()
+        } catch (e: Exception) {
+            Log.w(TAG, "clearQueue failed: ${e.message}")
+        }
+    }
 }
