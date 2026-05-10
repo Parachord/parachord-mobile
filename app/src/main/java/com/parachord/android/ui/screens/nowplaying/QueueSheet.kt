@@ -98,7 +98,14 @@ fun QueueSheet(
                 if (playbackContext != null) {
                     val contextLabel = when (playbackContext.type) {
                         "listen-along" -> "Listening along with ${playbackContext.name}"
-                        "spinoff" -> playbackContext.name // "Spinoff from {track}"
+                        // Spinoff covers two flavors: in-app right-click → Spinoff
+                        // (name = "Spinoff from {title}") and Mode B/C protocol radio
+                        // (id = "pool-based", name = station name e.g. "Radio: Slowdive").
+                        // Desktop branches its "Spun off from X by Y" template to
+                        // station-name-only when sourceTrack.artist is blank — Android
+                        // never had that template, so rendering name directly is the
+                        // correct convergence point for both flavors.
+                        "spinoff" -> playbackContext.name
                         else -> "Playing from: ${playbackContext.name}"
                     }
                     val contextColor = when (playbackContext.type) {
