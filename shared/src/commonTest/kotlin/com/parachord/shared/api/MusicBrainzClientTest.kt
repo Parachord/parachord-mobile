@@ -8,8 +8,10 @@ import com.parachord.shared.config.AppConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.decodeURLQueryComponent
 import io.ktor.http.headersOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -49,6 +51,28 @@ class MusicBrainzClientTest {
         return MusicBrainzClient(httpClient)
     }
 
+    /**
+     * Read a query parameter from a captured Ktor [HttpRequestData].
+     *
+     * Workaround for Ktor 3.1.1 (#133): query params added via the
+     * `parameter("k", v)` extension on `HttpRequestBuilder` end up in the
+     * eventual request URL but are NOT visible via `request.url.parameters[k]`
+     * inside a `MockEngine` lambda — that map returns `null`. The encoded
+     * URL string DOES contain them, so we parse out of the query string
+     * directly. Returns null when [name] isn't present.
+     */
+    private fun queryParam(request: HttpRequestData, name: String): String? {
+        val query = request.url.toString().substringAfter('?', missingDelimiterValue = "")
+        if (query.isEmpty()) return null
+        return query.split('&')
+            .firstNotNullOfOrNull { kv ->
+                val eq = kv.indexOf('=')
+                if (eq < 0) return@firstNotNullOfOrNull null
+                val k = kv.substring(0, eq).decodeURLQueryComponent()
+                if (k != name) null else kv.substring(eq + 1).decodeURLQueryComponent(plusIsSpace = true)
+            }
+    }
+
     @Test
     fun searchRecordings_buildsCorrectRequest_andDeserializesResponse() = runBlocking {
         val mock = MockEngine { request ->
@@ -56,9 +80,9 @@ class MusicBrainzClientTest {
                 "https://musicbrainz.org/ws/2/recording/",
                 request.url.toString().substringBefore("?"),
             )
-            assertEquals("turnstile", request.url.parameters["query"])
-            assertEquals("20", request.url.parameters["limit"])
-            assertEquals("json", request.url.parameters["fmt"])
+            assertEquals("turnstile", queryParam(request, "query"))
+            assertEquals("20", queryParam(request, "limit"))
+            assertEquals("json", queryParam(request, "fmt"))
             respond(
                 content = """
                     {
@@ -98,9 +122,9 @@ class MusicBrainzClientTest {
                 "https://musicbrainz.org/ws/2/release/",
                 request.url.toString().substringBefore("?"),
             )
-            assertEquals("glow on", request.url.parameters["query"])
-            assertEquals("10", request.url.parameters["limit"])
-            assertEquals("json", request.url.parameters["fmt"])
+            assertEquals("glow on", queryParam(request, "query"))
+            assertEquals("10", queryParam(request, "limit"))
+            assertEquals("json", queryParam(request, "fmt"))
             respond(
                 content = """
                     {
@@ -140,9 +164,9 @@ class MusicBrainzClientTest {
                 "https://musicbrainz.org/ws/2/artist/",
                 request.url.toString().substringBefore("?"),
             )
-            assertEquals("turnstile", request.url.parameters["query"])
-            assertEquals("5", request.url.parameters["limit"])
-            assertEquals("json", request.url.parameters["fmt"])
+            assertEquals("turnstile", queryParam(request, "query"))
+            assertEquals("5", queryParam(request, "limit"))
+            assertEquals("json", queryParam(request, "fmt"))
             respond(
                 content = """
                     {
@@ -180,8 +204,8 @@ class MusicBrainzClientTest {
                 "https://musicbrainz.org/ws/2/release/rel-1",
                 request.url.toString().substringBefore("?"),
             )
-            assertEquals("recordings+artist-credits", request.url.parameters["inc"])
-            assertEquals("json", request.url.parameters["fmt"])
+            assertEquals("recordings+artist-credits", queryParam(request, "inc"))
+            assertEquals("json", queryParam(request, "fmt"))
             respond(
                 content = """
                     {
@@ -232,10 +256,10 @@ class MusicBrainzClientTest {
                 "https://musicbrainz.org/ws/2/release-group",
                 request.url.toString().substringBefore("?"),
             )
-            assertEquals("art-1", request.url.parameters["artist"])
-            assertEquals("100", request.url.parameters["limit"])
-            assertEquals("0", request.url.parameters["offset"])
-            assertEquals("json", request.url.parameters["fmt"])
+            assertEquals("art-1", queryParam(request, "artist"))
+            assertEquals("100", queryParam(request, "limit"))
+            assertEquals("0", queryParam(request, "offset"))
+            assertEquals("json", queryParam(request, "fmt"))
             respond(
                 content = """
                     {
@@ -286,8 +310,8 @@ class MusicBrainzClientTest {
                 "https://musicbrainz.org/ws/2/artist/art-1",
                 request.url.toString().substringBefore("?"),
             )
-            assertEquals("url-rels", request.url.parameters["inc"])
-            assertEquals("json", request.url.parameters["fmt"])
+            assertEquals("url-rels", queryParam(request, "inc"))
+            assertEquals("json", queryParam(request, "fmt"))
             respond(
                 content = """
                     {
@@ -322,7 +346,7 @@ class MusicBrainzClientTest {
         // Validates non-default `inc` value flows through to the query string.
         var capturedInc: String? = null
         val mock = MockEngine { request ->
-            capturedInc = request.url.parameters["inc"]
+            capturedInc = queryParam(request, "inc")
             respond(
                 content = """{"id":"rel-1","title":"x","media":[]}""",
                 status = HttpStatusCode.OK,

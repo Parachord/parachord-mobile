@@ -65,13 +65,27 @@ class MusicBrainzClient(private val httpClient: HttpClient) {
         it.status.value == 429 || it.status.value == 503
     }
 
-    private suspend inline fun <reified T> guardedGet(url: String, crossinline build: io.ktor.client.request.HttpRequestBuilder.() -> Unit): T =
+    /**
+     * Run a `GET $url` through the rate-limit gate, applying [block] to the
+     * Ktor request builder before sending.
+     *
+     * **Do NOT rename [block] back to `build`** — `HttpRequestBuilder` has a
+     * member function `build(): HttpRequestData` that would silently shadow
+     * the lambda parameter, causing every `parameter("…", …)` call passed
+     * by callers to be discarded. The bug shipped from `f41d5bc` (the
+     * Retrofit→Ktor cutover) until issue #133, surviving because `fmt=json`
+     * (set inline below) was the only param MB actually requires for
+     * happy-path queries to return *something* — search endpoints returned
+     * empty result sets and `inc=` calls returned defaults, but UI paths
+     * fell back to other providers cleanly enough that nobody noticed.
+     */
+    private suspend inline fun <reified T> guardedGet(url: String, crossinline block: io.ktor.client.request.HttpRequestBuilder.() -> Unit): T =
         gate.withPermit(
             isRateLimited = isMbRateLimited,
             exceptionFactory = { MusicBrainzRateLimitedException(it) },
         ) {
             val response: HttpResponse = httpClient.get(url) {
-                build()
+                block()
                 parameter("fmt", "json")
             }
             gate.handleResponse(
