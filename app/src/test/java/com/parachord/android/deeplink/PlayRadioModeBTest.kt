@@ -43,7 +43,7 @@ class PlayRadioModeBTest {
 
         coVerifyOrder {
             td.prepareForNewPlayback()
-            pc.startSpinoffWithSeed("Slowdive", null, any())
+            pc.startSpinoffWithSeed("Slowdive", null, any(), any())
         }
     }
 
@@ -60,7 +60,7 @@ class PlayRadioModeBTest {
         )
 
         coVerify(exactly = 1) {
-            pc.startSpinoffWithSeed("Slowdive", "Sugar For The Pill", "My Custom Station")
+            pc.startSpinoffWithSeed("Slowdive", "Sugar For The Pill", "My Custom Station", any())
         }
     }
 
@@ -81,6 +81,7 @@ class PlayRadioModeBTest {
                 "Slowdive",
                 "Sugar For The Pill",
                 "Radio: Slowdive – Sugar For The Pill",
+                any(),
             )
         }
     }
@@ -98,7 +99,7 @@ class PlayRadioModeBTest {
         )
 
         coVerify(exactly = 1) {
-            pc.startSpinoffWithSeed("Slowdive", null, "Radio: Slowdive")
+            pc.startSpinoffWithSeed("Slowdive", null, "Radio: Slowdive", any())
         }
     }
 
@@ -107,16 +108,48 @@ class PlayRadioModeBTest {
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
         coEvery { td.prepareForNewPlayback() } just runs
-        val toasts = mutableListOf<String>()
-        val dispatcher = PlayRadioDispatcher(pc, td) { toasts += it }
+        val toastFn = mockk<suspend (String) -> Unit>()
+        coEvery { toastFn(any()) } just runs
 
+        val dispatcher = PlayRadioDispatcher(pc, td, toastFn)
         dispatcher.dispatch(
             DeepLinkAction.PlayRadio(mode = RadioMode.ArtistSeed("Slowdive", null))
         )
 
-        // Acknowledgment toast fires before teardown / startSpinoffWithSeed.
-        assert(toasts.firstOrNull() == "Building radio…") {
-            "expected 'Building radio…' first, got $toasts"
+        // Real ordering check: toast must fire BEFORE teardown AND
+        // before startSpinoffWithSeed. The earlier `toasts.firstOrNull()`
+        // assertion would have passed even if toast fired last.
+        coVerifyOrder {
+            toastFn("Building radio…")
+            td.prepareForNewPlayback()
+            pc.startSpinoffWithSeed(any(), any(), any(), any())
+        }
+    }
+
+    @Test
+    fun modeB_passesKickStartFirstTrackTrue_soPoolStartsPlayingImmediately() = runTest {
+        val pc = mockk<PlaybackController>(relaxed = true)
+        val td = mockk<ProtocolPlayTeardown>()
+        coEvery { td.prepareForNewPlayback() } just runs
+        val toastFn = mockk<suspend (String) -> Unit>()
+        coEvery { toastFn(any()) } just runs
+
+        val dispatcher = PlayRadioDispatcher(pc, td, toastFn)
+        dispatcher.dispatch(
+            DeepLinkAction.PlayRadio(
+                mode = RadioMode.ArtistSeed("Slowdive", null),
+            )
+        )
+
+        // Mode B is "start fresh radio now" — the pool's first track must
+        // begin playing without waiting for an existing track to finish.
+        coVerify(exactly = 1) {
+            pc.startSpinoffWithSeed(
+                seedArtist = "Slowdive",
+                seedTitle = null,
+                displayName = "Radio: Slowdive",
+                kickStartFirstTrack = true,
+            )
         }
     }
 
@@ -132,7 +165,7 @@ class PlayRadioModeBTest {
         )
 
         coVerify(exactly = 0) { td.prepareForNewPlayback() }
-        coVerify(exactly = 0) { pc.startSpinoffWithSeed(any(), any(), any()) }
+        coVerify(exactly = 0) { pc.startSpinoffWithSeed(any(), any(), any(), any()) }
         assert(toasts.contains("Mode C coming next commit"))
     }
 }

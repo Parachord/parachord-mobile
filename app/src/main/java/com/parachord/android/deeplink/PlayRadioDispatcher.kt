@@ -46,6 +46,12 @@ class PlayRadioDispatcher(
                     displayName = action.name
                         ?: mode.title?.let { "Radio: ${mode.artist} – $it" }
                         ?: "Radio: ${mode.artist}",
+                    // Mode B is "start fresh radio now" semantics — kick
+                    // the first pool track immediately rather than
+                    // waiting for an existing song to finish (the
+                    // teardown above clears the queue but doesn't stop
+                    // whatever's currently playing).
+                    kickStartFirstTrack = true,
                 )
             }
             is RadioMode.PoolBased -> {

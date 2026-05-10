@@ -1443,11 +1443,23 @@ class PlaybackController constructor(
      * directly. When null, falls back to `"Spinoff from $seedTitle"` (or
      * `"Radio: $seedArtist"` when title is also null) — preserves the
      * existing in-app banner copy for the wrapper [startSpinoff].
+     *
+     * [kickStartFirstTrack] controls whether the first pool track plays
+     * immediately once the pool is populated. The deeplink (Mode B) path
+     * passes `true` — radio should start playing now, regardless of
+     * whatever was previously on. The in-app spinoff path passes the
+     * default `false` so the existing track keeps playing and
+     * `skipNextInternal` pulls from the pool when it ends. Don't infer
+     * this from runtime state — `stateHolder.currentTrack` survives a
+     * teardown's `clearQueue()` call (it only clears on track-end /
+     * explicit stop), so the previous "currentTrack == null" guard
+     * silently failed to kick on Mode B when a song was playing.
      */
     fun startSpinoffWithSeed(
         seedArtist: String,
         seedTitle: String?,
         displayName: String? = null,
+        kickStartFirstTrack: Boolean = false,
     ) {
         if (stateHolder.state.value.spinoffMode) return // already active
 
@@ -1563,8 +1575,7 @@ class PlaybackController constructor(
                 spinoffPool.clear()
                 spinoffPool.addAll(resolvedTracks)
 
-                // Set playback context to spinoff (queue contents untouched).
-                queueManager.setContext(PlaybackContext(type = "spinoff", name = resolvedDisplayName))
+                val spinoffContext = PlaybackContext(type = "spinoff", name = resolvedDisplayName)
 
                 stateHolder.update {
                     copy(
@@ -1583,16 +1594,25 @@ class PlaybackController constructor(
                     Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
                 }
 
-                // Mode B (artist-only, no current track) needs an explicit
-                // kick — there's nothing currently playing to advance INTO
-                // the pool. The in-app title-bearing path lets the current
-                // song finish and skipNextInternal() pulls from the pool.
-                if (seedTitle == null && stateHolder.state.value.currentTrack == null && spinoffPool.isNotEmpty()) {
+                // Kick-start path (Mode B / deeplink): pull the first pool
+                // track and play it now. playTrack() will clearQueue() and
+                // then re-apply the spinoff context atomically — that's
+                // why the context is passed through here instead of being
+                // pre-set; a bare setContext() before playTrack() would
+                // get clobbered by playTrack's internal clearQueue().
+                //
+                // Non-kick path (in-app spinoff): the current track keeps
+                // playing; set the context now so the banner updates
+                // immediately, and let skipNextInternal() pull from the
+                // pool when the current song ends.
+                if (kickStartFirstTrack && spinoffPool.isNotEmpty()) {
                     val first = spinoffPool.removeAt(0)
-                    Log.d(TAG, "Spinoff: kicking off Mode B with '${first.title}' by ${first.artist}")
+                    Log.d(TAG, "Spinoff: kicking off with '${first.title}' by ${first.artist}")
                     withContext(Dispatchers.Main) {
-                        playTrack(first)
+                        playTrack(first, context = spinoffContext)
                     }
+                } else {
+                    queueManager.setContext(spinoffContext)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Spinoff: failed to start", e)
