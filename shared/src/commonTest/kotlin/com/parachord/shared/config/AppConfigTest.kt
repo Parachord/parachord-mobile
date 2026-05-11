@@ -28,4 +28,9 @@ class AppConfigTest {
         val config = AppConfig(isDebug = true)
         assertEquals(true, config.isDebug)
     }
+
+    @Test
+    fun achordionBearerToken_defaultIsEmpty() {
+        assertEquals("", AppConfig().achordionBearerToken)
+    }
 }
