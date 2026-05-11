@@ -132,6 +132,27 @@ class ShareManagerTest {
     }
 
     @Test
+    fun shareArtist_withMbid_callsEntityLinkOnly_noSubmit() = runTest {
+        val achordion = mockk<AchordionClient>()
+        coEvery { achordion.fetchEntityLink(EntityType.Artist, "artist-mbid-1", any()) } returns
+            EntityLink(url = "https://achordion.xyz/artist/slowdive")
+        val mgr = buildManager(achordion = achordion)
+        val result = mgr.shareArtist("Slowdive", artistMbid = "artist-mbid-1")
+        assertEquals("https://achordion.xyz/artist/slowdive", result.url)
+        assertTrue(result.isSmartLink)
+        coVerify(exactly = 0) { achordion.submitTrackLinks(any()) }
+    }
+
+    @Test
+    fun shareArtist_noMbid_returnsLookupFallback() = runTest {
+        val achordion = mockk<AchordionClient>(relaxed = true)
+        val mgr = buildManager(achordion = achordion)
+        val result = mgr.shareArtist("Slowdive", artistMbid = null)
+        assertEquals("https://achordion.xyz/artist/lookup?name=Slowdive", result.url)
+        assertFalse(result.isSmartLink)
+    }
+
+    @Test
     fun shareAlbum_withMbid_callsEntityLinkOnly_noSubmit() = runTest {
         val achordion = mockk<AchordionClient>()
         coEvery { achordion.fetchEntityLink(EntityType.ReleaseGroup, "rg-mbid-1", any()) } returns

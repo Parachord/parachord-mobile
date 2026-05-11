@@ -136,13 +136,17 @@ fun rememberSharePlaylistById(): (String) -> Unit {
 @Composable
 fun rememberShareArtist(): (name: String, imageUrl: String?) -> Unit {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val shareManager: ShareManager = koinInject()
     return remember(context, shareManager) {
-        { name, imageUrl ->
-            // Artists go straight to the deeplink wrapper — no smart-link
-            // shape exists on desktop yet, so no network call is needed.
-            val result = shareManager.shareArtist(name, imageUrl)
-            openShareSheet(context, result.url, result.subject)
+        { name, _ ->
+            // imageUrl is no longer used — Achordion serves the artist page
+            // from name (or MBID, when plumbed through callers in a follow-up).
+            scope.launch {
+                val result = shareManager.shareArtist(name, artistMbid = null)
+                openShareSheet(context, result.url, result.subject)
+            }
+            Unit
         }
     }
 }

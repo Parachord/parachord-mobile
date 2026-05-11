@@ -174,17 +174,19 @@ class ShareManager constructor(
     }
 
     /**
-     * Artists don't have a smart-link shape on desktop yet (per
-     * `TODO-album-smart-links.md` in Parachord/parachord — even albums are
-     * partial), so always fall back to the deeplink wrapper. Recipients with
-     * Parachord installed jump straight into the Artist screen; everyone else
-     * lands on the redirect page that explains what Parachord is.
+     * Shares an artist via the Achordion artist entity page when we have an
+     * MBID, falling back to the `/artist/lookup?name=` route otherwise.
+     * Matches desktop's behavior — no smart-link submit since artists don't
+     * have track-link payloads.
      */
-    fun shareArtist(name: String, imageUrl: String? = null): ShareResult {
-        val subject = name
-        val url = deepLinkWrapper("artist", "/${enc(name)}", isPath = true)
-        return ShareResult(url, subject, isSmartLink = false)
+    suspend fun shareArtist(name: String, artistMbid: String? = null): ShareResult {
+        val entityUrl = tryFetchEntityLink(EntityType.Artist, artistMbid)
+        val url = entityUrl ?: artistLookupUrl(name)
+        return ShareResult(url, name, isSmartLink = entityUrl != null)
     }
+
+    private fun artistLookupUrl(name: String): String =
+        "https://achordion.xyz/artist/lookup?name=${enc(name)}"
 
     private suspend fun tryCreateSmartLink(request: SmartLinkCreateRequest): String? {
         return try {
