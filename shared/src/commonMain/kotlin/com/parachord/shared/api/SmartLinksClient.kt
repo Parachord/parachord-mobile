@@ -11,17 +11,22 @@ import kotlinx.serialization.Serializable
 
 /**
  * Wrapper for the public Smart Links Cloudflare Workers backend that powers
- * desktop's `https://go.parachord.com/<id>` rich share pages — feature.fm /
+ * `https://go.parachord.com/<id>` rich share pages — feature.fm /
  * linkfire-style landing pages with title, artwork, and per-service play
- * buttons. Same backend, same URL shape; the recipient gets a rich preview
- * (Open Graph / oEmbed) on Slack, Discord, iMessage, etc.
+ * buttons. Recipients get a rich preview (Open Graph / oEmbed) on Slack,
+ * Discord, iMessage, etc.
+ *
+ * **Playlist-only after the Achordion migration (v0.6.x+).** Track / album /
+ * artist shares now route through `AchordionClient` (`achordion.xyz`
+ * entity pages with server-side per-service link resolution). This client
+ * is retained for the playlist path because Achordion has no playlist
+ * entity page yet — `ShareManager.sharePlaylist` still mints
+ * `go.parachord.com/<id>` URLs here. Future smart-link-shaped shares
+ * (e.g. albums-with-full-tracklist landing pages) could re-use this
+ * infrastructure if needed.
  *
  * The `/api/create` endpoint is open (CORS `*`, no auth) — see
  * `smart-links/functions/api/create.js` in the Parachord/parachord repo.
- *
- * Migrated from Retrofit → Ktor in the Smart Links cutover (2026-04-29).
- * Closes the last Retrofit footprint in the codebase; the entire app +
- * shared module now uses Ktor exclusively for HTTP.
  *
  * **Base URL trap**: production short URLs land on `go.parachord.com`,
  * NOT `links.parachord.app` (which doesn't even resolve) or the Pages
