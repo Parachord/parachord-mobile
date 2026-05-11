@@ -211,4 +211,36 @@ class ShareManagerTest {
         // ShareManager filters source-list at build time and skips submit when empty.
         coVerify(exactly = 0) { achordion.submitTrackLinks(any()) }
     }
+
+    @Test
+    fun sharePlaylist_unchanged_stillUsesSmartLinksClient_notAchordion() = runTest {
+        val achordion = mockk<AchordionClient>(relaxed = true)
+        val smartLinks = mockk<SmartLinksClient>(relaxed = true)
+        coEvery { smartLinks.create(any()) } returns com.parachord.shared.api.SmartLinkCreateResponse(
+            id = "abc123",
+            url = "https://go.parachord.com/abc123",
+        )
+
+        val playlistDao = mockk<PlaylistDao>()
+        val playlistTrackDao = mockk<PlaylistTrackDao>()
+        coEvery { playlistDao.getById("p1") } returns com.parachord.android.data.db.entity.PlaylistEntity(
+            id = "p1",
+            name = "My Playlist",
+            ownerName = "me",
+        )
+        coEvery { playlistTrackDao.getByPlaylistIdSync("p1") } returns emptyList()
+
+        val mgr = ShareManager(
+            smartLinksClient = smartLinks,
+            achordionClient = achordion,
+            playlistDao = playlistDao,
+            playlistTrackDao = playlistTrackDao,
+        )
+
+        val result = mgr.sharePlaylist("p1")
+        assertEquals("https://go.parachord.com/abc123", result?.url)
+        coVerify(exactly = 0) { achordion.fetchEntityLink(any(), any(), any()) }
+        coVerify(exactly = 0) { achordion.submitTrackLinks(any()) }
+        coVerify(exactly = 1) { smartLinks.create(any()) }
+    }
 }
