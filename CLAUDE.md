@@ -343,19 +343,43 @@ Importing a playlist from an XSPF URL (as opposed to an uploaded `.xspf` file or
 
 **Key files:** `playlist/HostedPlaylistPoller.kt`, `playlist/HostedPlaylistScheduler.kt`, `playlist/HostedPlaylistWorker.kt`, `playlist/XspfHashing.kt` (shared SSRF + SHA-256 helpers), `playlist/PlaylistImportManager.kt` (persists `sourceUrl` + hash), `sync/SyncEngine.kt` (hosted skip-pull + include-in-push), `ui/components/HostedBadge.kt`
 
-### Outbound Sharing (Smart Links)
+### Outbound Sharing (Achordion + Smart Links)
 
-Long-press / overflow → Share fires the Android share sheet with a `https://go.parachord.com/<id>` smart-link minted by desktop's Cloudflare Pages backend (same `/api/create` endpoint, same payload shape, same short URLs that desktop produces). Recipients on Slack / Discord / iMessage get a rich Open Graph preview with title, art, and per-service "Listen on Spotify/Apple Music/SoundCloud" buttons.
+Long-press / overflow → Share fires the Android share sheet. Post-migration (v0.6.x+) the share URL depends on the entity type:
 
-**Base URL trap.** The smart-links README documents `links.parachord.app` as the "optional custom domain" and the Cloudflare Pages default `parachord-links.pages.dev` as the canonical deploy. Neither matches what desktop actually uses — production short URLs land on `go.parachord.com`. Always use `https://go.parachord.com/` as the Retrofit base URL so Android shares stay brand-consistent with desktop. (`links.parachord.app` doesn't even resolve.)
+- **Track / album / artist** → Achordion entity URL (`https://achordion.xyz/<type>/<mbid>`) via `AchordionClient`. Mirrors desktop's `publishSmartLink` / `publishAlbumSmartLink` / `publishArtistSmartLink` in `parachord-desktop/app.js`.
+- **Playlist** → `https://go.parachord.com/<id>` via `SmartLinksClient`. Retained for playlists because Achordion has no playlist entity page yet.
 
-**Fallback chain order matters.** If smart-link creation fails (timeout / 5xx / no metadata), fall through to the `https://parachord.com/go?uri=parachord://...` deeplink wrapper — never to a raw source URL like `open.spotify.com/playlist/<id>`. Even synced playlists should keep Parachord branding on the share; recipients can still get to Spotify via the smart-link page's per-service buttons when the API is reachable. The wrapper at `parachord.com/go` is a separate static GitHub Pages redirect — different service from the smart-link backend at `go.parachord.com`.
+Recipients on Slack / Discord / iMessage get a rich Open Graph preview either way — Achordion renders per-service "Listen on Spotify/Apple Music/SoundCloud" buttons after server-side link resolution; smart-links serve the existing feature.fm-style landing page.
+
+**Track shares pre-warm Achordion's cache** via `POST /api/track-links/submit` so recipients see fully-resolved per-service links instead of an empty page on first load. Submit gates (all must hold):
+1. `recordingMbid` is non-null.
+2. At least one streaming source ID (`spotifyId`, `appleMusicId`, `soundcloudId`) is non-blank.
+3. Per-session dedup by lowercase MBID — repeat shares of the same track don't re-submit.
+4. Auth-failed kill-switch on 401 — flips off for the session so a bad bearer token doesn't spam the backend.
+
+Album and artist shares call entity-link only — **no submit** (matches desktop; submits are recording-keyed).
+
+**Fallback when MBID is missing or the entity-link API errors:** Achordion lookup URL patterns do server-side MusicBrainz search and 302 to the canonical entity page:
+- Tracks: `https://achordion.xyz/recording/lookup?artist=&title=`
+- Albums: `https://achordion.xyz/release-group/lookup?artist=&title=`
+- Artists: `https://achordion.xyz/artist/lookup?name=`
+
+Playlist shares fall back to the `https://parachord.com/go?uri=parachord://...` deeplink wrapper when smart-link creation fails — never to a raw source URL like `open.spotify.com/playlist/<id>`. The wrapper at `parachord.com/go` is a separate static GitHub Pages redirect — different service from the smart-link backend at `go.parachord.com`.
+
+**Bearer token** for Achordion comes from `AppConfig.achordionBearerToken` (BuildConfig field, sourced from `local.properties` or CI secret). Empty token short-circuits cleanly to lookup URLs without calling the API.
+
+**Smart-link payload requirements (playlist path, from `smart-links/functions/api/create.js`):** `title` is required; `tracks` array must be non-empty for `type=playlist`. Build the payload defensively — if there's nothing to send, skip the API and go straight to the deeplink wrapper rather than POSTing a guaranteed 400.
 
 **Wiring:** `TrackContextMenuHost` auto-wires share for tracks (every screen that uses the host gets it for free). Album / Artist / Playlist context menus take an optional `onShare: (() -> Unit)?` parameter — every callsite passes it explicitly via `rememberShareAlbumLite`, `rememberShareArtist`, `rememberSharePlaylist`, or `rememberSharePlaylistById`. The "lite" variants skip the per-track URL map (deeplink fallback only) for screens like the artist discography where tracks aren't in scope; the rich variant is used on detail screens (`PlaylistDetailScreen`) where the full tracklist is available.
 
-**Smart-link payload requirements (from `smart-links/functions/api/create.js`):** `title` is required; `tracks` array must be non-empty for `type=album|playlist`; `urls` map must be non-empty for `type=track`. Build the payload defensively — if there are no per-service URLs at all, skip the API and go straight to the deeplink wrapper rather than POSTing a guaranteed 400.
-
-**Key files:** `share/SmartLinkApi.kt` (Retrofit interface), `share/ShareManager.kt` (orchestration + fallback), `share/ShareSheet.kt` (`openShareSheet` + `rememberShareXxx` Composable helpers), `ui/components/{Track,Album,Artist}ContextMenu.kt`, `ui/screens/playlists/PlaylistsScreen.kt` (PlaylistContextMenu)
+**Key files:**
+- `shared/.../api/AchordionClient.kt` — Ktor client (entity-link + submit)
+- `shared/.../api/SmartLinksClient.kt` — playlist-only Ktor client
+- `app/.../share/ShareManager.kt` — caller, parallel `coroutineScope` for track shares (entity-link + submit fire concurrently)
+- `app/.../share/ShareSheet.kt` — `openShareSheet` + `rememberShareXxx` Composable helpers
+- `app/.../ui/components/{Track,Album,Artist}ContextMenu.kt`, `app/.../ui/screens/playlists/PlaylistsScreen.kt` (PlaylistContextMenu)
+- `parachord-desktop/plugins/achordion.axe` — reference implementation
 
 ### ListenBrainz Weekly Playlists
 

@@ -10,6 +10,7 @@ package com.parachord.shared.config
  * is generated in the :app module, which :shared can't reference.
  */
 data class AppConfig(
+    val achordionBearerToken: String = "",
     val lastFmApiKey: String = "",
     val lastFmSharedSecret: String = "",
     val spotifyClientId: String = "",

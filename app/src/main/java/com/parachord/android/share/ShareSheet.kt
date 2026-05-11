@@ -33,10 +33,10 @@ fun openShareSheet(context: Context, url: String, subject: String) {
 }
 
 /**
- * Returns a callback that asynchronously builds a smart-link (or fallback
- * deeplink) for [track] and opens the system share sheet. Network call is
- * bounded by [ShareManager.SMART_LINK_TIMEOUT_MS] so the share-sheet delay
- * is at most a few seconds.
+ * Returns a callback that asynchronously builds a share URL (Achordion
+ * entity link with submit pre-warm — falling back to a lookup URL when
+ * the MBID is absent or the API times out) for [track] and opens the
+ * system share sheet. Internal 4 s timeout caps share-sheet delay.
  */
 @Composable
 fun rememberShareTrack(): (TrackEntity) -> Unit {
@@ -66,9 +66,12 @@ fun rememberShareAlbum(): (
     val scope = rememberCoroutineScope()
     val shareManager: ShareManager = koinInject()
     return remember(context) {
-        { title, artist, artworkUrl, tracks, spotifyAlbumId ->
+        { title, artist, artworkUrl, _, _ ->
             scope.launch {
-                val result = shareManager.shareAlbum(title, artist, artworkUrl, tracks, spotifyAlbumId)
+                // releaseGroupMbid is not yet plumbed through callers — future follow-up
+                // to surface it from MetadataService results so Achordion serves the
+                // entity page directly instead of the lookup fallback.
+                val result = shareManager.shareAlbum(title, artist, artworkUrl, releaseGroupMbid = null)
                 openShareSheet(context, result.url, result.subject)
             }
             Unit
@@ -133,13 +136,17 @@ fun rememberSharePlaylistById(): (String) -> Unit {
 @Composable
 fun rememberShareArtist(): (name: String, imageUrl: String?) -> Unit {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val shareManager: ShareManager = koinInject()
     return remember(context, shareManager) {
-        { name, imageUrl ->
-            // Artists go straight to the deeplink wrapper — no smart-link
-            // shape exists on desktop yet, so no network call is needed.
-            val result = shareManager.shareArtist(name, imageUrl)
-            openShareSheet(context, result.url, result.subject)
+        { name, _ ->
+            // imageUrl is no longer used — Achordion serves the artist page
+            // from name (or MBID, when plumbed through callers in a follow-up).
+            scope.launch {
+                val result = shareManager.shareArtist(name, artistMbid = null)
+                openShareSheet(context, result.url, result.subject)
+            }
+            Unit
         }
     }
 }

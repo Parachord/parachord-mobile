@@ -144,6 +144,7 @@ val androidModule = module {
 
     single {
         com.parachord.shared.config.AppConfig(
+            achordionBearerToken = com.parachord.android.BuildConfig.ACHORDION_BEARER_TOKEN,
             lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
             lastFmSharedSecret = com.parachord.android.BuildConfig.LASTFM_SHARED_SECRET,
             spotifyClientId = com.parachord.android.BuildConfig.SPOTIFY_CLIENT_ID,
@@ -263,7 +264,7 @@ val androidModule = module {
     // `sharedModule`; per-platform `OkHttp`/`Darwin` Ktor engines + global
     // User-Agent + sanitized Authorization-stripping logging come for free
     // through the shared `HttpClientFactory`.
-    single { com.parachord.android.share.ShareManager(get(), get(), get()) }
+    single { com.parachord.android.share.ShareManager(get(), get(), get(), get()) }
 
     // Spotify Web API — migrated to shared Ktor client (SpotifyClient) in
     // Phase 9E.1.8. Binding lives in sharedModule; per-request auth via

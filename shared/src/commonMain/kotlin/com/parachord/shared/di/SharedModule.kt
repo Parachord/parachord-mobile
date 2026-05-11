@@ -1,5 +1,6 @@
 package com.parachord.shared.di
 
+import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.AppleMusicLibraryClient
 import com.parachord.shared.api.GeoLocationClient
@@ -11,6 +12,7 @@ import com.parachord.shared.api.SmartLinksClient
 import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.api.TicketmasterClient
 import com.parachord.shared.api.createHttpClient
+import com.parachord.shared.config.AppConfig
 import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.store.KvStore
 import kotlinx.serialization.json.Json
@@ -89,4 +91,10 @@ val sharedModule = module {
     // auth, CORS-open. Migrated from Retrofit → Ktor in the Smart Links cutover
     // (closes the last Retrofit footprint).
     single { SmartLinksClient(get()) }
+    single {
+        AchordionClient(
+            httpClient = get(),
+            bearerToken = get<AppConfig>().achordionBearerToken,
+        )
+    }
 }
