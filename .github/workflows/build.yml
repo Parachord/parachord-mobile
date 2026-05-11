@@ -42,6 +42,7 @@ jobs:
       - name: Create local.properties
         run: |
           cat <<EOF > local.properties
+          ACHORDION_BEARER_TOKEN=${{ secrets.ACHORDION_BEARER_TOKEN }}
           LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}
           LASTFM_SHARED_SECRET=${{ secrets.LASTFM_SHARED_SECRET }}
           SPOTIFY_CLIENT_ID=${{ secrets.SPOTIFY_CLIENT_ID }}
