@@ -6,12 +6,16 @@ import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -95,7 +99,47 @@ class AchordionClient(
     }
 
     suspend fun submitTrackLinks(payload: SubmitTrackLinksRequest): SubmitResult {
-        TODO("Task 3")
+        if (bearerToken.isBlank()) return SubmitResult.AuthFailed
+        if (authFailed) return SubmitResult.AuthFailed
+        if (payload.mbid.isBlank()) return SubmitResult.NoMbid
+        if (payload.links.isEmpty()) return SubmitResult.NoLinks
+
+        val mbidKey = payload.mbid.lowercase()
+        val alreadySubmitted = dedupMutex.withLock {
+            if (mbidKey in submittedThisSession) true
+            else {
+                submittedThisSession.add(mbidKey)
+                false
+            }
+        }
+        if (alreadySubmitted) return SubmitResult.AlreadySubmitted
+
+        return try {
+            val response = httpClient.post(SUBMIT_ENDPOINT) {
+                header(HttpHeaders.Authorization, "Bearer $bearerToken")
+                contentType(ContentType.Application.Json)
+                setBody(payload)
+            }
+            when (response.status) {
+                HttpStatusCode.OK, HttpStatusCode.Created, HttpStatusCode.Accepted -> SubmitResult.Ok
+                HttpStatusCode.Unauthorized -> {
+                    authFailed = true
+                    Log.w(TAG, "submit returned 401 — suppressing further calls this session")
+                    SubmitResult.AuthFailed
+                }
+                else -> {
+                    dedupMutex.withLock { submittedThisSession.remove(mbidKey) }
+                    Log.w(TAG, "submit returned HTTP ${response.status.value} for mbid=${payload.mbid}")
+                    SubmitResult.HttpError(response.status.value)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            dedupMutex.withLock { submittedThisSession.remove(mbidKey) }
+            Log.w(TAG, "submit failed for mbid=${payload.mbid}: ${e.message}")
+            SubmitResult.NetworkError(e.message ?: "unknown")
+        }
     }
 }
 

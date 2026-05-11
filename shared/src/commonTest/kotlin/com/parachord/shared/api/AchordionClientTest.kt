@@ -140,4 +140,109 @@ class AchordionClientTest {
         assertNull(client.fetchEntityLink(EntityType.Track, "third"))
         assertEquals(1, calls)   // only the first call hits the network
     }
+
+    // ── submitTrackLinks ────────────────────────────────────────────
+
+    private val sampleRequest = SubmitTrackLinksRequest(
+        mbid = "abc-mbid-123",
+        links = listOf(
+            TrackLink(url = "https://open.spotify.com/track/X", host = "spotify.com", label = "Spotify"),
+        ),
+        trackName = "Song",
+        artistName = "Artist",
+        albumName = "Album",
+    )
+
+    @Test
+    fun submitTrackLinks_returnsOk_whenApiReturns200() = runTest {
+        val engine = MockEngine { _ -> respond("", HttpStatusCode.OK) }
+        val client = buildClient(engine)
+        assertEquals(SubmitResult.Ok, client.submitTrackLinks(sampleRequest))
+    }
+
+    @Test
+    fun submitTrackLinks_returnsNoLinks_whenLinksListIsEmpty() = runTest {
+        val engine = MockEngine { _ -> error("should not be called") }
+        val client = buildClient(engine)
+        val result = client.submitTrackLinks(sampleRequest.copy(links = emptyList()))
+        assertEquals(SubmitResult.NoLinks, result)
+    }
+
+    @Test
+    fun submitTrackLinks_returnsNoMbid_whenMbidIsBlank() = runTest {
+        val engine = MockEngine { _ -> error("should not be called") }
+        val client = buildClient(engine)
+        val result = client.submitTrackLinks(sampleRequest.copy(mbid = ""))
+        assertEquals(SubmitResult.NoMbid, result)
+    }
+
+    @Test
+    fun submitTrackLinks_returnsAlreadySubmitted_onSecondCallSameMbid() = runTest {
+        val engine = MockEngine { _ -> respond("", HttpStatusCode.OK) }
+        val client = buildClient(engine)
+        assertEquals(SubmitResult.Ok, client.submitTrackLinks(sampleRequest))
+        assertEquals(SubmitResult.AlreadySubmitted, client.submitTrackLinks(sampleRequest))
+    }
+
+    @Test
+    fun submitTrackLinks_dedupKeyIsLowercaseMbid() = runTest {
+        val engine = MockEngine { _ -> respond("", HttpStatusCode.OK) }
+        val client = buildClient(engine)
+        client.submitTrackLinks(sampleRequest.copy(mbid = "ABC-MBID-123"))
+        val second = client.submitTrackLinks(sampleRequest.copy(mbid = "abc-mbid-123"))
+        assertEquals(SubmitResult.AlreadySubmitted, second)
+    }
+
+    @Test
+    fun submitTrackLinks_returnsAuthFailed_on401() = runTest {
+        val engine = MockEngine { _ -> respond("", HttpStatusCode.Unauthorized) }
+        val client = buildClient(engine)
+        assertEquals(SubmitResult.AuthFailed, client.submitTrackLinks(sampleRequest))
+    }
+
+    @Test
+    fun submitTrackLinks_authFailedShortCircuitsSubsequentCalls() = runTest {
+        var calls = 0
+        val engine = MockEngine { _ ->
+            calls += 1
+            respond("", HttpStatusCode.Unauthorized)
+        }
+        val client = buildClient(engine)
+        client.submitTrackLinks(sampleRequest)
+        val again = client.submitTrackLinks(sampleRequest.copy(mbid = "different-mbid"))
+        assertEquals(SubmitResult.AuthFailed, again)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun submitTrackLinks_returnsHttpError_onOther4xx() = runTest {
+        val engine = MockEngine { _ -> respond("", HttpStatusCode.UnprocessableEntity) }
+        val client = buildClient(engine)
+        val result = client.submitTrackLinks(sampleRequest)
+        assertEquals(SubmitResult.HttpError(422), result)
+    }
+
+    @Test
+    fun submitTrackLinks_sendsBearerTokenAndJsonBody() = runTest {
+        var seenAuth: String? = null
+        var seenContentType: String? = null
+        val engine = MockEngine { req ->
+            seenAuth = req.headers["Authorization"]
+            seenContentType = req.body.contentType?.toString() ?: req.headers["Content-Type"]
+            respond("", HttpStatusCode.OK)
+        }
+        val client = buildClient(engine, token = "tok-xyz")
+        client.submitTrackLinks(sampleRequest)
+        assertEquals("Bearer tok-xyz", seenAuth)
+        assertEquals(true, seenContentType?.startsWith("application/json"))
+    }
+
+    @Test
+    fun submitTrackLinks_emptyToken_returnsAuthFailed_doesNotHitNetwork() = runTest {
+        var calls = 0
+        val engine = MockEngine { _ -> calls += 1; respond("", HttpStatusCode.OK) }
+        val client = buildClient(engine, token = "")
+        assertEquals(SubmitResult.AuthFailed, client.submitTrackLinks(sampleRequest))
+        assertEquals(0, calls)
+    }
 }
