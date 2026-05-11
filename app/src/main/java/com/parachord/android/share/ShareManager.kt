@@ -22,18 +22,22 @@ import kotlinx.coroutines.withTimeout
 /**
  * Builds shareable URLs for tracks, albums, playlists, and artists.
  *
- * Primary path: POST to the desktop Smart Links backend (`links.parachord.app`)
- * to mint a rich landing page — same infra desktop uses. The recipient gets
- * Open Graph previews + per-service "Play on Spotify/SoundCloud/Bandcamp"
- * buttons on every major platform that unfurls links.
+ * - **Tracks / albums / artists** resolve to Achordion entity pages
+ *   (`achordion.xyz/{recording,release-group,artist}/...`) via
+ *   [AchordionClient]. Track shares additionally pre-warm Achordion's
+ *   match cache via `POST /api/track-links/submit` so recipients land
+ *   on a fully-populated entity page on first click. Mirrors desktop's
+ *   `publishSmartLink` / `publishAlbumSmartLink` / `publishArtistSmartLink`.
+ * - **Playlists** continue to use [SmartLinksClient] →
+ *   `go.parachord.com/<id>` smart-links. Achordion has no playlist
+ *   entity page yet.
+ * - When the MBID is missing or the API fails/times out, all four paths
+ *   fall through to lookup URLs (`achordion.xyz/<type>/lookup?...` for
+ *   the migrated types, the existing `parachord.com/go?uri=...` wrapper
+ *   for playlists), so a share always produces a usable URL.
  *
- * Fallback path: a `https://parachord.com/go?uri=parachord://...` redirect
- * (matches desktop's chat-share format) so the link always opens in Parachord
- * even if the smart-link API is down or we don't have enough metadata to
- * make a useful smart link (e.g. artists, which aren't smart-link-shaped).
- *
- * Network calls are bounded by [SMART_LINK_TIMEOUT_MS] so a slow API can't
- * hold up the share sheet — we silently fall back to the deeplink wrapper.
+ * Network calls are bounded by a 4 s timeout so a slow API can't hold
+ * up the share sheet.
  */
 class ShareManager constructor(
     private val smartLinksClient: SmartLinksClient,

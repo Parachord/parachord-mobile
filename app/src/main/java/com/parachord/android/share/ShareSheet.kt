@@ -33,10 +33,10 @@ fun openShareSheet(context: Context, url: String, subject: String) {
 }
 
 /**
- * Returns a callback that asynchronously builds a smart-link (or fallback
- * deeplink) for [track] and opens the system share sheet. Network call is
- * bounded by [ShareManager.SMART_LINK_TIMEOUT_MS] so the share-sheet delay
- * is at most a few seconds.
+ * Returns a callback that asynchronously builds a share URL (Achordion
+ * entity link with submit pre-warm — falling back to a lookup URL when
+ * the MBID is absent or the API times out) for [track] and opens the
+ * system share sheet. Internal 4 s timeout caps share-sheet delay.
  */
 @Composable
 fun rememberShareTrack(): (TrackEntity) -> Unit {
