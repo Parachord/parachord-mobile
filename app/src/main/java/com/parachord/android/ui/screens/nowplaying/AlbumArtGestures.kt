@@ -180,7 +180,6 @@ fun AlbumArtWithGestures(
                         scaleX = heartScale.value
                         scaleY = heartScale.value
                         alpha = heartAlpha.value
-                        shadowElevation = 8f
                     },
             )
         }
