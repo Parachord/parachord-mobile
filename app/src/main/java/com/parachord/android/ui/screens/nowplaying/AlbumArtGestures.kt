@@ -1,7 +1,9 @@
 package com.parachord.android.ui.screens.nowplaying
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
@@ -14,6 +16,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -22,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Dp
@@ -65,43 +70,102 @@ fun AlbumArtWithGestures(
 ) {
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
 
-    // Heart-pop animation state. poppedAt is the touch position in
-    // composable-local pixels; null when no animation is active.
+    // Heart-pop state
     var poppedAt by remember { mutableStateOf<Offset?>(null) }
     val heartScale = remember { Animatable(0.5f) }
     val heartAlpha = remember { Animatable(0f) }
-
-    // Read the loved state at gesture time — not via LaunchedEffect on
-    // `isLoved` — so the animation is anchored to the explicit gesture,
-    // not to repository state changes triggered by other paths
-    // (e.g. context-menu love).
     val isLovedNow by rememberUpdatedState(isLoved)
 
+    // Drag state
+    val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+    val commitThresholdPx = screenWidthPx * SWIPE_COMMIT_FRACTION
+    val edgeGuardPx = with(density) { EDGE_GUARD_DP.toPx() }
+    val offsetX = remember { Animatable(0f) }
+    val coroutineScopeJob = rememberCoroutineScope()
+    val velocityTracker = remember { VelocityTracker() }
+    var dragInProgress by remember { mutableStateOf(false) }
+
     Box(
-        modifier = modifier.pointerInput(Unit) {
-            detectTapGestures(
-                onTap = { onSingleTap?.invoke() },
-                onDoubleTap = { offset ->
-                    if (!isLovedNow) {
-                        onDoubleTapLove()
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        poppedAt = offset
-                    }
-                    // Already loved → no-op, no animation, no haptic.
-                },
-            )
-        },
+        modifier = modifier
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { onSingleTap?.invoke() },
+                    onDoubleTap = { offset ->
+                        if (!isLovedNow) {
+                            onDoubleTapLove()
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            poppedAt = offset
+                        }
+                    },
+                )
+            }
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { start ->
+                        if (start.x < edgeGuardPx || start.x > size.width - edgeGuardPx) {
+                            dragInProgress = false
+                            return@detectHorizontalDragGestures
+                        }
+                        dragInProgress = true
+                        velocityTracker.resetTracking()
+                        coroutineScopeJob.launch { offsetX.stop() }
+                    },
+                    onHorizontalDrag = { change, dx ->
+                        if (!dragInProgress) return@detectHorizontalDragGestures
+                        coroutineScopeJob.launch { offsetX.snapTo(offsetX.value + dx) }
+                        velocityTracker.addPosition(change.uptimeMillis, change.position)
+                    },
+                    onDragEnd = {
+                        if (!dragInProgress) return@detectHorizontalDragGestures
+                        dragInProgress = false
+                        val velocity = velocityTracker.calculateVelocity().x
+                        val outcome = decideSwipeCommit(
+                            offsetX = offsetX.value,
+                            velocity = velocity,
+                            commitThreshold = commitThresholdPx,
+                            velocityThreshold = SWIPE_VELOCITY_THRESHOLD_PX_PER_S,
+                        )
+                        coroutineScopeJob.launch {
+                            when (outcome) {
+                                SwipeOutcome.Next -> {
+                                    offsetX.animateTo(-screenWidthPx, tween(SWIPE_OUT_ANIMATION_MS))
+                                    onSwipeNext()
+                                    offsetX.snapTo(0f)
+                                }
+                                SwipeOutcome.Previous -> {
+                                    offsetX.animateTo(screenWidthPx, tween(SWIPE_OUT_ANIMATION_MS))
+                                    onSwipePrevious()
+                                    offsetX.snapTo(0f)
+                                }
+                                SwipeOutcome.SnapBack -> {
+                                    offsetX.animateTo(0f, spring())
+                                }
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        if (!dragInProgress) return@detectHorizontalDragGestures
+                        dragInProgress = false
+                        coroutineScopeJob.launch { offsetX.animateTo(0f, spring()) }
+                    },
+                )
+            },
     ) {
         AlbumArtCardFill(
             artworkUrl = artworkUrl,
-            modifier = Modifier,
+            modifier = Modifier.graphicsLayer {
+                translationX = offsetX.value
+                alpha = 1f - (kotlin.math.abs(offsetX.value) / screenWidthPx) * 0.3f
+            },
             cornerRadius = cornerRadius,
             elevation = elevation,
             placeholderName = placeholderName,
         )
 
-        // Heart-pop overlay. Renders only while the animation is active.
+        // Heart-pop overlay — NOT translated with offsetX so the heart
+        // stays anchored to the tap position even if the artwork drifts.
         poppedAt?.let { pos ->
             val heartSizeDp = 96.dp
             val heartHalfPx = with(density) { (heartSizeDp / 2).toPx().toInt() }
@@ -122,7 +186,6 @@ fun AlbumArtWithGestures(
         }
     }
 
-    // Drive the animation as a side-effect of poppedAt changing.
     LaunchedEffect(poppedAt) {
         val pos = poppedAt ?: return@LaunchedEffect
         heartScale.snapTo(0.5f)
@@ -138,8 +201,11 @@ fun AlbumArtWithGestures(
                 heartAlpha.animateTo(0f, tween(300))
             }
         }
-        // Only clear if we're still showing the same pop — guards against
-        // a rapid second double-tap that reset poppedAt mid-animation.
         if (poppedAt == pos) poppedAt = null
     }
 }
+
+private const val SWIPE_COMMIT_FRACTION = 0.30f
+private const val SWIPE_VELOCITY_THRESHOLD_PX_PER_S = 600f
+private val EDGE_GUARD_DP = 16.dp
+private const val SWIPE_OUT_ANIMATION_MS = 200
