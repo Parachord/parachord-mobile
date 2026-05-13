@@ -195,7 +195,12 @@ class ResolverManager constructor(
                     sourceType = "soundcloud",
                     resolver = "soundcloud",
                     soundcloudId = soundcloudId,
-                    confidence = 0.95, // High confidence — direct ID match
+                    // Direct-ID hint: a previously-validated streaming ID is
+                    // by definition correct, so stamp 1.0. Reserves 0.95 for
+                    // fuzzy scoreConfidence() matches. Matches desktop's
+                    // two-tier model (see CLAUDE.md "Achordion Pre-resolution
+                    // Plugin" — tier-1 dispatch gates on >= 1.0).
+                    confidence = 1.0,
                 )
             )
         }
@@ -208,7 +213,8 @@ class ResolverManager constructor(
                     sourceType = "applemusic",
                     resolver = "applemusic",
                     appleMusicId = appleMusicId,
-                    confidence = 0.95, // High confidence — direct ID match
+                    // Direct-ID hint — see SoundCloud branch above.
+                    confidence = 1.0,
                 )
             )
         }
@@ -313,7 +319,8 @@ class ResolverManager constructor(
                 resolver = "spotify",
                 spotifyUri = "spotify:track:${track.id}",
                 spotifyId = track.id,
-                confidence = 0.95, // High confidence — verified ID match
+                // Direct-ID match — see SoundCloud branch above (~L190).
+                confidence = 1.0,
                 artworkUrl = track.album?.images?.firstOrNull()?.url,
             )
         } catch (e: com.parachord.shared.api.SpotifyRateLimitedException) {
@@ -424,7 +431,12 @@ class ResolverManager constructor(
                 url = sourceUrl,
                 sourceType = "local",
                 resolver = "localfiles",
-                confidence = 0.95, // High confidence — exact title+artist match in local library
+                // Direct-match path: findLocalFile is a deterministic
+                // case-insensitive equality SQL lookup, not a fuzzy search.
+                // Matches desktop's localfiles resolver, which the
+                // eager-enrichment gate at app.js:24143 treats as a 1.0
+                // signal. See SoundCloud branch (~L190) for the contract.
+                confidence = 1.0,
                 matchedTitle = track.title,
                 matchedArtist = track.artist,
                 matchedDurationMs = track.duration,
