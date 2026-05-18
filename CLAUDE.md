@@ -381,6 +381,36 @@ Playlist shares fall back to the `https://parachord.com/go?uri=parachord://...` 
 - `app/.../ui/components/{Track,Album,Artist}ContextMenu.kt`, `app/.../ui/screens/playlists/PlaylistsScreen.kt` (PlaylistContextMenu)
 - `parachord-desktop/plugins/achordion.axe` — reference implementation
 
+### Loved Tracks → ListenBrainz / Last.fm Push
+
+When the user adds a track to their collection (a "love"), Parachord can mirror that to ListenBrainz's `recording-feedback` endpoint and Last.fm's `track.love` — same direction as scrobbles. Mirrors desktop's design doc `docs/plans/2026-05-03-loved-tracks-scrobbler-push-design.md`.
+
+**Per-service toggle, default OFF.** `SettingsStore.LOVE_PUSH_ENABLED` holds a CSV (`"lastfm:true,listenbrainz:false"`). Unset service ⇒ false. Toggling on in Settings → Scrobblers enables push for new loves; toggling off doesn't un-love past pushes.
+
+**Idempotency cache.** `SettingsStore.LOVE_PUSHED_KEYS` is a JSON map `{ "<trackId>": { "<service>": <epochMs> } }`. Survives crashes mid-backfill — each successful push writes its key before moving on, so resume picks up where it left off. Mirrors desktop's `love_pushed_keys` exactly so a user signed into both clients doesn't double-push.
+
+**Push paths:**
+- **Real-time** — `LibraryRepository.addToCollection(track)` calls `LovesPushService.pushLove(track)` after the local upsert. Fire-and-forget; failures log + skip without rolling back the local love.
+- **Backfill** — Settings → Scrobblers exposes a "Backfill N loved tracks" button per service. `SettingsViewModel.runLoveBackfill(service)` enumerates the existing collection, skips entries already in the idempotency cache for that service, and pushes the rest. Progress state surfaces via `loveBackfillState: StateFlow<LovesPushService.BackfillState>`.
+
+**Per-service gating:**
+- **ListenBrainz**: needs `recording_mbid` (validates against the 36-char canonical regex). Tracks without one are silently skipped — the next mapper backfill via `MbidEnrichmentService` will eventually populate the MBID, and the next love (or backfill run) catches them.
+- **Last.fm**: needs (artist, title) + a valid Last.fm session token. No MBID dependency.
+
+**Key files:** `playback/LovesPushService.kt`, `playback/scrobbler/{Scrobbler,ListenBrainzScrobbler,LastFmScrobbler}.kt#loveTrack`, `ui/screens/settings/SettingsViewModel.kt#runLoveBackfill`.
+
+### Friend Follow / Unfollow
+
+`FriendsRepository.addFriend(...)` and `removeFriend(...)` both call into the source service to keep the follow graph consistent across Parachord clients (so a friend added on Android shows up on desktop's friends list and vice versa).
+
+**Token source rule:** ListenBrainz follow / unfollow uses `SettingsStore.getListenBrainzToken()` — the same scrobbler-config token, NOT a separate meta-service token. Cross-platform consistency rule: both platforms must read from the same persistence key.
+
+**Last.fm has no follow API.** Last.fm deprecated `user.addFriend` / `user.deleteFriend` in 2018 (returns `Method "user.addFriend" is deprecated`). Local-only add / remove. The Last.fm-side state is whatever's already in the user's Last.fm follows; we can't change it via the API.
+
+**Removal-stickiness gap (Last.fm).** Because we can't unfollow on Last.fm, a removed Last.fm friend will re-appear on the next `refreshLastFmFriends` sync from the user's still-active Last.fm follows. The `hidden_friend_keys` allowlist that fixes this (per desktop CLAUDE.md "Last.fm follow gap") is tracked in issue [#147](https://github.com/Parachord/parachord-android/issues/147).
+
+**Key files:** `shared/.../repository/FriendsRepository.kt#followOnService` / `unfollowOnService`.
+
 ### ListenBrainz Weekly Playlists
 
 The desktop fetches `GET /1/user/{username}/playlists/createdfor?count=100` (public, no auth token needed), filters by title containing "weekly jams" or "weekly exploration", sorts by date descending, and takes the most recent 4 of each type. Tracks are loaded lazily per playlist via `GET /1/playlist/{playlistId}`.
