@@ -3,6 +3,7 @@ package com.parachord.android.app
 import android.app.Application
 import com.parachord.android.data.metadata.ImageEnrichmentService
 import com.parachord.android.di.androidModule
+import com.parachord.android.enrichment.CrossResolverEnrichmentScheduler
 import com.parachord.android.playlist.HostedPlaylistScheduler
 import com.parachord.shared.di.sharedModule
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,7 @@ class ParachordApplication : Application() {
 
     private val hostedPlaylistScheduler: HostedPlaylistScheduler by inject()
     private val imageEnrichmentService: ImageEnrichmentService by inject()
+    private val crossResolverEnrichmentScheduler: CrossResolverEnrichmentScheduler by inject()
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -32,6 +34,13 @@ class ParachordApplication : Application() {
         // The scheduler short-circuits when there are no hosted rows.
         hostedPlaylistScheduler.startInAppTimer()
         hostedPlaylistScheduler.enableWorkManagerPolling()
+
+        // Slow-trickle cross-resolver enrichment (#150): backfills
+        // streaming-service IDs for local-files-only tracks so the
+        // Achordion contribution loop closes for the ~30% of users who
+        // never connect a streaming service. 24h periodic, unmetered +
+        // battery-not-low. Idempotent via WorkManager KEEP policy.
+        crossResolverEnrichmentScheduler.enable()
 
         // On every app launch, regenerate playlist mosaics for any playlist
         // whose artwork isn't already a locally-generated `file://` mosaic.

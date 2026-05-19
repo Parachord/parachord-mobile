@@ -444,6 +444,37 @@ val androidModule = module {
     singleOf(::ResolverScoring)
     singleOf(::TrackResolverCache)
 
+    // ── Slow-trickle cross-resolver enrichment (#150) ────────────────
+    // The service itself lives in shared/commonMain; the Android Koin
+    // binding closes the resolver lambda over ResolverManager.resolveWithHints.
+    // Per-source confidence gate at 0.95 — well above the 0.60 floor in
+    // ResolverScoring. We don't want to pollute Achordion's match cache
+    // with wrong-song matches that scored just above the playback floor.
+    single {
+        val resolverManager: ResolverManager = get()
+        com.parachord.shared.enrichment.CrossResolverEnrichmentService(
+            trackDao = get(),
+            mbidEnrichmentService = get(),
+            achordionClient = get(),
+            resolveByTitleArtist = { title, artist ->
+                val sources = resolverManager.resolveWithHints(
+                    query = "$artist - $title",
+                    targetTitle = title,
+                    targetArtist = artist,
+                )
+                fun pick(name: String) = sources
+                    .filter { it.resolver == name && (it.confidence ?: 0.0) >= 0.95 }
+                    .maxByOrNull { it.confidence ?: 0.0 }
+                com.parachord.shared.enrichment.CrossResolverEnrichmentService.ResolvedSources(
+                    spotifyId = pick("spotify")?.spotifyId,
+                    appleMusicId = pick("applemusic")?.appleMusicId,
+                    soundcloudId = pick("soundcloud")?.soundcloudId,
+                )
+            },
+        )
+    }
+    single { com.parachord.android.enrichment.CrossResolverEnrichmentScheduler(androidContext()) }
+
     // ── Repositories ─────────────────────────────────────────────────
 
     // LibraryRepository — shared. MbidEnrichmentService is also shared,
