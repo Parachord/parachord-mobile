@@ -125,6 +125,110 @@ class SyncEngine constructor(
                 Log.d(TAG, "Backfilled $added playlist source(s) into sync_playlist_source")
             }
         }
+
+        /**
+         * Heal playlists whose `sync_playlist_source.providerId` doesn't match the
+         * provider implied by the playlist's `id` prefix. Mirrors desktop's
+         * `healImportedSyncedFromMismatch` (runs in `main.js` alongside
+         * `migrateSyncLinksFromPlaylists`).
+         *
+         * Cross-platform invariant: when one client has a sync bug that flips a
+         * Spotify-imported playlist's `syncedFrom.resolver` to `applemusic` (or
+         * `undefined`), the OTHER client's launch must silently restore it. Without
+         * this on Android, an Android regression corrupts a fleet and only desktop
+         * heals.
+         *
+         * Idempotent. Runs every launch. No-op on healthy data (no log unless N > 0).
+         *
+         * For each playlist row whose `id` starts with `spotify-` or `applemusic-`:
+         *   1. Derive `impliedProvider` from the prefix and `externalIdFromPrefix`
+         *      from the substring after it.
+         *   2. Read the current `sync_playlist_source` row.
+         *   3. If existing row matches `impliedProvider`, skip (healthy).
+         *   4. Otherwise:
+         *      a. If the existing row points at a different provider, demote it
+         *         into `sync_playlist_link` (only if no link already exists for
+         *         that provider — never overwrite, an existing link may carry a
+         *         more-recent snapshot).
+         *      b. Restore `sync_playlist_source` with the implied provider +
+         *         externalId from the prefix. `snapshotId = null` so the next sync
+         *         from that provider repopulates it.
+         *      c. Clear `playlist.locallyModified` — the row's state on the
+         *         implied provider is now considered canonical.
+         *
+         * Slot in `syncAll()` between `migrateSourceFromPlaylists` and
+         * `migrateMergeCrossProviderDuplicates`: the source backfill must run
+         * first (it may CREATE source rows from `spotifyId` for installs that
+         * pre-date the source table); the heal then validates / corrects those
+         * rows.
+         */
+        // static for test isolation — avoids constructing SyncEngine with unrelated deps
+        suspend fun healImportedSyncedFromMismatch(
+            playlistDao: PlaylistDao,
+            syncPlaylistSourceDao: SyncPlaylistSourceDao,
+            syncPlaylistLinkDao: SyncPlaylistLinkDao,
+        ) {
+            val supportedProviders = listOf(
+                SpotifySyncProvider.PROVIDER_ID,
+                AppleMusicSyncProvider.PROVIDER_ID,
+            )
+            var healed = 0
+            for (playlist in playlistDao.getAllSync()) {
+                val impliedProvider = supportedProviders.firstOrNull {
+                    playlist.id.startsWith("$it-")
+                } ?: continue
+                val externalIdFromPrefix = playlist.id.substringAfter("$impliedProvider-")
+
+                val existing = syncPlaylistSourceDao.selectForLocal(playlist.id)
+                if (existing != null && existing.providerId == impliedProvider) {
+                    // Healthy — providerId matches the prefix.
+                    continue
+                }
+
+                // Demote: if a source points at the wrong provider, preserve its
+                // external mapping as a link (push target) — but only if no link
+                // already exists. An existing link may carry a more-recent
+                // snapshot we shouldn't clobber.
+                if (existing != null && existing.providerId != impliedProvider) {
+                    val existingLink = syncPlaylistLinkDao.selectForLink(
+                        playlist.id, existing.providerId,
+                    )
+                    if (existingLink == null) {
+                        syncPlaylistLinkDao.upsertWithSnapshot(
+                            localPlaylistId = playlist.id,
+                            providerId = existing.providerId,
+                            externalId = existing.externalId,
+                            snapshotId = existing.snapshotId,
+                            syncedAt = existing.syncedAt,
+                        )
+                    }
+                }
+
+                // Restore the correct syncedFrom. snapshotId = null so the next
+                // sync from impliedProvider repopulates it. ownerId = null —
+                // playlist row doesn't persist ownerId separately on Android.
+                syncPlaylistSourceDao.upsert(
+                    localPlaylistId = playlist.id,
+                    providerId = impliedProvider,
+                    externalId = externalIdFromPrefix,
+                    snapshotId = null,
+                    ownerId = null,
+                    syncedAt = currentTimeMillis(),
+                )
+
+                // Clear locallyModified — the row's state on the implied
+                // provider is now considered canonical. Android's Playlist
+                // model has no `hasUpdates` field; only locallyModified.
+                if (playlist.locallyModified) {
+                    playlistDao.update(playlist.copy(locallyModified = false))
+                }
+
+                healed++
+            }
+            if (healed > 0) {
+                Log.d(TAG, "Healed $healed imported-playlist syncedFrom mismatches")
+            }
+        }
     }
 
     private val syncMutex = Mutex()
@@ -868,6 +972,26 @@ class SyncEngine constructor(
         // `syncedFrom` row so future pull cycles have a stable key beyond
         // the id-prefix convention.
         migrateSourceFromPlaylists(db, syncPlaylistSourceDao)
+
+        // Heal `spotify-*` / `applemusic-*` rows whose
+        // `sync_playlist_source.providerId` doesn't match the id prefix.
+        // Mirrors desktop's `healImportedSyncedFromMismatch` (runs in
+        // main.js alongside migrateSyncLinksFromPlaylists). Cross-
+        // platform invariant: when one client has a sync bug that flips
+        // a Spotify-imported playlist's syncedFrom to applemusic, the
+        // OTHER client's launch must silently restore it. Without this
+        // on Android, an Android regression corrupts a fleet and only
+        // desktop heals.
+        //
+        // Runs AFTER migrateSourceFromPlaylists so the backfill has
+        // populated any missing rows from `spotifyId`, and BEFORE
+        // migrateMergeCrossProviderDuplicates so the dedup pass sees
+        // the corrected providerId values.
+        healImportedSyncedFromMismatch(
+            playlistDao,
+            syncPlaylistSourceDao,
+            syncPlaylistLinkDao,
+        )
 
         // One-shot cleanup for installs that pre-date the cross-provider
         // pull-path name-match (commit ef5a3c2). Walks all playlist
