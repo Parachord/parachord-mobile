@@ -209,6 +209,8 @@ Only if all three miss does `createPlaylistOnSpotify` run. The link is written *
 
 **Startup link backfill (`migrateLinksFromPlaylists`):** runs at the top of every `syncPlaylists`. For every playlist row with a non-null `spotifyId`, upserts a matching link row. Idempotent — protects against upgrades from pre-link-map installs and older push paths that wrote `spotifyId` without a link.
 
+**Startup syncedFrom heal (`healImportedSyncedFromMismatch`).** Cross-platform invariant. Runs in `syncPlaylists` between `migrateSourceFromPlaylists` and `migrateMergeCrossProviderDuplicates`. For every playlist with an ID prefix (`spotify-*` or `applemusic-*`), if `sync_playlist_source.providerId` doesn't match the implied prefix: (1) demote the wrong source into `sync_playlist_link` (only if no link exists for that provider — preserves more-recent snapshots), (2) restore `sync_playlist_source` with `impliedProvider + externalIdFromPrefix` (snapshotId null so the next sync repopulates), (3) clear `playlist.locallyModified`. Idempotent; no-op on healthy data. **Both platforms must implement it.** When one client has a sync bug that corrupts `syncedFrom`, the other client's launch silently restores it — without this on Android, an Android regression would corrupt a fleet of playlists and only desktop could heal.
+
 **Skip-if-held mutex (not wait-if-held):** `SyncEngine.syncAll` uses `syncMutex.tryLock()` and returns early if held. `LibrarySyncWorker` (hourly), `SyncScheduler` (15 min in-app timer), and `SyncViewModel.syncNow` can all fire concurrently — wait-if-held would just queue wasted work behind the in-flight sync. Always use `tryLock` here, never `withLock`.
 
 **Link-table cleanup hooks:** prune the link row when its remote is deleted during duplicate cleanup (`deleteByExternalId`), and clear all provider entries on `stopSyncing` (`deleteForProvider`). Link orphans otherwise accumulate across sync-disconnect / reconnect cycles.
@@ -407,9 +409,77 @@ When the user adds a track to their collection (a "love"), Parachord can mirror 
 
 **Last.fm has no follow API.** Last.fm deprecated `user.addFriend` / `user.deleteFriend` in 2018 (returns `Method "user.addFriend" is deprecated`). Local-only add / remove. The Last.fm-side state is whatever's already in the user's Last.fm follows; we can't change it via the API.
 
-**Removal-stickiness gap (Last.fm).** Because we can't unfollow on Last.fm, a removed Last.fm friend will re-appear on the next `refreshLastFmFriends` sync from the user's still-active Last.fm follows. The `hidden_friend_keys` allowlist that fixes this (per desktop CLAUDE.md "Last.fm follow gap") is tracked in issue [#147](https://github.com/Parachord/parachord-android/issues/147).
+**Removal stickiness — `deletedFriendKeys` allowlist.** Last.fm has no unfollow API, so a removed Last.fm friend would re-appear on the next `syncFriendsFromServices` cycle from the user's still-active Last.fm follows. `SettingsStore.deletedFriendKeys` (CSV-encoded `Set<String>` in `KvStore` under `DELETED_FRIEND_KEYS`) carries the allowlist. `removeFriend` adds `"<service>:<username.lowercase>"` to the set; `addFriend` removes it; `syncFriendsFromServices` checks before re-inserting. Applied to **BOTH services** (LB too — even though LB has a working unfollow, a user-removed friend shouldn't sneak back through any periodic re-sync path).
 
-**Key files:** `shared/.../repository/FriendsRepository.kt#followOnService` / `unfollowOnService`.
+**Last.fm refresh log-spam guard.** Every 2-minute `refreshAllActivity` cycle fans out one `getUserRecentTracks` call per friend. With 60+ Last.fm friends, the rate-limit gate trips after a handful of calls and every remaining call throws `LastFmRateLimitedException` synchronously. The catch in `refreshFriendActivity` demotes that specific exception to debug, and `refreshAllActivity` tracks a per-cycle flag so subsequent Last.fm calls skip without launching coroutines that immediately throw. ListenBrainz friends are unaffected (separate API + separate gate).
+
+**Key files:** `shared/.../repository/FriendsRepository.kt#followOnService` / `unfollowOnService` / `syncFriendsFromServices` / `refreshAllActivity`, `shared/.../settings/SettingsStore.kt` (the `DELETED_FRIEND_KEYS` family).
+
+### Cross-Resolver Enrichment (Slow Trickle)
+
+Local-files-only tracks never get streaming-service IDs (Spotify / Apple Music / SoundCloud) populated through the normal playback or sync paths. Without intervention they never feed Achordion's match cache either — the contribution loop is broken for the ~30% of users whose libraries are mostly local files. Mirrors desktop's "Cross-Resolver Enrichment (Eager Gate + Slow Trickle)".
+
+**Algorithm.** A `WorkManager` periodic job (`CrossResolverEnrichmentWorker`, 24h cadence) wraps `CrossResolverEnrichmentService.runOnce()` from `shared/.../enrichment/`. Each run:
+
+1. SQL query selects up to **20** localfiles tracks (`resolver = 'localfiles'`) that are missing at least one streaming-service ID column AND haven't been visited within the **30-day cooldown** (`crossResolverEnrichedAt IS NULL OR < cutoff`). Never-tried tracks sort first.
+2. For each candidate (with a **3-second** gap between):
+   - If `recordingMbid` is null → call `MbidEnrichmentService.enrichTrack(...)` synchronously and re-read.
+   - Call the resolver cascade (`ResolverManager.resolveWithHints`) for Spotify / Apple Music / SoundCloud matches.
+   - Persist any **new** IDs additively to the track row — never overwrite an existing populated ID. Both the Kotlin filter AND the existing `backfillResolverIds` SQL enforce the null-only-update invariant.
+   - If `recordingMbid` is now non-null AND we have ≥1 high-confidence (≥0.95) streaming ID, POST to Achordion's `/api/track-links/submit` via `AchordionClient.submitTrackLinks`.
+3. Stamp `crossResolverEnrichedAt = now` **regardless of outcome** so un-findable tracks aren't thrashed every cycle.
+
+**Constraints.** WorkManager requires `NetworkType.UNMETERED` + `requiresBatteryNotLow = true`. Idle-priority background work — never runs on a metered cellular connection or low battery. `KEEP` policy on `enqueueUniquePeriodicWork` so re-enabling on app start is idempotent.
+
+**KMP-ready.** `CrossResolverEnrichmentService` is `shared/commonMain` and generic over the resolver via a `suspend (title, artist) -> ResolvedSources` lambda. The Android Koin binding closes over `ResolverManager.resolveWithHints`. iOS gets the service for free; it just needs its own background-work scheduler equivalent when the shell lands.
+
+**Key files:** `shared/.../enrichment/CrossResolverEnrichmentService.kt`, `app/.../enrichment/CrossResolverEnrichmentWorker.kt`, `app/.../enrichment/CrossResolverEnrichmentScheduler.kt`.
+
+### In-App Announcements
+
+Achordion + desktop already share an `announcements:json` Upstash row that drives in-app banner notifications (outage notices, launch messaging, Discord-invite pushes, etc.). Android consumes the same feed.
+
+**Endpoints.**
+- `GET https://achordion.xyz/api/announcements` — public, no auth, cached `s-maxage=60`. Returns the full validated server list.
+- `POST https://achordion.xyz/api/announcements/event` — public, no auth, per-IP rate-limited (60/min). Body: `{ id, event: "view" | "dismiss" | "cta-click" }`. Best-effort telemetry; failures are swallowed at debug level.
+
+**Client-side filtering.** The server returns everything; clients filter:
+
+- **Surface match** — `surfaces == null || surfaces.isEmpty() || "parachord" in surfaces`. The string is `"parachord"`, not `"parachord-android"` — matches desktop.
+- **Version range** — `appVersion >= minVersion` AND `appVersion <= maxVersion`. Semver compare via `compareSemverOrNull`. Unparseable bounds fail-open (don't crash on a malformed version string).
+- **Not expired** — `expiresAt == null || Clock.System.now() < Instant.parse(expiresAt)`. Unparseable timestamps fail-open.
+- **Not dismissed** — `id` not in the persisted `announcements_dismissed_ids` set (CSV in `KvStore`).
+
+**Polling cadence.**
+- **Cold start** — `ParachordApplication.onCreate` fires `repo.refreshNow()` fire-and-forget.
+- **Foreground resume** — `MainActivity.onResume` calls `repo.refreshIfStale()`, which short-circuits unless `now - announcements_last_fetched_ms >= 6h`.
+
+**Banner UI.** Top of `HomeScreen`. Severity-themed background (`error` red, `warn` amber, `success` green, `info`/unknown brand purple). Light/dark variants via `ParachordTheme.isDark`. `LaunchedEffect(id)` fires the `view` event once per session per id. CTA opens `Intent.ACTION_VIEW` (defensive try/catch + toast fallback) and fires `cta-click`. Dismiss X persists the id + fires `dismiss` + removes from the StateFlow.
+
+**KMP-ready.** `AchordionClient.listAnnouncements` / `trackAnnouncementEvent` + `AnnouncementsRepository` live in `shared/commonMain`. iOS shell needs its own SwiftUI banner component when it lands.
+
+**Key files:** `shared/.../api/AchordionClient.kt` (the two endpoint methods + `Announcement`/`Cta` types), `shared/.../repository/AnnouncementsRepository.kt`, `app/.../ui/components/AnnouncementBanner.kt`, `app/.../ui/screens/home/HomeScreen.kt`.
+
+### Apple Music Catalog Throttle (`MusicKitCatalogLimiter`)
+
+Apple Music's catalog API (`api.music.apple.com/v1/catalog/{storefront}/...`) is aggressively throttled per dev-token / IP. Once a burst trips the throttle, subsequent calls — including the `/songs/{id}` lookup that playback does internally — fail with `MusicDataRequest.Error 1`, killing the active play path too. Mirrors desktop's `nativeMusicKitLimiter`.
+
+**Three call sites** in `MusicKitWebBridge` wrap their JS `evaluate()` in `catalogLimiter.runThrottled`:
+
+- `search(query, limit)` — used by `ResolverManager` Apple Music resolution
+- `getPlaylist(playlistId)` — used by Apple Music playlist import
+- `preload(songId)` — fired per-track during background source enrichment
+
+**Limiter knobs** (`MusicKitCatalogLimiter`, `:app`-only since the bridge is WebView-specific):
+
+- Concurrency cap: 3 in-flight via `Semaphore`
+- Inter-request gap: 150 ms minimum, mutex-protected so simultaneous permit-grabs space themselves
+- Circuit breaker: 3 consecutive rate-limit signals trip a 5-minute cooldown. In-cooldown calls short-circuit returning null without hitting the bridge. **Time-bound, NOT session-permanent** — one transient throttle shouldn't disable Apple Music for the session.
+- Rate-limit detection via `looksLikeRateLimit(errorString)` — matches `"MusicDataRequest.Error 1"`, `"429"`, `"rate-limit"`, `"too many requests"`.
+
+iOS will need its own MusicKit limiter when the shell lands — `MusicKitWebBridge` is WebView-specific. The design (concurrency cap + inter-request gap + time-bound circuit breaker) ports cleanly; the implementation does not.
+
+**Key files:** `app/.../playback/handlers/MusicKitCatalogLimiter.kt`, `app/.../playback/handlers/MusicKitWebBridge.kt#search` / `getPlaylist` / `preload`.
 
 ### ListenBrainz Weekly Playlists
 
