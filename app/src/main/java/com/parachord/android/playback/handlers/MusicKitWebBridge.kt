@@ -51,6 +51,15 @@ class MusicKitWebBridge constructor(
     private val settingsStore: SettingsStore,
     private val json: Json,
 ) {
+    /**
+     * Throttle gate for Apple Music catalog API calls. All three call sites
+     * ([search], [getPlaylist], [preload]) wrap their JS evaluate() in
+     * [catalogLimiter.runThrottled] so a burst of MBID-enrichment fallback
+     * searches (large library import / hosted-XSPF refresh) can't trip
+     * Apple's per-token throttle and cascade into `MusicDataRequest.Error 1`
+     * on the active play path. Mirrors desktop's `nativeMusicKitLimiter`.
+     */
+    private val catalogLimiter = MusicKitCatalogLimiter()
     companion object {
         private const val TAG = "MusicKitWebBridge"
         /** Served via WebViewAssetLoader so the bridge has an https:// origin,
@@ -597,19 +606,26 @@ class MusicKitWebBridge constructor(
     suspend fun search(query: String, limit: Int = 10): List<AppleMusicSearchResult> {
         musicKitReady.await()
         val storefront = settingsStore.getAppleMusicStorefront() ?: "us"
-        val result = evaluate("search(atob('${b64(query)}'), $limit, atob('${b64(storefront)}'))") ?: return emptyList()
-        return try {
-            val parsed = json.decodeFromString<MusicKitSearchResponse>(cleanJsString(result))
-            if (!parsed.success) {
-                Log.w(TAG, "Search failed: ${parsed.error}")
+        return catalogLimiter.runThrottled {
+            val result = evaluate("search(atob('${b64(query)}'), $limit, atob('${b64(storefront)}'))")
+                ?: return@runThrottled emptyList()
+            try {
+                val parsed = json.decodeFromString<MusicKitSearchResponse>(cleanJsString(result))
+                if (!parsed.success) {
+                    if (catalogLimiter.looksLikeRateLimit(parsed.error)) {
+                        catalogLimiter.reportRateLimit()
+                    }
+                    Log.w(TAG, "Search failed: ${parsed.error}")
+                    emptyList()
+                } else {
+                    catalogLimiter.reportSuccess()
+                    parsed.results
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse search response: $result", e)
                 emptyList()
-            } else {
-                parsed.results
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse search response: $result", e)
-            emptyList()
-        }
+        } ?: emptyList()
     }
 
     // ── Playlist Fetch ─────────────────────────────────────────────
@@ -629,29 +645,39 @@ class MusicKitWebBridge constructor(
     suspend fun getPlaylist(playlistId: String): AppleMusicPlaylistResult? {
         musicKitReady.await()
         val storefront = settingsStore.getAppleMusicStorefront() ?: "us"
-        val result = evaluate("getPlaylist(atob('${b64(playlistId)}'), atob('${b64(storefront)}'))") ?: return null
-        return try {
-            val response = json.decodeFromString<GetPlaylistResponse>(cleanJsString(result))
-            if (!response.success || response.tracks.isNullOrEmpty()) return null
-            AppleMusicPlaylistResult(
-                name = response.name ?: "Playlist",
-                tracks = response.tracks.map { t ->
-                    AppleMusicSearchResult(
-                        id = t.id,
-                        title = t.title,
-                        artist = t.artist,
-                        album = t.album,
-                        duration = t.duration,
-                        artworkUrl = t.artworkUrl,
-                        isrc = null,
-                        previewUrl = null,
-                        appleMusicUrl = null,
-                    )
-                },
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse getPlaylist response: ${e.message}")
-            null
+        return catalogLimiter.runThrottled {
+            val result = evaluate("getPlaylist(atob('${b64(playlistId)}'), atob('${b64(storefront)}'))")
+                ?: return@runThrottled null
+            try {
+                val response = json.decodeFromString<GetPlaylistResponse>(cleanJsString(result))
+                if (!response.success) {
+                    if (catalogLimiter.looksLikeRateLimit(response.error)) {
+                        catalogLimiter.reportRateLimit()
+                    }
+                    return@runThrottled null
+                }
+                if (response.tracks.isNullOrEmpty()) return@runThrottled null
+                catalogLimiter.reportSuccess()
+                AppleMusicPlaylistResult(
+                    name = response.name ?: "Playlist",
+                    tracks = response.tracks.map { t ->
+                        AppleMusicSearchResult(
+                            id = t.id,
+                            title = t.title,
+                            artist = t.artist,
+                            album = t.album,
+                            duration = t.duration,
+                            artworkUrl = t.artworkUrl,
+                            isrc = null,
+                            previewUrl = null,
+                            appleMusicUrl = null,
+                        )
+                    },
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse getPlaylist response: ${e.message}")
+                null
+            }
         }
     }
 
@@ -663,7 +689,13 @@ class MusicKitWebBridge constructor(
      */
     suspend fun preload(songId: String) {
         if (!musicKitReady.isCompleted) return
-        evaluate("preload(atob('${b64(songId)}'))")
+        // Throttled — preload calls fan out per-track during background source
+        // resolution. Best-effort: if the limiter's cooldown is open, the
+        // preload is silently skipped (playback's catalog lookup will reload
+        // it lazily anyway).
+        catalogLimiter.runThrottled {
+            evaluate("preload(atob('${b64(songId)}'))")
+        }
     }
 
     /** Play a song by Apple Music catalog ID. Returns true on success. */
