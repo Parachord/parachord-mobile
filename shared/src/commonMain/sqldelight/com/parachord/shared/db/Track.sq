@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     appleMusicId TEXT,
     recordingMbid TEXT,
     artistMbid TEXT,
-    releaseMbid TEXT
+    releaseMbid TEXT,
+    crossResolverEnrichedAt INTEGER
 );
 
 getAll:
@@ -67,6 +68,17 @@ UPDATE tracks SET
     artistMbid = CASE WHEN (artistMbid IS NULL OR artistMbid = '') THEN ? ELSE artistMbid END,
     releaseMbid = CASE WHEN (releaseMbid IS NULL OR releaseMbid = '') THEN ? ELSE releaseMbid END
 WHERE id = ?;
+
+selectCrossResolverEnrichmentCandidates:
+SELECT * FROM tracks
+WHERE resolver = 'localfiles'
+  AND (spotifyId IS NULL OR appleMusicId IS NULL OR soundcloudId IS NULL)
+  AND (crossResolverEnrichedAt IS NULL OR crossResolverEnrichedAt < ?)
+ORDER BY (crossResolverEnrichedAt IS NULL) DESC, addedAt DESC
+LIMIT ?;
+
+markCrossResolverEnriched:
+UPDATE tracks SET crossResolverEnrichedAt = ? WHERE id = ?;
 
 deleteSyncedTracks:
 DELETE FROM tracks WHERE id LIKE 'spotify-%';

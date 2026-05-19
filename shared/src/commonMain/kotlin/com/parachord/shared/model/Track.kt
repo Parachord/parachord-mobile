@@ -33,6 +33,12 @@ data class Track(
     val artistMbid: String? = null,
     /** MusicBrainz release MBID. */
     val releaseMbid: String? = null,
+    /**
+     * Epoch-ms timestamp of the last slow-trickle cross-resolver enrichment
+     * attempt. Null = never tried. Set by [CrossResolverEnrichmentService]
+     * regardless of outcome so un-findable tracks aren't thrashed every run.
+     */
+    val crossResolverEnrichedAt: Long? = null,
 ) {
     /**
      * Derive all available resolvers from stored IDs.

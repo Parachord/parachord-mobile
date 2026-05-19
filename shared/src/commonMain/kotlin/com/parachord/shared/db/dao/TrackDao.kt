@@ -7,6 +7,7 @@ import app.cash.sqldelight.db.SqlDriver
 import com.parachord.shared.db.ParachordDb
 import com.parachord.shared.db.Tracks
 import com.parachord.shared.model.Track
+import com.parachord.shared.platform.currentTimeMillis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -29,6 +30,7 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         resolver = resolver, spotifyUri = spotifyUri, soundcloudId = soundcloudId,
         spotifyId = spotifyId, appleMusicId = appleMusicId,
         recordingMbid = recordingMbid, artistMbid = artistMbid, releaseMbid = releaseMbid,
+        crossResolverEnrichedAt = crossResolverEnrichedAt,
     )
 
     /* ---- Queries returning Flow ---- */
@@ -155,6 +157,26 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
             soundcloudId = soundcloudId,
             id = trackId,
         )
+    }
+
+    /**
+     * Slow-trickle candidates: localfiles tracks missing >=1 streaming-service
+     * ID, not visited within the cooldown window. Never-tried first.
+     */
+    suspend fun selectCrossResolverEnrichmentCandidates(
+        olderThanEpochMs: Long,
+        limit: Int,
+    ): List<Track> = withContext(Dispatchers.Default) {
+        queries.selectCrossResolverEnrichmentCandidates(olderThanEpochMs, limit.toLong())
+            .executeAsList()
+            .map { it.toTrack() }
+    }
+
+    suspend fun markCrossResolverEnriched(
+        id: String,
+        epochMs: Long = currentTimeMillis(),
+    ): Unit = withContext(Dispatchers.Default) {
+        queries.markCrossResolverEnriched(epochMs, id)
     }
 
     suspend fun backfillMbids(

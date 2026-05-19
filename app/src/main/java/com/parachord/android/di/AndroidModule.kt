@@ -255,6 +255,14 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // Slow-trickle cross-resolver enrichment (#150): tracks the last time
+        // we tried to backfill streaming-service IDs for a localfiles-only
+        // track. Same idempotent ALTER pattern as above.
+        try {
+            driver.execute(null, "ALTER TABLE tracks ADD COLUMN crossResolverEnrichedAt INTEGER", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         com.parachord.shared.db.ParachordDb(driver)
     }
 
@@ -435,6 +443,37 @@ val androidModule = module {
     singleOf(::ResolverManager)
     singleOf(::ResolverScoring)
     singleOf(::TrackResolverCache)
+
+    // ── Slow-trickle cross-resolver enrichment (#150) ────────────────
+    // The service itself lives in shared/commonMain; the Android Koin
+    // binding closes the resolver lambda over ResolverManager.resolveWithHints.
+    // Per-source confidence gate at 0.95 — well above the 0.60 floor in
+    // ResolverScoring. We don't want to pollute Achordion's match cache
+    // with wrong-song matches that scored just above the playback floor.
+    single {
+        val resolverManager: ResolverManager = get()
+        com.parachord.shared.enrichment.CrossResolverEnrichmentService(
+            trackDao = get(),
+            mbidEnrichmentService = get(),
+            achordionClient = get(),
+            resolveByTitleArtist = { title, artist ->
+                val sources = resolverManager.resolveWithHints(
+                    query = "$artist - $title",
+                    targetTitle = title,
+                    targetArtist = artist,
+                )
+                fun pick(name: String) = sources
+                    .filter { it.resolver == name && (it.confidence ?: 0.0) >= 0.95 }
+                    .maxByOrNull { it.confidence ?: 0.0 }
+                com.parachord.shared.enrichment.CrossResolverEnrichmentService.ResolvedSources(
+                    spotifyId = pick("spotify")?.spotifyId,
+                    appleMusicId = pick("applemusic")?.appleMusicId,
+                    soundcloudId = pick("soundcloud")?.soundcloudId,
+                )
+            },
+        )
+    }
+    single { com.parachord.android.enrichment.CrossResolverEnrichmentScheduler(androidContext()) }
 
     // ── Repositories ─────────────────────────────────────────────────
 
