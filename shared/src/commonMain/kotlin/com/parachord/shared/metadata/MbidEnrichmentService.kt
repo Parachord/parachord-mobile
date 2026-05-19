@@ -115,6 +115,24 @@ class MbidEnrichmentService(
     }
 
     /**
+     * Synchronously enrich one track and return when the mapper lookup
+     * + Room backfill is complete. Unlike [enrichInBackground], this
+     * suspends until the work is done — required by the slow-trickle
+     * cross-resolver visitor which needs the MBID populated before it
+     * can submit to Achordion. Safe to call from any coroutine context;
+     * dedup-friendly via the same [tryClaim]/[release] gate.
+     */
+    suspend fun enrichTrack(req: TrackEnrichmentRequest) {
+        if (req.artist.isBlank() || req.title.isBlank()) return
+        if (!tryClaim(req.trackId)) return
+        try {
+            enrichTrack(req.trackId, req.artist, req.title)
+        } finally {
+            release(req.trackId)
+        }
+    }
+
+    /**
      * Look up an artist MBID from the cache or via the mapper.
      * Returns null if not found. Does not persist to Room (no trackId context).
      * Used by FreshDropsRepository for release-group browsing.
