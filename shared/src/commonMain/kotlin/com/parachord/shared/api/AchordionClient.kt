@@ -13,6 +13,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,6 +54,8 @@ class AchordionClient(
         private const val TAG = "AchordionClient"
         private const val ENTITY_LINK_ENDPOINT = "https://achordion.xyz/api/entity-link"
         private const val SUBMIT_ENDPOINT = "https://achordion.xyz/api/track-links/submit"
+        private const val ANNOUNCEMENTS_ENDPOINT = "https://achordion.xyz/api/announcements"
+        private const val ANNOUNCEMENTS_EVENT_ENDPOINT = "https://achordion.xyz/api/announcements/event"
         private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
     }
 
@@ -95,6 +98,60 @@ class AchordionClient(
         } catch (e: Throwable) {
             Log.w(TAG, "entity-link failed for $type mbid=$mbid: ${e.message}")
             null
+        }
+    }
+
+    /**
+     * Fetch the live announcements feed.
+     *
+     * Public endpoint — no auth header, no bearer token gate. Server returns
+     * a JSON array of [Announcement] objects (cached `s-maxage=60`). Clients
+     * are responsible for surface / version / expiry / dismissal filtering
+     * (see [com.parachord.shared.repository.AnnouncementsRepository]).
+     *
+     * Returns an empty list on any error so the banner just hides instead of
+     * the home screen exploding. Cancellation re-throws to keep coroutine
+     * semantics clean.
+     */
+    suspend fun listAnnouncements(): List<Announcement> {
+        return try {
+            val response = httpClient.get(ANNOUNCEMENTS_ENDPOINT) {
+                accept(ContentType.Application.Json)
+            }
+            if (response.status != HttpStatusCode.OK) {
+                Log.w(TAG, "announcements returned HTTP ${response.status.value}")
+                return emptyList()
+            }
+            val body = response.bodyAsText()
+            json.decodeFromString<List<Announcement>>(body)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "announcements fetch failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Best-effort telemetry post for view / dismiss / cta-click events.
+     *
+     * Public endpoint, no auth. Rate-limited 60/min/IP — failures (including
+     * 429) are logged at debug level and swallowed because telemetry is
+     * fire-and-forget by design (the banner UX must never block on this).
+     */
+    suspend fun trackAnnouncementEvent(id: String, event: String) {
+        try {
+            val response = httpClient.post(ANNOUNCEMENTS_EVENT_ENDPOINT) {
+                contentType(ContentType.Application.Json)
+                setBody(AnnouncementEventRequest(id = id, event = event))
+            }
+            if (!response.status.isSuccess()) {
+                Log.d(TAG, "announcements/event ${event} for id=${id} returned HTTP ${response.status.value}")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.d(TAG, "announcements/event ${event} for id=${id} failed: ${e.message}")
         }
     }
 
@@ -173,6 +230,34 @@ data class TrackLink(
     val host: String,
     val label: String? = null,
 )
+
+/**
+ * One announcement from Achordion's `/api/announcements` feed.
+ *
+ * The server returns a validated list — clients filter by `surfaces`,
+ * `minVersion`/`maxVersion`, `expiresAt`, and the local dismissed-id set
+ * (see [com.parachord.shared.repository.AnnouncementsRepository.filterForClient]).
+ */
+@Serializable
+data class Announcement(
+    val id: String,
+    val title: String,
+    val severity: String? = null,
+    val body: String? = null,
+    val icon: String? = null,
+    val iconUrl: String? = null,
+    val cta: Cta? = null,
+    val surfaces: List<String>? = null,
+    val minVersion: String? = null,
+    val maxVersion: String? = null,
+    val expiresAt: String? = null,
+)
+
+@Serializable
+data class Cta(val label: String, val url: String)
+
+@Serializable
+internal data class AnnouncementEventRequest(val id: String, val event: String)
 
 sealed class SubmitResult {
     object Ok : SubmitResult()
