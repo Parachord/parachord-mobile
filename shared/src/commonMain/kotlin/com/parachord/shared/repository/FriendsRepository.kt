@@ -1,6 +1,7 @@
 package com.parachord.shared.repository
 
 import com.parachord.shared.api.LastFmClient
+import com.parachord.shared.api.LastFmRateLimitedException
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.api.bestImageUrl
 import com.parachord.shared.db.dao.FriendDao
@@ -431,6 +432,16 @@ class FriendsRepository(
                 "lastfm" -> refreshLastFmActivity(friend)
                 "listenbrainz" -> refreshListenBrainzActivity(friend)
             }
+        } catch (e: LastFmRateLimitedException) {
+            // Expected transient under load — the [LastFmClient] rate-limit
+            // gate is doing its job (cooldown is active, short-circuiting
+            // further calls without a network hit). Demote to debug so a
+            // user with 60+ Last.fm friends doesn't see a stack-trace burst
+            // every 2-minute refresh cycle. Re-thrown from the call below
+            // so [refreshAllActivity] can short-circuit the rest of the
+            // cycle's Last.fm friends.
+            Log.d(TAG, "Last.fm rate-limited for ${friend.username} (cooldown active) — skipping")
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Failed to refresh activity for ${friend.username}", e)
         }
@@ -439,12 +450,26 @@ class FriendsRepository(
     /**
      * Refresh all friends' activity and update auto-pins.
      * Called periodically (every 2 minutes) by MainViewModel.
+     *
+     * Skips remaining Last.fm friends in the cycle once the rate-limit gate
+     * trips — those calls would all throw [LastFmRateLimitedException]
+     * synchronously without making a network call, but the noise still
+     * accumulates in logcat and wastes a few hundred coroutine launches
+     * every cycle. ListenBrainz friends are unaffected (separate API +
+     * separate gate) so the loop continues for them.
      */
     suspend fun refreshAllActivity() = withContext(Dispatchers.Default) {
         val allFriends = friendDao.getAllFriendsSync()
+        var lastFmRateLimited = false
         for (friend in allFriends) {
+            if (lastFmRateLimited && friend.service == "lastfm") continue
             try {
                 refreshFriendActivity(friend)
+            } catch (e: LastFmRateLimitedException) {
+                // First trip of the cycle — log once at debug, then suppress
+                // for the rest of this cycle's Last.fm friends.
+                lastFmRateLimited = true
+                Log.d(TAG, "Last.fm rate-limit tripped; skipping remaining Last.fm friends this cycle")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to refresh ${friend.username}", e)
             }
