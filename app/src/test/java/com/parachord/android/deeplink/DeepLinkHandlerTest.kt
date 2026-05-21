@@ -360,3 +360,161 @@ class DeepLinkHandlerRadioContractTest {
         assertFalse((b as DeepLinkAction.PlayRadio).shuffle)
     }
 }
+
+/**
+ * Round-trip tests for the Universal-Link / App-Link HTTPS form
+ * (`https://parachord.com/<verb>`) against its custom-scheme counterpart
+ * (`parachord://<verb>`).
+ *
+ * Each test asserts `parse(httpsUrl) == parse(parachordUrl)` for one verb.
+ * This locks the contract: the HTTPS form is a complete drop-in for the
+ * custom scheme. If [DeepLinkHandler.parseParachordHttps]'s URL rewrite
+ * breaks for any verb, exactly one of these tests fails.
+ *
+ * Adding a new verb to [DeepLinkHandler.parseParachord]? Add a parallel
+ * test here AND a matching `<data android:path|pathPrefix=...>` entry to
+ * the `https://parachord.com` `<intent-filter>` in AndroidManifest.xml.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class)
+class DeepLinkHandlerHttpsParachordTest {
+
+    private val handler = DeepLinkHandler()
+
+    private fun assertRoundTrip(httpsPath: String, parachordPath: String) {
+        val https = handler.parse(Uri.parse("https://parachord.com$httpsPath"))
+        val parachord = handler.parse(Uri.parse("parachord:$parachordPath"))
+        assertEquals(
+            "HTTPS form (https://parachord.com$httpsPath) must produce the same DeepLinkAction as the custom scheme (parachord:$parachordPath)",
+            parachord,
+            https,
+        )
+        // Reject the "both Unknown" trivial pass — a real verb must resolve.
+        assertFalse(
+            "Both forms resolved to Unknown — the test isn't actually exercising parseParachord's switch",
+            https is DeepLinkAction.Unknown,
+        )
+    }
+
+    // -- Playback verbs --
+
+    @Test fun play_artist_title() =
+        assertRoundTrip("/play?artist=Radiohead&title=Creep", "//play?artist=Radiohead&title=Creep")
+
+    @Test fun play_album_byMbid() =
+        assertRoundTrip("/play/album?mbid=554b417d-8885-41e6-86c7-ae935e62d571", "//play/album?mbid=554b417d-8885-41e6-86c7-ae935e62d571")
+
+    @Test fun play_playlist_bySpotifyId() =
+        assertRoundTrip(
+            "/play/playlist?spotify=37i9dQZF1DXcBWIGoYBM5M&title=Hits",
+            "//play/playlist?spotify=37i9dQZF1DXcBWIGoYBM5M&title=Hits",
+        )
+
+    @Test fun play_radio_artistSeed() =
+        assertRoundTrip("/play/radio?artist=Slowdive", "//play/radio?artist=Slowdive")
+
+    @Test fun listen_along() =
+        assertRoundTrip("/listen-along?service=lastfm&user=jherskow", "//listen-along?service=lastfm&user=jherskow")
+
+    @Test fun control_pause() =
+        assertRoundTrip("/control/pause", "//control/pause")
+
+    @Test fun control_play() =
+        assertRoundTrip("/control/play", "//control/play")
+
+    @Test fun control_next() =
+        assertRoundTrip("/control/next", "//control/next")
+
+    @Test fun queue_add() =
+        assertRoundTrip("/queue/add?artist=Beatles&title=Yesterday", "//queue/add?artist=Beatles&title=Yesterday")
+
+    @Test fun queue_clear() =
+        assertRoundTrip("/queue/clear", "//queue/clear")
+
+    @Test fun shuffle_on() =
+        assertRoundTrip("/shuffle/on", "//shuffle/on")
+
+    @Test fun shuffle_off() =
+        assertRoundTrip("/shuffle/off", "//shuffle/off")
+
+    @Test fun volume_set() =
+        assertRoundTrip("/volume/50", "//volume/50")
+
+    @Test fun import_playlist() =
+        assertRoundTrip(
+            "/import?url=https%3A%2F%2Fexample.com%2Fp.xspf",
+            "//import?url=https%3A%2F%2Fexample.com%2Fp.xspf",
+        )
+
+    // -- Navigation verbs --
+
+    @Test fun navigate_home() =
+        assertRoundTrip("/home", "//home")
+
+    @Test fun navigate_artist() =
+        assertRoundTrip("/artist/Radiohead", "//artist/Radiohead")
+
+    @Test fun navigate_artist_withTab() =
+        assertRoundTrip("/artist/Radiohead?tab=tour", "//artist/Radiohead?tab=tour")
+
+    @Test fun navigate_album() =
+        assertRoundTrip("/album/Radiohead/OK%20Computer", "//album/Radiohead/OK%20Computer")
+
+    @Test fun navigate_library() =
+        assertRoundTrip("/library", "//library")
+
+    @Test fun navigate_library_withTab() =
+        assertRoundTrip("/library?tab=artists", "//library?tab=artists")
+
+    @Test fun navigate_history() =
+        assertRoundTrip("/history", "//history")
+
+    @Test fun navigate_friend() =
+        assertRoundTrip("/friend/jherskow?tab=top-tracks", "//friend/jherskow?tab=top-tracks")
+
+    @Test fun navigate_recommendations() =
+        assertRoundTrip("/recommendations", "//recommendations")
+
+    @Test fun navigate_charts() =
+        assertRoundTrip("/charts", "//charts")
+
+    @Test fun navigate_critics_picks() =
+        assertRoundTrip("/critics-picks", "//critics-picks")
+
+    @Test fun navigate_playlists() =
+        assertRoundTrip("/playlists", "//playlists")
+
+    @Test fun navigate_playlist_byId() =
+        assertRoundTrip("/playlist/local-abc123", "//playlist/local-abc123")
+
+    @Test fun navigate_settings() =
+        assertRoundTrip("/settings", "//settings")
+
+    @Test fun navigate_search() =
+        assertRoundTrip("/search?q=Radiohead", "//search?q=Radiohead")
+
+    @Test fun navigate_chat() =
+        assertRoundTrip("/chat", "//chat")
+
+    // -- Negative / edge cases --
+
+    @Test fun rootPath_returnsUnknown() {
+        // No verb → no action. (parseParachord with no host produces Unknown
+        // too; we just want to confirm no NPE / crash on a bare host.)
+        val a = handler.parse(Uri.parse("https://parachord.com/"))
+        assertTrue(a is DeepLinkAction.Unknown)
+    }
+
+    @Test fun emptyPath_returnsUnknown() {
+        val a = handler.parse(Uri.parse("https://parachord.com"))
+        assertTrue(a is DeepLinkAction.Unknown)
+    }
+
+    @Test fun unknownVerb_returnsUnknown() {
+        // parachord://nonexistent is also Unknown; the HTTPS form must
+        // match.
+        val httpsResult = handler.parse(Uri.parse("https://parachord.com/nonexistent-verb"))
+        val parachordResult = handler.parse(Uri.parse("parachord://nonexistent-verb"))
+        assertEquals(parachordResult, httpsResult)
+    }
+}
