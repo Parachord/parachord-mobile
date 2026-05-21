@@ -107,6 +107,55 @@
                 <data android:scheme="parachord" android:host="import" />
             </intent-filter>
 
+            <!-- Universal-Links / App-Links HTTPS counterpart to parachord://.
+                 Auto-verifies against https://parachord.com/.well-known/assetlinks.json
+                 (lives in the parachord-website repo). Until the website ships
+                 that file, taps to https://parachord.com/<verb> show Android's
+                 chooser dialog ("Open with: Parachord / Browser"). After the
+                 website ships and Android re-verifies (24h propagation,
+                 can be forced with the `pm verify-app-links` adb command
+                 + re-verify flag), the chooser disappears and Parachord
+                 opens directly.
+
+                 Filter belongs on MainActivity, NOT OAuthRedirectActivity —
+                 that one is OAuth-only and uses parachord://auth/...
+
+                 autoVerify is on the filter, not the data tags — Android
+                 verifies the host once per filter.
+
+                 Paths mirror the parachord:// host list above. New verbs
+                 added later need entries here too. Tracked by #122 / #123. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="parachord.com" />
+                <!-- Playback -->
+                <data android:path="/play" />
+                <data android:pathPrefix="/play/" />
+                <data android:path="/listen-along" />
+                <data android:path="/import" />
+                <data android:pathPrefix="/queue/" />
+                <data android:pathPrefix="/control/" />
+                <data android:pathPrefix="/shuffle/" />
+                <data android:pathPrefix="/volume/" />
+                <!-- Navigation -->
+                <data android:pathPrefix="/artist/" />
+                <data android:pathPrefix="/album/" />
+                <data android:pathPrefix="/library" />
+                <data android:pathPrefix="/history" />
+                <data android:pathPrefix="/friend/" />
+                <data android:pathPrefix="/recommendations" />
+                <data android:path="/charts" />
+                <data android:path="/critics-picks" />
+                <data android:path="/playlists" />
+                <data android:pathPrefix="/playlist/" />
+                <data android:pathPrefix="/settings" />
+                <data android:path="/search" />
+                <data android:path="/chat" />
+                <data android:path="/home" />
+            </intent-filter>
+
             <!-- Spotify web URLs -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

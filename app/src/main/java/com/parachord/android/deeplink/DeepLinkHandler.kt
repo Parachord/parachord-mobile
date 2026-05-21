@@ -380,8 +380,38 @@ class DeepLinkHandler constructor() {
         return when (uri.host) {
             "open.spotify.com" -> parseSpotifyUrl(uri)
             "music.apple.com" -> parseAppleMusicUrl(uri)
+            "parachord.com" -> parseParachordHttps(uri)
             else -> DeepLinkAction.Unknown(uri.toString())
         }
+    }
+
+    /**
+     * Map a Universal-Link / App-Link of the form
+     *   `https://parachord.com/<verb>[/<sub>]?<query>`
+     * onto the same [DeepLinkAction] the equivalent
+     *   `parachord://<verb>[/<sub>]?<query>`
+     * URL would produce.
+     *
+     * Strategy: rewrite the HTTPS URI into the matching custom-scheme URI
+     * (first path segment becomes the authority, rest becomes the path,
+     * query carries verbatim) and delegate to [parseParachord]. That makes
+     * every existing AND future verb HTTPS-compatible for free — adding a
+     * new `parachord://` verb in [parseParachord] automatically gains
+     * `https://parachord.com/...` coverage without touching this method.
+     *
+     * Pairs with the matching `<intent-filter android:autoVerify="true">`
+     * in AndroidManifest.xml. See `docs/plans/2026-05-21-android-app-links-design.md`.
+     */
+    private fun parseParachordHttps(uri: Uri): DeepLinkAction {
+        val segments = uri.pathSegments
+        if (segments.isEmpty()) return DeepLinkAction.Unknown(uri.toString())
+        val rebuilt = Uri.Builder()
+            .scheme("parachord")
+            .authority(segments.first())
+            .apply { segments.drop(1).forEach { appendPath(it) } }
+            .encodedQuery(uri.encodedQuery)
+            .build()
+        return parseParachord(rebuilt)
     }
 
     private fun parseSpotifyUrl(uri: Uri): DeepLinkAction {
