@@ -260,7 +260,7 @@ class ForwardingPlayerSnapshotTest {
         verify { external.onIsPlayingChanged(true) }
     }
 
-    @Test fun `delegate timeline events ARE forwarded to external listeners`() {
+    @Test fun `delegate timeline events are NOT forwarded to external listeners`() {
         val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
         every { delegate.currentTimeline } returns Timeline.EMPTY
         val forwarderSlot = slot<Player.Listener>()
@@ -271,24 +271,63 @@ class ForwardingPlayerSnapshotTest {
 
         val external = mockk<Player.Listener>(relaxed = true)
         wrapper.addListener(external)
-        // The wrapper's addListener calls super.addListener (ForwardingPlayer's
-        // default), which installs a forwarding listener on the delegate. So
-        // delegate-side timeline + media-item-transition events DO reach
-        // external listeners. We accept this trade-off: the silence-loop
-        // timeline arrives first, then our synthetic updateQueueSnapshot
-        // emissions land after and become MediaSession's latest known state
-        // (Auto reads the wrapper's overrides for current state queries, so
-        // the synthetic queue still wins for display purposes).
+        // The wrapper installs an internal delegateForwarder on the delegate
+        // (NOT the external listener itself). That forwarder re-emits a
+        // curated subset of non-timeline events to externalListeners and
+        // drops `onTimelineChanged` / `onMediaItemTransition` from the
+        // delegate.
         //
-        // This test pins that contract — if it fails because forwarding got
-        // suppressed, ExoPlayer-native playback regresses (no STATE_ENDED →
-        // skipNext flow, no Now Playing UI updates).
+        // This test pins THE bug fix: if a future change brings back the
+        // "forward everything" behavior, the delegate's single-item
+        // silence-loop timeline leaks into Auto and the Up Next list goes
+        // empty after every track transition.
         val fakeTimeline = mockk<Timeline>(relaxed = true)
         val fakeItem = track("delegate-item").toAutoMediaItem()
         forwarderSlot.captured.onTimelineChanged(fakeTimeline, Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE)
         forwarderSlot.captured.onMediaItemTransition(fakeItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO)
-        verify { external.onTimelineChanged(fakeTimeline, Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE) }
-        verify { external.onMediaItemTransition(fakeItem, Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) }
+        verify(exactly = 0) { external.onTimelineChanged(any(), any()) }
+        verify(exactly = 0) { external.onMediaItemTransition(any(), any()) }
+    }
+
+    @Test fun `silence-loop timeline reload does not clobber synthetic queue snapshot`() {
+        // Regression test for the queue-disappears-after-track-transition
+        // bug: delegate fires onTimelineChanged when the underlying
+        // ExoPlayer's silence-loop or single-track MediaItem is replaced,
+        // and that event must NOT propagate to Auto. The wrapper's
+        // synthetic timeline (built from the real QueueManager) must
+        // remain the only timeline Auto sees.
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val forwarderSlot = slot<Player.Listener>()
+        every { delegate.addListener(capture(forwarderSlot)) } returns Unit
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        // First register a no-op listener to trigger the delegateForwarder
+        // install (otherwise forwarderSlot stays empty).
+        wrapper.addListener(mockk(relaxed = true))
+        // Build a 3-track synthetic queue.
+        wrapper.updateQueueSnapshot(track("current"), listOf(track("u1"), track("u2")))
+        assertEquals(3, wrapper.currentTimeline.windowCount)
+        // Now register the listener we care about — AFTER the snapshot,
+        // so its onTimelineChanged invocation count starts at 0 even
+        // though synthetic events already fired for the first listener.
+        val external = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(external)
+        // Simulate a silence-loop reload firing from the delegate.
+        // (Timeline argument identity is irrelevant — what matters is
+        // whether any external listener sees the event AT ALL.)
+        val silenceLoopTimeline = mockk<Timeline>(relaxed = true)
+        forwarderSlot.captured.onTimelineChanged(
+            silenceLoopTimeline,
+            Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE,
+        )
+        // Synthetic queue must still be the wrapper's reported timeline.
+        assertEquals(3, wrapper.currentTimeline.windowCount)
+        // External listener must not have received the silence-loop event.
+        // (any() to avoid Timeline.equals() pulling unmocked getWindowCount.)
+        verify(exactly = 0) { external.onTimelineChanged(any(), any()) }
     }
 
     @Test fun `getMediaItemAt out of bounds throws`() {
@@ -305,6 +344,40 @@ class ForwardingPlayerSnapshotTest {
         } catch (e: IndexOutOfBoundsException) {
             // expected
         }
+    }
+
+    @Test fun `external-mode duration is TIME_UNSET when stateHolder duration is zero`() {
+        // Regression test for the 10:00 progress-bar leak (issue #111).
+        // The silence WAV is exactly 10 minutes; if we fell through to
+        // super.getDuration() during external mode while the real
+        // duration hasn't been populated yet, Auto would display 600_000ms.
+        // We return TIME_UNSET instead so Auto shows an indeterminate bar.
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        every { delegate.duration } returns 600_000L  // silence WAV
+        every { delegate.contentDuration } returns 600_000L
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+        wrapper.externalMode = true
+
+        // stateHolder.duration is 0 by default — real duration not yet known.
+        assertEquals(C.TIME_UNSET, wrapper.duration)
+        assertEquals(C.TIME_UNSET, wrapper.contentDuration)
+    }
+
+    @Test fun `external-mode duration reflects stateHolder when populated`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        every { delegate.duration } returns 600_000L
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+        wrapper.externalMode = true
+
+        stateHolder.update { copy(duration = 245_000L) }
+        assertEquals(245_000L, wrapper.duration)
+        assertEquals(245_000L, wrapper.contentDuration)
     }
 
     @Test fun `same current track does not re-fire onMediaItemTransition`() {

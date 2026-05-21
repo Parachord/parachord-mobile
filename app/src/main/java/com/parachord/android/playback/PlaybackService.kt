@@ -12,6 +12,7 @@ import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import com.parachord.shared.platform.Log
@@ -21,6 +22,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player.Commands
@@ -37,6 +39,7 @@ import androidx.media3.session.MediaSession
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
 import com.parachord.android.R
 import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
 import com.parachord.shared.playback.QueueManager
@@ -49,7 +52,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
@@ -80,6 +85,11 @@ class PlaybackService : MediaLibraryService() {
     private val playbackController: PlaybackController by inject()
     private val stateHolder: PlaybackStateHolder by inject()
     private val queueManager: QueueManager by inject()
+    private val playlistDao: com.parachord.shared.db.dao.PlaylistDao by inject()
+    private val playlistTrackDao: com.parachord.shared.db.dao.PlaylistTrackDao by inject()
+    private val trackDao: com.parachord.shared.db.dao.TrackDao by inject()
+    private val libraryRepository: com.parachord.shared.repository.LibraryRepository by inject()
+    private val metadataService: com.parachord.shared.metadata.MetadataService by inject()
 
     private var mediaSession: MediaLibrarySession? = null
     private var player: ExoPlayer? = null
@@ -125,6 +135,25 @@ class PlaybackService : MediaLibraryService() {
         private const val CHANNEL_ID = "parachord_playback"
         private const val ARTWORK_SIZE = 256
         private const val LIBRARY_ROOT_ID = "parachord_root"
+
+        // Browse-tree IDs surfaced in Android Auto. The "browse:" prefix is a
+        // navigable folder (Auto calls onGetChildren on it); the "action:"
+        // prefix is a tap-and-go playable item that we intercept in
+        // onAddMediaItems to dispatch into PlaybackController without going
+        // through ExoPlayer's media-item loading path. Playlist items use
+        // the "playlist:" prefix.
+        private const val BROWSE_PLAYLISTS_ID = "browse:playlists"
+        private const val ACTION_COLLECTION_RADIO_ID = "action:collection-radio"
+        private const val PLAYLIST_ITEM_PREFIX = "playlist:"
+
+        /**
+         * MediaId prefix for tracks returned by Auto search. The integer
+         * suffix is an index into the in-memory [searchResultsCache] kept on
+         * the LibraryCallback. On tap, the LibraryCallback looks up the
+         * cached [TrackSearchResult] and dispatches playback through the
+         * resolver pipeline (PlaybackController handles on-the-fly resolve).
+         */
+        private const val SEARCH_TRACK_PREFIX = "search-track:"
 
         /** Intent actions sent by PlaybackController to manage foreground state. */
         const val ACTION_EXTERNAL_PLAYBACK_START = "com.parachord.android.EXTERNAL_PLAYBACK_START"
@@ -275,17 +304,7 @@ class PlaybackService : MediaLibraryService() {
             browser: MediaSession.ControllerInfo,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<MediaItem>> {
-            val rootMetadata = MediaMetadata.Builder()
-                .setTitle("Parachord")
-                .setIsBrowsable(true)
-                .setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
-                .build()
-            val rootItem = MediaItem.Builder()
-                .setMediaId(LIBRARY_ROOT_ID)
-                .setMediaMetadata(rootMetadata)
-                .build()
-            return Futures.immediateFuture(LibraryResult.ofItem(rootItem, params))
+            return Futures.immediateFuture(LibraryResult.ofItem(rootItem(), params))
         }
 
         override fun onGetChildren(
@@ -296,9 +315,41 @@ class PlaybackService : MediaLibraryService() {
             pageSize: Int,
             params: LibraryParams?,
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            return Futures.immediateFuture(
-                LibraryResult.ofItemList(ImmutableList.of(), params)
-            )
+            return when (parentId) {
+                LIBRARY_ROOT_ID -> {
+                    val children = ImmutableList.of(
+                        browsableFolder(BROWSE_PLAYLISTS_ID, "Playlists"),
+                        playableAction(ACTION_COLLECTION_RADIO_ID, "Collection Radio", subtitle = "Shuffle all loved tracks"),
+                    )
+                    Futures.immediateFuture(LibraryResult.ofItemList(children, params))
+                }
+                BROWSE_PLAYLISTS_ID -> loadPlaylistChildrenAsync(params)
+                else -> Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.of(), params))
+            }
+        }
+
+        override fun onGetItem(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            mediaId: String,
+        ): ListenableFuture<LibraryResult<MediaItem>> = when {
+            mediaId == LIBRARY_ROOT_ID ->
+                Futures.immediateFuture(LibraryResult.ofItem(rootItem(), null))
+            mediaId == BROWSE_PLAYLISTS_ID ->
+                Futures.immediateFuture(LibraryResult.ofItem(browsableFolder(BROWSE_PLAYLISTS_ID, "Playlists"), null))
+            mediaId == ACTION_COLLECTION_RADIO_ID ->
+                Futures.immediateFuture(LibraryResult.ofItem(playableAction(ACTION_COLLECTION_RADIO_ID, "Collection Radio", "Shuffle all loved tracks"), null))
+            mediaId.startsWith(PLAYLIST_ITEM_PREFIX) -> {
+                val future = SettableFuture.create<LibraryResult<MediaItem>>()
+                serviceScope.launch {
+                    val id = mediaId.removePrefix(PLAYLIST_ITEM_PREFIX)
+                    val p = try { playlistDao.getById(id) } catch (e: Exception) { null }
+                    if (p == null) future.set(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
+                    else future.set(LibraryResult.ofItem(playlistToMediaItem(p), null))
+                }
+                future
+            }
+            else -> Futures.immediateFuture(LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE))
         }
 
         override fun onAddMediaItems(
@@ -306,27 +357,375 @@ class PlaybackService : MediaLibraryService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: List<MediaItem>,
         ): ListenableFuture<List<MediaItem>> {
-            // CRITICAL: this callback fires for EVERY MediaController.setMediaItems —
-            // including our own internal `PlaybackController.playTrackInternal()` calls
-            // that need to actually reach ExoPlayer. We must distinguish:
-            //
-            //   - Internal: our app's own MediaController is loading a track for
-            //     playback. Forward the items unchanged so ExoPlayer plays them.
-            //
-            //   - External: Android Auto voice search ("Hey Google, play X") sends
-            //     arbitrary MediaItems via this same callback. Resolving those
-            //     against our catalog is out of scope for v1, so we drop them
-            //     rather than letting random items hijack the queue.
-            //
-            // Distinguishing by controller.packageName: our process's own
-            // MediaController reports our packageName; external sources (Auto,
-            // Assistant, Wear) report theirs.
             val isInternal = controller.packageName == packageName
-            if (isInternal) {
-                return Futures.immediateFuture(mediaItems)
+            if (isInternal) return Futures.immediateFuture(mediaItems)
+
+            val first = mediaItems.firstOrNull()
+            val firstId = first?.mediaId
+            if (firstId != null && isBrowseTreeMediaId(firstId)) {
+                Log.d(TAG, "onAddMediaItems: dispatching browse-tree action mediaId=$firstId from ${controller.packageName}")
+                serviceScope.launch { dispatchBrowseTreeAction(firstId) }
+                // Return a silence-loop placeholder so Media3 can complete
+                // its setMediaItems → play() sequence without erroring out.
+                // PlaybackController.playQueue (kicked off above) will replace
+                // these items via its own setMediaItems call once playback
+                // routes through to an external handler.
+                return Futures.immediateFuture(listOf(silencePlaceholderFor(first)))
             }
             Log.d(TAG, "onAddMediaItems: ${mediaItems.size} items from ${controller.packageName} — ignoring (v1)")
             return Futures.immediateFuture(emptyList())
+        }
+
+        /**
+         * Auto's "tap to play" from the browse tree fires
+         * [MediaController.setMediaItem] which routes here. Without this
+         * override, Media3 only sees [onAddMediaItems] (no start index /
+         * position) and Auto displays "Parachord doesn't seem to be working
+         * right now" while the future never resolves to a playable form.
+         *
+         * The dispatch is the same as [onAddMediaItems]: detect browse-tree
+         * mediaIds, kick off the real playback via [dispatchBrowseTreeAction],
+         * return a silence placeholder so Media3's add-then-play sequence
+         * completes.
+         */
+        override fun onSetMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>,
+            startIndex: Int,
+            startPositionMs: Long,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val isInternal = controller.packageName == packageName
+            if (isInternal) {
+                return Futures.immediateFuture(
+                    MediaSession.MediaItemsWithStartPosition(mediaItems, startIndex, startPositionMs)
+                )
+            }
+            val first = mediaItems.firstOrNull()
+            val firstId = first?.mediaId
+            if (firstId != null && isBrowseTreeMediaId(firstId)) {
+                Log.d(TAG, "onSetMediaItems: dispatching browse-tree action mediaId=$firstId from ${controller.packageName}")
+                serviceScope.launch { dispatchBrowseTreeAction(firstId) }
+                return Futures.immediateFuture(
+                    MediaSession.MediaItemsWithStartPosition(
+                        listOf(silencePlaceholderFor(first)),
+                        /* startIndex = */ 0,
+                        /* startPositionMs = */ 0L,
+                    )
+                )
+            }
+            Log.d(TAG, "onSetMediaItems: ${mediaItems.size} items from ${controller.packageName} — ignoring (v1)")
+            return Futures.immediateFuture(
+                MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0L)
+            )
+        }
+
+        /**
+         * Build a silence-URI placeholder MediaItem keyed to the original
+         * browse-tree item's mediaId. ExoPlayer can load + play this without
+         * error; we then rely on [PlaybackController.playQueue]'s own
+         * `setMediaItems` (fired async via [dispatchBrowseTreeAction]) to
+         * replace it with the routed track's silence loop + external mode.
+         */
+        private fun silencePlaceholderFor(source: MediaItem): MediaItem {
+            val silenceUri = Uri.parse(
+                "android.resource://${packageName}/${com.parachord.android.R.raw.silence}"
+            )
+            return MediaItem.Builder()
+                .setMediaId(source.mediaId)
+                .setUri(silenceUri)
+                .setMediaMetadata(source.mediaMetadata)
+                .build()
+        }
+
+        // ── Browse-tree helpers ─────────────────────────────────────────
+
+        /** Async loader for the "Playlists" folder's children. */
+        private fun loadPlaylistChildrenAsync(
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+            serviceScope.launch {
+                try {
+                    val playlists = playlistDao.getAllSync().sortedByDescending { it.updatedAt }
+                    val items = ImmutableList.copyOf(playlists.map { playlistToMediaItem(it) })
+                    future.set(LibraryResult.ofItemList(items, params))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Browse: failed to load playlist children", e)
+                    future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                }
+            }
+            return future
+        }
+
+        /** Tap-target dispatch for browse-tree entries (called off the binder thread). */
+        private suspend fun dispatchBrowseTreeAction(mediaId: String) {
+            try {
+                when {
+                    mediaId == ACTION_COLLECTION_RADIO_ID -> {
+                        val collection = trackDao.getAll().first()
+                        if (collection.isEmpty()) {
+                            Log.w(TAG, "Collection Radio: no loved tracks available")
+                            return
+                        }
+                        Log.d(TAG, "Collection Radio: starting shuffled queue of ${collection.size} tracks")
+                        playbackController.playQueue(collection, startIndex = 0, shuffle = true)
+                    }
+                    mediaId.startsWith(PLAYLIST_ITEM_PREFIX) -> {
+                        val playlistId = mediaId.removePrefix(PLAYLIST_ITEM_PREFIX)
+                        val rows = playlistTrackDao.getByPlaylistIdSync(playlistId)
+                        if (rows.isEmpty()) {
+                            Log.w(TAG, "Browse: playlist $playlistId has no tracks")
+                            return
+                        }
+                        val tracks = rows.map { libraryRepository.playlistTrackToTrackEntity(it) }
+                        Log.d(TAG, "Browse: starting playlist $playlistId (${tracks.size} tracks)")
+                        playbackController.playQueue(tracks, startIndex = 0)
+                    }
+                    mediaId.startsWith(SEARCH_TRACK_PREFIX) -> {
+                        val idx = mediaId.removePrefix(SEARCH_TRACK_PREFIX).toIntOrNull()
+                        val cached = searchMutex.withLock { searchResultsCache.toList() }
+                        if (idx == null || idx < 0 || idx >= cached.size) {
+                            Log.w(TAG, "Search: stale or out-of-range mediaId=$mediaId (cache size=${cached.size})")
+                            return
+                        }
+                        // Queue all cached search results from the tapped index. Tracks
+                        // before the index become history; from idx onward becomes the
+                        // play order. Matches the Spotify-Auto / YT-Music-Auto tap
+                        // semantics where the rest of the search results form upNext.
+                        val tracks = cached.map { searchResultToTrackEntity(it) }
+                        Log.d(TAG, "Search: starting tap at index $idx of ${tracks.size} cached results")
+                        playbackController.playQueue(tracks, startIndex = idx)
+                    }
+                    else -> Log.w(TAG, "dispatchBrowseTreeAction: unknown mediaId=$mediaId")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "dispatchBrowseTreeAction failed for $mediaId", e)
+            }
+        }
+
+        private fun isBrowseTreeMediaId(mediaId: String): Boolean =
+            mediaId == ACTION_COLLECTION_RADIO_ID ||
+                mediaId.startsWith(PLAYLIST_ITEM_PREFIX) ||
+                mediaId.startsWith(SEARCH_TRACK_PREFIX)
+
+        // ── Auto search ─────────────────────────────────────────────────
+
+        /**
+         * In-memory cache of the most recent Auto search results. Auto's
+         * search flow is split across two callbacks ([onSearch] +
+         * [onGetSearchResult]) and the playback dispatch (via
+         * [onSetMediaItems]) is a third, so we need to remember the result
+         * list between calls. The list is indexed by position; mediaIds
+         * encode the index ("search-track:&lt;n&gt;").
+         */
+        @Volatile
+        private var searchResultsCache: List<com.parachord.shared.metadata.TrackSearchResult> = emptyList()
+
+        /** Guards writes to [searchResultsCache] across the search callbacks. */
+        private val searchMutex = kotlinx.coroutines.sync.Mutex()
+
+        /**
+         * The first leg of Auto search. Auto calls this once with the user's
+         * query; we run the resolver-cascade search through [MetadataService]
+         * asynchronously, cache the results, and tell Auto how many we have
+         * via `notifySearchResultChanged`. Auto then calls
+         * [onGetSearchResult] to fetch a page of items.
+         *
+         * Returning `LibraryResult.ofVoid` immediately is the required
+         * acknowledgement — Auto doesn't block on it; the real signal is
+         * `notifySearchResultChanged`.
+         */
+        override fun onSearch(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<Void>> {
+            Log.d(TAG, "Auto search requested: query='$query' from ${browser.packageName}")
+            serviceScope.launch {
+                val count = try {
+                    // Fetch wider than we'll surface (40) so ranking has room
+                    // to pull the strongest matches forward; we serve the top
+                    // 20 after scoring.
+                    val raw = metadataService.searchTracks(query, limit = 40)
+                    val ranked = rankSearchResults(query, raw).take(20)
+                    searchMutex.withLock { searchResultsCache = ranked }
+                    ranked.size
+                } catch (e: Exception) {
+                    Log.e(TAG, "Auto search failed for query='$query'", e)
+                    searchMutex.withLock { searchResultsCache = emptyList() }
+                    0
+                }
+                try {
+                    session.notifySearchResultChanged(browser, query, count, params)
+                } catch (e: Exception) {
+                    Log.w(TAG, "notifySearchResultChanged threw: ${e.message}")
+                }
+            }
+            return Futures.immediateFuture(LibraryResult.ofVoid(params))
+        }
+
+        /**
+         * Re-rank raw [MetadataService] hits using the desktop's combined
+         * score: 60% fuzzy title/artist match + 40% provider-priority weighting
+         * (MusicBrainz 0, Last.fm 10, Spotify 20 — lower priority number =
+         * heavier "popularity" weight, since MB's canonical recordings are
+         * the most-trustworthy matches). Mirrors `SearchViewModel.rankTracks`
+         * — keep both in sync if either changes.
+         */
+        private fun rankSearchResults(
+            query: String,
+            results: List<com.parachord.shared.metadata.TrackSearchResult>,
+        ): List<com.parachord.shared.metadata.TrackSearchResult> =
+            results.map { track ->
+                val titleScore = com.parachord.android.ui.screens.search.FuzzyMatch.score(query, track.title)
+                val artistScore = com.parachord.android.ui.screens.search.FuzzyMatch.score(query, track.artist)
+                val fuzzy = maxOf(titleScore, artistScore * 0.9)
+                val priority = providerPriority(track.provider)
+                track to com.parachord.android.ui.screens.search.FuzzyMatch.combinedScore(fuzzy, priority)
+            }
+                .filter { it.second > 0.0 }
+                .sortedByDescending { it.second }
+                .map { it.first }
+
+        /** Provider-priority weights — kept in sync with SearchViewModel. */
+        private fun providerPriority(provider: String): Int = when {
+            "musicbrainz" in provider -> 0
+            "lastfm" in provider -> 10
+            "spotify" in provider -> 20
+            else -> 10
+        }
+
+        /**
+         * Returns the cached results from the most-recent [onSearch] call,
+         * paginated. Auto calls this after we fire `notifySearchResultChanged`.
+         */
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+            serviceScope.launch {
+                try {
+                    val cached = searchMutex.withLock { searchResultsCache.toList() }
+                    val start = page * pageSize
+                    if (start >= cached.size) {
+                        future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                        return@launch
+                    }
+                    val end = minOf(start + pageSize, cached.size)
+                    val items = ImmutableList.copyOf(
+                        cached.subList(start, end).mapIndexed { offset, r ->
+                            searchResultToMediaItem(start + offset, r)
+                        }
+                    )
+                    future.set(LibraryResult.ofItemList(items, params))
+                } catch (e: Exception) {
+                    Log.e(TAG, "onGetSearchResult failed", e)
+                    future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                }
+            }
+            return future
+        }
+
+        /**
+         * Build a playable [MediaItem] for an Auto search hit. The mediaId
+         * is `search-track:<index>` — on tap, [dispatchBrowseTreeAction]
+         * looks up the cached [TrackSearchResult] by index and dispatches
+         * the queue (rest of the results from that index onward) through
+         * [PlaybackController.playQueue].
+         */
+        private fun searchResultToMediaItem(
+            index: Int,
+            r: com.parachord.shared.metadata.TrackSearchResult,
+        ): MediaItem {
+            val md = MediaMetadata.Builder()
+                .setTitle(r.title)
+                .setArtist(r.artist)
+                .apply { r.album?.let { setAlbumTitle(it) } }
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .apply { r.artworkUrl?.let { setArtworkUri(Uri.parse(it)) } }
+                .build()
+            return MediaItem.Builder()
+                .setMediaId("$SEARCH_TRACK_PREFIX$index")
+                .setMediaMetadata(md)
+                .build()
+        }
+
+        /**
+         * Convert a metadata search hit into a metadata-only [TrackEntity].
+         * `resolver` and `sourceUrl` are deliberately null — PlaybackController
+         * runs on-the-fly resolution via the resolver cascade (see CLAUDE.md
+         * "On-the-fly Track Resolution"). Hints (spotifyId, mbid) are passed
+         * through so the cascade can fast-path the lookup.
+         */
+        private fun searchResultToTrackEntity(
+            r: com.parachord.shared.metadata.TrackSearchResult,
+        ): TrackEntity =
+            com.parachord.shared.model.Track(
+                id = com.parachord.shared.platform.randomUUID(),
+                title = r.title,
+                artist = r.artist,
+                album = r.album,
+                duration = r.duration,
+                artworkUrl = r.artworkUrl,
+                spotifyId = r.spotifyId,
+                recordingMbid = r.mbid,
+            )
+
+        // ── MediaItem builders ──────────────────────────────────────────
+
+        private fun rootItem(): MediaItem {
+            val md = MediaMetadata.Builder()
+                .setTitle("Parachord")
+                .setIsBrowsable(true)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+                .build()
+            return MediaItem.Builder().setMediaId(LIBRARY_ROOT_ID).setMediaMetadata(md).build()
+        }
+
+        private fun browsableFolder(id: String, title: String): MediaItem {
+            val md = MediaMetadata.Builder()
+                .setTitle(title)
+                .setIsBrowsable(true)
+                .setIsPlayable(false)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS)
+                .build()
+            return MediaItem.Builder().setMediaId(id).setMediaMetadata(md).build()
+        }
+
+        private fun playableAction(id: String, title: String, subtitle: String? = null): MediaItem {
+            val md = MediaMetadata.Builder()
+                .setTitle(title)
+                .apply { subtitle?.let { setSubtitle(it) } }
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .build()
+            return MediaItem.Builder().setMediaId(id).setMediaMetadata(md).build()
+        }
+
+        private fun playlistToMediaItem(p: com.parachord.shared.model.Playlist): MediaItem {
+            val md = MediaMetadata.Builder()
+                .setTitle(p.name)
+                .setArtist(p.ownerName ?: "Parachord")
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
+                .apply { p.artworkUrl?.let { setArtworkUri(Uri.parse(it)) } }
+                .build()
+            return MediaItem.Builder()
+                .setMediaId("$PLAYLIST_ITEM_PREFIX${p.id}")
+                .setMediaMetadata(md)
+                .build()
         }
     }
 
@@ -708,17 +1107,85 @@ class PlaybackService : MediaLibraryService() {
         /** Re-entrancy guard for [updateQueueSnapshot]. See KDoc on that method. */
         private var dispatching = false
 
-        /** Listeners we synthesize queue-related events to via
-         *  [updateQueueSnapshot]. Listeners are ALSO registered on the
-         *  delegate (via super.addListener) so they receive normal player
-         *  events (state, position, errors) directly. We just additionally
-         *  emit synthesized `onTimelineChanged` / `onMediaItemTransition`
-         *  for our queue. The delegate's silence-loop timeline events
-         *  arrive too, but our synthesized emissions are dispatched after
-         *  state changes propagate, so the synthetic timeline wins as
-         *  MediaSession's latest known state. */
+        /**
+         * Set of external listeners (MediaSession, etc.) that subscribed via
+         * [addListener]. We re-emit a curated subset of delegate events to
+         * these listeners via [delegateForwarder] — **never** by registering
+         * them directly on the delegate. Filtering at this layer is the only
+         * way to prevent the underlying ExoPlayer's silence-loop / single-
+         * item timeline events from clobbering the synthetic queue we build
+         * in [updateQueueSnapshot].
+         */
         private val externalListeners =
             java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+
+        /**
+         * Single internal listener installed on the [delegate] (lazily, on
+         * first [addListener]) that re-emits a curated subset of player
+         * events to [externalListeners].
+         *
+         * **What is forwarded** — non-timeline state events that MediaSession
+         * and Android Auto need to drive Now Playing UI and trigger
+         * `PlaybackController`'s `STATE_ENDED → skipNextInternal` flow during
+         * ExoPlayer-native playback: `onIsPlayingChanged`,
+         * `onPlaybackStateChanged`, `onPlayWhenReadyChanged`,
+         * `onPositionDiscontinuity`, `onPlayerError`, `onIsLoadingChanged`,
+         * `onRepeatModeChanged`, `onShuffleModeEnabledChanged`,
+         * `onAvailableCommandsChanged`.
+         *
+         * **What is DELIBERATELY NOT forwarded** — events that would corrupt
+         * Auto's queue display by leaking the underlying ExoPlayer's
+         * single-item silence-loop / setMediaItems timeline:
+         * `onTimelineChanged`, `onMediaItemTransition`, `onTracksChanged`,
+         * `onMediaMetadataChanged`. The wrapper synthesizes its own versions
+         * of these events in [updateQueueSnapshot] from the real
+         * `QueueManager` state, and Auto must only see those.
+         *
+         * If a regression brings back the silence-loop-shows-in-Auto bug,
+         * look here first — adding a forwarded override that touches the
+         * timeline surface is almost certainly the cause.
+         */
+        private val delegateForwarder = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                externalListeners.forEach { it.onIsPlayingChanged(isPlaying) }
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                externalListeners.forEach { it.onPlaybackStateChanged(playbackState) }
+            }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                externalListeners.forEach { it.onPlayWhenReadyChanged(playWhenReady, reason) }
+            }
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) {
+                externalListeners.forEach {
+                    it.onPositionDiscontinuity(oldPosition, newPosition, reason)
+                }
+            }
+            override fun onPlayerError(error: PlaybackException) {
+                externalListeners.forEach { it.onPlayerError(error) }
+            }
+            override fun onIsLoadingChanged(isLoading: Boolean) {
+                externalListeners.forEach { it.onIsLoadingChanged(isLoading) }
+            }
+            override fun onRepeatModeChanged(repeatMode: Int) {
+                externalListeners.forEach { it.onRepeatModeChanged(repeatMode) }
+            }
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                externalListeners.forEach { it.onShuffleModeEnabledChanged(shuffleModeEnabled) }
+            }
+            override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+                externalListeners.forEach { it.onAvailableCommandsChanged(availableCommands) }
+            }
+            // Intentionally NOT overriding: onTimelineChanged,
+            // onMediaItemTransition, onTracksChanged, onMediaMetadataChanged.
+            // See KDoc above.
+        }
+
+        /** True once [delegateForwarder] has been installed on [delegate]. */
+        private var delegateForwarderInstalled = false
 
         /** Internal data holder so reads of timeline + index are atomic. */
         data class QueueSnapshotState(
@@ -765,13 +1232,26 @@ class PlaybackService : MediaLibraryService() {
         /**
          * Report the real track duration (from [PlaybackStateHolder]) during
          * external playback instead of the silence-loop file's duration.
-         * Without this override, Android Auto's progress bar shows 10:00 for
-         * every Spotify / Apple Music track.
+         *
+         * The silence WAV (`res/raw/silence.wav`) is exactly 10 minutes
+         * long. If we fall through to `super.getDuration()` while
+         * `stateHolder.duration` hasn't been populated yet (track loading,
+         * external state poll lagging behind), Auto receives 600_000 and
+         * displays a 10:00 progress bar — sometimes briefly mid-track when
+         * the external poll drops, sometimes for the whole track if the
+         * race lands wrong. It also causes the bar to stall at 10:00 on
+         * any track longer than 10 minutes, since Auto clamps position to
+         * the reported duration.
+         *
+         * Return `C.TIME_UNSET` (indeterminate) instead of leaking the
+         * silence WAV's duration. Auto handles the unknown-duration case
+         * gracefully (no progress bar / spinner) — much better than wrong
+         * data.
          */
         override fun getDuration(): Long {
             if (externalMode) {
                 val real = stateHolder.state.value.duration
-                if (real > 0L) return real
+                return if (real > 0L) real else C.TIME_UNSET
             }
             return super.getDuration()
         }
@@ -779,7 +1259,7 @@ class PlaybackService : MediaLibraryService() {
         override fun getContentDuration(): Long {
             if (externalMode) {
                 val real = stateHolder.state.value.duration
-                if (real > 0L) return real
+                return if (real > 0L) real else C.TIME_UNSET
             }
             return super.getContentDuration()
         }
@@ -955,47 +1435,42 @@ class PlaybackService : MediaLibraryService() {
         /**
          * Register a listener for player events.
          *
-         * **Hybrid forwarding strategy.** The wrapper installs a single
-         * internal [delegateForwarder] on the underlying ExoPlayer the first
-         * time any external listener registers. That forwarder relays every
-         * non-timeline event from the delegate to the registered external
-         * listeners. We also synthesize our own `onTimelineChanged` and
-         * `onMediaItemTransition` via [updateQueueSnapshot] — these REPLACE
-         * the delegate's silence-loop timeline events (which describe the
-         * single-item silence loop, not the real queue, and would corrupt
-         * Auto's queue display if forwarded).
+         * **Filtered-forwarder strategy.** External listeners are kept in
+         * [externalListeners] and never registered on the underlying
+         * [delegate]. On first registration we install our single
+         * [delegateForwarder] on the delegate; it re-emits a curated set of
+         * non-timeline events to [externalListeners]. The wrapper itself
+         * synthesizes `onTimelineChanged` / `onMediaItemTransition` from the
+         * real `QueueManager` state via [updateQueueSnapshot].
          *
-         * The non-timeline events (`onIsPlayingChanged`,
-         * `onPlaybackStateChanged`, `onPositionDiscontinuity`,
-         * `onPlayerError`, etc.) are essential for Media3's MediaSession to
-         * drive the Now Playing notification, lock screen, and Android Auto's
-         * playback metadata — without them, Auto shows "no media".
-         *
-         * **DO NOT** call `super.addListener(listener)` here. The delegate
-         * forwards every event including the silence-loop timeline noise
-         * we're trying to suppress. Always go through the forwarder.
+         * **Why not `super.addListener`?** `ForwardingPlayer.addListener`
+         * registers the listener on the delegate, which then fires every
+         * event the delegate emits — including the single-item silence-loop
+         * `onTimelineChanged` that arrives after every `setMediaItems` call
+         * (track transitions, external→external switches, prepare). When
+         * those events leak through, Android Auto sees a size-1 timeline
+         * after a track change and the Up Next list goes empty until the
+         * next QueueManager mutation. That regression is exactly what this
+         * class structure exists to prevent.
          */
         override fun addListener(listener: Player.Listener) {
+            val wasFirst = externalListeners.isEmpty()
             externalListeners.add(listener)
-            // Forward to delegate so MediaSession + MediaController receive
-            // playback-state events (onIsPlayingChanged, onPlaybackStateChanged,
-            // onPositionDiscontinuity, etc.) needed to drive Now Playing UI
-            // and trigger PlaybackController's STATE_ENDED → skipNextInternal
-            // logic correctly. Without this, ExoPlayer-native playback breaks
-            // because the listener never sees the delegate's state machine.
-            //
-            // The trade-off: delegate's onTimelineChanged + onMediaItemTransition
-            // events also flow through (1-item silence-loop timeline). They
-            // arrive BEFORE our synthetic events fired by updateQueueSnapshot,
-            // and MediaSession uses the latest emission, so the synthetic
-            // queue wins. Auto may briefly see a 1-item timeline during
-            // external→external transitions; acceptable trade-off.
-            super.addListener(listener)
+            if (wasFirst && !delegateForwarderInstalled) {
+                delegate.addListener(delegateForwarder)
+                delegateForwarderInstalled = true
+            }
+            // DO NOT call super.addListener(listener). Doing so leaks the
+            // delegate's silence-loop timeline events to Auto. See KDoc.
         }
 
         override fun removeListener(listener: Player.Listener) {
             externalListeners.remove(listener)
-            super.removeListener(listener)
+            if (externalListeners.isEmpty() && delegateForwarderInstalled) {
+                delegate.removeListener(delegateForwarder)
+                delegateForwarderInstalled = false
+            }
+            // No super.removeListener — we never called super.addListener.
         }
 
         /**
