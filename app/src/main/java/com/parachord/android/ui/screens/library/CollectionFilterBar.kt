@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -177,9 +176,13 @@ fun CollectionFilterBar(
                                 )
                             }
                         },
+                        // No explicit .height() — Material 3's OutlinedTextField
+                        // has an enforced minimum content height (56dp); forcing
+                        // it shorter (44dp originally) clipped the rendered text's
+                        // descenders because the internal layout positions the
+                        // text baseline as if it had the full 56dp to work with.
                         modifier = Modifier
                             .width(200.dp)
-                            .height(44.dp)
                             .focusRequester(focusRequester),
                     )
                 }
