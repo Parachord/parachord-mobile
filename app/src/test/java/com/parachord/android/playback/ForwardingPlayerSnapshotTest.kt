@@ -178,6 +178,61 @@ class ForwardingPlayerSnapshotTest {
         assertEquals(C.INDEX_UNSET, wrapper.currentMediaItemIndex)
     }
 
+    @Test fun `null current with non-empty upNext emits empty timeline (Auto IPC crash regression)`() {
+        // Regression test for the in-car dispatch crash:
+        //   FATAL EXCEPTION: java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 2644
+        //       at com.parachord.android.playback.QueueTimeline.getWindow(QueueTimeline.kt:65)
+        //       at androidx.media3.session.PlayerInfo.getCurrentMediaItem(PlayerInfo.java:782)
+        //
+        // Race window when a browse-tree action dispatches: QueueManager.snapshot
+        // emits with upNext populated before PlaybackStateHolder.currentTrack
+        // lands (~30-100ms gap while the routed handler starts playback).
+        // Without this guard, the snapshot would have items.size = 2644 but
+        // currentMediaItemIndex = INDEX_UNSET. Media3 IPCs that inconsistent
+        // state to Auto's controller, which then calls timeline.getWindow(-1)
+        // and crashes the controller process.
+        //
+        // Invariant: items.isEmpty() iff currentTrack == null.
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        wrapper.updateQueueSnapshot(
+            currentTrack = null,
+            upNext = listOf(track("u1"), track("u2"), track("u3")),
+        )
+
+        // Without the fix: mediaItemCount = 3 + currentMediaItemIndex = -1 → crash.
+        // With the fix: empty timeline, consistent state.
+        assertEquals(0, wrapper.mediaItemCount)
+        assertEquals(C.INDEX_UNSET, wrapper.currentMediaItemIndex)
+        assertNull(wrapper.currentMediaItem)
+        assertEquals(0, wrapper.currentTimeline.windowCount)
+    }
+
+    @Test fun `upNext becomes visible once currentTrack lands`() {
+        // Continuation of the race-window scenario: first snapshot has
+        // upNext but no current (gets suppressed), then a follow-up snapshot
+        // with both current AND upNext should expose the full queue.
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        // First emission: upNext only — should be suppressed
+        wrapper.updateQueueSnapshot(currentTrack = null, upNext = listOf(track("u1"), track("u2")))
+        assertEquals(0, wrapper.mediaItemCount)
+
+        // Second emission: current + upNext arrives — should be visible
+        wrapper.updateQueueSnapshot(currentTrack = track("current"), upNext = listOf(track("u1"), track("u2")))
+        assertEquals(3, wrapper.mediaItemCount)
+        assertEquals(0, wrapper.currentMediaItemIndex)
+        assertEquals("current", wrapper.currentMediaItem?.mediaId)
+    }
+
     @Test fun `current to null transition fires onMediaItemTransition with null item`() {
         val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
         every { delegate.currentTimeline } returns Timeline.EMPTY

@@ -1493,9 +1493,38 @@ class PlaybackService : MediaLibraryService() {
             }
             dispatching = true
             try {
-                val combined = buildList {
-                    currentTrack?.let { add(it) }
-                    addAll(upNext)
+                // INVARIANT: items.isEmpty() iff currentTrack == null. We
+                // MUST NOT emit a snapshot with upNext populated but no
+                // current track. Reason: our [getCurrentMediaItemIndex]
+                // returns C.INDEX_UNSET (-1) when [queueSnapshot.currentMediaId]
+                // is null. Media3 IPCs the timeline + currentMediaItemIndex
+                // together to the controller (Android Auto), and the
+                // controller's PlayerInfo.getCurrentMediaItem calls
+                // timeline.getWindow(currentMediaItemIndex, ...) — i.e.
+                // timeline.getWindow(-1, ...) when current is null.
+                // [QueueTimeline.getWindow] doesn't bounds-check (Media3
+                // contractually shouldn't call with -1 if the timeline is
+                // non-empty), so an inconsistent snapshot crashes the
+                // controller process with IndexOutOfBoundsException.
+                //
+                // Race window that hits this: user taps Collection Radio →
+                // [PlaybackController.playQueue] → [QueueManager.setQueue]
+                // emits a new snapshot with upNext = N immediately, but
+                // [PlaybackStateHolder.currentTrack] doesn't update until
+                // the routed handler starts playback ~30-100ms later. The
+                // combine in [queueSnapshotJob] fires on the upNext
+                // emission first, with currentTrack still null.
+                //
+                // Fix: when currentTrack is null, emit an empty timeline.
+                // The queue becomes visible to Auto once the current
+                // track lands.
+                val combined: List<TrackEntity> = if (currentTrack != null) {
+                    buildList {
+                        add(currentTrack)
+                        addAll(upNext)
+                    }
+                } else {
+                    emptyList()
                 }
                 val items = combined.map { it.toAutoMediaItem() }
                 val durationsUs = LongArray(combined.size) { i ->

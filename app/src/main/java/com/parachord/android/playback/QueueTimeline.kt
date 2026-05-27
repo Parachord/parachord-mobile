@@ -62,6 +62,24 @@ class QueueTimeline(
         window: Window,
         defaultPositionProjectionUs: Long,
     ): Window {
+        // Defensive bounds check. Media3 contractually shouldn't call
+        // getWindow with an out-of-range index — but it does crash if
+        // [ExternalPlaybackForwardingPlayer]'s snapshot is ever
+        // inconsistent (timeline.size > 0 with currentMediaItemIndex =
+        // INDEX_UNSET; controller-side PlayerInfo.getCurrentMediaItem
+        // then calls timeline.getWindow(-1, ...)). The wrapper enforces
+        // the consistency invariant — this is the second line of defense
+        // so that any future regression there throws a clear,
+        // QueueTimeline-attributed error instead of an opaque ArrayList
+        // IndexOutOfBoundsException in a Media3 stack frame.
+        if (windowIndex < 0 || windowIndex >= items.size) {
+            throw IndexOutOfBoundsException(
+                "QueueTimeline.getWindow: windowIndex=$windowIndex out of range [0, ${items.size}). " +
+                    "Caller passed an invalid index — check that " +
+                    "ExternalPlaybackForwardingPlayer.updateQueueSnapshot kept the " +
+                    "current-track / items-list invariant (items empty iff currentTrack null)."
+            )
+        }
         val item = items[windowIndex]
         val durationUs = durationsUs[windowIndex]
         return window.set(
@@ -83,6 +101,11 @@ class QueueTimeline(
     }
 
     override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+        if (periodIndex < 0 || periodIndex >= items.size) {
+            throw IndexOutOfBoundsException(
+                "QueueTimeline.getPeriod: periodIndex=$periodIndex out of range [0, ${items.size})."
+            )
+        }
         val uid = if (setIds) uidAt(periodIndex) else null
         return period.set(
             /* id = */ uid,
