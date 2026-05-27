@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Achordion brand icon — direct port of achordion/app/icon.svg.
+
+    Multi-color (dark circle + white C-ring + white right bar + small
+    purple cap), so it can't go through the path-data system in
+    ResolverIcon.kt (which only handles white-fill paths). Special-cased
+    in ResolverIconSquare to render via painterResource(R.drawable.achordion_icon)
+    similar to how SoundCloud's PNG drawable is handled.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="190"
+    android:viewportHeight="190">
+
+    <!-- Dark blue-gray circle background (#273441), 1-unit white outline. -->
+    <path
+        android:fillColor="#273441"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:pathData="M0.5,95 A94.5,94.5 0 1,1 189.5,95 A94.5,94.5 0 1,1 0.5,95 Z" />
+
+    <!-- White C-shape ring — thick 27-unit stroke; no fill. -->
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="27"
+        android:pathData="M88.5,48.7222 C112.725,48.7222 133.5,69.5684 133.5,96.7222 C133.5,123.876 112.725,144.722 88.5,144.722 C64.2754,144.722 43.5,123.876 43.5,96.7222 C43.5,69.5684 64.2754,48.7222 88.5,48.7222 Z" />
+
+    <!-- White vertical bar (tag on the right of the C). -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="1"
+        android:pathData="M122.5,35.7222 h24 v122 h-24 Z" />
+
+    <!-- Purple top cap (#774BE9) with white outline. -->
+    <path
+        android:fillColor="#774BE9"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:pathData="M148.5,29.5 V37.1426 H144.852 V45.5 H122.148 V37.1426 H118.5 V29.5 H148.5 Z" />
+</vector>

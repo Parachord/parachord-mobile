@@ -68,6 +68,7 @@ object ResolverIconColors {
     val seatgeek = Color(0xFFFC4C02)
     val bandsintown = Color(0xFF00B4B3)
     val songkick = Color(0xFFF80046)
+    val achordion = Color(0xFF7C3AED)
 
     fun forResolver(resolver: String?): Color? = when (resolver?.lowercase()) {
         "spotify" -> spotify
@@ -89,6 +90,7 @@ object ResolverIconColors {
         "seatgeek" -> seatgeek
         "bandsintown" -> bandsintown
         "songkick" -> songkick
+        "achordion" -> achordion
         else -> null
     }
 }
@@ -473,6 +475,20 @@ fun ResolverIconSquare(
                 modifier = modifier.size(size).alpha(iconAlpha),
             )
         }
+        return
+    }
+
+    // Achordion uses a multi-color VectorDrawable (dark circle + white C-ring
+    // + white tag bar + small purple cap) — can't go through the path-data
+    // system which only handles white-fill paths. Render the drawable at full
+    // size; its built-in dark circle background sits inside the chip (if a
+    // chip is drawn upstream by PluginTile etc.).
+    if (resolver.lowercase() == "achordion") {
+        Image(
+            painter = painterResource(R.drawable.achordion_icon),
+            contentDescription = "Achordion",
+            modifier = modifier.size(size).alpha(iconAlpha),
+        )
         return
     }
 
