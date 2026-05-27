@@ -50,6 +50,18 @@ data class LbCreatedForPlaylist(
     val annotation: String = "",
 )
 
+/**
+ * A user-owned playlist as returned by `GET /1/user/{userName}/playlists`.
+ * Distinct from [LbCreatedForPlaylist] (the system-generated `createdfor`
+ * playlists like Weekly Jams).
+ */
+data class LbPlaylist(
+    val mbid: String,
+    val title: String,
+    val annotation: String = "",
+    val lastModifiedAt: String? = null,
+)
+
 /** A track from a ListenBrainz playlist with album art info. */
 data class LbPlaylistTrack(
     val id: String,

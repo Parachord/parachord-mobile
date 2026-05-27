@@ -439,4 +439,94 @@ class ListenBrainzClientMutationTest {
         )
         assertNull(result)
     }
+
+    // ── getUserOwnedPlaylists ────────────────────────────────────────────────
+
+    private val LB_PLAYLISTS_FIXTURE = """
+        {
+          "playlist_count": 2,
+          "playlists": [
+            {
+              "playlist": {
+                "identifier": "https://listenbrainz.org/playlist/11111111-1111-1111-1111-111111111111",
+                "title": "My Playlist",
+                "annotation": "Description One",
+                "extension": {
+                  "https://musicbrainz.org/doc/jspf#playlist": {
+                    "last_modified_at": "2026-05-27T10:30:00.000000+00:00",
+                    "public": true,
+                    "creator": "testuser"
+                  }
+                }
+              }
+            },
+            {
+              "playlist": {
+                "identifier": "https://listenbrainz.org/playlist/22222222-2222-2222-2222-222222222222",
+                "title": "Another Playlist",
+                "annotation": "",
+                "extension": {
+                  "https://musicbrainz.org/doc/jspf#playlist": {
+                    "last_modified_at": "2026-05-26T08:15:00.000000+00:00",
+                    "public": true,
+                    "creator": "testuser"
+                  }
+                }
+              }
+            }
+          ]
+        }
+    """.trimIndent()
+
+    @Test
+    fun `getUserOwnedPlaylists parses playlist list with MBID extracted from identifier URL`() = runTest {
+        var seenUrl: String? = null
+        var seenAuth: String? = null
+        val engine = MockEngine { request ->
+            seenUrl = request.url.toString()
+            seenAuth = request.headers["Authorization"]
+            respond(LB_PLAYLISTS_FIXTURE, HttpStatusCode.OK, jsonHeaders)
+        }
+        val result = client(engine).getUserOwnedPlaylists("testuser")
+        assertEquals(
+            "https://api.listenbrainz.org/1/user/testuser/playlists",
+            seenUrl,
+        )
+        assertNull(seenAuth)
+        assertEquals(2, result.size)
+        assertEquals("11111111-1111-1111-1111-111111111111", result[0].mbid)
+        assertEquals("My Playlist", result[0].title)
+        assertEquals("Description One", result[0].annotation)
+        assertEquals("2026-05-27T10:30:00.000000+00:00", result[0].lastModifiedAt)
+        assertEquals("22222222-2222-2222-2222-222222222222", result[1].mbid)
+        assertEquals("Another Playlist", result[1].title)
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists returns empty list on 404`() = runTest {
+        val engine = MockEngine { respond("", HttpStatusCode.NotFound) }
+        val result = client(engine).getUserOwnedPlaylists("missinguser")
+        assertEquals(emptyList(), result)
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists returns empty list when no playlists present`() = runTest {
+        val engine = MockEngine {
+            respond(
+                """{"playlist_count": 0, "playlists": []}""",
+                HttpStatusCode.OK,
+                jsonHeaders,
+            )
+        }
+        val result = client(engine).getUserOwnedPlaylists("emptyuser")
+        assertEquals(emptyList(), result)
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists throws on 500`() = runTest {
+        val engine = MockEngine { respond("oops", HttpStatusCode.InternalServerError) }
+        assertFailsWith<Exception> {
+            client(engine).getUserOwnedPlaylists("testuser")
+        }
+    }
 }

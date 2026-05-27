@@ -439,6 +439,47 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         }
     }
 
+    /**
+     * GET /1/user/{userName}/playlists — owned playlists, not the system
+     * `createdfor` playlists already exposed via [getCreatedForPlaylists].
+     *
+     * Returns the user's playlists as a list of [LbPlaylist] entries. Each
+     * entry carries playlist MBID (extracted from the `identifier` URL's
+     * trailing segment) + title + annotation (description) +
+     * last_modified_at (from the JSPF extension).
+     *
+     * Unauth — public playlists are world-readable. The `Token` header is
+     * NOT sent. 404 → empty list (treat as "user has no playlists or does
+     * not exist"); other non-2xx → throws [Exception].
+     */
+    suspend fun getUserOwnedPlaylists(userName: String): List<LbPlaylist> {
+        val response = httpClient.get("$BASE_URL/1/user/$userName/playlists")
+        if (response.status == HttpStatusCode.NotFound) return emptyList()
+        if (!response.status.isSuccess()) {
+            val text = response.bodyAsText().take(200)
+            throw Exception("getUserOwnedPlaylists($userName) failed: HTTP ${response.status.value} $text")
+        }
+        return try {
+            val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
+            parsed.playlists.mapNotNull { wrapper ->
+                val pl = wrapper.playlist ?: return@mapNotNull null
+                val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
+                    ?: return@mapNotNull null
+                LbPlaylist(
+                    mbid = mbid,
+                    title = pl.title.orEmpty(),
+                    annotation = pl.annotation.orEmpty(),
+                    lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
+                )
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to parse owned playlists for $userName", e)
+            emptyList()
+        }
+    }
+
     /** Fetch recent listens for a user. */
     suspend fun getRecentListens(
         username: String,
@@ -861,6 +902,21 @@ private data class PlaylistMetaWire(
     val title: String? = null,
     val date: String? = null,
     val annotation: String? = null,
+    val extension: PlaylistMetaExtensionWire? = null,
+) {
+    val lastModifiedAt: String?
+        get() = extension?.jspfPlaylist?.lastModifiedAt
+}
+
+@Serializable
+private data class PlaylistMetaExtensionWire(
+    @SerialName("https://musicbrainz.org/doc/jspf#playlist")
+    val jspfPlaylist: JspfPlaylistMetaWire? = null,
+)
+
+@Serializable
+private data class JspfPlaylistMetaWire(
+    @SerialName("last_modified_at") val lastModifiedAt: String? = null,
 )
 
 @Serializable
