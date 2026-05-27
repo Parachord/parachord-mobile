@@ -52,6 +52,7 @@ import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.sync.AppleMusicSyncProvider
 import com.parachord.android.sync.SpotifySyncProvider
 import com.parachord.android.sync.SyncEngine
+import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.android.sync.SyncScheduler
 import com.parachord.android.ui.MainViewModel
 import com.parachord.android.ui.screens.album.AlbumViewModel
@@ -807,6 +808,7 @@ val androidModule = module {
     // changes required here.
     singleOf(::SpotifySyncProvider) bind com.parachord.shared.sync.SyncProvider::class
     singleOf(::AppleMusicSyncProvider) bind com.parachord.shared.sync.SyncProvider::class
+    singleOf(::ListenBrainzSyncProvider) bind com.parachord.shared.sync.SyncProvider::class
     single<List<com.parachord.shared.sync.SyncProvider>> { getAll() }
     singleOf(::SyncScheduler)
     singleOf(::HostedPlaylistPoller)
