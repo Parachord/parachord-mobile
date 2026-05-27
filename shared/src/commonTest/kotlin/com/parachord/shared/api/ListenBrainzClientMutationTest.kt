@@ -529,4 +529,52 @@ class ListenBrainzClientMutationTest {
             client(engine).getUserOwnedPlaylists("testuser")
         }
     }
+
+    @Test
+    fun `getUserOwnedPlaylists returns null lastModifiedAt when extension absent`() = runTest {
+        // LB doesn't always include the extension block — verify we tolerate it
+        // and produce null lastModifiedAt rather than crashing.
+        val fixture = """
+            {
+              "playlist_count": 2,
+              "playlists": [
+                {
+                  "playlist": {
+                    "identifier": "https://listenbrainz.org/playlist/33333333-3333-3333-3333-333333333333",
+                    "title": "Bare Playlist",
+                    "annotation": ""
+                  }
+                },
+                {
+                  "playlist": {
+                    "identifier": "https://listenbrainz.org/playlist/44444444-4444-4444-4444-444444444444",
+                    "title": "Null Extension Playlist",
+                    "annotation": "",
+                    "extension": null
+                  }
+                }
+              ]
+            }
+        """.trimIndent()
+        val engine = MockEngine { respond(fixture, HttpStatusCode.OK, jsonHeaders) }
+        val result = client(engine).getUserOwnedPlaylists("testuser")
+        assertEquals(2, result.size)
+        assertEquals("33333333-3333-3333-3333-333333333333", result[0].mbid)
+        assertEquals("Bare Playlist", result[0].title)
+        assertNull(result[0].lastModifiedAt)
+        assertEquals("44444444-4444-4444-4444-444444444444", result[1].mbid)
+        assertEquals("Null Extension Playlist", result[1].title)
+        assertNull(result[1].lastModifiedAt)
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists propagates parse failures (malformed JSON)`() = runTest {
+        // Parse failures must throw, not swallow to empty list — otherwise the
+        // sync provider can't distinguish "user has no playlists" from "LB
+        // returned garbage" and would wipe the local mirror.
+        val engine = MockEngine { respond("not json at all{", HttpStatusCode.OK, jsonHeaders) }
+        assertFailsWith<Exception> {
+            client(engine).getUserOwnedPlaylists("testuser")
+        }
+    }
 }

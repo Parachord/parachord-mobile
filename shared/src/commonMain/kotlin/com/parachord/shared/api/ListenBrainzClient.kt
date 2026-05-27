@@ -450,33 +450,35 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
      *
      * Unauth — public playlists are world-readable. The `Token` header is
      * NOT sent. 404 → empty list (treat as "user has no playlists or does
-     * not exist"); other non-2xx → throws [Exception].
+     * not exist"); other non-2xx → throws [Exception]. Parse failures
+     * propagate as well — the caller ([ListenBrainzSyncProvider.fetchPlaylists])
+     * needs to distinguish "user has no playlists" (empty list) from "LB is
+     * broken right now" (exception) so a malformed response doesn't wipe the
+     * local mirror.
+     *
+     * Wrapped in [executeWithRetry] for 429/503 backoff, matching the other
+     * read paths in this client.
      */
     suspend fun getUserOwnedPlaylists(userName: String): List<LbPlaylist> {
-        val response = httpClient.get("$BASE_URL/1/user/$userName/playlists")
+        val response = executeWithRetry {
+            httpClient.get("$BASE_URL/1/user/$userName/playlists")
+        }
         if (response.status == HttpStatusCode.NotFound) return emptyList()
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
             throw Exception("getUserOwnedPlaylists($userName) failed: HTTP ${response.status.value} $text")
         }
-        return try {
-            val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
-            parsed.playlists.mapNotNull { wrapper ->
-                val pl = wrapper.playlist ?: return@mapNotNull null
-                val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
-                    ?: return@mapNotNull null
-                LbPlaylist(
-                    mbid = mbid,
-                    title = pl.title.orEmpty(),
-                    annotation = pl.annotation.orEmpty(),
-                    lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
-                )
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            Log.w(TAG, "Failed to parse owned playlists for $userName", e)
-            emptyList()
+        val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
+        return parsed.playlists.mapNotNull { wrapper ->
+            val pl = wrapper.playlist ?: return@mapNotNull null
+            val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
+                ?: return@mapNotNull null
+            LbPlaylist(
+                mbid = mbid,
+                title = pl.title.orEmpty(),
+                annotation = pl.annotation.orEmpty(),
+                lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
+            )
         }
     }
 
