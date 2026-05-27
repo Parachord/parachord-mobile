@@ -2,7 +2,9 @@ package com.parachord.shared.sync
 
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.metadata.MbidEnrichmentService
+import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
+import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.settings.SettingsStore
 import kotlin.concurrent.Volatile
 
@@ -53,7 +55,64 @@ class ListenBrainzSyncProvider(
 
     override suspend fun fetchPlaylists(
         onProgress: ((current: Int, total: Int) -> Unit)?,
-    ): List<SyncedPlaylist> = TODO("Task 10")
+    ): List<SyncedPlaylist> {
+        // Kill-switch active — short-circuit until session restart so we
+        // don't hammer LB with calls we know will 401 again. Mirrors AM's
+        // `amPutUnsupportedForSession` / `amPatchUnsupportedForSession`
+        // pattern.
+        if (authFailedForSession) return emptyList()
+
+        // Provider not configured — token + username are both required.
+        // Treat unconfigured as "no playlists" (NOT an error) so SyncEngine
+        // can iterate every enabled provider blindly.
+        val token = settingsStore.getListenBrainzToken()
+        if (token.isNullOrBlank()) return emptyList()
+        val username = settingsStore.getListenBrainzUsername()
+        if (username.isNullOrBlank()) return emptyList()
+
+        val lbPlaylists = try {
+            client.getUserOwnedPlaylists(username)
+        } catch (e: ListenBrainzUnauthorizedException) {
+            // Trip the session-scoped kill-switch. Non-401 errors propagate
+            // so SyncEngine can decide whether to surface them to the user.
+            authFailedForSession = true
+            return emptyList()
+        }
+        return lbPlaylists.map { it.toSyncedPlaylist() }
+    }
+
+    private fun com.parachord.shared.api.LbPlaylist.toSyncedPlaylist(): SyncedPlaylist {
+        // SyncedPlaylist's `spotifyId` slot carries the provider's external
+        // id (the field name is Spotify-shaped by historical accident; AM
+        // does the same). The LB playlist MBID lives here.
+        val description = annotation.ifBlank { null }
+        val playlistEntity = Playlist(
+            id = "listenbrainz-$mbid",
+            name = title,
+            description = description,
+            artworkUrl = null,
+            trackCount = 0,
+            createdAt = 0L,
+            updatedAt = currentTimeMillis(),
+            spotifyId = null,
+            snapshotId = lastModifiedAt,
+            lastModified = 0L,
+            locallyModified = false,
+            ownerName = null,
+            sourceUrl = null,
+            sourceContentHash = null,
+            localOnly = false,
+        )
+        return SyncedPlaylist(
+            entity = playlistEntity,
+            spotifyId = mbid,
+            snapshotId = lastModifiedAt,
+            trackCount = 0,
+            // The `/1/user/{userName}/playlists` endpoint returns only the
+            // user's OWN playlists — every entry here is owned + mutable.
+            isOwned = true,
+        )
+    }
 
     override suspend fun fetchPlaylistTracks(
         externalPlaylistId: String,
