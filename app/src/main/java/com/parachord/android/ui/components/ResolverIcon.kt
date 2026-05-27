@@ -492,6 +492,38 @@ fun ResolverIconSquare(
         return
     }
 
+    // Wikipedia uses a VectorDrawable instead of the path-string system
+    // because the path's geometry tickles a rendering bug somewhere in
+    // parseSvgPath or Compose's PathBuilder — the bottom-left V of the W
+    // came out malformed. The Simple Icons W path renders correctly via
+    // Android's well-tested VectorDrawable parser. Same chip-style render
+    // as other tiles (white fill on the dark chip drawn upstream).
+    if (resolver.lowercase() == "wikipedia") {
+        if (showBackground && bgColor != null) {
+            Box(
+                modifier = modifier
+                    .size(size)
+                    .clip(RoundedCornerShape(4.dp))
+                    .alpha(iconAlpha)
+                    .background(bgColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.wikipedia_icon),
+                    contentDescription = "Wikipedia",
+                    modifier = Modifier.size(size * 0.65f),
+                )
+            }
+        } else {
+            Image(
+                painter = painterResource(R.drawable.wikipedia_icon),
+                contentDescription = "Wikipedia",
+                modifier = modifier.size(size).alpha(iconAlpha),
+            )
+        }
+        return
+    }
+
     val pathData = ResolverIconPaths.forResolver(resolver) ?: return
     // Use IconSpec viewport params for icons with non-standard viewBoxes
     val spec = when (resolver.lowercase()) {
