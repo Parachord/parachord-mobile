@@ -326,6 +326,25 @@ class SettingsViewModel constructor(
         }
     }
 
+    // ── ListenBrainz sync (Task 19) ──────────────────────────────────
+    // Mirrors the AM toggle above. Only visible when LB is authorized
+    // (token present). Writes to enabled_sync_providers, which the
+    // multi-provider sync engine reads on every cycle. Loved tracks
+    // continue to sync separately via the scrobbler pipeline — this
+    // toggle controls playlist sync (push Parachord playlists to LB).
+    val listenBrainzSyncEnabled: StateFlow<Boolean> =
+        settingsStore.getEnabledSyncProvidersFlow()
+            .map { "listenbrainz" in it }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setListenBrainzSyncEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            val current = settingsStore.getEnabledSyncProviders()
+            val next = if (enabled) current + "listenbrainz" else current - "listenbrainz"
+            settingsStore.setEnabledSyncProviders(next)
+        }
+    }
+
     // --- SoundCloud ---
 
     /** Whether the user has saved SoundCloud client credentials (BYOK). */

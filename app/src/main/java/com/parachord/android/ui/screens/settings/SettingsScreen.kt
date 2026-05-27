@@ -212,6 +212,7 @@ fun SettingsScreen(
     val appleMusicConfigured by viewModel.appleMusicConfigured.collectAsStateWithLifecycle()
     val appleMusicAuthorized by viewModel.appleMusicAuthorized.collectAsStateWithLifecycle()
     val appleMusicSyncEnabled by viewModel.appleMusicSyncEnabled.collectAsStateWithLifecycle()
+    val listenBrainzSyncEnabled by viewModel.listenBrainzSyncEnabled.collectAsStateWithLifecycle()
     val appleMusicConnecting by viewModel.appleMusicConnecting.collectAsStateWithLifecycle()
     val persistQueue by viewModel.persistQueue.collectAsStateWithLifecycle()
     val libreFmAuthError by viewModel.libreFmAuthError.collectAsStateWithLifecycle()
@@ -321,6 +322,9 @@ fun SettingsScreen(
                     appleMusicAuthorized = appleMusicAuthorized,
                     appleMusicSyncEnabled = appleMusicSyncEnabled,
                     onSetAppleMusicSyncEnabled = { viewModel.setAppleMusicSyncEnabled(it) },
+                    listenBrainzConnected = listenBrainzConnected,
+                    listenBrainzSyncEnabled = listenBrainzSyncEnabled,
+                    onSetListenBrainzSyncEnabled = { viewModel.setListenBrainzSyncEnabled(it) },
                 )
                 2 -> AboutTab()
             }
@@ -2744,6 +2748,9 @@ private fun GeneralTab(
     appleMusicAuthorized: Boolean,
     appleMusicSyncEnabled: Boolean,
     onSetAppleMusicSyncEnabled: (Boolean) -> Unit,
+    listenBrainzConnected: Boolean,
+    listenBrainzSyncEnabled: Boolean,
+    onSetListenBrainzSyncEnabled: (Boolean) -> Unit,
 ) {
     val syncViewModel: SyncViewModel = koinViewModel()
     val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
@@ -2990,6 +2997,35 @@ private fun GeneralTab(
                         }
                     }
                 }
+            }
+        }
+
+        // ── ListenBrainz Sync section (Task 19) ──────────────────────
+        // Only shown when LB is authorized (token present). Toggle
+        // writes to enabled_sync_providers, which the multi-provider
+        // sync engine reads on every cycle. Loved tracks already sync
+        // separately via the scrobbler love-push pipeline — this
+        // controls playlist sync (pushing Parachord-curated playlists
+        // up to the user's LB profile).
+        if (listenBrainzConnected) {
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { SectionHeader("ListenBrainz Sync") }
+            item {
+                ListItem(
+                    headlineContent = { Text("ListenBrainz Sync") },
+                    supportingContent = {
+                        Text(
+                            "Pushes Parachord-curated playlists to your ListenBrainz profile. " +
+                                "Loved tracks already sync separately via scrobblers.",
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = listenBrainzSyncEnabled,
+                            onCheckedChange = onSetListenBrainzSyncEnabled,
+                        )
+                    },
+                )
             }
         }
     }
