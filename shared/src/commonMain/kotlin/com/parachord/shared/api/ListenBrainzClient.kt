@@ -18,7 +18,10 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 /**
@@ -299,6 +302,140 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
             throw Exception("deletePlaylist($playlistMbid) failed: HTTP ${response.status.value} $text")
+        }
+    }
+
+    /**
+     * POST /1/playlist/{playlistMbid}/item/add — append recording MBIDs.
+     *
+     * Per LB JSPF spec, recordings are identified by full MusicBrainz URI
+     * (`https://musicbrainz.org/recording/<mbid>`). Body shape:
+     *
+     *   {"playlist": {"track": [{"identifier": "https://..."}, ...]}}
+     *
+     * No-op (no HTTP request) when [recordingMbids] is empty.
+     *
+     * Wrapped in [executeWithRetry]. Throws [ListenBrainzUnauthorizedException]
+     * on HTTP 401.
+     */
+    suspend fun addPlaylistItems(
+        playlistMbid: String,
+        recordingMbids: List<String>,
+        token: String,
+    ) {
+        if (recordingMbids.isEmpty()) return
+        val body = buildJsonObject {
+            put(
+                "playlist",
+                buildJsonObject {
+                    put(
+                        "track",
+                        buildJsonArray {
+                            for (mbid in recordingMbids) {
+                                add(
+                                    buildJsonObject {
+                                        put("identifier", "https://musicbrainz.org/recording/$mbid")
+                                    },
+                                )
+                            }
+                        },
+                    )
+                },
+            )
+        }
+        val response = executeWithRetry {
+            httpClient.post("$BASE_URL/1/playlist/$playlistMbid/item/add") {
+                header("Authorization", "Token $token")
+                contentType(io.ktor.http.ContentType.Application.Json)
+                setBody(body)
+            }
+        }
+        if (response.status == HttpStatusCode.Unauthorized) {
+            throw ListenBrainzUnauthorizedException(
+                "ListenBrainz returned 401 on addPlaylistItems — token rejected",
+            )
+        }
+        if (!response.status.isSuccess()) {
+            val text = response.bodyAsText().take(200)
+            throw Exception("addPlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
+        }
+    }
+
+    /**
+     * POST /1/playlist/{playlistMbid}/item/delete — remove items by position range.
+     *
+     * `index` is the 0-based starting position; `count` is the number of items
+     * to remove. To full-replace, call this with (0, currentTrackCount) then
+     * [addPlaylistItems] with the new list.
+     *
+     * No-op (no HTTP request) when [count] is `<= 0`.
+     *
+     * Wrapped in [executeWithRetry]. Throws [ListenBrainzUnauthorizedException]
+     * on HTTP 401.
+     */
+    suspend fun deletePlaylistItems(
+        playlistMbid: String,
+        index: Int,
+        count: Int,
+        token: String,
+    ) {
+        if (count <= 0) return
+        val body = buildJsonObject {
+            put("index", index)
+            put("count", count)
+        }
+        val response = executeWithRetry {
+            httpClient.post("$BASE_URL/1/playlist/$playlistMbid/item/delete") {
+                header("Authorization", "Token $token")
+                contentType(io.ktor.http.ContentType.Application.Json)
+                setBody(body)
+            }
+        }
+        if (response.status == HttpStatusCode.Unauthorized) {
+            throw ListenBrainzUnauthorizedException(
+                "ListenBrainz returned 401 on deletePlaylistItems — token rejected",
+            )
+        }
+        if (!response.status.isSuccess()) {
+            val text = response.bodyAsText().take(200)
+            throw Exception("deletePlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
+        }
+    }
+
+    /**
+     * GET /1/playlist/{playlistMbid} — extract only the `last_modified_at`
+     * timestamp from the JSPF extension.
+     *
+     * Used by `ListenBrainzSyncProvider.getPlaylistSnapshotId` to detect
+     * remote changes since the local snapshot. Returns `null` when:
+     *  - The playlist returns 404 (deleted / never existed)
+     *  - The `last_modified_at` field is absent
+     *
+     * Reads `playlist.extension["https://musicbrainz.org/doc/jspf#playlist"]
+     * .last_modified_at` (JSPF extension structure LB uses).
+     *
+     * No auth required — public LB playlists are publicly readable, and the
+     * caller may be checking other users' shared playlists. Non-2xx errors
+     * other than 404 propagate as [Exception].
+     */
+    suspend fun getPlaylistLastModified(playlistMbid: String): String? {
+        val response = httpClient.get("$BASE_URL/1/playlist/$playlistMbid")
+        if (response.status == HttpStatusCode.NotFound) return null
+        if (!response.status.isSuccess()) {
+            val text = response.bodyAsText().take(200)
+            throw Exception("getPlaylistLastModified($playlistMbid) failed: HTTP ${response.status.value} $text")
+        }
+        return try {
+            val root = Json.parseToJsonElement(response.bodyAsText()).jsonObject
+            val playlist = root["playlist"]?.jsonObject ?: return null
+            val ext = playlist["extension"]?.jsonObject ?: return null
+            val jspf = ext["https://musicbrainz.org/doc/jspf#playlist"]?.jsonObject ?: return null
+            jspf["last_modified_at"]?.jsonPrimitive?.content?.ifBlank { null }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to parse last_modified_at for $playlistMbid", e)
+            null
         }
     }
 

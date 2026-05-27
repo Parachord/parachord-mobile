@@ -15,12 +15,15 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -233,5 +236,207 @@ class ListenBrainzClientMutationTest {
                 token = "bad",
             )
         }
+    }
+
+    // ── addPlaylistItems ─────────────────────────────────────────────────────
+
+    @Test
+    fun `addPlaylistItems sends list of MB recording URIs in JSPF body`() = runTest {
+        var seenUrl: String? = null
+        var seenAuth: String? = null
+        var seenMethod: HttpMethod? = null
+        var seenBody: JsonObject? = null
+        val engine = MockEngine { request ->
+            seenUrl = request.url.toString()
+            seenAuth = request.headers["Authorization"]
+            seenMethod = request.method
+            seenBody = bodyJson(request)
+            respond("""{"status":"ok"}""", HttpStatusCode.OK, jsonHeaders)
+        }
+
+        client(engine).addPlaylistItems(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+            recordingMbids = listOf(
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+            ),
+            token = "tok",
+        )
+
+        assertEquals(
+            "https://api.listenbrainz.org/1/playlist/abcd1234-1111-2222-3333-444455556666/item/add",
+            seenUrl,
+        )
+        assertEquals(HttpMethod.Post, seenMethod)
+        assertEquals("Token tok", seenAuth)
+        val tracks = seenBody!!["playlist"]!!.jsonObject["track"]!!.jsonArray
+        assertEquals(2, tracks.size)
+        assertEquals(
+            "https://musicbrainz.org/recording/11111111-1111-1111-1111-111111111111",
+            tracks[0].jsonObject["identifier"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            "https://musicbrainz.org/recording/22222222-2222-2222-2222-222222222222",
+            tracks[1].jsonObject["identifier"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `addPlaylistItems short-circuits when list is empty`() = runTest {
+        var callCount = 0
+        val engine = MockEngine {
+            callCount++
+            respond("""{"status":"ok"}""", HttpStatusCode.OK, jsonHeaders)
+        }
+        client(engine).addPlaylistItems(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+            recordingMbids = emptyList(),
+            token = "tok",
+        )
+        assertEquals(0, callCount)
+    }
+
+    @Test
+    fun `addPlaylistItems throws on 401`() = runTest {
+        val engine = MockEngine { respond("", HttpStatusCode.Unauthorized) }
+        assertFailsWith<ListenBrainzUnauthorizedException> {
+            client(engine).addPlaylistItems(
+                playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+                recordingMbids = listOf("11111111-1111-1111-1111-111111111111"),
+                token = "bad",
+            )
+        }
+    }
+
+    // ── deletePlaylistItems ──────────────────────────────────────────────────
+
+    @Test
+    fun `deletePlaylistItems sends index and count`() = runTest {
+        var seenUrl: String? = null
+        var seenAuth: String? = null
+        var seenMethod: HttpMethod? = null
+        var seenBody: JsonObject? = null
+        val engine = MockEngine { request ->
+            seenUrl = request.url.toString()
+            seenAuth = request.headers["Authorization"]
+            seenMethod = request.method
+            seenBody = bodyJson(request)
+            respond("""{"status":"ok"}""", HttpStatusCode.OK, jsonHeaders)
+        }
+
+        client(engine).deletePlaylistItems(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+            index = 0,
+            count = 5,
+            token = "tok",
+        )
+
+        assertEquals(
+            "https://api.listenbrainz.org/1/playlist/abcd1234-1111-2222-3333-444455556666/item/delete",
+            seenUrl,
+        )
+        assertEquals(HttpMethod.Post, seenMethod)
+        assertEquals("Token tok", seenAuth)
+        assertEquals(0, seenBody!!["index"]!!.jsonPrimitive.int)
+        assertEquals(5, seenBody!!["count"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `deletePlaylistItems short-circuits when count is zero`() = runTest {
+        var callCount = 0
+        val engine = MockEngine {
+            callCount++
+            respond("""{"status":"ok"}""", HttpStatusCode.OK, jsonHeaders)
+        }
+        client(engine).deletePlaylistItems(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+            index = 0,
+            count = 0,
+            token = "tok",
+        )
+        assertEquals(0, callCount)
+    }
+
+    @Test
+    fun `deletePlaylistItems throws on 401`() = runTest {
+        val engine = MockEngine { respond("", HttpStatusCode.Unauthorized) }
+        assertFailsWith<ListenBrainzUnauthorizedException> {
+            client(engine).deletePlaylistItems(
+                playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+                index = 0,
+                count = 3,
+                token = "bad",
+            )
+        }
+    }
+
+    // ── getPlaylistLastModified ──────────────────────────────────────────────
+
+    @Test
+    fun `getPlaylistLastModified extracts last_modified_at from JSPF extension`() = runTest {
+        var seenUrl: String? = null
+        val engine = MockEngine { request ->
+            seenUrl = request.url.toString()
+            respond(
+                """
+                {
+                  "playlist": {
+                    "title": "X",
+                    "extension": {
+                      "https://musicbrainz.org/doc/jspf#playlist": {
+                        "last_modified_at": "2026-05-27T12:34:56.000000+00:00",
+                        "public": true
+                      }
+                    }
+                  }
+                }
+                """.trimIndent(),
+                HttpStatusCode.OK,
+                jsonHeaders,
+            )
+        }
+        val result = client(engine).getPlaylistLastModified(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+        )
+        assertEquals(
+            "https://api.listenbrainz.org/1/playlist/abcd1234-1111-2222-3333-444455556666",
+            seenUrl,
+        )
+        assertEquals("2026-05-27T12:34:56.000000+00:00", result)
+    }
+
+    @Test
+    fun `getPlaylistLastModified returns null on 404`() = runTest {
+        val engine = MockEngine { respond("", HttpStatusCode.NotFound) }
+        val result = client(engine).getPlaylistLastModified(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+        )
+        assertNull(result)
+    }
+
+    @Test
+    fun `getPlaylistLastModified returns null when field missing`() = runTest {
+        val engine = MockEngine {
+            respond(
+                """
+                {
+                  "playlist": {
+                    "title": "X",
+                    "extension": {
+                      "https://musicbrainz.org/doc/jspf#playlist": {
+                        "public": true
+                      }
+                    }
+                  }
+                }
+                """.trimIndent(),
+                HttpStatusCode.OK,
+                jsonHeaders,
+            )
+        }
+        val result = client(engine).getPlaylistLastModified(
+            playlistMbid = "abcd1234-1111-2222-3333-444455556666",
+        )
+        assertNull(result)
     }
 }
