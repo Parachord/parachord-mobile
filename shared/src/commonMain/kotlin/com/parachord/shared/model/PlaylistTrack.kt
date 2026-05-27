@@ -14,6 +14,7 @@ data class PlaylistTrack(
     val trackSoundcloudId: String? = null,
     val trackSpotifyId: String? = null,
     val trackAppleMusicId: String? = null,
+    val trackRecordingMbid: String? = null,
     val addedAt: Long = 0L,
 ) {
     fun availableResolvers(resolverOrder: List<String> = emptyList()): List<String> {
