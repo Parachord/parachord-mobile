@@ -489,8 +489,6 @@ class SpotifyPlaybackHandler constructor(
      */
     private suspend fun resolveLocalDevice(): SpDevice? {
         Log.d(TAG, "Resolving local device: model='${Build.MODEL}', manufacturer='${Build.MANUFACTURER}'")
-        val localModel = Build.MODEL.lowercase()
-        val localManufacturer = Build.MANUFACTURER.lowercase()
 
         // Always ensure Spotify is running on this phone. Remote devices
         // (TVs, computers) can appear in the API without local Spotify running.
@@ -506,12 +504,8 @@ class SpotifyPlaybackHandler constructor(
             pollCount++
             try {
                 val devices = spotifyClient.getDevices().devices
-                val local = devices.firstOrNull { d ->
-                    d.type == "Smartphone" && (
-                        d.name.lowercase().contains(localModel) ||
-                        d.name.lowercase().contains(localManufacturer)
-                    )
-                } ?: devices.firstOrNull { it.type == "Smartphone" }
+                val local = devices.firstOrNull { isLocalRealDevice(it) }
+                    ?: devices.firstOrNull { it.type == "Smartphone" }
 
                 if (local != null) {
                     deviceVerified = true
@@ -755,11 +749,30 @@ class SpotifyPlaybackHandler constructor(
 
         val chosen = deferred.await()
         if (chosen != null) {
-            settingsStore.setPreferredSpotifyDeviceId(chosen.id)
-            Log.d(TAG, "User picked '${chosen.name}', saved as preferred")
+            val stableId = chooseStableId(chosen)
+            settingsStore.setPreferredSpotifyDeviceId(stableId)
+            Log.d(TAG, "User picked '${chosen.name}', saved as preferred id=$stableId")
         }
         return chosen
     }
+
+    /**
+     * Normalize the device ID we persist when the user picks a device from the
+     * picker. Real Spotify device IDs are NOT stable across Spotify process
+     * restarts — saving the real ID for the local phone causes "preferred device
+     * not found" on every cold start, falling through to the phantom-active-remote
+     * trap. For the local phone (synthetic placeholder OR resolved real
+     * smartphone matching Build.MODEL/MANUFACTURER), persist LOCAL_DEVICE_ID
+     * instead so [pickDevice] step 1 honors it on every subsequent session.
+     * Remote devices (TVs, computers, other phones) keep their real IDs —
+     * those don't rotate the same way and explicit-cross-room casts must work.
+     */
+    internal fun chooseStableId(chosen: SpDevice): String =
+        if (isLocalPlaceholder(chosen) || isLocalRealDevice(chosen)) {
+            LOCAL_DEVICE_ID
+        } else {
+            chosen.id
+        }
 
     /**
      * Detect whether the track we started has finished or is about to finish.
