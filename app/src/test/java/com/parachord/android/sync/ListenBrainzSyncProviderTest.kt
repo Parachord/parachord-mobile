@@ -282,7 +282,9 @@ class ListenBrainzSyncProviderTest {
         // Snapshot is fetched separately via getPlaylistSnapshotId — the create
         // endpoint returns only the MBID, not a last_modified timestamp.
         assertNull(result.snapshotId)
-        coVerify { client.createPlaylist("Test", "Desc", true, "tok") }
+        // Default PRIVATE (isPublic=false): matches desktop + Achordion interop
+        // contract; LB treats a missing flag as public, so we send it explicitly.
+        coVerify { client.createPlaylist("Test", "Desc", false, "tok") }
     }
 
     @Test

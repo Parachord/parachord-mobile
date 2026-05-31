@@ -160,7 +160,14 @@ class ListenBrainzSyncProvider(
             throw IllegalStateException("ListenBrainz token not configured")
         }
         val mbid = try {
-            client.createPlaylist(name = name, description = description, isPublic = true, token = token)
+            // Default PRIVATE, matching desktop (sync-providers/listenbrainz.js
+            // hardcodes public:false) and the Achordion interop contract. LB
+            // treats a MISSING public flag as public, so we must send it
+            // explicitly. Pushing a user's whole library as public playlists is
+            // a privacy leak — the original isPublic=true here is what put 6,397
+            // public duplicates on a real profile (Parachord/parachord-android
+            // pagination incident, May 2026).
+            client.createPlaylist(name = name, description = description, isPublic = false, token = token)
         } catch (e: ListenBrainzUnauthorizedException) {
             Log.w(TAG, "LB createPlaylist 401 — tripping kill-switch", e)
             authFailedForSession = true
