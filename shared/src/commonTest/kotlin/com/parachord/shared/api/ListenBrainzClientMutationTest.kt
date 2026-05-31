@@ -489,7 +489,7 @@ class ListenBrainzClientMutationTest {
         }
         val result = client(engine).getUserOwnedPlaylists("testuser")
         assertEquals(
-            "https://api.listenbrainz.org/1/user/testuser/playlists",
+            "https://api.listenbrainz.org/1/user/testuser/playlists?count=100&offset=0",
             seenUrl,
         )
         assertNull(seenAuth)
@@ -576,5 +576,58 @@ class ListenBrainzClientMutationTest {
         assertFailsWith<Exception> {
             client(engine).getUserOwnedPlaylists("testuser")
         }
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists paginates through every page`() = runTest {
+        // Regression for Parachord/parachord#846: the endpoint defaults to
+        // count=25; without paging, the sync dedup only sees the newest page and
+        // recreates everything else every cycle. The client MUST return the
+        // COMPLETE list. Here playlist_count=250 with pageSize=100 → 3 pages.
+        val total = 250
+        val seenOffsets = mutableListOf<Int>()
+        val engine = MockEngine { request ->
+            val offset = request.url.parameters["offset"]?.toInt() ?: 0
+            val count = request.url.parameters["count"]?.toInt() ?: 25
+            seenOffsets += offset
+            val pageItems = (offset until minOf(offset + count, total)).joinToString(",") { i ->
+                """{"playlist":{"identifier":"https://listenbrainz.org/playlist/mbid-$i","title":"PL $i"}}"""
+            }
+            respond(
+                """{"playlist_count":$total,"playlists":[$pageItems]}""",
+                HttpStatusCode.OK,
+                jsonHeaders,
+            )
+        }
+
+        val result = client(engine).getUserOwnedPlaylists("testuser")
+
+        // All 250 fetched (not just the first 25/100).
+        assertEquals(total, result.size)
+        assertEquals("mbid-0", result.first().mbid)
+        assertEquals("mbid-249", result.last().mbid)
+        // Paged at offsets 0, 100, 200.
+        assertEquals(listOf(0, 100, 200), seenOffsets)
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists stops after a single page when count covers all`() = runTest {
+        var requests = 0
+        val engine = MockEngine {
+            requests++
+            respond(
+                """{"playlist_count":2,"playlists":[
+                    {"playlist":{"identifier":"https://listenbrainz.org/playlist/a","title":"A"}},
+                    {"playlist":{"identifier":"https://listenbrainz.org/playlist/b","title":"B"}}
+                ]}""",
+                HttpStatusCode.OK,
+                jsonHeaders,
+            )
+        }
+
+        val result = client(engine).getUserOwnedPlaylists("testuser")
+
+        assertEquals(2, result.size)
+        assertEquals(1, requests) // no needless second page
     }
 }

@@ -459,27 +459,51 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
      * Wrapped in [executeWithRetry] for 429/503 backoff, matching the other
      * read paths in this client.
      */
+    /**
+     * Fetch ALL of a user's own playlists, paginating through every page.
+     *
+     * CRITICAL: this MUST return the complete list. The endpoint defaults to
+     * `count=25`; without paging, the sync engine's three-layer playlist dedup
+     * only sees the 25 newest playlists and recreates everything else on every
+     * cycle — a runaway duplication bug that produced ~6,400 duplicate public
+     * playlists on a real account (Parachord/parachord#846). Page until we've
+     * pulled `playlist_count` entries.
+     */
     suspend fun getUserOwnedPlaylists(userName: String): List<LbPlaylist> {
-        val response = executeWithRetry {
-            httpClient.get("$BASE_URL/1/user/$userName/playlists")
+        val pageSize = 100 // LB's max per request
+        val all = mutableListOf<LbPlaylist>()
+        var offset = 0
+        // Hard cap on iterations as a runaway guard (1000 pages = 100k playlists).
+        repeat(1000) {
+            val response = executeWithRetry {
+                httpClient.get("$BASE_URL/1/user/$userName/playlists") {
+                    parameter("count", pageSize)
+                    parameter("offset", offset)
+                }
+            }
+            if (response.status == HttpStatusCode.NotFound) return all
+            if (!response.status.isSuccess()) {
+                val text = response.bodyAsText().take(200)
+                throw Exception("getUserOwnedPlaylists($userName) failed: HTTP ${response.status.value} $text")
+            }
+            val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
+            val page = parsed.playlists.mapNotNull { wrapper ->
+                val pl = wrapper.playlist ?: return@mapNotNull null
+                val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
+                    ?: return@mapNotNull null
+                LbPlaylist(
+                    mbid = mbid,
+                    title = pl.title.orEmpty(),
+                    annotation = pl.annotation.orEmpty(),
+                    lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
+                )
+            }
+            all.addAll(page)
+            offset += parsed.playlists.size
+            // Stop when the page was empty or we've covered the reported total.
+            if (parsed.playlists.isEmpty() || offset >= parsed.playlistCount) return all
         }
-        if (response.status == HttpStatusCode.NotFound) return emptyList()
-        if (!response.status.isSuccess()) {
-            val text = response.bodyAsText().take(200)
-            throw Exception("getUserOwnedPlaylists($userName) failed: HTTP ${response.status.value} $text")
-        }
-        val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
-        return parsed.playlists.mapNotNull { wrapper ->
-            val pl = wrapper.playlist ?: return@mapNotNull null
-            val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
-                ?: return@mapNotNull null
-            LbPlaylist(
-                mbid = mbid,
-                title = pl.title.orEmpty(),
-                annotation = pl.annotation.orEmpty(),
-                lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
-            )
-        }
+        return all
     }
 
     /** Fetch recent listens for a user. */
@@ -893,6 +917,7 @@ private data class ReleaseStatWire(
 @Serializable
 private data class CreatedForListWire(
     val playlists: List<CreatedForWrapperWire> = emptyList(),
+    @SerialName("playlist_count") val playlistCount: Int = 0,
 )
 
 @Serializable
