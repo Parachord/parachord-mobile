@@ -53,10 +53,22 @@ class SyncViewModel constructor(
         viewModelScope.launch {
             // Pre-fill axis checkboxes from the per-provider opt-in.
             val collections = settingsStore.getSyncCollectionsForProvider(providerId)
-            _syncTracks.value = "tracks" in collections
-            _syncAlbums.value = "albums" in collections
-            _syncArtists.value = "artists" in collections
-            _syncPlaylists.value = "playlists" in collections
+            if (providerId == com.parachord.shared.sync.ListenBrainzSyncProvider.PROVIDER_ID) {
+                // ListenBrainz only syncs playlists — loved tracks go via the
+                // scrobbler love-push path, and albums/artists aren't supported.
+                // Force the non-playlist axes off (the wizard hides them) and
+                // default playlists on for a fresh setup so "Start Sync" is
+                // enabled immediately.
+                _syncTracks.value = false
+                _syncAlbums.value = false
+                _syncArtists.value = false
+                _syncPlaylists.value = collections.isEmpty() || "playlists" in collections
+            } else {
+                _syncTracks.value = "tracks" in collections
+                _syncAlbums.value = "albums" in collections
+                _syncArtists.value = "artists" in collections
+                _syncPlaylists.value = "playlists" in collections
+            }
         }
     }
 

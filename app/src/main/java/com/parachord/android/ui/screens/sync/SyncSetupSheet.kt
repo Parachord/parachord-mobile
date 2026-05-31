@@ -32,10 +32,12 @@ import com.parachord.android.ui.components.AlbumArtCard
 
 private val SpotifyGreen = Color(0xFF1DB954)
 private val AppleMusicRed = Color(0xFFFA243C)
+private val ListenBrainzOrange = Color(0xFFEB743B)
 
 /** Provider-specific accent color used for the wizard's CTA button + spinner. */
 private fun providerAccent(providerId: String): Color = when (providerId) {
     "applemusic" -> AppleMusicRed
+    "listenbrainz" -> ListenBrainzOrange
     else -> SpotifyGreen
 }
 
@@ -43,6 +45,7 @@ private fun providerAccent(providerId: String): Color = when (providerId) {
 private fun providerDisplayName(providerId: String): String = when (providerId) {
     "applemusic" -> "Apple Music"
     "spotify" -> "Spotify"
+    "listenbrainz" -> "ListenBrainz"
     else -> providerId.replaceFirstChar { it.uppercase() }
 }
 
@@ -107,13 +110,17 @@ private fun OptionsStep(
     // provider-native nomenclature for the row labels so the wizard
     // matches the user's mental model of the source.
     val isApple = providerId == "applemusic"
+    // ListenBrainz only syncs playlists (loved tracks go via scrobblers,
+    // albums/artists aren't supported), so the wizard hides the other axes
+    // and is all-or-nothing on playlists like Apple Music.
+    val isListenBrainz = providerId == "listenbrainz"
     val tracksLabel = if (isApple) "Library Songs" else "Liked Songs"
     val albumsLabel = if (isApple) "Library Albums" else "Saved Albums"
     val artistsLabel = if (isApple) "Library Artists" else "Followed Artists"
 
-    // Apple Music skips the playlist picker (per Decision D1 — AM is
-    // all-or-nothing for now), so the CTA is "Start Sync" not "Next".
-    val showsPicker = !isApple
+    // Apple Music + ListenBrainz skip the per-playlist picker (all-or-nothing
+    // for now), so their CTA is "Start Sync" not "Next".
+    val showsPicker = !isApple && !isListenBrainz
 
     Column(
         modifier = Modifier
@@ -142,11 +149,23 @@ private fun OptionsStep(
         )
         Spacer(Modifier.height(24.dp))
 
-        SyncOptionRow(tracksLabel, Icons.Default.Favorite, syncTracks) { viewModel.setSyncTracks(it) }
-        SyncOptionRow(albumsLabel, Icons.Default.Album, syncAlbums) { viewModel.setSyncAlbums(it) }
-        SyncOptionRow(artistsLabel, Icons.Default.Person, syncArtists) { viewModel.setSyncArtists(it) }
+        if (!isListenBrainz) {
+            SyncOptionRow(tracksLabel, Icons.Default.Favorite, syncTracks) { viewModel.setSyncTracks(it) }
+            SyncOptionRow(albumsLabel, Icons.Default.Album, syncAlbums) { viewModel.setSyncAlbums(it) }
+            SyncOptionRow(artistsLabel, Icons.Default.Person, syncArtists) { viewModel.setSyncArtists(it) }
+        }
         @Suppress("DEPRECATION")
         SyncOptionRow("Playlists", Icons.Default.QueueMusic, syncPlaylists) { viewModel.setSyncPlaylists(it) }
+
+        if (isListenBrainz) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Pushes your Parachord playlists to your ListenBrainz profile. " +
+                    "Loved tracks sync separately via scrobblers.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         if (isApple) {
             Spacer(Modifier.height(8.dp))

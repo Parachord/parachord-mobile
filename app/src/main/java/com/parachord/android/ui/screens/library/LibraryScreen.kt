@@ -149,6 +149,7 @@ fun CollectionScreen(
     val resolverOrder by viewModel.resolverOrder.collectAsStateWithLifecycle()
     val trackResolvers by viewModel.trackResolvers.collectAsStateWithLifecycle()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsStateWithLifecycle()
+    val listenBrainzConnected by viewModel.listenBrainzConnected.collectAsStateWithLifecycle()
 
     if (showSyncSheet) {
         SyncSetupSheet(
@@ -160,6 +161,7 @@ fun CollectionScreen(
     if (showSyncProviderPicker) {
         SyncProviderPickerSheet(
             onDismiss = { showSyncProviderPicker = false },
+            showListenBrainz = listenBrainzConnected,
             onPick = { providerId ->
                 syncSheetProviderId = providerId
                 showSyncProviderPicker = false
@@ -970,6 +972,7 @@ private fun EmptyState(
 private fun SyncProviderPickerSheet(
     onDismiss: () -> Unit,
     onPick: (String) -> Unit,
+    showListenBrainz: Boolean = false,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1007,6 +1010,14 @@ private fun SyncProviderPickerSheet(
                 accent = Color(0xFFFA243C),
                 onClick = { onPick("applemusic") },
             )
+            if (showListenBrainz) {
+                Spacer(Modifier.height(8.dp))
+                ProviderPickerRow(
+                    label = "ListenBrainz",
+                    accent = ListenBrainzOrange,
+                    onClick = { onPick("listenbrainz") },
+                )
+            }
             Spacer(Modifier.height(16.dp))
         }
     }

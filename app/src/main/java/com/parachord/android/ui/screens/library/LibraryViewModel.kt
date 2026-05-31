@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 class LibraryViewModel constructor(
@@ -61,6 +62,15 @@ class LibraryViewModel constructor(
     /** User-configured resolver priority order, used to sort resolver icons on track rows. */
     val resolverOrder: StateFlow<List<String>> = settingsStore.getResolverOrderFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * Whether ListenBrainz is authorized (token present). Gates the LB row in
+     * the sync-provider picker — LB auth lives in Settings → Scrobblers, not
+     * the sync wizard, so offering it before a token is set would dead-end.
+     */
+    val listenBrainzConnected: StateFlow<Boolean> = settingsStore.getListenBrainzTokenFlow()
+        .map { it != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     // --- Sort state per tab ---
 
