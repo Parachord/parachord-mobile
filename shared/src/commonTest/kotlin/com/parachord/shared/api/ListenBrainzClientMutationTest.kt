@@ -611,6 +611,41 @@ class ListenBrainzClientMutationTest {
     }
 
     @Test
+    fun `getUserOwnedPlaylists throws on partial fetch (empty page before playlist_count)`() = runTest {
+        // Interop contract rule 4: a partial/truncated fetch is NOT a
+        // confirmed-empty result. If LB reports playlist_count=250 but a page
+        // comes back empty before we've walked the whole list, the client MUST
+        // throw — returning the partial list would make the sync dedup treat the
+        // un-fetched playlists as deleted-remotely and recreate them.
+        val engine = MockEngine { request ->
+            val offset = request.url.parameters["offset"]?.toInt() ?: 0
+            val body = if (offset == 0) {
+                // First page: 100 items, but claims 250 total.
+                val items = (0 until 100).joinToString(",") { i ->
+                    """{"playlist":{"identifier":"https://listenbrainz.org/playlist/mbid-$i","title":"PL $i"}}"""
+                }
+                """{"playlist_count":250,"playlists":[$items]}"""
+            } else {
+                // Second page: unexpectedly empty (LB truncated / transient).
+                """{"playlist_count":250,"playlists":[]}"""
+            }
+            respond(body, HttpStatusCode.OK, jsonHeaders)
+        }
+        assertFailsWith<Exception> {
+            client(engine).getUserOwnedPlaylists("testuser")
+        }
+    }
+
+    @Test
+    fun `getUserOwnedPlaylists returns empty on first-page 404 (no playlists)`() = runTest {
+        // A 404 on offset 0 is the one legitimate empty result: the user has no
+        // playlists. Must return empty, not throw.
+        val engine = MockEngine { respond("", HttpStatusCode.NotFound) }
+        val result = client(engine).getUserOwnedPlaylists("testuser")
+        assertEquals(0, result.size)
+    }
+
+    @Test
     fun `getUserOwnedPlaylists stops after a single page when count covers all`() = runTest {
         var requests = 0
         val engine = MockEngine {

@@ -462,17 +462,31 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
     /**
      * Fetch ALL of a user's own playlists, paginating through every page.
      *
-     * CRITICAL: this MUST return the complete list. The endpoint defaults to
-     * `count=25`; without paging, the sync engine's three-layer playlist dedup
-     * only sees the 25 newest playlists and recreates everything else on every
-     * cycle — a runaway duplication bug that produced ~6,400 duplicate public
-     * playlists on a real account (Parachord/parachord#846). Page until we've
-     * pulled `playlist_count` entries.
+     * CRITICAL — two invariants, both load-bearing for the sync dedup:
+     *
+     * 1. **Complete.** The endpoint defaults to `count=25`; without paging, the
+     *    sync engine's three-layer dedup only sees the 25 newest playlists and
+     *    recreates everything else every cycle — the runaway bug that produced
+     *    ~6,400 duplicate public playlists on a real account.
+     *
+     * 2. **All-or-nothing.** If the full list can't be retrieved (HTTP error,
+     *    429, malformed body, a 404 mid-walk, or an empty page before reaching
+     *    `playlist_count`) this THROWS rather than returning a partial list. Per
+     *    the LB sync interop contract (CLAUDE.md "ListenBrainz Playlist Sync —
+     *    Interop Contract", rule 4): a failed/partial fetch is NOT a
+     *    confirmed-empty result. Returning a truncated list would make the dedup
+     *    treat the un-fetched playlists as deleted-remotely and RECREATE them.
+     *    Throwing aborts the sync cycle for this provider, preserving the
+     *    local→MBID mappings; it retries next cycle.
+     *
+     * A 404 on the FIRST page (offset 0) is the one legitimate empty result:
+     * the user has no playlists (or the user doesn't exist). Returns empty.
      */
     suspend fun getUserOwnedPlaylists(userName: String): List<LbPlaylist> {
         val pageSize = 100 // LB's max per request
         val all = mutableListOf<LbPlaylist>()
         var offset = 0
+        var expectedTotal = -1 // captured from the first successful page
         // Hard cap on iterations as a runaway guard (1000 pages = 100k playlists).
         repeat(1000) {
             val response = executeWithRetry {
@@ -481,29 +495,44 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                     parameter("offset", offset)
                 }
             }
-            if (response.status == HttpStatusCode.NotFound) return all
+            if (response.status == HttpStatusCode.NotFound) {
+                // First-page 404 = confirmed "no playlists". A mid-walk 404 is
+                // anomalous and must NOT be read as "the rest were deleted".
+                if (offset == 0) return emptyList()
+                throw Exception("getUserOwnedPlaylists($userName): 404 mid-pagination at offset $offset (incomplete fetch)")
+            }
             if (!response.status.isSuccess()) {
                 val text = response.bodyAsText().take(200)
                 throw Exception("getUserOwnedPlaylists($userName) failed: HTTP ${response.status.value} $text")
             }
             val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
-            val page = parsed.playlists.mapNotNull { wrapper ->
-                val pl = wrapper.playlist ?: return@mapNotNull null
-                val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
-                    ?: return@mapNotNull null
-                LbPlaylist(
-                    mbid = mbid,
-                    title = pl.title.orEmpty(),
-                    annotation = pl.annotation.orEmpty(),
-                    lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
-                )
-            }
-            all.addAll(page)
+            if (expectedTotal < 0) expectedTotal = parsed.playlistCount
+            all.addAll(
+                parsed.playlists.mapNotNull { wrapper ->
+                    val pl = wrapper.playlist ?: return@mapNotNull null
+                    val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
+                        ?: return@mapNotNull null
+                    LbPlaylist(
+                        mbid = mbid,
+                        title = pl.title.orEmpty(),
+                        annotation = pl.annotation.orEmpty(),
+                        lastModifiedAt = pl.lastModifiedAt?.ifBlank { null },
+                    )
+                },
+            )
             offset += parsed.playlists.size
-            // Stop when the page was empty or we've covered the reported total.
-            if (parsed.playlists.isEmpty() || offset >= parsed.playlistCount) return all
+            // Covered the full reported total (raw offset, not parsed count — a
+            // playlist that fails MBID parsing still advances the walk). Also
+            // covers the empty-library case (total 0 ⇒ 0 >= 0 on the first page).
+            if (offset >= expectedTotal) return all
+            // Empty page BEFORE reaching the total ⇒ LB truncated / transient.
+            // Abort rather than return a partial list (see invariant 2).
+            if (parsed.playlists.isEmpty()) {
+                throw Exception("getUserOwnedPlaylists($userName): empty page at offset $offset before reaching playlist_count=$expectedTotal (incomplete fetch)")
+            }
         }
-        return all
+        // Hit the 1000-page guard without covering the total — incomplete.
+        throw Exception("getUserOwnedPlaylists($userName): exceeded pagination cap before reaching playlist_count=$expectedTotal")
     }
 
     /** Fetch recent listens for a user. */
