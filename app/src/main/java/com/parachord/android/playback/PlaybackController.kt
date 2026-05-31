@@ -776,6 +776,7 @@ class PlaybackController constructor(
                         .setMediaMetadata(
                             MediaMetadata.Builder()
                                 .setTitle(routedTrack.title)
+                                .setSubtitle(routedTrack.artist)
                                 .setArtist(routedTrack.artist)
                                 .setAlbumTitle(routedTrack.album)
                                 .setArtworkUri(artworkUri)

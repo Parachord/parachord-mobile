@@ -23,6 +23,7 @@ import com.parachord.android.data.db.entity.TrackEntity
 fun TrackEntity.toAutoMediaItem(): MediaItem {
     val builder = MediaMetadata.Builder()
         .setTitle(title)
+        .setSubtitle(artist)
         .setArtist(artist)
         .setAlbumTitle(album)
         .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
