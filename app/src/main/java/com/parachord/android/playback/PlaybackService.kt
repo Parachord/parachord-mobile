@@ -646,6 +646,7 @@ class PlaybackService : MediaLibraryService() {
         ): MediaItem {
             val md = MediaMetadata.Builder()
                 .setTitle(r.title)
+                .setSubtitle(r.artist)
                 .setArtist(r.artist)
                 .apply { r.album?.let { setAlbumTitle(it) } }
                 .setIsBrowsable(false)
@@ -716,6 +717,7 @@ class PlaybackService : MediaLibraryService() {
         private fun playlistToMediaItem(p: com.parachord.shared.model.Playlist): MediaItem {
             val md = MediaMetadata.Builder()
                 .setTitle(p.name)
+                .setSubtitle(p.ownerName ?: "Parachord")
                 .setArtist(p.ownerName ?: "Parachord")
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
