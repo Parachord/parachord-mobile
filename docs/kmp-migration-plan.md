@@ -2,7 +2,7 @@
 
 ## Context
 
-The Android app (191 files, ~51K lines) needs to share ~73% of its code with a future iOS app. The .axe plugin system is already KMP-ready (`JsRuntime` interface). This plan migrates the existing `parachord-android` repo in-place to a KMP project with a `:shared` module, keeping Android shipping at every step.
+The Android app (191 files, ~51K lines) needs to share ~73% of its code with a future iOS app. The .axe plugin system is already KMP-ready (`JsRuntime` interface). This plan migrates the existing `parachord-mobile` repo in-place to a KMP project with a `:shared` module, keeping Android shipping at every step.
 
 **Approach:** Start with Phases 0-1 (project structure + models), evaluate, then iterate sprint-by-sprint (1-2 phases per sprint). Android keeps shipping features between migration phases.
 

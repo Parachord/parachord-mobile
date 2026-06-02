@@ -406,7 +406,7 @@ One `git clone`. One CI pipeline. `./gradlew :androidApp:installDebug` builds An
 
 ### Migration path: transform existing repo vs. new repo
 
-**Option A — Transform `parachord-android` in place (recommended):**
+**Option A — Transform `parachord-mobile` in place (recommended):**
 - Add `:shared` module to this repo
 - Gradually move code from `app/` → `shared/commonMain/`
 - Add `iosApp/` directory for the iOS target
@@ -416,9 +416,9 @@ One `git clone`. One CI pipeline. `./gradlew :androidApp:installDebug` builds An
 
 **Option B — New `parachord-mobile` repo:**
 - Start fresh with KMP project template
-- Port shared code from `parachord-android`
+- Port shared code from `parachord-mobile`
 - Build iOS alongside
-- Archive `parachord-android` when done
+- Archive `parachord-mobile` when done
 - Clean start, but parallel repos during migration and lost git history
 
 **Option A is the standard approach** — recommended by JetBrains and Google. The migration is incremental: extract one package at a time into `shared/`, verify Android still works, repeat. No big bang.

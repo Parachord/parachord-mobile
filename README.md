@@ -10,7 +10,7 @@ Android companion to the [Parachord desktop app](https://github.com/Parachord/pa
 
 or
 
-**Sideload** — grab the signed APK from the [latest release](https://github.com/Parachord/parachord-android/releases/latest) and install directly. Requires "Install unknown apps" permission for your browser or Files app.
+**Sideload** — grab the signed APK from the [latest release](https://github.com/Parachord/parachord-mobile/releases/latest) and install directly. Requires "Install unknown apps" permission for your browser or Files app.
 
 ## Screenshots
 
@@ -109,7 +109,7 @@ Default order: `spotify > applemusic > bandcamp > soundcloud > localfiles > yout
 - **Hosted XSPF** — import any `.xspf` URL (e.g. a radio station's "recently played" feed) and Parachord polls every 5 minutes to keep local + Spotify in lockstep.
 - **Three-layer dedup** prevents duplicate remote playlists on re-sync.
 
-Apple Music sync is on the roadmap ([#15](https://github.com/Parachord/parachord-android/issues/15)); playback works today.
+Apple Music sync is on the roadmap ([#15](https://github.com/Parachord/parachord-mobile/issues/15)); playback works today.
 
 ### Discovery
 - **Recommendations** — personalized albums and artists from Last.fm + ListenBrainz, plus an AI-generated feed (your own ChatGPT/Claude/Gemini key).
@@ -277,7 +277,7 @@ Full security review completed April 2026; see [SECURITY.md](SECURITY.md) and `.
 - OAuth tokens and API keys stored in `EncryptedSharedPreferences` (AES-256-GCM, Android Keystore backed) — never in plain DataStore.
 - `.claude/` and `play-service-account.json` are gitignored.
 
-Plugin sandboxing ([#107](https://github.com/Parachord/parachord-android/issues/107)) — the `.axe` fetch allowlist and storage namespacing — is deferred pending a broader plugin SDK revision shared with desktop.
+Plugin sandboxing ([#107](https://github.com/Parachord/parachord-mobile/issues/107)) — the `.axe` fetch allowlist and storage namespacing — is deferred pending a broader plugin SDK revision shared with desktop.
 
 ## CI
 

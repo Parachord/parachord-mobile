@@ -5,7 +5,7 @@
 If you discover a security vulnerability in Parachord, please report it responsibly:
 
 1. **Email:** security@parachord.app
-2. **GitHub:** Open a [security advisory](https://github.com/Parachord/parachord-android/security/advisories/new)
+2. **GitHub:** Open a [security advisory](https://github.com/Parachord/parachord-mobile/security/advisories/new)
 
 Please include:
 - Description of the vulnerability
@@ -49,7 +49,7 @@ Plugins are JavaScript files downloaded from the [parachord-plugins](https://git
 - Plugin signing (HTTPS transport integrity is the current defense; repo access controls prevent supply-chain compromise)
 - `file://` origin hardening on the plugin WebView (`JsBridge`)
 
-See GitHub issue [#107](https://github.com/Parachord/parachord-android/issues/107) for the plugin sandbox roadmap.
+See GitHub issue [#107](https://github.com/Parachord/parachord-mobile/issues/107) for the plugin sandbox roadmap.
 
 ### Network Security
 
@@ -77,4 +77,4 @@ See GitHub issue [#107](https://github.com/Parachord/parachord-android/issues/10
 
 ## Completed Security Review
 
-A comprehensive security review was completed in April 2026. The full review plan is tracked internally. All Critical, High, and Medium findings have been closed. See issues [#105](https://github.com/Parachord/parachord-android/issues/105)–[#108](https://github.com/Parachord/parachord-android/issues/108) for remaining work.
+A comprehensive security review was completed in April 2026. The full review plan is tracked internally. All Critical, High, and Medium findings have been closed. See issues [#105](https://github.com/Parachord/parachord-mobile/issues/105)–[#108](https://github.com/Parachord/parachord-mobile/issues/108) for remaining work.

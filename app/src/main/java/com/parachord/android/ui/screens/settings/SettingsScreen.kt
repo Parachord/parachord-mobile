@@ -3170,7 +3170,7 @@ private fun AboutTab() {
                     color = accent,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.clickable {
-                        uriHandler.openUri("https://github.com/Parachord/parachord-android")
+                        uriHandler.openUri("https://github.com/Parachord/parachord-mobile")
                     },
                 )
 

@@ -165,7 +165,7 @@ class ListenBrainzSyncProvider(
             // treats a MISSING public flag as public, so we must send it
             // explicitly. Pushing a user's whole library as public playlists is
             // a privacy leak — the original isPublic=true here is what put 6,397
-            // public duplicates on a real profile (Parachord/parachord-android
+            // public duplicates on a real profile (Parachord/parachord-mobile
             // pagination incident, May 2026).
             client.createPlaylist(name = name, description = description, isPublic = false, token = token)
         } catch (e: ListenBrainzUnauthorizedException) {

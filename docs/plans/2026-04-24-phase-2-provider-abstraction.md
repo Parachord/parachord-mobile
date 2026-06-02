@@ -194,7 +194,7 @@ git commit -m "Add SyncProvider interface + ProviderFeatures + SnapshotKind + De
 
 Run:
 ```
-grep -rn "SpotifySyncProvider\.Synced\(Track\|Album\|Artist\|Playlist\)" /Users/jherskowitz/Development/parachord/parachord-android/app/src /Users/jherskowitz/Development/parachord/parachord-android/shared/src
+grep -rn "SpotifySyncProvider\.Synced\(Track\|Album\|Artist\|Playlist\)" /Users/jherskowitz/Development/parachord/parachord-mobile/app/src /Users/jherskowitz/Development/parachord/parachord-mobile/shared/src
 ```
 
 Expected sites: `SyncEngine.kt` (~5 references), `SyncViewModel.kt` (~2 references). Any others must also be updated in this commit.
@@ -417,7 +417,7 @@ git commit -m "SpotifySyncProvider implements SyncProvider with capability decla
 
 Grep:
 ```
-grep -n "SpotifySyncProvider\|SyncEngine" /Users/jherskowitz/Development/parachord/parachord-android/app/src/main/java/com/parachord/android/di/AndroidModule.kt
+grep -n "SpotifySyncProvider\|SyncEngine" /Users/jherskowitz/Development/parachord/parachord-mobile/app/src/main/java/com/parachord/android/di/AndroidModule.kt
 ```
 
 Should be a `single { SpotifySyncProvider(...) }` and a `single { SyncEngine(spotifyProvider = get(), ...) }`.
@@ -555,7 +555,7 @@ single {
 
 Find them:
 ```
-grep -rn "SyncEngine(" /Users/jherskowitz/Development/parachord/parachord-android/app/src/test
+grep -rn "SyncEngine(" /Users/jherskowitz/Development/parachord/parachord-mobile/app/src/test
 ```
 
 For each, wrap the existing `spotifyProvider = mockk()` argument in `listOf(...)`:

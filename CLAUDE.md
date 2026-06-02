@@ -463,7 +463,7 @@ Achordion + desktop already share an `announcements:json` Upstash row that drive
 
 **Client-side filtering.** The server returns everything; clients filter:
 
-- **Surface match** — `surfaces == null || surfaces.isEmpty() || "parachord" in surfaces`. The string is `"parachord"`, not `"parachord-android"` — matches desktop.
+- **Surface match** — `surfaces == null || surfaces.isEmpty() || "parachord" in surfaces`. The string is `"parachord"`, not `"parachord-mobile"` — matches desktop.
 - **Version range** — `appVersion >= minVersion` AND `appVersion <= maxVersion`. Semver compare via `compareSemverOrNull`. Unparseable bounds fail-open (don't crash on a malformed version string).
 - **Not expired** — `expiresAt == null || Clock.System.now() < Instant.parse(expiresAt)`. Unparseable timestamps fail-open.
 - **Not dismissed** — `id` not in the persisted `announcements_dismissed_ids` set (CSV in `KvStore`).

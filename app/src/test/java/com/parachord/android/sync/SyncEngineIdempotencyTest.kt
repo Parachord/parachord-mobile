@@ -43,7 +43,7 @@ import org.junit.Test
  * list) made `SyncEngine.pushPlaylistsForProvider`'s three-layer dedup fail to
  * see existing playlists, so every sync cycle RE-CREATED the user's entire
  * library — ~6,400 duplicate public playlists on a live account over ~18 days
- * (root-cause fix: parachord-android@cfb0c61 pagination + 40c4579 default
+ * (root-cause fix: parachord-mobile@cfb0c61 pagination + 40c4579 default
  * private). The pre-existing unit tests covered the dedup helpers in isolation
  * but never ran a full sync cycle twice — that gap is exactly what this file
  * closes.

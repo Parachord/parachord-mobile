@@ -42,7 +42,7 @@ The existing code is on a strong foundation. These pieces already match desktop 
 
 Every item below is something Android is missing that causes a specific round-trip failure mode documented in desktop CLAUDE.md.
 
-1. **Single-provider hardcoding.** Every entry point opens with `val providerId = SpotifySyncProvider.PROVIDER_ID`. Apple Music has no sync path at all. (Tracking: [#15](https://github.com/Parachord/parachord-android/issues/15).)
+1. **Single-provider hardcoding.** Every entry point opens with `val providerId = SpotifySyncProvider.PROVIDER_ID`. Apple Music has no sync path at all. (Tracking: [#15](https://github.com/Parachord/parachord-mobile/issues/15).)
 2. **No `syncedTo` map on playlists.** Android stores only `playlists.spotifyId` (scalar). The desktop model is `syncedTo: Map<providerId, { externalId, snapshotId, syncedAt, pendingAction, unresolvedTracks }>`. Missing this means we can't even represent a playlist that mirrors to both Spotify and Apple Music.
 3. **No `syncedFrom` field.** Android infers the pull source from the playlist id prefix (`spotify-…`, `hosted-xspf-…`). The desktop stores `syncedFrom: { resolver, externalId, snapshotId, ownerId }` explicitly. The implicit scheme breaks on non-prefixed locally-originated playlists that later get pulled from a second provider.
 4. **No `localOnly` opt-out.** Desktop supports "never sync this playlist" per row; Android doesn't.

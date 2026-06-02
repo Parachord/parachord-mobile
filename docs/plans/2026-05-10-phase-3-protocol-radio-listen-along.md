@@ -25,7 +25,7 @@
 
 Run:
 ```bash
-cd /Users/jherskowitz/Development/parachord/parachord-android \
+cd /Users/jherskowitz/Development/parachord/parachord-mobile \
   && git checkout main \
   && git pull --ff-only \
   && git checkout -b feature/protocol-phase-3 \

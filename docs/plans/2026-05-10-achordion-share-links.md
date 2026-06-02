@@ -1459,7 +1459,7 @@ EOF
 **Step 1: Build + install.**
 
 ```bash
-cd /Users/jherskowitz/Development/parachord/parachord-android
+cd /Users/jherskowitz/Development/parachord/parachord-mobile
 adb shell am force-stop com.parachord.android.debug
 ./gradlew installDebug
 ```
