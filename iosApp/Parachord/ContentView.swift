@@ -1,6 +1,176 @@
 import SwiftUI
 import Shared
 import JavaScriptCore
+import AVFoundation
+import Combine
+
+// MARK: - AVPlayer engine (phase 4.4)
+//
+// First-iteration iOS playback layer. Plays one URL at a time via
+// `AVPlayer`, exposes the bare state SwiftUI needs (isPlaying,
+// currentTime, duration, status), and wires `AVAudioSession` for the
+// `.playback` category so audio keeps routing through the iPad's
+// speaker / connected output instead of being treated as a UI sound.
+//
+// Scoped DELIBERATELY to single-track playback. The shared
+// `PlaybackEngine` interface (queue management, shuffle, repeat,
+// skip next/prev, PlaybackContext) is a follow-up — this class is
+// the foundation those features sit on top of, not the full
+// implementation.
+//
+// Background audio (`UIBackgroundModes: audio` + lock-screen
+// `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter`) is phase 4.5;
+// for this commit playback stops when the app backgrounds, which is
+// fine for the smoke-test demo.
+
+@Observable
+final class IosAVPlayer {
+    enum Status: String {
+        case idle, loading, ready, playing, paused, failed
+    }
+
+    private var player: AVPlayer?
+    private var timeObserver: Any?
+    private var statusObservation: NSKeyValueObservation?
+    private var endObservation: NSObjectProtocol?
+
+    var status: Status = .idle
+    var isPlaying = false
+    var currentTime: Double = 0
+    var duration: Double = 0
+    var errorMessage: String?
+    var loadedURL: URL?
+
+    init() {
+        configureAudioSession()
+    }
+
+    deinit {
+        teardown()
+    }
+
+    /// Activate `.playback` category so audio plays through the
+    /// device speaker (not the silent-ringer-respecting `.ambient`
+    /// default) and stays alive across audio interruptions. Without
+    /// this, AVPlayer plays through the receiver and respects the
+    /// hardware mute switch.
+    private func configureAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(
+                .playback,
+                mode: .default,
+                options: []
+            )
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            errorMessage = "AVAudioSession setup failed: \(error.localizedDescription)"
+        }
+    }
+
+    func load(url urlString: String) {
+        guard let url = URL(string: urlString) else {
+            status = .failed
+            errorMessage = "Invalid URL"
+            return
+        }
+        teardown()
+        let item = AVPlayerItem(url: url)
+        let newPlayer = AVPlayer(playerItem: item)
+        // KVO on `status` — when item becomes `.readyToPlay`, durationis known
+        // and we can publish it. `.failed` surfaces the error to the UI.
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard let self else { return }
+            Task { @MainActor in
+                switch item.status {
+                case .readyToPlay:
+                    self.status = .ready
+                    self.duration = item.duration.seconds.isFinite
+                        ? item.duration.seconds : 0
+                case .failed:
+                    self.status = .failed
+                    self.errorMessage = item.error?.localizedDescription
+                        ?? "Item failed (unknown)"
+                default:
+                    break
+                }
+            }
+        }
+        // Periodic clock observer fires twice a second on the main
+        // queue — fine granularity for a progress slider without
+        // burning CPU.
+        timeObserver = newPlayer.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            guard let self else { return }
+            self.currentTime = time.seconds.isFinite ? time.seconds : 0
+            if self.duration == 0,
+               let d = newPlayer.currentItem?.duration.seconds,
+               d.isFinite {
+                self.duration = d
+            }
+            self.isPlaying = newPlayer.timeControlStatus == .playing
+        }
+        endObservation = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] _ in
+            self?.isPlaying = false
+            self?.status = .paused
+        }
+        player = newPlayer
+        loadedURL = url
+        status = .loading
+        errorMessage = nil
+    }
+
+    func play() {
+        player?.play()
+        isPlaying = true
+        status = .playing
+    }
+
+    func pause() {
+        player?.pause()
+        isPlaying = false
+        status = .paused
+    }
+
+    func togglePlayPause() {
+        if isPlaying { pause() } else { play() }
+    }
+
+    func seek(to seconds: Double) {
+        let target = CMTime(seconds: seconds, preferredTimescale: 600)
+        player?.seek(to: target)
+    }
+
+    func stop() {
+        teardown()
+    }
+
+    private func teardown() {
+        if let obs = timeObserver {
+            player?.removeTimeObserver(obs)
+            timeObserver = nil
+        }
+        statusObservation?.invalidate()
+        statusObservation = nil
+        if let endObs = endObservation {
+            NotificationCenter.default.removeObserver(endObs)
+            endObservation = nil
+        }
+        player?.pause()
+        player = nil
+        isPlaying = false
+        currentTime = 0
+        duration = 0
+        loadedURL = nil
+        status = .idle
+        errorMessage = nil
+    }
+}
 
 // MARK: - JSC Polyfills (phase 4.2)
 //
@@ -308,11 +478,14 @@ struct ContentView: View {
     @State private var jsConsoleOutput: [String] = []
     @State private var jsPolyfillsAttached = false
 
+    @State private var avPlayer = IosAVPlayer()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 resolverScoringCard
+                avPlayerCard
                 jsRuntimeCard
                 mosaicSmokeTestCard
                 ktorSmokeTestCard
@@ -515,6 +688,118 @@ struct ContentView: View {
                 await runMosaic()
             }
         }
+    }
+
+    // MARK: - Phase 4.4 (AVPlayer)
+
+    /// Stable, free-to-stream test track. SoundHelix hosts a set of
+    /// algorithmic compositions that have been online for years and
+    /// don't require any auth — perfect for proving AVPlayer + audio
+    /// session work in our setup without depending on a resolved
+    /// Spotify / Apple Music / SoundCloud URL.
+    private static let testAudioURL =
+        "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"
+
+    private var avPlayerCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("AVPlayer (Phase 4.4)")
+                .font(.headline)
+            Text(
+                "Direct AVFoundation playback of an HTTPS audio stream " +
+                "via the `.playback` AVAudioSession category. Foundation " +
+                "for the iOS half of `PlaybackEngine` — queue, shuffle, " +
+                "repeat, skip next/prev, and lock-screen now-playing are " +
+                "follow-ups (phase 4.4.5 and 4.5)."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Button(loadButtonLabel) {
+                    if avPlayer.status == .idle || avPlayer.status == .failed {
+                        avPlayer.load(url: Self.testAudioURL)
+                    } else {
+                        avPlayer.stop()
+                    }
+                }
+                .buttonStyle(.bordered)
+
+                Button(avPlayer.isPlaying ? "Pause" : "Play") {
+                    avPlayer.togglePlayPause()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(avPlayer.status == .idle
+                          || avPlayer.status == .loading
+                          || avPlayer.status == .failed)
+
+                Spacer()
+
+                Text("status: \(avPlayer.status.rawValue)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            if avPlayer.duration > 0 {
+                Slider(
+                    value: Binding(
+                        get: { avPlayer.currentTime },
+                        set: { avPlayer.seek(to: $0) }
+                    ),
+                    in: 0...avPlayer.duration
+                )
+                .tint(.accentColor)
+
+                HStack {
+                    Text(Self.formatTime(avPlayer.currentTime))
+                    Spacer()
+                    Text(Self.formatTime(avPlayer.duration))
+                }
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+
+            if let error = avPlayer.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        // Auto-load + start on first appear so the screenshot harness
+        // can observe the full path (audio session activation, item
+        // ready-state, periodic time observer firing, slider updating)
+        // without needing to script a synthetic button tap.
+        .task {
+            if avPlayer.status == .idle {
+                avPlayer.load(url: Self.testAudioURL)
+                // Poll for ready (item.status hits .readyToPlay
+                // asynchronously after the first frame parses). Bail
+                // on failure, time out at 8s on slow networks.
+                for _ in 0..<40 {
+                    if avPlayer.status == .ready || avPlayer.status == .paused {
+                        avPlayer.play()
+                        return
+                    }
+                    if avPlayer.status == .failed { return }
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+        }
+    }
+
+    private var loadButtonLabel: String {
+        switch avPlayer.status {
+        case .idle, .failed: "Load track"
+        default: "Stop"
+        }
+    }
+
+    private static func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let s = Int(seconds)
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     // MARK: - Phase 4.1 (JavaScriptCore)
