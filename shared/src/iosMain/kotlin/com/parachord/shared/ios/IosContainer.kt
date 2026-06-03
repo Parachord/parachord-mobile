@@ -8,6 +8,9 @@ import com.parachord.shared.api.auth.AuthTokenProvider
 import com.parachord.shared.api.auth.OAuthTokenRefresher
 import com.parachord.shared.api.createHttpClient
 import com.parachord.shared.config.AppConfig
+import com.parachord.shared.plugin.IosJsRuntime
+import com.parachord.shared.plugin.PluginFileAccess
+import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.repository.WeeklyPlaylistEntry
 import com.parachord.shared.repository.WeeklyPlaylistsRepository
 import com.parachord.shared.settings.SettingsStore
@@ -92,6 +95,78 @@ class IosContainer private constructor() {
     val musicBrainzClient: MusicBrainzClient by lazy { MusicBrainzClient(httpClient) }
 
     val listenBrainzClient: ListenBrainzClient by lazy { ListenBrainzClient(httpClient) }
+
+    // ── .axe plugin host (the cross-platform resolver system) ──────────
+
+    /**
+     * The JSC-backed runtime that hosts the same `.axe` plugins as
+     * desktop + Android. Swift MUST set [IosJsRuntime.nativeBridgeInstaller]
+     * (via `JsPolyfills.installNativeBridge`) before [pluginManager] is
+     * initialized — the bootstrap polyfills reference `NativeBridge`.
+     */
+    val pluginJsRuntime: IosJsRuntime by lazy { IosJsRuntime() }
+
+    /**
+     * Shared [PluginManager] — common to all platforms. Reads bundled
+     * `.axe` files via [PluginFileAccess] (NSBundle on iOS) and drives
+     * them through [pluginJsRuntime].
+     */
+    val pluginManager: PluginManager by lazy {
+        PluginManager(PluginFileAccess(), pluginJsRuntime)
+    }
+
+    /**
+     * Initialize the plugin host (idempotent) and return the loaded
+     * plugin IDs. The Swift caller attaches the NativeBridge installer
+     * before calling this.
+     */
+    suspend fun loadPluginsAndList(): List<String> {
+        pluginManager.ensureInitialized()
+        return pluginManager.plugins.value.map { it.id }
+    }
+
+    /**
+     * Resolve a track through a specific `.axe` resolver, awaiting the
+     * async result properly. Returns the raw JSON result string, or null
+     * for no-match.
+     *
+     * The shared `PluginManager.resolve` uses an `(async () => …)()` IIFE
+     * and reads its return synchronously — which yields `[object Promise]`
+     * on any runtime (the async hasn't settled yet; CLAUDE.md mistake
+     * #27). The resolver-loader exposes `window.__lastPluginResult` for
+     * exactly this: kick off the async work storing its outcome there,
+     * then poll. Polling with `delay()` yields the main run loop so the
+     * fetch callbacks (URLSession → MainActor → `__fetchCallbacks` → JS
+     * Promise) can fire and settle the resolve.
+     */
+    suspend fun pluginResolveAsync(resolverId: String, artist: String, title: String): String? {
+        pluginManager.ensureInitialized()
+        val a = artist.replace("\\", "\\\\").replace("'", "\\'")
+        val t = title.replace("\\", "\\\\").replace("'", "\\'")
+        pluginJsRuntime.evaluate(
+            """
+            window.__lastPluginResult = 'pending';
+            (async () => {
+                try {
+                    var r = window.__resolverLoader.getResolver('$resolverId');
+                    if (!r || !r.resolve) { window.__lastPluginResult = 'null'; return; }
+                    var result = await r.resolve('$a', '$t', null, r.config || {});
+                    window.__lastPluginResult = result ? JSON.stringify(result) : 'null';
+                } catch (e) {
+                    window.__lastPluginResult = 'error: ' + ((e && e.message) ? e.message : String(e));
+                }
+            })();
+            """.trimIndent()
+        )
+        repeat(50) {
+            kotlinx.coroutines.delay(100)
+            val r = pluginJsRuntime.evaluate("window.__lastPluginResult")
+            if (r != null && r != "pending") {
+                return if (r == "null") null else r
+            }
+        }
+        return null
+    }
 
     /**
      * Weekly Jams / Weekly Exploration from ListenBrainz. Needs only the

@@ -10,6 +10,8 @@
 		AA0000000000000000000020 /* ParachordApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* ParachordApp.swift */; };
 		AA0000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* ContentView.swift */; };
 		AA0000000000000000000022 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* Assets.xcassets */; };
+		AA0000000000000000000029 /* resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* resolver-loader.js */; };
+		AA000000000000000000002A /* plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* plugins */; };
 		AA0000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* SettingsView.swift */; };
 		AA0000000000000000000024 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* RootView.swift */; };
 		AA0000000000000000000025 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000015 /* SearchView.swift */; };
@@ -29,6 +31,8 @@
 		AA0000000000000000000016 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000017 /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000018 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000019 /* resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
+		AA000000000000000000001A /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +73,8 @@
 				AA0000000000000000000016 /* NowPlayingView.swift */,
 				AA0000000000000000000017 /* DiscoverView.swift */,
 				AA0000000000000000000018 /* PlaylistDetailView.swift */,
+				AA0000000000000000000019 /* resolver-loader.js */,
+				AA000000000000000000001A /* plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
 			);
 			path = Parachord;
@@ -134,6 +140,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000022 /* Assets.xcassets in Resources */,
+				AA0000000000000000000029 /* resolver-loader.js in Resources */,
+				AA000000000000000000002A /* plugins in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

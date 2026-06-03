@@ -13,7 +13,7 @@ struct ContentView: View {
     @State private var playback = AppPlayback()
     /// Open on Discover — a music app landing on real content beats an
     /// empty Now Playing.
-    @State private var selectedTab = 1
+    @State private var selectedTab = 1  // Discover
 
     var body: some View {
         TabView(selection: $selectedTab) {

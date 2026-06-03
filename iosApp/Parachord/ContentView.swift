@@ -847,6 +847,85 @@ final class QueuePlaybackCoordinator {
 
 enum JsPolyfills {
 
+    /// Attach the `NativeBridge` object the bootstrap polyfills (in
+    /// `IosJsRuntime.BOOTSTRAP_JS`) reference — `log` / `fetchAsync` /
+    /// `storageGet` / `storageSet`, matching Android's `@JavascriptInterface`
+    /// surface so the same bootstrap + `.axe` plugins run unmodified.
+    ///
+    /// Called by the iOS plugin host (`IosContainer.pluginJsRuntime`) via
+    /// the `nativeBridgeInstaller` hook, BEFORE the bootstrap JS runs.
+    static func installNativeBridge(to context: JSContext) {
+        let bridge = JSValue(newObjectIn: context)!
+
+        let log: @convention(block) (String, String) -> Void = { level, message in
+            print("[plugin:\(level)] \(message)")
+        }
+        let storageGet: @convention(block) (String) -> String? = { key in
+            guard isAllowedStorageKey(key) else { return nil }
+            return UserDefaults.standard.string(forKey: key)
+        }
+        let storageSet: @convention(block) (String, String) -> Void = { key, value in
+            guard isAllowedStorageKey(key) else { return }
+            UserDefaults.standard.set(value, forKey: key)
+        }
+        let fetchAsync: @convention(block) (String, String, String, String, String) -> Void = {
+            callbackId, url, method, headersJson, body in
+            performFetch(
+                context: context,
+                callbackId: callbackId,
+                url: url, method: method, headersJson: headersJson, body: body
+            )
+        }
+
+        bridge.setObject(log, forKeyedSubscript: "log" as NSString)
+        bridge.setObject(storageGet, forKeyedSubscript: "storageGet" as NSString)
+        bridge.setObject(storageSet, forKeyedSubscript: "storageSet" as NSString)
+        bridge.setObject(fetchAsync, forKeyedSubscript: "fetchAsync" as NSString)
+        context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
+    }
+
+    /// Shared fetch implementation: URLSession → `{ok,status,body}`
+    /// envelope (matching Android's `NativeBridge.fetchAsync`) → resolve
+    /// the JS Promise via `window.__fetchCallbacks[callbackId]`.
+    private static func performFetch(
+        context: JSContext,
+        callbackId: String,
+        url: String, method: String, headersJson: String, body: String
+    ) {
+        guard let requestURL = URL(string: url) else {
+            fireFetchCallback(context: context, callbackId: callbackId,
+                              envelope: errorEnvelope("Invalid URL: \(url)"))
+            return
+        }
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = method
+        if let headersData = headersJson.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: headersData),
+           let headers = parsed as? [String: String] {
+            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        }
+        if !body.isEmpty { request.httpBody = body.data(using: .utf8) }
+        Task.detached {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let envelope: [String: Any] = [
+                    "ok": (200..<300).contains(status),
+                    "status": status,
+                    "body": String(data: data, encoding: .utf8) ?? "",
+                ]
+                await MainActor.run {
+                    fireFetchCallback(context: context, callbackId: callbackId, envelope: envelope)
+                }
+            } catch {
+                await MainActor.run {
+                    fireFetchCallback(context: context, callbackId: callbackId,
+                                      envelope: errorEnvelope(error.localizedDescription))
+                }
+            }
+        }
+    }
+
     /// Attach a `console.log` / info / warn / error / debug polyfill
     /// that routes through `__nativeLog(level, message)` to the
     /// caller-provided `onLog` closure. Fires synchronously inside the
@@ -1143,6 +1222,11 @@ struct DevSmokeTestView: View {
     @State private var jsConsoleOutput: [String] = []
     @State private var jsPolyfillsAttached = false
 
+    @State private var pluginIds: [String] = []
+    @State private var pluginResolveResult: String?
+    @State private var pluginLoading = false
+    @State private var pluginError: String?
+
     @State private var avPlayer = IosAVPlayer()
     @State private var queue: QueuePlaybackCoordinator?
     @State private var musicKit = IosMusicKitPlayer()
@@ -1156,6 +1240,7 @@ struct DevSmokeTestView: View {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 resolverScoringCard
+                pluginHostCard
                 queueCard
                 avPlayerCard
                 musicKitCard
@@ -1758,6 +1843,92 @@ struct DevSmokeTestView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+
+    // MARK: - Cross-platform .axe plugin host
+
+    private var pluginHostCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(".axe plugin host (cross-platform)")
+                .font(.headline)
+
+            Text(
+                "Loads resolver-loader.js + the bundled .axe plugins into " +
+                "JavaScriptCore via the SHARED PluginManager — the same host " +
+                "as desktop + Android. Swift provides NativeBridge " +
+                "(log/fetch/storage); the plugins run unmodified."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if pluginLoading {
+                ProgressView()
+            }
+
+            if !pluginIds.isEmpty {
+                Text("Loaded \(pluginIds.count) plugins:")
+                    .font(.caption.weight(.semibold))
+                Text(pluginIds.joined(separator: ", "))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+            }
+
+            if let pluginResolveResult {
+                Divider()
+                Text("resolve(\"Spoon\", \"The Underdog\"):")
+                    .font(.caption.weight(.semibold))
+                Text(pluginResolveResult)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(pluginResolveResult.hasPrefix("error") ? .red : .green)
+                    .lineLimit(4)
+            }
+
+            if let pluginError {
+                Text(pluginError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .task {
+            if pluginIds.isEmpty && pluginError == nil {
+                await runPluginHost()
+            }
+        }
+    }
+
+    private func runPluginHost() async {
+        pluginLoading = true
+        let container = IosContainer.companion.shared
+        // Attach the NativeBridge the bootstrap polyfills reference, BEFORE
+        // PluginManager initializes the runtime.
+        container.pluginJsRuntime.nativeBridgeInstaller = { ctx in
+            JsPolyfills.installNativeBridge(to: ctx)
+        }
+        do {
+            let ids = try await container.loadPluginsAndList()
+            pluginIds = ids
+            // Resolve via SoundCloud's no-auth public API to prove the plugin
+            // code executes end-to-end in JSC (load → fetch → parse → result).
+            // pluginResolveAsync awaits the resolver's async Promise properly
+            // (polls window.__lastPluginResult) instead of reading [object
+            // Promise] off the bare IIFE.
+            let resolverId = ids.contains("soundcloud") ? "soundcloud"
+                           : ids.contains("listenbrainz") ? "listenbrainz" : nil
+            if let resolverId {
+                let result = try await container.pluginResolveAsync(
+                    resolverId: resolverId,
+                    artist: "Spoon",
+                    title: "The Underdog"
+                )
+                pluginResolveResult = "[\(resolverId)] " + (result ?? "(no match / null)")
+            }
+        } catch {
+            pluginError = "error: \(error.localizedDescription)"
+        }
+        pluginLoading = false
     }
 
     // MARK: - Phase 4.1 (JavaScriptCore)
