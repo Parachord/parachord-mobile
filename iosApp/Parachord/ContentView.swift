@@ -4,6 +4,112 @@ import JavaScriptCore
 import AVFoundation
 import Combine
 import MediaPlayer
+import MusicKit
+
+// `import MusicKit` introduces `MusicKit.Track`, which collides with the
+// shared module's `Track` model. Disambiguate every plain `Track` in
+// this file to the KMP one. (MusicKit's own Track is never used here —
+// we resolve catalog items as `Song`.)
+typealias Track = Shared.Track
+
+// MARK: - MusicKit player (phase 4.7)
+//
+// Native Apple Music playback via the MusicKit framework's
+// `ApplicationMusicPlayer.shared`. This is dramatically simpler than
+// Android's approach (a hidden WebView hosting MusicKit JS with all
+// the WebView-lifecycle / GPU-layer / background-ANR workarounds in
+// CLAUDE.md) — on iOS, MusicKit is a first-class framework.
+//
+// ## Verification status
+//
+// This class compiles and `authorizationStatus` (read-only) works
+// with just the `NSAppleMusicUsageDescription` Info.plist string.
+// Three things gate ACTUAL catalog playback, none of which can be
+// done headlessly:
+//   1. The MusicKit *entitlement* — enable via Xcode → Signing &
+//      Capabilities → + Capability → MusicKit (adds
+//      `com.apple.developer.musickit` + updates the provisioning
+//      profile). Deliberately NOT added to the build here because an
+//      entitlement the provisioning profile doesn't include breaks
+//      code-signing.
+//   2. `MusicAuthorization.request()` showing the system prompt and
+//      the user granting access.
+//   3. An active Apple Music subscription + a signed-in account on the
+//      device (the simulator usually has neither).
+//
+// So `requestAuthorization()` + `play(appleMusicId:)` are written and
+// correct, but the smoke-test card only exercises the read-only
+// `currentStatus` until the capability is enabled on a real device.
+
+@Observable
+final class IosMusicKitPlayer {
+
+    /// Current Apple Music authorization. Read-only access works with
+    /// just the usage-description string; no entitlement needed.
+    var authorizationStatus: String = MusicAuthorization.currentStatus.shortName
+
+    var nowPlayingTitle: String = ""
+    var isPlaying = false
+    var lastError: String?
+
+    /// Request Apple Music access. Shows the system prompt IF the
+    /// MusicKit entitlement is present; without it this resolves to
+    /// `.denied` (or errors) — see the verification note above.
+    @MainActor
+    func requestAuthorization() async {
+        let status = await MusicAuthorization.request()
+        authorizationStatus = status.shortName
+    }
+
+    /// Play an Apple Music catalog song by its numeric catalog ID
+    /// (the `appleMusicId` field already on `Track`). Resolves the ID
+    /// to a `Song` via a catalog request, then hands it to the shared
+    /// application player.
+    @MainActor
+    func play(appleMusicId: String) async {
+        lastError = nil
+        guard MusicAuthorization.currentStatus == .authorized else {
+            lastError = "Not authorized for Apple Music"
+            return
+        }
+        do {
+            let request = MusicCatalogResourceRequest<Song>(
+                matching: \.id,
+                equalTo: MusicItemID(appleMusicId)
+            )
+            let response = try await request.response()
+            guard let song = response.items.first else {
+                lastError = "Catalog song \(appleMusicId) not found"
+                return
+            }
+            let player = ApplicationMusicPlayer.shared
+            player.queue = [song]
+            try await player.play()
+            nowPlayingTitle = song.title
+            isPlaying = true
+        } catch {
+            lastError = "Playback failed: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    func pause() {
+        ApplicationMusicPlayer.shared.pause()
+        isPlaying = false
+    }
+}
+
+private extension MusicAuthorization.Status {
+    var shortName: String {
+        switch self {
+        case .notDetermined: "notDetermined"
+        case .denied: "denied"
+        case .restricted: "restricted"
+        case .authorized: "authorized"
+        @unknown default: "unknown"
+        }
+    }
+}
 
 // MARK: - AVPlayer engine (phase 4.4)
 //
@@ -741,6 +847,7 @@ struct ContentView: View {
 
     @State private var avPlayer = IosAVPlayer()
     @State private var queue: QueuePlaybackCoordinator?
+    @State private var musicKit = IosMusicKitPlayer()
 
     var body: some View {
         ScrollView {
@@ -749,6 +856,7 @@ struct ContentView: View {
                 resolverScoringCard
                 queueCard
                 avPlayerCard
+                musicKitCard
                 jsRuntimeCard
                 mosaicSmokeTestCard
                 ktorSmokeTestCard
@@ -1202,6 +1310,49 @@ struct ContentView: View {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
         let s = Int(seconds)
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    // MARK: - Phase 4.7 (MusicKit)
+
+    private var musicKitCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("MusicKit (Phase 4.7)")
+                .font(.headline)
+            Text(
+                "Native Apple Music via `ApplicationMusicPlayer.shared` — " +
+                "no WebView/JS bridge like Android. Auth status reads with " +
+                "just the usage-description string; requesting access + " +
+                "catalog playback need the MusicKit capability (Xcode → " +
+                "Signing & Capabilities → + MusicKit), an Apple Music " +
+                "subscription, and a real device."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            HStack {
+                Text("authorization:")
+                    .font(.callout)
+                Text(musicKit.authorizationStatus)
+                    .font(.callout.monospaced())
+                    .foregroundStyle(
+                        musicKit.authorizationStatus == "authorized" ? .green : .orange
+                    )
+                Spacer()
+                Button("Request") {
+                    Task { await musicKit.requestAuthorization() }
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if let error = musicKit.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Phase 4.1 (JavaScriptCore)

@@ -23,6 +23,17 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<!--
+	  Required before MusicKit's MusicAuthorization.request() can show
+	  the Apple Music access prompt. Safe to ship without the MusicKit
+	  *entitlement* — reading MusicAuthorization.currentStatus works
+	  with just this string; actually requesting access + playing
+	  catalog tracks additionally needs the MusicKit capability enabled
+	  on the App ID (Xcode → Signing & Capabilities → + → MusicKit) and
+	  an Apple Music subscription on the device.
+	-->
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Parachord uses Apple Music to play tracks resolved to the Apple Music catalog.</string>
+	<!--
 	  UIBackgroundModes: `audio` keeps AVPlayer / MusicKit / Spotify
 	  Connect playback alive when the app is backgrounded or the screen
 	  is locked. Without it, iOS suspends the process on background and
