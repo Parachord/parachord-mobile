@@ -47,6 +47,11 @@ final class IosAVPlayer {
     // MPNowPlayingInfoCenter and back to the UI as a read-back proof.
     var nowPlayingTitle: String = ""
     var nowPlayingArtist: String = ""
+
+    /// Fired when the current item plays to its end. The queue
+    /// coordinator (phase 4.6) sets this to auto-advance. Nil by
+    /// default, so standalone single-track use just stops at the end.
+    var onTrackEnded: (() -> Void)?
     /// The last keys we pushed to MPNowPlayingInfoCenter — displayed in
     /// the smoke-test card so the lock-screen wiring is observable in
     /// the simulator (where photographing the actual lock screen is
@@ -141,6 +146,9 @@ final class IosAVPlayer {
         ) { [weak self] _ in
             self?.isPlaying = false
             self?.status = .paused
+            // Auto-advance if a queue coordinator is attached;
+            // otherwise the track just ends.
+            self?.onTrackEnded?()
         }
         player = newPlayer
         loadedURL = url
@@ -286,6 +294,142 @@ final class IosAVPlayer {
         loadedURL = nil
         status = .idle
         errorMessage = nil
+    }
+}
+
+// MARK: - Queue playback coordinator (phase 4.6)
+//
+// Bridges the SHARED `QueueManager` (KMP, already in Shared.framework)
+// to the iOS `IosAVPlayer`. No queue logic is reimplemented in Swift —
+// `QueueManager` owns upNext / history / shuffle / setQueue / skipNext /
+// skipPrevious / playFromQueue exactly as it does on Android. This
+// coordinator just:
+//   - holds the QueueManager + player
+//   - on each queue mutation, reads `queueManager.snapshot.value`
+//     (synchronous — we're the mutator, so no Flow collection needed)
+//     and republishes it as Swift @Observable state for SwiftUI
+//   - loads + plays the track QueueManager hands back
+//   - auto-advances when the player reports a track ended
+//   - routes the lock-screen skip commands to real next/previous track
+//
+// This is the iOS analogue of Android's PlaybackController queue half.
+// Resolver routing (mapping Track.resolver → AVPlayer / MusicKit /
+// Spotify Connect) is a follow-up; for now every track plays through
+// AVPlayer via its `sourceUrl`.
+
+@Observable
+final class QueuePlaybackCoordinator {
+
+    let player: IosAVPlayer
+    private let queueManager = QueueManager()
+
+    /// Republished from `QueueManager.snapshot.value` after every
+    /// mutation so SwiftUI can render the up-next list reactively.
+    var currentTrack: Track?
+    var upNext: [Track] = []
+    var shuffleEnabled = false
+
+    init(player: IosAVPlayer) {
+        self.player = player
+        // Auto-advance: when AVPlayer reports the item ended, pull the
+        // next track from the shared QueueManager and play it.
+        self.player.onTrackEnded = { [weak self] in
+            self?.skipNext()
+        }
+    }
+
+    /// Establish a new queue and start playing the track at
+    /// `startIndex`. Mirrors `PlaybackEngine.setQueue`.
+    func setQueue(_ tracks: [Track], startIndex: Int) {
+        let toPlay = queueManager.setQueue(
+            tracks: tracks,
+            startIndex: Int32(startIndex),
+            context: nil,
+            shuffle: shuffleEnabled
+        )
+        syncSnapshot()
+        if let track = toPlay {
+            playTrack(track)
+        }
+    }
+
+    func skipNext() {
+        guard let next = queueManager.skipNext(currentTrack: currentTrack) else {
+            // Queue exhausted — stop cleanly.
+            player.stop()
+            currentTrack = nil
+            syncSnapshot()
+            return
+        }
+        syncSnapshot()
+        playTrack(next)
+    }
+
+    func skipPrevious() {
+        // Match desktop/Android: if we're more than ~3s into the track,
+        // "previous" restarts the current track instead of going back.
+        if player.currentTime > 3, currentTrack != nil {
+            player.seek(to: 0)
+            return
+        }
+        guard let prev = queueManager.skipPrevious(currentTrack: currentTrack) else {
+            player.seek(to: 0)
+            return
+        }
+        syncSnapshot()
+        playTrack(prev)
+    }
+
+    /// User tapped a track in the up-next list.
+    func playFromQueue(_ index: Int) {
+        guard let track = queueManager.playFromQueue(
+            index: Int32(index),
+            currentTrack: currentTrack
+        ) else { return }
+        syncSnapshot()
+        playTrack(track)
+    }
+
+    func toggleShuffle() {
+        shuffleEnabled = queueManager.toggleShuffle()
+        syncSnapshot()
+    }
+
+    private func playTrack(_ track: Track) {
+        currentTrack = track
+        guard let url = track.sourceUrl else {
+            // No resolved URL — in production this is where resolver
+            // routing kicks in. For the smoke test every track carries
+            // a direct sourceUrl, so a nil here means skip ahead.
+            skipNext()
+            return
+        }
+        player.load(url: url, title: track.title, artist: track.artist)
+        // Poll for ready, then play. Item.status flips asynchronously.
+        Task { @MainActor in
+            for _ in 0..<40 {
+                if player.status == .ready || player.status == .paused {
+                    player.play()
+                    return
+                }
+                if player.status == .failed { return }
+                try? await Task.sleep(nanoseconds: 150_000_000)
+            }
+        }
+    }
+
+    /// Pull the latest snapshot from the shared QueueManager and mirror
+    /// it into Swift @Observable properties. Reads `.value` directly —
+    /// safe because every call happens immediately after a mutation we
+    /// performed on the same actor, so there's no need to collect the
+    /// StateFlow asynchronously.
+    private func syncSnapshot() {
+        // Kotlin `StateFlow<QueueSnapshot>.value` bridges to Swift as
+        // `Any?` (the generic erases), so cast back to the concrete
+        // snapshot type.
+        guard let snap = queueManager.snapshot.value as? QueueSnapshot else { return }
+        upNext = snap.upNext
+        shuffleEnabled = snap.shuffleEnabled
     }
 }
 
@@ -596,12 +740,14 @@ struct ContentView: View {
     @State private var jsPolyfillsAttached = false
 
     @State private var avPlayer = IosAVPlayer()
+    @State private var queue: QueuePlaybackCoordinator?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
                 resolverScoringCard
+                queueCard
                 avPlayerCard
                 jsRuntimeCard
                 mosaicSmokeTestCard
@@ -903,30 +1049,146 @@ struct ContentView: View {
         .padding()
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        // Auto-load + start on first appear so the screenshot harness
-        // can observe the full path (audio session activation, item
-        // ready-state, periodic time observer firing, slider updating)
-        // without needing to script a synthetic button tap.
-        .task {
-            if avPlayer.status == .idle {
-                avPlayer.load(
-                    url: Self.testAudioURL,
-                    title: "SoundHelix Song 1",
-                    artist: "T. Schürger"
-                )
-                // Poll for ready (item.status hits .readyToPlay
-                // asynchronously after the first frame parses). Bail
-                // on failure, time out at 8s on slow networks.
-                for _ in 0..<40 {
-                    if avPlayer.status == .ready || avPlayer.status == .paused {
-                        avPlayer.play()
-                        return
-                    }
-                    if avPlayer.status == .failed { return }
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                }
+        // No auto-play here in phase 4.6 — the queue card below owns the
+        // single shared `avPlayer` and drives it through a multi-track
+        // queue. This card is now the transport + now-playing view of
+        // whatever the queue is playing.
+    }
+
+    // MARK: - Phase 4.6 (queue coordinator)
+
+    /// Three stable free-stream SoundHelix tracks for the queue demo.
+    private static let queueTracks: [(title: String, url: String)] = [
+        ("SoundHelix Song 1", "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3"),
+        ("SoundHelix Song 2", "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3"),
+        ("SoundHelix Song 3", "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3"),
+    ]
+
+    private var queueCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Queue (Phase 4.6)")
+                .font(.headline)
+            queueBlurb
+            if let queue {
+                queueControls(queue)
+                queueNowPlaying(queue)
+                queueUpNext(queue)
             }
         }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        // Stand up the coordinator (wrapping the shared avPlayer) on
+        // first appear and load a 3-track queue. Auto-plays track 1
+        // immediately; the queue drives auto-advance on track end.
+        .task {
+            if queue == nil {
+                let coordinator = QueuePlaybackCoordinator(player: avPlayer)
+                queue = coordinator
+                let tracks = Self.queueTracks.enumerated().map { idx, t in
+                    Self.makeTrack(id: "smoke-queue-\(idx)", title: t.title, url: t.url)
+                }
+                coordinator.setQueue(tracks, startIndex: 0)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var queueBlurb: some View {
+        Text(
+            "Shared KMP `QueueManager` drives the iOS `IosAVPlayer` " +
+            "through a 3-track queue. No queue logic reimplemented in " +
+            "Swift — setQueue / skipNext / skipPrevious / playFromQueue " +
+            "/ shuffle all run in the shared module exactly as on Android."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private func queueControls(_ queue: QueuePlaybackCoordinator) -> some View {
+        HStack(spacing: 8) {
+            Button("◀ prev") { queue.skipPrevious() }
+                .buttonStyle(.bordered)
+            Button("next ▶") { queue.skipNext() }
+                .buttonStyle(.bordered)
+            Button(queue.shuffleEnabled ? "shuffle: on" : "shuffle: off") {
+                queue.toggleShuffle()
+            }
+            .buttonStyle(.bordered)
+            .tint(queue.shuffleEnabled ? .accentColor : .gray)
+            Spacer()
+        }
+    }
+
+    @ViewBuilder
+    private func queueNowPlaying(_ queue: QueuePlaybackCoordinator) -> some View {
+        if let current = queue.currentTrack {
+            HStack {
+                Image(systemName: "play.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+                Text("Now: \(current.title)")
+                    .font(.callout.weight(.medium))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func queueUpNext(_ queue: QueuePlaybackCoordinator) -> some View {
+        if !queue.upNext.isEmpty {
+            Text("Up Next (\(queue.upNext.count))")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(Array(queue.upNext.enumerated()), id: \.offset) { index, track in
+                Button {
+                    queue.playFromQueue(index)
+                } label: {
+                    HStack {
+                        Text("\(index + 1).")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text(track.title)
+                            .font(.callout)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        } else if queue.currentTrack != nil {
+            Text("queue exhausted")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Build a shared `Track` for the queue demo. Broken out of the
+    /// `.map` closure because the 19-parameter Kotlin-bridged
+    /// initializer overwhelms Swift's inline type-checker inside a
+    /// trailing closure. An explicit return type + statement context
+    /// keeps the build fast.
+    private static func makeTrack(id: String, title: String, url: String) -> Track {
+        return Track(
+            id: id,
+            title: title,
+            artist: "T. Schürger",
+            album: nil,
+            albumId: nil,
+            duration: nil,
+            artworkUrl: nil,
+            sourceType: "direct",
+            sourceUrl: url,
+            addedAt: 0,
+            resolver: "direct",
+            spotifyUri: nil,
+            soundcloudId: nil,
+            spotifyId: nil,
+            appleMusicId: nil,
+            recordingMbid: nil,
+            artistMbid: nil,
+            releaseMbid: nil,
+            crossResolverEnrichedAt: nil
+        )
     }
 
     private var loadButtonLabel: String {
