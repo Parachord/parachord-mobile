@@ -13,11 +13,40 @@ import Shared
 final class DiscoverViewModel {
 
     private let container = IosContainer.companion.shared
+    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+    private var subscription: Cancellable?
+    private var debounceTask: Task<Void, Never>?
+    private var lastUsername: String?
 
     var jams: [IosWeeklyEntry] = []
     var exploration: [IosWeeklyEntry] = []
     var isLoading = false
     var loaded = false
+
+    /// Observe the ListenBrainz username and (re)load Weekly playlists when
+    /// it changes — so setting it in Settings reflects here WITHOUT an app
+    /// restart (the previous `.task`-once load never reacted to the username
+    /// changing). The flow emits the current value on subscribe, which drives
+    /// the initial load. The Settings field persists per keystroke, so a burst
+    /// of edits is debounced into a single fetch.
+    func start() {
+        guard subscription == nil else { return }
+        subscription = watcher.watch(flow: container.settingsStore.getListenBrainzUsernameFlow()) { [weak self] value in
+            let username = (value as? String) ?? ""
+            Task { @MainActor in self?.onUsernameChanged(username) }
+        }
+    }
+
+    private func onUsernameChanged(_ username: String) {
+        guard username != lastUsername else { return }
+        lastUsername = username
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            await self.load(forceRefresh: true)
+        }
+    }
 
     func load(forceRefresh: Bool = false) async {
         isLoading = true
@@ -48,9 +77,7 @@ struct DiscoverView: View {
             }
             .navigationTitle("Discover")
         }
-        .task {
-            if !model.loaded { await model.load(forceRefresh: true) }
-        }
+        .task { model.start() }
     }
 
     private var emptyState: some View {
