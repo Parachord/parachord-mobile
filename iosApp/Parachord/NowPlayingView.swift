@@ -12,12 +12,24 @@ import Shared
 @Observable
 final class AppPlayback {
     let player: IosAVPlayer
+    let musicKit: IosMusicKitPlayer
+    let spotify: IosSpotifyConnect
     let coordinator: QueuePlaybackCoordinator
 
+    @MainActor
     init() {
         let p = IosAVPlayer()
+        let mk = IosMusicKitPlayer()
+        let sp = IosSpotifyConnect()
         self.player = p
-        self.coordinator = QueuePlaybackCoordinator(player: p)
+        self.musicKit = mk
+        self.spotify = sp
+        self.coordinator = QueuePlaybackCoordinator(
+            player: p,
+            musicKit: mk,
+            spotify: sp,
+            resolverCache: IosTrackResolverCache.shared
+        )
     }
 
     /// Until a Library / resolver path feeds real tracks, this seeds a

@@ -732,15 +732,23 @@ final class IosAVPlayer {
 //   - routes the lock-screen skip commands to real next/previous track
 //
 // This is the iOS analogue of Android's PlaybackController queue half.
-// Resolver routing (mapping Track.resolver → AVPlayer / MusicKit /
-// Spotify Connect) is a follow-up; for now every track plays through
-// AVPlayer via its `sourceUrl`.
+// playTrack closes the loop: cache → on-the-fly resolve → PlaybackRouter →
+// the right engine (AVPlayer / MusicKit / Spotify Connect), with unified
+// engine-agnostic now-playing state for the UI.
 
 @Observable
 final class QueuePlaybackCoordinator {
 
     let player: IosAVPlayer
+    let musicKit: IosMusicKitPlayer
+    let spotify: IosSpotifyConnect
+    private let resolverCache: IosTrackResolverCache
+    private let container = IosContainer.companion.shared
     private let queueManager = QueueManager()
+
+    private var router: PlaybackRouter {
+        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify)
+    }
 
     /// Republished from `QueueManager.snapshot.value` after every
     /// mutation so SwiftUI can render the up-next list reactively.
@@ -748,12 +756,54 @@ final class QueuePlaybackCoordinator {
     var upNext: [Track] = []
     var shuffleEnabled = false
 
-    init(player: IosAVPlayer) {
+    /// Which engine the current track is playing on. The UI reads unified
+    /// state below so it doesn't care which one.
+    var activeEngine: PlaybackEngineKind = .avPlayer
+
+    // ── Unified now-playing state (engine-agnostic) ────────────────────
+    // AVPlayer exposes real position; MusicKit/Spotify report play state
+    // only for v1 (position best-effort/zero — a follow-up).
+    var isPlaying: Bool {
+        switch activeEngine {
+        case .avPlayer: return player.isPlaying
+        case .musicKit: return musicKit.isPlaying
+        case .spotify: return false
+        }
+    }
+    var currentTime: Double { activeEngine == .avPlayer ? player.currentTime : 0 }
+    var duration: Double { activeEngine == .avPlayer ? player.duration : 0 }
+
+    init(
+        player: IosAVPlayer,
+        musicKit: IosMusicKitPlayer,
+        spotify: IosSpotifyConnect,
+        resolverCache: IosTrackResolverCache
+    ) {
         self.player = player
+        self.musicKit = musicKit
+        self.spotify = spotify
+        self.resolverCache = resolverCache
         // Auto-advance: when AVPlayer reports the item ended, pull the
-        // next track from the shared QueueManager and play it.
+        // next track from the shared QueueManager and play it. (External
+        // engines don't emit this to us yet — manual Next works; auto-
+        // advance for MusicKit/Spotify is a documented follow-up.)
         self.player.onTrackEnded = { [weak self] in
             self?.skipNext()
+        }
+    }
+
+    /// Engine-agnostic play/pause toggle for the mini player + Now Playing.
+    func togglePlayPause() {
+        switch activeEngine {
+        case .avPlayer:
+            player.isPlaying ? player.pause() : player.play()
+        case .musicKit:
+            Task { @MainActor in
+                if musicKit.isPlaying { musicKit.pause() }
+                else if let id = currentTrack?.appleMusicId { await musicKit.play(appleMusicId: id) }
+            }
+        case .spotify:
+            break
         }
     }
 
@@ -816,15 +866,40 @@ final class QueuePlaybackCoordinator {
 
     private func playTrack(_ track: Track) {
         currentTrack = track
-        guard let url = track.sourceUrl else {
-            // No resolved URL — in production this is where resolver
-            // routing kicks in. For the smoke test every track carries
-            // a direct sourceUrl, so a nil here means skip ahead.
-            skipNext()
-            return
+        Task { @MainActor in
+            // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
+            // play straight through AVPlayer, no resolver round-trip.
+            if let url = track.sourceUrl, !url.isEmpty,
+               resolverCache.cached(artist: track.artist, title: track.title, album: track.album) == nil {
+                activeEngine = .avPlayer
+                player.load(url: url, title: track.title, artist: track.artist)
+                startAVPlaybackWhenReady()
+                return
+            }
+
+            // Two-layer resolution: cache (background pre-resolved) first,
+            // on-the-fly fallback on a miss.
+            var ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album)
+            if ranked == nil || ranked!.isEmpty {
+                ranked = (try? await container.resolveSources(
+                    artist: track.artist, title: track.title, album: track.album)) ?? []
+            }
+
+            let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist)
+            switch result {
+            case .played(let kind):
+                activeEngine = kind
+                if kind == .avPlayer { startAVPlaybackWhenReady() }
+            case .noPlayableSource:
+                // Resolved but no engine could play it (e.g. Apple-Music-only
+                // match with no subscription) — advance to the next track.
+                skipNext()
+            }
         }
-        player.load(url: url, title: track.title, artist: track.artist)
-        // Poll for ready, then play. Item.status flips asynchronously.
+    }
+
+    /// Poll the async AVPlayerItem status, then play once it's ready.
+    private func startAVPlaybackWhenReady() {
         Task { @MainActor in
             for _ in 0..<40 {
                 if player.status == .ready || player.status == .paused {
@@ -1601,7 +1676,12 @@ struct DevSmokeTestView: View {
         // immediately; the queue drives auto-advance on track end.
         .task {
             if queue == nil {
-                let coordinator = QueuePlaybackCoordinator(player: avPlayer)
+                let coordinator = QueuePlaybackCoordinator(
+                    player: avPlayer,
+                    musicKit: IosMusicKitPlayer(),
+                    spotify: IosSpotifyConnect(),
+                    resolverCache: IosTrackResolverCache.shared
+                )
                 queue = coordinator
                 let tracks = Self.queueTracks.enumerated().map { idx, t in
                     Self.makeTrack(id: "smoke-queue-\(idx)", title: t.title, url: t.url)
