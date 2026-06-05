@@ -22,6 +22,7 @@ import com.parachord.shared.sync.SyncProvider
 import com.parachord.shared.sync.SyncSettings
 import com.parachord.shared.sync.SyncSettingsProvider
 import com.parachord.shared.sync.SyncedPlaylist
+import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -85,6 +86,7 @@ class ListenBrainzPushShortCircuitTest {
             syncPlaylistSourceDao = sourceDao,
             settingsStore = settings,
             providers = listOf(provider),
+            tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
         )
 
         suspend fun seedLocalPlaylist(id: String, name: String, trackCount: Int = 2) {

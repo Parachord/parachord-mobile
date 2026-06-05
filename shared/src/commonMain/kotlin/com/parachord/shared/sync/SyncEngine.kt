@@ -44,6 +44,7 @@ class SyncEngine constructor(
      * + cast` indirection goes away when those bodies are generalized.
      */
     private val providers: List<com.parachord.shared.sync.SyncProvider>,
+    private val tombstones: TrackTombstoneService,
 ) {
 
     private val spotifyProvider: SpotifySyncProvider
@@ -2284,6 +2285,12 @@ class SyncEngine constructor(
     suspend fun onTrackRemoved(track: Track) {
         val sources = syncSourceDao.getByItem(track.id, "track")
         val providersById = providers.associateBy { it.id }
+        // Tombstone EVERY synced provider for this track up front, so a failed or
+        // unsupported remote removal can't be undone by the next sync's re-import (#172).
+        val entries = sources.mapNotNull { s ->
+            s.externalId?.let { TombstoneEntry(s.providerId, it) }
+        }
+        if (entries.isNotEmpty()) tombstones.addAll(entries)
         for (source in sources) {
             val externalId = source.externalId ?: continue
             val provider = providersById[source.providerId] ?: continue

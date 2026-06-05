@@ -22,6 +22,7 @@ import com.parachord.shared.sync.SyncProvider
 import com.parachord.shared.sync.SyncSettings
 import com.parachord.shared.sync.SyncSettingsProvider
 import com.parachord.shared.sync.SyncedPlaylist
+import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -99,6 +100,7 @@ class SyncEngineIdempotencyTest {
             syncPlaylistSourceDao = sourceDao,
             settingsStore = settings,
             providers = listOf(provider),
+            tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
         )
 
         /** Seed a local push-candidate playlist (`local-*`) with [trackCount] tracks. */
