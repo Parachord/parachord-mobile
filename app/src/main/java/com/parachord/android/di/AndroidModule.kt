@@ -537,6 +537,7 @@ val androidModule = module {
             // LovesPushService is fire-and-forget internally; this lambda
             // returns immediately.
             pushLovedTrack = { track -> lovesPush.pushLoved(track) },
+            tombstones = get(),
         )
     }
     // ChartsRepository takes `lastFmApiKey` as a constructor parameter

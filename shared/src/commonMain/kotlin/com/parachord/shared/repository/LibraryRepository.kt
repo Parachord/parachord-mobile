@@ -15,6 +15,7 @@ import com.parachord.shared.model.Track
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.platform.randomUUID
 import com.parachord.shared.sync.SyncEngine
+import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -53,6 +54,14 @@ class LibraryRepository(
      * no-op so non-Android consumers and tests don't need to provide one.
      */
     private val pushLovedTrack: (Track) -> Unit = {},
+    /**
+     * Track tombstone facade (#172). User-intent add paths ([addTrack] /
+     * [addTracks]) clear a track's tombstones so a deliberately re-added
+     * track may be re-imported by sync. NEVER cleared from the sync-import
+     * path — that goes through `trackDao.insertAll` in `SyncEngine`, not
+     * here, and the tombstone filter already blocks re-import there.
+     */
+    private val tombstones: TrackTombstoneService,
 ) {
 
     /**
@@ -103,6 +112,8 @@ class LibraryRepository(
         val existing = trackDao.getById(track.id)
         // Preserve the synced addedAt timestamp if one exists
         trackDao.insert(if (existing != null) track.copy(addedAt = existing.addedAt) else track)
+        // User re-adding a track clears its tombstones so sync may re-import it (#172).
+        tombstones.clearAll(TrackTombstoneService.deriveTombstoneEntries(track))
         // Background MBID enrichment
         mbidEnrichTrack(track.id, track.artist, track.title)
     }
@@ -125,6 +136,9 @@ class LibraryRepository(
 
     suspend fun addTracks(tracks: List<Track>) {
         trackDao.insertAll(tracks)
+        // User re-adding tracks clears their tombstones so sync may re-import them (#172).
+        val entries = tracks.flatMap { TrackTombstoneService.deriveTombstoneEntries(it) }
+        if (entries.isNotEmpty()) tombstones.clearAll(entries)
         // Background MBID enrichment for batch imports
         mbidEnrichBatch(tracks)
     }
