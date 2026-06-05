@@ -222,6 +222,20 @@ class IosJsRuntime : JsRuntime {
                 };
                 window.nativeFetch = window.fetch;
 
+                // iTunesRateLimiter — applemusic.axe calls
+                // `window.iTunesRateLimiter.fetch(url)` for its no-auth iTunes
+                // Search lookups. The desktop/Android hosts provide this global;
+                // it is NOT defined in any .axe or resolver-loader.js. On Android
+                // it never surfaced because the NATIVE applemusic resolver runs
+                // (native-first), so the .axe resolve() is never invoked. iOS is
+                // .axe-only, so the plugin host must supply it. Passthrough —
+                // JSC has no setTimeout for an inter-request gap, and request
+                // throttling is handled a layer up by IosTrackResolverCache's
+                // concurrency cap.
+                window.iTunesRateLimiter = {
+                    fetch: function(url, options) { return window.fetch(url, options); }
+                };
+
                 // Storage — scoped per-plugin via createPluginStorage; the
                 // native side enforces the plugin.* / parachord.* allowlist.
                 window.createPluginStorage = function(pluginId) {

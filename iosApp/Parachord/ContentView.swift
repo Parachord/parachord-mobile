@@ -858,7 +858,9 @@ enum JsPolyfills {
         let bridge = JSValue(newObjectIn: context)!
 
         let log: @convention(block) (String, String) -> Void = { level, message in
-            print("[plugin:\(level)] \(message)")
+            // NSLog (not print) so .axe / resolver-loader console output is
+            // captured by `xcrun simctl log stream` for on-device debugging.
+            NSLog("[plugin:%@] %@", level, message)
         }
         let storageGet: @convention(block) (String) -> String? = { key in
             guard isAllowedStorageKey(key) else { return nil }
@@ -1910,20 +1912,22 @@ struct DevSmokeTestView: View {
         do {
             let ids = try await container.loadPluginsAndList()
             pluginIds = ids
-            // Resolve via SoundCloud's no-auth public API to prove the plugin
-            // code executes end-to-end in JSC (load → fetch → parse → result).
-            // pluginResolveAsync awaits the resolver's async Promise properly
-            // (polls window.__lastPluginResult) instead of reading [object
-            // Promise] off the bare IIFE.
-            let resolverId = ids.contains("soundcloud") ? "soundcloud"
-                           : ids.contains("listenbrainz") ? "listenbrainz" : nil
-            if let resolverId {
-                let result = try await container.pluginResolveAsync(
-                    resolverId: resolverId,
-                    artist: "Spoon",
-                    title: "The Underdog"
-                )
-                pluginResolveResult = "[\(resolverId)] " + (result ?? "(no match / null)")
+            // Drive the full iOS resolver pipeline: IosResolverCoordinator
+            // fans out resolve() across stream-capable resolvers concurrently
+            // (unique JSC result keys, no clobber), re-scores via
+            // scoreConfidence, and ranks via selectRanked. Proves the
+            // coordinator end-to-end before the UI layers sit on top.
+            let ranked = try await container.resolveSources(
+                artist: "Spoon",
+                title: "The Underdog",
+                album: nil
+            )
+            if ranked.isEmpty {
+                pluginResolveResult = "(no source above 0.60 floor)"
+            } else {
+                pluginResolveResult = ranked
+                    .map { "\($0.resolver)@\(String(format: "%.2f", $0.confidence?.doubleValue ?? 0))" }
+                    .joined(separator: ", ")
             }
         } catch {
             pluginError = "error: \(error.localizedDescription)"

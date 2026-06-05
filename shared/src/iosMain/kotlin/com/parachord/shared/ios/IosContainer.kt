@@ -11,6 +11,8 @@ import com.parachord.shared.config.AppConfig
 import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
+import com.parachord.shared.resolver.ResolvedSource
+import com.parachord.shared.resolver.ResolverScoring
 import com.parachord.shared.repository.WeeklyPlaylistEntry
 import com.parachord.shared.repository.WeeklyPlaylistsRepository
 import com.parachord.shared.settings.SettingsStore
@@ -167,6 +169,37 @@ class IosContainer private constructor() {
         }
         return null
     }
+
+    // ── Resolver pipeline (.axe-only, the iOS ResolverManager-equivalent) ──
+
+    /**
+     * Shared priority + confidence scoring, wired to the user's resolver
+     * order + active set from [settingsStore]. Same instance Android builds
+     * in its Koin graph.
+     */
+    val resolverScoring: ResolverScoring by lazy {
+        ResolverScoring(
+            getResolverOrder = { settingsStore.getResolverOrder() },
+            getActiveResolvers = { settingsStore.getActiveResolvers() },
+        )
+    }
+
+    val resolverCoordinator: IosResolverCoordinator by lazy {
+        IosResolverCoordinator(
+            jsRuntime = pluginJsRuntime,
+            pluginManager = pluginManager,
+            scoring = resolverScoring,
+            settingsStore = settingsStore,
+        )
+    }
+
+    /**
+     * Resolve a track through the `.axe` pipeline and return the ranked,
+     * floor-filtered sources (best first). The Swift `PlaybackRouter` walks
+     * this list for the first engine-available source.
+     */
+    suspend fun resolveSources(artist: String, title: String, album: String?): List<ResolvedSource> =
+        resolverCoordinator.resolveSources(artist, title, album)
 
     /**
      * Weekly Jams / Weekly Exploration from ListenBrainz. Needs only the
