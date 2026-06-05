@@ -49,24 +49,23 @@ class ResolverScoring constructor(
     }
 
     /**
-     * Select the best source from a list of resolved sources,
-     * applying the desktop app's priority-first, confidence-second scoring.
+     * Rank sources via the desktop app's priority-first, confidence-second
+     * scoring: drop sources below [MIN_CONFIDENCE_THRESHOLD] and inactive
+     * resolvers, then sort by resolver priority (lower index wins), confidence
+     * descending as the tiebreaker. A [preferredResolver] jumps to the front.
+     *
+     * Returns the full ranked list so callers that need availability-based
+     * fallback (e.g. the iOS PlaybackRouter walking sources until one has a
+     * playable engine) can iterate, not just take the head.
      */
-    suspend fun selectBest(
+    suspend fun selectRanked(
         sources: List<ResolvedSource>,
         preferredResolver: String? = null,
-    ): ResolvedSource? {
-        if (sources.isEmpty()) return null
+    ): List<ResolvedSource> {
+        if (sources.isEmpty()) return emptyList()
 
         val resolverOrder = getResolverOrder()
         val activeResolvers = getActiveResolvers()
-
-        if (sources.size == 1) {
-            val only = sources.first()
-            val passesActive = activeResolvers.isEmpty() || only.resolver in activeResolvers
-            val passesFloor = (only.confidence ?: 0.0) >= MIN_CONFIDENCE_THRESHOLD
-            return if (passesActive && passesFloor) only else null
-        }
 
         return sources
             .filter { activeResolvers.isEmpty() || it.resolver in activeResolvers }
@@ -85,9 +84,17 @@ class ResolverScoring constructor(
                 if (preferredResolver != null && scored.source.resolver == preferredResolver) -1
                 else scored.priority
             }.thenByDescending { it.confidence })
-            .firstOrNull()
-            ?.source
+            .map { it.source }
     }
+
+    /**
+     * Select the single best source — the head of [selectRanked]. Same
+     * priority-first, confidence-second gate.
+     */
+    suspend fun selectBest(
+        sources: List<ResolvedSource>,
+        preferredResolver: String? = null,
+    ): ResolvedSource? = selectRanked(sources, preferredResolver).firstOrNull()
 
     /**
      * Insert a resolver ID into an order list at its canonical position.
