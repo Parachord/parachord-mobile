@@ -116,10 +116,10 @@ struct NowPlayingView: View {
                 .padding(.top, 24)
 
             VStack(spacing: 4) {
-                Text(player.nowPlayingTitle.isEmpty ? "—" : player.nowPlayingTitle)
+                Text(coordinator.currentTrack?.title ?? "—")
                     .font(.title2.weight(.semibold))
                     .lineLimit(1)
-                Text(player.nowPlayingArtist.isEmpty ? "—" : player.nowPlayingArtist)
+                Text(coordinator.currentTrack?.artist ?? "—")
                     .font(.body)
                     .foregroundStyle(.secondary)
             }
@@ -139,18 +139,18 @@ struct NowPlayingView: View {
         VStack(spacing: 4) {
             Slider(
                 value: Binding(
-                    get: { player.currentTime },
+                    get: { coordinator.currentTime },
                     set: { player.seek(to: $0) }
                 ),
-                in: 0...max(player.duration, 0.01)
+                in: 0...max(coordinator.duration, 0.01)
             )
             .tint(.accentColor)
-            .disabled(player.duration <= 0)
+            .disabled(coordinator.duration <= 0)
 
             HStack {
-                Text(Self.time(player.currentTime))
+                Text(Self.time(coordinator.currentTime))
                 Spacer()
-                Text(Self.time(player.duration))
+                Text(Self.time(coordinator.duration))
             }
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
@@ -162,8 +162,8 @@ struct NowPlayingView: View {
             Button { coordinator.skipPrevious() } label: {
                 Image(systemName: "backward.fill").font(.title)
             }
-            Button { player.togglePlayPause() } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+            Button { coordinator.togglePlayPause() } label: {
+                Image(systemName: coordinator.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 64))
             }
             Button { coordinator.skipNext() } label: {
@@ -224,10 +224,10 @@ struct MiniPlayer: View {
                     }
 
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(player.nowPlayingTitle.isEmpty ? "—" : player.nowPlayingTitle)
+                    Text(coordinator.currentTrack?.title ?? "—")
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
-                    Text(player.nowPlayingArtist.isEmpty ? "—" : player.nowPlayingArtist)
+                    Text(coordinator.currentTrack?.artist ?? "—")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -235,8 +235,8 @@ struct MiniPlayer: View {
 
                 Spacer()
 
-                Button { player.togglePlayPause() } label: {
-                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                Button { coordinator.togglePlayPause() } label: {
+                    Image(systemName: coordinator.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title3)
                 }
                 Button { coordinator.skipNext() } label: {
