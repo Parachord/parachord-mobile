@@ -75,18 +75,18 @@ same tall-display + `trim.py` method (set `wm size 1080x7272`, `screencap`,
 | `now-playing` | Tap the mini-player while something is playing. |
 | `queue` | Now Playing → expand "UP NEXT". |
 | `playlist-detail` | Open any playlist from the Playlists screen. |
+| `friends` | + FAB → Add Friend → Friends list. |
+| `edit-playlist` | Playlist detail → ⋮ → Edit (reorder/remove). |
+| `weekly-playlist` | Home → a Weekly Jams / Weekly Exploration card. |
 
-**Not yet captured** (lower priority — these reuse track-row / header / mosaic
-patterns already visible in the captured screens):
+**Not yet captured** (lower priority — these reuse track-row / album-grid /
+detail patterns already visible in the captured screens):
 
 | Screen | How to reach |
 |--------|--------------|
-| `friends` | Sidebar (☰) → Friends section / friends list. |
-| `edit-playlist` | Playlist detail → ⋮ → Edit (reorder/remove). |
-| `weekly-playlist` | Home → a Weekly Jams / Weekly Exploration card. |
 | `concerts` | Discover → Concerts / an artist's On Tour tab. |
 | `fresh-drops` | Discover → Fresh Drops. |
-| `friend-detail` | Sidebar → tap a friend. |
+| `friend-detail` | Friends list → tap a friend. |
 
 ## Privacy note
 
