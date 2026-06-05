@@ -45,8 +45,14 @@ struct PlaybackRouter {
                 return .played(.avPlayer)
 
             case "applemusic":
-                guard MusicAuthorization.currentStatus == .authorized,
-                      let id = source.appleMusicId, !id.isEmpty else { continue }
+                guard let id = source.appleMusicId, !id.isEmpty else { continue }
+                // Request Apple Music access on the first play so a fresh
+                // install doesn't depend on the Dev tab: notDetermined →
+                // prompt; denied/restricted → skip this source. (The router is
+                // @MainActor, so request() runs on the main actor as required.)
+                var status = MusicAuthorization.currentStatus
+                if status == .notDetermined { status = await MusicAuthorization.request() }
+                guard status == .authorized else { continue }
                 if await musicKit.play(appleMusicId: id) { return .played(.musicKit) }
                 // started false (no subscription / transient) → next source
 
