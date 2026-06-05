@@ -22,9 +22,14 @@ import com.parachord.shared.sync.SyncProvider
 import com.parachord.shared.sync.SyncSettings
 import com.parachord.shared.sync.SyncSettingsProvider
 import com.parachord.shared.sync.SyncedPlaylist
+import com.parachord.shared.sync.SyncedTrack
 import com.parachord.shared.sync.TrackTombstoneService
+import com.parachord.shared.sync.TrackTombstones
+import com.parachord.shared.model.Track
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -336,6 +341,161 @@ class SyncEngineIdempotencyTest {
         assertTrue(
             "re-linked externalIds point at the original remotes",
             h.listenBrainzLinks().all { it.externalId in h.provider.remote.keys },
+        )
+    }
+
+    // ── Track-collection tombstone filter (#172) ────────────────────
+
+    /**
+     * Pins the load-bearing wire that the rest of #172's tests don't reach:
+     * `SyncEngine.applyTrackDiff` must DROP a remote track that's tombstoned
+     * before it ever hits the add-diff. The other #172 tests exercise the pure
+     * `TrackTombstones` module and the `TrackTombstoneService` facade in
+     * isolation — none of them drive a real `SyncEngine.syncAll` with a fake
+     * `SyncProvider` returning tracks, so a future refactor of the
+     * `{ it.spotifyId }` external-id extractor or the `SyncSource.externalId` /
+     * `providerId` wiring would silently break the feature while every other
+     * test stays green. This drives the public [SyncEngine.syncAll] entry point
+     * (tracks axis only) through the private `syncTracksForProvider` →
+     * `applyTrackDiff` path without reflection.
+     */
+    private class TrackHarness(seedTombstone: Boolean) {
+        // A non-Spotify provider id so the dedicated `syncTracksForSpotify`
+        // path (which casts `spotifyProvider` to the concrete SpotifySyncProvider
+        // and would NPE on our fake) is never taken; the generic
+        // `syncTracksForProvider` path is.
+        val providerId = "applemusic"
+
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also {
+            ParachordDb.Schema.create(it)
+        }
+        val db = ParachordDb(driver)
+
+        val trackDao = TrackDao(db, driver)
+        val albumDao = AlbumDao(db)
+        val artistDao = ArtistDao(db)
+        val playlistDao = PlaylistDao(db)
+        val playlistTrackDao = PlaylistTrackDao(db)
+        val syncSourceDao = SyncSourceDao(db)
+        val linkDao = SyncPlaylistLinkDao(db)
+        val sourceDao = SyncPlaylistSourceDao(db)
+
+        // Seed the tombstone into the SAME store instance the service wraps,
+        // BEFORE the sync, so applyTrackDiff's filterRemote sees it.
+        val tombstoneStore = InMemoryTombstoneStore().also {
+            if (seedTombstone) TrackTombstones.addTombstone(it, providerId, "abc", 1L)
+        }
+
+        val provider = FakeTrackProvider(providerId)
+        val settings = FakeTrackSyncSettings(providerId)
+
+        val engine = SyncEngine(
+            db = db,
+            driver = driver,
+            trackDao = trackDao,
+            albumDao = albumDao,
+            artistDao = artistDao,
+            playlistDao = playlistDao,
+            playlistTrackDao = playlistTrackDao,
+            syncSourceDao = syncSourceDao,
+            syncPlaylistLinkDao = linkDao,
+            syncPlaylistSourceDao = sourceDao,
+            settingsStore = settings,
+            providers = listOf(provider),
+            tombstones = TrackTombstoneService(tombstoneStore),
+        )
+    }
+
+    /** Minimal [SyncProvider] returning a single saved track on fetch. */
+    private class FakeTrackProvider(override val id: String) : SyncProvider {
+        override val displayName = "Fake ($id)"
+        override val features = ProviderFeatures(snapshots = SnapshotKind.None)
+
+        override suspend fun fetchTracks(
+            localCount: Int,
+            latestExternalId: String?,
+            onProgress: ((current: Int, total: Int) -> Unit)?,
+        ): List<SyncedTrack> = listOf(
+            SyncedTrack(
+                entity = Track(id = "abc", title = "Tombstoned Song", artist = "Artist", spotifyId = "abc"),
+                spotifyId = "abc",
+                addedAt = 1_000L,
+            ),
+        )
+
+        // Playlist surface unused for the tracks axis.
+        override suspend fun fetchPlaylists(onProgress: ((current: Int, total: Int) -> Unit)?) = emptyList<SyncedPlaylist>()
+        override suspend fun fetchPlaylistTracks(externalPlaylistId: String) = emptyList<PlaylistTrack>()
+        override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
+        override suspend fun createPlaylist(name: String, description: String?) = RemoteCreated(externalId = "x", snapshotId = null)
+        override suspend fun replacePlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? = null
+        override suspend fun updatePlaylistDetails(externalPlaylistId: String, name: String?, description: String?) {}
+        override suspend fun deletePlaylist(externalPlaylistId: String): DeleteResult = DeleteResult.Success
+    }
+
+    /** Settings enabling ONLY the tracks axis for the fake provider. */
+    private class FakeTrackSyncSettings(private val providerId: String) : SyncSettingsProvider {
+        private var dataVersion = 5
+        override suspend fun getSyncSettings() = SyncSettings(
+            enabled = true,
+            syncTracks = true,
+            syncAlbums = false,
+            syncArtists = false,
+            syncPlaylists = false,
+            pushLocalPlaylists = false,
+        )
+        override suspend fun getEnabledSyncProviders() = setOf(providerId)
+        // ONLY the fake provider gets the tracks axis; Spotify must report no
+        // axes so `syncTracks` skips `syncTracksForSpotify` (which would touch
+        // the `spotifyProvider` getter and throw — no Spotify provider is
+        // registered in this harness).
+        override suspend fun getSyncCollectionsForProvider(providerId: String) =
+            if (providerId == this.providerId) setOf("tracks") else emptySet()
+        override suspend fun getSyncDataVersion() = dataVersion
+        override suspend fun setSyncDataVersion(version: Int) { dataVersion = version }
+        override suspend fun setLastSyncAt(timestamp: Long) {}
+        override suspend fun clearSyncSettings() {}
+    }
+
+    /**
+     * THE filter-wire guard. A remote track whose external id is tombstoned
+     * must NOT be imported by `applyTrackDiff`.
+     */
+    @Test
+    fun `tombstoned remote track is dropped from the add-diff`() = runBlocking {
+        val h = TrackHarness(seedTombstone = true)
+
+        h.engine.syncAll()
+
+        assertNull(
+            "REGRESSION GUARD: tombstoned remote track 'abc' must not be re-added by applyTrackDiff",
+            h.trackDao.getById("abc"),
+        )
+        assertTrue(
+            "no sync source row should be written for the dropped track",
+            h.syncSourceDao.getByProvider(h.providerId, "track").isEmpty(),
+        )
+    }
+
+    /**
+     * Negative control: WITHOUT the tombstone the identical sync DOES import
+     * the track. Proves the test above catches a broken filter (it isn't a
+     * trivially-always-pass assertion).
+     */
+    @Test
+    fun `un-tombstoned remote track is added normally`() = runBlocking {
+        val h = TrackHarness(seedTombstone = false)
+
+        h.engine.syncAll()
+
+        assertNotNull(
+            "without a tombstone the remote track must be imported (proves the filter is what drops it)",
+            h.trackDao.getById("abc"),
+        )
+        assertEquals(
+            "a sync source row links the imported track to its provider",
+            1,
+            h.syncSourceDao.getByProvider(h.providerId, "track").size,
         )
     }
 }

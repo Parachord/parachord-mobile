@@ -57,6 +57,10 @@ class TrackTombstoneService(private val store: TombstoneStore) {
             }
             push("spotify", track.spotifyId)
             push("applemusic", track.appleMusicId)
+            // Forward-looking / dead today: LB syncs playlists only (no
+            // track-collection sync), so no LB track tombstone is ever
+            // written — this entry is a harmless no-op until LB track sync
+            // exists. Kept for parity with desktop's deriveTombstoneEntries.
             push("listenbrainz", track.recordingMbid)
             return out
         }

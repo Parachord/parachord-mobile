@@ -137,6 +137,12 @@ class LibraryRepository(
     suspend fun addTracks(tracks: List<Track>) {
         trackDao.insertAll(tracks)
         // User re-adding tracks clears their tombstones so sync may re-import them (#172).
+        // No-op for local-scan tracks: they carry no streaming IDs, so
+        // deriveTombstoneEntries returns empty and clearAll does nothing. The
+        // clear is therefore gated to user-intent semantics by the fact that
+        // only deliberate user adds carry streaming IDs today — do NOT route
+        // automated streaming-ID imports through addTracks without revisiting
+        // this (they'd silently resurrect tracks the user purposely removed).
         val entries = tracks.flatMap { TrackTombstoneService.deriveTombstoneEntries(it) }
         if (entries.isNotEmpty()) tombstones.clearAll(entries)
         // Background MBID enrichment for batch imports
