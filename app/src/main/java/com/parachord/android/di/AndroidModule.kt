@@ -320,6 +320,24 @@ val androidModule = module {
     // KvStore — KMP-friendly key-value store backed by SharedPreferences
     // (Phase 9B Stage 1). Stage 3 fully consolidates SettingsStore onto KvStore.
     single { com.parachord.shared.store.KvStoreFactory.create(androidContext()) }
+    // Track remove tombstones (#172): durable "user removed this on purpose"
+    // markers so sync doesn't re-import a deliberately-removed track. Stored as a
+    // single JSON blob in a dedicated SharedPreferences file (independent of other
+    // prefs), accessed via synchronous load/save lambdas to keep the shared store
+    // KMP-pure. iOS will wire its own TombstoneStore backing when the shell lands.
+    single<com.parachord.shared.sync.TombstoneStore> {
+        val prefs = androidContext().getSharedPreferences(
+            "parachord_tombstones",
+            android.content.Context.MODE_PRIVATE,
+        )
+        com.parachord.shared.sync.KvTombstoneStore(
+            loadBlob = { prefs.getString(com.parachord.shared.sync.KvTombstoneStore.KEY, null) },
+            saveBlob = { value ->
+                prefs.edit().putString(com.parachord.shared.sync.KvTombstoneStore.KEY, value).apply()
+            },
+        )
+    }
+    single { com.parachord.shared.sync.TrackTombstoneService(get()) }
     // One-shot DataStore→KvStore migration (Phase 9B Stage 3). Runs the first
     // time SettingsStore accesses KvStore on an upgraded install; subsequent
     // launches see the `_migration_v1` marker and skip the copy.
