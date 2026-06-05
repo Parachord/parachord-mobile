@@ -19,6 +19,9 @@ final class PlaylistDetailViewModel {
     let title: String
 
     var tracks: [IosPlaylistTrack] = []
+    /// Metadata-only shared Tracks (no resolver IDs) — what the coordinator
+    /// queues + resolves on the fly. Parallel to `tracks` by index.
+    var trackEntities: [Track] = []
     var isLoading = false
     var loaded = false
 
@@ -31,13 +34,37 @@ final class PlaylistDetailViewModel {
         guard !loaded else { return }
         isLoading = true
         tracks = (try? await container.loadWeeklyPlaylistTracks(playlistId: playlistId)) ?? []
+        trackEntities = tracks.map { Self.makeTrack($0) }
         isLoading = false
         loaded = true
+
+        // Resolver Pipeline Rule: every tracklist screen pre-resolves its
+        // tracks in the background → resolver badges + instant tap-to-play.
+        IosTrackResolverCache.shared.resolveInBackground(
+            tracks.map { ResolveRequest(artist: $0.artist, title: $0.title, album: $0.album) }
+        )
+    }
+
+    /// Build a metadata-only shared `Track` from an LB playlist track. The
+    /// 19-param Kotlin-bridged initializer overwhelms Swift's inline type
+    /// checker in a `.map` closure, so it lives in a standalone func.
+    private static func makeTrack(_ t: IosPlaylistTrack) -> Track {
+        Track(
+            id: t.id, title: t.title, artist: t.artist,
+            album: t.album, albumId: nil, duration: nil, artworkUrl: t.albumArt,
+            sourceType: nil, sourceUrl: nil, addedAt: 0,
+            resolver: nil, spotifyUri: nil, soundcloudId: nil,
+            spotifyId: nil, appleMusicId: nil, recordingMbid: nil,
+            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+        )
     }
 }
 
 struct PlaylistDetailView: View {
     @State private var model: PlaylistDetailViewModel
+    @Environment(QueuePlaybackCoordinator.self) private var coordinator
+    /// Observed so badge rows re-render as background resolution lands.
+    private var resolverCache = IosTrackResolverCache.shared
 
     init(playlistId: String, title: String) {
         _model = State(initialValue: PlaylistDetailViewModel(playlistId: playlistId, title: title))
@@ -57,22 +84,12 @@ struct PlaylistDetailView: View {
             } else {
                 List {
                     ForEach(Array(model.tracks.enumerated()), id: \.element.id) { index, track in
-                        HStack(spacing: 12) {
-                            Text("\(index + 1)")
-                                .font(.callout.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28, alignment: .trailing)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(track.title)
-                                    .font(.body)
-                                    .lineLimit(1)
-                                Text(albumLine(track))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
+                        Button {
+                            coordinator.setQueue(model.trackEntities, startIndex: index)
+                        } label: {
+                            row(index: index, track: track)
                         }
-                        .padding(.vertical, 2)
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -80,6 +97,36 @@ struct PlaylistDetailView: View {
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.load() }
+    }
+
+    @ViewBuilder
+    private func row(index: Int, track: IosPlaylistTrack) -> some View {
+        let isCurrent = index < model.trackEntities.count
+            && coordinator.currentTrack?.id == model.trackEntities[index].id
+        HStack(spacing: 12) {
+            Text("\(index + 1)")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 28, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(track.title)
+                    .font(.body)
+                    .foregroundStyle(isCurrent ? Color(red: 0.49, green: 0.23, blue: 0.93) : .primary)
+                    .lineLimit(1)
+                Text(albumLine(track))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                // Resolver badges from the background-resolution cache.
+                if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
+                   !ranked.isEmpty {
+                    ResolverBadgeRow(sources: ranked)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 
     private func albumLine(_ track: IosPlaylistTrack) -> String {

@@ -52,6 +52,9 @@ struct ContentView: View {
         .safeAreaInset(edge: .bottom) {
             MiniPlayer(playback: playback)
         }
+        // The one shared coordinator, reachable by pushed screens
+        // (Discover → PlaylistDetail) for tap-to-play.
+        .environment(playback.coordinator)
     }
 }
 
