@@ -10,14 +10,14 @@
 		AA0000000000000000000020 /* ParachordApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* ParachordApp.swift */; };
 		AA0000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* ContentView.swift */; };
 		AA0000000000000000000022 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* Assets.xcassets */; };
-		AA0000000000000000000029 /* resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* resolver-loader.js */; };
-		AA000000000000000000002A /* plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* plugins */; };
 		AA0000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* SettingsView.swift */; };
 		AA0000000000000000000024 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* RootView.swift */; };
 		AA0000000000000000000025 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000015 /* SearchView.swift */; };
 		AA0000000000000000000026 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000016 /* NowPlayingView.swift */; };
 		AA0000000000000000000027 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000017 /* DiscoverView.swift */; };
 		AA0000000000000000000028 /* PlaylistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000018 /* PlaylistDetailView.swift */; };
+		AA0000000000000000000029 /* Resources/resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* Resources/resolver-loader.js */; };
+		AA000000000000000000002A /* Resources/plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* Resources/plugins */; };
 		AA000000000000000000002B /* IosTrackResolverCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001B /* IosTrackResolverCache.swift */; };
 		AA000000000000000000002C /* PlaybackRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001C /* PlaybackRouter.swift */; };
 		AA000000000000000000002D /* ResolverBadgeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001D /* ResolverBadgeRow.swift */; };
@@ -34,11 +34,11 @@
 		AA0000000000000000000016 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000017 /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000018 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000019 /* Resources/resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
+		AA000000000000000000001A /* Resources/plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
 		AA000000000000000000001B /* IosTrackResolverCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosTrackResolverCache.swift; sourceTree = "<group>"; };
 		AA000000000000000000001C /* PlaybackRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRouter.swift; sourceTree = "<group>"; };
 		AA000000000000000000001D /* ResolverBadgeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolverBadgeRow.swift; sourceTree = "<group>"; };
-		AA0000000000000000000019 /* resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
-		AA000000000000000000001A /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,8 +82,8 @@
 				AA000000000000000000001B /* IosTrackResolverCache.swift */,
 				AA000000000000000000001C /* PlaybackRouter.swift */,
 				AA000000000000000000001D /* ResolverBadgeRow.swift */,
-				AA0000000000000000000019 /* resolver-loader.js */,
-				AA000000000000000000001A /* plugins */,
+				AA0000000000000000000019 /* Resources/resolver-loader.js */,
+				AA000000000000000000001A /* Resources/plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
 			);
 			path = Parachord;
@@ -149,8 +149,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000022 /* Assets.xcassets in Resources */,
-				AA0000000000000000000029 /* resolver-loader.js in Resources */,
-				AA000000000000000000002A /* plugins in Resources */,
+				AA0000000000000000000029 /* Resources/resolver-loader.js in Resources */,
+				AA000000000000000000002A /* Resources/plugins in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -322,6 +322,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YR3XETE537;
@@ -345,6 +346,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -356,6 +358,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YR3XETE537;
@@ -379,6 +382,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
