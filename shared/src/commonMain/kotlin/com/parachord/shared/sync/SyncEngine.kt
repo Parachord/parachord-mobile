@@ -459,10 +459,18 @@ class SyncEngine constructor(
     }
 
     private suspend fun applyTrackDiff(
-        remote: List<SyncedTrack>,
+        remoteIn: List<SyncedTrack>,
         localSources: List<SyncSource>,
         providerId: String,
     ): TypeSyncResult {
+        // Drop tracks the user removed on purpose (and re-arm their TTL on every
+        // hit), so a still-present remote track isn't re-imported against the
+        // user's intent (#172). Mirrors desktop "filter remote before diff".
+        val tombResult = tombstones.filterRemote(remoteIn, providerId) { it.spotifyId }
+        val remote = tombResult.filtered ?: remoteIn
+        if (tombResult.dropped > 0) {
+            Log.d(TAG, "applyTrackDiff: tombstones dropped ${tombResult.dropped} remote tracks for $providerId")
+        }
         val remoteByExternalId = remote.associateBy { it.spotifyId }
         val localByExternalId = localSources.associateBy { it.externalId }
 
