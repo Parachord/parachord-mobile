@@ -44,6 +44,18 @@
 		<string>spotify</string>
 	</array>
 	<!--
+	  Spotify OAuth (PKCE) client id, read by IosContainer via
+	  NSBundle.objectForInfoDictionaryKey("SpotifyClientID"). PKCE public
+	  client ids are not secret (they appear in the authorize URL), so this
+	  is safe to commit. ⚠️ FILL IN with the Parachord Spotify app's client
+	  id (same one Android uses — SPOTIFY_CLIENT_ID in local.properties) and
+	  register the redirect URI `parachord://auth/callback/spotify` in that
+	  Spotify app's dashboard. Empty = Spotify auth is inert (Connect button
+	  errors with "invalid client").
+	-->
+	<key>SpotifyClientID</key>
+	<string></string>
+	<!--
 	  UIBackgroundModes: `audio` keeps AVPlayer / MusicKit / Spotify
 	  Connect playback alive when the app is backgrounded or the screen
 	  is locked. Without it, iOS suspends the process on background and
