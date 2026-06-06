@@ -248,6 +248,7 @@ class IosContainer private constructor() {
             pluginManager = pluginManager,
             scoring = resolverScoring,
             settingsStore = settingsStore,
+            spotifyClient = spotifyClient,
         )
     }
 

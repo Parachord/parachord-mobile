@@ -1,5 +1,6 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.resolver.ResolvedSource
@@ -10,6 +11,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -44,6 +46,7 @@ class IosResolverCoordinator(
     private val pluginManager: PluginManager,
     private val scoring: ResolverScoring,
     private val settingsStore: SettingsStore,
+    private val spotifyClient: SpotifyClient,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -64,10 +67,33 @@ class IosResolverCoordinator(
         val ids = STREAMING_RESOLVERS.filter { id ->
             id in loaded && (active.isEmpty() || id in active)
         }
-        if (ids.isEmpty()) return emptyList()
+
+        // Native Spotify branch (Android parity): resolve Spotify via the shared
+        // SpotifyClient instead of spotify.axe. Gate on (a) spotify being active
+        // and (b) a present access token — skip entirely when not connected to
+        // avoid 401 spam. The result joins the SAME list that re-scores via
+        // scoreConfidence + selectRanked below, so it's ranked identically.
+        val spotifyActive = active.isEmpty() || "spotify" in active
+        val spotifyConnected = spotifyActive && settingsStore.getSpotifyAccessToken() != null
+
+        if (ids.isEmpty() && !spotifyConnected) return emptyList()
 
         val resolved: List<ResolvedSource> = coroutineScope {
-            ids.map { id -> async { resolveOne(id, artist, title, album) } }.awaitAll()
+            val axeDeferred = ids.map { id -> async { resolveOne(id, artist, title, album) } }
+            val spotifyDeferred = if (spotifyConnected) {
+                async {
+                    try {
+                        spotifyClient.searchTrack("$artist $title")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            } else {
+                null
+            }
+            (axeDeferred + listOfNotNull(spotifyDeferred)).awaitAll()
         }.filterNotNull()
 
         // Re-score against the target (Android ResolverManager parity): the
@@ -172,8 +198,13 @@ class IosResolverCoordinator(
     private fun String.jsEsc(): String = replace("\\", "\\\\").replace("'", "\\'")
 
     private companion object {
-        /** CLAUDE.md `stream: true` content resolvers. localfiles is a no-op on iOS today. */
-        val STREAMING_RESOLVERS = listOf("spotify", "applemusic", "soundcloud", "localfiles")
+        /**
+         * CLAUDE.md `stream: true` content resolvers run through `.axe`.
+         * `spotify` is intentionally ABSENT — it resolves natively via the
+         * shared [SpotifyClient] (Android parity); `spotify.axe` stays loaded
+         * but dormant for resolution. localfiles is a no-op on iOS today.
+         */
+        val STREAMING_RESOLVERS = listOf("applemusic", "soundcloud", "localfiles")
         const val POLL_ATTEMPTS = 50
         const val POLL_INTERVAL_MS = 100L
     }
