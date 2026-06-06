@@ -229,7 +229,7 @@ class ResolverManager constructor(
         // discarding it via the resolver-name filter forces the downstream
         // image-enrichment cascade to RE-ASK metadata providers. Same root
         // cause as the AM-artwork-propagation work in [resolveAppleMusic] /
-        // [searchSpotifyTrack].
+        // [SpotifyClient.searchTrack].
         val cascadeResults = resolve(query, targetTitle, targetArtist)
         val cascadeByResolver = cascadeResults.associateBy { it.resolver }
         val mergedHints = results.map { hint ->
@@ -254,7 +254,7 @@ class ResolverManager constructor(
         }
 
         return try {
-            searchSpotifyTrack(query)
+            spotifyClient.searchTrack(query)
         } catch (e: com.parachord.shared.api.auth.ReauthRequiredException) {
             Log.w(TAG, "Spotify resolve: reauth required for '$query' — user must reconnect")
             null
@@ -268,35 +268,6 @@ class ResolverManager constructor(
             Log.w(TAG, "Spotify resolve failed for '$query': ${e.message}")
             null
         }
-    }
-
-    private suspend fun searchSpotifyTrack(query: String): ResolvedSource? {
-        // Use field-qualified search for better precision (matches desktop spotify.axe)
-        val response = spotifyClient.search(
-            query = query,
-            type = "track",
-            limit = 5, // Get a few results so we can filter to playable ones
-        )
-        // Filter to tracks that are actually playable in the user's market
-        // (market=from_token is passed by default, which sets is_playable)
-        val track = response.tracks?.items
-            ?.firstOrNull { it.isPlayable != false }
-            ?: return null
-        // Spotify returns images in descending size order; take the first
-        // for the highest-resolution album art.
-        val albumArt = track.album?.images?.firstOrNull()?.url
-        return ResolvedSource(
-            url = "spotify:track:${track.id}",
-            sourceType = "spotify",
-            resolver = "spotify",
-            spotifyUri = "spotify:track:${track.id}",
-            spotifyId = track.id,
-            confidence = 0.9, // Default — overridden by scoreConfidence() in resolve()
-            matchedTitle = track.name,
-            matchedArtist = track.artistName,
-            matchedDurationMs = track.durationMs,
-            artworkUrl = albumArt,
-        )
     }
 
     /**
