@@ -40,7 +40,7 @@ class SpotifyAuthTokenProvider(
         val cached = settingsStore.getSpotifyAccessToken()
         val expiresAt = settingsStore.getSpotifyAccessTokenExpiresAt()
         val expiringSoon = currentTimeMillis() >= expiresAt - EXPIRY_SKEW_MS
-        val hasRefresh = settingsStore.getSpotifyRefreshToken() != null
+        val hasRefresh = !settingsStore.getSpotifyRefreshToken().isNullOrBlank()
 
         if (expiringSoon && hasRefresh) {
             val refreshed = refresher.refresh(AuthRealm.Spotify)
@@ -82,7 +82,8 @@ class SpotifyTokenRefresher(
     override suspend fun refresh(realm: AuthRealm): AuthCredential.BearerToken? {
         if (realm != AuthRealm.Spotify) return null
 
-        val refreshToken = settingsStore.getSpotifyRefreshToken() ?: run {
+        val refreshToken = settingsStore.getSpotifyRefreshToken()
+        if (refreshToken.isNullOrBlank()) {
             Log.w(TAG, "No refresh token stored — re-auth required")
             return null
         }
@@ -117,6 +118,8 @@ class SpotifyTokenRefresher(
             }
             Log.d(TAG, "Spotify token refreshed successfully")
             AuthCredential.BearerToken(token.accessToken)
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.d(TAG, "Spotify token refresh error", e)
             null
