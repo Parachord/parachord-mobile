@@ -119,4 +119,41 @@ class SpotifyClientSearchTest {
 
         assertNull(client.searchTrack("The Underdog Spoon"))
     }
+
+    @Test
+    fun searchTrack_skipsUnplayable_picksNextPlayable() = runTest {
+        val mock = MockEngine {
+            respond(
+                content = """
+                    {
+                      "tracks": {
+                        "items": [
+                          {
+                            "id": "bad",
+                            "name": "X",
+                            "artists": [ { "name": "A" } ],
+                            "is_playable": false
+                          },
+                          {
+                            "id": "def",
+                            "name": "The Good One",
+                            "artists": [ { "name": "B" } ],
+                            "duration_ms": 200000,
+                            "is_playable": true,
+                            "album": { "images": [ { "url": "http://art2" } ] }
+                          }
+                        ]
+                      }
+                    }
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val client = buildClient(mock)
+
+        val source = client.searchTrack("The Good One B")
+        assertNotNull(source)
+        assertEquals("def", source.spotifyId)
+    }
 }
