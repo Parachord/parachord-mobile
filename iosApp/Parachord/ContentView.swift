@@ -52,6 +52,26 @@ final class IosSpotifyConnect {
     var spotifyInstalled: Bool = false
     var lastAction: String?
 
+    /// True when a Spotify OAuth token is present (mirrors the shared
+    /// `getSpotifyConnectedFlow()`). Drives `canPlay` so the PlaybackRouter
+    /// only routes to Spotify once auth is wired.
+    private(set) var connected: Bool = false
+
+    @ObservationIgnored
+    private let connectWatcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+    @ObservationIgnored
+    private var connectSubscription: Shared.Cancellable?
+
+    init() {
+        // Observe token presence; held for the lifetime of this object so the
+        // FlowWatcher + Cancellable aren't deallocated mid-collection.
+        connectSubscription = connectWatcher.watch(
+            flow: IosContainer.companion.shared.getSpotifyConnectedFlow()
+        ) { [weak self] value in
+            self?.connected = (value as? Bool) ?? ((value as? KotlinBoolean)?.boolValue ?? false)
+        }
+    }
+
     func refreshInstalled() {
         guard let url = URL(string: Self.spotifyScheme) else {
             spotifyInstalled = false
@@ -92,18 +112,88 @@ final class IosSpotifyConnect {
     // HTTP client when iOS Koin wiring lands. Build.MODEL-style local
     // matching becomes `UIDevice.current.name` / `.model`.
 
-    /// Whether Spotify playback can currently run. False until a Spotify
-    /// OAuth token + the shared SpotifyClient are wired into IosContainer —
-    /// the PlaybackRouter gates on this and falls through to the next source.
-    var canPlay: Bool { false }
+    /// Whether Spotify playback can currently run. True once a Spotify OAuth
+    /// token is present (observed from `getSpotifyConnectedFlow()`). The
+    /// PlaybackRouter gates on this and falls through to the next source when
+    /// false.
+    var canPlay: Bool { connected }
 
-    /// Start Spotify Connect playback of a track URI. Stub until the shared
-    /// SpotifyClient + token wiring lands (see the flow sketch above); the
-    /// router treats a `false` return as "engine unavailable, try next".
+    /// Start Spotify Connect playback of a track URI. Single-pass flow:
+    /// getDevices → (wake + poll if none) → pickDevice → startPlayback with
+    /// `device_id` (no separate transferPlayback; `startPlayback` activates an
+    /// inactive device itself). One 502 retry. The router treats `false` as
+    /// "engine unavailable, try next source".
     @MainActor
     func play(uri: String) async -> Bool {
-        lastAction = "Spotify playback not wired yet (needs token + SpotifyClient)"
-        return false
+        let client = IosContainer.companion.shared.spotifyClient
+
+        func usableDevices() async -> [SpDevice] {
+            // Restricted devices (e.g. Spotify Free) can't accept playback.
+            (try? await client.getDevices())?.devices.filter { !$0.isRestricted } ?? []
+        }
+
+        var devices = await usableDevices()
+
+        // No device visible — wake Spotify (foregrounds it via spotify://) and
+        // poll the devices endpoint until one registers (~10s).
+        if devices.isEmpty {
+            wakeSpotify()
+            for _ in 0..<33 {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                devices = await usableDevices()
+                if !devices.isEmpty { break }
+            }
+            if devices.isEmpty {
+                lastAction = "No Spotify device found"
+                return false
+            }
+        }
+
+        // Prefer an already-active device; otherwise the first usable one
+        // (startPlayback with device_id activates an inactive device).
+        guard let dev = devices.first(where: { $0.isActive }) ?? devices.first else {
+            lastAction = "No Spotify device found"
+            return false
+        }
+
+        // Returns the HTTP status code, or -1 on a thrown error.
+        func attempt() async -> Int {
+            do {
+                let resp = try await client.startPlayback(
+                    body: SpPlaybackRequest(uris: [uri], contextUri: nil),
+                    deviceId: dev.id
+                )
+                return Int(resp.status.value)
+            } catch {
+                lastAction = "Spotify play error: \(error.localizedDescription)"
+                return -1
+            }
+        }
+
+        var status = await attempt()
+        // Single 502 retry — Spotify occasionally 502s on a cold device.
+        if status == 502 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            status = await attempt()
+        }
+
+        switch status {
+        case 200...204:
+            // Spotify returns 204 No Content on a successful start.
+            lastAction = "Spotify playback started"
+            return true
+        case 403:
+            lastAction = "Spotify Premium required"
+            return false
+        case 429:
+            lastAction = "Spotify rate-limited"
+            return false
+        default:
+            if status >= 0 {
+                lastAction = "Spotify play failed (status \(status))"
+            }
+            return false
+        }
     }
 }
 
