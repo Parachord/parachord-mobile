@@ -360,6 +360,22 @@ final class IosMusicKitPlayer {
     var isPlaying = false
     var lastError: String?
 
+    // Published from the state-polling loop so the coordinator's unified
+    // now-playing state (Now Playing scrubber) works for the MusicKit engine.
+    var currentTime: Double = 0
+    var duration: Double = 0
+
+    /// Fired once when the current track plays to its natural end. The queue
+    /// coordinator sets this to auto-advance — the MusicKit analogue of
+    /// `IosAVPlayer.onTrackEnded`. `ApplicationMusicPlayer` has no native
+    /// end callback, so we detect it from the polling loop.
+    var onTrackEnded: (() -> Void)?
+
+    // Poll-loop state.
+    private var pollTask: Task<Void, Never>?
+    private var trackEndHandled = false   // fire onTrackEnded once per track
+    private var observedPlaying = false   // require .playing before honoring .stopped
+
     /// Request Apple Music access. Shows the system prompt IF the
     /// MusicKit entitlement is present; without it this resolves to
     /// `.denied` (or errors) — see the verification note above.
@@ -398,6 +414,12 @@ final class IosMusicKitPlayer {
             try await player.play()
             nowPlayingTitle = song.title
             isPlaying = true
+            // Reset end-detection for the new track and (re)start the loop.
+            duration = song.duration ?? 0
+            currentTime = 0
+            trackEndHandled = false
+            observedPlaying = false
+            startPollingIfNeeded()
             return true
         } catch {
             lastError = "Playback failed: \(error.localizedDescription)"
@@ -409,6 +431,56 @@ final class IosMusicKitPlayer {
     func pause() {
         ApplicationMusicPlayer.shared.pause()
         isPlaying = false
+    }
+
+    /// Resume the current track WITHOUT resetting the queue (re-`play()`ing by
+    /// id would restart from 0). Used by the coordinator's toggle + lock-screen
+    /// play command.
+    @MainActor
+    func resume() {
+        Task { @MainActor in
+            try? await ApplicationMusicPlayer.shared.play()
+            isPlaying = true
+        }
+    }
+
+    // ── State polling (auto-advance + scrubber) ────────────────────────
+    //
+    // Mirrors Android's startAppleMusicStatePolling: a 500ms main-actor loop
+    // reads ApplicationMusicPlayer state and (1) publishes position/duration,
+    // (2) fires onTrackEnded when a track finishes. NEVER blocks on async work
+    // — it only reads state. Detection no-ops once handled for a track
+    // (trackEndHandled) and won't false-fire on our own queue swaps (requires
+    // .playing observed before honoring .stopped).
+
+    @MainActor
+    private func startPollingIfNeeded() {
+        guard pollTask == nil else { return }
+        pollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self else { return }
+                self.tick()
+            }
+        }
+    }
+
+    @MainActor
+    private func tick() {
+        let amp = ApplicationMusicPlayer.shared
+        let status = amp.state.playbackStatus
+        currentTime = amp.playbackTime
+        isPlaying = (status == .playing)
+        if status == .playing { observedPlaying = true }
+
+        // End detection: primary = playing→stopped (single-song queue ends);
+        // safety net = within 1s of a known duration.
+        let naturalStop = observedPlaying && status == .stopped
+        let nearEnd = duration > 0 && currentTime > 0 && (duration - currentTime) < 1.0
+        if (naturalStop || nearEnd) && !trackEndHandled {
+            trackEndHandled = true
+            onTrackEnded?()
+        }
     }
 }
 
@@ -761,8 +833,8 @@ final class QueuePlaybackCoordinator {
     var activeEngine: PlaybackEngineKind = .avPlayer
 
     // ── Unified now-playing state (engine-agnostic) ────────────────────
-    // AVPlayer exposes real position; MusicKit/Spotify report play state
-    // only for v1 (position best-effort/zero — a follow-up).
+    // AVPlayer and MusicKit both expose real position/duration (MusicKit via
+    // its state-polling loop). Spotify is play-state-only for now (stubbed).
     var isPlaying: Bool {
         switch activeEngine {
         case .avPlayer: return player.isPlaying
@@ -770,8 +842,20 @@ final class QueuePlaybackCoordinator {
         case .spotify: return false
         }
     }
-    var currentTime: Double { activeEngine == .avPlayer ? player.currentTime : 0 }
-    var duration: Double { activeEngine == .avPlayer ? player.duration : 0 }
+    var currentTime: Double {
+        switch activeEngine {
+        case .avPlayer: return player.currentTime
+        case .musicKit: return musicKit.currentTime
+        case .spotify: return 0
+        }
+    }
+    var duration: Double {
+        switch activeEngine {
+        case .avPlayer: return player.duration
+        case .musicKit: return musicKit.duration
+        case .spotify: return 0
+        }
+    }
 
     init(
         player: IosAVPlayer,
@@ -783,12 +867,39 @@ final class QueuePlaybackCoordinator {
         self.musicKit = musicKit
         self.spotify = spotify
         self.resolverCache = resolverCache
-        // Auto-advance: when AVPlayer reports the item ended, pull the
-        // next track from the shared QueueManager and play it. (External
-        // engines don't emit this to us yet — manual Next works; auto-
-        // advance for MusicKit/Spotify is a documented follow-up.)
+        // Auto-advance: both engines pull the next queued track when the
+        // current one ends. AVPlayer fires onTrackEnded from its end
+        // notification; MusicKit fires it from its state-polling loop
+        // (ApplicationMusicPlayer has no native end callback).
         self.player.onTrackEnded = { [weak self] in
             self?.skipNext()
+        }
+        self.musicKit.onTrackEnded = { [weak self] in
+            self?.skipNext()
+        }
+        // Lock-screen / Control-Center next & previous drive the QUEUE
+        // (engine-agnostic), not a single player — the "real next/previous"
+        // the AVPlayer's skip±15s stand-ins anticipated.
+        setupQueueRemoteCommands()
+    }
+
+    /// Register engine-agnostic next/previous-track commands on the shared
+    /// remote command center so lock-screen / Control-Center / headphone
+    /// next-prev advance our queue regardless of which engine is active.
+    /// (Per-engine play/pause + now-playing info stay where they are:
+    /// AVPlayer self-registers them; ApplicationMusicPlayer drives the lock
+    /// screen natively during Apple Music playback.)
+    private func setupQueueRemoteCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        center.nextTrackCommand.isEnabled = true
+        center.nextTrackCommand.addTarget { [weak self] _ in
+            self?.skipNext()
+            return .success
+        }
+        center.previousTrackCommand.isEnabled = true
+        center.previousTrackCommand.addTarget { [weak self] _ in
+            self?.skipPrevious()
+            return .success
         }
     }
 
@@ -798,9 +909,10 @@ final class QueuePlaybackCoordinator {
         case .avPlayer:
             player.isPlaying ? player.pause() : player.play()
         case .musicKit:
+            // Resume in place rather than re-playing by id (which restarts
+            // the track from 0). pause()/resume() are @MainActor.
             Task { @MainActor in
-                if musicKit.isPlaying { musicKit.pause() }
-                else if let id = currentTrack?.appleMusicId { await musicKit.play(appleMusicId: id) }
+                if musicKit.isPlaying { musicKit.pause() } else { musicKit.resume() }
             }
         case .spotify:
             break
