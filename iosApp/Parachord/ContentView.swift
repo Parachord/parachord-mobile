@@ -62,6 +62,14 @@ final class IosSpotifyConnect {
     @ObservationIgnored
     private var connectSubscription: Shared.Cancellable?
 
+    // Spotify Connect device-resolution state (mirrors Android
+    // SpotifyPlaybackHandler). Plumbing — not observable UI state.
+    @ObservationIgnored private var deviceVerified = false
+    @ObservationIgnored private var lastResolvedLocalId: String?
+    /// Synthetic "this device" id persisted as the preferred device — the real
+    /// id changes between Spotify sessions, so we persist this token instead.
+    private static let localDeviceId = "__local_device__"
+
     init() {
         // Observe token presence; held for the lifetime of this object so the
         // FlowWatcher + Cancellable aren't deallocated mid-collection.
@@ -96,72 +104,109 @@ final class IosSpotifyConnect {
         }
     }
 
-    // The play flow itself — ensureDevice / pickDevice / startPlayback —
-    // calls the SHARED `SpotifyClient` (already in Shared.framework):
-    //
-    //   let devices = try await spotifyClient.getDevices()
-    //   let device = pickDevice(devices.devices)   // prefer local smartphone
-    //   try await spotifyClient.startPlayback(
-    //       body: SpPlaybackRequest(uris: [track.spotifyUri]),
-    //       deviceId: device?.id
-    //   )
-    //
-    // It isn't reproduced here because (a) it needs a real token + a
-    // Premium account to run, and (b) the device-selection rules are
-    // platform-agnostic and belong in the shared layer alongside the
-    // HTTP client when iOS Koin wiring lands. Build.MODEL-style local
-    // matching becomes `UIDevice.current.name` / `.model`.
-
     /// Whether Spotify playback can currently run. True once a Spotify OAuth
     /// token is present (observed from `getSpotifyConnectedFlow()`). The
     /// PlaybackRouter gates on this and falls through to the next source when
     /// false.
     var canPlay: Bool { connected }
 
-    /// Start Spotify Connect playback of a track URI. Single-pass flow:
-    /// getDevices → (wake + poll if none) → pickDevice → startPlayback with
-    /// `device_id` (no separate transferPlayback; `startPlayback` activates an
-    /// inactive device itself). One 502 retry. The router treats `false` as
-    /// "engine unavailable, try next source".
+    /// Start Spotify Connect playback on the device Parachord is running on
+    /// (this iPad/iPhone), mirroring Android's `SpotifyPlaybackHandler`
+    /// (CLAUDE.md "Spotify Connect — Device Wake & Playback"):
+    ///
+    /// 1. **Warm path** — a cached resolved local device still in the list →
+    ///    `startPlayback` directly.
+    /// 2. **Prefer the LOCAL device** — this device's own Spotify entry (by
+    ///    name / Tablet|Smartphone type), NEVER an active *remote* (a phantom
+    ///    Bedroom-TV / a just-closed desktop the API still lists). That phantom
+    ///    pickup was the "succeeds into the void / nothing plays" bug.
+    /// 3. **Resolve local** — if this device's Spotify isn't registered yet,
+    ///    wake it (`spotify://` — iOS's only wake; no invisible broadcast) and
+    ///    poll until it appears (cold launch ~15-20s), pausing once so Spotify
+    ///    doesn't auto-resume its own last track.
+    /// 4. `startPlayback` with `device_id` (no separate transfer — it activates
+    ///    an inactive device). Single 502 retry.
+    ///
+    /// Returns `false` when no local device can be established → `PlaybackRouter`
+    /// falls through to the next source in the user's resolver order, instead of
+    /// "succeeding" onto a phantom remote.
     @MainActor
     func play(uri: String) async -> Bool {
         let client = IosContainer.companion.shared.spotifyClient
+        let settings = IosContainer.companion.shared.settingsStore
 
-        func usableDevices() async -> [SpDevice] {
-            // Restricted devices (e.g. Spotify Free) can't accept playback.
-            (try? await client.getDevices())?.devices.filter { !$0.isRestricted } ?? []
+        // 1. Warm path — cached local device still present.
+        if deviceVerified, let warmId = lastResolvedLocalId {
+            let devs = (try? await client.getDevices())?.devices ?? []
+            if devs.contains(where: { $0.id == warmId }) {
+                if await startPlayback(client, uri: uri, deviceId: warmId) { return true }
+            }
+            lastResolvedLocalId = nil
+            deviceVerified = false
         }
 
-        var devices = await usableDevices()
+        // 2. Prefer this device's already-registered Spotify entry.
+        let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
+        var target = usable.first(where: { isLocalRealDevice($0) })
 
-        // No device visible — wake Spotify (foregrounds it via spotify://) and
-        // poll the devices endpoint until one registers (~10s).
-        if devices.isEmpty {
-            wakeSpotify()
-            for _ in 0..<33 {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                devices = await usableDevices()
-                if !devices.isEmpty { break }
-            }
-            if devices.isEmpty {
-                lastAction = "No Spotify device found"
-                return false
-            }
+        // 3. Not registered → wake THIS device's Spotify and resolve it.
+        if target == nil {
+            target = await resolveLocalDevice(client)
         }
 
-        // Prefer an already-active device; otherwise the first usable one
-        // (startPlayback with device_id activates an inactive device).
-        guard let dev = devices.first(where: { $0.isActive }) ?? devices.first else {
-            lastAction = "No Spotify device found"
+        guard let dev = target else {
+            lastAction = "Couldn't find Spotify on this device. Open Spotify and try again."
             return false
         }
 
-        // Returns the HTTP status code, or -1 on a thrown error.
+        // 4. Play.
+        let ok = await startPlayback(client, uri: uri, deviceId: dev.id)
+        if ok {
+            deviceVerified = true
+            lastResolvedLocalId = dev.id
+            // Sticky default (parity with Android): persist the SYNTHETIC
+            // localDeviceId, never the real id (it changes between Spotify
+            // sessions). Only when no preference is already set.
+            let existing = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
+            if existing == nil {
+                try? await settings.setPreferredSpotifyDeviceId(deviceId: Self.localDeviceId)
+            }
+        }
+        return ok
+    }
+
+    /// Wake this device's Spotify and poll until its own Connect device
+    /// registers. Always wakes — remote devices appear in the API without the
+    /// LOCAL Spotify running, so finding *a* device isn't enough (mirrors
+    /// Android `resolveLocalDevice`). iOS wake = foreground `spotify://`.
+    @MainActor
+    private func resolveLocalDevice(_ client: SpotifyClient) async -> SpDevice? {
+        wakeSpotify()
+        try? await Task.sleep(nanoseconds: 1_500_000_000) // let Spotify start
+        // Stop Spotify auto-resuming its own last track on wake.
+        _ = try? await client.pausePlayback()
+
+        // Cold-launching Spotify can take ~15-20s to register as a Connect
+        // device (process start + auth + server registration).
+        for _ in 0..<60 { // ~18s at 300ms
+            let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
+            if let local = usable.first(where: { isLocalRealDevice($0) })
+                ?? usable.first(where: { isTabletOrPhone($0) }) {
+                return local
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return nil
+    }
+
+    /// `startPlayback` with a single 502 retry. True on 2xx (204 = success).
+    @MainActor
+    private func startPlayback(_ client: SpotifyClient, uri: String, deviceId: String) async -> Bool {
         func attempt() async -> Int {
             do {
                 let resp = try await client.startPlayback(
                     body: SpPlaybackRequest(uris: [uri], contextUri: nil),
-                    deviceId: dev.id
+                    deviceId: deviceId
                 )
                 return Int(resp.status.value)
             } catch {
@@ -169,31 +214,36 @@ final class IosSpotifyConnect {
                 return -1
             }
         }
-
         var status = await attempt()
-        // Single 502 retry — Spotify occasionally 502s on a cold device.
         if status == 502 {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             status = await attempt()
         }
-
         switch status {
-        case 200...204:
-            // Spotify returns 204 No Content on a successful start.
-            lastAction = "Spotify playback started"
-            return true
-        case 403:
-            lastAction = "Spotify Premium required"
-            return false
-        case 429:
-            lastAction = "Spotify rate-limited"
-            return false
+        case 200...204: lastAction = "Spotify playback started"; return true
+        case 403: lastAction = "Spotify Premium required"; return false
+        case 429: lastAction = "Spotify rate-limited"; return false
         default:
-            if status >= 0 {
-                lastAction = "Spotify play failed (status \(status))"
-            }
+            if status >= 0 { lastAction = "Spotify play failed (status \(status))" }
             return false
         }
+    }
+
+    /// True when [device] is THIS device's own Spotify entry — matched by name
+    /// (Spotify registers the device's user-set name; `UIDevice.current.name`)
+    /// AND a handheld/tablet type. iOS has no `Build.MODEL`; the name is the
+    /// reliable signal. `resolveLocalDevice` falls back to the type alone.
+    private func isLocalRealDevice(_ device: SpDevice) -> Bool {
+        let myName = UIDevice.current.name.lowercased()
+        guard !myName.isEmpty else { return false }
+        let devName = device.name.lowercased()
+        return (devName.contains(myName) || myName.contains(devName)) && isTabletOrPhone(device)
+    }
+
+    /// A handheld/tablet device type — plausibly THIS device, not a remote
+    /// Computer / TV / Speaker phantom.
+    private func isTabletOrPhone(_ device: SpDevice) -> Bool {
+        device.type == "Smartphone" || device.type == "Tablet"
     }
 }
 
