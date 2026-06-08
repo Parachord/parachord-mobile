@@ -158,13 +158,23 @@ final class IosSpotifyConnect {
             deviceVerified = false
         }
 
-        // 2. Prefer this device's already-registered Spotify entry.
+        // 2. Pick the best ALREADY-LIVE Connect device. Controlling an
+        // existing device via the Web API never opens the Spotify app — that's
+        // the desktop/Android behavior. Prefer THIS device (silent control of a
+        // running local Spotify), then desktop spotify.axe order
+        // (Computer > phone/tablet > Speaker > active > any).
         let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
-        var target = usable.first(where: { isLocalRealDevice($0) })
+        print("SPCONNECT: usable devices = \(usable.map { "\($0.name)[type=\($0.type),active=\($0.isActive)]" })")
+        var target = pickDevice(usable)
 
-        // 3. Not registered → wake THIS device's Spotify and resolve it.
+        // 3. No live device anywhere → wake THIS device's Spotify. This is the
+        // ONLY path that opens the Spotify app (iOS has no invisible wake), so
+        // it's the last resort — used only when nothing is already running.
         if target == nil {
+            print("SPCONNECT: no live device — waking this device's Spotify (will foreground it)")
             target = await resolveLocalDevice(client)
+        } else {
+            print("SPCONNECT: controlling existing device '\(target!.name)' via Connect (no app open)")
         }
 
         guard let dev = target else {
@@ -194,6 +204,21 @@ final class IosSpotifyConnect {
             }
         }
         return ok
+    }
+
+    /// Choose a target from the ALREADY-LIVE Connect devices, preferring THIS
+    /// device (so a running local Spotify is controlled silently), then the
+    /// desktop `spotify.axe` `play()` order: Computer > phone/tablet > Speaker >
+    /// any active > any. Returns nil only when the list is empty — the single
+    /// case where `play()` falls through to waking (and thus opening) Spotify.
+    /// Mirrors desktop device selection + Android `ensureDevice`/`pickDevice`.
+    private func pickDevice(_ usable: [SpDevice]) -> SpDevice? {
+        usable.first(where: { isLocalRealDevice($0) })
+            ?? usable.first(where: { $0.type == "Computer" })
+            ?? usable.first(where: { isTabletOrPhone($0) })
+            ?? usable.first(where: { $0.type == "Speaker" })
+            ?? usable.first(where: { $0.isActive })
+            ?? usable.first
     }
 
     /// Wake this device's Spotify and poll until its own Connect device
