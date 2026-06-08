@@ -104,9 +104,11 @@ class IosContainer private constructor() {
         SpotifyTokenRefresher(settingsStore, authHttpClient) { appConfig.spotifyClientId }
     }
 
-    /** Request-time Spotify bearer lookup (proactive-refresh aware). */
+    /** Request-time Spotify bearer lookup. Cached-read only; the reactive,
+     *  single-flighted OAuthRefreshPlugin (wired with [spotifyTokenRefresher])
+     *  owns all refresh — mirrors AndroidAuthTokenProvider. */
     val spotifyAuthProvider: SpotifyAuthTokenProvider by lazy {
-        SpotifyAuthTokenProvider(settingsStore, spotifyTokenRefresher)
+        SpotifyAuthTokenProvider(settingsStore)
     }
 
     /**
