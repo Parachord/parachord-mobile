@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -195,6 +196,10 @@ fun WeeklyPlaylistScreen(
                 // Track list
                 itemsIndexed(tracks, key = { index, track -> track.id }) { index, track ->
                     val resolverKey = "${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"
+                    // Visibility-scoped resolution (#177): resolve a row only once
+                    // it scrolls into view (LazyColumn composes viewport + overscan),
+                    // not the whole list on open. The cache dedups, so re-scroll is free.
+                    LaunchedEffect(track.id) { viewModel.resolveVisibleTrack(track) }
                     TrackRow(
                         title = track.title,
                         artist = track.artist,

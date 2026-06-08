@@ -102,11 +102,27 @@ class WeeklyPlaylistViewModel constructor(
             _coverUrls.value = lbTracks.mapNotNull { it.albumArt }.distinct().take(4)
             _isLoading.value = false
 
-            // Resolve tracks in background for resolver badges and playback sources
-            if (trackEntities.isNotEmpty()) {
-                trackResolverCache.resolveInBackground(trackEntities, backfillDb = false)
-            }
+            // NOTE: resolution is visibility-scoped (#177) — the screen calls
+            // resolveVisibleTrack() per row as it scrolls into view, instead of
+            // bulk-submitting the whole list on open (which fanned out one
+            // Spotify + one iTunes catalog search per track in a single burst,
+            // tripping Spotify's account-wide abuse window on a fresh client).
+            // Mirrors the desktop's ResolutionScheduler.updateVisibility.
         }
+    }
+
+    /**
+     * Resolve a single track the moment its row becomes visible (driven by
+     * the LazyColumn item's `LaunchedEffect`). Mirrors the desktop's
+     * `ResolutionScheduler.updateVisibility` — resolve only the viewport +
+     * overscan, not the whole list on open. Submitting per-row is safe
+     * because [TrackResolverCache.resolveInBackground] dedups by track key
+     * and skips in-flight requests, so scrolling back over an already
+     * resolved row is free. `backfillDb = false` because weekly playlists
+     * are ephemeral, metadata-only LB tracks with no DB row to backfill.
+     */
+    fun resolveVisibleTrack(track: TrackEntity) {
+        trackResolverCache.resolveInBackground(listOf(track), backfillDb = false)
     }
 
     fun playAll(startIndex: Int = 0) {
