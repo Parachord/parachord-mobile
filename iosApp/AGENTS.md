@@ -232,6 +232,33 @@ there**, so several gaps only surface on iOS:
   fail). Symptom of regressing this: resolution works only after visiting the
   Dev tab. Keep the installer wired in `ParachordApp.init()` + pre-warm there.
 
+### Tracklist resolution: visibility-scoped, top-down, globally bounded
+
+Every list screen that shows resolver badges MUST submit its tracks the same
+way — this is the desktop `ResolutionScheduler` model (parachord-desktop
+`app.js` ~L1126) ported into `IosTrackResolverCache`. Three invariants,
+learned the hard way (each caused a Spotify 429 abuse window or a visible
+bug):
+
+- **Visibility-scoped, not whole-list.** Resolve per *visible row* via the
+  row's `.onAppear`, NOT a bulk `resolveInBackground(allTracks)` on load.
+  Bursting a 50-track playlist fired ~50 Spotify + ~50 iTunes searches at
+  once and tripped the shared-`client_id` abuse window (mobile #177 tracks
+  the Android side; iOS `PlaylistDetailView` is the reference fix).
+- **Top-down, not `onAppear` order.** Submit with `cache.resolve(req,
+  order: index)` where `order` is the row index. The cache drains a priority
+  queue LOWEST-order-first, so badges fill from the top of the page down —
+  SwiftUI's `onAppear` firing order is NOT top-down, so relying on it fills
+  bottom-up.
+- **One global concurrency cap.** `IosTrackResolverCache` has a SHARED worker
+  pool (`cap = 3`). Do not reintroduce a per-call task group — that lets N
+  rows run N concurrent resolves and defeats both the JSC-context bound and
+  the rate-limit protection.
+
+When Library / Search / other list screens land, wire them the same way
+(`.onAppear { resolve(req, order: index) }`); don't bulk-submit and don't
+drop the index.
+
 ---
 
 ## UIKit / CoreGraphics (mosaic, etc.)
