@@ -104,10 +104,19 @@ class SpotifyClient(
      * triggered an unprotected `/v1/tracks/{id}` call that 429'd, each one
      * extending Spotify's punishment window indefinitely.
      *
-     * Playback-control PUT/DELETE methods (startPlayback, pausePlayback,
-     * etc.) intentionally **do not** route through the gate — the user
-     * needs to be able to skip / pause even during a throttle window. The
-     * gate is for high-volume read traffic, not interactive control.
+     * Library + playlist write methods (saveTracks, removeTracks,
+     * createPlaylist, replacePlaylistTracks, …) ALSO route through the
+     * gate via [gatedSend] (issue #176) so a 429 on a write sets the same
+     * persisted cooldown a read does, and a write can't fire mid-cooldown
+     * to re-arm Spotify's abuse window on the shared `client_id`.
+     *
+     * Only the interactive playback-control PUT/DELETE methods
+     * (startPlayback, pausePlayback, seekPlayback, setVolume,
+     * transferPlayback) and [getDevices] intentionally **do not** route
+     * through the gate — the user needs to be able to skip / pause even
+     * during a throttle window. Those low-volume, user-initiated calls
+     * honor the cooldown advisorily (the playback flow checks the gate's
+     * remaining cooldown and bails before poking a penalized account).
      */
     private val gate = RateLimitGate(
         tag = "SpotifyClient",
@@ -144,6 +153,35 @@ class SpotifyClient(
         gate.handleResponse(response) { SpotifyRateLimitedException(it) }
         response.body()
     }
+
+    /**
+     * Routes a write/mutation request through the same rate-limit gate as
+     * [gatedGet] (issue #176). Acquires a permit (short-circuiting with a
+     * typed [SpotifyRateLimitedException] if the cooldown is active),
+     * issues the request, then calls [RateLimitGate.handleResponse] so a
+     * 429 on a write SETS + persists the cooldown — and throws — exactly
+     * like a 429 on a gated read.
+     *
+     * Why this matters: Spotify's 429s are account-wide and its abuse
+     * window hands back a long `Retry-After` (~1h). If writes stayed
+     * ungated, a write 429 would never arm the cooldown, and a write fired
+     * mid-cooldown (e.g. set by another client on the shared `client_id`)
+     * would poke an already-penalized account and re-arm a fresh ~1h
+     * window. The gate's persisted cooldown is the single source of truth;
+     * every high-volume call — read OR write — must route through it.
+     *
+     * Returns the raw [HttpResponse] for callers that inspect status. The
+     * interactive playback-control PUTs (`play`/`pause`/`seek`/`volume`/
+     * `transferPlayback`) and [getDevices] deliberately stay ungated — the
+     * user must be able to control playback during a throttle window. See
+     * the [gate] KDoc.
+     */
+    private suspend fun gatedSend(request: suspend () -> HttpResponse): HttpResponse =
+        gate.withPermit(exceptionFactory = { SpotifyRateLimitedException(it) }) {
+            val response = request()
+            gate.handleResponse(response) { SpotifyRateLimitedException(it) }
+            response
+        }
 
     // ── Search + Lookup ──────────────────────────────────────────────
 
@@ -256,61 +294,83 @@ class SpotifyClient(
     // ── Library Write ────────────────────────────────────────────────
 
     suspend fun saveTracks(body: SpIdsRequest): HttpResponse =
-        httpClient.put("$BASE/v1/me/tracks") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.put("$BASE/v1/me/tracks") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun removeTracks(body: SpIdsRequest): HttpResponse =
-        httpClient.delete("$BASE/v1/me/tracks") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.delete("$BASE/v1/me/tracks") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun saveAlbums(body: SpIdsRequest): HttpResponse =
-        httpClient.put("$BASE/v1/me/albums") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.put("$BASE/v1/me/albums") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun removeAlbums(body: SpIdsRequest): HttpResponse =
-        httpClient.delete("$BASE/v1/me/albums") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.delete("$BASE/v1/me/albums") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun followArtists(body: SpIdsRequest): HttpResponse =
-        httpClient.put("$BASE/v1/me/following") {
-            applyAuth(this); parameter("type", "artist")
-            contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.put("$BASE/v1/me/following") {
+                applyAuth(this); parameter("type", "artist")
+                contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun unfollowArtists(body: SpIdsRequest): HttpResponse =
-        httpClient.delete("$BASE/v1/me/following") {
-            applyAuth(this); parameter("type", "artist")
-            contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.delete("$BASE/v1/me/following") {
+                applyAuth(this); parameter("type", "artist")
+                contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     // ── Playlist Write ───────────────────────────────────────────────
 
     suspend fun createPlaylist(userId: String, body: SpCreatePlaylistRequest): SpPlaylistFull =
-        httpClient.post("$BASE/v1/users/$userId/playlists") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.post("$BASE/v1/users/$userId/playlists") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }.body()
 
     suspend fun replacePlaylistTracks(playlistId: String, body: SpUrisRequest): HttpResponse =
-        httpClient.put("$BASE/v1/playlists/$playlistId/tracks") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.put("$BASE/v1/playlists/$playlistId/tracks") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun addPlaylistTracks(playlistId: String, body: SpUrisRequest): HttpResponse =
-        httpClient.post("$BASE/v1/playlists/$playlistId/tracks") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.post("$BASE/v1/playlists/$playlistId/tracks") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun updatePlaylistDetails(playlistId: String, body: SpUpdatePlaylistRequest): HttpResponse =
-        httpClient.put("$BASE/v1/playlists/$playlistId") {
-            applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+        gatedSend {
+            httpClient.put("$BASE/v1/playlists/$playlistId") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
         }
 
     suspend fun unfollowPlaylist(playlistId: String): HttpResponse =
-        httpClient.delete("$BASE/v1/playlists/$playlistId/followers") { applyAuth(this) }
+        gatedSend {
+            httpClient.delete("$BASE/v1/playlists/$playlistId/followers") { applyAuth(this) }
+        }
 }
 
 // ── Response Models ──────────────────────────────────────────────────
