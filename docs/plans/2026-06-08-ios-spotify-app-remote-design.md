@@ -1,8 +1,38 @@
 # iOS Spotify on-device playback: `SPTAppRemote` design
 
-**Status:** Design / decision record (no code yet)
+**Status:** Design / decision record. **SDK DEFERRED** — see §0.
 **Date:** 2026-06-08
 **Decision driver:** On-device playback is the **primary** iOS user experience.
+
+---
+
+## 0. Outcome (2026-06-08): on-device works on the Web API — SDK deferred
+
+Before adopting the SDK we hardened the Web API path and tested on-device.
+**Result: cold on-device playback now works without the SDK.**
+
+- The original breakage was the **suspension race** (waking Spotify backgrounds
+  us → iOS suspends the device poll). A **`UIApplication` background-task
+  assertion** around the wake+poll fixed it: the poll now completes, the
+  phone's Spotify registers as a Connect device, and the Web API
+  `startPlayback?device_id=…` plays the track. Verified on-device: track
+  played, and play/pause works.
+- We also switched the wake to the **track deep link** (`spotify:track:<id>`)
+  so Spotify lands on the right track (no wrong-track auto-resume).
+- The "does opening the track URI **autoplay**" micro-experiment was
+  **inconclusive** (the state check fired at 2s, before the device registered)
+  — but moot, because the Web API `startPlayback` plays it regardless.
+
+**Why the SDK is deferred, not adopted:** per §3 fact #1, the SDK's
+`authorizeAndPlayURI` **also foregrounds Spotify** on a cold start, so it would
+NOT remove the one remaining bit of jank ("it opened Spotify") — that cold
+foreground is unavoidable on iOS either way. The SDK's only remaining marginal
+value is **push playback state** (scrubber position / auto-advance without
+polling), which a slow Web API poll can approximate. So the SDK becomes a
+**later polish** item, not a prerequisite for the primary experience.
+
+The design below is retained as the record for if/when push-state or a cleaner
+cold-start justifies revisiting.
 
 ---
 

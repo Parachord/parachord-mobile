@@ -117,12 +117,11 @@ final class IosSpotifyConnect {
         }
     }
 
-    /// EXPERIMENT: wake Spotify by opening the TRACK deep link
-    /// (`spotify:track:<id>`) instead of bare `spotify://`, to test whether iOS
-    /// auto-plays the track on open. If it does, we get reliable cold
-    /// wake-and-play with NO SPTAppRemote SDK; if Spotify only navigates to the
-    /// track page without playing, the SDK's `authorizeAndPlayURI` is required.
-    /// Falls back to the bare scheme if `trackUri` isn't a valid URL.
+    /// Wake Spotify by opening the TRACK deep link (`spotify:track:<id>`)
+    /// instead of bare `spotify://`, so Spotify lands on the right track while
+    /// it registers as a Connect device (avoiding a wrong-track auto-resume
+    /// flash). Playback itself is then started via the Web API once the device
+    /// appears. Falls back to the bare scheme if `trackUri` isn't a valid URL.
     func wakeSpotifyPlaying(_ trackUri: String) {
         guard let url = URL(string: trackUri) else { wakeSpotify(); return }
         UIApplication.shared.open(url, options: [:]) { [weak self] success in
@@ -356,19 +355,16 @@ final class IosSpotifyConnect {
         let bgTask = UIApplication.shared.beginBackgroundTask(withName: "spotify-device-wake")
         defer { if bgTask != .invalid { UIApplication.shared.endBackgroundTask(bgTask) } }
 
-        // EXPERIMENT (no-SDK cold wake-and-play): open the TRACK uri instead of
-        // bare `spotify://` to see whether iOS auto-plays it. If it does, we get
-        // reliable on-device play with no SPTAppRemote. We deliberately do NOT
-        // pausePlayback here (that would kill any autoplay we're testing for).
+        // Wake Spotify by opening the TRACK deep link (spotify:track:<id>),
+        // which sends Spotify straight to the right track — so we no longer need
+        // the old wrong-track-auto-resume pause. Cold first-play still
+        // foregrounds Spotify (iOS has no invisible wake; the SDK's
+        // authorizeAndPlayURI would foreground it too), but the background-task
+        // assertion above lets this poll complete so the device registers and
+        // the Web API startPlayback (below) plays it reliably; subsequent plays
+        // hit the warm path silently. Verified on-device 2026-06-08.
         wakeSpotifyPlaying(playUri)
-        try? await Task.sleep(nanoseconds: 2_000_000_000) // let Spotify start + (maybe) autoplay
-
-        // Definitive autoplay signal: did opening the track uri start playback?
-        if let state = try? await client.getPlaybackStateOrNull() {
-            print("SPWAKE: after opening \(playUri) — isPlaying=\(state.isPlaying) track=\(state.item?.name ?? "nil")")
-        } else {
-            print("SPWAKE: after opening \(playUri) — no playback state (no active device yet)")
-        }
+        try? await Task.sleep(nanoseconds: 1_500_000_000) // let Spotify start
 
         for _ in 0..<maxPolls {
             // Bail early if a 429 lands mid-wait — keep parity with the
