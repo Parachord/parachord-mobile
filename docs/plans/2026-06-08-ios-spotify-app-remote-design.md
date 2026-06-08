@@ -26,13 +26,27 @@ Before adopting the SDK we hardened the Web API path and tested on-device.
 **Why the SDK is deferred, not adopted:** per §3 fact #1, the SDK's
 `authorizeAndPlayURI` **also foregrounds Spotify** on a cold start, so it would
 NOT remove the one remaining bit of jank ("it opened Spotify") — that cold
-foreground is unavoidable on iOS either way. The SDK's only remaining marginal
+foreground is unavoidable on iOS either way. The SDK's remaining marginal
 value is **push playback state** (scrubber position / auto-advance without
-polling), which a slow Web API poll can approximate. So the SDK becomes a
-**later polish** item, not a prerequisite for the primary experience.
+polling) — and the auto-return below. So the SDK becomes a **later polish**
+item, not a prerequisite for the primary experience.
 
-The design below is retained as the record for if/when push-state or a cleaner
-cold-start justifies revisiting.
+**Caveat that sharpens the SDK case — auto-return to Parachord.** iOS does
+**not** let an app foreground itself (no API; self-foregrounding is blocked).
+So after the Web-API `spotify://` wake, the user is **stranded in Spotify**
+until they manually switch back — we cannot bring Parachord forward. The
+**only** mechanism that auto-returns is a redirect routed to us, which is
+exactly what `authorizeAndPlayURI` produces: open Spotify → play → **redirect
+to `parachord://` re-foregrounds Parachord**. (And since that redirect fires
+*after* playback starts, the Android mistake-#19 "deprioritized before it
+registered" concern doesn't apply.) So the SDK's distinctive win is **not** a
+silent cold start (still flashes Spotify) but **returning the user to
+Parachord automatically** — the Web-API path cannot do this on iOS. If
+"don't strand the user in Spotify on cold start" is a priority, that revives
+the SDK case on its own.
+
+The design below is retained as the record for if/when push-state, auto-return,
+or a cleaner cold-start justifies revisiting.
 
 ---
 
@@ -142,6 +156,9 @@ desktop + Android + iOS (which is exactly why our 429s hit everywhere at once).
 
 **Pros**
 - Reliable on-device first play (atomic wake+play) — fixes the core UX.
+- **Auto-returns the user to Parachord** after the cold-start foreground (its
+  `parachord://` redirect). The Web-API `spotify://` path **cannot** — iOS
+  forbids self-foregrounding, so that path strands the user in Spotify.
 - Silent on-device control + **push** state after first play.
 - Playback control off the Web API → big rate-limit relief on the one key.
 - Unblocks scrubber / accurate play-pause / auto-advance without polling.
