@@ -52,6 +52,12 @@ final class IosSpotifyConnect {
     var spotifyInstalled: Bool = false
     var lastAction: String?
 
+    /// Whether the Connect session is currently playing. Tracked optimistically
+    /// (set on play/resume/pause) so the mini-player play/pause glyph reflects
+    /// Connect state WITHOUT a per-500ms `getPlaybackState` poll (that ungated
+    /// poll is exactly the kind of traffic that re-arms Spotify's rate limit).
+    var isPlaying: Bool = false
+
     /// True when a Spotify OAuth token is present (mirrors the shared
     /// `getSpotifyConnectedFlow()`). Drives `canPlay` so the PlaybackRouter
     /// only routes to Spotify once auth is wired.
@@ -270,6 +276,29 @@ final class IosSpotifyConnect {
         cont?.resume(returning: device)
     }
 
+    /// Pause the active Connect session via the Web API (PUT /me/player/pause).
+    /// Used by the mini-player / Now Playing play-pause toggle when Spotify is
+    /// the active engine. Optimistically flips `isPlaying` so the glyph updates
+    /// immediately; reverts if the call fails.
+    @MainActor
+    func pause() async {
+        isPlaying = false
+        let resp = try? await IosContainer.companion.shared.spotifyClient.pausePlayback()
+        if let code = resp?.status.value, !(200...204).contains(Int(code)) {
+            isPlaying = true // couldn't pause — restore glyph to reality
+        }
+    }
+
+    /// Resume the active Connect session (PUT /me/player/play with no body).
+    @MainActor
+    func resume() async {
+        isPlaying = true
+        let resp = try? await IosContainer.companion.shared.spotifyClient.resumePlayback()
+        if let code = resp?.status.value, !(200...204).contains(Int(code)) {
+            isPlaying = false
+        }
+    }
+
     /// Wake this device's Spotify and poll until its own Connect device
     /// registers. Always wakes — remote devices appear in the API without the
     /// LOCAL Spotify running, so finding *a* device isn't enough (mirrors
@@ -324,7 +353,7 @@ final class IosSpotifyConnect {
             status = await attempt()
         }
         switch status {
-        case 200...204: lastAction = "Spotify playback started"; return true
+        case 200...204: lastAction = "Spotify playback started"; isPlaying = true; return true
         case 403: lastAction = "Spotify Premium required"; return false
         case 429: lastAction = "Spotify rate-limited"; return false
         default:
@@ -1177,6 +1206,12 @@ final class QueuePlaybackCoordinator {
     /// state below so it doesn't care which one.
     var activeEngine: PlaybackEngineKind = .avPlayer
 
+    /// Mirror of `spotify.isPlaying`, updated from the @MainActor contexts that
+    /// drive Connect (play start + toggle). Lets the nonisolated `isPlaying`
+    /// getter below read Spotify state without crossing into the @MainActor
+    /// `IosSpotifyConnect` from a nonisolated getter.
+    private var spotifyPlaying = false
+
     // ── Unified now-playing state (engine-agnostic) ────────────────────
     // AVPlayer and MusicKit both expose real position/duration (MusicKit via
     // its state-polling loop). Spotify is play-state-only for now (stubbed).
@@ -1184,7 +1219,7 @@ final class QueuePlaybackCoordinator {
         switch activeEngine {
         case .avPlayer: return player.isPlaying
         case .musicKit: return musicKit.isPlaying
-        case .spotify: return false
+        case .spotify: return spotifyPlaying
         }
     }
     var currentTime: Double {
@@ -1260,7 +1295,12 @@ final class QueuePlaybackCoordinator {
                 if musicKit.isPlaying { musicKit.pause() } else { musicKit.resume() }
             }
         case .spotify:
-            break
+            // Control the Spotify Connect session over the Web API
+            // (pause / resume) — NOT a local engine.
+            Task { @MainActor in
+                if spotify.isPlaying { await spotify.pause() } else { await spotify.resume() }
+                spotifyPlaying = spotify.isPlaying
+            }
         }
     }
 
@@ -1347,6 +1387,7 @@ final class QueuePlaybackCoordinator {
             case .played(let kind):
                 activeEngine = kind
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
+                if kind == .spotify { spotifyPlaying = spotify.isPlaying }
             case .noPlayableSource:
                 // Resolved but no engine could play it (e.g. Apple-Music-only
                 // match with no subscription) — advance to the next track.
