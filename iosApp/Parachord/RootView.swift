@@ -55,6 +55,14 @@ struct ContentView: View {
         // The one shared coordinator, reachable by pushed screens
         // (Discover → PlaylistDetail) for tap-to-play.
         .environment(playback.coordinator)
+        // Spotify Connect device picker (Android parity) — shown when play
+        // hits ambiguous live devices with no remembered preference.
+        .sheet(item: Binding(
+            get: { playback.spotify.pickerRequest },
+            set: { if $0 == nil { playback.spotify.onDevicePicked(nil) } }
+        )) { request in
+            SpotifyDevicePickerSheet(request: request) { playback.spotify.onDevicePicked($0) }
+        }
     }
 }
 

@@ -68,7 +68,14 @@ final class IosSpotifyConnect {
     @ObservationIgnored private var lastResolvedLocalId: String?
     /// Synthetic "this device" id persisted as the preferred device — the real
     /// id changes between Spotify sessions, so we persist this token instead.
-    private static let localDeviceId = "__local_device__"
+    static let localDeviceId = "__local_device__"
+
+    /// Non-nil while the device picker should be shown. Observed by the root
+    /// view's `.sheet`. Mirrors Android's `devicePickerRequest` StateFlow.
+    var pickerRequest: SpotifyPickerRequest?
+    /// Bridges the async `play()` flow to the user's picker choice — the Swift
+    /// analogue of Android's `CompletableDeferred<SpDevice?>`.
+    @ObservationIgnored private var pickerContinuation: CheckedContinuation<SpDevice?, Never>?
 
     init() {
         // Observe token presence; held for the lifetime of this object so the
@@ -158,27 +165,40 @@ final class IosSpotifyConnect {
             deviceVerified = false
         }
 
-        // 2. Pick the best ALREADY-LIVE Connect device. Controlling an
-        // existing device via the Web API never opens the Spotify app — that's
-        // the desktop/Android behavior. Prefer THIS device (silent control of a
-        // running local Spotify), then desktop spotify.axe order
-        // (Computer > phone/tablet > Speaker > active > any).
+        // 2. Resolve the target device (Android `pickDevice` parity).
+        //    - preferred == "This device"  → wake this device.
+        //    - preferred remote present     → control it silently.
+        //    - stale preference             → clear, fall through.
+        //    - no live device at all        → wake this device (only option).
+        //    - otherwise (ambiguous)        → ASK via the picker; remember the
+        //      choice (LOCAL token for this-device, real id for a remote).
+        let preferred = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
         let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
-        print("SPCONNECT: usable devices = \(usable.map { "\($0.name)[type=\($0.type),active=\($0.isActive)]" })")
-        var target = pickDevice(usable)
 
-        // 3. No live device anywhere → wake THIS device's Spotify. This is the
-        // ONLY path that opens the Spotify app (iOS has no invisible wake), so
-        // it's the last resort — used only when nothing is already running.
-        if target == nil {
-            print("SPCONNECT: no live device — waking this device's Spotify (will foreground it)")
+        var target: SpDevice?
+        if preferred == Self.localDeviceId {
             target = await resolveLocalDevice(client)
+        } else if let pid = preferred, let match = usable.first(where: { $0.id == pid }) {
+            target = match
         } else {
-            print("SPCONNECT: controlling existing device '\(target!.name)' via Connect (no app open)")
+            if let pid = preferred, !pid.isEmpty {
+                try? await settings.clearPreferredSpotifyDeviceId() // stale
+            }
+            if usable.isEmpty {
+                target = await resolveLocalDevice(client)
+            } else {
+                // Offer the live devices plus a synthetic "This device".
+                guard let chosen = await presentPicker(usable + [localDeviceEntry()]) else {
+                    lastAction = "Playback cancelled"
+                    return false
+                }
+                try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
+                target = isLocalPlaceholder(chosen) ? await resolveLocalDevice(client) : chosen
+            }
         }
 
         guard let dev = target else {
-            lastAction = "Couldn't find Spotify on this device. Open Spotify and try again."
+            lastAction = "Couldn't find a Spotify device. Open Spotify and try again."
             return false
         }
 
@@ -206,19 +226,48 @@ final class IosSpotifyConnect {
         return ok
     }
 
-    /// Choose a target from the ALREADY-LIVE Connect devices, preferring THIS
-    /// device (so a running local Spotify is controlled silently), then the
-    /// desktop `spotify.axe` `play()` order: Computer > phone/tablet > Speaker >
-    /// any active > any. Returns nil only when the list is empty — the single
-    /// case where `play()` falls through to waking (and thus opening) Spotify.
-    /// Mirrors desktop device selection + Android `ensureDevice`/`pickDevice`.
-    private func pickDevice(_ usable: [SpDevice]) -> SpDevice? {
-        usable.first(where: { isLocalRealDevice($0) })
-            ?? usable.first(where: { $0.type == "Computer" })
-            ?? usable.first(where: { isTabletOrPhone($0) })
-            ?? usable.first(where: { $0.type == "Speaker" })
-            ?? usable.first(where: { $0.isActive })
-            ?? usable.first
+    /// Synthetic "This device" entry injected into the picker (Android's
+    /// `localDeviceEntry`). Picking it routes through `resolveLocalDevice`
+    /// (wake this device's Spotify).
+    private func localDeviceEntry() -> SpDevice {
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        return SpDevice(
+            id: Self.localDeviceId,
+            name: UIDevice.current.name,
+            isActive: false,
+            isRestricted: false,
+            type: isPad ? "Tablet" : "Smartphone",
+            volumePercent: nil
+        )
+    }
+
+    private func isLocalPlaceholder(_ device: SpDevice) -> Bool { device.id == Self.localDeviceId }
+
+    /// Persist LOCAL_DEVICE_ID for this device (synthetic OR a matched local
+    /// smartphone) — its real id rotates between Spotify sessions; remotes keep
+    /// their real id. Mirrors Android `chooseStableId`.
+    private func chooseStableId(_ chosen: SpDevice) -> String {
+        (isLocalPlaceholder(chosen) || isLocalRealDevice(chosen)) ? Self.localDeviceId : chosen.id
+    }
+
+    /// Present the device picker and await the user's choice (or nil on
+    /// cancel) — the Swift analogue of Android's `CompletableDeferred.await()`.
+    private func presentPicker(_ devices: [SpDevice]) async -> SpDevice? {
+        pickerContinuation?.resume(returning: nil) // cancel any stale picker
+        pickerContinuation = nil
+        return await withCheckedContinuation { cont in
+            pickerContinuation = cont
+            pickerRequest = SpotifyPickerRequest(devices: devices)
+        }
+    }
+
+    /// Called by the picker sheet when the user taps a device (or nil to
+    /// cancel / dismiss). Mirrors Android's `onDevicePicked`. Idempotent.
+    func onDevicePicked(_ device: SpDevice?) {
+        pickerRequest = nil
+        let cont = pickerContinuation
+        pickerContinuation = nil
+        cont?.resume(returning: device)
     }
 
     /// Wake this device's Spotify and poll until its own Connect device
@@ -314,6 +363,84 @@ final class IosSpotifyConnect {
     /// Computer / TV / Speaker phantom.
     private func isTabletOrPhone(_ device: SpDevice) -> Bool {
         device.type == "Smartphone" || device.type == "Tablet"
+    }
+}
+
+// MARK: - Spotify device picker (Android SpotifyDevicePickerDialog parity)
+
+/// Identifiable wrapper so the root view can drive a `.sheet(item:)`.
+struct SpotifyPickerRequest: Identifiable {
+    let id = UUID()
+    let devices: [SpDevice]
+}
+
+/// "Choose Spotify Device" sheet — mirrors Android's `SpotifyDevicePickerDialog`
+/// (type emoji, name, "This device" label, active badge). Shown when there are
+/// live Connect devices but no remembered preference; the choice is persisted.
+struct SpotifyDevicePickerSheet: View {
+    let request: SpotifyPickerRequest
+    let onPick: (SpDevice?) -> Void
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(request.devices, id: \.id) { device in
+                        Button { onPick(device) } label: { row(device) }
+                            .buttonStyle(.plain)
+                    }
+                } header: {
+                    Text("Where would you like to play?")
+                }
+            }
+            .navigationTitle("Choose Spotify Device")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onPick(nil) }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    @ViewBuilder
+    private func row(_ device: SpDevice) -> some View {
+        let isLocal = device.id == IosSpotifyConnect.localDeviceId
+        HStack(spacing: 12) {
+            Text(Self.emoji(device.type)).font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isLocal ? "This device" : device.name)
+                    .font(.body).foregroundStyle(.primary).lineLimit(1)
+                if isLocal {
+                    Text(device.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else if let vol = device.volumePercent {
+                    Text("Volume \(vol)%").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            if device.isActive {
+                Text("Active").font(.caption2)
+                    .foregroundStyle(Color(red: 0.49, green: 0.23, blue: 0.93))
+            }
+        }
+        .contentShape(Rectangle())
+        .padding(.vertical, 4)
+    }
+
+    /// Type → emoji, matching Android's `deviceTypeEmoji`.
+    private static func emoji(_ type: String) -> String {
+        switch type {
+        case "Computer": return "💻"
+        case "Smartphone": return "📱"
+        case "Tablet": return "📱"
+        case "Speaker": return "🔊"
+        case "TV", "CastVideo": return "📺"
+        case "CastAudio": return "🔊"
+        case "GameConsole": return "🎮"
+        case "AVR": return "🎵"
+        default: return "🎶"
+        }
     }
 }
 
