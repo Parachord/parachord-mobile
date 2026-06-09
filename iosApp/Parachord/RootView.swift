@@ -62,7 +62,13 @@ struct ContentView: View {
                 }
                 PCTabBar(selected: $tab, onCenter: { showAdd = true },
                          onReselect: { t in
-                             if t == .home { homePath = [] } else { navResetCount += 1 }
+                             // Clear the value-based path AND recreate the tab
+                             // content (.id bump) so BOTH value-based (sidebar /
+                             // tile) and destination-based (discography /
+                             // context-menu / Album→Artist) pushes pop to root.
+                             // homePath=[] alone only popped the value-based ones.
+                             if t == .home { homePath = [] }
+                             navResetCount += 1
                          })
             }
             .padding(.bottom, 6)

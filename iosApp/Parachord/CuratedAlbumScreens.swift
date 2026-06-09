@@ -7,38 +7,42 @@ import Shared
 // Fresh's filter chips + release badge), not the design's grid — per the
 // "Android wins on conflict" rule. Each row → AlbumScreen.
 
-/// Full-bleed gradient header used by the curated Discover screens (mirrors
-/// Android's HeaderGradient). Extends under the status bar.
+/// Gradient header for the curated Discover screens (mirrors Android's
+/// HeaderGradient). The back button sits in a nav row ABOVE the title (so they
+/// never collide); the gradient background bleeds up behind the status bar
+/// while the content respects the safe area.
 struct PCCuratedHeader: View {
     let title: String
     let subtitle: String
     let count: String?
     let gradient: [UInt32]
+    let onBack: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
-            Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.85))
-            if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.7)) }
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white).frame(width: 36, height: 36)
+                        .background(.white.opacity(0.18), in: Circle())
+                }
+                Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title).font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
+                Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.85))
+                if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.7)) }
+            }
+            .padding(.top, 14)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20).padding(.top, 64).padding(.bottom, 22)
-        .background(LinearGradient(
-            colors: gradient.map { Color(uiColor: UIColor(hex: $0)) },
-            startPoint: .leading, endPoint: .trailing))
-    }
-}
-
-/// Floating glass back button for the full-bleed curated screens.
-private struct PCBackButton: View {
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white).frame(width: 36, height: 36)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(.leading, 16).padding(.top, 4)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 22)
+        .background(
+            LinearGradient(
+                colors: gradient.map { Color(uiColor: UIColor(hex: $0)) },
+                startPoint: .leading, endPoint: .trailing)
+            .ignoresSafeArea(edges: .top) // gradient bleeds behind the status bar
+        )
     }
 }
 
@@ -69,7 +73,7 @@ struct CriticalDarlingsScreen: View {
                     title: "Critical Darlings",
                     subtitle: "Top-rated albums from leading music publications",
                     count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
-                    gradient: [0xF59E0B, 0xF97316])
+                    gradient: [0xF59E0B, 0xF97316], onBack: { dismiss() })
                 if model.isLoading && !model.loaded {
                     ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
                 }
@@ -83,9 +87,7 @@ struct CriticalDarlingsScreen: View {
             }
             .padding(.bottom, 130)
         }
-        .ignoresSafeArea(edges: .top)
         .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .topLeading) { PCBackButton { dismiss() } }
         .task { await model.load() }
     }
 
@@ -142,7 +144,7 @@ struct FreshDropsScreen: View {
                     title: "Fresh Drops",
                     subtitle: "New releases from artists you listen to",
                     count: model.drops.isEmpty ? nil : "\(model.drops.count) releases",
-                    gradient: [0x10B981, 0x14B8A6, 0x06B6D4])
+                    gradient: [0x10B981, 0x14B8A6, 0x06B6D4], onBack: { dismiss() })
 
                 Section {
                     if model.isLoading && !model.loaded {
@@ -161,9 +163,7 @@ struct FreshDropsScreen: View {
             }
             .padding(.bottom, 130)
         }
-        .ignoresSafeArea(edges: .top)
         .toolbar(.hidden, for: .navigationBar)
-        .overlay(alignment: .topLeading) { PCBackButton { dismiss() } }
         .task { await model.load() }
     }
 
