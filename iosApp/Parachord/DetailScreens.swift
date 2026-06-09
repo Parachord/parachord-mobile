@@ -137,19 +137,18 @@ struct AlbumScreen: View {
                     HStack(spacing: 12) {
                         Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(PC.fg3).frame(width: 22)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(t.title)
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1)
-                                .lineLimit(1)
-                            if let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
-                               !sources.isEmpty {
-                                ResolverBadgeRow(sources: sources)
-                            }
-                        }
-                        Spacer(minLength: 0)
+                        Text(t.title)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        // Android TrackRow order: title → duration → resolver icons (rightmost).
                         if let d = t.duration, d.int64Value > 0 {
                             Text(pcDur(d.int64Value)).font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3)
+                        }
+                        if let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
+                           !sources.isEmpty {
+                            ResolverBadgeRow(sources: sources)
                         }
                     }
                     .padding(.horizontal, 20).padding(.vertical, 9)

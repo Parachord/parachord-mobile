@@ -148,13 +148,14 @@ struct PlaylistDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                // Resolver badges from the background-resolution cache.
-                if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
-                   !ranked.isEmpty {
-                    ResolverBadgeRow(sources: ranked)
-                }
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            // Resolver squares sit rightmost (Android TrackRow order: after
+            // the duration; these LB tracks have no duration).
+            if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
+               !ranked.isEmpty {
+                ResolverBadgeRow(sources: ranked)
+            }
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
