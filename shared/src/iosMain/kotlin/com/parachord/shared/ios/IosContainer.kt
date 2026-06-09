@@ -109,8 +109,10 @@ class IosContainer private constructor() {
         // artist images/bios, top songs, charts — and is a built-in app key,
         // NOT a user BYO field (matches Android's BuildConfig.LASTFM_API_KEY).
         // The User-Agent matters regardless: MusicBrainz 403s the default UA.
+        // .trim() guards against stray whitespace pasted into Info.plist values
+        // (a trailing space in an API key silently breaks every request).
         fun plist(key: String): String =
-            NSBundle.mainBundle.objectForInfoDictionaryKey(key) as? String ?: ""
+            (NSBundle.mainBundle.objectForInfoDictionaryKey(key) as? String ?: "").trim()
         AppConfig(
             userAgent = "Parachord/0.1 (iOS; https://parachord.com)",
             isDebug = true,
