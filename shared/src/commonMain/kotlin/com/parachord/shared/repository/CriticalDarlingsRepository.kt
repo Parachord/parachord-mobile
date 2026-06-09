@@ -308,13 +308,24 @@ class CriticalDarlingsRepository(
      * decode something like `&amp;lt;` (which should become `&lt;`,
      * not `<`).
      */
-    private fun decodeHtmlEntities(s: String): String =
-        s.replace("&lt;", "<")
+    internal fun decodeHtmlEntities(s: String): String {
+        var out = s
+            .replace("&lt;", "<")
             .replace("&gt;", ">")
             .replace("&quot;", "\"")
-            .replace("&#39;", "'")
             .replace("&apos;", "'")
-            .replace("&amp;", "&")
+        // Generic numeric entities — decimal (&#39; AND zero-padded &#039;,
+        // &#8217; curly apostrophe, &#8212; em-dash …) and hex (&#x27;). The
+        // RSS feed uses zero-padded forms the old explicit "&#39;" missed.
+        out = Regex("&#(\\d+);").replace(out) { m ->
+            m.groupValues[1].toIntOrNull()?.takeIf { it in 0..0xFFFF }?.toChar()?.toString() ?: m.value
+        }
+        out = Regex("&#[xX]([0-9a-fA-F]+);").replace(out) { m ->
+            m.groupValues[1].toIntOrNull(16)?.takeIf { it in 0..0xFFFF }?.toChar()?.toString() ?: m.value
+        }
+        // &amp; last so a literal "&" isn't re-interpreted as an entity prefix.
+        return out.replace("&amp;", "&")
+    }
 
     /** Strip HTML tags, decode entities, and remove leftover URLs. */
     private fun cleanHtml(html: String): String {
