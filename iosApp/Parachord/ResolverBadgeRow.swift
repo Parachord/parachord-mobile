@@ -1,20 +1,63 @@
 import SwiftUI
 import Shared
 
-// MARK: - Resolver badge row (playback-loop phase)
+// MARK: - Resolver icon squares (matches Android's ResolverIconSquare/Row)
 //
-// Confidence-aware resolver badges per CLAUDE.md "Resolver Badge Display":
-//   1. filter noMatch / confidence < 0.60 from display
+// Small brand-colored rounded squares (NOT text capsules) — the same visual
+// language as Android/desktop. Confidence-aware per CLAUDE.md "Resolver Badge
+// Display":
+//   1. filter noMatch / confidence < 0.60
 //   2. dim icons with confidence <= 0.80 to 0.6 alpha
 //   3. sort by resolver priority (canonical order), then confidence desc —
-//      the leftmost badge is the source that will actually play
+//      the leftmost square is the source that will actually play
 //
-// iOS has no resolver icon assets yet, so each badge is a small branded
-// capsule (SF Symbol + per-resolver color). Reads ranked sources from
-// IosTrackResolverCache, so badges appear as background resolution lands.
+// Display-only, like Android (the track ROW handles playback). iOS has no
+// brand-logo assets, so each square shows the resolver initial in white; the
+// brand COLOR is the primary identifier, matching ResolverIconColors.
+
+struct ResolverIconSquare: View {
+    let resolver: String
+    var size: CGFloat = 18
+    var confidence: Double = 1
+
+    // ResolverIconColors.forResolver (Android), verbatim.
+    private var color: Color {
+        switch resolver.lowercased() {
+        case "spotify":    return Color(uiColor: UIColor(hex: 0x1DB954))
+        case "applemusic": return Color(uiColor: UIColor(hex: 0xFA243C))
+        case "soundcloud": return Color(uiColor: UIColor(hex: 0xFF5500))
+        case "bandcamp":   return Color(uiColor: UIColor(hex: 0x629AA9))
+        case "youtube":    return Color(uiColor: UIColor(hex: 0xFF0000))
+        case "localfiles": return Color(uiColor: UIColor(hex: 0xA855F7))
+        default:           return Color(uiColor: UIColor(hex: 0x7c3aed))
+        }
+    }
+    private var glyph: String {
+        switch resolver.lowercased() {
+        case "applemusic": return "A"
+        case "soundcloud": return "S"
+        case "spotify":    return "S"
+        case "bandcamp":   return "B"
+        case "youtube":    return "Y"
+        case "localfiles": return "L"
+        default:           return resolver.prefix(1).uppercased()
+        }
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(color)
+            .frame(width: size, height: size)
+            .overlay(
+                Text(glyph).font(.system(size: size * 0.55, weight: .bold)).foregroundStyle(.white)
+            )
+            .opacity(confidence > 0.8 ? 1 : 0.6)
+    }
+}
 
 struct ResolverBadgeRow: View {
     let sources: [ResolvedSource]
+    var size: CGFloat = 18
 
     // Canonical priority order (matches ResolverScoring.CANONICAL_RESOLVER_ORDER).
     private static let order = ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"]
@@ -31,55 +74,11 @@ struct ResolverBadgeRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(visible.enumerated()), id: \.offset) { _, source in
-                badge(for: source)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func badge(for source: ResolvedSource) -> some View {
-        let conf = source.confidence?.doubleValue ?? 0
         HStack(spacing: 3) {
-            Image(systemName: icon(source.resolver))
-                .font(.system(size: 9, weight: .semibold))
-            Text(label(source.resolver))
-                .font(.system(size: 10, weight: .medium))
-        }
-        .foregroundStyle(color(source.resolver))
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(color(source.resolver).opacity(0.15), in: Capsule())
-        // Dim low-confidence (<=0.80) matches, full opacity for strong matches.
-        .opacity(conf <= 0.80 ? 0.6 : 1.0)
-    }
-
-    private func label(_ resolver: String) -> String {
-        switch resolver {
-        case "applemusic": return "Apple"
-        case "soundcloud": return "SoundCloud"
-        case "localfiles": return "Local"
-        default: return resolver.prefix(1).uppercased() + resolver.dropFirst()
-        }
-    }
-
-    private func icon(_ resolver: String) -> String {
-        switch resolver {
-        case "localfiles": return "internaldrive"
-        case "youtube": return "play.rectangle.fill"
-        default: return "music.note"
-        }
-    }
-
-    private func color(_ resolver: String) -> Color {
-        switch resolver {
-        case "spotify": return Color(red: 0.11, green: 0.73, blue: 0.33)   // green
-        case "applemusic": return Color(red: 0.98, green: 0.18, blue: 0.33) // pink/red
-        case "soundcloud": return Color(red: 1.0, green: 0.47, blue: 0.0)   // orange
-        case "bandcamp": return Color(red: 0.0, green: 0.6, blue: 0.71)     // cyan
-        case "youtube": return Color(red: 0.94, green: 0.13, blue: 0.13)    // red
-        default: return Color(red: 0.49, green: 0.23, blue: 0.93)           // brand purple
+            ForEach(Array(visible.enumerated()), id: \.offset) { _, source in
+                ResolverIconSquare(resolver: source.resolver, size: size,
+                                   confidence: source.confidence?.doubleValue ?? 1)
+            }
         }
     }
 }
