@@ -35,6 +35,16 @@ final class SettingsViewModel {
     var spotifyConnected: Bool = false
     var spotifyError: String? = nil
 
+    // BYO keys/tokens (Keychain-backed via the shared SecureTokenStore). These
+    // are one-shot secure reads (not Flows), loaded on start().
+    var listenBrainzToken: String = ""
+    var selectedAiProvider: String = "chatgpt"
+    var aiKeys: [String: String] = ["chatgpt": "", "claude": "", "gemini": ""]
+    var ticketmasterKey: String = ""
+    var seatGeekId: String = ""
+
+    static let aiProviders = ["chatgpt", "claude", "gemini"]
+
     func start() {
         guard subscriptions.isEmpty else { return }
         // Each `watch` collects a shared Flow; the closure receives the
@@ -64,6 +74,20 @@ final class SettingsViewModel {
                 self?.spotifyConnected = (value as? Bool) ?? ((value as? KotlinBoolean)?.boolValue ?? false)
             }
         )
+        loadKeys()
+    }
+
+    /// One-shot secure reads of the BYO keys (Keychain, not Flow-backed).
+    private func loadKeys() {
+        Task { @MainActor in
+            listenBrainzToken = (try? await store.getListenBrainzToken()) ?? ""
+            selectedAiProvider = (try? await store.getSelectedChatProvider()) ?? "chatgpt"
+            for p in Self.aiProviders {
+                aiKeys[p] = (try? await store.getAiProviderApiKey(providerId: p)) ?? ""
+            }
+            ticketmasterKey = (try? await store.getTicketmasterApiKey()) ?? ""
+            seatGeekId = (try? await store.getSeatGeekClientId()) ?? ""
+        }
     }
 
     func stop() {
@@ -89,6 +113,31 @@ final class SettingsViewModel {
 
     func setListenBrainzUsername(_ username: String) {
         Task { try? await store.setListenBrainzUsername(username: username) }
+    }
+
+    func setListenBrainzToken(_ token: String) {
+        listenBrainzToken = token
+        Task { try? await store.setListenBrainzToken(token: token) }
+    }
+
+    func setSelectedAiProvider(_ provider: String) {
+        selectedAiProvider = provider
+        Task { try? await store.setSelectedChatProvider(providerId: provider) }
+    }
+
+    func setAiKey(_ provider: String, _ key: String) {
+        aiKeys[provider] = key
+        Task { try? await store.setAiProviderApiKey(providerId: provider, apiKey: key) }
+    }
+
+    func setTicketmasterKey(_ key: String) {
+        ticketmasterKey = key
+        Task { try? await store.setTicketmasterApiKey(key: key) }
+    }
+
+    func setSeatGeekId(_ id: String) {
+        seatGeekId = id
+        Task { try? await store.setSeatGeekClientId(id: id) }
     }
 
     // Spotify OAuth — drives the PKCE authorize flow then exchanges the code
@@ -150,10 +199,15 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                 }
 
-                Section("ListenBrainz") {
+                Section {
                     TextField("Username", text: listenBrainzBinding)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                    SecureField("User token", text: lbTokenBinding)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                } header: { Text("ListenBrainz") } footer: {
+                    Text("The user token enables playlist sync, follows, and loved-track push. Find it at listenbrainz.org/settings.")
                 }
 
                 Section("Spotify") {
@@ -176,6 +230,31 @@ struct SettingsView: View {
                                 .foregroundStyle(.red)
                         }
                     }
+                }
+
+                Section {
+                    Picker("Provider", selection: aiProviderBinding) {
+                        Text("ChatGPT").tag("chatgpt")
+                        Text("Claude").tag("claude")
+                        Text("Gemini").tag("gemini")
+                    }
+                    SecureField("ChatGPT API key", text: aiKeyBinding("chatgpt"))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Claude API key", text: aiKeyBinding("claude"))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("Gemini API key", text: aiKeyBinding("gemini"))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                } header: { Text("AI Providers") } footer: {
+                    Text("Bring your own API key for Shuffleupagus (DJ chat) and AI recommendations. Only the selected provider is used.")
+                }
+
+                Section {
+                    SecureField("Ticketmaster API key", text: ticketmasterBinding)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("SeatGeek client ID", text: seatGeekBinding)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                } header: { Text("Concerts & Events") } footer: {
+                    Text("Keys for concert discovery. Without them the On Tour and Concerts features stay empty.")
                 }
 
                 Section {
@@ -208,5 +287,20 @@ struct SettingsView: View {
     }
     private var listenBrainzBinding: Binding<String> {
         Binding(get: { model.listenBrainzUsername }, set: { model.setListenBrainzUsername($0) })
+    }
+    private var lbTokenBinding: Binding<String> {
+        Binding(get: { model.listenBrainzToken }, set: { model.setListenBrainzToken($0) })
+    }
+    private var aiProviderBinding: Binding<String> {
+        Binding(get: { model.selectedAiProvider }, set: { model.setSelectedAiProvider($0) })
+    }
+    private func aiKeyBinding(_ provider: String) -> Binding<String> {
+        Binding(get: { model.aiKeys[provider] ?? "" }, set: { model.setAiKey(provider, $0) })
+    }
+    private var ticketmasterBinding: Binding<String> {
+        Binding(get: { model.ticketmasterKey }, set: { model.setTicketmasterKey($0) })
+    }
+    private var seatGeekBinding: Binding<String> {
+        Binding(get: { model.seatGeekId }, set: { model.setSeatGeekId($0) })
     }
 }
