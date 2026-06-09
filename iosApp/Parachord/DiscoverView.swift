@@ -8,6 +8,13 @@ import Shared
 // WeeklyPlaylistsRepository, keyed off the LB username they set in
 // Settings. No auth — the createdfor endpoint is public.
 
+/// Featured item shown inside a Discover tile (matches Android's DiscoverPreview).
+struct TilePreview {
+    let title: String
+    let subtitle: String
+    let artworkUrl: String?
+}
+
 @MainActor
 @Observable
 final class DiscoverViewModel {
@@ -26,6 +33,9 @@ final class DiscoverViewModel {
     /// playlistId → up to 4 distinct album-art URLs for the 2x2 cover mosaic
     /// (matches Android's weeklyCovers). Filled in the same background pass.
     var trackCovers: [String: [String]] = [:]
+    /// preset → featured item shown inside each Discover tile (matches Android's
+    /// per-tile DiscoverPreview). Loaded in the background from each tile's repo.
+    var previews: [String: TilePreview] = [:]
     var isLoading = false
     var loaded = false
 
@@ -40,6 +50,30 @@ final class DiscoverViewModel {
         subscription = watcher.watch(flow: container.settingsStore.getListenBrainzUsernameFlow()) { [weak self] value in
             let username = (value as? String) ?? ""
             Task { @MainActor in self?.onUsernameChanged(username) }
+        }
+        loadPreviews()
+    }
+
+    /// Each Discover tile's featured item, from its own repo's first entry
+    /// (matches Android: For You = top recommended artist, Critical = latest
+    /// reviewed album, Fresh = latest release, Pop = #1 album). Fire-and-forget.
+    private func loadPreviews() {
+        Task { @MainActor [weak self] in
+            guard let self, let a = (try? await self.container.loadRecommendedArtists())?.first else { return }
+            let reason = a.reason.flatMap { $0.isEmpty ? nil : $0 } ?? "Based on your listening"
+            self.previews["foryou"] = TilePreview(title: a.name, subtitle: reason, artworkUrl: a.imageUrl)
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let al = (try? await self.container.loadCriticalDarlings())?.first else { return }
+            self.previews["critical"] = TilePreview(title: al.title, subtitle: al.artist, artworkUrl: al.albumArt)
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let d = (try? await self.container.loadFreshDrops())?.first else { return }
+            self.previews["fresh"] = TilePreview(title: d.title, subtitle: d.artist, artworkUrl: d.albumArt)
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let al = (try? await self.container.loadPopOfTheTopsAlbums(countryCode: "us"))?.first else { return }
+            self.previews["pop"] = TilePreview(title: al.title, subtitle: al.artist, artworkUrl: al.artworkUrl)
         }
     }
 

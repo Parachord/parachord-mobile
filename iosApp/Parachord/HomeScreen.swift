@@ -131,11 +131,22 @@ struct HomeScreen: View {
     }
 
     private func tileLabel(_ tile: Tile) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Label(tile.title, systemImage: tile.icon)
                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
             Spacer(minLength: 0)
-            Text(tile.subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85))
+            if let p = model.previews[tile.preset] {
+                HStack(spacing: 8) {
+                    tilePreviewThumb(p.artworkUrl, seed: p.title + p.subtitle)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(p.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(p.subtitle).font(.system(size: 10)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+            } else {
+                Text(tile.subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85))
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
@@ -202,6 +213,17 @@ struct HomeScreen: View {
                 .frame(width: 75, height: 75).clipped()
         } else {
             PCArtwork(name: seed, size: 75, radius: 0)
+        }
+    }
+
+    @ViewBuilder
+    private func tilePreviewThumb(_ url: String?, seed: String) -> some View {
+        if let url, let u = URL(string: url) {
+            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                placeholder: { PCArtwork(name: seed, size: 36, radius: 4) }
+                .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        } else {
+            PCArtwork(name: seed, size: 36, radius: 4)
         }
     }
 }
