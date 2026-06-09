@@ -231,7 +231,12 @@ class IosContainer private constructor() {
             httpClient = httpClient,
             listenBrainzClient = listenBrainzClient,
             settingsStore = settingsStore,
-            metadataService = metadataService,
+            // Spotify-free: RecommendationsRepository's only MetadataService use
+            // is getArtistInfo per recommended artist (artist images/bios) — a
+            // ~15-artist Spotify-search burst on the shared key. Tracks come
+            // from ListenBrainz, not metadata, so this costs nothing (artist
+            // images already came from Last.fm/MusicBrainz, not Spotify).
+            metadataService = enrichMetadataService,
             cacheRead = { IosFileCache.read("recommendations_cache.json") },
             cacheWrite = { IosFileCache.write("recommendations_cache.json", it) },
         )
