@@ -14,9 +14,14 @@ import Shared
 enum PCRoute: Hashable { case recommendations, pop, critical, fresh }
 
 struct HomeScreen: View {
-    @Binding var path: [PCRoute]
+    /// One-shot route injected by the sidebar (consumed into `path`). The tab's
+    /// nav stack lives in HomeScreen's OWN @State so re-tapping Home (which
+    /// recreates HomeScreen via the shell's `.id`) reliably resets it to root —
+    /// a hoisted binding raced the recreation and re-pushed the screen.
+    @Binding var pendingRoute: PCRoute?
     let onMenu: () -> Void
 
+    @State private var path: [PCRoute] = []
     @State private var model = DiscoverViewModel()
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
@@ -56,6 +61,9 @@ struct HomeScreen: View {
                 case .fresh:           FreshDropsScreen()
                 }
             }
+        }
+        .onChange(of: pendingRoute, initial: true) { _, route in
+            if let route { path = [route]; pendingRoute = nil }
         }
         .task { model.start() }
     }

@@ -18,9 +18,9 @@ struct ContentView: View {
     /// `.id` so re-tapping pops that tab's NavigationStack to root (and thus
     /// back to where the sidebar menu lives).
     @State private var navResetCount = 0
-    /// Home tab's value-based navigation stack — driven by the Discover tiles
-    /// AND the sidebar (so sidebar items push with the tab bar still visible).
-    @State private var homePath: [PCRoute] = []
+    /// One-shot route the sidebar injects into the Home tab (HomeScreen owns
+    /// the actual nav stack as internal @State so re-tap reliably pops to root).
+    @State private var homePendingRoute: PCRoute?
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -31,7 +31,7 @@ struct ContentView: View {
             // ── Active tab content ───────────────────────────────────
             Group {
                 switch tab {
-                case .home:       HomeScreen(path: $homePath, onMenu: { showSidebar = true })
+                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true })
                 case .search:     SearchView()
                 case .collection: PCPlaceholder(title: "Collection",
                                                 systemImage: "square.stack",
@@ -61,15 +61,11 @@ struct ContentView: View {
                     )
                 }
                 PCTabBar(selected: $tab, onCenter: { showAdd = true },
-                         onReselect: { t in
-                             // Clear the value-based path AND recreate the tab
-                             // content (.id bump) so BOTH value-based (sidebar /
-                             // tile) and destination-based (discography /
-                             // context-menu / Album→Artist) pushes pop to root.
-                             // homePath=[] alone only popped the value-based ones.
-                             if t == .home { homePath = [] }
-                             navResetCount += 1
-                         })
+                         // Re-tapping the active tab bumps navResetCount → new
+                         // `.id` → the tab content (and its NavigationStack,
+                         // whose path is internal @State) is recreated fresh at
+                         // root, popping every push regardless of how it got there.
+                         onReselect: { _ in navResetCount += 1 })
             }
             .padding(.bottom, 6)
             .opacity(showNowPlaying ? 0 : 1)
@@ -139,7 +135,7 @@ struct ContentView: View {
         }
         if let route {
             tab = .home
-            homePath = [route]
+            homePendingRoute = route
             return
         }
         switch id {
