@@ -7,42 +7,53 @@ import Shared
 // Fresh's filter chips + release badge), not the design's grid — per the
 // "Android wins on conflict" rule. Each row → AlbumScreen.
 
-/// Gradient header for the curated Discover screens (mirrors Android's
-/// HeaderGradient). The back button sits in a nav row ABOVE the title (so they
-/// never collide); the gradient background bleeds up behind the status bar
-/// while the content respects the safe area.
-struct PCCuratedHeader: View {
+/// Shared page header bar — mirrors Android's TopAppBar: the title in ALL CAPS,
+/// a light weight, letter-spaced (0.2em), on the SAME ROW as the leading
+/// back/menu icon, with NO color background. Used by every pushed page + Home.
+struct PCTopBar: View {
+    enum Leading { case back, menu, none }
     let title: String
+    var leading: Leading = .back
+    var onLeading: (() -> Void)? = nil
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if leading != .none {
+                Button { onLeading?() } label: {
+                    Image(systemName: leading == .back ? "chevron.left" : "line.3.horizontal")
+                        .font(.system(size: 18, weight: .regular)).foregroundStyle(PC.fg1)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+            }
+            Text(title.uppercased())
+                .font(.system(size: 21, weight: .light)).tracking(3.6)  // titleLarge · Light · 0.2em
+                .foregroundStyle(PC.fg1).lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// Gradient metadata banner that sits BELOW the plain PCTopBar on the curated
+/// screens (mirrors Android's CriticsHeader / FreshDropsHeader). Carries the
+/// subtitle + count only — the title lives in the top bar now.
+struct PCCuratedBanner: View {
     let subtitle: String
     let count: String?
     let gradient: [UInt32]
-    let onBack: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white).frame(width: 36, height: 36)
-                        .background(.white.opacity(0.18), in: Circle())
-                }
-                Spacer(minLength: 0)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
-                Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.85))
-                if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.7)) }
-            }
-            .padding(.top, 14)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.92))
+            if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.78)) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 22)
-        .background(
-            LinearGradient(
-                colors: gradient.map { Color(uiColor: UIColor(hex: $0)) },
-                startPoint: .leading, endPoint: .trailing)
-            .ignoresSafeArea(edges: .top) // gradient bleeds behind the status bar
-        )
+        .padding(.horizontal, 20).padding(.vertical, 16)
+        .background(LinearGradient(
+            colors: gradient.map { Color(uiColor: UIColor(hex: $0)) },
+            startPoint: .leading, endPoint: .trailing))
     }
 }
 
@@ -67,25 +78,27 @@ struct CriticalDarlingsScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                PCCuratedHeader(
-                    title: "Critical Darlings",
-                    subtitle: "Top-rated albums from leading music publications",
-                    count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
-                    gradient: [0xF59E0B, 0xF97316], onBack: { dismiss() })
-                if model.isLoading && !model.loaded {
-                    ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
-                }
-                ForEach(Array(model.albums.enumerated()), id: \.element.id) { _, album in
-                    NavigationLink { AlbumScreen(title: album.title, artist: album.artist) } label: {
-                        row(album)
+        VStack(spacing: 0) {
+            PCTopBar(title: "Critical Darlings", leading: .back, onLeading: { dismiss() })
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    PCCuratedBanner(
+                        subtitle: "Top-rated albums from leading music publications",
+                        count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
+                        gradient: [0xF59E0B, 0xF97316])
+                    if model.isLoading && !model.loaded {
+                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
                     }
-                    .buttonStyle(.plain)
-                    Divider().padding(.leading, 104)
+                    ForEach(Array(model.albums.enumerated()), id: \.element.id) { _, album in
+                        NavigationLink { AlbumScreen(title: album.title, artist: album.artist) } label: {
+                            row(album)
+                        }
+                        .buttonStyle(.plain)
+                        Divider().padding(.leading, 104)
+                    }
                 }
+                .padding(.bottom, 130)
             }
-            .padding(.bottom, 130)
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
@@ -138,30 +151,32 @@ struct FreshDropsScreen: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                PCCuratedHeader(
-                    title: "Fresh Drops",
-                    subtitle: "New releases from artists you listen to",
-                    count: model.drops.isEmpty ? nil : "\(model.drops.count) releases",
-                    gradient: [0x10B981, 0x14B8A6, 0x06B6D4], onBack: { dismiss() })
+        VStack(spacing: 0) {
+            PCTopBar(title: "Fresh Drops", leading: .back, onLeading: { dismiss() })
+            ScrollView {
+                LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    PCCuratedBanner(
+                        subtitle: "New releases from artists you listen to",
+                        count: model.drops.isEmpty ? nil : "\(model.drops.count) releases",
+                        gradient: [0x10B981, 0x14B8A6, 0x06B6D4])
 
-                Section {
-                    if model.isLoading && !model.loaded {
-                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
-                    }
-                    ForEach(Array(filtered.enumerated()), id: \.offset) { _, drop in
-                        NavigationLink { AlbumScreen(title: drop.title, artist: drop.artist) } label: {
-                            row(drop)
+                    Section {
+                        if model.isLoading && !model.loaded {
+                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
                         }
-                        .buttonStyle(.plain)
-                        Divider().padding(.leading, 84)
+                        ForEach(Array(filtered.enumerated()), id: \.offset) { _, drop in
+                            NavigationLink { AlbumScreen(title: drop.title, artist: drop.artist) } label: {
+                                row(drop)
+                            }
+                            .buttonStyle(.plain)
+                            Divider().padding(.leading, 84)
+                        }
+                    } header: {
+                        filterBar
                     }
-                } header: {
-                    filterBar
                 }
+                .padding(.bottom, 130)
             }
-            .padding(.bottom, 130)
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }

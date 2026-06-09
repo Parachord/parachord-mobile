@@ -27,32 +27,29 @@ struct HomeScreen: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if let t = coordinator.currentTrack {
-                        sectionHeader("Continue Listening")
-                        continueCard(t)
+            VStack(spacing: 0) {
+                PCTopBar(title: "Parachord", leading: .menu, onLeading: onMenu)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if let t = coordinator.currentTrack {
+                            sectionHeader("Continue Listening")
+                            continueCard(t)
+                        }
+
+                        sectionHeader("Discover")
+                        discoverGrid
+
+                        weeklySection("Weekly Jams", model.jams)
+                        weeklySection("Weekly Exploration", model.exploration)
+
+                        if model.isLoading && !model.loaded {
+                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 24)
+                        }
                     }
-
-                    sectionHeader("Discover")
-                    discoverGrid
-
-                    weeklySection("Weekly Jams", model.jams)
-                    weeklySection("Weekly Exploration", model.exploration)
-
-                    if model.isLoading && !model.loaded {
-                        ProgressView().frame(maxWidth: .infinity).padding(.vertical, 24)
-                    }
-                }
-                .padding(.bottom, 130) // clear the floating tab bar
-            }
-            .navigationTitle("Home")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onMenu) { Image(systemName: "line.3.horizontal") }
-                        .tint(PC.fg1)
+                    .padding(.bottom, 130) // clear the floating tab bar
                 }
             }
+            .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: PCRoute.self) { route in
                 switch route {
                 case .recommendations: RecommendationsScreen()
