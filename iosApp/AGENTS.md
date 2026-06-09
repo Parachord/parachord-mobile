@@ -360,9 +360,32 @@ Conformance checklist (audited 2026-06-07):
 - **Deferred (low-risk on iOS today, no device picker yet):** granular
   404/hard-fail preference cleanup, and warm-path handling of a non-local
   preferred device. Do them when the picker lands.
-- **Still ungated (latent, same as Android):** Spotify writes/sync
-  (`saveTracks`, `createPlaylist`, `replacePlaylistTracks`, follow). They should
-  also consult `rateLimitRemainingMs()` — tracked in parachord-mobile #176.
+- **Spotify writes/sync are now gated (shared, #176 — DONE).** `saveTracks`,
+  `removeTracks`, `createPlaylist`, `replacePlaylistTracks`, follow, etc. route
+  through `SpotifyClient.gatedSend`, so a 429 on a write arms the same persisted
+  cooldown a read does. iOS inherits this for free. Only the interactive
+  playback PUTs + `getDevices` stay ungated (they consult `rateLimitRemainingMs()`).
+
+**Cooldown is now an ESCALATING circuit breaker, not a flat 1 h (shared, #182).**
+The shared `RateLimitGate` doubles the cooldown on each consecutive 429
+(SpotifyClient: 1h→2h→4h→6h cap; resets on the first clean response). Rationale:
+Spotify's abuse ban outlasts a flat 1 h, so a flat cooldown re-pokes on every
+lapse and never clears (observed 12+ h on a quiet network). iOS inherits this —
+just don't add a *second*, shorter local cooldown that would undercut it.
+
+**Mirror the resolver rules (shared spec, #182) in `IosResolverCoordinator`:**
+when a track already has a `spotifyId`, verify it via `getTrack` (returns the
+source + artwork) and **do NOT also fire a Spotify search** — that doubled
+Spotify volume per cached track on Android. And on a 429 during verify, **keep
+the known Spotify ID as a source** (don't drop it) so the badge doesn't vanish
+across a list. Full rule: `/CLAUDE.md` → "Spotify Rate-Limit Gate — Abuse-Ban
+Remediation".
+
+**Last.fm `guardedGet` (shared, #183).** If Last.fm artist/charts/friends come
+back empty on iOS, it's almost certainly the `apply(build)` receiver-binding bug
+(a bare `crossinline build()` inside the Ktor `get {}` drops every param). Fixed
+in `LastFmClient`; guarded by `LastFmClientParamsTest`. See `/CLAUDE.md` KMP
+rules #12.
 
 ### Why iOS can't silently wake Spotify like Android (don't re-litigate)
 
