@@ -325,6 +325,7 @@ struct PCQueueSheet: View {
                             .padding(.horizontal, 20).padding(.vertical, 8)
                         }
                         .buttonStyle(.plain)
+                        .pcTrackContextMenu(t, coordinator: coordinator)
                     }
                 }
                 .padding(.vertical, 8)

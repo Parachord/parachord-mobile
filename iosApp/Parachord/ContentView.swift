@@ -1531,6 +1531,18 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
+    /// Insert a track right after the current one (context-menu "Play Next").
+    func playNext(_ track: Track) {
+        queueManager.insertNext(tracks: [track])
+        syncSnapshot()
+    }
+
+    /// Append a track to the end of the queue (context-menu "Add to Queue").
+    func addToQueue(_ track: Track) {
+        queueManager.addToQueue(tracks: [track])
+        syncSnapshot()
+    }
+
     private func playTrack(_ track: Track) {
         currentTrack = track
         Task { @MainActor in

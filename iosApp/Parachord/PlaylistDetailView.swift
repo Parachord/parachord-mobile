@@ -110,6 +110,7 @@ struct PlaylistDetailView: View {
                         // tagged with `index` so the shared cache resolves
                         // top-down rather than in onAppear order.
                         .onAppear { model.resolveVisible(track, index: index) }
+                        .pcTrackContextMenu(model.trackEntities[index], coordinator: coordinator)
                     }
                 }
             }
