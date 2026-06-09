@@ -40,15 +40,17 @@ struct PCTopBar: View {
 /// screens (mirrors Android's CriticsHeader / FreshDropsHeader). Carries the
 /// subtitle + count only — the title lives in the top bar now.
 struct PCCuratedBanner: View {
-    let icon: String          // SF Symbol, mirrors Android's banner icon (32dp white)
+    var icon: String? = nil   // SF Symbol, mirrors Android's banner icon (32dp white); Pop has none
     let subtitle: String
     let count: String?
     let gradient: [UInt32]
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: icon).font(.system(size: 26))
-                .foregroundStyle(.white.opacity(0.9))
+            if let icon {
+                Image(systemName: icon).font(.system(size: 26))
+                    .foregroundStyle(.white.opacity(0.9))
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.92))
                 if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.78)) }

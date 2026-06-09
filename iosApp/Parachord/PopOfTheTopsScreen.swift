@@ -56,9 +56,21 @@ struct PopOfTheTopsScreen: View {
     @State private var navArtist: String?
     @State private var navAlbum: PCAlbumRef?
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
+    @Environment(\.dismiss) private var dismiss
+    private var resolverCache = IosTrackResolverCache.shared
+
+    private var bannerCount: String? {
+        guard !model.albums.isEmpty || !model.songs.isEmpty else { return nil }
+        return "\(model.albums.count) albums · \(model.songs.count) songs"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            PCTopBar(title: "Pop of the Tops", leading: .back, onLeading: { dismiss() })
+            PCCuratedBanner(
+                subtitle: "What's trending around the world",
+                count: bannerCount,
+                gradient: [0xF97316, 0xEC4899, 0x8B5CF6])
             Picker("", selection: $tab) {
                 ForEach(PopTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
@@ -68,60 +80,84 @@ struct PopOfTheTopsScreen: View {
             if model.isLoading && !model.loaded {
                 Spacer(); ProgressView(); Spacer()
             } else {
-                switch tab {
-                case .albums: albumsList
-                case .songs:  songsList
+                ScrollView {
+                    switch tab {
+                    case .albums: albumsGrid
+                    case .songs:  songsList
+                    }
                 }
             }
         }
-        .navigationTitle("Pop of the Tops")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { await model.load() }
     }
 
-    // ── Albums tab: each row → the album page ──────────────────────────
-    private var albumsList: some View {
-        List {
+    // ── Albums tab: 2-column grid (rank badge on the art) → album page ──
+    private var albumsGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
             ForEach(Array(model.albums.enumerated()), id: \.element.id) { index, album in
-                NavigationLink {
-                    AlbumScreen(title: album.title, artist: album.artist)
-                } label: {
-                    HStack(spacing: 12) {
-                        rank(index)
-                        artwork(album.artworkUrl, seed: album.title + album.artist)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(album.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
-                            Text(album.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                NavigationLink { AlbumScreen(title: album.title, artist: album.artist) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ZStack(alignment: .topLeading) {
+                            albumArt(album.artworkUrl, seed: album.title + album.artist)
+                            Text("#\(index + 1)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
+                                .padding(6)
                         }
+                        Text(album.title).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg1)
+                            .lineLimit(1).padding(.horizontal, 2)
+                        Text(album.artist).font(.system(size: 12)).foregroundStyle(PC.fg2)
+                            .lineLimit(1).padding(.horizontal, 2)
                     }
-                    .padding(.vertical, 2)
                 }
+                .buttonStyle(.plain)
             }
         }
-        .listStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 8).padding(.bottom, 120)
     }
 
-    // ── Songs tab: tap plays; long-press → album/artist ────────────────
+    @ViewBuilder
+    private func albumArt(_ url: String?, seed: String) -> some View {
+        Group {
+            if let url, let u = URL(string: url) {
+                AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                    placeholder: { PCArtwork(name: seed, size: nil, radius: 8) }
+            } else {
+                PCArtwork(name: seed, size: nil, radius: 8)
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+    }
+
+    // ── Songs tab: rank + art + title/artist + resolver squares ─────────
     private var songsList: some View {
-        List {
+        LazyVStack(spacing: 0) {
             ForEach(Array(model.songs.enumerated()), id: \.element.id) { index, song in
                 Button {
                     coordinator.setQueue(model.songEntities, startIndex: index)
                 } label: {
                     HStack(spacing: 12) {
-                        rank(index)
-                        artwork(song.artworkUrl, seed: song.title + song.artist)
+                        Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(PC.fg3).frame(width: 24)
+                        songArt(song.artworkUrl, seed: song.title + song.artist)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(coordinator.currentTrack?.id == model.songEntities[index].id ? PC.accent : PC.fg1)
                                 .lineLimit(1)
                             Text(song.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                         }
-                        Spacer(minLength: 0)
+                        Spacer(minLength: 8)
+                        if let sources = resolverCache.cached(artist: song.artist, title: song.title, album: song.album),
+                           !sources.isEmpty {
+                            ResolverBadgeRow(sources: sources)
+                        }
                     }
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(song, index: index) }
@@ -132,24 +168,15 @@ struct PopOfTheTopsScreen: View {
                 )
             }
         }
-        .listStyle(.plain)
-    }
-
-    private func rank(_ index: Int) -> some View {
-        Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
-            .foregroundStyle(PC.fg3).frame(width: 24, alignment: .center)
+        .padding(.vertical, 4).padding(.bottom, 120)
     }
 
     @ViewBuilder
-    private func artwork(_ url: String?, seed: String) -> some View {
+    private func songArt(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in
-                img.resizable().aspectRatio(contentMode: .fill)
-            } placeholder: {
-                PCArtwork(name: seed, size: 44, radius: 6)
-            }
-            .frame(width: 44, height: 44)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                placeholder: { PCArtwork(name: seed, size: 44, radius: 6) }
+                .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             PCArtwork(name: seed, size: 44, radius: 6)
         }
