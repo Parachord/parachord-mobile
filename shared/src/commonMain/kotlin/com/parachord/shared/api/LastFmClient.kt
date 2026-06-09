@@ -1,15 +1,16 @@
 package com.parachord.shared.api
 
 import io.ktor.client.HttpClient
-import io.ktor.client.call.body
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -61,74 +62,90 @@ class LastFmClient(private val httpClient: HttpClient) {
     private val gate = RateLimitGate(tag = "LastFmClient")
 
     /**
+     * Explicit Json for decoding the response body via the per-call
+     * [KSerializer] passed to [guardedGet], rather than Ktor's
+     * `response.body<reified T>()`. The compiler-generated serializer resolves
+     * at the call site and still honors the per-type custom serializers below.
+     */
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        coerceInputValues = true
+    }
+
+    /**
      * Wraps every GET against [BASE_URL] in the rate-limit gate. Methods
      * just supply their `method=` + endpoint params — `format=json` is
      * always set here so it can't be forgotten at a callsite.
      */
-    private suspend inline fun <reified T> guardedGet(
+    private suspend inline fun <T> guardedGet(
+        deserializer: KSerializer<T>,
         crossinline build: HttpRequestBuilder.() -> Unit,
     ): T = gate.withPermit(exceptionFactory = { LastFmRateLimitedException(it) }) {
         val response: HttpResponse = httpClient.get(BASE_URL) {
-            build()
+            apply(build)   // bind `build`'s receiver explicitly to this builder —
+                           // a bare `build()` fails to bind on BOTH JVM and
+                           // Native here and silently drops every param (Last.fm
+                           // error 6). See LastFmClientParamsTest.
             parameter("format", "json")
         }
         gate.handleResponse(response) { LastFmRateLimitedException(it) }
-        response.body()
+        json.decodeFromString(deserializer, response.bodyAsText())
     }
 
     suspend fun searchTracks(track: String, apiKey: String, limit: Int = 20): LfmTrackSearchResponse =
-        guardedGet { parameter("method", "track.search"); parameter("track", track); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmTrackSearchResponse.serializer()) { parameter("method", "track.search"); parameter("track", track); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun searchAlbums(album: String, apiKey: String, limit: Int = 10): LfmAlbumSearchResponse =
-        guardedGet { parameter("method", "album.search"); parameter("album", album); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmAlbumSearchResponse.serializer()) { parameter("method", "album.search"); parameter("album", album); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun searchArtists(artist: String, apiKey: String, limit: Int = 10): LfmArtistSearchResponse =
-        guardedGet { parameter("method", "artist.search"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmArtistSearchResponse.serializer()) { parameter("method", "artist.search"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun getArtistInfo(artist: String, apiKey: String): LfmArtistInfoResponse =
-        guardedGet { parameter("method", "artist.getinfo"); parameter("artist", artist); parameter("api_key", apiKey) }
+        guardedGet(LfmArtistInfoResponse.serializer()) { parameter("method", "artist.getinfo"); parameter("artist", artist); parameter("api_key", apiKey) }
 
     suspend fun getSimilarArtists(artist: String, apiKey: String, limit: Int = 20): LfmSimilarArtistsResponse =
-        guardedGet { parameter("method", "artist.getsimilar"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmSimilarArtistsResponse.serializer()) { parameter("method", "artist.getsimilar"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun getArtistTopTracks(artist: String, apiKey: String, limit: Int = 10): LfmTopTracksResponse =
-        guardedGet { parameter("method", "artist.gettoptracks"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmTopTracksResponse.serializer()) { parameter("method", "artist.gettoptracks"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun getArtistTopAlbums(artist: String, apiKey: String, limit: Int = 50): LfmTopAlbumsResponse =
-        guardedGet { parameter("method", "artist.gettopalbums"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmTopAlbumsResponse.serializer()) { parameter("method", "artist.gettopalbums"); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun getTrackInfo(track: String, artist: String, apiKey: String): LfmTrackInfoResponse =
-        guardedGet { parameter("method", "track.getInfo"); parameter("track", track); parameter("artist", artist); parameter("api_key", apiKey) }
+        guardedGet(LfmTrackInfoResponse.serializer()) { parameter("method", "track.getInfo"); parameter("track", track); parameter("artist", artist); parameter("api_key", apiKey) }
 
     suspend fun getSimilarTracks(track: String, artist: String, apiKey: String, limit: Int = 20): LfmSimilarTracksResponse =
-        guardedGet { parameter("method", "track.getsimilar"); parameter("track", track); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
+        guardedGet(LfmSimilarTracksResponse.serializer()) { parameter("method", "track.getsimilar"); parameter("track", track); parameter("artist", artist); parameter("api_key", apiKey); parameter("limit", limit) }
 
     suspend fun getAlbumInfo(album: String, artist: String, apiKey: String): LfmAlbumInfoResponse =
-        guardedGet { parameter("method", "album.getinfo"); parameter("album", album); parameter("artist", artist); parameter("api_key", apiKey) }
+        guardedGet(LfmAlbumInfoResponse.serializer()) { parameter("method", "album.getinfo"); parameter("album", album); parameter("artist", artist); parameter("api_key", apiKey) }
 
     suspend fun getUserInfo(user: String, apiKey: String): LfmUserInfoResponse =
-        guardedGet { parameter("method", "user.getinfo"); parameter("user", user); parameter("api_key", apiKey) }
+        guardedGet(LfmUserInfoResponse.serializer()) { parameter("method", "user.getinfo"); parameter("user", user); parameter("api_key", apiKey) }
 
     suspend fun getUserTopTracks(user: String, apiKey: String, period: String = "overall", limit: Int = 50): LfmUserTopTracksResponse =
-        guardedGet { parameter("method", "user.gettoptracks"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmUserTopTracksResponse.serializer()) { parameter("method", "user.gettoptracks"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getUserTopAlbums(user: String, apiKey: String, period: String = "overall", limit: Int = 50): LfmUserTopAlbumsResponse =
-        guardedGet { parameter("method", "user.gettopalbums"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmUserTopAlbumsResponse.serializer()) { parameter("method", "user.gettopalbums"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getUserTopArtists(user: String, apiKey: String, period: String = "overall", limit: Int = 50): LfmUserTopArtistsResponse =
-        guardedGet { parameter("method", "user.gettopartists"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmUserTopArtistsResponse.serializer()) { parameter("method", "user.gettopartists"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getUserRecentTracks(user: String, apiKey: String, limit: Int = 50): LfmUserRecentTracksResponse =
-        guardedGet { parameter("method", "user.getrecenttracks"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmUserRecentTracksResponse.serializer()) { parameter("method", "user.getrecenttracks"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getUserFriends(user: String, apiKey: String, limit: Int = 200): LfmUserFriendsResponse =
-        guardedGet { parameter("method", "user.getfriends"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmUserFriendsResponse.serializer()) { parameter("method", "user.getfriends"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getChartTopTracks(apiKey: String, limit: Int = 50): LfmChartTopTracksResponse =
-        guardedGet { parameter("method", "chart.gettoptracks"); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmChartTopTracksResponse.serializer()) { parameter("method", "chart.gettoptracks"); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getGeoTopTracks(country: String, apiKey: String, limit: Int = 50): LfmGeoTopTracksResponse =
-        guardedGet { parameter("method", "geo.gettoptracks"); parameter("country", country); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(LfmGeoTopTracksResponse.serializer()) { parameter("method", "geo.gettoptracks"); parameter("country", country); parameter("limit", limit); parameter("api_key", apiKey) }
 }
 
 // ── Response Models ──────────────────────────────────────────────────
