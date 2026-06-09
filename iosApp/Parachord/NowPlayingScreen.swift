@@ -29,6 +29,7 @@ private func pcTime(_ s: Double) -> String {
 
 struct PCNowPlaying: View {
     @Bindable var coordinator: QueuePlaybackCoordinator
+    var artNamespace: Namespace.ID
     let onClose: () -> Void
 
     @State private var showQueue = false
@@ -47,6 +48,7 @@ struct PCNowPlaying: View {
                         PCArtwork(name: track?.title ?? "P", radius: 14)
                             .aspectRatio(1, contentMode: .fit)
                             .frame(maxWidth: .infinity)
+                            .matchedGeometryEffect(id: "npArt", in: artNamespace)
                             .shadow(color: .black.opacity(0.6), radius: 24, y: 20)
                             .padding(.top, 4)
 

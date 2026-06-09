@@ -119,6 +119,8 @@ struct PCMiniPlayer: View {
     let artist: String
     let isPlaying: Bool
     var progress: Double = 0
+    var artNamespace: Namespace.ID
+    var artIsSource: Bool = true
     let onToggle: () -> Void
     let onExpand: () -> Void
 
@@ -126,6 +128,7 @@ struct PCMiniPlayer: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 PCArtwork(name: title, size: 44, radius: 8)
+                    .matchedGeometryEffect(id: "npArt", in: artNamespace, isSource: artIsSource)
                     .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(1)

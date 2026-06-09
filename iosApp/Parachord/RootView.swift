@@ -14,6 +14,8 @@ struct ContentView: View {
     @State private var showAdd = false
     @State private var showNowPlaying = false
     @State private var showSettings = false
+    /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
+    @Namespace private var artNS
 
     private var coordinator: QueuePlaybackCoordinator { playback.coordinator }
 
@@ -43,13 +45,27 @@ struct ContentView: View {
                         title: t.title, artist: t.artist,
                         isPlaying: coordinator.isPlaying,
                         progress: coordinator.duration > 0 ? coordinator.currentTime / coordinator.duration : 0,
+                        artNamespace: artNS, artIsSource: !showNowPlaying,
                         onToggle: { coordinator.togglePlayPause() },
-                        onExpand: { showNowPlaying = true }
+                        onExpand: { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = true } }
                     )
                 }
                 PCTabBar(selected: $tab, onCenter: { showAdd = true })
             }
             .padding(.bottom, 6)
+            .opacity(showNowPlaying ? 0 : 1)
+
+            // ── Now Playing (in-shell overlay for the shared-element morph) ──
+            if showNowPlaying {
+                PCNowPlaying(
+                    coordinator: coordinator,
+                    artNamespace: artNS,
+                    onClose: { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false } }
+                )
+                .ignoresSafeArea()
+                .zIndex(5)
+                .transition(.move(edge: .bottom))
+            }
 
             // ── Sidebar drawer (slide-in over a scrim) ───────────────
             if showSidebar {
@@ -74,9 +90,6 @@ struct ContentView: View {
         .environment(coordinator)
         .sheet(isPresented: $showAdd) {
             PCAddSheet(onShuffleupagus: { /* Phase: DJ chat */ }, onDismiss: { showAdd = false })
-        }
-        .fullScreenCover(isPresented: $showNowPlaying) {
-            PCNowPlaying(coordinator: coordinator, onClose: { showNowPlaying = false })
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack { SettingsView() }
