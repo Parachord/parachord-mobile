@@ -8,14 +8,20 @@ import Shared
 // carousels. DB/AI sections (Recently Added, Your Playlists, Stats, Recent
 // Loves, Friend Activity, Suggestions) land with the data layer.
 
+/// Value-based routes pushed onto the Home tab's stack — driven by both the
+/// Discover tiles and the sidebar, so the sidebar navigates with the tab bar
+/// still visible (a push, not a modal).
+enum PCRoute: Hashable { case recommendations, pop, critical, fresh }
+
 struct HomeScreen: View {
+    @Binding var path: [PCRoute]
     let onMenu: () -> Void
 
     @State private var model = DiscoverViewModel()
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if let t = coordinator.currentTrack {
@@ -40,6 +46,14 @@ struct HomeScreen: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(action: onMenu) { Image(systemName: "line.3.horizontal") }
                         .tint(PC.fg1)
+                }
+            }
+            .navigationDestination(for: PCRoute.self) { route in
+                switch route {
+                case .recommendations: RecommendationsScreen()
+                case .pop:             PopOfTheTopsScreen()
+                case .critical:        CriticalDarlingsScreen()
+                case .fresh:           FreshDropsScreen()
                 }
             }
         }
@@ -78,6 +92,15 @@ struct HomeScreen: View {
 
     private struct Tile: Identifiable {
         let id = UUID(); let title: String; let icon: String; let c1: UInt32; let c2: UInt32; let preset: String
+        var route: PCRoute? {
+            switch preset {
+            case "foryou": return .recommendations
+            case "pop": return .pop
+            case "critical": return .critical
+            case "fresh": return .fresh
+            default: return nil
+            }
+        }
     }
     private let tiles: [Tile] = [
         .init(title: "For You", icon: "star.fill", c1: 0x7c3aed, c2: 0x6d28d9, preset: "foryou"),
@@ -89,20 +112,10 @@ struct HomeScreen: View {
     private var discoverGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
             ForEach(tiles) { tile in
-                switch tile.preset {
-                case "pop":
-                    NavigationLink { PopOfTheTopsScreen() } label: { tileLabel(tile) }
+                if let route = tile.route {
+                    NavigationLink(value: route) { tileLabel(tile) }
                         .buttonStyle(.plain)
-                case "foryou":
-                    NavigationLink { RecommendationsScreen() } label: { tileLabel(tile) }
-                        .buttonStyle(.plain)
-                case "critical":
-                    NavigationLink { CriticalDarlingsScreen() } label: { tileLabel(tile) }
-                        .buttonStyle(.plain)
-                case "fresh":
-                    NavigationLink { FreshDropsScreen() } label: { tileLabel(tile) }
-                        .buttonStyle(.plain)
-                default:
+                } else {
                     tileLabel(tile)
                 }
             }

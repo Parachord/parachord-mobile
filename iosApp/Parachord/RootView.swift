@@ -18,6 +18,9 @@ struct ContentView: View {
     /// `.id` so re-tapping pops that tab's NavigationStack to root (and thus
     /// back to where the sidebar menu lives).
     @State private var navResetCount = 0
+    /// Home tab's value-based navigation stack — driven by the Discover tiles
+    /// AND the sidebar (so sidebar items push with the tab bar still visible).
+    @State private var homePath: [PCRoute] = []
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -28,7 +31,7 @@ struct ContentView: View {
             // ── Active tab content ───────────────────────────────────
             Group {
                 switch tab {
-                case .home:       HomeScreen(onMenu: { showSidebar = true })
+                case .home:       HomeScreen(path: $homePath, onMenu: { showSidebar = true })
                 case .search:     SearchView()
                 case .collection: PCPlaceholder(title: "Collection",
                                                 systemImage: "square.stack",
@@ -58,7 +61,9 @@ struct ContentView: View {
                     )
                 }
                 PCTabBar(selected: $tab, onCenter: { showAdd = true },
-                         onReselect: { _ in navResetCount += 1 })
+                         onReselect: { t in
+                             if t == .home { homePath = [] } else { navResetCount += 1 }
+                         })
             }
             .padding(.bottom, 6)
             .opacity(showNowPlaying ? 0 : 1)
@@ -118,11 +123,24 @@ struct ContentView: View {
 
     private func handleSidebar(_ id: String) {
         closeSidebar()
+        // Discover items push onto the Home tab's stack.
+        let route: PCRoute? = switch id {
+        case "recommendations": .recommendations
+        case "pop":             .pop
+        case "critical":        .critical
+        case "fresh":           .fresh
+        default:                nil
+        }
+        if let route {
+            tab = .home
+            homePath = [route]
+            return
+        }
         switch id {
         case "collection": tab = .collection
         case "playlists":  tab = .playlists
         case "settings":   showSettings = true
-        default: break // history / discover lists land in later phases
+        default: break // history / concerts land with their screens
         }
     }
 }
