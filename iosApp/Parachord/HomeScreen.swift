@@ -176,10 +176,11 @@ struct HomeScreen: View {
     }
 
     private func weeklyCard(_ entry: IosWeeklyEntry) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let covers = model.trackCovers[entry.id] ?? []
+        return VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(columns: [GridItem(.fixed(75), spacing: 0), GridItem(.fixed(75), spacing: 0)], spacing: 0) {
                 ForEach(0..<4, id: \.self) { j in
-                    PCArtwork(name: "\(entry.id)\(j)", size: 75, radius: 0)
+                    mosaicCell(j < covers.count ? covers[j] : nil, seed: "\(entry.id)\(j)")
                 }
             }
             .frame(width: 150, height: 150)
@@ -191,5 +192,16 @@ struct HomeScreen: View {
                 .font(.system(size: 12)).foregroundStyle(PC.fg2)
         }
         .frame(width: 150)
+    }
+
+    @ViewBuilder
+    private func mosaicCell(_ url: String?, seed: String) -> some View {
+        if let url, let u = URL(string: url) {
+            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                placeholder: { PCArtwork(name: seed, size: 75, radius: 0) }
+                .frame(width: 75, height: 75).clipped()
+        } else {
+            PCArtwork(name: seed, size: 75, radius: 0)
+        }
     }
 }

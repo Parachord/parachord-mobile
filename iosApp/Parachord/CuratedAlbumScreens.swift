@@ -40,14 +40,20 @@ struct PCTopBar: View {
 /// screens (mirrors Android's CriticsHeader / FreshDropsHeader). Carries the
 /// subtitle + count only — the title lives in the top bar now.
 struct PCCuratedBanner: View {
+    let icon: String          // SF Symbol, mirrors Android's banner icon (32dp white)
     let subtitle: String
     let count: String?
     let gradient: [UInt32]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.92))
-            if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.78)) }
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: icon).font(.system(size: 26))
+                .foregroundStyle(.white.opacity(0.9))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.92))
+                if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.78)) }
+            }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 20).padding(.vertical, 16)
@@ -83,9 +89,10 @@ struct CriticalDarlingsScreen: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     PCCuratedBanner(
+                        icon: "trophy.fill",
                         subtitle: "Top-rated albums from leading music publications",
                         count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
-                        gradient: [0xF59E0B, 0xF97316])
+                        gradient: [0xF59E0B, 0xF97316, 0xEF4444])
                     if model.isLoading && !model.loaded {
                         ProgressView().frame(maxWidth: .infinity).padding(.vertical, 40)
                     }
@@ -111,8 +118,8 @@ struct CriticalDarlingsScreen: View {
                 Text(album.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(2)
                 Text(album.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                 if !album.blurb.isEmpty {
-                    Text(album.blurb).font(.system(size: 12)).foregroundStyle(PC.fg3)
-                        .lineLimit(3).padding(.top, 2)
+                    // Android shows the full synopsis — no maxLines/truncation.
+                    Text(album.blurb).font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.top, 2)
                 }
             }
             Spacer(minLength: 0)
@@ -156,6 +163,7 @@ struct FreshDropsScreen: View {
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
                     PCCuratedBanner(
+                        icon: "drop.fill",
                         subtitle: "New releases from artists you listen to",
                         count: model.drops.isEmpty ? nil : "\(model.drops.count) releases",
                         gradient: [0x10B981, 0x14B8A6, 0x06B6D4])
@@ -169,7 +177,7 @@ struct FreshDropsScreen: View {
                                 row(drop)
                             }
                             .buttonStyle(.plain)
-                            Divider().padding(.leading, 84)
+                            Divider().padding(.leading, 112)
                         }
                     } header: {
                         filterBar
@@ -203,7 +211,7 @@ struct FreshDropsScreen: View {
 
     private func row(_ drop: FreshDrop) -> some View {
         HStack(spacing: 12) {
-            pcCover(drop.albumArt, seed: drop.title + drop.artist, size: 56, radius: 8)
+            pcCover(drop.albumArt, seed: drop.title + drop.artist, size: 80, radius: 8)
             VStack(alignment: .leading, spacing: 3) {
                 Text(drop.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(drop.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)

@@ -23,6 +23,9 @@ final class DiscoverViewModel {
     /// playlistId → track count, for the "N tracks" weekly-card subtitle
     /// (matches Android's weeklyTrackCounts). Filled lazily in the background.
     var trackCounts: [String: Int] = [:]
+    /// playlistId → up to 4 distinct album-art URLs for the 2x2 cover mosaic
+    /// (matches Android's weeklyCovers). Filled in the same background pass.
+    var trackCovers: [String: [String]] = [:]
     var isLoading = false
     var loaded = false
 
@@ -69,7 +72,15 @@ final class DiscoverViewModel {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let tracks = (try? await self.container.loadWeeklyPlaylistTracks(playlistId: entry.id)) ?? []
-                if !tracks.isEmpty { self.trackCounts[entry.id] = tracks.count }
+                guard !tracks.isEmpty else { return }
+                self.trackCounts[entry.id] = tracks.count
+                // First 4 distinct album-art URLs → the 2x2 mosaic.
+                var seen = Set<String>(); var covers: [String] = []
+                for t in tracks {
+                    guard let art = t.albumArt, !art.isEmpty, seen.insert(art).inserted else { continue }
+                    covers.append(art); if covers.count == 4 { break }
+                }
+                if !covers.isEmpty { self.trackCovers[entry.id] = covers }
             }
         }
     }
