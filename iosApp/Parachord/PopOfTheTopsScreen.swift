@@ -48,6 +48,8 @@ final class PopOfTheTopsModel {
 
 struct PopOfTheTopsScreen: View {
     @State private var model = PopOfTheTopsModel()
+    @State private var navArtist: String?
+    @State private var navAlbum: PCAlbumRef?
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
@@ -64,7 +66,11 @@ struct PopOfTheTopsScreen: View {
                         }
                         .buttonStyle(.plain)
                         .onAppear { model.resolveVisible(song, index: index) }
-                        .pcTrackContextMenu(model.entities[index], coordinator: coordinator)
+                        .pcTrackContextMenu(
+                            model.entities[index], coordinator: coordinator,
+                            onGoToArtist: { navArtist = song.artist },
+                            onGoToAlbum: song.album.map { album in { navAlbum = PCAlbumRef(title: album, artist: song.artist) } }
+                        )
                     }
                 }
                 .listStyle(.plain)
@@ -72,6 +78,8 @@ struct PopOfTheTopsScreen: View {
         }
         .navigationTitle("Pop of the Tops")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
+        .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { await model.load() }
     }
 

@@ -9,6 +9,14 @@ import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.LastFmClient
+import com.parachord.shared.metadata.AlbumDetail
+import com.parachord.shared.metadata.AlbumSearchResult
+import com.parachord.shared.metadata.ArtistInfo
+import com.parachord.shared.metadata.LastFmProvider
+import com.parachord.shared.metadata.MetadataService
+import com.parachord.shared.metadata.MusicBrainzProvider
+import com.parachord.shared.metadata.SpotifyProvider
+import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.ChartSong
 import com.parachord.shared.repository.ChartsRepository
 import com.parachord.shared.resolver.ResolvedSource
@@ -153,6 +161,32 @@ class IosContainer private constructor() {
     /** Pop of the Tops — Apple Music (iTunes RSS) top songs. No auth/key. */
     suspend fun loadPopOfTheTops(countryCode: String): List<ChartSong> =
         chartsRepository.getAppleMusicSongs(countryCode)
+
+    // ── Metadata (Album + Artist detail) ───────────────────────────────
+    // Cascading providers per CLAUDE.md: MusicBrainz (discography/tracklists)
+    // → Last.fm (images/bio/similar) → Spotify (art/IDs).
+    val metadataService: MetadataService by lazy {
+        MetadataService(
+            providers = listOf(
+                MusicBrainzProvider(musicBrainzClient),
+                LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
+                SpotifyProvider(spotifyClient, settingsStore),
+            ),
+            getDisabledProviders = { emptySet() },
+        )
+    }
+
+    suspend fun getAlbumDetail(albumTitle: String, artistName: String): AlbumDetail? =
+        metadataService.getAlbumTracks(albumTitle, artistName)
+
+    suspend fun getArtistInfo(artistName: String): ArtistInfo? =
+        metadataService.getArtistInfo(artistName)
+
+    suspend fun getArtistTopTracks(artistName: String): List<TrackSearchResult> =
+        metadataService.getArtistTopTracks(artistName, 10)
+
+    suspend fun getArtistAlbums(artistName: String): List<AlbumSearchResult> =
+        metadataService.getArtistAlbums(artistName, 50)
 
     /** Shared Spotify Web API client, authed via [spotifyAuthProvider]. The
      *  rate-limit cooldown is persisted to [kvStore] (matching Android) so a

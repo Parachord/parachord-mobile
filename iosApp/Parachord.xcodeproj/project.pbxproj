@@ -27,6 +27,7 @@
 		AA0000000000000000000065 /* Interactions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000064 /* Interactions.swift */; };
 		AA0000000000000000000067 /* HomeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000066 /* HomeScreen.swift */; };
 		AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000068 /* PopOfTheTopsScreen.swift */; };
+		AA000000000000000000006B /* DetailScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006A /* DetailScreens.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,6 +52,7 @@
 		AA0000000000000000000064 /* Interactions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Interactions.swift; sourceTree = "<group>"; };
 		AA0000000000000000000066 /* HomeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreen.swift; sourceTree = "<group>"; };
 		AA0000000000000000000068 /* PopOfTheTopsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopOfTheTopsScreen.swift; sourceTree = "<group>"; };
+		AA000000000000000000006A /* DetailScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailScreens.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +102,7 @@
 				AA0000000000000000000064 /* Interactions.swift */,
 				AA0000000000000000000066 /* HomeScreen.swift */,
 				AA0000000000000000000068 /* PopOfTheTopsScreen.swift */,
+				AA000000000000000000006A /* DetailScreens.swift */,
 				AA0000000000000000000019 /* Resources/resolver-loader.js */,
 				AA000000000000000000001A /* Resources/plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
@@ -218,6 +221,7 @@
 				AA0000000000000000000065 /* Interactions.swift in Sources */,
 				AA0000000000000000000067 /* HomeScreen.swift in Sources */,
 				AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */,
+				AA000000000000000000006B /* DetailScreens.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

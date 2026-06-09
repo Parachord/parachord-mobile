@@ -77,6 +77,8 @@ final class PlaylistDetailViewModel {
 
 struct PlaylistDetailView: View {
     @State private var model: PlaylistDetailViewModel
+    @State private var navArtist: String?
+    @State private var navAlbum: PCAlbumRef?
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     /// Observed so badge rows re-render as background resolution lands.
     private var resolverCache = IosTrackResolverCache.shared
@@ -110,13 +112,21 @@ struct PlaylistDetailView: View {
                         // tagged with `index` so the shared cache resolves
                         // top-down rather than in onAppear order.
                         .onAppear { model.resolveVisible(track, index: index) }
-                        .pcTrackContextMenu(model.trackEntities[index], coordinator: coordinator)
+                        .pcTrackContextMenu(
+                            model.trackEntities[index], coordinator: coordinator,
+                            onGoToArtist: { navArtist = model.trackEntities[index].artist },
+                            onGoToAlbum: model.trackEntities[index].album.map { album in
+                                { navAlbum = PCAlbumRef(title: album, artist: model.trackEntities[index].artist) }
+                            }
+                        )
                     }
                 }
             }
         }
         .navigationTitle(model.title)
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
+        .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { await model.load() }
     }
 
