@@ -23,6 +23,7 @@
 		AA000000000000000000002D /* ResolverBadgeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001D /* ResolverBadgeRow.swift */; };
 		AA000000000000000000002F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001F /* Theme.swift */; };
 		AA000000000000000000002E /* Shell.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001E /* Shell.swift */; };
+		AA0000000000000000000063 /* NowPlayingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000062 /* NowPlayingScreen.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +44,7 @@
 		AA000000000000000000001D /* ResolverBadgeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolverBadgeRow.swift; sourceTree = "<group>"; };
 		AA000000000000000000001F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		AA000000000000000000001E /* Shell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shell.swift; sourceTree = "<group>"; };
+		AA0000000000000000000062 /* NowPlayingScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingScreen.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +90,7 @@
 				AA000000000000000000001D /* ResolverBadgeRow.swift */,
 				AA000000000000000000001F /* Theme.swift */,
 				AA000000000000000000001E /* Shell.swift */,
+				AA0000000000000000000062 /* NowPlayingScreen.swift */,
 				AA0000000000000000000019 /* Resources/resolver-loader.js */,
 				AA000000000000000000001A /* Resources/plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
@@ -202,6 +205,7 @@
 				AA000000000000000000002D /* ResolverBadgeRow.swift in Sources */,
 				AA000000000000000000002F /* Theme.swift in Sources */,
 				AA000000000000000000002E /* Shell.swift in Sources */,
+				AA0000000000000000000063 /* NowPlayingScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

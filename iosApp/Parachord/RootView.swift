@@ -68,8 +68,8 @@ struct ContentView: View {
         .sheet(isPresented: $showAdd) {
             PCAddSheet(onShuffleupagus: { /* Phase: DJ chat */ }, onDismiss: { showAdd = false })
         }
-        .sheet(isPresented: $showNowPlaying) {
-            NowPlayingView(playback: playback)
+        .fullScreenCover(isPresented: $showNowPlaying) {
+            PCNowPlaying(coordinator: coordinator, onClose: { showNowPlaying = false })
         }
         .sheet(isPresented: $showSettings) {
             NavigationStack { SettingsView() }

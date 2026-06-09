@@ -1347,6 +1347,59 @@ final class QueuePlaybackCoordinator {
         }
     }
 
+    // ── Resolver deck (Now Playing "Playing From") ─────────────────────
+
+    /// The resolver currently producing audio, for the Now Playing deck.
+    @MainActor var activeResolverName: String {
+        switch activeEngine {
+        case .spotify: return "spotify"
+        case .musicKit: return "applemusic"
+        case .avPlayer:
+            // AVPlayer plays soundcloud / localfiles / direct — surface the
+            // best cached URL-based source for the current track.
+            guard let t = currentTrack,
+                  let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
+            else { return "localfiles" }
+            return srcs.first(where: { ["soundcloud", "bandcamp", "localfiles", "direct"].contains($0.resolver) })?.resolver ?? "localfiles"
+        }
+    }
+
+    /// Resolvers that resolved the current track above the confidence floor,
+    /// in ranked order (deduped) — the deck's selectable sources.
+    @MainActor func availableResolvers() -> [String] {
+        guard let t = currentTrack,
+              let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
+        else { return [] }
+        var seen = Set<String>(); var out: [String] = []
+        for s in srcs where (s.confidence?.doubleValue ?? 0) >= 0.6 {
+            if seen.insert(s.resolver).inserted { out.append(s.resolver) }
+        }
+        return out
+    }
+
+    /// Switch the current track to a specific resolver's source (deck tap):
+    /// re-route the SAME track through the existing router with just that
+    /// source, so playback moves to the chosen service.
+    @MainActor func switchResolver(_ resolver: String) {
+        guard let t = currentTrack,
+              let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
+              let chosen = srcs.first(where: { $0.resolver == resolver })
+        else { return }
+        Task { @MainActor in
+            let result = await router.play(ranked: [chosen], title: t.title, artist: t.artist)
+            if case .played(let kind) = result {
+                activeEngine = kind
+                if kind == .avPlayer { startAVPlaybackWhenReady() }
+                if kind == .spotify {
+                    spotifyPlaying = spotify.isPlaying
+                    spotifyPositionSec = 0; spotifyDurationSec = 0
+                    spotifyElapsedSec = 0; spotifyEndHandled = false
+                    startSpotifyPolling()
+                }
+            }
+        }
+    }
+
     init(
         player: IosAVPlayer,
         musicKit: IosMusicKitPlayer,
@@ -1468,6 +1521,11 @@ final class QueuePlaybackCoordinator {
 
     func toggleShuffle() {
         shuffleEnabled = queueManager.toggleShuffle()
+        syncSnapshot()
+    }
+
+    func clearQueue() {
+        queueManager.clearQueue()
         syncSnapshot()
     }
 
