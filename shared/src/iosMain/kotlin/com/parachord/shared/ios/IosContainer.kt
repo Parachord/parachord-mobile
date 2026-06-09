@@ -14,6 +14,7 @@ import com.parachord.shared.metadata.AlbumSearchResult
 import com.parachord.shared.metadata.ArtistInfo
 import com.parachord.shared.metadata.LastFmProvider
 import com.parachord.shared.metadata.MetadataService
+import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MusicBrainzProvider
 import com.parachord.shared.metadata.SpotifyProvider
 import com.parachord.shared.metadata.TrackSearchResult
@@ -22,7 +23,18 @@ import com.parachord.shared.model.ChartSong
 import com.parachord.shared.model.RecommendedArtist
 import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
+import com.parachord.shared.db.DriverFactory
+import com.parachord.shared.db.ParachordDb
+import com.parachord.shared.db.dao.AlbumDao
+import com.parachord.shared.db.dao.ArtistDao
+import com.parachord.shared.db.dao.PlaylistDao
+import com.parachord.shared.db.dao.PlaylistTrackDao
+import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.repository.ChartsRepository
+import com.parachord.shared.repository.CriticalDarlingsRepository
+import com.parachord.shared.repository.CriticsPickAlbum
+import com.parachord.shared.repository.FreshDrop
+import com.parachord.shared.repository.FreshDropsRepository
 import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverScoring
@@ -156,6 +168,18 @@ class IosContainer private constructor() {
 
     val musicBrainzClient: MusicBrainzClient by lazy { MusicBrainzClient(httpClient) }
 
+    // ── SQLDelight database + DAOs (iOS DB layer) ──────────────────────
+    // DriverFactory + ParachordDb.Schema already exist; a fresh iOS install
+    // starts with the full v12-equivalent schema. Mirrors AndroidModule's
+    // DriverFactory → ParachordDb → DAO wiring.
+    val sqlDriver by lazy { DriverFactory().createDriver() }
+    val database: ParachordDb by lazy { ParachordDb(sqlDriver) }
+    val trackDao: TrackDao by lazy { TrackDao(database, sqlDriver) }
+    val albumDao: AlbumDao by lazy { AlbumDao(database) }
+    val artistDao: ArtistDao by lazy { ArtistDao(database) }
+    val playlistDao: PlaylistDao by lazy { PlaylistDao(database) }
+    val playlistTrackDao: PlaylistTrackDao by lazy { PlaylistTrackDao(database) }
+
     // ── Charts (Pop of the Tops) ───────────────────────────────────────
     val appleMusicClient: AppleMusicClient by lazy { AppleMusicClient(httpClient) }
     val lastFmClient: LastFmClient by lazy { LastFmClient(httpClient) }
@@ -224,6 +248,52 @@ class IosContainer private constructor() {
     suspend fun loadRecommendedArtists(): List<RecommendedArtist> {
         var out = emptyList<RecommendedArtist>()
         recommendationsRepository.getRecommendedArtists().collect { res ->
+            if (res is Resource.Success) out = res.data
+        }
+        return out
+    }
+
+    // ── Curated lists that need DB DAOs (now unblocked) ────────────────
+    // composeMosaic is a no-op on iOS for now (single art instead of a 2x2
+    // playlist mosaic). Disk/rotation caches are no-ops (fetch fresh).
+    val imageEnrichmentService: ImageEnrichmentService by lazy {
+        ImageEnrichmentService(
+            metadataService, artistDao, albumDao, trackDao, playlistDao, playlistTrackDao,
+            httpClient,
+            composeMosaic = { _, _ -> null },
+        )
+    }
+
+    val criticalDarlingsRepository: CriticalDarlingsRepository by lazy {
+        CriticalDarlingsRepository(
+            httpClient, musicBrainzClient, imageEnrichmentService,
+            cacheRead = { null }, cacheWrite = { },
+        )
+    }
+
+    suspend fun loadCriticalDarlings(): List<CriticsPickAlbum> {
+        var out = emptyList<CriticsPickAlbum>()
+        criticalDarlingsRepository.getCriticsPicks(false).collect { res ->
+            if (res is Resource.Success) out = res.data
+        }
+        return out
+    }
+
+    val freshDropsRepository: FreshDropsRepository by lazy {
+        FreshDropsRepository(
+            musicBrainzClient, lastFmClient, listenBrainzClient, settingsStore, trackDao,
+            cacheRead = { null }, cacheWrite = { },
+            rotationRead = { null }, rotationWrite = { },
+            mbidLookupCached = { null },
+            mbidLookupViaMapper = { artist, title -> listenBrainzClient.mbidMapperLookup(artist, title)?.artistMbid },
+            imageEnrichmentService = imageEnrichmentService,
+            lastFmApiKey = appConfig.lastFmApiKey,
+        )
+    }
+
+    suspend fun loadFreshDrops(): List<FreshDrop> {
+        var out = emptyList<FreshDrop>()
+        freshDropsRepository.getFreshDrops(false).collect { res ->
             if (res is Resource.Success) out = res.data
         }
         return out

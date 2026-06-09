@@ -29,6 +29,7 @@
 		AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000068 /* PopOfTheTopsScreen.swift */; };
 		AA000000000000000000006B /* DetailScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006A /* DetailScreens.swift */; };
 		AA000000000000000000006D /* RecommendationsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006C /* RecommendationsScreen.swift */; };
+		AA000000000000000000006F /* CuratedAlbumScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006E /* CuratedAlbumScreens.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -55,6 +56,7 @@
 		AA0000000000000000000068 /* PopOfTheTopsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopOfTheTopsScreen.swift; sourceTree = "<group>"; };
 		AA000000000000000000006A /* DetailScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailScreens.swift; sourceTree = "<group>"; };
 		AA000000000000000000006C /* RecommendationsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendationsScreen.swift; sourceTree = "<group>"; };
+		AA000000000000000000006E /* CuratedAlbumScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratedAlbumScreens.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +108,7 @@
 				AA0000000000000000000068 /* PopOfTheTopsScreen.swift */,
 				AA000000000000000000006A /* DetailScreens.swift */,
 				AA000000000000000000006C /* RecommendationsScreen.swift */,
+				AA000000000000000000006E /* CuratedAlbumScreens.swift */,
 				AA0000000000000000000019 /* Resources/resolver-loader.js */,
 				AA000000000000000000001A /* Resources/plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
@@ -226,6 +229,7 @@
 				AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */,
 				AA000000000000000000006B /* DetailScreens.swift in Sources */,
 				AA000000000000000000006D /* RecommendationsScreen.swift in Sources */,
+				AA000000000000000000006F /* CuratedAlbumScreens.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

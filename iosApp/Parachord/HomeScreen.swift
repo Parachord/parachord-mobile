@@ -96,8 +96,14 @@ struct HomeScreen: View {
                 case "foryou":
                     NavigationLink { RecommendationsScreen() } label: { tileLabel(tile) }
                         .buttonStyle(.plain)
+                case "critical":
+                    NavigationLink { CriticalDarlingsScreen() } label: { tileLabel(tile) }
+                        .buttonStyle(.plain)
+                case "fresh":
+                    NavigationLink { FreshDropsScreen() } label: { tileLabel(tile) }
+                        .buttonStyle(.plain)
                 default:
-                    tileLabel(tile) // Critical Darlings / Fresh Drops need the iOS DB
+                    tileLabel(tile)
                 }
             }
         }
