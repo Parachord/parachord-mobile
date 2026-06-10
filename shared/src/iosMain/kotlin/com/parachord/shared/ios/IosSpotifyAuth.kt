@@ -29,7 +29,6 @@ import kotlinx.serialization.json.Json
 class IosSpotifyAuth(
     private val authHttpClient: HttpClient,
     private val settingsStore: SettingsStore,
-    private val clientId: () -> String,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -39,8 +38,8 @@ class IosSpotifyAuth(
      * non-2xx response or a missing client ID.
      */
     suspend fun exchangeCode(code: String, codeVerifier: String, redirectUri: String) {
-        val cid = clientId()
-        require(cid.isNotBlank()) { "Spotify client ID is not configured (Info.plist SpotifyClientID)" }
+        val cid = settingsStore.getSpotifyClientId() ?: ""
+        require(cid.isNotBlank()) { "Spotify Client ID not set — add yours in Settings → Spotify" }
 
         val response = authHttpClient.submitForm(
             url = TOKEN_URL,

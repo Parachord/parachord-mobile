@@ -67,7 +67,6 @@ class SpotifyAuthTokenProvider(
 class SpotifyTokenRefresher(
     private val settingsStore: SettingsStore,
     private val authHttpClient: HttpClient,
-    private val clientId: () -> String,
 ) : OAuthTokenRefresher {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -80,9 +79,9 @@ class SpotifyTokenRefresher(
             Log.w(TAG, "No refresh token stored — re-auth required")
             return null
         }
-        val cid = clientId()
+        val cid = settingsStore.getSpotifyClientId() ?: ""
         if (cid.isBlank()) {
-            Log.w(TAG, "No Spotify client ID configured")
+            Log.w(TAG, "No Spotify Client ID set — add yours in Settings → Spotify")
             return null
         }
 

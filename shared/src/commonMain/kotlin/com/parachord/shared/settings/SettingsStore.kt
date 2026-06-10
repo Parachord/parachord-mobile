@@ -326,6 +326,13 @@ class SettingsStore(
         secureStore.remove("soundcloud_refresh_token")
     }
 
+    // Spotify uses a BYO Developer Client ID (PKCE — no secret). Parachord ships
+    // no key; the user creates a free app at developer.spotify.com/dashboard.
+    suspend fun getSpotifyClientId(): String? = secureStore.get("spotify_client_id")
+    fun getSpotifyClientIdFlow(): Flow<String?> = secureStore.observe("spotify_client_id")
+    suspend fun setSpotifyClientId(clientId: String) { secureStore.set("spotify_client_id", clientId) }
+    suspend fun clearSpotifyClientId() { secureStore.remove("spotify_client_id") }
+
     suspend fun setSoundCloudCredentials(clientId: String, clientSecret: String) {
         secureStore.set("soundcloud_client_id", clientId)
         secureStore.set("soundcloud_client_secret", clientSecret)

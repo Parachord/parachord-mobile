@@ -127,7 +127,7 @@ class IosContainer private constructor() {
         AppConfig(
             userAgent = "Parachord/0.1 (iOS; https://parachord.com)",
             isDebug = true,
-            spotifyClientId = plist("SpotifyClientID"),
+            spotifyClientId = "",   // BYO — Parachord ships no Spotify key; user adds theirs in Settings
             lastFmApiKey = plist("LastFmApiKey"),
             lastFmSharedSecret = plist("LastFmSharedSecret"),
         )
@@ -151,7 +151,7 @@ class IosContainer private constructor() {
 
     /** Spotify 401-refresh (plain client — no plugin recursion). */
     val spotifyTokenRefresher: SpotifyTokenRefresher by lazy {
-        SpotifyTokenRefresher(settingsStore, authHttpClient) { appConfig.spotifyClientId }
+        SpotifyTokenRefresher(settingsStore, authHttpClient)
     }
 
     /** Request-time Spotify bearer lookup. Cached-read only; the reactive,
@@ -456,8 +456,13 @@ class IosContainer private constructor() {
 
     /** Spotify authorization-code → token exchange (plain client). */
     val spotifyAuth: IosSpotifyAuth by lazy {
-        IosSpotifyAuth(authHttpClient, settingsStore) { appConfig.spotifyClientId }
+        IosSpotifyAuth(authHttpClient, settingsStore)
     }
+
+    // ── BYO Spotify Client ID (Parachord ships none — user supplies their own) ──
+    suspend fun getSpotifyClientId(): String = settingsStore.getSpotifyClientId() ?: ""
+    suspend fun setSpotifyClientId(clientId: String) = settingsStore.setSpotifyClientId(clientId)
+    suspend fun clearSpotifyClientId() = settingsStore.clearSpotifyClientId()
 
     // ── Swift-callable Spotify auth surface ────────────────────────────
 

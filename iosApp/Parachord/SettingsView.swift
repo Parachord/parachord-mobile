@@ -97,6 +97,7 @@ final class SettingsViewModel {
     var themeMode = "system"
     var scrobblingEnabled = false
     var spotifyConnected = false
+    var spotifyClientId = ""        // BYO Developer Client ID (Parachord ships none)
     var spotifyError: String?
     /// Enabled-AND-usable resolvers, in priority order (mirrors desktop's
     /// `resolver_order`, which only holds resolvers that are actually usable).
@@ -187,6 +188,7 @@ final class SettingsViewModel {
             mobileBlocked = blocked
             pluginCount = ((try? await container.loadPlugins()) ?? []).count
 
+            spotifyClientId = (try? await store.getSpotifyClientId()) ?? ""
             // Read Spotify connection up-front so the load-time recompute gates
             // it correctly (the connected-flow watcher only fires later).
             spotifyConnected = (try? await store.getSpotifyAccessToken()) != nil
@@ -286,12 +288,20 @@ final class SettingsViewModel {
     func setTheme(_ m: String) { themeMode = m; Task { try? await store.setThemeMode(mode: m) } }
     func setScrobbling(_ b: Bool) { scrobblingEnabled = b; Task { try? await store.setScrobblingEnabled(enabled: b) } }
 
-    // ── Spotify OAuth ─────────────────────────────────────────────────
+    // ── Spotify OAuth (BYO Client ID) ─────────────────────────────────
+    func setSpotifyClientId(_ id: String) {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        spotifyClientId = trimmed
+        Task { try? await container.setSpotifyClientId(clientId: trimmed) }
+    }
     func connectSpotify() {
+        guard !spotifyClientId.isEmpty else {
+            spotifyError = "Enter your Spotify Client ID first."; return
+        }
         Task { @MainActor in
             do {
                 let m = IosOAuthManager(); oauthManager = m
-                let cfg = OAuthConfig.spotify(clientId: container.appConfig.spotifyClientId)
+                let cfg = OAuthConfig.spotify(clientId: spotifyClientId)
                 let r = try await m.authorize(cfg)
                 try await container.connectSpotify(code: r.code, codeVerifier: r.codeVerifier)
                 spotifyError = nil
@@ -529,6 +539,7 @@ private struct PluginConfigSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
     @State private var secretDraft = ""
+    @State private var spotifyIdDraft = ""
 
     private var isAi: Bool { ["chatgpt", "claude", "gemini"].contains(service.id) }
 
@@ -574,7 +585,10 @@ private struct PluginConfigSheet: View {
             }
             .navigationTitle("Configure").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .onAppear { draft = model.values[service.id] ?? "" }
+            .onAppear {
+                draft = model.values[service.id] ?? ""
+                spotifyIdDraft = model.spotifyClientId
+            }
         }
     }
 
@@ -603,7 +617,23 @@ private struct PluginConfigSheet: View {
         }
     }
 
-    private var spotifySection: some View {
+    @ViewBuilder private var spotifySection: some View {
+        Section {
+            TextField("Client ID", text: $spotifyIdDraft)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .font(.system(.body, design: .monospaced))
+            Button("Save Client ID") { model.setSpotifyClientId(spotifyIdDraft) }
+                .disabled(spotifyIdDraft.trimmingCharacters(in: .whitespaces).isEmpty || spotifyIdDraft == model.spotifyClientId)
+            if !model.spotifyClientId.isEmpty {
+                Button("Clear", role: .destructive) { spotifyIdDraft = ""; model.setSpotifyClientId("") }
+            }
+            Link(destination: URL(string: "https://developer.spotify.com/dashboard")!) {
+                Label("Get a Client ID — developer.spotify.com →", systemImage: "key.fill").font(.system(size: 14))
+            }
+        } header: { Text("Spotify Developer Client ID") } footer: {
+            Text("Parachord ships no Spotify key. Create a free app at developer.spotify.com/dashboard, add the redirect URI parachord://auth/callback/spotify, then paste the Client ID. Spotify Premium is required for playback.")
+        }
+
         Section("Connection") {
             if model.spotifyConnected {
                 Label("Spotify Premium connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
@@ -613,7 +643,11 @@ private struct PluginConfigSheet: View {
                     Text("Connect Spotify").bold().frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent).tint(Color(uiColor: UIColor(hex: 0x1DB954)))
+                .disabled(model.spotifyClientId.isEmpty)
                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                if model.spotifyClientId.isEmpty {
+                    Text("Save your Client ID above to enable Connect.").font(.caption).foregroundStyle(.secondary)
+                }
                 if let e = model.spotifyError { Text(e).font(.caption).foregroundStyle(.red) }
             }
         }
