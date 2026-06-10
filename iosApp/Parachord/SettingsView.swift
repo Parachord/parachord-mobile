@@ -442,10 +442,13 @@ private struct PlugInsTab: View {
             }
             Spacer(minLength: 0)
             Button { onConfig(svc) } label: { Image(systemName: "gearshape").foregroundStyle(PC.fg3) }.buttonStyle(.plain)
+            // Fixed-width action so the gear sits at the same x on every row
+            // regardless of the "Connect" vs "Enable" label width.
             Button(needsConnect ? "Connect" : "Enable") {
                 if needsConnect { onConfig(svc) } else { model.setResolverEnabled(svc.id, true) }
             }
             .font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent).buttonStyle(.plain)
+            .frame(width: 72, alignment: .trailing)
         }
         .padding(.horizontal, 20).padding(.vertical, 9)
     }
