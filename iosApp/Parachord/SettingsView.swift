@@ -98,15 +98,27 @@ final class SettingsViewModel {
     var scrobblingEnabled = false
     var spotifyConnected = false
     var spotifyError: String?
-    /// Enabled resolvers, in priority order (disabled ones are absent — mirrors
-    /// desktop's `resolver_order`, which only holds enabled resolvers).
-    var resolverOrder: [String] = PCServices.resolvers.map { $0.id }
-    /// The enabled set (`active_resolvers`). Disabling drops the id from both
-    /// this and resolverOrder; enabling re-inserts at canonical position.
+    /// Enabled-AND-usable resolvers, in priority order (mirrors desktop's
+    /// `resolver_order`, which only holds resolvers that are actually usable).
+    var resolverOrder: [String] = []
+    /// User intent (`active_resolvers`): resolvers the user wants on. An
+    /// auth-gated resolver only reaches the priority list once it's also
+    /// connected (isUsable) — so a not-connected Spotify is never "enabled".
     var activeResolvers: Set<String> = Set(PCServices.resolvers.map { $0.id })
-    /// Catalogued resolvers not currently enabled — shown grayed below the list.
+    private var resolversReady = false
+
+    /// Resolvers needing an explicit connection before they can resolve.
+    /// (Bandcamp / Local Files need none; Apple Music auths at play time.)
+    func requiresConnection(_ id: String) -> Bool { id == "spotify" || id == "soundcloud" }
+    /// Usable = no connection required, or connected.
+    func isUsable(_ id: String) -> Bool { !requiresConnection(id) || isConnected(id) }
+    /// In the priority list = user-enabled AND usable AND mobile-allowed.
+    func isEnabledUsable(_ id: String) -> Bool {
+        activeResolvers.contains(id) && !mobileBlocked.contains(id) && isUsable(id)
+    }
+    /// Below the list: user-disabled, or auth-gated and not yet connected.
     var disabledResolvers: [String] {
-        PCServices.resolvers.map { $0.id }.filter { !activeResolvers.contains($0) && !mobileBlocked.contains($0) }
+        PCServices.resolvers.map { $0.id }.filter { !mobileBlocked.contains($0) && !isEnabledUsable($0) }
     }
 
     /// service id → its stored key/token/username (empty = not configured).
@@ -140,7 +152,9 @@ final class SettingsViewModel {
         subs.append(watcher.watch(flow: store.themeMode) { [weak self] v in if let s = v as? String { self?.themeMode = s } })
         subs.append(watcher.watch(flow: store.scrobblingEnabled) { [weak self] v in if let b = v as? Bool { self?.scrobblingEnabled = b } })
         subs.append(watcher.watch(flow: container.getSpotifyConnectedFlow()) { [weak self] v in
-            self?.spotifyConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false) })
+            self?.spotifyConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
+            self?.recomputeResolvers()   // connect/disconnect moves Spotify in/out of the list
+        })
         subs.append(watcher.watch(flow: container.getLibreFmConnectedFlow()) { [weak self] v in
             self?.libreFmConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false) })
         loadAll()
@@ -173,21 +187,19 @@ final class SettingsViewModel {
             mobileBlocked = blocked
             pluginCount = ((try? await container.loadPlugins()) ?? []).count
 
-            // Enabled set: empty stored = all catalogued resolvers enabled.
+            // Read Spotify connection up-front so the load-time recompute gates
+            // it correctly (the connected-flow watcher only fires later).
+            spotifyConnected = (try? await store.getSpotifyAccessToken()) != nil
+
+            // Resolver intent (active_resolvers): empty stored = all catalogued.
+            // Whether each actually reaches the priority list is gated by
+            // isUsable (connected / no-auth) inside recomputeResolvers.
             let catalogIds = PCServices.resolvers.map { $0.id }
             let storedActive = ((try? await store.getActiveResolvers()) as? [String]) ?? []
-            let active = storedActive.isEmpty ? Set(catalogIds) : Set(storedActive).intersection(catalogIds)
-            activeResolvers = active
-
-            // Priority order: enabled + mobile-allowed + catalogued, in stored
-            // order; append any enabled resolver missing from the order at its
-            // canonical position (shared insertInCanonicalOrder).
-            let stored = ((try? await store.getResolverOrder()) as? [String]) ?? []
-            var order = stored.filter { active.contains($0) && !blocked.contains($0) && PCServices.find($0) != nil }
-            for id in catalogIds where active.contains(id) && !order.contains(id) {
-                order = container.resolverScoring.insertInCanonicalOrder(order: order, newId: id)
-            }
-            resolverOrder = order
+            activeResolvers = storedActive.isEmpty ? Set(catalogIds) : Set(storedActive).intersection(catalogIds)
+            resolverOrder = ((try? await store.getResolverOrder()) as? [String])?.filter { PCServices.find($0) != nil } ?? []
+            resolversReady = true
+            recomputeResolvers()
         }
     }
 
@@ -206,25 +218,31 @@ final class SettingsViewModel {
         guard from >= 0, to >= 0, from < resolverOrder.count, to < resolverOrder.count else { return }
         let item = resolverOrder.remove(at: from)
         resolverOrder.insert(item, at: to)
-        let order = resolverOrder
-        Task { try? await store.setResolverOrder(order: order) }
+        persistResolvers()
     }
 
     func isResolverEnabled(_ id: String) -> Bool { activeResolvers.contains(id) }
 
-    /// Enable/disable a resolver. Disabling drops it from both active_resolvers
-    /// and resolver_order (so it leaves the priority list); enabling re-inserts
-    /// at its canonical position. Mirrors desktop's toggleResolver.
+    /// Toggle user intent; recompute rebuilds the usable priority list + persists.
+    /// A not-connected auth-gated resolver won't reach the list — connecting it
+    /// (which calls recompute) is what enables it.
     func setResolverEnabled(_ id: String, _ enabled: Bool) {
-        if enabled {
-            activeResolvers.insert(id)
-            if !resolverOrder.contains(id) {
-                resolverOrder = container.resolverScoring.insertInCanonicalOrder(order: resolverOrder, newId: id)
-            }
-        } else {
-            activeResolvers.remove(id)
-            resolverOrder.removeAll { $0 == id }
+        if enabled { activeResolvers.insert(id) } else { activeResolvers.remove(id) }
+        recomputeResolvers()
+    }
+
+    /// Rebuild resolverOrder = enabled-usable resolvers (preserving the current
+    /// order; canonical-insert any newly-usable one). Persists once load is done.
+    func recomputeResolvers() {
+        var order = resolverOrder.filter { isEnabledUsable($0) && PCServices.find($0) != nil }
+        for id in PCServices.resolvers.map({ $0.id }) where isEnabledUsable(id) && !order.contains(id) {
+            order = container.resolverScoring.insertInCanonicalOrder(order: order, newId: id)
         }
+        resolverOrder = order
+        if resolversReady { persistResolvers() }
+    }
+
+    private func persistResolvers() {
         let active = Array(activeResolvers); let order = resolverOrder
         Task {
             try? await store.setActiveResolvers(resolvers: active)
@@ -235,6 +253,10 @@ final class SettingsViewModel {
     // ── BYO key/token writes (routes to the right SettingsStore method) ─
     func setValue(_ id: String, _ value: String, secret: String? = nil) {
         values[id] = value
+        if requiresConnection(id) {            // soundcloud: creds gate usability
+            if !value.isEmpty { activeResolvers.insert(id) }
+            recomputeResolvers()
+        }
         Task {
             switch id {
             case "lastfm": try? await store.setLastFmUsername(username: value)
@@ -273,11 +295,17 @@ final class SettingsViewModel {
                 let r = try await m.authorize(cfg)
                 try await container.connectSpotify(code: r.code, codeVerifier: r.codeVerifier)
                 spotifyError = nil
+                activeResolvers.insert("spotify")   // connecting enables it (desktop parity)
+                recomputeResolvers()
             } catch { spotifyError = error.localizedDescription }
             oauthManager = nil
         }
     }
-    func disconnectSpotify() { Task { try? await container.disconnectSpotify() } }
+    func disconnectSpotify() {
+        activeResolvers.remove("spotify")   // auth-gated removal (desktop parity)
+        Task { try? await container.disconnectSpotify() }
+        recomputeResolvers()
+    }
 
     // ── Libre.fm (username + password → session) ──────────────────────
     func connectLibreFm() {
@@ -401,13 +429,23 @@ private struct PlugInsTab: View {
     }
 
     private func disabledResolverRow(_ svc: PCService) -> some View {
-        HStack(spacing: 12) {
+        // Auth-gated + not connected → "Connect" (opens config); otherwise the
+        // user disabled it → "Enable" re-adds it directly.
+        let needsConnect = model.requiresConnection(svc.id) && !model.isConnected(svc.id)
+        return HStack(spacing: 12) {
             tileIcon(svc, size: 34).opacity(0.4).grayscale(1)
-            Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg3)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg3)
+                if needsConnect {
+                    Text("Connect to enable").font(.system(size: 12)).foregroundStyle(PC.fg3)
+                }
+            }
             Spacer(minLength: 0)
             Button { onConfig(svc) } label: { Image(systemName: "gearshape").foregroundStyle(PC.fg3) }.buttonStyle(.plain)
-            Button("Enable") { model.setResolverEnabled(svc.id, true) }
-                .font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent).buttonStyle(.plain)
+            Button(needsConnect ? "Connect" : "Enable") {
+                if needsConnect { onConfig(svc) } else { model.setResolverEnabled(svc.id, true) }
+            }
+            .font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent).buttonStyle(.plain)
         }
         .padding(.horizontal, 20).padding(.vertical, 9)
     }
@@ -496,7 +534,11 @@ private struct PluginConfigSheet: View {
                     }
                 }
 
-                if service.kind == .resolver {
+                // The enable toggle only makes sense once a resolver is usable
+                // (no-auth, or connected). A not-connected Spotify/SoundCloud
+                // shows just its Connect/credentials section — connecting is what
+                // enables it.
+                if service.kind == .resolver && model.isUsable(service.id) {
                     Section {
                         Toggle("Enable resolver", isOn: Binding(
                             get: { model.isResolverEnabled(service.id) },
