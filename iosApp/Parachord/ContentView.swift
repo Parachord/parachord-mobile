@@ -2,6 +2,7 @@ import SwiftUI
 import Shared
 import JavaScriptCore
 import AVFoundation
+import UIKit
 import Combine
 import MediaPlayer
 import MusicKit
@@ -1282,8 +1283,17 @@ final class QueuePlaybackCoordinator {
     private let queueManager = QueueManager()
 
     private var router: PlaybackRouter {
-        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify)
+        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify,
+                       nonStreamingResolvers: nonStreamingResolvers)
     }
+
+    /// Resolver ids that open in the browser instead of streaming (stream:false,
+    /// e.g. Bandcamp). Seeded with the known default so it holds before the .axe
+    /// layer reports; refreshed from plugin capabilities in `init`.
+    @ObservationIgnored private var nonStreamingResolvers: Set<String> = ["bandcamp"]
+    /// The last URL handed to the browser, so the mini-player play button can
+    /// re-open it for a Bandcamp track.
+    @ObservationIgnored private var browserUrl: String?
 
     /// Republished from `QueueManager.snapshot.value` after every
     /// mutation so SwiftUI can render the up-next list reactively.
@@ -1318,6 +1328,7 @@ final class QueuePlaybackCoordinator {
         case .avPlayer: return player.isPlaying
         case .musicKit: return musicKit.isPlaying
         case .spotify: return spotifyPlaying
+        case .browser: return false   // external — we don't manage its playback
         }
     }
     var currentTime: Double {
@@ -1325,6 +1336,7 @@ final class QueuePlaybackCoordinator {
         case .avPlayer: return player.currentTime
         case .musicKit: return musicKit.currentTime
         case .spotify: return spotifyPositionSec
+        case .browser: return 0
         }
     }
     var duration: Double {
@@ -1332,6 +1344,7 @@ final class QueuePlaybackCoordinator {
         case .avPlayer: return player.duration
         case .musicKit: return musicKit.duration
         case .spotify: return spotifyDurationSec
+        case .browser: return 0
         }
     }
 
@@ -1346,6 +1359,8 @@ final class QueuePlaybackCoordinator {
         case .spotify:
             spotifyPositionSec = seconds // optimistic; resync corrects drift
             Task { @MainActor in await spotify.seek(toSec: seconds) }
+        case .browser:
+            break   // external playback — nothing to seek
         }
     }
 
@@ -1363,6 +1378,12 @@ final class QueuePlaybackCoordinator {
                   let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
             else { return "localfiles" }
             return srcs.first(where: { ["soundcloud", "bandcamp", "localfiles", "direct"].contains($0.resolver) })?.resolver ?? "localfiles"
+        case .browser:
+            // The stream:false source we opened (Bandcamp et al).
+            guard let t = currentTrack,
+                  let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
+            else { return "bandcamp" }
+            return srcs.first(where: { nonStreamingResolvers.contains($0.resolver) })?.resolver ?? "bandcamp"
         }
     }
 
@@ -1426,6 +1447,13 @@ final class QueuePlaybackCoordinator {
         // (engine-agnostic), not a single player — the "real next/previous"
         // the AVPlayer's skip±15s stand-ins anticipated.
         setupQueueRemoteCommands()
+        // Refresh the stream:false resolver set from plugin capabilities (the
+        // seeded "bandcamp" default covers the pre-load window).
+        Task { @MainActor [weak self] in
+            if let ids = try? await IosContainer.companion.shared.nonStreamingResolverIds(), !ids.isEmpty {
+                self?.nonStreamingResolvers = Set(ids.map { String(describing: $0) })
+            }
+        }
     }
 
     /// Register engine-agnostic next/previous-track commands on the shared
@@ -1465,6 +1493,11 @@ final class QueuePlaybackCoordinator {
             Task { @MainActor in
                 if spotify.isPlaying { await spotify.pause() } else { await spotify.resume() }
                 spotifyPlaying = spotify.isPlaying
+            }
+        case .browser:
+            // Re-open the Bandcamp page (playback happens in the browser).
+            if let url = browserUrl, let u = URL(string: url) {
+                Task { @MainActor in _ = await UIApplication.shared.open(u) }
             }
         }
     }
@@ -1577,6 +1610,19 @@ final class QueuePlaybackCoordinator {
                     spotifyEndHandled = false
                     startSpotifyPolling()
                 }
+            case .openBrowser(let url):
+                // Bandcamp (stream:false): stop the prior engine's audio, show
+                // the track in the mini player (not playing), open the URL.
+                switch activeEngine {
+                case .avPlayer: player.pause()
+                case .musicKit: musicKit.pause()
+                case .spotify: await spotify.pause()
+                case .browser: break
+                }
+                activeEngine = .browser
+                browserUrl = url
+                if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
+
             case .noPlayableSource:
                 // Resolved but no engine could play it (e.g. Apple-Music-only
                 // match with no subscription) — advance to the next track.

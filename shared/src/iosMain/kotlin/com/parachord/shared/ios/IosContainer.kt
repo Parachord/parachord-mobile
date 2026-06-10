@@ -578,6 +578,18 @@ class IosContainer private constructor() {
         return pluginManager.allLoadedPlugins.value
     }
 
+    /**
+     * Resolver ids that resolve tracks but can't stream audio (stream:false,
+     * e.g. Bandcamp) — playback opens these in the browser. Mirrors Android's
+     * PlaybackRouter check (`capabilities["stream"] == false && resolve == true`).
+     */
+    suspend fun nonStreamingResolverIds(): Set<String> {
+        pluginManager.ensureInitialized()
+        return pluginManager.plugins.value
+            .filter { it.capabilities["stream"] == false && it.capabilities["resolve"] == true }
+            .map { it.id }.toSet()
+    }
+
     // ── Plugin marketplace (GitHub parachord-plugins → hot-reload) ──────
     val pluginSyncService: PluginSyncService by lazy {
         PluginSyncService(

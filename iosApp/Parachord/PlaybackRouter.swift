@@ -18,13 +18,16 @@ import Shared
 //   spotify (track URI)                               → Spotify Connect
 
 enum PlaybackEngineKind: String {
-    case avPlayer, musicKit, spotify
+    case avPlayer, musicKit, spotify, browser
 }
 
 enum RouteResult: Equatable {
     /// Playback started on this engine. For `.avPlayer` the caller still
     /// drives the ready-poll-then-play (the item loads asynchronously).
     case played(PlaybackEngineKind)
+    /// A non-streaming resolver (stream:false, e.g. Bandcamp) — the caller opens
+    /// this URL in the browser and shows the track without managing audio.
+    case openBrowser(String)
     /// Every ranked source needed an engine we lack (no subscription / token).
     case noPlayableSource
 }
@@ -34,10 +37,18 @@ struct PlaybackRouter {
     let avPlayer: IosAVPlayer
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
+    /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
+    /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
+    var nonStreamingResolvers: Set<String> = []
 
     /// Walk the ranked sources; start the first engine-available one.
     func play(ranked: [ResolvedSource], title: String, artist: String) async -> RouteResult {
         for source in ranked {
+            // Non-streaming resolver (Bandcamp) — hand its URL back to open in
+            // the browser, before trying any audio engine for this source.
+            if nonStreamingResolvers.contains(source.resolver), !source.url.isEmpty {
+                return .openBrowser(source.url)
+            }
             switch source.resolver {
             case "soundcloud", "localfiles", "direct":
                 guard !source.url.isEmpty else { continue }
