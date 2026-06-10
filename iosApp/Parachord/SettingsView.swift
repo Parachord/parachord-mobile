@@ -198,7 +198,11 @@ final class SettingsViewModel {
             // isUsable (connected / no-auth) inside recomputeResolvers.
             let catalogIds = PCServices.resolvers.map { $0.id }
             let storedActive = ((try? await store.getActiveResolvers()) as? [String]) ?? []
-            activeResolvers = storedActive.isEmpty ? Set(catalogIds) : Set(storedActive).intersection(catalogIds)
+            // Fresh install: only no-auth resolvers are enabled by default (matches
+            // desktop's ['bandcamp','localfiles']); auth-gated ones (Spotify /
+            // SoundCloud) join the enabled set when connected.
+            let defaultActive = Set(catalogIds.filter { !requiresConnection($0) })
+            activeResolvers = storedActive.isEmpty ? defaultActive : Set(storedActive).intersection(catalogIds)
             resolverOrder = ((try? await store.getResolverOrder()) as? [String])?.filter { PCServices.find($0) != nil } ?? []
             resolversReady = true
             recomputeResolvers()
@@ -208,7 +212,9 @@ final class SettingsViewModel {
     // ── Connect status ────────────────────────────────────────────────
     func isConnected(_ id: String) -> Bool {
         switch id {
-        case "spotify": return spotifyConnected
+        // A stale token alone (e.g. iCloud-Keychain-synced) isn't a usable
+        // connection without the BYO Client ID — both are required.
+        case "spotify": return spotifyConnected && !spotifyClientId.isEmpty
         case "librefm": return libreFmConnected
         case "localfiles", "bandcamp", "applemusic": return true   // no key needed / MusicKit at play time
         default: return !(values[id]?.isEmpty ?? true)
@@ -236,6 +242,12 @@ final class SettingsViewModel {
     /// Rebuild resolverOrder = enabled-usable resolvers (preserving the current
     /// order; canonical-insert any newly-usable one). Persists once load is done.
     func recomputeResolvers() {
+        // Auth-gated resolvers that aren't usable (no connection / no key) must
+        // not linger in the enabled set — desktop drops them on disconnect. This
+        // also clears a stale-token Spotify on launch when no Client ID is set.
+        for id in PCServices.resolvers.map({ $0.id }) where requiresConnection(id) && !isUsable(id) {
+            activeResolvers.remove(id)
+        }
         var order = resolverOrder.filter { isEnabledUsable($0) && PCServices.find($0) != nil }
         for id in PCServices.resolvers.map({ $0.id }) where isEnabledUsable(id) && !order.contains(id) {
             order = container.resolverScoring.insertInCanonicalOrder(order: order, newId: id)
@@ -293,6 +305,7 @@ final class SettingsViewModel {
         let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
         spotifyClientId = trimmed
         Task { try? await container.setSpotifyClientId(clientId: trimmed) }
+        recomputeResolvers()   // a Client ID gain/loss flips Spotify's usability
     }
     func connectSpotify() {
         guard !spotifyClientId.isEmpty else {
@@ -305,7 +318,8 @@ final class SettingsViewModel {
                 let r = try await m.authorize(cfg)
                 try await container.connectSpotify(code: r.code, codeVerifier: r.codeVerifier)
                 spotifyError = nil
-                activeResolvers.insert("spotify")   // connecting enables it (desktop parity)
+                spotifyConnected = true              // before recompute, so the prune keeps it
+                activeResolvers.insert("spotify")    // connecting enables it (desktop parity)
                 recomputeResolvers()
             } catch { spotifyError = error.localizedDescription }
             oauthManager = nil
