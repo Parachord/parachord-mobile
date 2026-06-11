@@ -975,6 +975,11 @@ A full security review was completed April 2026. The review plan is at `.claude/
 - **Plugin signing is defense-in-depth, not critical.** HTTPS transport + GitHub repo access controls are the primary defense against supply chain attacks. Sandboxing (C3 namespaced storage, C2 fetch allowlist) matters more — a signed plugin with unrestricted NativeBridge access is just as dangerous as an unsigned one.
 - **MusicKit v3 `music.volume` has no effect on Android WebView.** DRM audio goes through MediaDrm/MediaCodec, bypassing the JS audio pipeline. Volume normalization between sources can't be solved app-side.
 - **Global OkHttpClient User-Agent is required.** MusicBrainz rate-limits or 403s requests with the default `okhttp/x.y.z` User-Agent. The shared OkHttpClient has a `User-Agent: Parachord/<version> (Android; https://parachord.app)` interceptor. Don't create per-API OkHttp clients without it.
+- **Apple Music developer token (JWT) — rotate BOTH platforms.** The `AppConfig.appleMusicDeveloperToken` JWT (used by the shared `AppleMusicArtistProvider` gap-filler for catalog artist images) is an ES256 JWT with `exp` ≤ 6 months. It is currently hand-pasted into **two independent files** that must BOTH be updated on every rotation, or that platform's Apple Music artist images silently stop working (note: `AppleMusicArtistProvider.isAvailable()` only checks `isNotBlank()`, not `exp` — an expired token fails silently per-request):
+  - **Android:** `local.properties:APPLE_MUSIC_DEVELOPER_TOKEN` (→ BuildConfig → AppConfig)
+  - **iOS:** `iosApp/Parachord/Secrets.xcconfig:APPLE_MUSIC_DEVELOPER_TOKEN` (→ Info.plist `AppleMusicDeveloperToken` → `IosContainer.plist`)
+
+  This is a separate token from the on-device *playback* token (the App Service token used by `ApplicationMusicPlayer` on iOS — see `iosApp/AGENTS.md`). The hand-paste drift + silent expiry is tracked for build-time generation from the `.p8` in [parachord-mobile#186](https://github.com/Parachord/parachord-mobile/issues/186); until that lands, **rotation = update both files above.**
 
 ## Common Mistakes to Avoid
 

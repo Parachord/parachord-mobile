@@ -372,6 +372,32 @@ it took many rounds. The complete, correct procedure:
 
 ---
 
+## Apple Music developer token (JWT) — rotation
+
+This is a **different token** from the playback token above. The playback
+token (`ApplicationMusicPlayer`) is minted on-device from the MusicKit App
+Service. The token here is a hand-generated **ES256 JWT** (`exp` ≤ 6 months)
+that populates `AppConfig.appleMusicDeveloperToken`, used by the shared
+`AppleMusicArtistProvider` (a catalog gap-filler for **artist images** in the
+metadata cascade — NOT playback).
+
+- **iOS source:** `iosApp/Parachord/Secrets.xcconfig`
+  (`APPLE_MUSIC_DEVELOPER_TOKEN`, gitignored) → `Info.plist`
+  `AppleMusicDeveloperToken = $(APPLE_MUSIC_DEVELOPER_TOKEN)` →
+  `IosContainer.plist("AppleMusicDeveloperToken")`.
+- **Android source:** `local.properties:APPLE_MUSIC_DEVELOPER_TOKEN` (the same
+  JWT). **Both files hold the same value and must BOTH be updated on every
+  rotation** — forget one and that platform's Apple Music artist images go
+  blank with no error (`isAvailable()` checks `isNotBlank()`, never `exp`, so
+  an expired token fails silently per-request).
+- **Rotation today:** paste the new JWT into BOTH `Secrets.xcconfig` and
+  Android `local.properties`.
+- **Planned fix:** mint the JWT at build time from the `.p8` (already used for
+  Mac builds) so it never drifts or expires unexpectedly —
+  [parachord-mobile#186](https://github.com/Parachord/parachord-mobile/issues/186).
+
+---
+
 ## Spotify Connect playback (`IosSpotifyConnect` in `ContentView.swift`)
 
 **The canonical spec is `/CLAUDE.md` → "Spotify Connect — Device Wake &
