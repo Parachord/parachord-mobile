@@ -309,5 +309,6 @@ fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
     mbid = mbid ?: other.mbid,
     spotifyId = spotifyId ?: other.spotifyId,
     releaseType = releaseType ?: other.releaseType,
+    secondaryTypes = secondaryTypes.ifEmpty { other.secondaryTypes },
     provider = "$provider+${other.provider}",
 )

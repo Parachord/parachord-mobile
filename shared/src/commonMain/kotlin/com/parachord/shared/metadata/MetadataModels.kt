@@ -44,6 +44,10 @@ data class AlbumSearchResult(
     val mbid: String? = null,
     val spotifyId: String? = null,
     val releaseType: String? = null,
+    /** MusicBrainz secondary types (e.g. "Live", "Compilation", "Soundtrack").
+     *  Lets the UI split Live releases into their own discography filter instead
+     *  of lumping them under Studio Albums. */
+    val secondaryTypes: List<String> = emptyList(),
     val provider: String = "",
 )
 

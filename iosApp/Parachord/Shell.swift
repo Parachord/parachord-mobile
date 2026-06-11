@@ -96,8 +96,11 @@ struct PCTabBar: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 56)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 32, style: .continuous).strokeBorder(.white.opacity(0.10)))
+            // Thicker material + adaptive separator so the glass stays legible
+            // over BOTH light and dark backgrounds (ultraThin went near-black
+            // over dark art and swallowed the icons).
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 32, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
             .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
 
             Button(action: onCenter) {
@@ -122,7 +125,9 @@ struct PCTabBar: View {
 struct PCMiniPlayer: View {
     let title: String
     let artist: String
+    var artworkUrl: String? = nil
     let isPlaying: Bool
+    var isStarting: Bool = false
     var progress: Double = 0
     var artNamespace: Namespace.ID
     var artIsSource: Bool = true
@@ -132,7 +137,7 @@ struct PCMiniPlayer: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                PCArtwork(name: title, size: 44, radius: 8)
+                pcCover(artworkUrl, seed: title, size: 44, radius: 8)
                     .matchedGeometryEffect(id: "npArt", in: artNamespace, isSource: artIsSource)
                     .shadow(color: .black.opacity(0.2), radius: 1, y: 1)
                 VStack(alignment: .leading, spacing: 1) {
@@ -143,11 +148,21 @@ struct PCMiniPlayer: View {
                 Image(systemName: "heart").font(.system(size: 20)).foregroundStyle(PC.error)
                     .frame(width: 40, height: 40)
                 Button(action: onToggle) {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 20)).foregroundStyle(PC.fg1)
-                        .frame(width: 40, height: 40)
+                    ZStack {
+                        // Spinner while a tapped track is resolving/starting so
+                        // the control feels responsive instead of the glyph
+                        // lagging until the engine reports playing.
+                        if isStarting {
+                            ProgressView().controlSize(.small).tint(PC.fg2)
+                        } else {
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 20)).foregroundStyle(PC.fg1)
+                        }
+                    }
+                    .frame(width: 40, height: 40)
                 }
                 .buttonStyle(.plain)
+                .disabled(isStarting)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
 
@@ -160,8 +175,8 @@ struct PCMiniPlayer: View {
             }
             .frame(height: 2)
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.white.opacity(0.10)))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.separator, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
         .padding(.horizontal, 12)
         .contentShape(Rectangle())

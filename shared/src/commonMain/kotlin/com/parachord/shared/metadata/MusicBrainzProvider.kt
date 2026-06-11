@@ -208,6 +208,7 @@ class MusicBrainzProvider(
                         year = rg.year,
                         mbid = rg.id,
                         releaseType = normalizeReleaseGroupEntry(rg),
+                        secondaryTypes = rg.secondaryTypes,
                         provider = name,
                     )
                 }

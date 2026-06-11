@@ -53,7 +53,9 @@ struct ContentView: View {
                 if let t = coordinator.currentTrack {
                     PCMiniPlayer(
                         title: t.title, artist: t.artist,
+                        artworkUrl: pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
                         isPlaying: coordinator.isPlaying,
+                        isStarting: coordinator.isStarting,
                         progress: coordinator.duration > 0 ? coordinator.currentTime / coordinator.duration : 0,
                         artNamespace: artNS, artIsSource: !showNowPlaying,
                         onToggle: { coordinator.togglePlayPause() },
@@ -75,7 +77,14 @@ struct ContentView: View {
                 PCNowPlaying(
                     coordinator: coordinator,
                     artNamespace: artNS,
-                    onClose: { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false } }
+                    onClose: { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false } },
+                    // Tapping the artist closes Now Playing and pushes the artist
+                    // page onto the Home tab's stack.
+                    onArtist: { name in
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                        tab = .home
+                        homePendingRoute = .artist(name)
+                    }
                 )
                 // NOTE: do NOT add .ignoresSafeArea() here — the content must
                 // respect the top safe area (status bar / Dynamic Island). The
@@ -98,18 +107,19 @@ struct ContentView: View {
                 .transition(.move(edge: .leading))
             }
         }
-        .overlay(alignment: .top) {
-            // Mock Dynamic Island live activity — hidden while Now Playing is up.
-            if let t = coordinator.currentTrack, !showNowPlaying {
-                PCDynamicIsland(title: t.title, isPlaying: coordinator.isPlaying)
-                    .padding(.top, 11)
-            }
-        }
+        // NOTE: no faux Dynamic Island while the app is in the FOREGROUND — the
+        // mini-player already shows what's playing, and a real Dynamic Island is
+        // a system-managed Live Activity that only appears when the app is
+        // BACKGROUNDED. Rendering a mock island over our own UI covered the real
+        // status bar / camera housing and is non-standard. (A real ActivityKit
+        // Live Activity for background playback is a separate, larger feature.)
         .environment(coordinator)
         .sheet(isPresented: $showAdd) {
             PCAddSheet(onShuffleupagus: { /* Phase: DJ chat */ }, onDismiss: { showAdd = false })
         }
-        .sheet(isPresented: $showSettings) {
+        // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
+        // PCTopBar back button calls dismiss(), which closes the cover.
+        .fullScreenCover(isPresented: $showSettings) {
             NavigationStack { SettingsView() }
         }
         // Spotify Connect device picker (Phase: Spotify) — hosted at the shell.

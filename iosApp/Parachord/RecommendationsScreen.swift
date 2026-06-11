@@ -9,20 +9,27 @@ import Shared
 
 @MainActor @Observable
 final class RecommendationsModel {
+    static let shared = RecommendationsModel()
     private let container = IosContainer.companion.shared
     var tracks: [RecommendedTrack] = []
     var entities: [Track] = []
     var artists: [RecommendedArtist] = []
     var isLoading = false
     var loaded = false
+    private var lastLoad: Date?
+    private let ttl: TimeInterval = 30 * 60
 
     func load() async {
-        guard !loaded else { return }
+        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
         let t = (try? await container.loadRecommendedTracks()) ?? []
-        tracks = t
-        entities = t.map { Self.makeTrack($0) }
-        artists = (try? await container.loadRecommendedArtists()) ?? []
+        if !t.isEmpty {
+            tracks = t
+            entities = t.map { Self.makeTrack($0) }
+        }
+        let a = (try? await container.loadRecommendedArtists()) ?? []
+        if !a.isEmpty { artists = a }
+        lastLoad = Date()
         isLoading = false
         loaded = true
     }
@@ -47,7 +54,7 @@ final class RecommendationsModel {
 private enum RecTab: String, CaseIterable { case artists = "Artists", songs = "Songs" }
 
 struct RecommendationsScreen: View {
-    @State private var model = RecommendationsModel()
+    @State private var model = RecommendationsModel.shared
     @State private var tabIndex = 0
     @State private var source = "all"
     @State private var navArtist: String?
@@ -171,7 +178,7 @@ struct RecommendationsScreen: View {
                     coordinator.setQueue(filteredSongs.map { $0.entity }, startIndex: index)
                 } label: {
                     HStack(spacing: 12) {
-                        pcCover(pair.track.artworkUrl, seed: pair.track.title + pair.track.artist, size: 44, radius: 6)
+                        pcCover(pcTrackArt(pair.track.artworkUrl, artist: pair.track.artist, title: pair.track.title, album: pair.track.album), seed: pair.track.title + pair.track.artist, size: 44, radius: 6)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pair.track.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(coordinator.currentTrack?.id == pair.entity.id ? PC.accent : PC.fg1).lineLimit(1)

@@ -4,31 +4,77 @@ import Shared
 
 @main
 struct ParachordApp: App {
-
-    init() {
-        // Wire the .axe plugin host's NativeBridge installer at STARTUP, before
-        // any view (or resolution) runs. IosJsRuntime.initialize() only loads
-        // resolver-loader.js + the plugins when this installer is present;
-        // otherwise it stands up a bare JSContext with no window.__resolverLoader.
-        // initialize() is idempotent, so if any production resolution
-        // (badges, tap-to-play, background pre-resolution) ran before this was
-        // set, the host stayed plugin-less for the whole session. Previously it
-        // was only set in the Dev tab, so resolving before visiting Dev broke
-        // the entire resolver pipeline. Setting it here guarantees full mode.
-        IosContainer.companion.shared.pluginJsRuntime.nativeBridgeInstaller = { ctx in
-            JsPolyfills.installNativeBridge(to: ctx)
-        }
-    }
-
+    // NOTE: deliberately NO init() work. Touching IosContainer.companion.shared
+    // here forced Koin + plugin-host init SYNCHRONOUSLY before SwiftUI could
+    // commit its first frame, so the system's (white) launch screen lingered for
+    // seconds. All container access now happens inside RootGate's async warm-up,
+    // AFTER the splash's first frame is on screen.
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .task {
-                    // Pre-warm the plugin host so the first resolve isn't a
-                    // cold start (loading 19 .axe files into JSC). The installer
-                    // above is already set, so this initializes in full mode.
-                    _ = try? await IosContainer.companion.shared.loadPluginsAndList()
+            RootGate()
+        }
+    }
+}
+
+/// Shows an animated branded splash over the app while the plugin host warms up
+/// (loading 19 .axe files into JSC is the slow part of cold start). The splash
+/// fades out once warm-up finishes (or a short floor elapses, so it never just
+/// blinks). Mirrors the desktop's loading screen.
+private struct RootGate: View {
+    @State private var ready = false
+
+    var body: some View {
+        ZStack {
+            // Defer ContentView (and its heavy container/plugin init) until the
+            // warm-up finishes, so the FIRST committed frame is the cheap splash
+            // — otherwise the system's white launch screen lingers through the
+            // cold start and the brand splash never shows.
+            if ready { ContentView().transition(.opacity) }
+            if !ready { PCSplash().transition(.opacity).zIndex(100) }
+        }
+        .task {
+            async let warm: () = {
+                // Install the .axe NativeBridge polyfill BEFORE plugins load —
+                // moved here from App.init so the container's first-access init
+                // (Koin + plugin host) runs AFTER the splash is on screen, not
+                // before the first frame. IosJsRuntime.initialize() only loads
+                // the resolvers when this installer is present.
+                IosContainer.companion.shared.pluginJsRuntime.nativeBridgeInstaller = { ctx in
+                    JsPolyfills.installNativeBridge(to: ctx)
                 }
+                _ = try? await IosContainer.companion.shared.loadPluginsAndList()
+            }()
+            // Minimum on-screen time so the splash doesn't flash on a warm start.
+            async let floor: () = { _ = try? await Task.sleep(nanoseconds: 900_000_000) }()
+            _ = await (warm, floor)
+            withAnimation(.easeOut(duration: 0.35)) { ready = true }
+        }
+    }
+}
+
+/// Branded launch animation: the Parachord mark on the brand background with a
+/// gentle pulse + a spinner, so the long cold start reads as "loading", not hung.
+struct PCSplash: View {
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: UIColor(hex: 0x273441)).ignoresSafeArea()
+            VStack(spacing: 22) {
+                Image("AppLogo")
+                    .resizable().scaledToFit()
+                    .frame(width: 132, height: 132)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .scaleEffect(pulse ? 1.04 : 0.96)
+                    .opacity(pulse ? 1 : 0.85)
+                    .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
+                ProgressView()
+                    .progressViewStyle(.circular)
+                    .tint(.white.opacity(0.85))
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) { pulse = true }
         }
     }
 }

@@ -172,20 +172,28 @@ struct PCCuratedBanner: View {
 
 @MainActor @Observable
 final class CriticalDarlingsModel {
+    // Singleton so data survives screen recreation (instant, no reload flicker);
+    // TTL-gated revalidate so it still refreshes — just not every open. The
+    // `isLoading && !loaded` skeleton gate in the view means the skeleton only
+    // shows on the FIRST load; TTL revalidations keep showing the stale data.
+    static let shared = CriticalDarlingsModel()
     private let container = IosContainer.companion.shared
     var albums: [CriticsPickAlbum] = []
     var isLoading = false
     var loaded = false
+    private var lastLoad: Date?
+    private let ttl: TimeInterval = 4 * 3600   // mirrors desktop Critical Darlings TTL
     func load() async {
-        guard !loaded else { return }
+        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
-        albums = (try? await container.loadCriticalDarlings()) ?? []
-        isLoading = false; loaded = true
+        let fresh = (try? await container.loadCriticalDarlings()) ?? []
+        if !fresh.isEmpty { albums = fresh }   // keep cache on a failed/empty refresh
+        lastLoad = Date(); isLoading = false; loaded = true
     }
 }
 
 struct CriticalDarlingsScreen: View {
-    @State private var model = CriticalDarlingsModel()
+    @State private var model = CriticalDarlingsModel.shared
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -238,15 +246,19 @@ struct CriticalDarlingsScreen: View {
 
 @MainActor @Observable
 final class FreshDropsModel {
+    static let shared = FreshDropsModel()
     private let container = IosContainer.companion.shared
     var drops: [FreshDrop] = []
     var isLoading = false
     var loaded = false
+    private var lastLoad: Date?
+    private let ttl: TimeInterval = 6 * 3600   // mirrors desktop Fresh Drops 6h TTL
     func load() async {
-        guard !loaded else { return }
+        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
-        drops = (try? await container.loadFreshDrops()) ?? []
-        isLoading = false; loaded = true
+        let fresh = (try? await container.loadFreshDrops()) ?? []
+        if !fresh.isEmpty { drops = fresh }
+        lastLoad = Date(); isLoading = false; loaded = true
     }
 }
 
@@ -254,7 +266,7 @@ private let freshFilters: [(key: String, label: String)] =
     [("all", "All"), ("album", "Albums"), ("ep", "EPs"), ("single", "Singles")]
 
 struct FreshDropsScreen: View {
-    @State private var model = FreshDropsModel()
+    @State private var model = FreshDropsModel.shared
     @State private var filter = "all"
     @State private var search = ""
     @State private var searchOpen = false
@@ -399,15 +411,19 @@ func freshDate(_ raw: String?) -> (text: String, upcoming: Bool)? {
 
 @MainActor @Observable
 final class ConcertsModel {
+    static let shared = ConcertsModel()
     private let container = IosContainer.companion.shared
     var events: [ConcertEvent] = []
     var isLoading = false
     var loaded = false
+    private var lastLoad: Date?
+    private let ttl: TimeInterval = 2 * 3600
     func load() async {
-        guard !loaded else { return }
+        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
-        events = (try? await container.loadConcerts()) ?? []
-        isLoading = false; loaded = true
+        let fresh = (try? await container.loadConcerts()) ?? []
+        if !fresh.isEmpty { events = fresh }
+        lastLoad = Date(); isLoading = false; loaded = true
     }
 }
 
@@ -424,7 +440,7 @@ private func concertFmt(_ raw: String?, _ pattern: String) -> String {
 }
 
 struct ConcertsScreen: View {
-    @State private var model = ConcertsModel()
+    @State private var model = ConcertsModel.shared
     @Environment(\.dismiss) private var dismiss
 
     private var grouped: [(month: String, events: [ConcertEvent])] {

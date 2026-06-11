@@ -9,6 +9,11 @@ import Shared
 
 @MainActor @Observable
 final class HistoryModel {
+    // Singleton + per-key TTL: each tab/period loads once, persists across
+    // screen recreation, and revalidates only after the TTL (not every open).
+    // `loading` flips true only on the FIRST load of a key (nothing cached) so
+    // a TTL revalidation never re-shows the skeleton over stale data.
+    static let shared = HistoryModel()
     private let container = IosContainer.companion.shared
 
     var topTracks: [HistoryTrack] = []
@@ -18,25 +23,28 @@ final class HistoryModel {
     var recent: [RecentTrack] = []
     var recentEntities: [Track] = []
     var loading = false
-    private var done: Set<String> = []
+    private var lastLoad: [String: Date] = [:]
+    private let ttl: TimeInterval = 60 * 60
 
     func load(tab: Int, period: String) async {
         let key = tab == 3 ? "recent" : "\(tab)-\(period)"
-        guard !done.contains(key) else { return }
-        loading = true
+        if let l = lastLoad[key], Date().timeIntervalSince(l) < ttl { return }
+        loading = (lastLoad[key] == nil)   // spinner only the first time for this key
         switch tab {
         case 0:
             let t = (try? await container.loadTopTracks(period: period)) ?? []
-            topTracks = t; trackEntities = t.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) }
+            if !t.isEmpty { topTracks = t; trackEntities = t.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) } }
         case 1:
-            topAlbums = (try? await container.loadTopAlbums(period: period)) ?? []
+            let a = (try? await container.loadTopAlbums(period: period)) ?? []
+            if !a.isEmpty { topAlbums = a }
         case 2:
-            topArtists = (try? await container.loadTopArtists(period: period)) ?? []
+            let a = (try? await container.loadTopArtists(period: period)) ?? []
+            if !a.isEmpty { topArtists = a }
         default:
             let r = (try? await container.loadRecentTracks()) ?? []
-            recent = r; recentEntities = r.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) }
+            if !r.isEmpty { recent = r; recentEntities = r.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) } }
         }
-        done.insert(key)
+        lastLoad[key] = Date()
         loading = false
     }
 
@@ -58,7 +66,7 @@ private let historyPeriods: [(key: String, label: String)] = [
 ]
 
 struct HistoryScreen: View {
-    @State private var model = HistoryModel()
+    @State private var model = HistoryModel.shared
     @State private var tabIndex = 0
     @State private var period = "7day"
     @State private var navArtist: String?
@@ -122,7 +130,7 @@ struct HistoryScreen: View {
                 Button { coordinator.setQueue(model.trackEntities, startIndex: i) } label: {
                     HStack(spacing: 12) {
                         Text("\(t.rank)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
-                        pcCover(t.artworkUrl, seed: t.title + t.artist, size: 44, radius: 6)
+                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(coordinator.currentTrack?.id == model.trackEntities[i].id ? PC.accent : PC.fg1).lineLimit(1)
@@ -194,7 +202,7 @@ struct HistoryScreen: View {
             ForEach(Array(model.recent.enumerated()), id: \.offset) { i, t in
                 Button { coordinator.setQueue(model.recentEntities, startIndex: i) } label: {
                     HStack(spacing: 12) {
-                        pcCover(t.artworkUrl, seed: t.title + t.artist, size: 44, radius: 6)
+                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6)
                         VStack(alignment: .leading, spacing: 2) {
                             Text((t.nowPlaying ? "▶ " : "") + t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(t.nowPlaying ? PC.accent : (coordinator.currentTrack?.id == model.recentEntities[i].id ? PC.accent : PC.fg1)).lineLimit(1)

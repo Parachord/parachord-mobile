@@ -11,20 +11,27 @@ import Shared
 @MainActor
 @Observable
 final class PopOfTheTopsModel {
+    static let shared = PopOfTheTopsModel()
     private let container = IosContainer.companion.shared
     var albums: [ChartAlbum] = []
     var songs: [ChartSong] = []
     var songEntities: [Track] = []
     var isLoading = false
     var loaded = false
+    private var lastLoad: Date?
+    private let ttl: TimeInterval = 2 * 3600
 
     func load() async {
-        guard !loaded else { return }
+        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
-        albums = (try? await container.loadPopOfTheTopsAlbums(countryCode: "us")) ?? []
+        let al = (try? await container.loadPopOfTheTopsAlbums(countryCode: "us")) ?? []
+        if !al.isEmpty { albums = al }
         let s = (try? await container.loadPopOfTheTops(countryCode: "us")) ?? []
-        songs = s
-        songEntities = s.map { Self.makeTrack($0) }
+        if !s.isEmpty {
+            songs = s
+            songEntities = s.map { Self.makeTrack($0) }
+        }
+        lastLoad = Date()
         isLoading = false
         loaded = true
     }
@@ -51,7 +58,7 @@ final class PopOfTheTopsModel {
 private enum PopTab: String, CaseIterable { case albums = "Albums", songs = "Songs" }
 
 struct PopOfTheTopsScreen: View {
-    @State private var model = PopOfTheTopsModel()
+    @State private var model = PopOfTheTopsModel.shared
     @State private var tabIndex = 0
     @State private var navArtist: String?
     @State private var navAlbum: PCAlbumRef?

@@ -24,18 +24,47 @@ private func pcTrack(from t: TrackSearchResult) -> Track {
     )
 }
 
+/// Best available album art for a track, ENRICHED from the resolver cache.
+/// Many track lists arrive art-less (Last.fm history, ListenBrainz, AI recs);
+/// once a row resolves for its badges, the resolved sources carry Apple Music /
+/// Spotify artwork, so we fall back to that. Filters Last.fm's grey-star
+/// placeholder hash. Use anywhere a track row shows a cover so art fills in
+/// uniformly across the app.
+@MainActor
+func pcTrackArt(_ artworkUrl: String?, artist: String, title: String, album: String?) -> String? {
+    if let a = artworkUrl, !a.isEmpty, !a.contains("2a96cbd8b46e442fc41c2b86b821562f") { return a }
+    if let srcs = IosTrackResolverCache.shared.cached(artist: artist, title: title, album: album),
+       let a = srcs.compactMap({ $0.artworkUrl }).first(where: { !$0.isEmpty }) {
+        return a
+    }
+    return nil
+}
+
 @ViewBuilder
 func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat) -> some View {
-    if let url, let u = URL(string: url) {
-        AsyncImage(url: u) { img in
-            img.resizable().aspectRatio(contentMode: .fill)
-        } placeholder: {
-            PCArtwork(name: seed, size: size, radius: radius)
+    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+    // Cover content: real art fill-cropped, gradient placeholder on miss/load.
+    let content = ZStack {
+        if let url, let u = URL(string: url) {
+            AsyncImage(url: u) { img in
+                img.resizable().scaledToFill()
+            } placeholder: {
+                PCArtwork(name: seed, radius: radius)
+            }
+        } else {
+            PCArtwork(name: seed, radius: radius)
         }
-        .frame(width: size, height: size) // nil → fills available width (grid)
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+    if let size {
+        content.frame(width: size, height: size).clipShape(shape)
     } else {
-        PCArtwork(name: seed, size: size, radius: radius)
+        // Grid mode (size == nil): LOCK a 1:1 cell. A clear square spacer fixes
+        // the footprint so an occasional non-square remote image can't dictate
+        // the cell height and break row alignment; the image fill-crops into it.
+        Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay { content }
+            .clipShape(shape)
     }
 }
 
@@ -338,6 +367,9 @@ struct ArtistScreen: View {
     // MARK: Discography (chips + 2-col grid)
 
     private func releaseKind(_ a: AlbumSearchResult) -> String {
+        // Live releases (MB secondary type) get their OWN bucket so they don't
+        // pollute Studio Albums.
+        if a.secondaryTypes.contains(where: { $0.lowercased() == "live" }) { return "Live" }
         switch (a.releaseType ?? "album").lowercased() {
         case "single": return "Singles"
         case "ep": return "EPs"
@@ -355,13 +387,14 @@ struct ArtistScreen: View {
                 ("Studio Albums", model.albums.filter { releaseKind($0) == "Studio Albums" }.count),
                 ("EPs", model.albums.filter { releaseKind($0) == "EPs" }.count),
                 ("Singles", model.albums.filter { releaseKind($0) == "Singles" }.count),
+                ("Live", model.albums.filter { releaseKind($0) == "Live" }.count),
             ]
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(counts.filter { $0.1 > 0 || $0.0 == "All" }, id: \.0) { name, n in
                         let on = discoFilter == name
                         Button { discoFilter = name } label: {
-                            Text("\(name) \(n)").font(.system(size: 13, weight: .medium))
+                            Text("\(name) (\(n))").font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(on ? PC.bgPrimary : PC.fg1)
                                 .padding(.horizontal, 14).padding(.vertical, 6)
                                 .background(on ? PC.fg1 : PC.bgInset, in: Capsule())

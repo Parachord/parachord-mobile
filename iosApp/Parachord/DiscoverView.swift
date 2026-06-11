@@ -18,6 +18,11 @@ struct TilePreview {
 @MainActor
 @Observable
 final class DiscoverViewModel {
+    /// App-lifetime singleton so loaded Discover/Weekly data survives the Home
+    /// tab being recreated (tab switch / nav reset) — no reload flicker.
+    static let shared = DiscoverViewModel()
+    private var lastLoad: Date?
+    private let ttl: TimeInterval = 6 * 3600
 
     private let container = IosContainer.companion.shared
     private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
@@ -89,13 +94,19 @@ final class DiscoverViewModel {
     }
 
     func load(forceRefresh: Bool = false) async {
+        // TTL-gated revalidate (unless forced by a username change): show cached
+        // weekly carousels instantly, refresh only after the TTL — not every open.
+        if !forceRefresh, loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
         let entries = (try? await container.loadWeeklyPlaylists(forceRefresh: forceRefresh)) ?? []
-        jams = entries.filter { $0.kind == "Weekly Jams" }
-        exploration = entries.filter { $0.kind == "Weekly Exploration" }
+        if !entries.isEmpty {
+            jams = entries.filter { $0.kind == "Weekly Jams" }
+            exploration = entries.filter { $0.kind == "Weekly Exploration" }
+            loadTrackCounts(entries)
+        }
+        lastLoad = Date()
         isLoading = false
         loaded = true
-        loadTrackCounts(entries)
     }
 
     /// Fetch each weekly playlist's tracks just for its count (ListenBrainz,

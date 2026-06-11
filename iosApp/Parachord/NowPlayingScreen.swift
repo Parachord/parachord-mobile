@@ -31,9 +31,16 @@ struct PCNowPlaying: View {
     @Bindable var coordinator: QueuePlaybackCoordinator
     var artNamespace: Namespace.ID
     let onClose: () -> Void
+    /// Navigate to the tapped artist's page. The shell closes Now Playing and
+    /// pushes ArtistScreen on the Home stack.
+    var onArtist: (String) -> Void = { _ in }
 
     @State private var showQueue = false
     @State private var dragY: CGFloat = 0
+    /// Regular width (iPad / landscape) gets a larger art cap so it doesn't look
+    /// lost in the wide column; compact (phone) stays capped so the controls
+    /// clear the Up-Next peek.
+    @Environment(\.horizontalSizeClass) private var hSize
 
     private var npBg: Color { Color(uiColor: UIColor(hex: 0x1e1e20)) }
 
@@ -45,8 +52,17 @@ struct PCNowPlaying: View {
                 grabberBar
                 ScrollView {
                     VStack(spacing: 16) {
-                        PCArtwork(name: track?.title ?? "P", radius: 14)
-                            .aspectRatio(1, contentMode: .fit)
+                        // iPad: center the column in the tall viewport instead of
+                        // leaving a big gap below the controls (phone stays
+                        // top-anchored — these spacers collapse there).
+                        if hSize == .regular { Spacer(minLength: 0) }
+                        pcCover(track.flatMap { pcTrackArt($0.artworkUrl, artist: $0.artist, title: $0.title, album: $0.album) },
+                                seed: track?.title ?? "P", size: nil, radius: 14)
+                            // Cap the art so the transport, resolver deck and
+                            // bottom actions stay on-screen above the Up-Next
+                            // peek; larger cap on iPad so it isn't tiny in the
+                            // wide column. Capped square, centered.
+                            .frame(maxWidth: hSize == .regular ? 460 : 320)
                             .frame(maxWidth: .infinity)
                             .matchedGeometryEffect(id: "npArt", in: artNamespace)
                             .shadow(color: .black.opacity(0.6), radius: 24, y: 20)
@@ -61,9 +77,11 @@ struct PCNowPlaying: View {
                             onPick: { coordinator.switchResolver($0) }
                         )
                         bottomActions
+                        if hSize == .regular { Spacer(minLength: 0) }
                     }
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
+                    .modifier(NPVCenterOnRegular(active: hSize == .regular))
                 }
                 upNextPeek
             }
@@ -77,10 +95,24 @@ struct PCNowPlaying: View {
                     if v.translation.height > 120 { onClose() } else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
                 }
         )
-        .sheet(isPresented: $showQueue) {
-            PCQueueSheet(coordinator: coordinator)
-                .presentationDetents([.large])
-                .presentationBackground(npBg)
+        // Queue lives ON the Now Playing screen (not a system sheet): a scrim
+        // + bottom panel revealed by tapping/swiping the Up-Next peek. The
+        // ZStack is ALWAYS present so the children's transitions fire — the
+        // scrim fades, the panel SLIDES up from the bottom (a conditional
+        // container would have faded the whole layer in instead).
+        .overlay(alignment: .bottom) {
+            ZStack(alignment: .bottom) {
+                if showQueue {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                        .transition(.opacity)
+                        .onTapGesture { withAnimation(.spring(duration: 0.32)) { showQueue = false } }
+                    PCQueuePanel(coordinator: coordinator,
+                                 onClose: { withAnimation(.spring(duration: 0.32)) { showQueue = false } })
+                        .padding(.top, 90) // scrim gap at the top
+                        .transition(.move(edge: .bottom))
+                }
+            }
+            .zIndex(20)
         }
     }
 
@@ -107,7 +139,13 @@ struct PCNowPlaying: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(track?.title ?? "—").font(.system(size: 22, weight: .bold)).foregroundStyle(.white).lineLimit(2)
-                Text(track?.artist ?? "—").font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accentSoft)
+                Button {
+                    if let a = track?.artist, !a.isEmpty { onArtist(a) }
+                } label: {
+                    Text(track?.artist ?? "—").font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accentSoft)
+                }
+                .buttonStyle(.plain)
+                .disabled((track?.artist ?? "").isEmpty)
                 if let album = track?.album, !album.isEmpty {
                     Text("From \(album)").font(.system(size: 13)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                 }
@@ -174,18 +212,34 @@ struct PCNowPlaying: View {
         HStack(spacing: 0) {
             actionBtn("airplayaudio", nil) { }
             actionBtn("sparkles", "Spinoff") { }
-            ZStack(alignment: .topTrailing) {
-                actionBtn("list.bullet", "Queue") { showQueue = true }
-                let n = coordinator.upNext.count
-                if n > 0 {
-                    Text("\(n)").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
-                        .padding(.horizontal, 6).padding(.vertical, 1)
-                        .background(PC.accentSoft, in: Capsule()).offset(x: -2, y: -2)
-                }
-            }
+            queueActionBtn
             actionBtn("ellipsis", nil) { }
         }
         .foregroundStyle(.white.opacity(0.65))
+    }
+
+    /// Queue action whose count badge anchors to the ICON glyph's top-right —
+    /// the old badge sat on the full-width cell, floating it to the far edge
+    /// instead of over the icon.
+    private var queueActionBtn: some View {
+        Button { withAnimation(.spring(duration: 0.32)) { showQueue = true } } label: {
+            VStack(spacing: 4) {
+                Image(systemName: "list.bullet").font(.system(size: 21))
+                    .overlay(alignment: .topTrailing) {
+                        let n = coordinator.upNext.count
+                        if n > 0 {
+                            Text("\(n)").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(PC.accentSoft, in: Capsule())
+                                .fixedSize()
+                                .offset(x: 11, y: -7)
+                        }
+                    }
+                Text("Queue").font(.system(size: 11))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
     }
 
     private func actionBtn(_ icon: String, _ label: String?, _ go: @escaping () -> Void) -> some View {
@@ -201,7 +255,7 @@ struct PCNowPlaying: View {
 
     private var upNextPeek: some View {
         let next = coordinator.upNext.first
-        return Button { showQueue = true } label: {
+        return Button { withAnimation(.spring(duration: 0.32)) { showQueue = true } } label: {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.up").font(.system(size: 14)).foregroundStyle(.white.opacity(0.5))
                 Text("UP NEXT").font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(.white.opacity(0.5))
@@ -215,6 +269,31 @@ struct PCNowPlaying: View {
             .overlay(Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5), alignment: .top)
         }
         .buttonStyle(.plain)
+        // Swipe up on the peek also opens the queue (highPriority so it wins
+        // over the sheet's swipe-DOWN-to-close drag on the root).
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 12)
+                .onEnded { v in
+                    if v.translation.height < -30 {
+                        withAnimation(.spring(duration: 0.32)) { showQueue = true }
+                    }
+                }
+        )
+    }
+}
+
+/// Vertically centers the Now Playing column within the scroll viewport on
+/// regular width (iPad). No-op on compact (phone), where the content fills and
+/// scrolls normally. `containerRelativeFrame` pins the content to the scroll
+/// viewport's height so the inner Spacers can center it.
+private struct NPVCenterOnRegular: ViewModifier {
+    let active: Bool
+    func body(content: Content) -> some View {
+        if active {
+            content.frame(maxWidth: .infinity).containerRelativeFrame(.vertical, alignment: .center)
+        } else {
+            content
+        }
     }
 }
 
@@ -254,7 +333,11 @@ struct PCResolverDeck: View {
         }
         .overlay(alignment: .bottom) {
             if open {
-                let order = available + pcKnownResolvers.filter { !available.contains($0) }
+                // ONLY enabled resolvers that actually MATCHED this track. The
+                // resolve pipeline only runs active (enabled) resolvers, and
+                // `available` is the floor-passing matches — so we no longer
+                // append the greyed "Not connected" rows for every known service.
+                let order = available
                 VStack(spacing: 0) {
                     ForEach(order, id: \.self) { r in
                         let avail = available.contains(r)
@@ -288,28 +371,22 @@ struct PCResolverDeck: View {
     }
 }
 
-// MARK: - Queue sheet
+// MARK: - Queue panel (inline on Now Playing)
 
-struct PCQueueSheet: View {
+struct PCQueuePanel: View {
     @Bindable var coordinator: QueuePlaybackCoordinator
+    let onClose: () -> Void
+
+    /// Observed so resolver badges appear as background resolution lands.
+    /// (Non-private so the memberwise init stays internal/callable.)
+    var resolverCache = IosTrackResolverCache.shared
+    @State var dragY: CGFloat = 0
+    private var npBg: Color { Color(uiColor: UIColor(hex: 0x1e1e20)) }
 
     var body: some View {
         let up = coordinator.upNext
         VStack(spacing: 0) {
-            Capsule().fill(.white.opacity(0.35)).frame(width: 36, height: 5).padding(.top, 8)
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("UP NEXT · \(up.count) TRACKS").font(.system(size: 13, weight: .semibold)).tracking(2)
-                        .foregroundStyle(PC.accentSoft)
-                    Text("Playing from your queue").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
-                }
-                Spacer()
-                Button("Clear") { coordinator.clearQueue() }
-                    .font(.system(size: 15, weight: .medium)).foregroundStyle(.white.opacity(0.75))
-            }
-            .padding(.horizontal, 20).padding(.vertical, 12)
-            .overlay(Rectangle().fill(.white.opacity(0.08)).frame(height: 1), alignment: .bottom)
-
+            header(count: up.count)
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(up.enumerated()), id: \.element.id) { idx, t in
@@ -317,22 +394,79 @@ struct PCQueueSheet: View {
                             HStack(spacing: 12) {
                                 Text("\(idx + 1)").font(.system(size: 12, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.4)).frame(width: 24, alignment: .trailing)
-                                PCArtwork(name: t.title, size: 38, radius: 6)
+                                pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title, size: 38, radius: 6)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(t.title).font(.system(size: 14, weight: .medium)).foregroundStyle(.white).lineLimit(1)
                                     Text(t.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                                 }
-                                Spacer(minLength: 0)
+                                Spacer(minLength: 8)
+                                // Resolver badges — same confidence-aware row as
+                                // every other tracklist. Resolved per-row below.
+                                if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
+                                   !s.isEmpty {
+                                    ResolverBadgeRow(sources: s, size: 16)
+                                }
                             }
                             .padding(.horizontal, 20).padding(.vertical, 8)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // Visibility-scoped resolution (mirrors the album/playlist
+                        // tracklists): resolve each row as it appears so badges
+                        // fill in and playback starts instantly from cache.
+                        .onAppear {
+                            resolverCache.resolve(
+                                ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: idx)
+                        }
                         .pcTrackContextMenu(t, coordinator: coordinator)
                     }
                 }
                 .padding(.vertical, 8)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(
+            npBg.clipShape(.rect(topLeadingRadius: 22, topTrailingRadius: 22))
+                .ignoresSafeArea(edges: .bottom)
+        )
+        .offset(y: max(0, dragY))
         .preferredColorScheme(.dark)
+    }
+
+    /// Grabber + title + Clear + close. The drag-to-dismiss gesture lives HERE
+    /// (not on the whole panel) so it never fights the list's scroll.
+    private func header(count: Int) -> some View {
+        VStack(spacing: 0) {
+            Capsule().fill(.white.opacity(0.35)).frame(width: 36, height: 5)
+                .padding(.top, 8).padding(.bottom, 6)
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("UP NEXT · \(count) TRACKS").font(.system(size: 13, weight: .semibold)).tracking(2)
+                        .foregroundStyle(PC.accentSoft)
+                    Text("Playing from your queue").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+                }
+                Spacer()
+                Button("Clear") { coordinator.clearQueue() }
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                Button(action: onClose) {
+                    Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white).frame(width: 30, height: 30)
+                        .background(.white.opacity(0.14), in: Circle())
+                }
+                .buttonStyle(.plain).padding(.leading, 6)
+            }
+            .padding(.horizontal, 20).padding(.bottom, 12)
+        }
+        .background(npBg.clipShape(.rect(topLeadingRadius: 22, topTrailingRadius: 22)))
+        .overlay(Rectangle().fill(.white.opacity(0.08)).frame(height: 1), alignment: .bottom)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { v in if v.translation.height > 0 { dragY = v.translation.height } }
+                .onEnded { v in
+                    if v.translation.height > 110 { onClose() }
+                    else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
+                }
+        )
     }
 }

@@ -11,7 +11,7 @@ import Shared
 /// Value-based routes pushed onto the Home tab's stack — driven by both the
 /// Discover tiles and the sidebar, so the sidebar navigates with the tab bar
 /// still visible (a push, not a modal).
-enum PCRoute: Hashable { case recommendations, pop, critical, fresh, concerts, history }
+enum PCRoute: Hashable { case recommendations, pop, critical, fresh, concerts, history, artist(String) }
 
 struct HomeScreen: View {
     /// One-shot route injected by the sidebar (consumed into `path`). The tab's
@@ -22,7 +22,7 @@ struct HomeScreen: View {
     let onMenu: () -> Void
 
     @State private var path: [PCRoute] = []
-    @State private var model = DiscoverViewModel()
+    @State private var model = DiscoverViewModel.shared
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
@@ -39,11 +39,12 @@ struct HomeScreen: View {
                         sectionHeader("Discover")
                         discoverGrid
 
-                        weeklySection("Weekly Jams", model.jams)
-                        weeklySection("Weekly Exploration", model.exploration)
-
                         if model.isLoading && !model.loaded {
-                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 24)
+                            weeklySkeleton("Weekly Jams")
+                            weeklySkeleton("Weekly Exploration")
+                        } else {
+                            weeklySection("Weekly Jams", model.jams)
+                            weeklySection("Weekly Exploration", model.exploration)
                         }
                     }
                     .padding(.bottom, 130) // clear the floating tab bar
@@ -58,13 +59,14 @@ struct HomeScreen: View {
                 case .fresh:           FreshDropsScreen()
                 case .concerts:        ConcertsScreen()
                 case .history:         HistoryScreen()
+                case .artist(let name): ArtistScreen(artistName: name)
                 }
             }
         }
         .onChange(of: pendingRoute, initial: true) { _, route in
             if let route { path = [route]; pendingRoute = nil }
         }
-        .task { model.start() }
+        .task { model.start(); await model.load() }
     }
 
     // MARK: Sections
@@ -157,6 +159,30 @@ struct HomeScreen: View {
                            startPoint: .topLeading, endPoint: .bottomTrailing),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.10), radius: 9, y: 6)
+    }
+
+    /// Placeholder carousel shown while the first Weekly load is in flight —
+    /// matches the 2x2-mosaic card shape so it doesn't jump on arrival.
+    private func weeklySkeleton(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Text(title).pcSectionHeader()
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 14) {
+                    ForEach(0..<4, id: \.self) { _ in
+                        VStack(alignment: .leading, spacing: 8) {
+                            PCSkeletonBox(width: 150, height: 150, radius: 10)
+                            PCSkeletonBox(width: 120, height: 13, radius: 4)
+                            PCSkeletonBox(width: 80, height: 11, radius: 4)
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
     }
 
     @ViewBuilder
