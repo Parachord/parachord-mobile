@@ -23,14 +23,14 @@ import com.parachord.shared.plugin.PluginFileAccess
 // com.parachord.shared.api.SpotifyClient bound in sharedModule
 import com.parachord.android.data.db.dao.*
 import com.parachord.shared.db.DriverFactory
-import com.parachord.android.data.metadata.DiscogsProvider
+import com.parachord.shared.metadata.DiscogsProvider
 import com.parachord.android.data.metadata.ImageEnrichmentService
 import com.parachord.android.data.metadata.LastFmProvider
 import com.parachord.android.data.metadata.MbidEnrichmentService
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.metadata.MusicBrainzProvider
 import com.parachord.android.data.metadata.SpotifyProvider
-import com.parachord.android.data.metadata.WikipediaProvider
+import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.android.data.network.NetworkMonitor
 import com.parachord.android.data.repository.*
 import com.parachord.android.data.scanner.MediaScanner

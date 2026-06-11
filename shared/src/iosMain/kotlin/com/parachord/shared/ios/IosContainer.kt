@@ -13,7 +13,9 @@ import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.metadata.AlbumDetail
 import com.parachord.shared.metadata.AlbumSearchResult
 import com.parachord.shared.metadata.ArtistInfo
+import com.parachord.shared.metadata.DiscogsProvider
 import com.parachord.shared.metadata.LastFmProvider
+import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MusicBrainzProvider
@@ -218,10 +220,17 @@ class IosContainer private constructor() {
     // Cascading providers per CLAUDE.md: MusicBrainz (discography/tracklists)
     // → Last.fm (images/bio/similar) → Spotify (art/IDs).
     val metadataService: MetadataService by lazy {
+        val mbProvider = MusicBrainzProvider(musicBrainzClient)
         MetadataService(
+            // Priority order (cascade fills gaps): MB 0, Wikipedia 5, Last.fm 10,
+            // Discogs 15, Spotify 20 — matches AndroidModule's provider set so
+            // artist images/bios fall back to Wikipedia/Discogs (no auth) when
+            // Spotify isn't connected.
             providers = listOf(
-                MusicBrainzProvider(musicBrainzClient),
+                mbProvider,
+                WikipediaProvider(musicBrainzClient, mbProvider, httpClient),
                 LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
+                DiscogsProvider(httpClient, settingsStore),
                 SpotifyProvider(spotifyClient, settingsStore),
             ),
             getDisabledProviders = { emptySet() },
@@ -326,10 +335,17 @@ class IosContainer private constructor() {
     // that re-trips the shared key's 3600s window on every cold Discover load.
     // User-initiated Album/Artist screens keep the full Spotify cascade.
     private val enrichMetadataService: MetadataService by lazy {
+        val mbProvider = MusicBrainzProvider(musicBrainzClient)
         MetadataService(
+            // Spotify-free (avoids the shared-key burst on cold Discover loads),
+            // but DOES include Wikipedia + Discogs so background artist-image
+            // enrichment (ImageEnrichmentService) and recommendations get real
+            // artist images without a connected Spotify. No auth on either.
             providers = listOf(
-                MusicBrainzProvider(musicBrainzClient),
+                mbProvider,
+                WikipediaProvider(musicBrainzClient, mbProvider, httpClient),
                 LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
+                DiscogsProvider(httpClient, settingsStore),
             ),
             getDisabledProviders = { emptySet() },
             enrichAlbumArtwork = { artistName, albums ->
