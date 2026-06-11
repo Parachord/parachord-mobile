@@ -117,6 +117,7 @@ fun ArtistScreen(
     val albumsLoading by viewModel.albumsLoading.collectAsStateWithLifecycle()
     val trackResolvers by viewModel.trackResolvers.collectAsStateWithLifecycle()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsStateWithLifecycle()
+    val trackArtwork by viewModel.trackArtwork.collectAsStateWithLifecycle()
     val isSaved by viewModel.isSaved.collectAsStateWithLifecycle()
     val tourDates by viewModel.tourDates.collectAsStateWithLifecycle()
     val isOnTour by viewModel.isOnTour.collectAsStateWithLifecycle()
@@ -324,6 +325,7 @@ fun ArtistScreen(
                             isLoading = isLoading,
                             trackResolvers = trackResolvers,
                             trackResolverConfidences = trackResolverConfidences,
+                            trackArtwork = trackArtwork,
                             onPlayTopTrack = { index -> viewModel.playTopTrack(index) },
                             onTrackLongClick = { track ->
                                 val entity = viewModel.trackSearchResultToEntity(track)
@@ -610,6 +612,7 @@ private fun TopTracksTab(
     isLoading: Boolean = false,
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
+    trackArtwork: Map<String, String> = emptyMap(),
     onPlayTopTrack: (Int) -> Unit = {},
     onTrackLongClick: (TrackSearchResult) -> Unit = {},
 ) {
@@ -621,7 +624,9 @@ private fun TopTracksTab(
                 TrackRow(
                     title = track.title,
                     artist = track.album ?: "",
-                    artworkUrl = track.artworkUrl,
+                    // Prefer resolved album art (#188) — Top Tracks arrive art-less
+                    // from Last.fm; the resolver supplies real Apple Music / Spotify art.
+                    artworkUrl = trackArtwork[trackKey(track.title, track.artist)] ?: track.artworkUrl,
                     resolvers = trackResolvers[trackKey(track.title, track.artist)]?.ifEmpty { null },
                     resolverConfidences = trackResolverConfidences[trackKey(track.title, track.artist)],
                     onClick = { onPlayTopTrack(index) },

@@ -46,6 +46,8 @@ class NowPlayingViewModel constructor(
     /** Resolver badge names for UI display — shared across all screens via TrackResolverCache. */
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
+    /** Best resolved album art per track key — fills in art for queue rows (#190). */
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
 
     /** All resolved sources for the current track, for the source switcher dropdown. */
     val trackSources: StateFlow<Map<String, List<com.parachord.android.resolver.ResolvedSource>>> =

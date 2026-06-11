@@ -117,6 +117,36 @@ class TrackResolverCache constructor(
             }
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
+    /**
+     * Best resolved album-art URL per track key ("title|artist") — the
+     * highest-priority above-floor source that actually carries artwork. Lets
+     * ephemeral, art-less track lists (artist Top Tracks, the play queue, AI
+     * recs, etc.) show real album art once they resolve, even when the metadata
+     * source had none (#188 / #190). The resolver that plays is the one whose
+     * art we show, so it always matches.
+     */
+    val trackArtwork: StateFlow<Map<String, String>> =
+        combine(
+            _trackSources,
+            settingsStore.getResolverOrderFlow(),
+        ) { sources, resolverOrder ->
+            sources.mapNotNull { (key, v) ->
+                val aboveThreshold = v.filter {
+                    (it.confidence ?: 0.0) >= ResolverScoring.MIN_CONFIDENCE_THRESHOLD
+                }
+                val ordered = if (resolverOrder.isEmpty()) {
+                    aboveThreshold
+                } else {
+                    aboveThreshold.sortedBy { s ->
+                        val idx = resolverOrder.indexOf(s.resolver)
+                        if (idx == -1) resolverOrder.size else idx
+                    }
+                }
+                val art = ordered.firstNotNullOfOrNull { it.artworkUrl?.takeIf { u -> u.isNotBlank() } }
+                if (art != null) key to art else null
+            }.toMap()
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
     /** Track keys currently being resolved (prevents duplicate in-flight requests). */
     private val inFlight = mutableSetOf<String>()
 

@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.playback.PlaybackContext
+import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.ResolverIconRow
 import com.parachord.android.ui.theme.PlayerSurface
@@ -62,6 +63,9 @@ fun QueueSheet(
     trackResolvers: Map<String, List<String>> = emptyMap(),
     /** Resolver confidence scores keyed by "title|artist", then by resolver name. */
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
+    /** Best resolved album art keyed by "title|artist" — fills in art for queue
+     *  rows whose TrackEntity arrived art-less (#190). */
+    trackArtwork: Map<String, String> = emptyMap(),
     /** True when queue is "paused" (spinoff or listen-along) — dims tracks to show they'll resume later. */
     queueSuspended: Boolean = false,
     /** Navigate to the source context (album, playlist, artist page). */
@@ -166,6 +170,7 @@ fun QueueSheet(
                         resolverOrder = resolverOrder,
                         trackResolvers = trackResolvers,
                         trackResolverConfidences = trackResolverConfidences,
+                        trackArtwork = trackArtwork,
                         onTap = { onPlayFromQueue(index) },
                         onRemove = { onRemoveFromQueue(index) },
                     )
@@ -183,6 +188,7 @@ private fun QueueTrackRow(
     resolverOrder: List<String> = emptyList(),
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
+    trackArtwork: Map<String, String> = emptyMap(),
     onTap: () -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -232,9 +238,10 @@ private fun QueueTrackRow(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Album art
+            // Album art — prefer resolved art (#190); queue tracks often arrive
+            // art-less (metadata-only), the resolver supplies real album art.
             AlbumArtCard(
-                artworkUrl = track.artworkUrl,
+                artworkUrl = trackArtwork[trackKey(track.title, track.artist)] ?: track.artworkUrl,
                 modifier = Modifier.graphicsLayer { alpha = dimAlpha },
                 size = 40.dp,
                 cornerRadius = 4.dp,

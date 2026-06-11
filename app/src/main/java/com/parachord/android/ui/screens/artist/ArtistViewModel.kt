@@ -89,6 +89,8 @@ class ArtistViewModel constructor(
     /** Resolver badge names for UI display from shared cache */
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
+    /** Best resolved album art per track key — fills in art for Top Tracks (#188). */
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
 
     init {
         if (artistName.isNotBlank()) {
