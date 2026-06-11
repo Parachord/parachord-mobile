@@ -114,6 +114,7 @@ struct ContentView: View {
         // status bar / camera housing and is non-standard. (A real ActivityKit
         // Live Activity for background playback is a separate, larger feature.)
         .environment(coordinator)
+        .task { ResolverPrefs.shared.start() }
         .sheet(isPresented: $showAdd) {
             PCAddSheet(onShuffleupagus: { /* Phase: DJ chat */ }, onDismiss: { showAdd = false })
         }

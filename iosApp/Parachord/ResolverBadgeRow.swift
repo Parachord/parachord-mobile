@@ -59,15 +59,22 @@ struct ResolverBadgeRow: View {
     let sources: [ResolvedSource]
     var size: CGFloat = 18
 
-    // Canonical priority order (matches ResolverScoring.CANONICAL_RESOLVER_ORDER).
-    private static let order = ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"]
+    // Fallback when the user has no explicit order yet (matches
+    // ResolverScoring.CANONICAL_RESOLVER_ORDER).
+    private static let canonical = ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"]
 
     private var visible: [ResolvedSource] {
-        sources
+        // Sort by the user's CONFIGURED resolver priority order (Android parity:
+        // ResolverIconRow reads LocalResolverOrder), falling back to canonical.
+        // Reading ResolverPrefs.shared here makes the row re-sort reactively when
+        // the user reorders/enables resolvers in Settings.
+        let userOrder = ResolverPrefs.shared.order
+        let order = userOrder.isEmpty ? Self.canonical : userOrder
+        return sources
             .filter { !$0.noMatch && ($0.confidence?.doubleValue ?? 0) >= 0.60 }
             .sorted { a, b in
-                let pa = Self.order.firstIndex(of: a.resolver) ?? Self.order.count
-                let pb = Self.order.firstIndex(of: b.resolver) ?? Self.order.count
+                let pa = order.firstIndex(of: a.resolver) ?? order.count
+                let pb = order.firstIndex(of: b.resolver) ?? order.count
                 if pa != pb { return pa < pb }
                 return (a.confidence?.doubleValue ?? 0) > (b.confidence?.doubleValue ?? 0)
             }
@@ -80,5 +87,39 @@ struct ResolverBadgeRow: View {
                                    confidence: source.confidence?.doubleValue ?? 1)
             }
         }
+    }
+}
+
+// MARK: - ResolverPrefs (global, live mirror of resolver order + active set)
+//
+// iOS equivalent of Android's `LocalResolverOrder` CompositionLocal + the
+// active-resolver set. Kept live from the shared SettingsStore flows so
+// ResolverBadgeRow re-sorts reactively (#4) and resolver enable/disable can
+// drive additive re-resolution (#1). Lives here (not its own file) to avoid
+// Xcode project-file surgery.
+@Observable
+final class ResolverPrefs {
+    static let shared = ResolverPrefs()
+
+    /// User-configured resolver priority order (leftmost = highest priority).
+    var order: [String] = []
+    /// Enabled ("active") resolver ids.
+    var active: Set<String> = []
+
+    private let container = IosContainer.companion.shared
+    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+    private var subs: [Any] = []
+
+    private init() {}
+
+    /// Idempotent — begin watching the store flows. Call once at app start.
+    func start() {
+        guard subs.isEmpty else { return }
+        subs.append(watcher.watch(flow: container.settingsStore.getResolverOrderFlow()) { [weak self] v in
+            if let list = v as? [String] { self?.order = list }
+        })
+        subs.append(watcher.watch(flow: container.settingsStore.getActiveResolversFlow()) { [weak self] v in
+            if let list = v as? [String] { self?.active = Set(list) }
+        })
     }
 }
