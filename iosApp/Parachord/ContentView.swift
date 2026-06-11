@@ -857,20 +857,38 @@ final class IosMusicKitPlayer {
                 lastError = "Catalog song \(appleMusicId) not found"
                 return false
             }
+            // SUPPRESS end-detection ACROSS the queue swap, BEFORE mutating the
+            // shared player. Swapping `queue` flips `playbackStatus` to .stopped
+            // for the ~½s the new item takes to load; if the running poll loop
+            // ticks during that window with a STALE `observedPlaying == true`
+            // (from the outgoing track), it fires a phantom onTrackEnded →
+            // skipNext → a SECOND play() that interrupts THIS queue
+            // ("MPMusicPlayerControllerErrorDomain.2 Queue was interrupted by
+            // another queue"), and the tapped track silently fails. Guarding
+            // here — not after the await (the old bug) — closes that race.
+            // Tapping any out-of-queue track while Apple Music is playing hit it.
+            trackEndHandled = true
+            observedPlaying = false
+            currentTime = 0
+            duration = 0
             let player = ApplicationMusicPlayer.shared
             player.queue = [song]
             try await player.play()
             nowPlayingTitle = song.title
             isPlaying = true
-            // Reset end-detection for the new track and (re)start the loop.
             duration = song.duration ?? 0
             currentTime = 0
+            // Re-arm end-detection now that the new track is actually playing.
             trackEndHandled = false
             observedPlaying = false
             startPollingIfNeeded()
             return true
         } catch {
             lastError = "Playback failed: \(error.localizedDescription)"
+            // Re-arm so a transient failure can't leave end-detection
+            // permanently suppressed for the next successful play.
+            trackEndHandled = false
+            observedPlaying = false
             return false
         }
     }
@@ -1295,6 +1313,15 @@ final class QueuePlaybackCoordinator {
     /// re-open it for a Bandcamp track.
     @ObservationIgnored private var browserUrl: String?
 
+    /// The in-flight `playTrack` task. Each new start cancels the previous one
+    /// so only the LATEST request reaches the router. Without this, two
+    /// overlapping starts (rapid tap B then C before B resolves; or a user tap
+    /// racing an auto-advance `skipNext`) both call `router.play` →
+    /// `ApplicationMusicPlayer.play()` and the second interrupts the first's
+    /// queue ("Queue was interrupted by another queue"), silently dropping a
+    /// track. Resolution is async, so the window is real on a slow lookup.
+    @ObservationIgnored private var playTask: Task<Void, Never>?
+
     /// Republished from `QueueManager.snapshot.value` after every
     /// mutation so SwiftUI can render the up-next list reactively.
     var currentTrack: Track?
@@ -1304,6 +1331,11 @@ final class QueuePlaybackCoordinator {
     /// Which engine the current track is playing on. The UI reads unified
     /// state below so it doesn't care which one.
     var activeEngine: PlaybackEngineKind = .avPlayer
+
+    /// True from the moment a track is tapped until its engine starts (resolve
+    /// + route can take a beat). The mini-player shows a spinner so the tap
+    /// feels responsive instead of the play/pause glyph lagging behind.
+    var isStarting = false
 
     /// Mirror of `spotify.isPlaying`, updated from the @MainActor contexts that
     /// drive Connect (play start + toggle). Lets the nonisolated `isPlaying`
@@ -1578,7 +1610,14 @@ final class QueuePlaybackCoordinator {
 
     private func playTrack(_ track: Track) {
         currentTrack = track
-        Task { @MainActor in
+        isStarting = true
+        // Supersede any in-flight start so only the LATEST request reaches the
+        // router (rapid tap B-then-C before B resolves; or a user tap racing an
+        // auto-advance skipNext). Two starts each awaiting resolution would both
+        // call router.play → ApplicationMusicPlayer.play(), and the second
+        // interrupts the first's queue, silently dropping a track.
+        playTask?.cancel()
+        playTask = Task { @MainActor in
             // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
             // play straight through AVPlayer, no resolver round-trip.
             if let url = track.sourceUrl, !url.isEmpty,
@@ -1586,6 +1625,7 @@ final class QueuePlaybackCoordinator {
                 activeEngine = .avPlayer
                 player.load(url: url, title: track.title, artist: track.artist)
                 startAVPlaybackWhenReady()
+                isStarting = false
                 return
             }
 
@@ -1596,8 +1636,14 @@ final class QueuePlaybackCoordinator {
                 ranked = (try? await container.resolveSources(
                     artist: track.artist, title: track.title, album: track.album)) ?? []
             }
+            // A newer playTrack superseded us during the async resolve — don't
+            // route a stale track over the one the user actually wants.
+            if Task.isCancelled { return }
 
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist)
+            // Superseded while the engine was starting — skip the stale UI
+            // state updates (the newer start owns activeEngine now).
+            if Task.isCancelled { return }
             switch result {
             case .played(let kind):
                 activeEngine = kind
@@ -1628,6 +1674,7 @@ final class QueuePlaybackCoordinator {
                 // match with no subscription) — advance to the next track.
                 skipNext()
             }
+            isStarting = false
         }
     }
 
