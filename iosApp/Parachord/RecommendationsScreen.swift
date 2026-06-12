@@ -17,7 +17,7 @@ final class RecommendationsModel {
     var isLoading = false
     var loaded = false
     private var lastLoad: Date?
-    private let ttl: TimeInterval = 30 * 60
+    private let ttl: TimeInterval = 6 * 3600
 
     func load() async {
         if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }

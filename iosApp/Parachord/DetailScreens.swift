@@ -497,7 +497,7 @@ final class ArtistDetailModel {
 
     init(name: String) { self.name = name }
 
-    private let ttl: TimeInterval = 30 * 60
+    private let ttl: TimeInterval = 6 * 3600   // discography rarely changes — revalidate sparingly
 
     func load() async {
         guard !loaded else { return }

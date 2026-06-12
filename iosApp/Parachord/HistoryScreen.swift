@@ -24,7 +24,7 @@ final class HistoryModel {
     var recentEntities: [Track] = []
     var loading = false
     private var lastLoad: [String: Date] = [:]
-    private let ttl: TimeInterval = 60 * 60
+    private let ttl: TimeInterval = 6 * 3600
 
     func load(tab: Int, period: String) async {
         let key = tab == 3 ? "recent" : "\(tab)-\(period)"

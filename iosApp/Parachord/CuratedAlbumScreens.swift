@@ -434,7 +434,7 @@ final class ConcertsModel {
     var isLoading = false
     var loaded = false
     private var lastLoad: Date?
-    private let ttl: TimeInterval = 2 * 3600
+    private let ttl: TimeInterval = 6 * 3600
 
     // Cold-start cache (see CriticalDarlingsModel) — concerts are doubly slow
     // since loadConcerts() first fetches recommended artists, so surfacing the

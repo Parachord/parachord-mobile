@@ -19,7 +19,7 @@ final class PopOfTheTopsModel {
     var isLoading = false
     var loaded = false
     private var lastLoad: Date?
-    private let ttl: TimeInterval = 2 * 3600
+    private let ttl: TimeInterval = 6 * 3600
 
     func load() async {
         if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
