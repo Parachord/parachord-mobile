@@ -299,6 +299,18 @@ final class FreshDropsModel {
 private let freshFilters: [(key: String, label: String)] =
     [("all", "All"), ("album", "Albums"), ("ep", "EPs"), ("single", "Singles")]
 
+/// Per-release-type pill/badge color (shared with the artist discography filters).
+func pcReleaseTypeColor(_ key: String?) -> Color {
+    switch key?.lowercased() {
+    case "album":       return Color(uiColor: UIColor(hex: 0x6366F1)) // indigo
+    case "ep":          return Color(uiColor: UIColor(hex: 0xA855F7)) // purple
+    case "single":      return Color(uiColor: UIColor(hex: 0xEC4899)) // pink
+    case "live":        return Color(uiColor: UIColor(hex: 0xF59E0B)) // amber
+    case "compilation": return Color(uiColor: UIColor(hex: 0x14B8A6)) // teal
+    default:            return Color(uiColor: UIColor(hex: 0x9CA3AF)) // gray
+    }
+}
+
 struct FreshDropsScreen: View {
     @State private var model = FreshDropsModel.shared
     @State private var filter = "all"
@@ -354,11 +366,15 @@ struct FreshDropsScreen: View {
                     HStack(spacing: 8) {
                         ForEach(freshFilters, id: \.key) { f in
                             let on = filter == f.key
+                            let color = f.key == "all" ? pcReleaseTypeColor(nil) : pcReleaseTypeColor(f.key)
+                            let count = f.key == "all" ? nil : model.drops.filter { $0.releaseType.lowercased() == f.key }.count
+                            let label = count != nil ? "\(f.label) (\(count!))" : f.label
                             Button { filter = f.key } label: {
-                                Text(f.label).font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(on ? .white : PC.fg1)
+                                Text(label).font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(on ? color : PC.fg2)
                                     .padding(.horizontal, 14).padding(.vertical, 6)
-                                    .background(on ? PC.accent : PC.bgInset, in: Capsule())
+                                    .background(on ? color.opacity(0.20) : PC.bgInset, in: Capsule())
+                                    .overlay(Capsule().strokeBorder(on ? Color.clear : PC.border))
                             }
                             .buttonStyle(.plain)
                         }

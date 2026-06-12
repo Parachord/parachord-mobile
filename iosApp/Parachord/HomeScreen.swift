@@ -94,7 +94,8 @@ struct HomeScreen: View {
     private func continueCard(_ t: Track) -> some View {
         Button { coordinator.togglePlayPause() } label: {
             HStack(spacing: 14) {
-                PCArtwork(name: t.title, size: 56, radius: 8)
+                pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
+                        seed: t.title, size: 56, radius: 8)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(t.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(1)
                     Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)

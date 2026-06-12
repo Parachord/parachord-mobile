@@ -484,10 +484,10 @@ struct AlbumScreen: View {
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
                                     : (coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1))
                                 .lineLimit(1)
-                            // Compilations are various-artists — show the per-track
-                            // artist under the title, like a playlist row (bug 2).
-                            if isCompilation, !t.artist.isEmpty {
-                                Text(t.artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
+                            // Always show the per-track artist for a consistent
+                            // tracklist look (and correct for compilations).
+                            if !t.artist.isEmpty {
+                                Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                             }
                         }
                         Spacer(minLength: 8)
@@ -974,11 +974,15 @@ struct ArtistScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3 : PC.fg1).lineLimit(1)
-                            if let d = t.duration, d.int64Value > 0 {
-                                Text(pcDur(d.int64Value)).font(.system(size: 13)).foregroundStyle(PC.fg2)
+                            // Artist under the title — consistent with album tracklists.
+                            if !t.artist.isEmpty {
+                                Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                             }
                         }
                         Spacer(minLength: 0)
+                        if let d = t.duration, d.int64Value > 0 {
+                            Text(pcDur(d.int64Value)).font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3)
+                        }
                         // Resolver icons (parity with Pop of the Tops > Songs).
                         if let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
                            !sources.isEmpty {
