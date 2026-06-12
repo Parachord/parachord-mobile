@@ -699,6 +699,25 @@ class IosContainer private constructor() {
             emptyMap()
         }
 
+    // ── Curated-screen view caches (Swift-managed, decoupled from the repo's
+    //    internal disk cache) ────────────────────────────────────────────────
+    // The iOS Critical Darlings / Concerts models are app-lifetime singletons,
+    // so they reset to BLANK on every cold start and show a skeleton until the
+    // network returns. These let the Swift model persist its last rendered list
+    // and reload it on launch — so a cold start shows the previous list instantly
+    // and fades in fresh data (same pattern as the Discover tile previews).
+    fun encodeCriticsPicks(list: List<CriticsPickAlbum>): String =
+        resolverCacheJson.encodeToString(list)
+
+    fun decodeCriticsPicks(blob: String): List<CriticsPickAlbum> =
+        try { resolverCacheJson.decodeFromString<List<CriticsPickAlbum>>(blob) } catch (e: Exception) { emptyList() }
+
+    fun encodeConcerts(list: List<ConcertEvent>): String =
+        resolverCacheJson.encodeToString(list)
+
+    fun decodeConcerts(blob: String): List<ConcertEvent> =
+        try { resolverCacheJson.decodeFromString<List<ConcertEvent>>(blob) } catch (e: Exception) { emptyList() }
+
     /**
      * Weekly Jams / Weekly Exploration from ListenBrainz. Needs only the
      * LB client + the SettingsStore (for the username the user set in

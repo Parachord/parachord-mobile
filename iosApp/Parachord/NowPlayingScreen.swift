@@ -37,6 +37,10 @@ struct PCNowPlaying: View {
 
     @State private var showQueue = false
     @State private var dragY: CGFloat = 0
+    /// Observed so the hero art re-renders the moment the current track resolves
+    /// and its playing-source artwork (Spotify / Apple Music / SoundCloud) lands.
+    /// Non-private so the synthesized memberwise init stays accessible to RootView.
+    var resolverCache = IosTrackResolverCache.shared
     /// Regular width (iPad / landscape) gets a larger art cap so it doesn't look
     /// lost in the wide column; compact (phone) stays capped so the controls
     /// clear the Up-Next peek.
@@ -87,6 +91,15 @@ struct PCNowPlaying: View {
             }
         }
         .preferredColorScheme(.dark)
+        // Resolve the current track so its playing-source artwork populates the
+        // hero (Android always shows art from the service it's playing from). On
+        // a cache hit this is a no-op; pcTrackArt then reads the resolved art.
+        .task(id: track?.id) {
+            if let t = track {
+                resolverCache.resolve(
+                    ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: 0)
+            }
+        }
         .offset(y: max(0, dragY))
         .gesture(
             DragGesture()

@@ -183,11 +183,28 @@ final class CriticalDarlingsModel {
     var loaded = false
     private var lastLoad: Date?
     private let ttl: TimeInterval = 4 * 3600   // mirrors desktop Critical Darlings TTL
+
+    // Persist the last rendered list so a COLD START shows it instantly instead
+    // of a blank skeleton, then fades in fresh data (Discover-tile pattern).
+    private let cacheURL: URL = {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ios_critical_view.json")
+    }()
+    init() {
+        if let blob = try? String(contentsOf: cacheURL, encoding: .utf8) {
+            let cached = container.decodeCriticsPicks(blob: blob)
+            if !cached.isEmpty { albums = cached; loaded = true }
+        }
+    }
+
     func load() async {
         if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
         let fresh = (try? await container.loadCriticalDarlings()) ?? []
-        if !fresh.isEmpty { albums = fresh }   // keep cache on a failed/empty refresh
+        if !fresh.isEmpty {
+            withAnimation(.easeInOut(duration: 0.4)) { albums = fresh }   // fade in over the cached list
+            try? container.encodeCriticsPicks(list: fresh).write(to: cacheURL, atomically: true, encoding: .utf8)
+        }
         lastLoad = Date(); isLoading = false; loaded = true
     }
 }
@@ -418,11 +435,29 @@ final class ConcertsModel {
     var loaded = false
     private var lastLoad: Date?
     private let ttl: TimeInterval = 2 * 3600
+
+    // Cold-start cache (see CriticalDarlingsModel) — concerts are doubly slow
+    // since loadConcerts() first fetches recommended artists, so surfacing the
+    // last list instantly matters most here.
+    private let cacheURL: URL = {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ios_concerts_view.json")
+    }()
+    init() {
+        if let blob = try? String(contentsOf: cacheURL, encoding: .utf8) {
+            let cached = container.decodeConcerts(blob: blob)
+            if !cached.isEmpty { events = cached; loaded = true }
+        }
+    }
+
     func load() async {
         if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
         let fresh = (try? await container.loadConcerts()) ?? []
-        if !fresh.isEmpty { events = fresh }
+        if !fresh.isEmpty {
+            withAnimation(.easeInOut(duration: 0.4)) { events = fresh }
+            try? container.encodeConcerts(list: fresh).write(to: cacheURL, atomically: true, encoding: .utf8)
+        }
         lastLoad = Date(); isLoading = false; loaded = true
     }
 }

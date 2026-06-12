@@ -14,6 +14,13 @@ import Vision
 /// "Go to Album").
 struct PCAlbumRef: Hashable { let title: String; let artist: String }
 
+/// Stable identity for a discography cell — keyed off the MBID when present,
+/// else title+artist. Used so `ForEach`/`.id` recreate cells per album (not per
+/// array slot) when the filter changes, refreshing the artwork (bug 7).
+extension AlbumSearchResult {
+    var discoId: String { "\(mbid ?? "")|\(title)|\(artist)" }
+}
+
 private func pcTrack(from t: TrackSearchResult) -> Track {
     Track(
         id: "\(t.title)|\(t.artist)", title: t.title, artist: t.artist,
@@ -78,11 +85,53 @@ func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat) -> s
 // While first-loading it shows a neutral shimmer (NOT the gradient), so artwork
 // goes skeleton -> art; the `placeholder` (gradient) appears ONLY when there's no
 // URL or the load fails.
-private let pcImageCache: NSCache<NSString, UIImage> = {
-    let c = NSCache<NSString, UIImage>()
-    c.countLimit = 400
-    return c
-}()
+// Two-tier decoded-image cache: an in-memory NSCache (sync hits, instant
+// revisits) BACKED BY a disk store (caches/imgcache/<stable-hash>.img). NSCache
+// purges aggressively under memory pressure and is wiped on relaunch, which is
+// why album art "reloaded every page view" and the artist hero "disappeared
+// after a while" — once evicted, the only recourse was a network re-fetch that
+// flashed a placeholder (or failed). The disk tier means an image fetched once
+// is decoded from disk on the next visit/launch — no network, no flash.
+//
+// IMPORTANT: the disk key is a DETERMINISTIC hash (FNV-1a). Swift's
+// `String.hashValue` is seeded per process launch, so it could NOT locate disk
+// files across launches — defeating the whole cache.
+enum PCImageStore {
+    private static let memory: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>(); c.countLimit = 500; return c
+    }()
+    private static let dir: URL = {
+        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("imgcache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+    private static func stableKey(_ s: String) -> String {
+        var h: UInt64 = 1469598103934665603
+        for b in s.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+        return String(h, radix: 16)
+    }
+    private static func diskURL(_ key: String) -> URL {
+        dir.appendingPathComponent(stableKey(key) + ".img")
+    }
+    /// Synchronous MEMORY hit only (safe to call from `body`).
+    static func memoryImage(_ url: URL) -> UIImage? {
+        memory.object(forKey: url.absoluteString as NSString)
+    }
+    /// Memory → disk (populates memory on a disk hit). Call from async `load()`.
+    static func load(_ url: URL) -> UIImage? {
+        let key = url.absoluteString
+        if let m = memory.object(forKey: key as NSString) { return m }
+        guard let data = try? Data(contentsOf: diskURL(key)), let img = UIImage(data: data) else { return nil }
+        memory.setObject(img, forKey: key as NSString)
+        return img
+    }
+    static func store(_ url: URL, _ data: Data, _ img: UIImage) {
+        let key = url.absoluteString
+        memory.setObject(img, forKey: key as NSString)
+        try? data.write(to: diskURL(key), options: .atomic)
+    }
+}
 
 struct PCCachedImage<Content: View, Placeholder: View>: View {
     private let url: URL?
@@ -100,7 +149,7 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
     }
 
     private var cachedImage: UIImage? {
-        loaded ?? url.flatMap { pcImageCache.object(forKey: $0.absoluteString as NSString) }
+        loaded ?? url.flatMap { PCImageStore.memoryImage($0) }
     }
 
     var body: some View {
@@ -118,15 +167,14 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
 
     private func load() async {
         guard let url, loaded == nil else { return }
-        let key = url.absoluteString as NSString
-        if pcImageCache.object(forKey: key) != nil { return }   // body already shows it
+        if let cached = PCImageStore.load(url) { loaded = cached; return }   // memory or disk — no network
         failed = false
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let ui = UIImage(data: data) else {
             failed = true
             return
         }
-        pcImageCache.setObject(ui, forKey: key)
+        PCImageStore.store(url, data, ui)
         loaded = ui
     }
 }
@@ -153,7 +201,7 @@ struct PCArtistImage<Placeholder: View>: View {
     @State private var failed = false
 
     private var uiImage: UIImage? {
-        loaded ?? url.flatMap { pcImageCache.object(forKey: $0.absoluteString as NSString) }
+        loaded ?? url.flatMap { PCImageStore.memoryImage($0) }
     }
     private var center: UnitPoint {
         if let detected { return detected }
@@ -203,11 +251,15 @@ struct PCArtistImage<Placeholder: View>: View {
         guard let url else { return }
         let key = url.absoluteString
         if uiImage == nil {
-            failed = false
-            guard let (data, _) = try? await URLSession.shared.data(from: url),
-                  let ui = UIImage(data: data) else { failed = true; return }
-            pcImageCache.setObject(ui, forKey: key as NSString)
-            loaded = ui
+            if let cached = PCImageStore.load(url) {        // memory or disk — survives eviction/relaunch
+                loaded = cached
+            } else {
+                failed = false
+                guard let (data, _) = try? await URLSession.shared.data(from: url),
+                      let ui = UIImage(data: data) else { failed = true; return }
+                PCImageStore.store(url, data, ui)
+                loaded = ui
+            }
         }
         if pcFaceCache.object(forKey: key as NSString) == nil, let img = uiImage {
             let pt = await Self.detectFaceCenter(img)
@@ -331,6 +383,10 @@ struct AlbumScreen: View {
         .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 8)
     }
 
+    private var isCompilation: Bool {
+        model.detail?.releaseType?.lowercased() == "compilation"
+    }
+
     private var tracklist: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array((model.detail?.tracks ?? []).enumerated()), id: \.offset) { index, t in
@@ -338,10 +394,17 @@ struct AlbumScreen: View {
                     HStack(spacing: 12) {
                         Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(PC.fg3).frame(width: 22)
-                        Text(t.title)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1)
-                            .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(t.title)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1)
+                                .lineLimit(1)
+                            // Compilations are various-artists — show the per-track
+                            // artist under the title, like a playlist row (bug 2).
+                            if isCompilation, !t.artist.isEmpty {
+                                Text(t.artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
+                            }
+                        }
                         Spacer(minLength: 8)
                         // Android TrackRow order: title → duration → resolver icons (rightmost).
                         if let d = t.duration, d.int64Value > 0 {
@@ -385,9 +448,23 @@ final class ArtistDetailModel {
         ArtistImageCache.shared.fetch(name)   // header image (#187)
         topTracks = (try? await container.getArtistTopTracks(artistName: name)) ?? []
         topEntities = topTracks.map { pcTrack(from: $0) }
-        albums = (try? await container.getArtistAlbums(artistName: name)) ?? []
+        albums = sortedByYearDesc((try? await container.getArtistAlbums(artistName: name)) ?? [])
         isLoading = false
         loaded = true
+        // Android parity (ArtistViewModel.retryDiscography): the first fetch can
+        // come back without year/releaseType when MusicBrainz was rate-limited in
+        // the parallel burst — so compilations/live get no type and can't bucket.
+        // Re-fetch once after a short delay and adopt the typed result.
+        if !albums.isEmpty && albums.allSatisfy({ $0.year == nil }) {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            let retry = sortedByYearDesc((try? await container.getArtistAlbums(artistName: name)) ?? [])
+            if retry.contains(where: { $0.year != nil }) { albums = retry }
+        }
+    }
+
+    /// Most-recent-first by release year (Android: `.sortedByDescending { it.year ?: 0 }`).
+    private func sortedByYearDesc(_ list: [AlbumSearchResult]) -> [AlbumSearchResult] {
+        list.sorted { ($0.year?.intValue ?? 0) > ($1.year?.intValue ?? 0) }
     }
 
     // Resolver pipeline (CLAUDE.md): every track list resolves per visible row.
@@ -447,7 +524,10 @@ struct ArtistScreen: View {
                 cta
                 tabBar
                 if model.isLoading && !model.loaded {
-                    PCSkeletonGrid(count: 6)
+                    // Discography renders its OWN skeleton (filter chips + grid) so
+                    // the chip row is reserved and the layout doesn't shift when it
+                    // loads (bug 3). Other tabs keep the generic grid skeleton.
+                    if tab == .discography { discographyTab } else { PCSkeletonGrid(count: 6) }
                 } else {
                     tabContent
                 }
@@ -585,67 +665,113 @@ struct ArtistScreen: View {
         }
     }
 
-    private func albumTypeKey(_ a: AlbumSearchResult) -> String { (a.releaseType ?? "album").lowercased() }
+    /// Collapse duplicate titles to ONE entry, keeping the MOST-SPECIFIC release
+    /// type. MusicBrainz tags a greatest-hits as `compilation` while Spotify
+    /// reports the same title as `album`; the shared dedup keeps both, so without
+    /// this the compilation ALSO surfaces under Studio Albums (the reported bug).
+    /// Preserves the model's most-recent-first order (first appearance wins slot).
+    private var dedupedAlbums: [AlbumSearchResult] {
+        func rank(_ t: String?) -> Int {
+            switch t?.lowercased() {
+            case "compilation", "live": return 3
+            case "ep", "single":        return 2
+            case "album":               return 1
+            default:                    return 0
+            }
+        }
+        var best: [String: AlbumSearchResult] = [:]
+        var order: [String] = []
+        for a in model.albums {
+            let key = a.title.lowercased()
+            if let cur = best[key] {
+                if rank(a.releaseType) > rank(cur.releaseType) { best[key] = a }
+            } else { best[key] = a; order.append(key) }
+        }
+        return order.compactMap { best[$0] }
+    }
 
     private var discoFiltered: [AlbumSearchResult] {
-        discoFilter == "all" ? model.albums : model.albums.filter { albumTypeKey($0) == discoFilter }
+        // Android parity: filter by the RAW releaseType — never default null to
+        // "album" (that's what force-labeled compilations/untyped as Studio Albums).
+        discoFilter == "all" ? dedupedAlbums : dedupedAlbums.filter { $0.releaseType?.lowercased() == discoFilter }
+    }
+
+    // Reserve the chip-row footprint while loading so the grid doesn't jump when
+    // the filters appear (bug 3).
+    private var discoFilterSkeleton: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<4, id: \.self) { _ in PCSkeletonBox(width: 78, height: 30, radius: 15) }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 12)
     }
 
     private var discographyTab: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Counts per releaseType (only albums with an explicit type — Android parity).
-            let typeCounts = Dictionary(grouping: model.albums.compactMap { $0.releaseType?.lowercased() }, by: { $0 })
-                .mapValues { $0.count }
-            let available = Self.discoFilters.filter { $0.key == "all" || typeCounts[$0.key] != nil }
-            if available.count > 1 {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(available, id: \.key) { f in
-                            let on = discoFilter == f.key
-                            let color = releaseTypeColor(f.key == "all" ? nil : f.key)
-                            let count = f.key == "all" ? nil : typeCounts[f.key]
-                            let label = count != nil ? "\(f.label) (\(count!))" : f.label
-                            Button { discoFilter = f.key } label: {
-                                Text(label).font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(on ? color : PC.fg2)
-                                    .padding(.horizontal, 14).padding(.vertical, 6)
-                                    .background(on ? color.opacity(0.20) : PC.bgInset, in: Capsule())
-                                    .overlay(Capsule().strokeBorder(on ? Color.clear : PC.border))
+            if model.isLoading && !model.loaded {
+                discoFilterSkeleton
+                PCSkeletonGrid(count: 6, columns: 2)
+            } else {
+                // Counts per releaseType (only albums with an explicit type — Android parity).
+                let typeCounts = Dictionary(grouping: dedupedAlbums.compactMap { $0.releaseType?.lowercased() }, by: { $0 })
+                    .mapValues { $0.count }
+                let available = Self.discoFilters.filter { $0.key == "all" || typeCounts[$0.key] != nil }
+                if available.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(available, id: \.key) { f in
+                                let on = discoFilter == f.key
+                                let color = releaseTypeColor(f.key == "all" ? nil : f.key)
+                                let count = f.key == "all" ? nil : typeCounts[f.key]
+                                let label = count != nil ? "\(f.label) (\(count!))" : f.label
+                                Button { discoFilter = f.key } label: {
+                                    Text(label).font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(on ? color : PC.fg2)
+                                        .padding(.horizontal, 14).padding(.vertical, 6)
+                                        .background(on ? color.opacity(0.20) : PC.bgInset, in: Capsule())
+                                        .overlay(Capsule().strokeBorder(on ? Color.clear : PC.border))
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 20)
                     }
-                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                 }
-                .padding(.vertical, 12)
-            }
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 18) {
-                ForEach(Array(discoFiltered.enumerated()), id: \.offset) { _, album in
-                    NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            pcCover(album.artworkUrl, seed: album.title + album.artist, size: nil, radius: 10)
-                                .aspectRatio(1, contentMode: .fit)
-                                .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
-                            Text(album.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1)
-                                .lineLimit(1).padding(.top, 10)
-                            HStack(spacing: 8) {
-                                let typeKey = albumTypeKey(album)
-                                let typeColor = releaseTypeColor(typeKey)
-                                Text(typeKey.uppercased())
-                                    .font(.system(size: 9, weight: .bold)).tracking(1)
-                                    .foregroundStyle(typeColor)
-                                    .padding(.horizontal, 6).padding(.vertical, 3)
-                                    .background(typeColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
-                                if let y = album.year { Text(String(y.intValue)).font(.system(size: 12)).foregroundStyle(PC.fg2) }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 18) {
+                    // Keyed by album identity (NOT array offset) so switching filters
+                    // gives each cell stable identity — the art refreshes with the
+                    // title instead of reusing the prior cell's cached image (bug 7).
+                    ForEach(discoFiltered, id: \.discoId) { album in
+                        NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                pcCover(album.artworkUrl, seed: album.title + album.artist, size: nil, radius: 10)
+                                    .aspectRatio(1, contentMode: .fit)
+                                    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+                                Text(album.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1)
+                                    .lineLimit(1).padding(.top, 10)
+                                HStack(spacing: 8) {
+                                    // Badge ONLY when typed (Android parity — no "ALBUM" default).
+                                    if let typeKey = album.releaseType?.lowercased() {
+                                        let typeColor = releaseTypeColor(typeKey)
+                                        Text(typeKey.uppercased())
+                                            .font(.system(size: 9, weight: .bold)).tracking(1)
+                                            .foregroundStyle(typeColor)
+                                            .padding(.horizontal, 6).padding(.vertical, 3)
+                                            .background(typeColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+                                    }
+                                    if let y = album.year { Text(String(y.intValue)).font(.system(size: 12)).foregroundStyle(PC.fg2) }
+                                }
+                                .padding(.top, 4)
                             }
-                            .padding(.top, 4)
                         }
+                        .buttonStyle(.plain)
+                        .id(album.discoId)   // fresh cell view per album → fresh PCCachedImage state
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 20).padding(.vertical, 12)
             }
-            .padding(.horizontal, 20).padding(.vertical, 12)
         }
     }
 
