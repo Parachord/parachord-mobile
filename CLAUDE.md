@@ -37,6 +37,23 @@ A Spotify result at 70% confidence beats a SoundCloud result at 95% when Spotify
 spotify > applemusic > bandcamp > soundcloud > localfiles > youtube
 ```
 
+### Resolver Coordinator — Shared Orchestration (#210)
+
+Resolver *orchestration* is one `commonMain` class, `ResolverCoordinator` (`shared/.../resolver/ResolverCoordinator.kt`) — both platforms inherit a single fan-out / gating / re-score / ranking path so a resolution-logic change lives in ONE place.
+
+**What the coordinator owns:** the parallel fan-out, the native **Spotify** branch (an injected `suspend (query) -> ResolvedSource?` lambda — the platform binding closes over the Spotify token-gate + `SpotifyClient.searchTrack`), gating (via the shared `ResolverGating` helpers), the re-score (`scoreConfidence` when both target fields are present), and ranking. It exposes three entry points:
+- `resolveScored(query, targetTitle?, targetArtist?, album?, excludeResolvers)` — fan out + re-score, **unranked / unfloored**. Android's `resolve()` delegates here (the 0.60 floor + priority sort run downstream via `ResolverScoring.selectBest`).
+- `resolveRanked(query, …, preferredResolver?)` — `selectRanked(resolveScored(...))`: drops sub-floor (< 0.60) sources, orders by priority. iOS's `resolveSources(artist, title, album)` delegates here.
+- `resolveSingle(resolverId, query, targetTitle?, targetArtist?, album?)` — additive re-resolution of ONE resolver (used when the user enables a resolver after a track was cached). Dispatches: `spotify` → the lambda; an id in `runtime.nativeResolverIds` → `resolveNative`; otherwise, ONLY if a resolve-capable plugin with that id is loaded → `resolveAxe`, else null. Re-scored, returned only if `!noMatch && confidence >= 0.60`.
+
+**`ResolverRuntime` interface** (`shared/.../resolver/ResolverRuntime.kt`) — the per-platform native non-Spotify resolvers + `.axe` execution that genuinely can't be shared:
+- **Android** `AndroidResolverRuntime` (`app/.../resolver/AndroidResolverRuntime.kt`): Apple Music (MusicKit Tier 1 + iTunes Tier 2), SoundCloud, local files; `.axe` via `PluginManager.resolve`. `nativeResolverIds = {applemusic, soundcloud, localfiles}`.
+- **iOS** `IosResolverRuntime` (`shared/iosMain/.../IosResolverRuntime.kt`): Apple Music via catalog HTTP; `.axe` via the JavaScriptCore unique-key polling workaround. `nativeResolverIds = {applemusic}`.
+
+Android's `ResolverManager` keeps its richer `resolveWithHints` wrapper (Spotify ID verify + 429-keep-the-badge fallback + cascade-artwork merge + `excludeResolvers`) **on top of** the coordinator — it calls `coordinator.resolveScored(..., excludeResolvers)`. iOS's `IosResolverCoordinator` is now a thin delegate (just `pluginManager.ensureInitialized()` + forward to `resolveRanked` / `resolveSingle`).
+
+**Native-gating divergence (behavior-preserving, D3).** The coordinator's native gate is `(active.isEmpty() || id in active) && id !in exclude`. Android never populates `active_resolvers` (gates natives on connection-state, so `active.isEmpty()` is always true → exclude-only), while iOS + desktop seed `active_resolvers` to all ids and remove-on-disable, so `id in active` is the real gate there. The unified gate preserves both. Converging Android onto `active_resolvers` (Finding 1) is a tracked follow-up — **OUT OF SCOPE** for #210 (it changes user-visible Android settings behavior).
+
 ### Per-Resolver Volume Offsets (dB)
 
 ```
@@ -882,8 +899,8 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 
 | Area | Files |
 |------|-------|
-| Resolver scoring | `resolver/ResolverScoring.kt` |
-| Track resolution | `resolver/ResolverManager.kt` |
+| Resolver scoring | `shared/.../resolver/ResolverScoring.kt` |
+| Resolver orchestration | `shared/.../resolver/{ResolverCoordinator,ResolverRuntime,ResolverGating}.kt` (shared fan-out / gating / re-score / rank), `app/.../resolver/{ResolverManager,AndroidResolverRuntime}.kt` (Android hints + native runtime), `shared/iosMain/.../{IosResolverCoordinator,IosResolverRuntime}.kt` (iOS delegate + native runtime) |
 | Resolver cache | `resolver/TrackResolverCache.kt` |
 | Playback routing | `playback/PlaybackRouter.kt`, `PlaybackController.kt` |
 | Metadata cascade | `data/metadata/MetadataService.kt`, `*Provider.kt` |

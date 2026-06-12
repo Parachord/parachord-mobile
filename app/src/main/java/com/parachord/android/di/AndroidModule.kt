@@ -46,6 +46,7 @@ import com.parachord.android.playlist.HostedPlaylistScheduler
 import com.parachord.android.playlist.PlaylistImportManager
 import com.parachord.android.plugin.PluginManager
 import com.parachord.android.plugin.PluginSyncService
+import com.parachord.android.resolver.AndroidResolverRuntime
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.resolver.TrackResolverCache
@@ -494,6 +495,62 @@ val androidModule = module {
     }
 
     // ── Resolvers ────────────────────────────────────────────────────
+
+    // Android ResolverRuntime (#210, D2): owns native non-Spotify resolution
+    // (Apple Music, SoundCloud, local files) + .axe execution.
+    singleOf(::AndroidResolverRuntime)
+
+    // Shared ResolverCoordinator (#210): fan-out + Spotify branch + gating +
+    // re-score. The Spotify lambda below is the EXACT body of the old
+    // ResolverManager.resolveSpotify (token gate + searchTrack + try/catch).
+    // NOTE the SHARED ResolverScoring here (lambda-based ctor), distinct from
+    // the app-wrapper com.parachord.android.resolver.ResolverScoring bound below.
+    single {
+        val settingsStore: com.parachord.android.data.store.SettingsStore = get()
+        val spotifyClient: com.parachord.shared.api.SpotifyClient = get()
+        val pluginManager: com.parachord.android.plugin.PluginManager = get()
+        val sharedScoring = com.parachord.shared.resolver.ResolverScoring(
+            getResolverOrder = { settingsStore.getResolverOrder() },
+            getActiveResolvers = { settingsStore.getActiveResolvers() },
+        )
+        com.parachord.shared.resolver.ResolverCoordinator(
+            runtime = get<AndroidResolverRuntime>(),
+            scoring = sharedScoring,
+            getActive = { settingsStore.getActiveResolvers() },
+            getDisabled = { settingsStore.getDisabledPlugins() },
+            getPlugins = { pluginManager.plugins.value },
+            resolveSpotify = { query ->
+                val token = settingsStore.getSpotifyAccessToken()
+                if (token.isNullOrBlank()) {
+                    com.parachord.shared.platform.Log.d(
+                        "ResolverManager",
+                        "Spotify resolve: no access token (disconnected or refresh failed) — skipping '$query'",
+                    )
+                    null
+                } else {
+                    try {
+                        spotifyClient.searchTrack(query)
+                    } catch (e: com.parachord.shared.api.auth.ReauthRequiredException) {
+                        com.parachord.shared.platform.Log.w(
+                            "ResolverManager",
+                            "Spotify resolve: reauth required for '$query' — user must reconnect",
+                        )
+                        null
+                    } catch (e: com.parachord.shared.api.SpotifyRateLimitedException) {
+                        // 429 (rate limit). Silently skip — SpotifyClient already
+                        // logged the first 429 of the cooldown cycle.
+                        null
+                    } catch (e: Exception) {
+                        com.parachord.shared.platform.Log.w(
+                            "ResolverManager",
+                            "Spotify resolve failed for '$query': ${e.message}",
+                        )
+                        null
+                    }
+                }
+            },
+        )
+    }
 
     singleOf(::ResolverManager)
     singleOf(::ResolverScoring)

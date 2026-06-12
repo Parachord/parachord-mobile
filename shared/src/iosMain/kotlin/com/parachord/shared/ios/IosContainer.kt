@@ -62,6 +62,7 @@ import com.parachord.shared.repository.FreshDrop
 import com.parachord.shared.repository.FreshDropsRepository
 import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.resolver.ResolvedSource
+import com.parachord.shared.resolver.ResolverCoordinator
 import com.parachord.shared.resolver.ResolverScoring
 import com.parachord.shared.repository.WeeklyPlaylistEntry
 import com.parachord.shared.repository.WeeklyPlaylistsRepository
@@ -790,15 +791,65 @@ class IosContainer private constructor() {
         )
     }
 
-    val resolverCoordinator: IosResolverCoordinator by lazy {
-        IosResolverCoordinator(
+    /**
+     * Platform-specific resolver execution (#210, D2): native Apple Music
+     * (catalog HTTP) + `.axe` via the JSC unique-key polling workaround. The
+     * shared [com.parachord.shared.resolver.ResolverCoordinator] owns the
+     * fan-out / gating / re-score / ranking on top of this.
+     */
+    val resolverRuntime: IosResolverRuntime by lazy {
+        IosResolverRuntime(
             jsRuntime = pluginJsRuntime,
-            pluginManager = pluginManager,
-            scoring = resolverScoring,
             settingsStore = settingsStore,
-            spotifyClient = spotifyClient,
             httpClient = httpClient,
             appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
+        )
+    }
+
+    /**
+     * Spotify resolve lambda — the EXACT old iOS Spotify branch from
+     * `resolveSources`: gate on a present access token, then
+     * `spotifyClient.searchTrack("$artist $title")` in a try/catch that
+     * rethrows CancellationException and returns null on other exceptions.
+     * Wired once here; reused by the shared coordinator AND
+     * [IosResolverCoordinator.resolveSingle].
+     */
+    private val resolveSpotify: suspend (String) -> ResolvedSource? = { query ->
+        if (settingsStore.getSpotifyAccessToken() == null) {
+            null
+        } else {
+            try {
+                spotifyClient.searchTrack(query)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    /**
+     * Shared resolver fan-out (#210): native Spotify branch + native Apple
+     * Music ([resolverRuntime]) + `.axe` resolvers, gated + re-scored + ranked.
+     * Same shape Android builds in its Koin graph.
+     */
+    val sharedResolverCoordinator: ResolverCoordinator by lazy {
+        ResolverCoordinator(
+            runtime = resolverRuntime,
+            scoring = resolverScoring,
+            getActive = { settingsStore.getActiveResolvers() },
+            getDisabled = { settingsStore.getDisabledPlugins() },
+            getPlugins = { pluginManager.plugins.value },
+            // Single source of truth — same lambda reused by resolveSingle, so the
+            // Spotify gate can't drift between the two paths.
+            resolveSpotify = resolveSpotify,
+        )
+    }
+
+    val resolverCoordinator: IosResolverCoordinator by lazy {
+        IosResolverCoordinator(
+            coordinator = sharedResolverCoordinator,
+            pluginManager = pluginManager,
         )
     }
 
