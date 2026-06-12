@@ -717,6 +717,20 @@ class IosContainer private constructor() {
      * LB username is set. Powers the iOS Discover screen (phase 5.3).
      */
     suspend fun loadWeeklyPlaylists(forceRefresh: Boolean): List<IosWeeklyEntry> {
+        // Self-heal: older iOS builds stored only the LB *token*, not the
+        // *username* the public `createdfor` weekly endpoint needs (Android
+        // derives both at token-save time via validateToken; iOS regressed to
+        // token-only). If the token is present but the username is missing,
+        // derive + persist it so Discover/Home weekly carousels load without
+        // the user re-entering anything.
+        if (settingsStore.getListenBrainzUsername() == null) {
+            val token = settingsStore.getListenBrainzToken()
+            if (!token.isNullOrBlank()) {
+                listenBrainzClient.validateToken(token)?.let {
+                    settingsStore.setListenBrainzUsername(it)
+                }
+            }
+        }
         val result = weeklyPlaylistsRepository.loadWeeklyPlaylists(forceRefresh)
             ?: return emptyList()
         val jams = (result.jams ?: emptyList()).map { it.toIos(kind = "Weekly Jams") }

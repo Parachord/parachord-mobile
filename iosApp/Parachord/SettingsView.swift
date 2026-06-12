@@ -274,7 +274,17 @@ final class SettingsViewModel {
         Task {
             switch id {
             case "lastfm": try? await store.setLastFmUsername(username: value)
-            case "listenbrainz": try? await store.setListenBrainzToken(token: value)
+            case "listenbrainz":
+                try? await store.setListenBrainzToken(token: value)
+                // Derive + persist the username the public `createdfor` weekly
+                // endpoint needs (mirrors desktop/Android validateToken). Without
+                // this the token saves but Weekly Jams/Exploration never load.
+                if value.isEmpty {
+                    try? await store.clearListenBrainzUsername()
+                } else if let username = try? await container.listenBrainzClient.validateToken(token: value),
+                          !username.isEmpty {
+                    try? await store.setListenBrainzUsername(username: username)
+                }
             case "discogs": try? await store.setDiscogsToken(token: value)
             case "ticketmaster": try? await store.setTicketmasterApiKey(key: value)
             case "seatgeek": try? await store.setSeatGeekClientId(id: value)
