@@ -536,14 +536,17 @@ struct ArtistScreen: View {
             if related.isEmpty {
                 Text("No related artists.").font(.system(size: 14)).foregroundStyle(PC.fg3).padding(40)
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 16) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 3), spacing: 16) {
                     ForEach(Array(related.enumerated()), id: \.offset) { _, a in
                         NavigationLink(value: PCRoute.artist(a.name)) {
                             VStack(spacing: 6) {
                                 relatedCircle(a)
+                                // Reserve a fixed 2-line height so 1- and 2-line
+                                // names occupy the same space — keeps every cell
+                                // identical and the circles aligned across rows.
                                 Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1)
                                     .multilineTextAlignment(.center).lineLimit(2)
-                                    .frame(maxWidth: .infinity)
+                                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .top)
                             }
                         }
                         .buttonStyle(.plain)
@@ -559,21 +562,23 @@ struct ArtistScreen: View {
     /// circle, with an initial-letter placeholder until it lands (Android parity).
     private func relatedCircle(_ a: SimilarArtist) -> some View {
         let url = ArtistImageCache.shared.image(for: a.name) ?? nonPlaceholderArt(a.imageUrl)
-        // Same structure as HistoryScreen.artistCircle: a single Group whose
-        // outer .aspectRatio(1) makes the CELL drive the size (the image fills it
-        // via .aspectRatio(.fill)). A ZStack + scaledToFill let a loaded image
-        // drive the size instead, which broke the grid.
-        return Group {
-            if let url, let u = URL(string: url) {
-                AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
-                    placeholder: { initialCircle(a.name) }
-            } else {
-                initialCircle(a.name)
+        // A size-less Color.clear drives the square (= grid column width); the
+        // image is an OVERLAY so it fills + clips but can NEVER change the size.
+        // Previously the image's native aspect ratio leaked through
+        // .aspectRatio(1) into the container, so a portrait vs landscape source
+        // gave different circle sizes even within one row (e.g. Cardi B smaller).
+        return Color.clear
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let url, let u = URL(string: url) {
+                    AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                        placeholder: { initialCircle(a.name) }
+                } else {
+                    initialCircle(a.name)
+                }
             }
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .clipShape(Circle())
-        .shadow(color: .black.opacity(0.1), radius: 6, y: 3)
+            .clipShape(Circle())
+            .shadow(color: .black.opacity(0.1), radius: 6, y: 3)
     }
 
     /// Initial-letter placeholder circle (Android RelatedArtistsTab parity).
