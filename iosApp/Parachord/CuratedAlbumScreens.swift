@@ -172,40 +172,30 @@ struct PCCuratedBanner: View {
 
 @MainActor @Observable
 final class CriticalDarlingsModel {
-    // Singleton so data survives screen recreation (instant, no reload flicker);
-    // TTL-gated revalidate so it still refreshes — just not every open. The
-    // `isLoading && !loaded` skeleton gate in the view means the skeleton only
-    // shows on the FIRST load; TTL revalidations keep showing the stale data.
+    // App-lifetime singleton. Watches the SHARED repository flow, which emits its
+    // own disk-cached list first (instant on cold start) then the fresh one — the
+    // repo owns persistence (cacheRead/cacheWrite), so there's no iOS-side cache.
+    // Architecture realignment (plan 2026-06-12): no more collect-and-return-last
+    // + parallel ios_critical_view.json.
     static let shared = CriticalDarlingsModel()
     private let container = IosContainer.companion.shared
+    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+    private var sub: Cancellable?
     var albums: [CriticsPickAlbum] = []
     var isLoading = false
     var loaded = false
-    private var lastLoad: Date?
-    private let ttl: TimeInterval = 4 * 3600   // mirrors desktop Critical Darlings TTL
-
-    // Persist the last rendered list so a COLD START shows it instantly instead
-    // of a blank skeleton, then fades in fresh data (Discover-tile pattern).
-    private let cacheURL: URL = {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ios_critical_view.json")
-    }()
-    init() {
-        if let blob = try? String(contentsOf: cacheURL, encoding: .utf8) {
-            let cached = container.decodeCriticsPicks(blob: blob)
-            if !cached.isEmpty { albums = cached; loaded = true }
-        }
-    }
 
     func load() async {
-        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
+        guard sub == nil else { return }   // subscribe once; the flow stays live
         isLoading = true
-        let fresh = (try? await container.loadCriticalDarlings()) ?? []
-        if !fresh.isEmpty {
-            withAnimation(.easeInOut(duration: 0.4)) { albums = fresh }   // fade in over the cached list
-            try? container.encodeCriticsPicks(list: fresh).write(to: cacheURL, atomically: true, encoding: .utf8)
+        sub = watcher.watch(flow: container.criticsPicksFlow()) { [weak self] v in
+            guard let self else { return }
+            if let list = v as? [CriticsPickAlbum], !list.isEmpty {
+                withAnimation(.easeInOut(duration: 0.4)) { self.albums = list }
+            }
+            self.isLoading = false
+            self.loaded = true
         }
-        lastLoad = Date(); isLoading = false; loaded = true
     }
 }
 

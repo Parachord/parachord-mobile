@@ -70,6 +70,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -391,6 +392,17 @@ class IosContainer private constructor() {
         }
         return out
     }
+
+    /**
+     * Reactive Critical Darlings — the repository already emits its disk-cached
+     * value FIRST, then the fresh one (stale-while-revalidate), and persists via
+     * its own cacheRead/cacheWrite. Swift watches this `Flow` (FlowWatcher) so the
+     * cached list shows instantly on cold start and fresh data fades in — no
+     * iOS-side duplicate cache needed (architecture realignment, plan 2026-06-12).
+     */
+    fun criticsPicksFlow(): Flow<List<CriticsPickAlbum>> =
+        criticalDarlingsRepository.getCriticsPicks(false)
+            .mapNotNull { (it as? Resource.Success)?.data }
 
     // ── Concerts ────────────────────────────────────────────────────────
     private val ticketmasterClient by lazy { TicketmasterClient(httpClient) }
