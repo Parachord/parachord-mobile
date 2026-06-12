@@ -158,7 +158,7 @@ struct HistoryScreen: View {
     private var topAlbums: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
             ForEach(Array(model.topAlbums.enumerated()), id: \.offset) { _, a in
-                NavigationLink { AlbumScreen(title: a.name, artist: a.artist) } label: {
+                NavigationLink(value: PCRoute.album(title: a.name, artist: a.artist)) {
                     VStack(alignment: .leading, spacing: 4) {
                         ZStack(alignment: .topLeading) {
                             pcCover(a.artworkUrl, seed: a.name + a.artist, size: nil, radius: 10)
@@ -182,7 +182,7 @@ struct HistoryScreen: View {
     private var topArtists: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 18) {
             ForEach(Array(model.topArtists.enumerated()), id: \.offset) { _, a in
-                NavigationLink { ArtistScreen(artistName: a.name) } label: {
+                NavigationLink(value: PCRoute.artist(a.name)) {
                     VStack(spacing: 6) {
                         artistCircle(a.imageUrl, seed: a.name)
                         Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).multilineTextAlignment(.center)

@@ -11,7 +11,32 @@ import Shared
 /// Value-based routes pushed onto the Home tab's stack — driven by both the
 /// Discover tiles and the sidebar, so the sidebar navigates with the tab bar
 /// still visible (a push, not a modal).
-enum PCRoute: Hashable { case recommendations, pop, critical, fresh, concerts, history, artist(String) }
+enum PCRoute: Hashable {
+    case recommendations, pop, critical, fresh, concerts, history
+    case artist(String)
+    case album(title: String, artist: String)
+    case playlist(id: String, title: String)
+}
+
+/// Single source of truth for every pushed destination. Used by EVERY tab's
+/// NavigationStack via `.navigationDestination(for: PCRoute.self)`, so all
+/// navigation is VALUE-BASED — never destination-based `NavigationLink { … }`,
+/// which corrupts a typed-path NavigationStack on iOS 18+ (mixing the two broke
+/// push + back across the app; works on older iPad OS, not the iOS 18.3 sim).
+@ViewBuilder
+func pcRouteDestination(_ route: PCRoute) -> some View {
+    switch route {
+    case .recommendations:             RecommendationsScreen()
+    case .pop:                         PopOfTheTopsScreen()
+    case .critical:                    CriticalDarlingsScreen()
+    case .fresh:                       FreshDropsScreen()
+    case .concerts:                    ConcertsScreen()
+    case .history:                     HistoryScreen()
+    case .artist(let name):            ArtistScreen(artistName: name)
+    case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
+    case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
+    }
+}
 
 struct HomeScreen: View {
     /// One-shot route injected by the sidebar (consumed into `path`). The tab's
@@ -51,17 +76,7 @@ struct HomeScreen: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(for: PCRoute.self) { route in
-                switch route {
-                case .recommendations: RecommendationsScreen()
-                case .pop:             PopOfTheTopsScreen()
-                case .critical:        CriticalDarlingsScreen()
-                case .fresh:           FreshDropsScreen()
-                case .concerts:        ConcertsScreen()
-                case .history:         HistoryScreen()
-                case .artist(let name): ArtistScreen(artistName: name)
-                }
-            }
+            .navigationDestination(for: PCRoute.self) { pcRouteDestination($0) }
         }
         .onChange(of: pendingRoute, initial: true) { _, route in
             if let route { path = [route]; pendingRoute = nil }
@@ -201,9 +216,7 @@ struct HomeScreen: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     ForEach(entries, id: \.id) { entry in
-                        NavigationLink {
-                            PlaylistDetailView(playlistId: entry.id, title: "\(entry.weekLabel) · \(entry.kind)")
-                        } label: {
+                        NavigationLink(value: PCRoute.playlist(id: entry.id, title: "\(entry.weekLabel) · \(entry.kind)")) {
                             weeklyCard(entry)
                         }
                         .buttonStyle(.plain)

@@ -136,7 +136,7 @@ struct RecommendationsScreen: View {
                 .foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 2)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 18) {
                 ForEach(Array(filteredArtists.enumerated()), id: \.offset) { _, a in
-                    NavigationLink { ArtistScreen(artistName: a.name) } label: {
+                    NavigationLink(value: PCRoute.artist(a.name)) {
                         VStack(spacing: 6) {
                             artistSquare(a)
                             Text(a.name).font(.system(size: 12, weight: .medium))

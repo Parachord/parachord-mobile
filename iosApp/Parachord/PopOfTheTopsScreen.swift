@@ -99,7 +99,7 @@ struct PopOfTheTopsScreen: View {
     private var albumsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
             ForEach(Array(model.albums.enumerated()), id: \.element.id) { index, album in
-                NavigationLink { AlbumScreen(title: album.title, artist: album.artist) } label: {
+                NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                     VStack(alignment: .leading, spacing: 4) {
                         ZStack(alignment: .topLeading) {
                             albumArt(album.artworkUrl, seed: album.title + album.artist)

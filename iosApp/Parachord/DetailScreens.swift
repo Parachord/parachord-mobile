@@ -142,7 +142,7 @@ struct AlbumScreen: View {
                 .shadow(color: .black.opacity(0.18), radius: 9, y: 6)
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.title).font(.system(size: 21, weight: .semibold)).foregroundStyle(PC.fg1)
-                NavigationLink { ArtistScreen(artistName: model.artist) } label: {
+                NavigationLink(value: PCRoute.artist(model.artist)) {
                     Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accent)
                 }
                 .buttonStyle(.plain)
@@ -449,7 +449,7 @@ struct ArtistScreen: View {
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 18) {
                 ForEach(Array(discoFiltered.enumerated()), id: \.offset) { _, album in
-                    NavigationLink { AlbumScreen(title: album.title, artist: album.artist) } label: {
+                    NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                         VStack(alignment: .leading, spacing: 0) {
                             pcCover(album.artworkUrl, seed: album.title + album.artist, size: nil, radius: 10)
                                 .aspectRatio(1, contentMode: .fit)
@@ -538,7 +538,7 @@ struct ArtistScreen: View {
             } else {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 16) {
                     ForEach(Array(related.enumerated()), id: \.offset) { _, a in
-                        NavigationLink { ArtistScreen(artistName: a.name) } label: {
+                        NavigationLink(value: PCRoute.artist(a.name)) {
                             VStack(spacing: 6) {
                                 relatedCircle(a)
                                 Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1)

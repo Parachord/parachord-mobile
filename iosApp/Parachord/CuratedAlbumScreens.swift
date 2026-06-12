@@ -210,7 +210,7 @@ struct CriticalDarlingsScreen: View {
                         PCSkeletonList(count: 6, art: 80)
                     }
                     ForEach(Array(model.albums.enumerated()), id: \.element.id) { _, album in
-                        NavigationLink { AlbumScreen(title: album.title, artist: album.artist) } label: {
+                        NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                             row(album)
                         }
                         .buttonStyle(.plain)
@@ -296,7 +296,7 @@ struct FreshDropsScreen: View {
                             PCSkeletonList(count: 6, art: 80)
                         }
                         ForEach(Array(filtered.enumerated()), id: \.offset) { _, drop in
-                            NavigationLink { AlbumScreen(title: drop.title, artist: drop.artist) } label: {
+                            NavigationLink(value: PCRoute.album(title: drop.title, artist: drop.artist)) {
                                 row(drop)
                             }
                             .buttonStyle(.plain)
