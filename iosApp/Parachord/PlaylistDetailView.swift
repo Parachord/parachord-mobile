@@ -171,7 +171,7 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private func mosaicCell(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                 placeholder: { PCArtwork(name: seed, size: 80, radius: 0) }
                 .frame(width: 80, height: 80).clipped()
         } else { PCArtwork(name: seed, size: 80, radius: 0) }
@@ -202,7 +202,7 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private func trackArt(_ track: IosPlaylistTrack) -> some View {
         if let url = track.albumArt, let u = URL(string: url) {
-            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                 placeholder: { PCArtwork(name: track.title + track.artist, size: 44, radius: 6) }
                 .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else { PCArtwork(name: track.title + track.artist, size: 44, radius: 6) }

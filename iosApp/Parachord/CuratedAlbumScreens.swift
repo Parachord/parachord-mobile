@@ -529,7 +529,7 @@ struct ConcertsScreen: View {
     @ViewBuilder
     private func concertImage(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                 placeholder: { PCArtwork(name: seed, size: 56, radius: 8) }
                 .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else { PCArtwork(name: seed, size: 56, radius: 8) }

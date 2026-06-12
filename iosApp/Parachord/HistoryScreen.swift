@@ -239,7 +239,7 @@ struct HistoryScreen: View {
     private func artistCircle(_ url: String?, seed: String) -> some View {
         Group {
             if let url, let u = URL(string: url) {
-                AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                     placeholder: { PCArtwork(name: seed, size: nil, radius: 999) }
             } else { PCArtwork(name: seed, size: nil, radius: 999) }
         }

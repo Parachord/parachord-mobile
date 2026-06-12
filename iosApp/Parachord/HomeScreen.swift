@@ -249,7 +249,7 @@ struct HomeScreen: View {
     @ViewBuilder
     private func mosaicCell(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                 placeholder: { PCArtwork(name: seed, size: 75, radius: 0) }
                 .frame(width: 75, height: 75).clipped()
         } else {
@@ -260,7 +260,7 @@ struct HomeScreen: View {
     @ViewBuilder
     private func tilePreviewThumb(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                 placeholder: { PCArtwork(name: seed, size: 36, radius: 4) }
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         } else {

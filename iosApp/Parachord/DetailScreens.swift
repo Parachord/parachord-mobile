@@ -46,7 +46,7 @@ func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat) -> s
     // Cover content: real art fill-cropped, gradient placeholder on miss/load.
     let content = ZStack {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in
+            PCCachedImage(url: u) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 PCArtwork(name: seed, radius: radius)
@@ -65,6 +65,68 @@ func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat) -> s
             .aspectRatio(1, contentMode: .fit)
             .overlay { content }
             .clipShape(shape)
+    }
+}
+
+// MARK: - Cached async image
+//
+// SwiftUI's AsyncImage caches nothing: every view rebuild (navigating back,
+// LazyVGrid cell recycling) restarts from the placeholder and reloads, flashing
+// the gradient. PCCachedImage caches the DECODED image in-memory and returns it
+// SYNCHRONOUSLY on a hit — so revisiting a screen shows art instantly, no flash.
+// While first-loading it shows a neutral shimmer (NOT the gradient), so artwork
+// goes skeleton -> art; the `placeholder` (gradient) appears ONLY when there's no
+// URL or the load fails.
+private let pcImageCache: NSCache<NSString, UIImage> = {
+    let c = NSCache<NSString, UIImage>()
+    c.countLimit = 400
+    return c
+}()
+
+struct PCCachedImage<Content: View, Placeholder: View>: View {
+    private let url: URL?
+    private let content: (Image) -> Content
+    private let placeholder: () -> Placeholder
+    @State private var loaded: UIImage?
+    @State private var failed = false
+
+    init(url: URL?,
+         @ViewBuilder content: @escaping (Image) -> Content,
+         @ViewBuilder placeholder: @escaping () -> Placeholder) {
+        self.url = url
+        self.content = content
+        self.placeholder = placeholder
+    }
+
+    private var cachedImage: UIImage? {
+        loaded ?? url.flatMap { pcImageCache.object(forKey: $0.absoluteString as NSString) }
+    }
+
+    var body: some View {
+        Group {
+            if let img = cachedImage {
+                content(Image(uiImage: img))
+            } else if url == nil || failed {
+                placeholder()          // genuine no-art fallback (gradient)
+            } else {
+                PCSkeletonBox(radius: 8) // loading — shimmer, not the gradient
+            }
+        }
+        .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        guard let url, loaded == nil else { return }
+        let key = url.absoluteString as NSString
+        if pcImageCache.object(forKey: key) != nil { return }   // body already shows it
+        failed = false
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let ui = UIImage(data: data) else {
+            failed = true
+            return
+        }
+        pcImageCache.setObject(ui, forKey: key)
+        loaded = ui
     }
 }
 
@@ -310,13 +372,11 @@ struct ArtistScreen: View {
         ZStack(alignment: .bottom) {
             // Base: the artist photo (fill-cropped) when available, else gradient.
             if let u = heroImage, !u.isEmpty, let url = URL(string: u) {
-                AsyncImage(url: url) { phase in
-                    if let img = phase.image {
-                        img.resizable().scaledToFill()
-                    } else {
-                        LinearGradient(colors: [gradient.0, gradient.1],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing)
-                    }
+                PCCachedImage(url: url) { img in
+                    img.resizable().scaledToFill()
+                } placeholder: {
+                    LinearGradient(colors: [gradient.0, gradient.1],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
                 }
             } else {
                 LinearGradient(colors: [gradient.0, gradient.1],
@@ -571,7 +631,7 @@ struct ArtistScreen: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay {
                 if let url, let u = URL(string: url) {
-                    AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                    PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                         placeholder: { initialCircle(a.name) }
                 } else {
                     initialCircle(a.name)

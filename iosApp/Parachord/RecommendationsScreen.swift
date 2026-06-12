@@ -159,7 +159,7 @@ struct RecommendationsScreen: View {
     private func artistSquare(_ a: RecommendedArtist) -> some View {
         Group {
             if let url = a.imageUrl, let u = URL(string: url) {
-                AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                     placeholder: { PCArtwork(name: a.name, size: nil, radius: 12) }
             } else {
                 PCArtwork(name: a.name, size: nil, radius: 12)

@@ -124,7 +124,7 @@ struct PopOfTheTopsScreen: View {
     private func albumArt(_ url: String?, seed: String) -> some View {
         Group {
             if let url, let u = URL(string: url) {
-                AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+                PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                     placeholder: { PCArtwork(name: seed, size: nil, radius: 8) }
             } else {
                 PCArtwork(name: seed, size: nil, radius: 8)
@@ -175,7 +175,7 @@ struct PopOfTheTopsScreen: View {
     @ViewBuilder
     private func songArt(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            AsyncImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
+            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
                 placeholder: { PCArtwork(name: seed, size: 44, radius: 6) }
                 .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
