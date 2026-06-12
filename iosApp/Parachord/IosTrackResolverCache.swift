@@ -102,8 +102,32 @@ final class IosTrackResolverCache {
     func resolve(_ req: ResolveRequest, order: Int) {
         let key = req.key
         requests[key] = req   // record for additive re-resolution (#1), even if cached
-        guard cache[key] == nil,
-              !inFlight.contains(key),
+        if let existing = cache[key] {
+            // Already resolved — but a resolver ENABLED after this track cached may
+            // be missing. The one-shot `resolverEnabled` burst fires an additive
+            // search for EVERY cached track at once; the batch that lands after
+            // Spotify's rate-limit window trips comes back nil, leaving a "chunk"
+            // with no Spotify badge that never retries. Re-attempt any active,
+            // not-disabled resolver that's absent here — scoped to this now-visible
+            // row, deduped against in-flight/queued work. Spotify's gate makes this
+            // cheap during cooldown and effective once it clears, so scrolling the
+            // chunk back into view fills it in.
+            let active = ResolverPrefs.shared.active
+            guard !active.isEmpty else { return }   // empty = all-on; full resolve already covered it
+            let disabled = ResolverPrefs.shared.disabled
+            var enqueued = false
+            for r in active where !disabled.contains(r) {
+                guard !existing.contains(where: { $0.resolver == r && !$0.noMatch }),
+                      !inFlight.contains("\(key)\u{1}\(r)"),
+                      !queue.contains(where: { $0.req.key == key && $0.merge == r })
+                else { continue }
+                queue.append((order: order, req: req, merge: r))
+                enqueued = true
+            }
+            if enqueued { pump() }
+            return
+        }
+        guard !inFlight.contains(key),
               !queue.contains(where: { $0.req.key == key && $0.merge == nil })
         else { return }
         queue.append((order, req, nil))
