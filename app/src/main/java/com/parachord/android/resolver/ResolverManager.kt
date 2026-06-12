@@ -8,9 +8,9 @@ import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.handlers.MusicKitWebBridge
 import com.parachord.android.plugin.PluginManager
 import com.parachord.shared.resolver.ResolvedSource
+import com.parachord.shared.resolver.ResolverGating
 import com.parachord.shared.resolver.ResolverInfo
-import com.parachord.shared.resolver.normalizeStr
-import com.parachord.shared.resolver.scoreConfidence
+import com.parachord.shared.resolver.selectBestMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -126,7 +126,7 @@ class ResolverManager constructor(
                 add(async { resolveSpotify(query) })
             }
             if (enabled("applemusic")) {
-                add(async { resolveAppleMusic(query) })
+                add(async { resolveAppleMusic(query, targetTitle, targetArtist) })
             }
             if (enabled("soundcloud")) {
                 add(async { resolveSoundCloud(query) })
@@ -137,10 +137,12 @@ class ResolverManager constructor(
             // .axe-only resolvers (bandcamp, youtube, etc.) — executed via JsBridge.
             // Native resolvers take priority (faster, no JS bridge overhead);
             // .axe resolvers fill gaps for sources with no native implementation.
-            val disabledPlugins = settingsStore.getDisabledPlugins()
-            val axeResolverIds = pluginManager.plugins.value
-                .filter { it.capabilities["resolve"] == true && it.id !in nativeResolverIds && it.id !in disabledPlugins }
-                .map { it.id }
+            val axeResolverIds = ResolverGating.axeResolverIds(
+                plugins = pluginManager.plugins.value,
+                active = activeResolvers,
+                disabled = settingsStore.getDisabledPlugins(),
+                nativeResolverIds = nativeResolverIds,
+            )
             for (resolverId in axeResolverIds) {
                 if (enabled(resolverId)) {
                     add(async { resolveViaPlugin(resolverId, query, targetTitle, targetArtist) })
@@ -152,17 +154,7 @@ class ResolverManager constructor(
 
         // Apply confidence scoring if target title/artist are available
         if (targetTitle != null && targetArtist != null) {
-            results = results.map { source ->
-                if (source.matchedTitle != null || source.matchedArtist != null) {
-                    val scored = scoreConfidence(
-                        targetTitle, targetArtist,
-                        source.matchedTitle, source.matchedArtist,
-                    )
-                    source.copy(confidence = scored)
-                } else {
-                    source
-                }
-            }
+            results = ResolverGating.rescore(results, targetTitle, targetArtist)
         }
 
         Log.d(TAG, "Resolved '$query' → ${results.size} sources: ${results.map { "${it.resolver}(${String.format("%.0f%%", (it.confidence ?: 0.0) * 100)})" }}")
@@ -342,12 +334,26 @@ class ResolverManager constructor(
 
     // ── Apple Music Resolver ────────────────────────────────────────
 
-    private suspend fun resolveAppleMusic(query: String): ResolvedSource? {
+    private suspend fun resolveAppleMusic(
+        query: String,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+    ): ResolvedSource? {
         // Tier 1: MusicKit JS (requires developer token + auth)
         if (musicKitBridge.configured.value) {
             try {
                 val results = musicKitBridge.search(query, limit = 5)
-                val best = results.firstOrNull()
+                // Pick the best title+artist match (desktop's matchFromResults,
+                // via the shared bidirectional matcher that scoreConfidence uses)
+                // instead of blindly taking the first catalog hit — a wrong first
+                // result would score 0.50 and get floored out, leaving NO Apple
+                // Music source even when a correct match sat lower in the list.
+                val best = if (targetTitle != null && targetArtist != null) {
+                    selectBestMatch(results, targetTitle, targetArtist, { it.title }, { it.artist })
+                        ?: results.firstOrNull()
+                } else {
+                    results.firstOrNull()
+                }
                 if (best != null) {
                     Log.d(TAG, "Apple Music (MusicKit) matched '${best.title}' by ${best.artist}")
                     return ResolvedSource(
@@ -370,10 +376,14 @@ class ResolverManager constructor(
         }
 
         // Tier 2: iTunes Search API (no auth, metadata-only)
-        return resolveViaiTunes(query)
+        return resolveViaiTunes(query, targetTitle, targetArtist)
     }
 
-    private suspend fun resolveViaiTunes(query: String): ResolvedSource? =
+    private suspend fun resolveViaiTunes(
+        query: String,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+    ): ResolvedSource? =
         withContext(Dispatchers.IO) {
             try {
                 val url = okhttp3.HttpUrl.Builder()
@@ -392,7 +402,16 @@ class ResolverManager constructor(
 
                 val body = response.body?.string() ?: return@withContext null
                 val result = json.decodeFromString<ITunesSearchResponse>(body)
-                val best = result.results.firstOrNull() ?: return@withContext null
+                // Best title+artist match (see resolveAppleMusic Tier 1) rather
+                // than the first iTunes hit.
+                val best = (
+                    if (targetTitle != null && targetArtist != null) {
+                        selectBestMatch(result.results, targetTitle, targetArtist, { it.trackName }, { it.artistName })
+                            ?: result.results.firstOrNull()
+                    } else {
+                        result.results.firstOrNull()
+                    }
+                    ) ?: return@withContext null
 
                 Log.d(TAG, "Apple Music (iTunes) matched '${best.trackName}' by ${best.artistName}")
 

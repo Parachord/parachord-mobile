@@ -4,8 +4,10 @@ import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.resolver.ResolvedSource
+import com.parachord.shared.resolver.ResolverGating
 import com.parachord.shared.resolver.ResolverScoring
 import com.parachord.shared.resolver.scoreConfidence
+import com.parachord.shared.resolver.selectBestMatch
 import com.parachord.shared.settings.SettingsStore
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -80,14 +82,12 @@ class IosResolverCoordinator(
         // NOT a hardcoded list — so a resolver downloaded/updated from the
         // marketplace runs immediately, and a user-disabled plugin is skipped.
         // Mirrors Android's ResolverManager `axeResolverIds`.
-        val ids = pluginManager.plugins.value
-            .filter {
-                it.capabilities["resolve"] == true &&
-                    it.id !in NATIVE_RESOLVER_IDS &&
-                    it.id !in disabled &&
-                    (active.isEmpty() || it.id in active)
-            }
-            .map { it.id }
+        val ids = ResolverGating.axeResolverIds(
+            plugins = pluginManager.plugins.value,
+            active = active,
+            disabled = disabled,
+            nativeResolverIds = NATIVE_RESOLVER_IDS,
+        )
 
         // Native Spotify branch (Android parity): resolve Spotify via the shared
         // SpotifyClient instead of spotify.axe. Gate on (a) spotify being active
@@ -133,18 +133,10 @@ class IosResolverCoordinator(
             (axeDeferred + listOfNotNull(spotifyDeferred, amDeferred)).awaitAll()
         }.filterNotNull()
 
-        // Re-score against the target (Android ResolverManager parity): the
-        // .axe placeholder 0.9 becomes 0.95 (both match) or 0.50 (single-axis),
+        // Re-score against the target (shared with Android via ResolverGating):
+        // the .axe placeholder 0.9 becomes 0.95 (both match) or 0.50 (single-axis),
         // and selectRanked's floor drops the wrong-song 0.50s.
-        val scored = resolved.map { source ->
-            if (source.matchedTitle != null || source.matchedArtist != null) {
-                source.copy(
-                    confidence = scoreConfidence(title, artist, source.matchedTitle, source.matchedArtist),
-                )
-            } else {
-                source
-            }
-        }
+        val scored = ResolverGating.rescore(resolved, title, artist)
 
         return scoring.selectRanked(scored)
     }
@@ -259,24 +251,18 @@ class IosResolverCoordinator(
         }.getOrNull() ?: return null
         if (data.isEmpty()) return null
 
-        fun norm(s: String?) = (s ?: "").lowercase().filter { it.isLetterOrDigit() }
-        // BIDIRECTIONAL substring — MUST match ResolverScoring.stringsMatch, which
-        // scoreConfidence uses. A one-directional check (AM ⊇ target) skipped the
-        // correct song whenever Apple Music's string was a substring of the target
-        // (e.g. AM "Tallest Man on Earth" vs target "THE Tallest Man on Earth"),
-        // fell back to data.first() — a weaker hit — and that scored 0.50, so a
-        // genuinely-playable AM track showed dimmed with no badge.
-        fun matches(amVal: String?, target: String): Boolean {
-            val a = norm(amVal)
-            return a.isNotEmpty() && target.isNotEmpty() && (a.contains(target) || target.contains(a))
-        }
-        val nt = norm(title)
-        val na = norm(artist)
-        val best = data.firstOrNull { el ->
-            val at = el.jsonObject["attributes"]?.jsonObject
-            matches(at?.get("name")?.jsonPrimitive?.contentOrNull, nt) &&
-                matches(at?.get("artistName")?.jsonPrimitive?.contentOrNull, na)
-        } ?: data.first()
+        // Best title+artist match via the shared bidirectional matcher (same gate
+        // scoreConfidence uses, so the pick scores 0.95 not 0.50), falling back to
+        // the first catalog hit. Shared with Android's AM tiers — one matcher, no
+        // drift. Bidirectional handles the "THE Tallest Man on Earth" case where
+        // the catalog string is a substring of the target.
+        fun attr(el: kotlinx.serialization.json.JsonElement, k: String) =
+            el.jsonObject["attributes"]?.jsonObject?.get(k)?.jsonPrimitive?.contentOrNull
+        val best = selectBestMatch(
+            data, title, artist,
+            { attr(it, "name") },
+            { attr(it, "artistName") },
+        ) ?: data.first()
 
         val attrs = best.jsonObject["attributes"]?.jsonObject ?: return null
         val id = best.jsonObject["id"]?.jsonPrimitive?.contentOrNull ?: return null

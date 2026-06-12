@@ -72,6 +72,35 @@ private fun stringsMatch(a: String, b: String): Boolean {
 }
 
 /**
+ * Pick the best-matching result for a target track: the first whose title AND
+ * artist BOTH bidirectionally substring-match — the SAME [stringsMatch] gate
+ * [scoreConfidence] uses, so a selected candidate is guaranteed to score 0.95
+ * rather than 0.50. Returns null when nothing matches; callers decide whether
+ * to fall back to the raw first result.
+ *
+ * Mirrors the desktop's `applemusic.axe` `matchFromResults`, but uses the
+ * bidirectional validate gate (not desktop's one-directional `includes`) so a
+ * target carrying extra words (e.g. "THE Tallest Man on Earth" vs the catalog's
+ * "Tallest Man on Earth") still matches instead of falling through to a weaker
+ * first result. Generic over the result type via field selectors so every
+ * resolver tier (MusicKit, iTunes, AM catalog JSON) can share one matcher.
+ */
+fun <T> selectBestMatch(
+    results: List<T>,
+    targetTitle: String,
+    targetArtist: String,
+    titleOf: (T) -> String?,
+    artistOf: (T) -> String?,
+): T? {
+    val nt = normalizeStr(targetTitle)
+    val na = normalizeStr(targetArtist)
+    if (nt.isEmpty() || na.isEmpty()) return null
+    return results.firstOrNull {
+        stringsMatch(nt, normalizeStr(titleOf(it))) && stringsMatch(na, normalizeStr(artistOf(it)))
+    }
+}
+
+/**
  * Calculate match confidence by comparing the resolver's result against the
  * target track.
  *
