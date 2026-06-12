@@ -20,9 +20,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * ListenBrainz API client. Cross-platform (commonMain).
@@ -142,6 +146,65 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
      * the love-push path catch and skip the per-track push, leaving the
      * idempotency cache untouched so the next sync gets another shot.
      */
+    /**
+     * POST /1/submit-listens — scrobble a play to ListenBrainz (shared so iOS gets
+     * scrobbling too; #193). `listenedAt == null` ⇒ a `playing_now` now-playing
+     * update (no timestamp); otherwise a `single` listen. MBIDs (recording / artist /
+     * release) are included per the LB spec — both top-level and in additional_info.
+     */
+    suspend fun submitListens(
+        token: String,
+        artist: String,
+        title: String,
+        release: String? = null,
+        recordingMbid: String? = null,
+        artistMbids: List<String> = emptyList(),
+        releaseMbid: String? = null,
+        durationMs: Long? = null,
+        listenedAt: Long? = null,
+    ): Boolean {
+        return try {
+            val payload = buildJsonObject {
+                put("listen_type", if (listenedAt == null) "playing_now" else "single")
+                putJsonArray("payload") {
+                    addJsonObject {
+                        if (listenedAt != null) put("listened_at", listenedAt)
+                        putJsonObject("track_metadata") {
+                            put("artist_name", artist)
+                            put("track_name", title)
+                            if (!release.isNullOrBlank()) put("release_name", release)
+                            if (!recordingMbid.isNullOrBlank()) put("recording_mbid", recordingMbid)
+                            putJsonObject("additional_info") {
+                                put("media_player", "Parachord")
+                                put("submission_client", "Parachord")
+                                if (durationMs != null) put("duration_ms", durationMs)
+                                if (!recordingMbid.isNullOrBlank()) put("recording_mbid", recordingMbid)
+                                if (!releaseMbid.isNullOrBlank()) put("release_mbid", releaseMbid)
+                                if (artistMbids.isNotEmpty()) {
+                                    putJsonArray("artist_mbids") { artistMbids.forEach { add(it) } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            val response = httpClient.post("$BASE_URL/1/submit-listens") {
+                header("Authorization", "Token $token")
+                contentType(io.ktor.http.ContentType.Application.Json)
+                setBody(payload)
+            }
+            if (!response.status.isSuccess()) {
+                Log.w(TAG, "submitListens($artist - $title) → HTTP ${response.status.value}")
+            }
+            response.status.isSuccess()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w(TAG, "submitListens failed: ${e.message}")
+            false
+        }
+    }
+
     suspend fun submitRecordingFeedback(
         recordingMbid: String,
         score: Int,
