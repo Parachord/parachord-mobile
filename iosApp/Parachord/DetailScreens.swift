@@ -175,20 +175,33 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
     }
 
     var body: some View {
-        Group {
+        // ZStack + opacity transitions so the skeleton CROSSFADES into the image
+        // (and one image crossfades into the NEXT when the url changes on a reused
+        // view — e.g. the mini player / Now Playing art on a song transition). A
+        // synchronously-seeded image starts as content with no state change, so it
+        // still shows instantly with no fade. Keying content by the image identity
+        // makes successive images distinct views so the opacity transition fires.
+        ZStack {
             if let img = cachedImage {
                 content(Image(uiImage: img))
+                    .id(ObjectIdentifier(img))
+                    .transition(.opacity)
             } else if url == nil || failed {
-                placeholder()          // genuine no-art fallback (gradient)
+                placeholder().transition(.opacity)          // genuine no-art fallback (gradient)
             } else {
-                PCSkeletonBox(radius: 8) // loading — shimmer, not the gradient
+                PCSkeletonBox(radius: 8).transition(.opacity) // loading — shimmer, not the gradient
             }
         }
+        .animation(.easeInOut(duration: 0.35), value: cachedImage.map { ObjectIdentifier($0) })
+        .animation(.easeInOut(duration: 0.35), value: failed)
         .task(id: url) { await load() }
     }
 
     private func load() async {
-        guard let url, loaded == nil else { return }
+        guard let url else { return }
+        // Always (re)load for the CURRENT url so a reused view whose url changed
+        // (mini player / Now Playing on track change) swaps to the new art instead
+        // of keeping the stale image. `.task(id: url)` only fires on a url change.
         if let cached = PCImageStore.load(url) { loaded = cached; return }   // memory or disk — no network
         failed = false
         guard let (data, _) = try? await URLSession.shared.data(from: url),
@@ -247,6 +260,8 @@ struct PCArtistImage<Placeholder: View>: View {
     var body: some View {
         GeometryReader { geo in
             cropped(geo.size)
+                .animation(.easeInOut(duration: 0.35), value: uiImage != nil)
+                .animation(.easeInOut(duration: 0.35), value: failed)
         }
         .task(id: url) { await load() }
     }
@@ -273,10 +288,11 @@ struct PCArtistImage<Placeholder: View>: View {
                 .offset(x: ox, y: oy)
                 .frame(width: size.width, height: size.height, alignment: .topLeading)
                 .clipped()
+                .transition(.opacity)
         } else if url == nil || failed {
-            placeholder()
+            placeholder().transition(.opacity)
         } else {
-            PCSkeletonBox(radius: 8)
+            PCSkeletonBox(radius: 8).transition(.opacity)
         }
     }
 
@@ -324,6 +340,18 @@ struct PCArtistImage<Placeholder: View>: View {
 
 // MARK: - Album
 
+// Session cache of loaded album pages (see ArtistDetailCache). AlbumScreen is
+// recreated on every navigation, so without this each reopen re-fetched the
+// tracklist and flashed the skeleton.
+@MainActor
+final class AlbumDetailCache {
+    static let shared = AlbumDetailCache()
+    struct Entry { var detail: AlbumDetail?; var entities: [Track]; var ts: Date }
+    private var cache: [String: Entry] = [:]
+    func get(_ key: String) -> Entry? { cache[key] }
+    func put(_ key: String, _ e: Entry) { cache[key] = e }
+}
+
 @MainActor @Observable
 final class AlbumDetailModel {
     private let container = IosContainer.companion.shared
@@ -333,16 +361,31 @@ final class AlbumDetailModel {
     var entities: [Track] = []
     var isLoading = false
     var loaded = false
+    private let ttl: TimeInterval = 6 * 3600
+    private var cacheKey: String { "\(title)|\(artist)".lowercased() }
 
     init(title: String, artist: String) { self.title = title; self.artist = artist }
 
     func load() async {
         guard !loaded else { return }
+        if let c = AlbumDetailCache.shared.get(cacheKey) {
+            detail = c.detail; entities = c.entities; loaded = true
+            if Date().timeIntervalSince(c.ts) > ttl { Task { await refresh() } }
+            return
+        }
         isLoading = true
         detail = try? await container.getAlbumDetail(albumTitle: title, artistName: artist)
         entities = detail?.tracks.map { pcTrack(from: $0) } ?? []
         isLoading = false
         loaded = true
+        AlbumDetailCache.shared.put(cacheKey, .init(detail: detail, entities: entities, ts: Date()))
+    }
+
+    private func refresh() async {
+        if let d = try? await container.getAlbumDetail(albumTitle: title, artistName: artist) {
+            detail = d; entities = d.tracks.map { pcTrack(from: $0) }
+            AlbumDetailCache.shared.put(cacheKey, .init(detail: d, entities: entities, ts: Date()))
+        }
     }
 
     func resolveVisible(_ t: TrackSearchResult, index: Int) {

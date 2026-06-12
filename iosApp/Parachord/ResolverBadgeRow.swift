@@ -81,6 +81,8 @@ struct ResolverBadgeRow: View {
             }
     }
 
+    @State private var shown = false
+
     var body: some View {
         HStack(spacing: 3) {
             ForEach(Array(visible.enumerated()), id: \.offset) { _, source in
@@ -88,6 +90,9 @@ struct ResolverBadgeRow: View {
                                    confidence: source.confidence?.doubleValue ?? 1)
             }
         }
+        // Fade the badges IN when resolution lands instead of hard-popping in.
+        .opacity(shown ? 1 : 0)
+        .onAppear { withAnimation(.easeInOut(duration: 0.3)) { shown = true } }
     }
 }
 
