@@ -158,6 +158,12 @@ final class SettingsViewModel {
     /// The live set of loaded plugins, mapped from PluginManager (Android parity).
     /// Drives the Meta/Concerts grids + the count.
     var loadedPlugins: [PCLoadedPlugin] = []
+    /// Plugin ids the user has explicitly disabled (shared `disabled_plugins`).
+    /// Gates resolution (IosResolverCoordinator) + metadata (getDisabledProviders).
+    var disabledPlugins: Set<String> = []
+    func setPluginEnabled(_ id: String, _ enabled: Bool) {
+        Task { try? await store.setPluginEnabled(pluginId: id, enabled: enabled) }
+    }
     /// Plugin ids declaring `capabilities.mobile == false` — hidden everywhere
     /// (youtube, ollama). Seeded with the known defaults so filtering holds even
     /// if the .axe layer hasn't loaded yet; augmented from plugin metadata.
@@ -202,6 +208,7 @@ final class SettingsViewModel {
         guard subs.isEmpty else { return }
         subs.append(watcher.watch(flow: store.themeMode) { [weak self] v in if let s = v as? String { self?.themeMode = s } })
         subs.append(watcher.watch(flow: store.scrobblingEnabled) { [weak self] v in if let b = v as? Bool { self?.scrobblingEnabled = b } })
+        subs.append(watcher.watch(flow: store.getDisabledPluginsFlow()) { [weak self] v in self?.disabledPlugins = (v as? Set<String>) ?? [] })
         subs.append(watcher.watch(flow: container.getSpotifyConnectedFlow()) { [weak self] v in
             self?.spotifyConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
             self?.recomputeResolvers()   // connect/disconnect moves Spotify in/out of the list
@@ -267,7 +274,12 @@ final class SettingsViewModel {
         case "spotify": return spotifyConnected && !spotifyClientId.isEmpty
         case "librefm": return libreFmConnected
         case "localfiles", "bandcamp", "applemusic": return true   // no key needed / MusicKit at play time
-        default: return !(values[id]?.isEmpty ?? true)
+        // No-key meta (Discogs) + any uncataloged loaded plugin (Wikipedia,
+        // Achordion): they work without credentials, so "active" == enabled.
+        case "discogs": return !disabledPlugins.contains(id)
+        default:
+            if PCServices.find(id) == nil { return !disabledPlugins.contains(id) }
+            return !(values[id]?.isEmpty ?? true)
         }
     }
 
@@ -648,12 +660,30 @@ private struct PluginConfigSheet: View {
                     }
                 }
 
+                // Enable/disable for non-resolver plugins (meta + concert + any
+                // marketplace plugin). Resolvers use the priority-list toggle above.
+                if service.kind != .resolver {
+                    Section {
+                        Toggle("Enabled", isOn: Binding(
+                            get: { !model.disabledPlugins.contains(service.id) },
+                            set: { model.setPluginEnabled(service.id, $0) }))
+                    } footer: {
+                        Text(service.kind == .meta
+                            ? "Turn off to stop using this plugin for metadata, bios, scrobbling, or AI."
+                            : "Turn off to stop using this plugin.")
+                    }
+                }
+
                 switch service.id {
                 case "spotify": spotifySection
                 case "librefm": libreFmSection
                 case "applemusic": infoSection("Apple Music is authorized at playback time via MusicKit. No key needed.")
                 case "localfiles": infoSection("Local files are scanned from your device's music library automatically.")
                 case "bandcamp": infoSection("Bandcamp needs no credentials — it resolves and opens tracks in the browser.")
+                // No key required (matches Android's toggle-only Discogs) — the
+                // public API works unauthenticated; a token would only raise rate
+                // limits, which we don't surface.
+                case "discogs": infoSection("Discogs provides artist bios and images from the community database — no API key required.")
                 // Uncataloged loaded plugins (e.g. Wikipedia, Achordion) have no
                 // BYO-key config — show read-only info instead of a stray key field.
                 case let id where PCServices.find(id) == nil: pluginInfoSection

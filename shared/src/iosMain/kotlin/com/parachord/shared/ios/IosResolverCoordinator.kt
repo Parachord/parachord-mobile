@@ -73,11 +73,21 @@ class IosResolverCoordinator(
     suspend fun resolveSources(artist: String, title: String, album: String?): List<ResolvedSource> {
         pluginManager.ensureInitialized()
 
-        val loaded = pluginManager.plugins.value.map { it.id }.toSet()
         val active = settingsStore.getActiveResolvers()
-        val ids = STREAMING_RESOLVERS.filter { id ->
-            id in loaded && (active.isEmpty() || id in active)
-        }
+        val disabled = settingsStore.getDisabledPlugins()
+        // All resolve-capable .axe plugins EXCEPT the natively-resolved ones
+        // (Spotify, Apple Music). Derived dynamically from the loaded plugin set —
+        // NOT a hardcoded list — so a resolver downloaded/updated from the
+        // marketplace runs immediately, and a user-disabled plugin is skipped.
+        // Mirrors Android's ResolverManager `axeResolverIds`.
+        val ids = pluginManager.plugins.value
+            .filter {
+                it.capabilities["resolve"] == true &&
+                    it.id !in NATIVE_RESOLVER_IDS &&
+                    it.id !in disabled &&
+                    (active.isEmpty() || it.id in active)
+            }
+            .map { it.id }
 
         // Native Spotify branch (Android parity): resolve Spotify via the shared
         // SpotifyClient instead of spotify.axe. Gate on (a) spotify being active
@@ -319,14 +329,14 @@ class IosResolverCoordinator(
 
     private companion object {
         /**
-         * CLAUDE.md `stream: true` content resolvers run through `.axe`.
-         * `spotify` AND `applemusic` are intentionally ABSENT — both resolve
-         * natively (Android parity): Spotify via the shared [SpotifyClient],
-         * Apple Music via the catalog API ([resolveAppleMusicNative]). Their
-         * `.axe` plugins stay loaded but dormant for resolution. localfiles is a
-         * no-op on iOS today.
+         * Resolvers handled by NATIVE code, not their `.axe` (Android parity):
+         * Spotify via the shared [SpotifyClient], Apple Music via the catalog API
+         * ([resolveAppleMusicNative]). Excluded from the dynamic `.axe` resolve
+         * fan-out so only the native path runs for them. Every OTHER resolve-capable
+         * plugin (soundcloud, bandcamp, localfiles, + marketplace resolvers) runs
+         * through `.axe`.
          */
-        val STREAMING_RESOLVERS = listOf("soundcloud", "localfiles")
+        val NATIVE_RESOLVER_IDS = setOf("spotify", "applemusic")
         const val POLL_ATTEMPTS = 50
         const val POLL_INTERVAL_MS = 100L
     }

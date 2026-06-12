@@ -241,7 +241,7 @@ class IosContainer private constructor() {
                 // when nothing above had an image. Inert without a dev token.
                 AppleMusicArtistProvider(httpClient, appConfig.appleMusicDeveloperToken),
             ),
-            getDisabledProviders = { emptySet() },
+            getDisabledProviders = { settingsStore.getDisabledPlugins() },
             // Mirrors AndroidModule.enrichAlbumArtworkViaItunes: upgrade Cover
             // Art Archive URLs to iTunes art via the shared AppleMusicClient.
             enrichAlbumArtwork = { artistName, albums ->
@@ -361,7 +361,7 @@ class IosContainer private constructor() {
                 DiscogsProvider(httpClient, settingsStore),
                 AppleMusicArtistProvider(httpClient, appConfig.appleMusicDeveloperToken),
             ),
-            getDisabledProviders = { emptySet() },
+            getDisabledProviders = { settingsStore.getDisabledPlugins() },
             enrichAlbumArtwork = { artistName, albums ->
                 enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
             },
