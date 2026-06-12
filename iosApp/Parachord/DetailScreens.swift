@@ -143,6 +143,10 @@ private let pcFaceCache = NSCache<NSString, NSValue>()
 
 struct PCArtistImage<Placeholder: View>: View {
     let url: URL?
+    /// Top area covered by the Dynamic Island / status bar in a full-bleed hero.
+    /// The face is biased BELOW this; 0 (the default, used by circles) just
+    /// centers the face normally.
+    var topInset: CGFloat = 0
     @ViewBuilder var placeholder: () -> Placeholder
     @State private var loaded: UIImage?
     @State private var detected: UnitPoint?
@@ -176,7 +180,12 @@ struct PCArtistImage<Placeholder: View>: View {
             // Shift so the face center lands at the container center, clamped so
             // the image still covers the container (no gaps). offset ∈ [C - d, 0].
             let ox = min(0, max(size.width - dW, size.width / 2 - center.x * dW))
-            let oy = min(0, max(size.height - dH, size.height / 2 - center.y * dH))
+            // Bias the face below `topInset` (Dynamic Island): target the center
+            // of the VISIBLE region and allow shifting DOWN into the inset area
+            // (covered by the island; the hero fills that strip with its gradient).
+            // topInset == 0 (circles) reduces to plain face-centering.
+            let targetY = topInset + (size.height - topInset) / 2
+            let oy = min(topInset, max(size.height - dH, targetY - center.y * dH))
             Image(uiImage: img)
                 .resizable()
                 .frame(width: dW, height: dH)
@@ -468,11 +477,15 @@ struct ArtistScreen: View {
 
     private var hero: some View {
         ZStack(alignment: .bottom) {
-            // Base: the artist photo (fill-cropped) when available, else gradient.
-            // Face-aware so the artist's face isn't cropped out of the header.
-            PCArtistImage(url: heroImage.flatMap { $0.isEmpty ? nil : URL(string: $0) }) {
-                LinearGradient(colors: [gradient.0, gradient.1],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            // Base gradient — fills the strip behind the Dynamic Island when the
+            // face-aware crop shifts the photo down to clear it.
+            LinearGradient(colors: [gradient.0, gradient.1],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            // Artist photo, face-aware and biased BELOW the Dynamic Island so the
+            // face isn't hidden by it (topInset = the status-bar/island height).
+            PCArtistImage(url: heroImage.flatMap { $0.isEmpty ? nil : URL(string: $0) },
+                          topInset: heroTopInset) {
+                Color.clear   // no-art → the base gradient shows
             }
             // Dark scrim for text legibility + fade into the page background.
             LinearGradient(
@@ -487,6 +500,14 @@ struct ArtistScreen: View {
         .frame(height: 360)
         .frame(maxWidth: .infinity)
         .clipped()
+    }
+
+    /// Top inset covered by the Dynamic Island / status bar (the hero is
+    /// full-bleed under it), so the face crop can be biased below it.
+    private var heroTopInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+            .first?.safeAreaInsets.top ?? 47
     }
 
     private var cta: some View {
