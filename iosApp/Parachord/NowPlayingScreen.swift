@@ -403,7 +403,10 @@ struct PCQueuePanel: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(up.enumerated()), id: \.element.id) { idx, t in
-                        Button { coordinator.playFromQueue(idx) } label: {
+                        // Tapping a mid-queue track removes the tracks above it
+                        // (they're "played"); animate so the queue SHIFTS UP to the
+                        // top instead of hard-cutting (Android parity).
+                        Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { coordinator.playFromQueue(idx) } } label: {
                             HStack(spacing: 12) {
                                 Text("\(idx + 1)").font(.system(size: 12, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.4)).frame(width: 24, alignment: .trailing)
@@ -433,6 +436,9 @@ struct PCQueuePanel: View {
                                 ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: idx)
                         }
                         .pcTrackContextMenu(t, coordinator: coordinator)
+                        // Removed (played-past) rows slide up and fade as the queue
+                        // shifts; remaining rows move up into their place.
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
                 .padding(.vertical, 8)
