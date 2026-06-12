@@ -140,8 +140,18 @@ final class SettingsViewModel {
     }
     /// Below the list: user-disabled, or auth-gated and not yet connected.
     var disabledResolvers: [String] {
-        PCServices.resolvers.map { $0.id }.filter { !mobileBlocked.contains($0) && !isEnabledUsable($0) }
+        resolverCatalog.map { $0.id }.filter { !mobileBlocked.contains($0) && !isEnabledUsable($0) }
     }
+
+    /// The resolver catalog — DYNAMIC from the loaded resolve-capable plugins so a
+    /// resolver downloaded/updated from the marketplace appears in the list and can
+    /// be prioritised/enabled (Android parity). Falls back to the static catalog
+    /// before the plugin layer has loaded.
+    var resolverCatalog: [PCService] {
+        let dynamic = displayServices(.resolver)
+        return dynamic.isEmpty ? PCServices.resolvers : dynamic
+    }
+    func resolverService(_ id: String) -> PCService? { resolverCatalog.first { $0.id == id } }
 
     /// service id → its stored key/token/username (empty = not configured).
     var values: [String: String] = [:]
@@ -182,6 +192,9 @@ final class SettingsViewModel {
             return PCLoadedPlugin(id: p.id, name: p.name, colorHex: p.color, version: p.version, caps: caps, kind: kind)
         }
         pluginCount = loadedPlugins.count
+        // A marketplace-downloaded/updated resolver just changed the catalog —
+        // fold it into the priority list (canonical-insert if newly usable).
+        if resolversReady { recomputeResolvers() }
     }
 
     /// The services to render for a category — built from the LIVE loaded plugins,
@@ -253,14 +266,17 @@ final class SettingsViewModel {
             // Resolver intent (active_resolvers): empty stored = all catalogued.
             // Whether each actually reaches the priority list is gated by
             // isUsable (connected / no-auth) inside recomputeResolvers.
-            let catalogIds = PCServices.resolvers.map { $0.id }
+            let catalogIds = resolverCatalog.map { $0.id }
             let storedActive = ((try? await store.getActiveResolvers()) as? [String]) ?? []
             // Fresh install: only no-auth resolvers are enabled by default (matches
             // desktop's ['bandcamp','localfiles']); auth-gated ones (Spotify /
-            // SoundCloud) join the enabled set when connected.
+            // SoundCloud) join the enabled set when connected. A NEW marketplace
+            // resolver on an EXISTING install lands in the disabled section with an
+            // Enable button (we can't distinguish "new" from "user-disabled" here,
+            // so we don't auto-enable it — avoids un-disabling a user's choice).
             let defaultActive = Set(catalogIds.filter { !requiresConnection($0) })
             activeResolvers = storedActive.isEmpty ? defaultActive : Set(storedActive).intersection(catalogIds)
-            resolverOrder = ((try? await store.getResolverOrder()) as? [String])?.filter { PCServices.find($0) != nil } ?? []
+            resolverOrder = ((try? await store.getResolverOrder()) as? [String])?.filter { resolverService($0) != nil } ?? []
             resolversReady = true
             recomputeResolvers()
         }
@@ -298,6 +314,11 @@ final class SettingsViewModel {
     /// (which calls recompute) is what enables it.
     func setResolverEnabled(_ id: String, _ enabled: Bool) {
         if enabled { activeResolvers.insert(id) } else { activeResolvers.remove(id) }
+        // Also record the AUTHORITATIVE on/off in disabled_plugins. The resolver
+        // coordinator gates native Spotify/Apple Music + .axe resolvers on this set,
+        // so a disabled resolver is never RESOLVED (not merely hidden/unranked) —
+        // even when active_resolvers is empty (the "all on" default).
+        setPluginEnabled(id, enabled)
         recomputeResolvers()
     }
 
@@ -307,11 +328,11 @@ final class SettingsViewModel {
         // Auth-gated resolvers that aren't usable (no connection / no key) must
         // not linger in the enabled set — desktop drops them on disconnect. This
         // also clears a stale-token Spotify on launch when no Client ID is set.
-        for id in PCServices.resolvers.map({ $0.id }) where requiresConnection(id) && !isUsable(id) {
+        for id in resolverCatalog.map({ $0.id }) where requiresConnection(id) && !isUsable(id) {
             activeResolvers.remove(id)
         }
-        var order = resolverOrder.filter { isEnabledUsable($0) && PCServices.find($0) != nil }
-        for id in PCServices.resolvers.map({ $0.id }) where isEnabledUsable(id) && !order.contains(id) {
+        var order = resolverOrder.filter { isEnabledUsable($0) && resolverService($0) != nil }
+        for id in resolverCatalog.map({ $0.id }) where isEnabledUsable(id) && !order.contains(id) {
             order = container.resolverScoring.insertInCanonicalOrder(order: order, newId: id)
         }
         resolverOrder = order
@@ -392,6 +413,7 @@ final class SettingsViewModel {
                 spotifyError = nil
                 spotifyConnected = true              // before recompute, so the prune keeps it
                 activeResolvers.insert("spotify")    // connecting enables it (desktop parity)
+                setPluginEnabled("spotify", true)    // clear any prior disabled flag
                 recomputeResolvers()
             } catch { spotifyError = error.localizedDescription }
             oauthManager = nil
@@ -475,7 +497,7 @@ private struct PlugInsTab: View {
                 .font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.bottom, 6)
             VStack(spacing: 0) {
                 ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
-                    if let svc = PCServices.find(id) {
+                    if let svc = model.resolverService(id) {
                         resolverRow(svc, index: i)
                             .opacity(draggingResolver == id ? 0.4 : 1)
                             .draggable(id) {
@@ -502,7 +524,7 @@ private struct PlugInsTab: View {
                     .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
                 VStack(spacing: 0) {
                     ForEach(model.disabledResolvers, id: \.self) { id in
-                        if let svc = PCServices.find(id) { disabledResolverRow(svc) }
+                        if let svc = model.resolverService(id) { disabledResolverRow(svc) }
                     }
                 }
             }

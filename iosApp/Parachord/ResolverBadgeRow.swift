@@ -71,8 +71,13 @@ struct ResolverBadgeRow: View {
         // the user reorders/enables resolvers in Settings.
         let userOrder = ResolverPrefs.shared.order
         let order = userOrder.isEmpty ? Self.canonical : userOrder
+        let active = ResolverPrefs.shared.active
+        let disabled = ResolverPrefs.shared.disabled
         return sources
             .filter { !$0.noMatch && ($0.confidence?.doubleValue ?? 0) >= 0.60 }
+            // Don't badge a resolver the user has turned OFF (it can't be played),
+            // matching what selectRanked feeds playback. Empty active = all on.
+            .filter { (active.isEmpty || active.contains($0.resolver)) && !disabled.contains($0.resolver) }
             .sorted { a, b in
                 let pa = order.firstIndex(of: a.resolver) ?? order.count
                 let pb = order.firstIndex(of: b.resolver) ?? order.count
@@ -111,6 +116,8 @@ final class ResolverPrefs {
     var order: [String] = []
     /// Enabled ("active") resolver ids.
     var active: Set<String> = []
+    /// Explicitly DISABLED plugin/resolver ids (authoritative off-switch).
+    var disabled: Set<String> = []
     /// Suppress additive re-resolution on the FIRST active-flow emit (initial
     /// load isn't a user "enable").
     @ObservationIgnored private var activeInitialized = false
@@ -126,6 +133,10 @@ final class ResolverPrefs {
         guard subs.isEmpty else { return }
         subs.append(watcher.watch(flow: container.settingsStore.getResolverOrderFlow()) { [weak self] v in
             if let list = v as? [String] { self?.order = list }
+        })
+        subs.append(watcher.watch(flow: container.settingsStore.getDisabledPluginsFlow()) { [weak self] v in
+            if let list = v as? [String] { self?.disabled = Set(list) }
+            else if let set = v as? Set<String> { self?.disabled = set }
         })
         subs.append(watcher.watch(flow: container.settingsStore.getActiveResolversFlow()) { [weak self] v in
             guard let self, let list = v as? [String] else { return }

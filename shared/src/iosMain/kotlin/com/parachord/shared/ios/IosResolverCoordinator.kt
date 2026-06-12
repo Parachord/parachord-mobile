@@ -94,7 +94,10 @@ class IosResolverCoordinator(
         // and (b) a present access token — skip entirely when not connected to
         // avoid 401 spam. The result joins the SAME list that re-scores via
         // scoreConfidence + selectRanked below, so it's ranked identically.
-        val spotifyActive = active.isEmpty() || "spotify" in active
+        // `!in disabled` is the AUTHORITATIVE off-switch: a user-disabled resolver
+        // must not be resolved at all (not just hidden/unranked) — even when the
+        // active set is empty (the "all on" default). Mirrors the .axe filter above.
+        val spotifyActive = (active.isEmpty() || "spotify" in active) && "spotify" !in disabled
         val spotifyConnected = spotifyActive && settingsStore.getSpotifyAccessToken() != null
 
         // Native Apple Music branch (Android parity). Android resolves Apple Music
@@ -102,7 +105,7 @@ class IosResolverCoordinator(
         // tracks Apple Music actually has. This hits the SAME catalog API MusicKit
         // uses (Bearer dev token) for far better matching. `applemusic` is excluded
         // from the .axe STREAMING_RESOLVERS so only this native path runs.
-        val amActive = active.isEmpty() || "applemusic" in active
+        val amActive = (active.isEmpty() || "applemusic" in active) && "applemusic" !in disabled
         val amAvailable = amActive && appleMusicDeveloperToken.isNotBlank()
 
         if (ids.isEmpty() && !spotifyConnected && !amAvailable) return emptyList()
