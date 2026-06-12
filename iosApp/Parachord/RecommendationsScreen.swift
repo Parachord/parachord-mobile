@@ -80,7 +80,7 @@ struct RecommendationsScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: "For You", leading: .back, onLeading: { dismiss() })
+            PCTopBar(title: "Recommendations", leading: .back, onLeading: { dismiss() })
             PCCuratedBanner(
                 icon: "star.fill",
                 subtitle: "A daily mix tuned to your listening",
@@ -183,6 +183,11 @@ struct RecommendationsScreen: View {
                             Text(pair.track.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                         }
                         Spacer(minLength: 0)
+                        // Resolver icons (parity with Pop of the Tops > Songs).
+                        if let sources = IosTrackResolverCache.shared.cached(artist: pair.track.artist, title: pair.track.title, album: pair.track.album),
+                           !sources.isEmpty {
+                            ResolverBadgeRow(sources: sources)
+                        }
                     }
                     .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
                 }

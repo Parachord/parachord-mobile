@@ -457,23 +457,24 @@ struct ConcertsScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             PCTopBar(title: "Concerts", leading: .back, onLeading: { dismiss() })
-            if model.isLoading && !model.loaded {
-                ScrollView { PCSkeletonList(count: 6, art: 56) }
-            } else {
-                ScrollView {
-                    PCCuratedBanner(
-                        icon: "ticket.fill",
-                        subtitle: "Upcoming shows from artists you listen to",
-                        count: model.events.isEmpty ? nil : "\(model.events.count) events",
-                        gradient: [0x14B8A6, 0x0891B2])
-                    if model.events.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: "ticket").font(.system(size: 40)).foregroundStyle(PC.fg3)
-                            Text("No upcoming concerts found.\nAdd Ticketmaster / SeatGeek keys in Settings to see shows.")
-                                .font(.system(size: 14)).foregroundStyle(PC.fg2)
-                                .multilineTextAlignment(.center).padding(.horizontal, 40)
-                        }.padding(.vertical, 60)
-                    } else {
+            ScrollView {
+                // Banner renders immediately with the title — never gated behind
+                // the content load.
+                PCCuratedBanner(
+                    icon: "ticket.fill",
+                    subtitle: "Upcoming shows from artists you listen to",
+                    count: model.events.isEmpty ? nil : "\(model.events.count) events",
+                    gradient: [0x14B8A6, 0x0891B2])
+                if model.isLoading && !model.loaded {
+                    PCSkeletonList(count: 6, art: 56)
+                } else if model.events.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "ticket").font(.system(size: 40)).foregroundStyle(PC.fg3)
+                        Text("No upcoming concerts found.\nAdd Ticketmaster / SeatGeek keys in Settings to see shows.")
+                            .font(.system(size: 14)).foregroundStyle(PC.fg2)
+                            .multilineTextAlignment(.center).padding(.horizontal, 40)
+                    }.padding(.vertical, 60)
+                } else {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(grouped, id: \.month) { group in
                                 Text(group.month).font(.system(size: 13, weight: .semibold)).foregroundStyle(PC.fg2)
@@ -487,7 +488,6 @@ struct ConcertsScreen: View {
                         .padding(.bottom, 130)
                     }
                 }
-            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }

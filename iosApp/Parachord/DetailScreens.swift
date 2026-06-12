@@ -666,6 +666,11 @@ struct ArtistScreen: View {
                             }
                         }
                         Spacer(minLength: 0)
+                        // Resolver icons (parity with Pop of the Tops > Songs).
+                        if let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
+                           !sources.isEmpty {
+                            ResolverBadgeRow(sources: sources)
+                        }
                     }
                     .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
                 }
