@@ -330,7 +330,7 @@ struct ArtistScreen: View {
                 .font(.system(size: 28, weight: .light)).tracking(5)
                 .foregroundStyle(.white).multilineTextAlignment(.center)
                 .shadow(color: .black.opacity(0.6), radius: 16)
-                .padding(.horizontal, 24).padding(.bottom, 36)
+                .padding(.horizontal, 24).padding(.bottom, 64)
         }
         .frame(height: 360)
         .frame(maxWidth: .infinity)
