@@ -137,4 +137,60 @@ class ResolverCoordinator(
             resolveScored(query, targetTitle, targetArtist, album),
             preferredResolver,
         )
+
+    /**
+     * Resolve ONE specific resolver for a track (additive re-resolution, #1 /
+     * #210 Task 6). When the user enables a resolver AFTER a track was already
+     * cached, the caller resolves just the newly-enabled resolver and merges it
+     * into the existing (still-good) sources — rather than re-resolving
+     * everything. Mirrors the pre-#210 iOS `IosResolverCoordinator.resolveSingle`
+     * dispatch verbatim:
+     *
+     * - `spotify` → the injected [resolveSpotify] lambda (already token-gated;
+     *   returns null when off / no token / errored).
+     * - an id in [ResolverRuntime.nativeResolverIds] → [ResolverRuntime.resolveNative]
+     *   (already availability-gated inside the runtime, e.g. blank AM dev-token).
+     * - otherwise, ONLY if a resolve-capable plugin with that id is loaded
+     *   (via [getPlugins]) → [ResolverRuntime.resolveAxe]; else null.
+     *
+     * The raw source is re-scored via [scoreConfidence] when it carries a matched
+     * title/artist, then returned ONLY if `!noMatch &&
+     * confidence >= MIN_CONFIDENCE_THRESHOLD` — else null (the same 0.60 floor
+     * the ranked path applies). The iOS layer keeps `pluginManager.ensureInitialized()`
+     * on top (platform lifecycle), not here.
+     */
+    suspend fun resolveSingle(
+        resolverId: String,
+        query: String,
+        targetTitle: String?,
+        targetArtist: String?,
+        album: String?,
+    ): ResolvedSource? {
+        val raw = when {
+            resolverId == "spotify" -> resolveSpotify(query)
+            resolverId in runtime.nativeResolverIds ->
+                runtime.resolveNative(resolverId, query, targetTitle, targetArtist, album)
+            getPlugins().any { it.id == resolverId } ->
+                runtime.resolveAxe(resolverId, query, targetTitle, targetArtist, album)
+            else -> null
+        } ?: return null
+
+        val scored = if (raw.matchedTitle != null || raw.matchedArtist != null) {
+            raw.copy(
+                confidence = scoreConfidence(
+                    targetTitle ?: "",
+                    targetArtist ?: "",
+                    raw.matchedTitle,
+                    raw.matchedArtist,
+                ),
+            )
+        } else {
+            raw
+        }
+        return if (!scored.noMatch && (scored.confidence ?: 0.0) >= ResolverScoring.MIN_CONFIDENCE_THRESHOLD) {
+            scored
+        } else {
+            null
+        }
+    }
 }

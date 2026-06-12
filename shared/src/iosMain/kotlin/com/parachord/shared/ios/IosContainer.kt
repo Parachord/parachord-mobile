@@ -849,11 +849,7 @@ class IosContainer private constructor() {
     val resolverCoordinator: IosResolverCoordinator by lazy {
         IosResolverCoordinator(
             coordinator = sharedResolverCoordinator,
-            runtime = resolverRuntime,
             pluginManager = pluginManager,
-            settingsStore = settingsStore,
-            appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
-            resolveSpotify = resolveSpotify,
         )
     }
 

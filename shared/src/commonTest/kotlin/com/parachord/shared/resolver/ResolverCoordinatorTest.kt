@@ -220,6 +220,80 @@ class ResolverCoordinatorTest {
         assertEquals(emptyList(), coord.resolveRanked("q", "Clover", "Tundra 212"))
     }
 
+    // --- resolveSingle (additive single-resolver re-resolution, #210 Task 6) ---
+
+    @Test
+    fun resolveSingle_spotify_callsSpotifyLambda() = runTest {
+        val runtime = FakeRuntime(nativeResolverIds = setOf("applemusic"))
+        var spotifyAsked = false
+        val coord = coordinator(
+            runtime,
+            spotify = { spotifyAsked = true; source("spotify", "Clover", "Tundra 212") },
+        )
+        val out = coord.resolveSingle("spotify", "Tundra 212 Clover", "Clover", "Tundra 212", null)
+        assertTrue(spotifyAsked)
+        assertNotNull(out)
+        assertEquals("spotify", out.resolver)
+        assertEquals(0.95, out.confidence) // re-scored both-match
+    }
+
+    @Test
+    fun resolveSingle_native_callsResolveNative() = runTest {
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic", "soundcloud", "localfiles"),
+            natives = mapOf("applemusic" to source("applemusic", "Clover", "Tundra 212")),
+        )
+        val coord = coordinator(runtime, spotify = { null })
+        val out = coord.resolveSingle("applemusic", "Tundra 212 Clover", "Clover", "Tundra 212", null)
+        assertEquals(listOf("applemusic"), runtime.askedNative)
+        assertNotNull(out)
+        assertEquals("applemusic", out.resolver)
+        assertEquals(0.95, out.confidence)
+    }
+
+    @Test
+    fun resolveSingle_axe_loaded_callsResolveAxe() = runTest {
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic"),
+            axes = mapOf("bandcamp" to source("bandcamp", "Clover", "Tundra 212")),
+        )
+        val coord = coordinator(
+            runtime,
+            plugins = listOf(plugin("bandcamp")),
+            spotify = { null },
+        )
+        val out = coord.resolveSingle("bandcamp", "Tundra 212 Clover", "Clover", "Tundra 212", null)
+        assertEquals(listOf("bandcamp"), runtime.askedAxe)
+        assertNotNull(out)
+        assertEquals("bandcamp", out.resolver)
+        assertEquals(0.95, out.confidence)
+    }
+
+    @Test
+    fun resolveSingle_axe_notLoaded_returnsNull_neverAsked() = runTest {
+        // bandcamp is not a loaded plugin → must not be asked, must return null.
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic"),
+            axes = mapOf("bandcamp" to source("bandcamp", "Clover", "Tundra 212")),
+        )
+        val coord = coordinator(runtime, plugins = emptyList(), spotify = { null })
+        val out = coord.resolveSingle("bandcamp", "Tundra 212 Clover", "Clover", "Tundra 212", null)
+        assertNull(out)
+        assertFalse("bandcamp" in runtime.askedAxe)
+    }
+
+    @Test
+    fun resolveSingle_belowFloor_singleAxis_returnsNull() = runTest {
+        // soundcloud matches title only (wrong artist) → 0.50 → below the 0.60 floor → null.
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic", "soundcloud", "localfiles"),
+            natives = mapOf("soundcloud" to source("soundcloud", "Clover", "Wrong Band")),
+        )
+        val coord = coordinator(runtime, spotify = { null })
+        val out = coord.resolveSingle("soundcloud", "Tundra 212 Clover", "Clover", "Tundra 212", null)
+        assertNull(out)
+    }
+
     @Test
     fun nonEmptyActive_filtersSpotifyAndAxe_keepsOnlyActive() = runTest {
         // active = [applemusic] only — this is the iOS path (active is always a
