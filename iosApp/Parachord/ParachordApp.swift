@@ -43,6 +43,11 @@ private struct RootGate: View {
                     JsPolyfills.installNativeBridge(to: ctx)
                 }
                 _ = try? await IosContainer.companion.shared.loadPluginsAndList()
+                // Marketplace plugin sync (24h-debounced) so playback-telemetry
+                // plugins like achordion download + hot-reload/register without a
+                // manual Settings trigger (Android parity: MainViewModel.syncIfNeeded).
+                // Fire-and-forget — never blocks the splash.
+                Task { _ = try? await IosContainer.companion.shared.syncPluginsIfNeeded() }
             }()
             // Minimum on-screen time so the splash doesn't flash on a warm start.
             async let floor: () = { _ = try? await Task.sleep(nanoseconds: 900_000_000) }()
