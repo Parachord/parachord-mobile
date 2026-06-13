@@ -226,7 +226,6 @@ fun SettingsScreen(
     val scanProgress by viewModel.scanProgress.collectAsStateWithLifecycle()
     val ticketmasterConnected by viewModel.ticketmasterConnected.collectAsStateWithLifecycle()
     val seatGeekConnected by viewModel.seatGeekConnected.collectAsStateWithLifecycle()
-    val concertLocation by viewModel.concertLocation.collectAsStateWithLifecycle()
 
     Column(modifier = modifier.fillMaxSize()) {
         TopAppBar(
@@ -308,10 +307,6 @@ fun SettingsScreen(
                     onTicketmasterDisconnect = { viewModel.clearTicketmasterApiKey() },
                     onSeatGeekClientIdSubmit = { viewModel.setSeatGeekClientId(it) },
                     onSeatGeekDisconnect = { viewModel.clearSeatGeekClientId() },
-                    concertLocation = concertLocation,
-                    onConcertLocationSelected = { lat, lon, city ->
-                        viewModel.setConcertLocation(lat, lon, city)
-                    },
                 )
                 1 -> GeneralTab(
                     themeMode = themeMode,
@@ -390,8 +385,6 @@ private fun PlugInsTab(
     onBandsintownDisconnect: () -> Unit = {},
     onSongkickApiKeySubmit: (String) -> Unit = {},
     onSongkickDisconnect: () -> Unit = {},
-    concertLocation: com.parachord.android.data.store.ConcertLocation = com.parachord.android.data.store.ConcertLocation(null, null, null, 50),
-    onConcertLocationSelected: (Double, Double, String) -> Unit = { _, _, _ -> },
 ) {
     var selectedPlugin by remember { mutableStateOf<PluginInfo?>(null) }
 
@@ -727,8 +720,6 @@ private fun PlugInsTab(
             onBandsintownDisconnect = { settingsViewModel.clearPluginApiKey("bandsintown") },
             onSongkickApiKeySubmit = { settingsViewModel.savePluginApiKey("songkick", it) },
             onSongkickDisconnect = { settingsViewModel.clearPluginApiKey("songkick") },
-            concertLocation = concertLocation,
-            onConcertLocationSelected = onConcertLocationSelected,
             lovePushEnabled = lovePushEnabled,
             loveBackfillState = loveBackfillState,
             onLovePushToggle = { service, enabled -> settingsViewModel.setLovePushEnabled(service, enabled) },
@@ -991,8 +982,6 @@ private fun PluginConfigSheet(
     onBandsintownDisconnect: () -> Unit = {},
     onSongkickApiKeySubmit: (String) -> Unit = {},
     onSongkickDisconnect: () -> Unit = {},
-    concertLocation: com.parachord.android.data.store.ConcertLocation = com.parachord.android.data.store.ConcertLocation(null, null, null, 50),
-    onConcertLocationSelected: (Double, Double, String) -> Unit = { _, _, _ -> },
     lovePushEnabled: Map<String, Boolean> = emptyMap(),
     loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState =
         com.parachord.android.playback.LovesPushService.BackfillState.Idle,
@@ -1189,8 +1178,6 @@ private fun PluginConfigSheet(
                     devPortalUrl = "https://developer-acct.ticketmaster.com/",
                     onSubmitKey = onTicketmasterApiKeySubmit,
                     onDisconnect = onTicketmasterDisconnect,
-                    concertLocation = concertLocation,
-                    onConcertLocationSelected = onConcertLocationSelected,
                 )
                 "seatgeek" -> ConcertProviderConfig(
                     isConnected = isConnected,
@@ -1200,8 +1187,6 @@ private fun PluginConfigSheet(
                     devPortalUrl = "https://seatgeek.com/account/develop",
                     onSubmitKey = onSeatGeekClientIdSubmit,
                     onDisconnect = onSeatGeekDisconnect,
-                    concertLocation = concertLocation,
-                    onConcertLocationSelected = onConcertLocationSelected,
                 )
                 "bandsintown" -> ConcertProviderConfig(
                     isConnected = isConnected,
@@ -1211,8 +1196,6 @@ private fun PluginConfigSheet(
                     devPortalUrl = "https://artists.bandsintown.com/support/api-installation",
                     onSubmitKey = onBandsintownApiKeySubmit,
                     onDisconnect = onBandsintownDisconnect,
-                    concertLocation = concertLocation,
-                    onConcertLocationSelected = onConcertLocationSelected,
                 )
                 "songkick" -> ConcertProviderConfig(
                     isConnected = isConnected,
@@ -1222,8 +1205,6 @@ private fun PluginConfigSheet(
                     devPortalUrl = "https://www.songkick.com/developer",
                     onSubmitKey = onSongkickApiKeySubmit,
                     onDisconnect = onSongkickDisconnect,
-                    concertLocation = concertLocation,
-                    onConcertLocationSelected = onConcertLocationSelected,
                 )
                 // Generic .axe plugin toggle — no special config UI
                 else -> ToggleableMetaConfig(
@@ -1785,34 +1766,6 @@ private fun LocalFilesConfig(
 
 // ── Concert Provider Config ────────────────────────────────────────
 
-private data class ConcertCity(val name: String, val lat: Double, val lon: Double)
-private val CONCERT_CITIES = listOf(
-    ConcertCity("New York", 40.7128, -74.0060),
-    ConcertCity("Los Angeles", 34.0522, -118.2437),
-    ConcertCity("Chicago", 41.8781, -87.6298),
-    ConcertCity("London", 51.5074, -0.1278),
-    ConcertCity("Toronto", 43.6532, -79.3832),
-    ConcertCity("San Francisco", 37.7749, -122.4194),
-    ConcertCity("Austin", 30.2672, -97.7431),
-    ConcertCity("Nashville", 36.1627, -86.7816),
-    ConcertCity("Berlin", 52.5200, 13.4050),
-    ConcertCity("Tokyo", 35.6762, 139.6503),
-    ConcertCity("Sydney", -33.8688, 151.2093),
-    ConcertCity("Seattle", 47.6062, -122.3321),
-    ConcertCity("Atlanta", 33.7490, -84.3880),
-    ConcertCity("Miami", 25.7617, -80.1918),
-    ConcertCity("Denver", 39.7392, -104.9903),
-    ConcertCity("Portland", 45.5152, -122.6784),
-    ConcertCity("Boston", 42.3601, -71.0589),
-    ConcertCity("Detroit", 42.3314, -83.0458),
-    ConcertCity("Minneapolis", 44.9778, -93.2650),
-    ConcertCity("Philadelphia", 39.9526, -75.1652),
-    ConcertCity("Phoenix", 33.4484, -112.0740),
-    ConcertCity("Paris", 48.8566, 2.3522),
-    ConcertCity("Amsterdam", 52.3676, 4.9041),
-    ConcertCity("Melbourne", -37.8136, 144.9631),
-    ConcertCity("Manchester", 53.4808, -2.2426),
-)
 
 @Composable
 private fun ConcertProviderConfig(
@@ -1823,13 +1776,9 @@ private fun ConcertProviderConfig(
     devPortalUrl: String,
     onSubmitKey: (String) -> Unit,
     onDisconnect: () -> Unit,
-    concertLocation: com.parachord.android.data.store.ConcertLocation,
-    onConcertLocationSelected: (Double, Double, String) -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
     var apiKeyInput by remember { mutableStateOf("") }
-    var citySearch by remember { mutableStateOf("") }
-    var showCityPicker by remember { mutableStateOf(false) }
 
     Spacer(modifier = Modifier.height(16.dp))
     HorizontalDivider()
@@ -1906,111 +1855,6 @@ private fun ConcertProviderConfig(
         }
     }
 
-    // Location section
-    Spacer(modifier = Modifier.height(16.dp))
-    HorizontalDivider()
-    Spacer(modifier = Modifier.height(16.dp))
-
-    Text(
-        text = "Location",
-        style = MaterialTheme.typography.bodyMedium,
-        fontWeight = FontWeight.Medium,
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-
-    val concertCity = concertLocation.city
-    if (concertCity != null) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                Icons.Filled.LocationOn,
-                contentDescription = null,
-                tint = Color(0xFF10C9B4),
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = concertCity,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = { showCityPicker = !showCityPicker }) {
-                Text("Change")
-            }
-        }
-    } else {
-        Text(
-            text = "Set your location to discover nearby concerts",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        showCityPicker = true
-    }
-
-    if (showCityPicker) {
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // City search field
-        OutlinedTextField(
-            value = citySearch,
-            onValueChange = { citySearch = it },
-            label = { Text("Search cities") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            leadingIcon = {
-                Icon(
-                    Icons.Filled.Search,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-            },
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-
-        val filtered = remember(citySearch) {
-            if (citySearch.isBlank()) CONCERT_CITIES.take(8)
-            else CONCERT_CITIES.filter { it.name.contains(citySearch, ignoreCase = true) }.take(8)
-        }
-
-        Column {
-            filtered.forEach { city ->
-                val isSelected = city.name == concertLocation.city
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .then(
-                            if (isSelected) Modifier.background(
-                                Color(0xFF10C9B4).copy(alpha = 0.1f),
-                            ) else Modifier,
-                        )
-                        .clickable {
-                            onConcertLocationSelected(city.lat, city.lon, city.name)
-                            showCityPicker = false
-                            citySearch = ""
-                        }
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        Icons.Filled.LocationOn,
-                        contentDescription = null,
-                        tint = if (isSelected) Color(0xFF10C9B4)
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = city.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isSelected) Color(0xFF10C9B4)
-                        else MaterialTheme.colorScheme.onSurface,
-                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                    )
-                }
-            }
-        }
-    }
 }
 
 // ── Last.fm Config ─────────────────────────────────────────────────

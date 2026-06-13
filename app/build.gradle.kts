@@ -177,6 +177,9 @@ dependencies {
     implementation(libs.mlkit.face.detection)
     implementation(libs.kotlinx.coroutines.play.services)
 
+    // Google Play Services Location (GPS device location for concerts)
+    implementation(libs.play.services.location)
+
     // Testing
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

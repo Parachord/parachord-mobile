@@ -587,6 +587,9 @@ val androidModule = module {
     }
     single { com.parachord.android.enrichment.CrossResolverEnrichmentScheduler(androidContext()) }
 
+    // GPS device-location helper (FusedLocationProvider) for concert detection.
+    single { com.parachord.android.data.location.DeviceLocationProvider(androidContext()) }
+
     // ── Repositories ─────────────────────────────────────────────────
 
     // LibraryRepository — shared. MbidEnrichmentService is also shared,

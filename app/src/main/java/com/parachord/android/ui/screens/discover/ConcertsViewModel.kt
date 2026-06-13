@@ -11,13 +11,17 @@ import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.android.data.db.dao.ArtistDao
 import com.parachord.android.data.db.dao.TrackDao
 import com.parachord.android.data.db.dao.AlbumDao
+import com.parachord.android.data.location.DeviceLocationProvider
 import com.parachord.android.data.repository.ConcertArtist
 import com.parachord.android.data.repository.ConcertEvent
 import com.parachord.android.data.repository.ConcertsRepository
 import com.parachord.shared.model.Resource
 import com.parachord.android.data.store.SettingsStore
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -26,6 +30,7 @@ class ConcertsViewModel constructor(
     private val concertsRepository: ConcertsRepository,
     private val settingsStore: SettingsStore,
     private val geoLocationClient: GeoLocationClient,
+    private val deviceLocationProvider: DeviceLocationProvider,
     private val artistDao: ArtistDao,
     private val trackDao: TrackDao,
     private val albumDao: AlbumDao,
@@ -61,6 +66,20 @@ class ConcertsViewModel constructor(
     private val _locationSuggestions = MutableStateFlow<List<GeoLocation>>(emptyList())
     val locationSuggestions: StateFlow<List<GeoLocation>> = _locationSuggestions.asStateFlow()
 
+    // One-shot signal: a geoIP fallback produced a CONFIRMABLE suggestion (coarse
+    // on cellular — not trustworthy enough to auto-commit, unlike a GPS fix). The
+    // screen observes this to open the location picker so the user can tap the
+    // suggestion to confirm. Mirrors iOS #199's geoIP-confirm UX.
+    private val _showGeoIpConfirm = MutableStateFlow(false)
+    val showGeoIpConfirm: StateFlow<Boolean> = _showGeoIpConfirm.asStateFlow()
+
+    // One-shot signal that a location was just COMMITTED (GPS detect, manual pick,
+    // or a confirmed geoIP suggestion). The screen observes this to close the
+    // location picker — otherwise a GPS-commit-via-Detect updates the bar behind
+    // an open modal that never closes.
+    private val _locationCommitted = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val locationCommitted: SharedFlow<Unit> = _locationCommitted.asSharedFlow()
+
     private var loadJob: Job? = null
     private var searchJob: Job? = null
 
@@ -72,30 +91,78 @@ class ConcertsViewModel constructor(
             if (loc.latitude != null && loc.longitude != null) {
                 _hasLocation.value = true
                 loadEvents(forceRefresh = false)
-            } else {
-                // Auto-detect location via GeoIP (matching desktop behavior)
+            } else if (deviceLocationProvider.hasLocationPermission()) {
+                // No saved location. Auto-detect on cold launch ONLY when we can do
+                // it silently AND trustworthily — i.e. GPS permission is already
+                // granted (→ commit). When it isn't, do NOTHING here: the passive
+                // "Detect my location" prompt stands. We never auto-open a dialog or
+                // silently commit coarse geoIP on a plain browse (iOS #199 parity —
+                // iOS never runs detect from init).
                 detectLocation()
             }
         }
     }
 
+    /** True when COARSE location permission has already been granted. */
+    fun hasLocationPermission(): Boolean = deviceLocationProvider.hasLocationPermission()
+
     /**
-     * Auto-detect location via GeoIP services (matching desktop's fallback chain).
+     * Detect the user's concert location. GPS (FusedLocationProvider) is
+     * trustworthy → COMMIT directly. geoIP is coarse on cellular → surface as a
+     * CONFIRMABLE suggestion (the user taps it to commit). Mirrors desktop's
+     * geoIP fallback chain and the iOS #199 GPS-first flow.
+     *
+     * The UI should request COARSE permission before calling this; we still
+     * gracefully fall back to geoIP if permission isn't granted (GPS returns null).
+     *
+     * @param userInitiated true when the user explicitly tapped "Detect" — only
+     *   then do we surface the coarse geoIP fallback as a confirmable suggestion
+     *   (which opens the picker). On the cold-launch auto-detect (false), the
+     *   geoIP fallback is suppressed entirely so a plain browse never pops a
+     *   dialog or fetches geoIP — only a trustworthy GPS fix can auto-commit.
      */
-    fun detectLocation() {
+    fun detectLocation(userInitiated: Boolean = false) {
         viewModelScope.launch {
             _isDetectingLocation.value = true
             try {
+                // 1. GPS first (city-level, single fix, ~10s cap). Never throws.
+                val gps = deviceLocationProvider.getCurrentLocation()
+                if (gps != null) {
+                    val (lat, lon) = gps
+                    val name = try {
+                        geoLocationClient.reverseGeocode(lat, lon)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Reverse geocode failed", e)
+                        null
+                    } ?: "Current location"
+                    // GPS is trustworthy — commit immediately, clear suggestions.
+                    _locationSuggestions.value = emptyList()
+                    setLocation(lat, lon, name)
+                    return@launch
+                }
+
+                // 2. GPS denied/failed → geoIP fallback, but ONLY when the user
+                //    explicitly asked. Coarse on cellular, so never silently commit
+                //    — surface as a single confirmable suggestion the user taps in
+                //    the picker (parity with iOS #199). Suppressed on cold-launch
+                //    auto-detect so a browse doesn't pop the picker or hit geoIP.
+                if (!userInitiated) return@launch
                 val geo = geoLocationClient.detectLocationByIp()
                 if (geo != null) {
-                    setLocation(geo.lat, geo.lng, geo.displayName)
+                    _locationSuggestions.value = listOf(geo)
+                    _showGeoIpConfirm.value = true
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "GeoIP detection failed", e)
+                Log.w(TAG, "Location detection failed", e)
             } finally {
                 _isDetectingLocation.value = false
             }
         }
+    }
+
+    /** Consume the one-shot geoIP-confirm signal after the screen reacts to it. */
+    fun consumeGeoIpConfirm() {
+        _showGeoIpConfirm.value = false
     }
 
     /**
@@ -119,6 +186,7 @@ class ConcertsViewModel constructor(
 
     fun clearLocationSuggestions() {
         _locationSuggestions.value = emptyList()
+        _showGeoIpConfirm.value = false
     }
 
     fun setLocation(lat: Double, lon: Double, city: String) {
@@ -127,6 +195,7 @@ class ConcertsViewModel constructor(
             settingsStore.setConcertLocation(lat, lon, city, radius)
             _locationCity.value = city
             _hasLocation.value = true
+            _locationCommitted.tryEmit(Unit)   // close the picker on any commit
             loadEvents(forceRefresh = true)
         }
     }

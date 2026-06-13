@@ -542,6 +542,10 @@ final class ArtistDetailModel {
     var topTracks: [TrackSearchResult] = []
     var topEntities: [Track] = []
     var albums: [AlbumSearchResult] = []
+    /// Upcoming tour dates (unfiltered — full schedule) for the On Tour tab (#201).
+    var tourDates: [ConcertEvent] = []
+    /// True when the artist has any upcoming dates → the On Tour tab appears (last).
+    var isOnTour = false
     var isLoading = false
     var loaded = false
     /// True when the discography fetch FAILED (a provider — typically MusicBrainz
@@ -561,6 +565,7 @@ final class ArtistDetailModel {
             albums = c.albums; albumsError = c.albumsError
             loaded = true
             ArtistImageCache.shared.fetch(name)
+            loadTourDates()   // tour dates aren't cached — always (re)fetch (#201)
             // Stale-while-revalidate: refresh quietly in the background past the
             // TTL — updates in place, no skeleton.
             if Date().timeIntervalSince(c.ts) > ttl { Task { await refresh() } }
@@ -571,9 +576,20 @@ final class ArtistDetailModel {
         ArtistImageCache.shared.fetch(name)   // header image (#187)
         topTracks = (try? await container.getArtistTopTracks(artistName: name)) ?? []
         topEntities = topTracks.map { pcTrack(from: $0) }
+        loadTourDates()   // fire-and-forget so it doesn't delay the page (#201)
         await loadDiscography()
         isLoading = false
         loaded = true
+    }
+
+    /// Fetch the unfiltered tour schedule and toggle the On Tour tab on/off.
+    /// Non-blocking — runs in its own Task so the rest of the page isn't delayed.
+    private func loadTourDates() {
+        Task {
+            let ev = (try? await container.getArtistEvents(artistName: name)) ?? []
+            tourDates = ev
+            isOnTour = !ev.isEmpty
+        }
     }
 
     private func saveToCache() {
@@ -590,6 +606,7 @@ final class ArtistDetailModel {
         if let fresh = try? await container.getArtistAlbums(artistName: name), !fresh.isEmpty {
             albums = sortedByYearDesc(fresh); albumsError = false
         }
+        loadTourDates()   // refresh tour dates too (#201)
         saveToCache()
     }
 
@@ -637,9 +654,13 @@ final class ArtistDetailModel {
     }
 }
 
-private enum ArtistTab: String, CaseIterable {
+/// Not `private` — the Now Playing on-tour dot (NowPlayingView) deep-links to
+/// `ArtistScreen(artistName:initialTab: .onTour)`, so the enum must be visible
+/// across the module (#201).
+enum ArtistTab: String, CaseIterable {
     case discography = "Discography", topTracks = "Top Tracks"
     case biography = "Biography", related = "Related Artists"
+    case onTour = "On Tour"
 }
 
 /// Design-matched Artist screen (screens.jsx ArtistScreen): 360px gradient
@@ -647,7 +668,7 @@ private enum ArtistTab: String, CaseIterable {
 /// grid / Top Tracks / Biography / Related Artists).
 struct ArtistScreen: View {
     @State private var model: ArtistDetailModel
-    @State private var tab: ArtistTab = .discography
+    @State private var tab: ArtistTab
     @State private var discoFilter = "all"
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
@@ -672,7 +693,12 @@ struct ArtistScreen: View {
         return nil
     }
 
-    init(artistName: String) { _model = State(initialValue: ArtistDetailModel(name: artistName)) }
+    /// `initialTab` lets the Now Playing on-tour dot deep-link straight to the
+    /// On Tour tab (#201). Defaults to Discography for every existing caller.
+    init(artistName: String, initialTab: ArtistTab = .discography) {
+        _model = State(initialValue: ArtistDetailModel(name: artistName))
+        _tab = State(initialValue: initialTab)
+    }
 
     // ART_COLOR (screens.jsx): hash(name) % 5 dark gradient pairs.
     private static let palettes: [(UInt32, UInt32)] = [
@@ -777,10 +803,18 @@ struct ArtistScreen: View {
 
     // MARK: Tabs
 
+    /// Tab order matches Android: the four base tabs, with On Tour appended LAST
+    /// and only when the artist has upcoming dates (ArtistScreen.kt buildList).
+    private var visibleTabs: [ArtistTab] {
+        var tabs: [ArtistTab] = [.discography, .topTracks, .biography, .related]
+        if model.isOnTour { tabs.append(.onTour) }
+        return tabs
+    }
+
     private var tabBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 24) {
-                ForEach(ArtistTab.allCases, id: \.self) { t in
+                ForEach(visibleTabs, id: \.self) { t in
                     Button { withAnimation(.easeOut(duration: 0.2)) { tab = t } } label: {
                         VStack(spacing: 7) {
                             Text(t.rawValue.uppercased()).font(.system(size: 13, weight: .semibold)).tracking(1)
@@ -805,6 +839,7 @@ struct ArtistScreen: View {
         case .topTracks:   topTracksTab
         case .biography:   biographyTab
         case .related:     relatedTab
+        case .onTour:      onTourTab
         }
     }
 
@@ -1085,6 +1120,91 @@ struct ArtistScreen: View {
     private func nonPlaceholderArt(_ url: String?) -> String? {
         guard let u = url, !u.isEmpty, !u.contains("2a96cbd8b46e442fc41c2b86b821562f") else { return nil }
         return u
+    }
+
+    // MARK: On Tour (#201)
+
+    // Mirrors Android's OnTourTab / TourDateRow (ArtistScreen.kt): a list of
+    // upcoming dates — teal MMM/day column + name + venue + city/time + a ticket
+    // link. UNFILTERED by location (the full schedule). On Tour appears only when
+    // the artist has dates, and is appended last (see `visibleTabs`).
+    private var onTourTab: some View {
+        Group {
+            if model.tourDates.isEmpty {
+                Text("No upcoming tour dates").font(.system(size: 14)).foregroundStyle(PC.fg3)
+                    .frame(maxWidth: .infinity).padding(40)
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.tourDates, id: \.id) { e in
+                        tourDateRow(e)
+                        Divider().padding(.leading, 84)
+                    }
+                }
+            }
+        }
+    }
+
+    private func tourDateRow(_ e: ConcertEvent) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Teal date column (Android: month abbrev + day in #10C9B4 / onSurface).
+            VStack(spacing: 1) {
+                Text(artistTourFmt(e.date, "MMM").uppercased())
+                    .font(.system(size: 11, weight: .semibold)).tracking(0.5)
+                    .foregroundStyle(PC.onTour)
+                Text(artistTourFmt(e.date, "d"))
+                    .font(.system(size: 22, weight: .bold)).foregroundStyle(PC.fg1)
+            }
+            .frame(width: 56)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(e.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
+                    .lineLimit(2)
+                if let v = e.venueName, !v.isEmpty {
+                    Text(v).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                }
+                // Android parity (ConcertsRepository.locationString): city, state,
+                // country. displayLocation (when the repo set it) already carries
+                // the full string; the fallback now includes country too.
+                let loc = e.displayLocation ?? [e.city, e.state, e.country].compactMap { $0 }.joined(separator: ", ")
+                if !loc.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mappin").font(.system(size: 10)).foregroundStyle(PC.fg3)
+                        Text(loc).font(.system(size: 11)).foregroundStyle(PC.fg3).lineLimit(1)
+                        let t12 = artistTourTime(e.time)
+                        if !t12.isEmpty {
+                            Text("· \(t12)").font(.system(size: 11)).foregroundStyle(PC.fg3)
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+            if let url = e.ticketUrl, let u = URL(string: url) {
+                Link(destination: u) {
+                    Image(systemName: "arrow.up.right.square").font(.system(size: 18)).foregroundStyle(PC.onTour)
+                }
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+    }
+
+    /// 24h "HH:mm" → 12h "h:mm a" (Android parity: ConcertsRepository.displayTime).
+    /// Returns "" for nil/blank/unparseable input so the row just omits the time.
+    private func artistTourTime(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "" }
+        let inFmt = DateFormatter(); inFmt.locale = Locale(identifier: "en_US_POSIX"); inFmt.dateFormat = "HH:mm"
+        guard let d = inFmt.date(from: raw) else { return "" }
+        let out = DateFormatter(); out.locale = Locale(identifier: "en_US"); out.dateFormat = "h:mm a"
+        return out.string(from: d)
+    }
+
+    /// Format an ISO `yyyy-MM-dd` date string with `pattern` (e.g. "MMM", "d").
+    private func artistTourFmt(_ raw: String?, _ pattern: String) -> String {
+        guard let raw, raw.count >= 10 else { return "" }
+        let inFmt = DateFormatter()
+        inFmt.dateFormat = "yyyy-MM-dd"; inFmt.locale = Locale(identifier: "en_US_POSIX")
+        guard let d = inFmt.date(from: String(raw.prefix(10))) else { return "" }
+        let outFmt = DateFormatter()
+        outFmt.dateFormat = pattern; outFmt.locale = Locale(identifier: "en_US")
+        return outFmt.string(from: d)
     }
 }
 

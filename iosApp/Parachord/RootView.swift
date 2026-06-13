@@ -84,6 +84,13 @@ struct ContentView: View {
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
                         tab = .home
                         homePendingRoute = .artist(name)
+                    },
+                    // On-tour dot (#201): same path as onArtist, but deep-links
+                    // straight to the artist's On Tour tab.
+                    onArtistOnTour: { name in
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                        tab = .home
+                        homePendingRoute = .artistOnTour(name)
                     }
                 )
                 // NOTE: do NOT add .ignoresSafeArea() here — the content must

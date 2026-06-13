@@ -36,6 +36,9 @@ coil = "2.7.0"
 # ML Kit (face detection for artist image centering)
 mlkit-face = "16.1.7"
 
+# Google Play Services Location (FusedLocationProvider — GPS device location)
+play-services-location = "21.3.0"
+
 # Testing
 junit = "4.13.2"
 mockk = "1.13.13"
@@ -124,6 +127,9 @@ kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "ko
 
 # ML Kit
 mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkit-face" }
+
+# Google Play Services Location (FusedLocationProvider)
+play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "play-services-location" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

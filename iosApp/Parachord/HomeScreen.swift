@@ -14,6 +14,8 @@ import Shared
 enum PCRoute: Hashable {
     case recommendations, pop, critical, fresh, concerts, history
     case artist(String)
+    /// Artist page opened straight to the On Tour tab (Now Playing on-tour dot, #201).
+    case artistOnTour(String)
     case album(title: String, artist: String)
     case playlist(id: String, title: String)
 }
@@ -33,6 +35,7 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .concerts:                    ConcertsScreen()
     case .history:                     HistoryScreen()
     case .artist(let name):            ArtistScreen(artistName: name)
+    case .artistOnTour(let name):      ArtistScreen(artistName: name, initialTab: .onTour)
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
     }

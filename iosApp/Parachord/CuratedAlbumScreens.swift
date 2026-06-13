@@ -442,17 +442,59 @@ func freshDate(_ raw: String?) -> (text: String, upcoming: Bool)? {
 final class ConcertsModel {
     static let shared = ConcertsModel()
     private let container = IosContainer.companion.shared
+    private var store: SettingsStore { container.settingsStore }
     private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
     private var sub: Cancellable?
     var events: [ConcertEvent] = []
     var isLoading = false
     var loaded = false
 
+    // ── Concert location (parity with Android's ConcertsViewModel #201) ──
+    // Location lives on the Concerts PAGE now (was duplicated in each concert
+    // plugin's Settings sheet). The picker (GPS detect / Nominatim typeahead /
+    // radius) is driven from here.
+    static let radiusOptions = [10, 25, 50, 100, 200]
+    /// Display city of the committed location (nil/empty = unset).
+    var concertCity = ""
+    /// Saved radius in miles (default 50).
+    var concertRadius = 50
+    /// Nominatim typeahead results AND the geoIP "confirm me" suggestion.
+    var locationSuggestions: [GeoLocation] = []
+    /// Spinner state while GPS/geoIP detection runs.
+    var isDetectingLocation = false
+    /// Bound to the search TextField in the picker sheet.
+    var locationQuery = ""
+    /// Drives the location picker sheet's presentation (the screen binds to it).
+    var showLocationPicker = false
+    /// CoreLocation one-shot GPS helper (lazy — constructed on first detect).
+    @ObservationIgnored private lazy var locationManager = IosLocationManager()
+    /// Debounce handle for the typeahead search.
+    @ObservationIgnored private var locationSearchTask: Task<Void, Never>?
+    /// True once the initial location load has run (so `load()` reads the store once).
+    @ObservationIgnored private var locationLoaded = false
+
+    var hasLocation: Bool { !concertCity.isEmpty }
+
     // Watch the shared concerts flow (builds the artist seed, then streams the
     // ConcertsRepository's cached-first + fresh events). The repo owns persistence
     // — no iOS-side cache fighting it (architecture realignment; fixes the cache bug).
     func load() async {
+        // Load the saved location once so the bar + radius render correctly.
+        if !locationLoaded {
+            locationLoaded = true
+            let loc = try? await store.getConcertLocation()
+            concertCity = loc?.city ?? ""
+            concertRadius = Int(loc?.radiusMiles ?? 50)
+        }
         guard sub == nil else { return }
+        subscribe()
+    }
+
+    /// (Re)subscribe to the concerts flow. `concertsFlow()` reads
+    /// `getConcertLocation()` at build time, so after a location/radius commit we
+    /// cancel + rebuild the flow to refresh events for the new location (mirrors
+    /// Android's `loadEvents(forceRefresh = true)`).
+    private func subscribe() {
         isLoading = true
         sub = watcher.watch(flow: container.concertsFlow()) { [weak self] v in
             guard let self else { return }
@@ -462,6 +504,95 @@ final class ConcertsModel {
             self.isLoading = false
             self.loaded = true
         }
+    }
+
+    /// Re-arm the concerts flow for a freshly-committed location/radius.
+    private func reloadEvents() {
+        sub?.cancel(); sub = nil
+        loaded = false
+        events = []
+        subscribe()
+    }
+
+    // ── Location detection (#199 parity): GPS → geoIP → typeahead ────────
+
+    /// Detect the user's concert location. GPS is trustworthy → COMMIT directly.
+    /// geoIP is coarse on cellular → surface as a CONFIRMABLE suggestion (the
+    /// user taps it to commit). Mirrors desktop/Android, adding GPS on iOS.
+    func detectLocation() {
+        guard !isDetectingLocation else { return }
+        isDetectingLocation = true
+        Task { @MainActor in
+            defer { isDetectingLocation = false }
+
+            // 1. Try GPS first (CoreLocation). City-level, single fix, ~10s cap.
+            if let coords = await locationManager.detectViaGPS() {
+                let name = (try? await container.reverseGeocode(lat: coords.lat, lng: coords.lon))
+                    ?? "Current location"
+                // GPS is trustworthy — commit immediately, clear any suggestions.
+                locationSuggestions = []
+                commitLocation(name, coords.lat, coords.lon)
+                return
+            }
+
+            // 2. GPS denied/failed → geoIP fallback. Coarse on cellular, so do
+            //    NOT silently commit — surface as a single confirmable suggestion.
+            if let geo = try? await container.detectLocationByIp() {
+                locationSuggestions = [geo]
+            }
+        }
+    }
+
+    /// Debounced Nominatim typeahead. ≥2 chars searches; empty clears.
+    func searchLocation(_ query: String) {
+        locationSearchTask?.cancel()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2 else {
+            locationSuggestions = []
+            return
+        }
+        locationSearchTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)  // 300ms debounce
+            if Task.isCancelled { return }
+            let results = (try? await container.searchLocations(query: trimmed)) ?? []
+            if Task.isCancelled { return }
+            locationSuggestions = results
+        }
+    }
+
+    /// Commit a chosen location (typeahead row OR the geoIP confirm suggestion).
+    func pickLocation(_ g: GeoLocation) {
+        locationSuggestions = []
+        locationQuery = ""
+        commitLocation(g.displayName, g.lat, g.lng)
+    }
+
+    /// Persist + apply a committed location: closes the picker (close-on-commit
+    /// parity), persists to the store, and re-arms the concerts flow.
+    private func commitLocation(_ city: String, _ lat: Double, _ lon: Double) {
+        concertCity = city
+        showLocationPicker = false   // close-on-commit (GPS / pick / confirmed geoIP)
+        let radius = Int32(concertRadius)
+        Task {
+            try? await store.setConcertLocation(lat: lat, lon: lon, city: city, radiusMiles: radius)
+            await MainActor.run { self.reloadEvents() }
+        }
+    }
+
+    /// Change the search radius — persist + reload events for the new radius.
+    func setConcertRadius(_ r: Int) {
+        concertRadius = r
+        let radius = Int32(r)
+        Task {
+            try? await store.setConcertRadius(radiusMiles: radius)
+            await MainActor.run { self.reloadEvents() }
+        }
+    }
+
+    func clearLocationSuggestions() {
+        locationSuggestions = []
+        locationQuery = ""
+        locationSearchTask?.cancel()
     }
 }
 
@@ -495,6 +626,14 @@ struct ConcertsScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             PCTopBar(title: "Concerts", leading: .back, onLeading: { dismiss() })
+
+            // Location bar — tap to open the picker. "Near {city} · {radius}mi"
+            // when set, else "Set your location" (parity with Android's bar).
+            locationBar
+
+            // Radius chips appear once a location is set (Android parity).
+            if model.hasLocation { radiusChips }
+
             ScrollView {
                 // Banner renders immediately with the title — never gated behind
                 // the content load.
@@ -529,6 +668,54 @@ struct ConcertsScreen: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
+        .sheet(isPresented: $model.showLocationPicker, onDismiss: { model.clearLocationSuggestions() }) {
+            ConcertLocationPicker(model: model)
+        }
+    }
+
+    // MARK: - Location bar + radius chips
+
+    private var locationBar: some View {
+        Button { model.showLocationPicker = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "mappin.circle.fill").font(.system(size: 18)).foregroundStyle(PC.onTour)
+                Text(model.hasLocation ? model.concertCity : "Set your location")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(model.hasLocation ? PC.fg1 : PC.fg2)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if model.isDetectingLocation {
+                    ProgressView().controlSize(.small).tint(PC.onTour)
+                } else {
+                    Text("\(model.concertRadius)mi").font(.system(size: 13)).foregroundStyle(PC.fg2)
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var radiusChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(ConcertsModel.radiusOptions, id: \.self) { r in
+                    let selected = model.concertRadius == r
+                    Text("\(r)mi")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(selected ? PC.onTour : PC.fg2)
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .background(
+                            Capsule().fill(selected ? PC.onTour.opacity(0.15) : PC.bgInset)
+                        )
+                        .overlay(
+                            Capsule().stroke(selected ? PC.onTour.opacity(0.4) : PC.border, lineWidth: 1)
+                        )
+                        .onTapGesture { model.setConcertRadius(r) }
+                }
+            }
+            .padding(.horizontal, 20).padding(.bottom, 8)
+        }
     }
 
     private func eventRow(_ e: ConcertEvent) -> some View {
@@ -571,5 +758,113 @@ struct ConcertsScreen: View {
                 placeholder: { PCArtwork(name: seed, size: 56, radius: 8) }
                 .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else { PCArtwork(name: seed, size: 56, radius: 8) }
+    }
+}
+
+// MARK: - Concert location picker (#201)
+//
+// The redesigned picker shown from the Concerts page (was a per-plugin Settings
+// section). Mirrors Android's `LocationSearchDialog`: a prominent tonal "Use my
+// current location" button with inline spinner, an "or search" divider, a
+// bordered rounded search field, and a scrollable suggestion list. GPS commits
+// directly; geoIP surfaces below as a confirmable suggestion. Closing/committing
+// is owned by ConcertsModel (close-on-commit parity with Android).
+private struct ConcertLocationPicker: View {
+    @Bindable var model: ConcertsModel
+    @Environment(\.dismiss) private var dismiss
+
+    /// Binding that fires the debounced typeahead as the user types.
+    private var queryBinding: Binding<String> {
+        Binding(get: { model.locationQuery },
+                set: { model.locationQuery = $0; model.searchLocation($0) })
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // "Currently: {city}" header when a location is set.
+                    if model.hasLocation {
+                        HStack(spacing: 6) {
+                            Image(systemName: "mappin.circle.fill").font(.system(size: 14)).foregroundStyle(PC.onTour)
+                            Text("Currently: \(model.concertCity)")
+                                .font(.system(size: 13)).foregroundStyle(PC.fg2)
+                        }
+                    }
+
+                    // Primary action — use current location (GPS commits; geoIP
+                    // surfaces below as a confirmable suggestion).
+                    Button { model.detectLocation() } label: {
+                        HStack(spacing: 8) {
+                            if model.isDetectingLocation {
+                                ProgressView().controlSize(.small).tint(PC.onTour)
+                            } else {
+                                Image(systemName: "location.fill").font(.system(size: 16))
+                            }
+                            Text(model.isDetectingLocation ? "Detecting…" : "Use my current location")
+                                .font(.system(size: 15, weight: .medium))
+                        }
+                        .foregroundStyle(PC.onTour)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(PC.onTour.opacity(0.14)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.isDetectingLocation)
+
+                    // "or search" divider.
+                    HStack(spacing: 8) {
+                        Rectangle().fill(PC.border).frame(height: 1)
+                        Text("or search").font(.system(size: 12)).foregroundStyle(PC.fg2).fixedSize()
+                        Rectangle().fill(PC.border).frame(height: 1)
+                    }
+
+                    // Bordered rounded search field (Nominatim typeahead).
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").font(.system(size: 16)).foregroundStyle(PC.fg2)
+                        TextField("Search any city…", text: queryBinding)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .submitLabel(.search)
+                            .font(.system(size: 15))
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 13)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(PC.bgInset)
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(PC.border, lineWidth: 1))
+                    )
+
+                    // Suggestion list (typeahead results + the geoIP confirm row).
+                    if !model.locationSuggestions.isEmpty {
+                        VStack(spacing: 2) {
+                            ForEach(Array(model.locationSuggestions.enumerated()), id: \.offset) { _, g in
+                                Button { model.pickLocation(g) } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "mappin.and.ellipse").font(.system(size: 16))
+                                            .foregroundStyle(PC.onTour.opacity(0.85))
+                                        Text(g.displayName).font(.system(size: 15)).foregroundStyle(PC.fg1)
+                                            .lineLimit(2).multilineTextAlignment(.leading)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.horizontal, 12).padding(.vertical, 12)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+            .background(PC.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Set concert location")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }.tint(PC.accent)
+                }
+            }
+        }
     }
 }

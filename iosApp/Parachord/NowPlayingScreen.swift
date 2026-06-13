@@ -34,8 +34,15 @@ struct PCNowPlaying: View {
     /// Navigate to the tapped artist's page. The shell closes Now Playing and
     /// pushes ArtistScreen on the Home stack.
     var onArtist: (String) -> Void = { _ in }
+    /// Same nav path as `onArtist`, but opens the artist's On Tour tab (#201).
+    var onArtistOnTour: (String) -> Void = { _ in }
 
     @State private var showQueue = false
+    /// Whether the currently-playing artist has upcoming shows near the user's
+    /// saved concert location (#201). Drives the teal on-tour dot. Recomputed on
+    /// every track/artist change; reset to false while the check is in flight so
+    /// a stale dot never lingers from the previous artist (Android parity).
+    @State private var isOnTour = false
     @State private var dragY: CGFloat = 0
     /// Observed so the hero art re-renders the moment the current track resolves
     /// and its playing-source artwork (Spotify / Apple Music / SoundCloud) lands.
@@ -100,6 +107,15 @@ struct PCNowPlaying: View {
                     ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: 0)
             }
         }
+        // On-tour check for the current artist (#201). `.task(id:)` cancels the
+        // previous check when the artist changes; reset to false first so the dot
+        // doesn't linger from the last track while the new check runs.
+        .task(id: track?.artist) {
+            isOnTour = false
+            guard let a = track?.artist, !a.isEmpty else { return }
+            let result = (try? await IosContainer.companion.shared.checkOnTour(artistName: a))?.boolValue ?? false
+            if !Task.isCancelled { isOnTour = result }
+        }
         .offset(y: max(0, dragY))
         .gesture(
             DragGesture()
@@ -152,13 +168,20 @@ struct PCNowPlaying: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(track?.title ?? "—").font(.system(size: 22, weight: .bold)).foregroundStyle(.white).lineLimit(2)
-                Button {
-                    if let a = track?.artist, !a.isEmpty { onArtist(a) }
-                } label: {
-                    Text(track?.artist ?? "—").font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accentSoft)
+                HStack(spacing: 6) {
+                    Button {
+                        if let a = track?.artist, !a.isEmpty { onArtist(a) }
+                    } label: {
+                        Text(track?.artist ?? "—").font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accentSoft)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled((track?.artist ?? "").isEmpty)
+                    // Teal on-tour dot (#201) — tapping opens the On Tour tab.
+                    if isOnTour, let a = track?.artist, !a.isEmpty {
+                        Circle().fill(PC.onTour).frame(width: 8, height: 8)
+                            .onTapGesture { onArtistOnTour(a) }
+                    }
                 }
-                .buttonStyle(.plain)
-                .disabled((track?.artist ?? "").isEmpty)
                 if let album = track?.album, !album.isEmpty {
                     Text("From \(album)").font(.system(size: 13)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                 }
