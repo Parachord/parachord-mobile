@@ -26,6 +26,14 @@ final class IosLocationManager: NSObject, CLLocationManagerDelegate {
         manager.desiredAccuracy = kCLLocationAccuracyReduced
     }
 
+    /// True when When-In-Use/Always is ALREADY granted — checked WITHOUT prompting.
+    /// Used to gate the silent cold-launch GPS auto-detect (Android parity): we only
+    /// auto-detect when permission already exists, never popping a prompt on a browse.
+    var isAuthorized: Bool {
+        let s = manager.authorizationStatus
+        return s == .authorizedWhenInUse || s == .authorizedAlways
+    }
+
     /// Returns the device coordinates, or nil on denied/restricted/timeout/error.
     /// City-level accuracy; ~10s hard timeout so it can't hang the detect flow.
     func detectViaGPS() async -> (lat: Double, lon: Double)? {
