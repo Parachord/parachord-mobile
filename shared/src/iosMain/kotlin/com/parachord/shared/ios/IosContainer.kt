@@ -858,8 +858,14 @@ class IosContainer private constructor() {
      * floor-filtered sources (best first). The Swift `PlaybackRouter` walks
      * this list for the first engine-available source.
      */
-    suspend fun resolveSources(artist: String, title: String, album: String?): List<ResolvedSource> =
-        resolverCoordinator.resolveSources(artist, title, album)
+    suspend fun resolveSources(
+        artist: String,
+        title: String,
+        album: String?,
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+    ): List<ResolvedSource> =
+        resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId)
 
     /** Additive single-resolver resolution for [IosTrackResolverCache] when a
      *  resolver is enabled after a track was already cached (#1). */

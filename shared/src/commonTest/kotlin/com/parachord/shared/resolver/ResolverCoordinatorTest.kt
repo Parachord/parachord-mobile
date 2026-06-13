@@ -81,10 +81,13 @@ class ResolverCoordinatorTest {
         matchedArtist = matchedArtist,
     )
 
-    /** Real [ResolverScoring] with the canonical priority order and "all active". */
-    private fun scoring() = ResolverScoring(
+    /** Real [ResolverScoring] with the canonical priority order. In production
+     *  the coordinator's `getActive` and `ResolverScoring.getActiveResolvers`
+     *  both close over the SAME `settingsStore.getActiveResolvers()` — mirror that
+     *  here so the search gate and the rank filter agree. */
+    private fun scoring(active: List<String> = emptyList()) = ResolverScoring(
         getResolverOrder = { ResolverScoring.CANONICAL_RESOLVER_ORDER },
-        getActiveResolvers = { emptyList() },
+        getActiveResolvers = { active },
     )
 
     private fun coordinator(
@@ -95,7 +98,7 @@ class ResolverCoordinatorTest {
         spotify: suspend (String) -> ResolvedSource? = { null },
     ) = ResolverCoordinator(
         runtime = runtime,
-        scoring = scoring(),
+        scoring = scoring(active),
         getActive = { active },
         getDisabled = { disabled },
         getPlugins = { plugins },
@@ -317,5 +320,65 @@ class ResolverCoordinatorTest {
         assertFalse("bandcamp" in runtime.askedAxe)      // bandcamp not in active → never asked
         assertEquals(listOf("applemusic"), runtime.askedNative)
         assertEquals(setOf("applemusic"), out.map { it.resolver }.toSet())
+    }
+
+    @Test
+    fun resolveRankedWithHints_knownSpotifyId_emitsDirectly_neverSearchesSpotify() = runTest {
+        // #211: a track that already carries a spotifyId must NOT fire a Spotify
+        // search — the ID is emitted directly (confidence 1.0) and spotify is
+        // excluded from the fan-out. AM still resolves via search.
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic"),
+            natives = mapOf("applemusic" to source("applemusic", matchedTitle = "Clover", matchedArtist = "Tundra 212")),
+        )
+        var spotifyAsked = false
+        val coord = coordinator(runtime, spotify = { spotifyAsked = true; source("spotify") })
+
+        val out = coord.resolveRankedWithHints(
+            "Tundra 212 Clover", targetTitle = "Clover", targetArtist = "Tundra 212",
+            spotifyId = "abc123",
+        )
+
+        assertFalse(spotifyAsked) // the whole point: no Spotify search when the ID is known
+        val sp = out.first { it.resolver == "spotify" }
+        assertEquals("abc123", sp.spotifyId)
+        assertEquals(1.0, sp.confidence)
+        // spotify (1.0, priority 0) ranks above applemusic (0.95, priority 1).
+        assertEquals(listOf("spotify", "applemusic"), out.map { it.resolver })
+    }
+
+    @Test
+    fun resolveRankedWithHints_noHints_fallsBackToSearch() = runTest {
+        val runtime = FakeRuntime(nativeResolverIds = setOf("applemusic"))
+        var spotifyAsked = false
+        val coord = coordinator(runtime, spotify = { spotifyAsked = true; source("spotify", "Clover", "Tundra 212") })
+
+        val out = coord.resolveRankedWithHints("Tundra 212 Clover", targetTitle = "Clover", targetArtist = "Tundra 212")
+
+        assertTrue(spotifyAsked) // no hint → normal search path
+        assertEquals(listOf("spotify"), out.map { it.resolver })
+    }
+
+    @Test
+    fun resolveRankedWithHints_disabledHintResolver_filteredByActive() = runTest {
+        // spotify disabled (active = [applemusic], spotify not in it) → the hint is
+        // built but selectRanked's active filter drops it; no Spotify search either.
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic"),
+            natives = mapOf("applemusic" to source("applemusic", matchedTitle = "Clover", matchedArtist = "Tundra 212")),
+        )
+        var spotifyAsked = false
+        val coord = coordinator(
+            runtime, active = listOf("applemusic"),
+            spotify = { spotifyAsked = true; source("spotify") },
+        )
+
+        val out = coord.resolveRankedWithHints(
+            "Tundra 212 Clover", targetTitle = "Clover", targetArtist = "Tundra 212",
+            spotifyId = "abc123",
+        )
+
+        assertFalse(spotifyAsked)
+        assertEquals(setOf("applemusic"), out.map { it.resolver }.toSet()) // spotify hint filtered out
     }
 }
