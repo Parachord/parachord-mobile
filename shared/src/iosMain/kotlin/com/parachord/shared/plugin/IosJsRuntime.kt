@@ -250,6 +250,67 @@ class IosJsRuntime : JsRuntime {
                     set: function(key, value) { NativeBridge.storageSet('plugin._global.' + key, value); }
                 };
 
+                // ── Scrobble-telemetry plugin registry ───────────────────────
+                // Ported from Android's bootstrap.html (the iOS JSC bootstrap had
+                // only the console/fetch/storage polyfills). playbackTelemetry
+                // plugins (achordion) self-register here in their init(); without
+                // this, registerPlugin is undefined → they never register, and
+                // ScrobbleManager's dispatch (window.__scrobbleManagerDispatch) is
+                // undefined → a silent no-op. With it, each scrobble / now-playing
+                // dispatch runs every registered plugin's hook — achordion POSTs the
+                // track's streaming links to /api/track-links/submit.
+                window.scrobbleManager = {
+                    _plugins: [],
+                    registerPlugin: function(plugin) {
+                        if (!plugin || !plugin.id) {
+                            console.warn('[scrobbleManager] registerPlugin rejected: missing id');
+                            return;
+                        }
+                        window.scrobbleManager._plugins =
+                            window.scrobbleManager._plugins.filter(function(p) { return p.id !== plugin.id; });
+                        window.scrobbleManager._plugins.push(plugin);
+                        console.log('[scrobbleManager] registered plugin:', plugin.id);
+                    },
+                    unregisterPlugin: function(id) {
+                        var before = window.scrobbleManager._plugins.length;
+                        window.scrobbleManager._plugins =
+                            window.scrobbleManager._plugins.filter(function(p) { return p.id !== id; });
+                        if (window.scrobbleManager._plugins.length < before) {
+                            console.log('[scrobbleManager] unregistered plugin:', id);
+                        }
+                    },
+                };
+                // Native -> JS dispatch. ScrobbleManager calls this per scrobble /
+                // now-playing with a desktop-shaped track JSON (id/title/artist/
+                // album/duration/mbid/_activeResolver/sources). Fire-and-forget.
+                window.__scrobbleManagerDispatch = async function(eventName, trackJson) {
+                    try {
+                        var track = JSON.parse(trackJson);
+                        // <30s duration filter inherited from desktop scrobbleManager.
+                        if (track.duration && track.duration < 30) return false;
+                        for (var i = 0; i < window.scrobbleManager._plugins.length; i++) {
+                            var plugin = window.scrobbleManager._plugins[i];
+                            try {
+                                var enabled = true;
+                                if (typeof plugin.isEnabled === 'function') {
+                                    enabled = await plugin.isEnabled();
+                                }
+                                if (!enabled) continue;
+                                if (typeof plugin[eventName] === 'function') {
+                                    await plugin[eventName](track);
+                                }
+                            } catch (e) {
+                                console.warn('[scrobbleManager] plugin', plugin.id, eventName,
+                                    'threw:', (e && e.message) ? e.message : e);
+                            }
+                        }
+                        return true;
+                    } catch (e) {
+                        console.warn('[scrobbleManager] dispatch failed:', (e && e.message) ? e.message : e);
+                        return false;
+                    }
+                };
+
                 window.__parachordClient = 'ios';
             })();
         """.trimIndent()

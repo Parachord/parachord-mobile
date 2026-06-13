@@ -816,6 +816,12 @@ class IosContainer private constructor() {
     }
     suspend fun syncPluginsNow(): PluginSyncService.SyncResult = pluginSyncService.sync()
 
+    /** 24h-debounced marketplace sync for app start (Android parity:
+     *  MainViewModel.syncIfNeeded). Downloads new/updated `.axe` (e.g. the
+     *  achordion playback-telemetry plugin) + hot-reloads them so they register.
+     *  Returns null when the debounce window hasn't elapsed. */
+    suspend fun syncPluginsIfNeeded(): PluginSyncService.SyncResult? = pluginSyncService.syncIfNeeded()
+
     // ── Resolver pipeline (.axe-only, the iOS ResolverManager-equivalent) ──
 
     /**
