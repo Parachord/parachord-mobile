@@ -10,6 +10,7 @@ import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.plugin.PluginSyncService
+import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.metadata.AlbumDetail
@@ -154,6 +155,10 @@ class IosContainer private constructor() {
             // images. From Info.plist -> Secrets.xcconfig $(APPLE_MUSIC_DEVELOPER_TOKEN).
             // Blank = AppleMusicArtistProvider stays inert (no error).
             appleMusicDeveloperToken = plist("AppleMusicDeveloperToken"),
+            // Achordion bearer token — pre-warms the track-links cache on scrobble
+            // (#215) + share. From Info.plist -> Secrets.xcconfig
+            // $(ACHORDION_BEARER_TOKEN). Blank = AchordionClient short-circuits inertly.
+            achordionBearerToken = plist("AchordionBearerToken"),
         )
     }
 
@@ -225,6 +230,14 @@ class IosContainer private constructor() {
 
     // ── Charts (Pop of the Tops) ───────────────────────────────────────
     val appleMusicClient: AppleMusicClient by lazy { AppleMusicClient(httpClient) }
+    /**
+     * Achordion track-links submit client (#215). Used by [scrobbleManager] to
+     * pre-warm the per-service link cache on scrobble. Bearer token from
+     * [appConfig]; blank token = submit short-circuits inertly.
+     */
+    val achordionClient: AchordionClient by lazy {
+        AchordionClient(httpClient = httpClient, bearerToken = appConfig.achordionBearerToken)
+    }
     val lastFmClient: LastFmClient by lazy { LastFmClient(httpClient) }
     val chartsRepository: ChartsRepository by lazy {
         ChartsRepository(appleMusicClient, lastFmClient, lastFmApiKey = appConfig.lastFmApiKey)
@@ -697,6 +710,9 @@ class IosContainer private constructor() {
                     }
                 }
             },
+            // Native Achordion track-links submit on scrobble (#215) — reliable
+            // link-cache pre-warm independent of the achordion .axe JS plugin.
+            achordionClient = achordionClient,
         )
     }
 

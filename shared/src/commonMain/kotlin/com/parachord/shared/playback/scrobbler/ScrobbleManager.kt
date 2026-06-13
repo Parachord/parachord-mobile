@@ -1,5 +1,8 @@
 package com.parachord.shared.playback.scrobbler
 
+import com.parachord.shared.api.AchordionClient
+import com.parachord.shared.api.SubmitTrackLinksRequest
+import com.parachord.shared.api.TrackLink
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Track
@@ -45,6 +48,13 @@ data class ScrobbleState(
  *    WebView/JsBridge + resolver-cache source-map here; iOS supplies its own
  *    (PluginManager) or a no-op. Kept off the shared path because building the
  *    desktop-shaped `sources` JSON depends on each platform's resolver cache.
+ *
+ * [achordionClient] is the NATIVE Achordion track-links submit (#215). On scrobble
+ * the manager POSTs the track's streaming links to Achordion directly, so the
+ * link-cache pre-warm does NOT depend on the achordion `.axe` JS plugin being
+ * synced + registered + dispatched (that JS path is fragile + opaque on mobile —
+ * see [dispatchToPlugins]). Mirrors ShareManager's submit gates. Nullable so tests
+ * and platforms without a configured bearer token can omit it.
  */
 class ScrobbleManager(
     private val settingsStore: SettingsStore,
@@ -53,6 +63,7 @@ class ScrobbleManager(
     private val trackDao: TrackDao,
     private val mbidEnrichment: MbidEnrichmentService,
     private val dispatchToPlugins: (eventName: String, track: Track) -> Unit = { _, _ -> },
+    private val achordionClient: AchordionClient? = null,
 ) {
     companion object {
         private const val TAG = "ScrobbleManager"
@@ -162,5 +173,52 @@ class ScrobbleManager(
             }
         }
         dispatchToPlugins("scrobble", enrichedTrack)
+        submitToAchordion(enrichedTrack)
+    }
+
+    /**
+     * Native Achordion track-links submit on scrobble (#215). Pre-warms Achordion's
+     * per-service link cache so a later share resolves "Listen on Spotify/Apple
+     * Music/SoundCloud" immediately instead of an empty page. Runs natively, so it
+     * works on both platforms regardless of whether the achordion `.axe` JS plugin
+     * is loaded/registered (the [dispatchToPlugins] route depends on that and is
+     * fragile + invisible on mobile). Mirrors ShareManager's link-building + gates.
+     *
+     * [AchordionClient.submitTrackLinks] internally handles the bearer-token gate,
+     * the per-session MBID dedup, the empty-MBID / empty-links gates, and the 401
+     * kill-switch — so this only builds the payload and fires it fire-and-forget.
+     */
+    private fun submitToAchordion(track: Track) {
+        val client = achordionClient ?: return
+        val mbid = track.recordingMbid
+        if (mbid.isNullOrBlank()) return
+        val links = buildList {
+            track.spotifyId?.takeIf { it.isNotBlank() }?.let {
+                add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
+            }
+            track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
+                add(TrackLink(url = "https://music.apple.com/song/$it", host = "music.apple.com", label = "Apple Music"))
+            }
+            track.soundcloudId?.takeIf { it.isNotBlank() }?.let {
+                add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
+            }
+        }
+        if (links.isEmpty()) return
+        scope.launch {
+            try {
+                val result = client.submitTrackLinks(
+                    SubmitTrackLinksRequest(
+                        mbid = mbid,
+                        links = links,
+                        trackName = track.title,
+                        artistName = track.artist,
+                        albumName = track.album,
+                    )
+                )
+                Log.d(TAG, "Achordion submit for '${track.title}' (mbid=$mbid, ${links.size} links): $result")
+            } catch (e: Exception) {
+                Log.w(TAG, "Achordion submit failed for '${track.title}': ${e.message}")
+            }
+        }
     }
 }

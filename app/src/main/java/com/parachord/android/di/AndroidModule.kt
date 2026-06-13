@@ -388,6 +388,9 @@ val androidModule = module {
             trackDao = get(),
             mbidEnrichment = get(),
             dispatchToPlugins = jsDispatcher::dispatch,
+            // Native Achordion track-links submit on scrobble (#215) — reliable
+            // link-cache pre-warm independent of the achordion .axe JS plugin.
+            achordionClient = get(),
         )
     }
     singleOf(::SpotifyPlaybackHandler)
