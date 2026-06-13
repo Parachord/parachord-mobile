@@ -1701,7 +1701,10 @@ final class QueuePlaybackCoordinator {
             var ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album)
             if ranked == nil || ranked!.isEmpty {
                 ranked = (try? await container.resolveSources(
-                    artist: track.artist, title: track.title, album: track.album)) ?? []
+                    artist: track.artist, title: track.title, album: track.album,
+                    // Play-time fallback also benefits from the #211 hint when the
+                    // track already carries streaming IDs.
+                    spotifyId: track.spotifyId, appleMusicId: track.appleMusicId)) ?? []
             }
             // A newer playTrack superseded us during the async resolve — don't
             // route a stale track over the one the user actually wants.
@@ -2915,7 +2918,9 @@ struct DevSmokeTestView: View {
             let ranked = try await container.resolveSources(
                 artist: "Spoon",
                 title: "The Underdog",
-                album: nil
+                album: nil,
+                spotifyId: nil,
+                appleMusicId: nil
             )
             if ranked.isEmpty {
                 pluginResolveResult = "(no source above 0.60 floor)"

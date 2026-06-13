@@ -132,6 +132,13 @@ class SpotifyClient(
         // letting the ban decay. Resets to base on the first clean response.
         escalateOnRepeat = true,
         maxCooldownMs = 6L * 60L * 60L * 1000L,
+        // PROACTIVE cap: Spotify Developer-Mode is a rolling-30s window that
+        // caps around ~180–200 req/min. Stay well under (75 / 30s ≈ 150/min) so
+        // a cold-cache browse can't blow the ceiling — and leave headroom for
+        // the rest of the fleet on the shared client_id. Backstop to the #211
+        // hint-skip (which removes most searches in the first place).
+        maxRequestsPerWindow = 75,
+        requestWindowMs = 30_000L,
     )
 
     /**

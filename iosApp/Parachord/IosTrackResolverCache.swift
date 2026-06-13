@@ -20,6 +20,20 @@ struct ResolveRequest: Hashable {
     let artist: String
     let title: String
     let album: String?
+    /// Already-known Spotify ID from the metadata layer (#211). When set, the
+    /// resolver emits it directly instead of firing a redundant Spotify *search*
+    /// — the redundancy that bursts the shared client_id on Album / Artist-Top-
+    /// Tracks pages (those rows arrive with a `spotifyId` from the provider
+    /// cascade). nil for ID-less content. NOT part of `key` (the cache is keyed
+    /// by artist/title/album, so a hinted and un-hinted request share one entry).
+    let spotifyId: String?
+
+    init(artist: String, title: String, album: String?, spotifyId: String? = nil) {
+        self.artist = artist
+        self.title = title
+        self.album = album
+        self.spotifyId = spotifyId
+    }
 
     var key: String {
         "\(artist.lowercased())\u{1}\(title.lowercased())\u{1}\((album ?? "").lowercased())"
@@ -196,7 +210,11 @@ final class IosTrackResolverCache {
             activeWorkers += 1
             Task { @MainActor in
                 let ranked = (try? await self.container.resolveSources(
-                    artist: item.req.artist, title: item.req.title, album: item.req.album)) ?? []
+                    artist: item.req.artist, title: item.req.title, album: item.req.album,
+                    // #211: pass the metadata-known Spotify ID so the resolver emits
+                    // it directly instead of re-searching Spotify per row. (Kotlin
+                    // default args don't bridge to Swift — pass appleMusicId explicitly.)
+                    spotifyId: item.req.spotifyId, appleMusicId: nil)) ?? []
                 self.cache[key] = ranked
                 // Persist only real results — never cache an empty/failed
                 // resolve to disk (it may be a transient rate-limit miss).

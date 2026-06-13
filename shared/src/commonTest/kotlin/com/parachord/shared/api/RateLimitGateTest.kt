@@ -53,6 +53,37 @@ class RateLimitGateTest {
     }
 
     @Test
+    fun rolling_window_delays_calls_over_budget() = runTest {
+        // Budget: 3 requests per 1000ms window. nowMs reads the test scheduler's
+        // virtual clock so the gate's window and `delay()` advance together.
+        val clock = testScheduler
+        val gate = RateLimitGate(
+            tag = "test",
+            interRequestDelayMs = 0L,            // isolate the window from the inter-request gap
+            maxRequestsPerWindow = 3,
+            requestWindowMs = 1000L,
+            nowMs = { clock.currentTime },
+        )
+        val ranAt = mutableListOf<Long>()
+        repeat(4) {
+            gate.withPermit(exceptionFactory = { TestRateLimited(it) }) { ranAt.add(clock.currentTime) }
+        }
+        // First 3 fit at t=0; the 4th waits until the oldest ages out at t=1000.
+        assertEquals(listOf(0L, 0L, 0L, 1000L), ranAt)
+    }
+
+    @Test
+    fun rolling_window_off_by_default_no_delay() = runTest {
+        // No maxRequestsPerWindow → the window cap is inert; many calls, no wait.
+        val clock = testScheduler
+        val gate = RateLimitGate(tag = "test", interRequestDelayMs = 0L, nowMs = { clock.currentTime })
+        var count = 0
+        repeat(50) { gate.withPermit(exceptionFactory = { TestRateLimited(it) }) { count++ } }
+        assertEquals(50, count)
+        assertEquals(0L, clock.currentTime)   // nothing delayed
+    }
+
+    @Test
     fun escalating_gate_doubles_cooldown_on_consecutive_429s() = runTest {
         var now = 0L
         val g = gate(escalate = true, now = { now })

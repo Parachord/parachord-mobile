@@ -26,13 +26,25 @@ class IosResolverCoordinator(
      * above the confidence floor. Delegates to the shared coordinator's ranked
      * path — behavior identical to the pre-#210 inline fan-out.
      */
-    suspend fun resolveSources(artist: String, title: String, album: String?): List<ResolvedSource> {
+    suspend fun resolveSources(
+        artist: String,
+        title: String,
+        album: String?,
+        // Already-known streaming IDs from the metadata layer (#211). When present,
+        // the coordinator emits them directly and skips searching that resolver —
+        // so a Spotify-connected Album / Artist-Top-Tracks list doesn't fire a
+        // redundant Spotify search per row. nil for ID-less content.
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+    ): List<ResolvedSource> {
         pluginManager.ensureInitialized()
-        return coordinator.resolveRanked(
+        return coordinator.resolveRankedWithHints(
             query = "$artist $title",
             targetTitle = title,
             targetArtist = artist,
             album = album,
+            spotifyId = spotifyId,
+            appleMusicId = appleMusicId,
         )
     }
 

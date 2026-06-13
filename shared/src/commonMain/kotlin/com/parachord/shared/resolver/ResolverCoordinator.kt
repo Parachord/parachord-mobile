@@ -139,6 +139,62 @@ class ResolverCoordinator(
         )
 
     /**
+     * [resolveRanked] but with already-known streaming IDs (#182 parity / #211).
+     * When metadata already carries a resolver's ID (e.g. Spotify-connected
+     * Album / Artist-Top-Tracks rows arrive with a `spotifyId` from the provider
+     * cascade), emit that ID as a direct source (confidence 1.0) and **exclude
+     * that resolver from the search fan-out** — so a screen of 15 tracks doesn't
+     * fire 15 redundant Spotify *searches* (which trip the shared `client_id`
+     * abuse window). The known ID is NOT re-verified: the metadata layer already
+     * surfaced it for this user's market, and [com.parachord.shared.playback]'s
+     * router falls through to the next source at play time if it's unplayable —
+     * so this actually *eliminates* the call rather than swapping search→getTrack.
+     *
+     * Direct-ID hints also mean the resolver badge survives a Spotify cooldown:
+     * we never call Spotify for a hinted resolver, so there's no 429 to drop it.
+     * Hints below the active set are still filtered by [ResolverScoring.selectRanked].
+     */
+    suspend fun resolveRankedWithHints(
+        query: String,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+        album: String? = null,
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+        soundcloudId: String? = null,
+        preferredResolver: String? = null,
+    ): List<ResolvedSource> {
+        val hints = buildList {
+            if (!spotifyId.isNullOrBlank()) add(
+                ResolvedSource(
+                    url = "spotify:track:$spotifyId", sourceType = "spotify", resolver = "spotify",
+                    spotifyUri = "spotify:track:$spotifyId", spotifyId = spotifyId, confidence = 1.0,
+                ),
+            )
+            if (!appleMusicId.isNullOrBlank()) add(
+                ResolvedSource(
+                    url = "applemusic:song:$appleMusicId", sourceType = "applemusic",
+                    resolver = "applemusic", appleMusicId = appleMusicId, confidence = 1.0,
+                ),
+            )
+            if (!soundcloudId.isNullOrBlank()) add(
+                ResolvedSource(
+                    url = "https://api.soundcloud.com/tracks/$soundcloudId", sourceType = "soundcloud",
+                    resolver = "soundcloud", soundcloudId = soundcloudId, confidence = 1.0,
+                ),
+            )
+        }
+        if (hints.isEmpty()) return resolveRanked(query, targetTitle, targetArtist, album, preferredResolver)
+
+        val exclude = hints.map { it.resolver }.toSet()
+        val cascade = resolveScored(query, targetTitle, targetArtist, album, excludeResolvers = exclude)
+        // Hints win for their resolver (we excluded them from the search); the
+        // cascade fills every OTHER resolver. selectRanked applies the active
+        // filter + 0.60 floor + priority order to the union.
+        return scoring.selectRanked(hints + cascade, preferredResolver)
+    }
+
+    /**
      * Resolve ONE specific resolver for a track (additive re-resolution, #1 /
      * #210 Task 6). When the user enables a resolver AFTER a track was already
      * cached, the caller resolves just the newly-enabled resolver and merges it

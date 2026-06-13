@@ -390,7 +390,7 @@ final class AlbumDetailModel {
 
     func resolveVisible(_ t: TrackSearchResult, index: Int) {
         IosTrackResolverCache.shared.resolve(
-            ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: index)
+            ResolveRequest(artist: t.artist, title: t.title, album: t.album, spotifyId: t.spotifyId), order: index)
     }
 }
 
@@ -633,7 +633,7 @@ final class ArtistDetailModel {
     // Resolver pipeline (CLAUDE.md): every track list resolves per visible row.
     func resolveVisible(_ t: TrackSearchResult, index: Int) {
         IosTrackResolverCache.shared.resolve(
-            ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: index)
+            ResolveRequest(artist: t.artist, title: t.title, album: t.album, spotifyId: t.spotifyId), order: index)
     }
 }
 

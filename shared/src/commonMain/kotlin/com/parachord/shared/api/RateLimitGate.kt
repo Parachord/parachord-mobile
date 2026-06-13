@@ -9,7 +9,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 
 /**
@@ -93,12 +95,37 @@ class RateLimitGate(
      */
     private val escalateOnRepeat: Boolean = false,
     /**
+     * PROACTIVE rolling-window rate cap (opt-in). When non-null, the gate keeps
+     * a sliding window of recent request timestamps and DELAYS the next call
+     * until it would no longer exceed [maxRequestsPerWindow] within
+     * [requestWindowMs] — so we stay under a service's published ceiling
+     * *before* a 429 instead of reacting after one.
+     *
+     * Why Spotify opts in: Developer-Mode limit is a rolling-30s window that
+     * caps around ~180–200 req/min. The reactive cooldown + 150ms gap alone
+     * permit ~400/min sustained, so a cold-cache browse can blow the ceiling.
+     * Sized conservatively (e.g. 75 / 30s ≈ 150/min) to leave headroom — the
+     * limit is on the SHARED `client_id` across the whole Parachord fleet, so a
+     * single device must under-shoot to leave room for other clients. This is a
+     * per-device backstop; the primary lever is fewer calls (#211 hint-skip).
+     * Null → off (LastFm/MusicBrainz keep the reactive-only behavior).
+     */
+    private val maxRequestsPerWindow: Int? = null,
+    private val requestWindowMs: Long = 30_000L,
+    /**
      * Clock source (epoch ms). Injectable so tests can drive the cooldown
      * deterministically; production passes the real [currentTimeMillis].
      */
     private val nowMs: () -> Long = { currentTimeMillis() },
 ) {
     private val limiter = Semaphore(maxConcurrent)
+
+    /** Sliding window of recent request epoch-ms timestamps for the proactive
+     *  [maxRequestsPerWindow] cap. Guarded by [windowMutex] — reserving a slot
+     *  (and any wait for one) is serialized, which IS the throttle. Bounded by
+     *  [maxRequestsPerWindow] (we prune before adding), so it stays tiny. */
+    private val windowMutex = Mutex()
+    private val requestTimestamps = mutableListOf<Long>()
 
     /** Consecutive rate-limited responses with no intervening success.
      *  Drives [escalateOnRepeat]. Reset to 0 on any non-rate-limited response. */
@@ -139,8 +166,38 @@ class RateLimitGate(
         checkCooldown(exceptionFactory)
         return limiter.withPermit {
             checkCooldown(exceptionFactory)
+            awaitWindowSlot()
             delay(interRequestDelayMs)
             block()
+        }
+    }
+
+    /**
+     * Proactive rolling-window throttle (opt-in via [maxRequestsPerWindow]).
+     * Reserves a slot in the sliding [requestWindowMs] window, DELAYING until
+     * the window has room so the request rate stays under the cap. No-op when
+     * [maxRequestsPerWindow] is null. The window-full wait is held under
+     * [windowMutex] so concurrent callers serialize on the same budget.
+     */
+    private suspend fun awaitWindowSlot() {
+        val max = maxRequestsPerWindow ?: return
+        windowMutex.withLock {
+            while (true) {
+                val now = nowMs()
+                val cutoff = now - requestWindowMs
+                // Prune timestamps that have aged out of the window (a request
+                // exactly requestWindowMs old is outside the rolling window).
+                while (requestTimestamps.isNotEmpty() && requestTimestamps[0] <= cutoff) {
+                    requestTimestamps.removeAt(0)
+                }
+                if (requestTimestamps.size < max) {
+                    requestTimestamps.add(now)
+                    return
+                }
+                // Window full — wait until the oldest entry ages out, then recheck.
+                val waitMs = requestTimestamps[0] + requestWindowMs - now
+                if (waitMs > 0) delay(waitMs)
+            }
         }
     }
 
