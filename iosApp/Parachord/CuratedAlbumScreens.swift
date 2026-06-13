@@ -485,9 +485,32 @@ final class ConcertsModel {
             let loc = try? await store.getConcertLocation()
             concertCity = loc?.city ?? ""
             concertRadius = Int(loc?.radiusMiles ?? 50)
+            // Returning-user silent GPS auto-detect (Android parity, ConcertsViewModel.init):
+            // no saved location AND permission ALREADY granted → detect via GPS in the
+            // background and commit. Gated on `isAuthorized` so it NEVER prompts on a
+            // browse, and GPS-only (no geoIP) so it never silently commits a coarse fix.
+            if concertCity.isEmpty && locationManager.isAuthorized {
+                autoDetectViaGps()
+            }
         }
         guard sub == nil else { return }
         subscribe()
+    }
+
+    /// Silent cold-launch GPS auto-detect (Android parity). Commits a GPS fix when
+    /// one lands; does nothing otherwise (no geoIP fallback, no permission prompt —
+    /// the caller only invokes this when already authorized).
+    private func autoDetectViaGps() {
+        guard !isDetectingLocation else { return }
+        isDetectingLocation = true
+        Task { @MainActor in
+            defer { isDetectingLocation = false }
+            if let coords = await locationManager.detectViaGPS() {
+                let name = (try? await container.reverseGeocode(lat: coords.lat, lng: coords.lon))
+                    ?? "Current location"
+                commitLocation(name, coords.lat, coords.lon)
+            }
+        }
     }
 
     /// (Re)subscribe to the concerts flow. `concertsFlow()` reads
