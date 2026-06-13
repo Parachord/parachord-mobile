@@ -1,5 +1,7 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.api.GeoLocation
+import com.parachord.shared.api.GeoLocationClient
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.api.MusicBrainzClient
 import com.parachord.shared.api.createHttpClient
@@ -503,6 +505,26 @@ class IosContainer private constructor() {
         }
         return out
     }
+
+    // ── Geo location (geoIP detect + Nominatim typeahead/reverse) ───────
+    // Shared client used by the concert-location picker (#199). Reuses the
+    // shared httpClient (global User-Agent satisfies Nominatim's UA policy).
+    // GPS detection is platform-specific (CoreLocation) and lives in Swift;
+    // these wrappers cover the geoIP fallback + typeahead + reverse-geocode.
+    val geoLocationClient: GeoLocationClient by lazy { GeoLocationClient(httpClient) }
+
+    /** GeoIP detect (ipapi.co → ip-api.com → ipwho.is), reverse-geocoded to a
+     *  city name. Coarse on cellular — the Swift caller treats this as a
+     *  confirmable suggestion, NOT a direct commit (unlike GPS). */
+    suspend fun detectLocationByIp(): GeoLocation? = geoLocationClient.detectLocationByIp()
+
+    /** Nominatim forward-geocode typeahead for the city search field. */
+    suspend fun searchLocations(query: String): List<GeoLocation> =
+        geoLocationClient.searchLocations(query)
+
+    /** Reverse-geocode GPS coords → a "City, State" display name. */
+    suspend fun reverseGeocode(lat: Double, lng: Double): String? =
+        geoLocationClient.reverseGeocode(lat, lng)
 
     // ── History (Last.fm top charts + Last.fm/ListenBrainz recent) ──────
     val historyRepository: HistoryRepository by lazy {

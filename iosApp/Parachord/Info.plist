@@ -34,6 +34,8 @@
 	<string>$(LASTFM_SHARED_SECRET)</string>
 	<key>NSAppleMusicUsageDescription</key>
 	<string>Parachord uses Apple Music to play tracks resolved to the Apple Music catalog.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Parachord uses your location to find concerts near you.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

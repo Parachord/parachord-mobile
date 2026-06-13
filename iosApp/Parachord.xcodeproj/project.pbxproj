@@ -11,6 +11,7 @@
 		AA0000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* ContentView.swift */; };
 		AA0000000000000000000022 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* Assets.xcassets */; };
 		AA0000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* SettingsView.swift */; };
+		AA0000000000000000000090 /* IosLocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000091 /* IosLocationManager.swift */; };
 		AA0000000000000000000024 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* RootView.swift */; };
 		AA0000000000000000000025 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000015 /* SearchView.swift */; };
 		AA0000000000000000000026 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000016 /* NowPlayingView.swift */; };
@@ -40,6 +41,7 @@
 		AA0000000000000000000011 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000000013 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000091 /* IosLocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosLocationManager.swift; sourceTree = "<group>"; };
 		AA0000000000000000000014 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000015 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000016 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
@@ -95,6 +97,7 @@
 				AA0000000000000000000010 /* ParachordApp.swift */,
 				AA0000000000000000000011 /* ContentView.swift */,
 				AA0000000000000000000013 /* SettingsView.swift */,
+				AA0000000000000000000091 /* IosLocationManager.swift */,
 				AA0000000000000000000014 /* RootView.swift */,
 				AA0000000000000000000015 /* SearchView.swift */,
 				AA0000000000000000000016 /* NowPlayingView.swift */,
@@ -217,6 +220,7 @@
 				AA0000000000000000000020 /* ParachordApp.swift in Sources */,
 				AA0000000000000000000021 /* ContentView.swift in Sources */,
 				AA0000000000000000000023 /* SettingsView.swift in Sources */,
+				AA0000000000000000000090 /* IosLocationManager.swift in Sources */,
 				AA0000000000000000000024 /* RootView.swift in Sources */,
 				AA0000000000000000000025 /* SearchView.swift in Sources */,
 				AA0000000000000000000026 /* NowPlayingView.swift in Sources */,
