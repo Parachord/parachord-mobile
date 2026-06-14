@@ -954,6 +954,20 @@ class IosContainer private constructor() {
         )
     }
 
+    /**
+     * Fire-and-forget recording-MBID enrichment at playback start, mirroring
+     * Android's `PlaybackController.enrichInBackground` (#215). Warms the mapper
+     * cache (and persists to the DB for library-backed tracks) so the MBID is
+     * present by scrobble time — the scrobble path's on-demand `getRecordingMbid`
+     * then hits the cache instead of depending on a live mapper call 30s in.
+     * Without it iOS had no enrichment hook, so every track relied on the live
+     * mapper at scrobble (and submitted nothing while the mapper was down).
+     * The service dedups + persists; no-ops on blank artist/title.
+     */
+    fun enrichTrackMbidInBackground(track: Track) {
+        mbidEnrichmentService.enrichInBackground(track.id, track.artist, track.title)
+    }
+
     /** Additive single-resolver resolution for [IosTrackResolverCache] when a
      *  resolver is enabled after a track was already cached (#1). */
     suspend fun resolveSingleResolver(resolverId: String, artist: String, title: String, album: String?): ResolvedSource? =

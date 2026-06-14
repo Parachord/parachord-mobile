@@ -1685,6 +1685,14 @@ final class QueuePlaybackCoordinator {
         // interrupts the first's queue, silently dropping a track.
         playTask?.cancel()
         playTask = Task { @MainActor in
+            // Enrich the recording MBID in the background at playback start
+            // (mirrors Android's PlaybackController.enrichInBackground, #215) so
+            // it's cached/persisted by scrobble time and the scrobble path's
+            // getRecordingMbid hits the cache instead of a live mapper call.
+            // Unconditional + fire-and-forget, so it covers every engine
+            // including the direct-URL fast path below.
+            container.enrichTrackMbidInBackground(track: track)
+
             // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
             // play straight through AVPlayer, no resolver round-trip.
             if let url = track.sourceUrl, !url.isEmpty,
