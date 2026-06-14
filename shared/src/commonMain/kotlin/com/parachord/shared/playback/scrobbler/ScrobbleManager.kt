@@ -132,8 +132,25 @@ class ScrobbleManager(
      * to the original track if it's ephemeral (not in the DB).
      */
     private suspend fun refreshTrackMbids(track: Track): Track {
-        val dbTrack = if (track.recordingMbid != null) track else {
+        var dbTrack = if (track.recordingMbid != null) track else {
             try { trackDao.getById(track.id) ?: track } catch (_: Exception) { track }
+        }
+        // Still no recording MBID — resolve it now via the mapper. Android enriches
+        // at playback start (PlaybackController.enrichInBackground) so the MBID is
+        // usually cached by scrobble time; iOS has no such hook, and ephemeral
+        // tracks (recommendations, weekly playlists) are never in the DB. Without an
+        // MBID the scrobble payload, achordion's tier-2 submit (it reads track.mbid
+        // off the dispatched JSON), and the native Achordion submit (#215) are all
+        // recording-keyed and skip. getRecordingMbid hits the cache when already
+        // enriched (cheap on Android) and returns null for genuinely unmappable
+        // tracks (correctly leaving them un-submitted).
+        if (dbTrack.recordingMbid.isNullOrBlank()) {
+            val mbid = try {
+                mbidEnrichment.getRecordingMbid(dbTrack.artist, dbTrack.title)
+            } catch (_: Exception) {
+                null
+            }
+            if (!mbid.isNullOrBlank()) dbTrack = dbTrack.copy(recordingMbid = mbid)
         }
         val canonical = mbidEnrichment.getCanonicalNames(dbTrack.artist, dbTrack.title)
         return if (canonical != null) {
