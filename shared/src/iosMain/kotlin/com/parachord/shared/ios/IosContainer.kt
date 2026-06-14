@@ -10,6 +10,7 @@ import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.plugin.PluginSyncService
+import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.metadata.AlbumDetail
@@ -154,6 +155,10 @@ class IosContainer private constructor() {
             // images. From Info.plist -> Secrets.xcconfig $(APPLE_MUSIC_DEVELOPER_TOKEN).
             // Blank = AppleMusicArtistProvider stays inert (no error).
             appleMusicDeveloperToken = plist("AppleMusicDeveloperToken"),
+            // Achordion bearer token — pre-warms the track-links cache on scrobble
+            // (#215) + share. From Info.plist -> Secrets.xcconfig
+            // $(ACHORDION_BEARER_TOKEN). Blank = AchordionClient short-circuits inertly.
+            achordionBearerToken = plist("AchordionBearerToken"),
         )
     }
 
@@ -225,6 +230,14 @@ class IosContainer private constructor() {
 
     // ── Charts (Pop of the Tops) ───────────────────────────────────────
     val appleMusicClient: AppleMusicClient by lazy { AppleMusicClient(httpClient) }
+    /**
+     * Achordion track-links submit client (#215). Used by [scrobbleManager] to
+     * pre-warm the per-service link cache on scrobble. Bearer token from
+     * [appConfig]; blank token = submit short-circuits inertly.
+     */
+    val achordionClient: AchordionClient by lazy {
+        AchordionClient(httpClient = httpClient, bearerToken = appConfig.achordionBearerToken)
+    }
     val lastFmClient: LastFmClient by lazy { LastFmClient(httpClient) }
     val chartsRepository: ChartsRepository by lazy {
         ChartsRepository(appleMusicClient, lastFmClient, lastFmApiKey = appConfig.lastFmApiKey)
@@ -697,6 +710,9 @@ class IosContainer private constructor() {
                     }
                 }
             },
+            // Native Achordion track-links submit on scrobble (#215) — reliable
+            // link-cache pre-warm independent of the achordion .axe JS plugin.
+            achordionClient = achordionClient,
         )
     }
 
@@ -911,6 +927,46 @@ class IosContainer private constructor() {
         appleMusicId: String? = null,
     ): List<ResolvedSource> =
         resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId)
+
+    /**
+     * Return [track] enriched with the streaming IDs + active resolver taken from
+     * the best-ranked [sources]. The now-playing/scrobble Track MUST carry these:
+     * achordion's played-source confidence, the native Achordion submit (#215),
+     * and LB source-enrichment all read `spotifyId`/`appleMusicId`/`soundcloudId`
+     * off the Track. Without this, an Apple-Music-streamed track still reaches the
+     * scrobble path with all IDs null → achordion sees confidence 0.00 and the
+     * native submit sees zero links.
+     *
+     * Additive — never overwrites an ID the track already has. The `id` is
+     * preserved (copy), so it doesn't re-trigger now-playing detection. Mirrors
+     * Android, whose `PlaybackController` scrobbles the resolved `routedTrack`.
+     */
+    fun trackWithResolvedSources(track: Track, sources: List<ResolvedSource>): Track {
+        if (sources.isEmpty()) return track
+        fun pick(get: (ResolvedSource) -> String?): String? =
+            sources.firstNotNullOfOrNull { get(it)?.takeIf { s -> s.isNotBlank() } }
+        return track.copy(
+            resolver = track.resolver ?: sources.first().resolver,
+            spotifyId = track.spotifyId ?: pick { it.spotifyId },
+            spotifyUri = track.spotifyUri ?: pick { it.spotifyUri },
+            appleMusicId = track.appleMusicId ?: pick { it.appleMusicId },
+            soundcloudId = track.soundcloudId ?: pick { it.soundcloudId },
+        )
+    }
+
+    /**
+     * Fire-and-forget recording-MBID enrichment at playback start, mirroring
+     * Android's `PlaybackController.enrichInBackground` (#215). Warms the mapper
+     * cache (and persists to the DB for library-backed tracks) so the MBID is
+     * present by scrobble time — the scrobble path's on-demand `getRecordingMbid`
+     * then hits the cache instead of depending on a live mapper call 30s in.
+     * Without it iOS had no enrichment hook, so every track relied on the live
+     * mapper at scrobble (and submitted nothing while the mapper was down).
+     * The service dedups + persists; no-ops on blank artist/title.
+     */
+    fun enrichTrackMbidInBackground(track: Track) {
+        mbidEnrichmentService.enrichInBackground(track.id, track.artist, track.title)
+    }
 
     /** Additive single-resolver resolution for [IosTrackResolverCache] when a
      *  resolver is enabled after a track was already cached (#1). */

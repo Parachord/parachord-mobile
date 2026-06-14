@@ -1685,6 +1685,14 @@ final class QueuePlaybackCoordinator {
         // interrupts the first's queue, silently dropping a track.
         playTask?.cancel()
         playTask = Task { @MainActor in
+            // Enrich the recording MBID in the background at playback start
+            // (mirrors Android's PlaybackController.enrichInBackground, #215) so
+            // it's cached/persisted by scrobble time and the scrobble path's
+            // getRecordingMbid hits the cache instead of a live mapper call.
+            // Unconditional + fire-and-forget, so it covers every engine
+            // including the direct-URL fast path below.
+            container.enrichTrackMbidInBackground(track: track)
+
             // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
             // play straight through AVPlayer, no resolver round-trip.
             if let url = track.sourceUrl, !url.isEmpty,
@@ -1717,6 +1725,14 @@ final class QueuePlaybackCoordinator {
             switch result {
             case .played(let kind):
                 activeEngine = kind
+                // Enrich the now-playing track with the resolved streaming IDs so
+                // the scrobble path carries them: achordion's played-source
+                // confidence, the native Achordion submit (#215), and LB source
+                // enrichment all read spotifyId/appleMusicId/soundcloudId off the
+                // Track. Without this, an Apple-Music-streamed track reaches scrobble
+                // with all IDs null → achordion confidence 0.00, zero submit links.
+                // Same `id` (additive copy) so it doesn't re-fire now-playing.
+                currentTrack = container.trackWithResolvedSources(track: track, sources: ranked ?? [])
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
                     spotifyPlaying = spotify.isPlaying
