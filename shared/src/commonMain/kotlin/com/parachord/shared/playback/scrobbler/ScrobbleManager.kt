@@ -189,9 +189,12 @@ class ScrobbleManager(
      * kill-switch — so this only builds the payload and fires it fire-and-forget.
      */
     private fun submitToAchordion(track: Track) {
-        val client = achordionClient ?: return
+        val client = achordionClient
+        if (client == null) {
+            Log.d(TAG, "Achordion: no client configured — skip '${track.title}'")
+            return
+        }
         val mbid = track.recordingMbid
-        if (mbid.isNullOrBlank()) return
         val links = buildList {
             track.spotifyId?.takeIf { it.isNotBlank() }?.let {
                 add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
@@ -203,7 +206,15 @@ class ScrobbleManager(
                 add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
             }
         }
-        if (links.isEmpty()) return
+        // Boundary instrumentation (#215): one line per scrobble shows the native
+        // path was REACHED + WHY it did/didn't submit, so "wired but no links" is
+        // distinguishable from "stale build / not wired". Fires before the gates.
+        Log.d(
+            TAG,
+            "Achordion submit candidate '${track.title}': mbid=${mbid ?: "null"} links=${links.size} " +
+                "(spotify=${!track.spotifyId.isNullOrBlank()} am=${!track.appleMusicId.isNullOrBlank()} sc=${!track.soundcloudId.isNullOrBlank()})",
+        )
+        if (mbid.isNullOrBlank() || links.isEmpty()) return
         scope.launch {
             try {
                 val result = client.submitTrackLinks(

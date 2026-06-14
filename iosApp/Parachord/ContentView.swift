@@ -1717,6 +1717,14 @@ final class QueuePlaybackCoordinator {
             switch result {
             case .played(let kind):
                 activeEngine = kind
+                // Enrich the now-playing track with the resolved streaming IDs so
+                // the scrobble path carries them: achordion's played-source
+                // confidence, the native Achordion submit (#215), and LB source
+                // enrichment all read spotifyId/appleMusicId/soundcloudId off the
+                // Track. Without this, an Apple-Music-streamed track reaches scrobble
+                // with all IDs null → achordion confidence 0.00, zero submit links.
+                // Same `id` (additive copy) so it doesn't re-fire now-playing.
+                currentTrack = container.trackWithResolvedSources(track: track, sources: ranked ?? [])
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
                     spotifyPlaying = spotify.isPlaying

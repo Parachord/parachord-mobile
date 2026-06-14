@@ -928,6 +928,32 @@ class IosContainer private constructor() {
     ): List<ResolvedSource> =
         resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId)
 
+    /**
+     * Return [track] enriched with the streaming IDs + active resolver taken from
+     * the best-ranked [sources]. The now-playing/scrobble Track MUST carry these:
+     * achordion's played-source confidence, the native Achordion submit (#215),
+     * and LB source-enrichment all read `spotifyId`/`appleMusicId`/`soundcloudId`
+     * off the Track. Without this, an Apple-Music-streamed track still reaches the
+     * scrobble path with all IDs null → achordion sees confidence 0.00 and the
+     * native submit sees zero links.
+     *
+     * Additive — never overwrites an ID the track already has. The `id` is
+     * preserved (copy), so it doesn't re-trigger now-playing detection. Mirrors
+     * Android, whose `PlaybackController` scrobbles the resolved `routedTrack`.
+     */
+    fun trackWithResolvedSources(track: Track, sources: List<ResolvedSource>): Track {
+        if (sources.isEmpty()) return track
+        fun pick(get: (ResolvedSource) -> String?): String? =
+            sources.firstNotNullOfOrNull { get(it)?.takeIf { s -> s.isNotBlank() } }
+        return track.copy(
+            resolver = track.resolver ?: sources.first().resolver,
+            spotifyId = track.spotifyId ?: pick { it.spotifyId },
+            spotifyUri = track.spotifyUri ?: pick { it.spotifyUri },
+            appleMusicId = track.appleMusicId ?: pick { it.appleMusicId },
+            soundcloudId = track.soundcloudId ?: pick { it.soundcloudId },
+        )
+    }
+
     /** Additive single-resolver resolution for [IosTrackResolverCache] when a
      *  resolver is enabled after a track was already cached (#1). */
     suspend fun resolveSingleResolver(resolverId: String, artist: String, title: String, album: String?): ResolvedSource? =
