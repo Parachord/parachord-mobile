@@ -169,6 +169,16 @@ class ConcertsRepository(
     private val artistEventsCache = mutableMapOf<String, Pair<Long, List<ConcertEvent>>>()
 
     /**
+     * Location-filtered "on tour near me" results, keyed by artist + location +
+     * radius. Kept SEPARATE from [artistEventsCache] (#214): [checkOnTour] is a
+     * nearby-only query, and sharing one cache let its location-filtered result
+     * poison the UNFILTERED full schedule that the On Tour tab reads via
+     * [getArtistEvents] (and vice-versa, order-dependent). The boolean is all the
+     * Now Playing on-tour dot needs.
+     */
+    private val onTourCache = mutableMapOf<String, Pair<Long, Boolean>>()
+
+    /**
      * Quick check: does this artist have upcoming events?
      * Returns cached result if available, otherwise null (unknown).
      */
@@ -255,17 +265,21 @@ class ConcertsRepository(
         lon: Double? = null,
         radiusMiles: Int = 50,
     ): Boolean {
-        val cacheKey = artistName.lowercase()
-        val cached = artistEventsCache[cacheKey]
+        // Keyed by artist + location + radius, in its OWN cache — never the
+        // unfiltered artistEventsCache the On Tour tab reads (#214). A location
+        // change re-checks rather than serving a stale-area result.
+        val cacheKey = "${artistName.lowercase()}|${lat ?: ""}|${lon ?: ""}|$radiusMiles"
+        val cached = onTourCache[cacheKey]
         if (cached != null && currentTimeMillis() - cached.first < STALE_THRESHOLD * 2) {
-            return cached.second.isNotEmpty()
+            return cached.second
         }
 
         return try {
             // If no location configured, query without coords (any show counts)
             val events = fetchArtistEvents(artistName, lat, lon, radiusMiles)
-            artistEventsCache[cacheKey] = currentTimeMillis() to events
-            events.isNotEmpty()
+            val onTour = events.isNotEmpty()
+            onTourCache[cacheKey] = currentTimeMillis() to onTour
+            onTour
         } catch (e: Exception) {
             Log.w(TAG, "On-tour check failed for '$artistName'", e)
             false
