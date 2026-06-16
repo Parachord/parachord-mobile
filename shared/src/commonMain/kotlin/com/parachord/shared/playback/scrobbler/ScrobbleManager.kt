@@ -219,7 +219,8 @@ class ScrobbleManager(
             Log.d(TAG, "Achordion: no client configured — skip '${track.title}'")
             return
         }
-        val mbid = track.recordingMbid
+        val mbid = track.recordingMbid?.takeIf { it.isNotBlank() }
+        val isrc = track.isrc?.takeIf { it.isNotBlank() }
         val links = buildList {
             track.spotifyId?.takeIf { it.isNotBlank() }?.let {
                 add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
@@ -236,22 +237,25 @@ class ScrobbleManager(
         // distinguishable from "stale build / not wired". Fires before the gates.
         Log.d(
             TAG,
-            "Achordion submit candidate '${track.title}': mbid=${mbid ?: "null"} links=${links.size} " +
+            "Achordion submit candidate '${track.title}': mbid=${mbid ?: "null"} isrc=${isrc ?: "null"} links=${links.size} " +
                 "(spotify=${!track.spotifyId.isNullOrBlank()} am=${!track.appleMusicId.isNullOrBlank()} sc=${!track.soundcloudId.isNullOrBlank()})",
         )
-        if (mbid.isNullOrBlank() || links.isEmpty()) return
+        // #216: an ISRC is a valid key too — submit ISRC-only tracks (no MBID yet,
+        // e.g. during a mapper outage); the server derives the MBID from the ISRC.
+        if ((mbid == null && isrc == null) || links.isEmpty()) return
         scope.launch {
             try {
                 val result = client.submitTrackLinks(
                     SubmitTrackLinksRequest(
                         mbid = mbid,
+                        isrc = isrc,
                         links = links,
                         trackName = track.title,
                         artistName = track.artist,
                         albumName = track.album,
                     )
                 )
-                Log.d(TAG, "Achordion submit for '${track.title}' (mbid=$mbid, ${links.size} links): $result")
+                Log.d(TAG, "Achordion submit for '${track.title}' (mbid=${mbid ?: "null"}, isrc=${isrc ?: "null"}, ${links.size} links): $result")
             } catch (e: Exception) {
                 Log.w(TAG, "Achordion submit failed for '${track.title}': ${e.message}")
             }
