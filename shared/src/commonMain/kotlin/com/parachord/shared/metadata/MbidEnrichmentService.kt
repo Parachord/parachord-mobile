@@ -2,6 +2,7 @@ package com.parachord.shared.metadata
 
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.api.MbidMapperResult
+import com.parachord.shared.api.MusicBrainzClient
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
@@ -49,6 +50,13 @@ class MbidEnrichmentService(
     private val cacheRead: suspend () -> String?,
     /** Write JSON to `mbid_mapper_cache.json`. Failures are swallowed. */
     private val cacheWrite: suspend (String) -> Unit,
+    /**
+     * Service-agnostic ISRC → recording-MBID fallback. When set, [getRecordingMbid]
+     * falls back to MusicBrainz `/isrc/{isrc}` if the ListenBrainz mapper is
+     * unavailable / returns no match and the caller supplied an ISRC. Nullable so
+     * tests + callers without MusicBrainz can omit it.
+     */
+    private val musicBrainzClient: MusicBrainzClient? = null,
 ) {
     companion object {
         private const val TAG = "MbidEnrichment"
@@ -157,14 +165,40 @@ class MbidEnrichmentService(
      * The achordion plugin's `resolveMbid(track)` fallback calls this when
      * `track.mbid` is absent. Same-shape mirror of [getArtistMbid].
      */
-    suspend fun getRecordingMbid(artistName: String, recordingName: String): String? {
+    suspend fun getRecordingMbid(
+        artistName: String,
+        recordingName: String,
+        isrc: String? = null,
+    ): String? {
         val key = cacheKey(artistName, recordingName)
         val cached = getCachedEntry(key)
         if (cached != null) return cached.recordingMbid
 
-        val result = mapperLookup(artistName, recordingName) ?: return null
-        putCache(key, result)
-        return result.recordingMbid
+        val result = mapperLookup(artistName, recordingName)
+        if (result != null) {
+            putCache(key, result)
+            return result.recordingMbid
+        }
+
+        // Fallback: the LB mapper is unavailable (e.g. a mapper outage) or has no
+        // confident match. Resolve via the played source's ISRC through
+        // MusicBrainz `/isrc/` — a different service, and exact (the ISRC is the
+        // recording the user is streaming), so no fuzzy wrong-variant risk.
+        //
+        // Deliberately NOT cached: an ISRC-only result lacks canonical names +
+        // artist/release MBIDs, and caching it (90-day TTL) would block the
+        // richer mapper entry once the mapper recovers. The scrobble submit only
+        // needs the bare MBID for this play.
+        if (!isrc.isNullOrBlank() && musicBrainzClient != null) {
+            return try {
+                musicBrainzClient.lookupRecordingMbidByIsrc(isrc)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "ISRC MBID fallback failed for isrc=$isrc: ${e.message}")
+                null
+            }
+        }
+        return null
     }
 
     /**

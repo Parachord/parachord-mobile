@@ -1871,8 +1871,13 @@ class PlaybackController constructor(
 
         val best = resolverScoring.selectBest(cachedSources) ?: return track
 
-        // Only update if the best resolver actually changed
-        if (best.resolver == track.resolver) return track
+        // Attach the played source's ISRC for the MBID fallback even when the
+        // resolver is unchanged — ISRC is never persisted on the track row, so
+        // it must be re-merged from the resolved source on each play.
+        val isrc = best.isrc?.takeIf { it.isNotBlank() } ?: track.isrc
+
+        // Only re-route if the best resolver actually changed (but still carry isrc).
+        if (best.resolver == track.resolver) return track.copy(isrc = isrc)
 
         Log.d(TAG, "Re-routed '${track.title}' from ${track.resolver} → ${best.resolver} (user priority)")
         return track.copy(
@@ -1883,6 +1888,7 @@ class PlaybackController constructor(
             spotifyId = best.spotifyId ?: track.spotifyId,
             soundcloudId = best.soundcloudId ?: track.soundcloudId,
             appleMusicId = best.appleMusicId ?: track.appleMusicId,
+            isrc = isrc,
         )
     }
 
@@ -1952,6 +1958,7 @@ class PlaybackController constructor(
                 spotifyId = best.spotifyId,
                 soundcloudId = best.soundcloudId,
                 appleMusicId = best.appleMusicId,
+                isrc = best.isrc?.takeIf { it.isNotBlank() } ?: track.isrc,
             )
         } catch (e: Exception) {
             Log.e(TAG, "On-the-fly resolution failed for '${track.title}'", e)

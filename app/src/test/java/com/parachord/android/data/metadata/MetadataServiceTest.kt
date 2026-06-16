@@ -1,5 +1,9 @@
 package com.parachord.android.data.metadata
 
+// WikipediaProvider + DiscogsProvider live only in shared (no android-package
+// typealias, unlike the other providers), so import them directly.
+import com.parachord.shared.metadata.DiscogsProvider
+import com.parachord.shared.metadata.WikipediaProvider
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest

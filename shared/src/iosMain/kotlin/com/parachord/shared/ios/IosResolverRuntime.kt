@@ -151,6 +151,9 @@ class IosResolverRuntime(
                     soundcloudId = parsed.soundcloudId,
                     soundcloudUrl = parsed.soundcloudUrl,
                     appleMusicId = parsed.appleMusicId,
+                    // Optional `.axe` result field — a streaming resolver MAY
+                    // supply its ISRC for the MBID fallback.
+                    isrc = parsed.isrc?.takeIf { it.isNotBlank() },
                     // Placeholder — overridden by scoreConfidence in resolveSources.
                     confidence = 0.9,
                     matchedTitle = parsed.title,
@@ -216,6 +219,9 @@ class IosResolverRuntime(
             sourceType = "applemusic",
             resolver = "applemusic",
             appleMusicId = id,
+            // Apple Music catalog attributes carry the ISRC — supply it for the
+            // MBID fallback.
+            isrc = attrs["isrc"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
             confidence = 0.9, // overridden by scoreConfidence in the coordinator
             matchedTitle = attrs["name"]?.jsonPrimitive?.contentOrNull,
             matchedArtist = attrs["artistName"]?.jsonPrimitive?.contentOrNull,
@@ -251,6 +257,7 @@ private data class AxeResolveResult(
     val soundcloudUrl: String? = null,
     val appleMusicId: String? = null,
     val appleMusicUrl: String? = null,
+    val isrc: String? = null,
     val previewUrl: String? = null,
     val albumArt: String? = null,
 )

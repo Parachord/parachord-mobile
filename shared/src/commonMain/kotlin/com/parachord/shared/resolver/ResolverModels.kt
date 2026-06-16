@@ -22,6 +22,16 @@ data class ResolvedSource(
     val soundcloudId: String? = null,
     val soundcloudUrl: String? = null,
     val appleMusicId: String? = null,
+    /**
+     * ISRC of the matched recording, when the resolver's response carries one
+     * (Spotify `external_ids.isrc`, Apple Music catalog `attributes.isrc`, or an
+     * `.axe` result's `isrc`). The service-agnostic supply side of the ISRC →
+     * recording-MBID fallback: [com.parachord.shared.metadata.MbidEnrichmentService]
+     * consumes this (via [com.parachord.shared.model.Track.isrc]) when the
+     * ListenBrainz mapper is unavailable, looking it up through
+     * MusicBrainz `/ws/2/isrc/{isrc}`. Resolvers without an ISRC leave it null.
+     */
+    val isrc: String? = null,
     /** Match confidence from the resolver (0.0–1.0). Desktop defaults to 0.9 for successful resolves. */
     val confidence: Double? = null,
     /** Whether the resolver explicitly couldn't match this track. */

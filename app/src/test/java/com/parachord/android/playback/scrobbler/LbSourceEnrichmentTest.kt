@@ -1,6 +1,7 @@
 package com.parachord.android.playback.scrobbler
 
 import com.parachord.android.data.db.entity.TrackEntity
+import com.parachord.shared.playback.scrobbler.deriveLbSourceEnrichment
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue

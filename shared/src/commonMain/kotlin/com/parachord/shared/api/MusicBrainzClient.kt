@@ -105,6 +105,18 @@ class MusicBrainzClient(private val httpClient: HttpClient) {
     suspend fun searchArtists(query: String, limit: Int = 10): MbArtistSearchResponse =
         guardedGet("$BASE_URL/artist/") { parameter("query", query); parameter("limit", limit) }
 
+    /**
+     * Resolve a recording MBID from an ISRC via `GET /ws/2/isrc/{isrc}`. The
+     * ISRC identifies the exact recording the streaming service is playing, so
+     * this is an exact lookup (no fuzzy title/artist matching). Independent of
+     * the ListenBrainz mapper — the service-agnostic core of the ISRC → MBID
+     * fallback. Returns the first recording's MBID, or null when the ISRC has no
+     * MusicBrainz recording. Throws [MusicBrainzRateLimitedException] on 429/503;
+     * callers wrap other failures (e.g. 404) and fall back to null.
+     */
+    suspend fun lookupRecordingMbidByIsrc(isrc: String): String? =
+        guardedGet<MbIsrcLookupResponse>("$BASE_URL/isrc/$isrc") {}.recordings.firstOrNull()?.id
+
     suspend fun getRelease(
         releaseId: String,
         inc: String = "recordings+artist-credits",
@@ -155,6 +167,18 @@ class MusicBrainzClient(private val httpClient: HttpClient) {
 }
 
 // ── Response Models ──────────────────────────────────────────────────
+
+/** `GET /ws/2/isrc/{isrc}` — recordings carrying that ISRC. */
+@Serializable
+data class MbIsrcLookupResponse(
+    val recordings: List<MbIsrcRecording> = emptyList(),
+)
+
+@Serializable
+data class MbIsrcRecording(
+    val id: String? = null,
+    val title: String? = null,
+)
 
 @Serializable
 data class MbRecordingSearchResponse(

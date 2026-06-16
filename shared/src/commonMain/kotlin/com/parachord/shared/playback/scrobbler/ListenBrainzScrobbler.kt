@@ -89,7 +89,7 @@ class ListenBrainzScrobbler(
 
         val mbid = track.recordingMbid?.takeIf { LB_MBID_PATTERN.matches(it) }
             ?: try {
-                mbidEnrichment.getRecordingMbid(track.artist, track.title)
+                mbidEnrichment.getRecordingMbid(track.artist, track.title, track.isrc)
                     ?.takeIf { LB_MBID_PATTERN.matches(it) }
             } catch (e: Exception) {
                 Log.w(TAG, "MBID mapper lookup failed for '${track.artist} - ${track.title}': ${e.message}")

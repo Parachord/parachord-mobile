@@ -670,6 +670,8 @@ class IosContainer private constructor() {
             trackDao = trackDao,
             cacheRead = { IosFileCache.read("mbid_mapper_cache.json") },
             cacheWrite = { IosFileCache.write("mbid_mapper_cache.json", it) },
+            // Service-agnostic ISRC → MBID fallback when the LB mapper is down.
+            musicBrainzClient = musicBrainzClient,
         )
     }
 
@@ -951,6 +953,7 @@ class IosContainer private constructor() {
             spotifyUri = track.spotifyUri ?: pick { it.spotifyUri },
             appleMusicId = track.appleMusicId ?: pick { it.appleMusicId },
             soundcloudId = track.soundcloudId ?: pick { it.soundcloudId },
+            isrc = track.isrc ?: pick { it.isrc },
         )
     }
 

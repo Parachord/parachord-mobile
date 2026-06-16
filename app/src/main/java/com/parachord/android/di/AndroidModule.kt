@@ -494,6 +494,8 @@ val androidModule = module {
             cacheWrite = { json ->
                 try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
             },
+            // Service-agnostic ISRC → MBID fallback when the LB mapper is down.
+            musicBrainzClient = get(),
         )
     }
 
