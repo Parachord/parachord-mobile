@@ -21,7 +21,7 @@ import com.parachord.shared.model.Track
  *     via MBID Mapper enrichment). LB skips its own mapping hop; Achordion keys
  *     its match-cache row by MBID.
  */
-internal data class LbSourceEnrichment(
+data class LbSourceEnrichment(
     val originUrl: String? = null,
     val musicService: String? = null,
     val musicServiceName: String? = null,
@@ -52,7 +52,9 @@ private fun String?.isHttpUrl(): Boolean =
  * winner (MIN_CONFIDENCE_THRESHOLD filtered <0.60 out of selection), and the
  * scrobble threshold is the empirical confidence signal (issue #170).
  */
-internal fun deriveLbSourceEnrichment(track: Track): LbSourceEnrichment {
+// Public (not internal) so the :app unit test can exercise it — :app can't see
+// shared-module internals (CLAUDE.md KMP rule #10).
+fun deriveLbSourceEnrichment(track: Track): LbSourceEnrichment {
     // Group 2: cross-platform Spotify anchor — independent of the played source.
     val spotifyAnchor = track.spotifyId
         ?.takeIf { it.isNotBlank() }

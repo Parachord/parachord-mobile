@@ -27,6 +27,13 @@ data class Track(
     val spotifyId: String? = null,
     /** Apple Music catalog song ID (e.g. "1440935467"). */
     val appleMusicId: String? = null,
+    /**
+     * ISRC of the resolved recording, carried from [com.parachord.shared.resolver.ResolvedSource.isrc]
+     * when the source is attached to the playing track. Used as the
+     * service-agnostic fallback to resolve [recordingMbid] via MusicBrainz
+     * `/isrc/` when the ListenBrainz mapper is unavailable.
+     */
+    val isrc: String? = null,
     /** MusicBrainz recording MBID. */
     val recordingMbid: String? = null,
     /** MusicBrainz artist MBID. */

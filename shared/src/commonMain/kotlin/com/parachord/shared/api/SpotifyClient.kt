@@ -252,6 +252,7 @@ class SpotifyClient(
             resolver = "spotify",
             spotifyUri = "spotify:track:${track.id}",
             spotifyId = track.id,
+            isrc = track.externalIds?.isrc?.takeIf { it.isNotBlank() },
             confidence = 0.9,
             matchedTitle = track.name,
             matchedArtist = track.artistName,
@@ -470,9 +471,15 @@ data class SpTrack(
     @SerialName("duration_ms") val durationMs: Long? = null,
     @SerialName("preview_url") val previewUrl: String? = null,
     @SerialName("is_playable") val isPlayable: Boolean? = null,
+    @SerialName("external_ids") val externalIds: SpExternalIds? = null,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name.orEmpty() }
 }
+
+/** Spotify `external_ids` — carries the ISRC (present on full track objects from
+ *  search + `/v1/tracks/{id}`), the supply side of the ISRC → MBID fallback. */
+@Serializable
+data class SpExternalIds(val isrc: String? = null)
 
 @Serializable
 data class SpArtistRef(val id: String? = null, val name: String? = null)

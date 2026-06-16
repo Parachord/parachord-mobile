@@ -3,11 +3,10 @@ package com.parachord.android.resolver
 import com.parachord.shared.api.SpTrack
 import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.api.SpotifyRateLimitedException
+import com.parachord.shared.resolver.ResolverCoordinator
 import io.mockk.coEvery
 import io.mockk.coVerify
-import io.mockk.every
 import io.mockk.mockk
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -34,22 +33,18 @@ class ResolverManagerHintsTest {
     fun setUp() {
         spotifyClient = mockk(relaxed = true)
         val settingsStore = mockk<com.parachord.shared.settings.SettingsStore>(relaxed = true)
-        val pluginManager = mockk<com.parachord.android.plugin.PluginManager>(relaxed = true)
+        // Post-#210, ResolverManager delegates the cascade to the shared
+        // ResolverCoordinator. A relaxed mock returns an empty scored list by
+        // default, so these tests isolate resolveWithHints' Spotify-verify +
+        // 429-keep-the-badge logic (which still lives in ResolverManager).
+        val coordinator = mockk<ResolverCoordinator>(relaxed = true)
 
-        coEvery { settingsStore.getActiveResolvers() } returns listOf("spotify")
         coEvery { settingsStore.getSpotifyAccessToken() } returns "token"
-        coEvery { settingsStore.getDisabledPlugins() } returns emptySet()
-        every { pluginManager.plugins } returns MutableStateFlow(emptyList())
 
         resolver = ResolverManager(
+            coordinator = coordinator,
             spotifyClient = spotifyClient,
             settingsStore = settingsStore,
-            oAuthManager = mockk(relaxed = true),
-            okHttpClient = mockk(relaxed = true),
-            json = mockk(relaxed = true),
-            musicKitBridge = mockk(relaxed = true),
-            trackDao = mockk(relaxed = true),
-            pluginManager = pluginManager,
         )
     }
 

@@ -99,6 +99,9 @@ class AndroidResolverRuntime constructor(
                         sourceType = "applemusic",
                         resolver = "applemusic",
                         appleMusicId = best.id,
+                        // MusicKit catalog attributes carry the ISRC (iTunes-Search
+                        // Tier 2 below does not) — supply it for the MBID fallback.
+                        isrc = best.isrc?.takeIf { it.isNotBlank() },
                         confidence = 0.9, // Default — overridden by scoreConfidence() in resolve()
                         matchedTitle = best.title,
                         matchedArtist = best.artist,
@@ -339,6 +342,9 @@ class AndroidResolverRuntime constructor(
                 spotifyId = result.spotifyId,
                 soundcloudId = result.soundcloudId,
                 appleMusicId = result.appleMusicId,
+                // Optional `.axe` result field — a plugin that resolves a
+                // streaming source MAY return its ISRC for the MBID fallback.
+                isrc = result.isrc?.takeIf { it.isNotBlank() },
                 confidence = 0.9,
                 matchedTitle = result.title,
                 matchedArtist = result.artist,
@@ -362,6 +368,7 @@ private data class AxeResolveResult(
     val spotifyId: String? = null,
     val soundcloudId: String? = null,
     val appleMusicId: String? = null,
+    val isrc: String? = null,
 )
 
 // ── iTunes API Response Models ──────────────────────────────────────

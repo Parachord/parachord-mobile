@@ -135,6 +135,14 @@ class ScrobbleManager(
         var dbTrack = if (track.recordingMbid != null) track else {
             try { trackDao.getById(track.id) ?: track } catch (_: Exception) { track }
         }
+        // ISRC is never persisted to the DB row (carried only on the live,
+        // resolver-merged track), so re-attach it after the DB re-read above —
+        // otherwise the ISRC→MBID fallback here AND ListenBrainzScrobbler's own
+        // fallback downstream (it reads off the returned enrichedTrack) would see
+        // null for every in-DB track, defeating the fallback for the common case.
+        if (dbTrack.isrc.isNullOrBlank() && !track.isrc.isNullOrBlank()) {
+            dbTrack = dbTrack.copy(isrc = track.isrc)
+        }
         // Still no recording MBID — resolve it now via the mapper. Android enriches
         // at playback start (PlaybackController.enrichInBackground) so the MBID is
         // usually cached by scrobble time; iOS has no such hook, and ephemeral
@@ -146,7 +154,7 @@ class ScrobbleManager(
         // tracks (correctly leaving them un-submitted).
         if (dbTrack.recordingMbid.isNullOrBlank()) {
             val mbid = try {
-                mbidEnrichment.getRecordingMbid(dbTrack.artist, dbTrack.title)
+                mbidEnrichment.getRecordingMbid(dbTrack.artist, dbTrack.title, dbTrack.isrc)
             } catch (_: Exception) {
                 null
             }
