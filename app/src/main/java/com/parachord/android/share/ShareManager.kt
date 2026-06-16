@@ -90,7 +90,10 @@ class ShareManager constructor(
     }
 
     private suspend fun trySubmitForTrack(track: TrackEntity, mbid: String?) {
-        if (mbid.isNullOrBlank()) return
+        val key = mbid?.takeIf { it.isNotBlank() } ?: track.isrc?.takeIf { it.isNotBlank() }
+        // #216: an ISRC is a valid recording key too — submit even without an MBID
+        // (the server derives it from the ISRC). Skip only when we have neither.
+        if (key == null) return
         val links = buildList {
             track.spotifyId?.takeIf { it.isNotBlank() }?.let {
                 add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
@@ -107,7 +110,8 @@ class ShareManager constructor(
             withTimeout(SMART_LINK_TIMEOUT_MS) {
                 achordionClient.submitTrackLinks(
                     SubmitTrackLinksRequest(
-                        mbid = mbid,
+                        mbid = mbid?.takeIf { it.isNotBlank() },
+                        isrc = track.isrc?.takeIf { it.isNotBlank() },
                         links = links,
                         trackName = track.title,
                         artistName = track.artist,
@@ -116,9 +120,9 @@ class ShareManager constructor(
                 )
             }
         } catch (e: TimeoutCancellationException) {
-            Log.w(TAG, "submitTrackLinks timed out for mbid=$mbid")
+            Log.w(TAG, "submitTrackLinks timed out for key=$key")
         } catch (e: Exception) {
-            Log.w(TAG, "submitTrackLinks failed for mbid=$mbid: ${e.message}")
+            Log.w(TAG, "submitTrackLinks failed for key=$key: ${e.message}")
         }
     }
 

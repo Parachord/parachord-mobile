@@ -60,6 +60,9 @@ class CrossResolverEnrichmentService(
         val spotifyId: String? = null,
         val appleMusicId: String? = null,
         val soundcloudId: String? = null,
+        /** ISRC of the matched recording, when a resolver supplied one (#216) —
+         *  lets ISRC-only tracks submit to Achordion even without an MBID. */
+        val isrc: String? = null,
     ) {
         val isEmpty: Boolean
             get() = spotifyId.isNullOrBlank() && appleMusicId.isNullOrBlank() && soundcloudId.isNullOrBlank()
@@ -156,9 +159,12 @@ class CrossResolverEnrichmentService(
                 track = trackDao.getById(track.id) ?: track
             }
 
-            // 4. Submit to Achordion when MBID + at least one streaming ID is present.
-            val mbid = track.recordingMbid
-            val submitted = if (!mbid.isNullOrBlank()) {
+            // 4. Submit to Achordion when a recording key (MBID OR ISRC, #216) +
+            //    at least one streaming ID is present. ISRC isn't a DB column, so
+            //    it comes off the just-resolved sources, not the track row.
+            val mbid = track.recordingMbid?.takeIf { it.isNotBlank() }
+            val isrc = resolved.isrc?.takeIf { it.isNotBlank() }
+            val submitted = if (mbid != null || isrc != null) {
                 val links = buildList {
                     track.spotifyId?.takeIf { it.isNotBlank() }?.let {
                         add(TrackLink("https://open.spotify.com/track/$it", "spotify.com", "Spotify"))
@@ -175,6 +181,7 @@ class CrossResolverEnrichmentService(
                         achordionClient.submitTrackLinks(
                             SubmitTrackLinksRequest(
                                 mbid = mbid,
+                                isrc = isrc,
                                 links = links,
                                 trackName = track.title,
                                 artistName = track.artist,

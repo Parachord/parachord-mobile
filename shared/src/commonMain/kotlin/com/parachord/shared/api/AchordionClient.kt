@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /**
@@ -158,14 +159,23 @@ class AchordionClient(
     suspend fun submitTrackLinks(payload: SubmitTrackLinksRequest): SubmitResult {
         if (bearerToken.isBlank()) return SubmitResult.AuthFailed
         if (authFailed) return SubmitResult.AuthFailed
-        if (payload.mbid.isBlank()) return SubmitResult.NoMbid
+        // Need a recording key — an MBID OR an ISRC. The server (achordion#77)
+        // derives the MBID from the ISRC when no MBID is supplied, so ISRC-only
+        // tracks (mapper outages; streaming-resolved tracks that ship an ISRC but
+        // no MBID) can contribute. #216.
+        val mbid = payload.mbid?.takeIf { it.isNotBlank() }
+        val isrc = payload.isrc?.takeIf { it.isNotBlank() }
+        if (mbid == null && isrc == null) return SubmitResult.NoKey
         if (payload.links.isEmpty()) return SubmitResult.NoLinks
 
-        val mbidKey = payload.mbid.lowercase()
+        // Dedup by whichever key is present (MBID preferred), namespaced so an
+        // ISRC can't collide with an MBID. Prevents an ISRC-only track from being
+        // re-submitted every session.
+        val dedupKey = (mbid ?: "isrc:$isrc").lowercase()
         val alreadySubmitted = dedupMutex.withLock {
-            if (mbidKey in submittedThisSession) true
+            if (dedupKey in submittedThisSession) true
             else {
-                submittedThisSession.add(mbidKey)
+                submittedThisSession.add(dedupKey)
                 false
             }
         }
@@ -175,7 +185,10 @@ class AchordionClient(
             val response = httpClient.post(SUBMIT_ENDPOINT) {
                 header(HttpHeaders.Authorization, "Bearer $bearerToken")
                 contentType(ContentType.Application.Json)
-                setBody(payload)
+                // Serialize with the local encodeDefaults=false json so null keys
+                // are OMITTED, not sent as `null` — the server's zod `.optional()`
+                // rejects an explicit `mbid: null` / `isrc: null`.
+                setBody(json.encodeToString(SubmitTrackLinksRequest.serializer(), payload))
             }
             when (response.status) {
                 HttpStatusCode.OK, HttpStatusCode.Created, HttpStatusCode.Accepted -> SubmitResult.Ok
@@ -185,16 +198,16 @@ class AchordionClient(
                     SubmitResult.AuthFailed
                 }
                 else -> {
-                    dedupMutex.withLock { submittedThisSession.remove(mbidKey) }
-                    Log.w(TAG, "submit returned HTTP ${response.status.value} for mbid=${payload.mbid}")
+                    dedupMutex.withLock { submittedThisSession.remove(dedupKey) }
+                    Log.w(TAG, "submit returned HTTP ${response.status.value} for key=$dedupKey")
                     SubmitResult.HttpError(response.status.value)
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {
-            dedupMutex.withLock { submittedThisSession.remove(mbidKey) }
-            Log.w(TAG, "submit failed for mbid=${payload.mbid}: ${e.message}")
+            dedupMutex.withLock { submittedThisSession.remove(dedupKey) }
+            Log.w(TAG, "submit failed for key=$dedupKey: ${e.message}")
             SubmitResult.NetworkError(e.message ?: "unknown")
         }
     }
@@ -217,7 +230,11 @@ data class EntityLink(
 
 @Serializable
 data class SubmitTrackLinksRequest(
-    val mbid: String,
+    /** Recording MBID. Optional when [isrc] is supplied — the server derives the
+     *  MBID from the ISRC (achordion#77). Omitted from the body when null. */
+    val mbid: String? = null,
+    /** ISRC — alternate recording key for ISRC-only clients (#216). Omitted when null. */
+    val isrc: String? = null,
     val links: List<TrackLink>,
     val trackName: String? = null,
     val artistName: String? = null,
@@ -263,7 +280,8 @@ sealed class SubmitResult {
     object Ok : SubmitResult()
     object NoLinks : SubmitResult()
     object AlreadySubmitted : SubmitResult()
-    object NoMbid : SubmitResult()
+    /** Neither an MBID nor an ISRC was supplied — nothing to key the recording on. */
+    object NoKey : SubmitResult()
     data class HttpError(val status: Int) : SubmitResult()
     object AuthFailed : SubmitResult()
     data class NetworkError(val message: String) : SubmitResult()

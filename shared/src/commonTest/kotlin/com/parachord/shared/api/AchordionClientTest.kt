@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 
 class AchordionClientTest {
@@ -169,11 +170,38 @@ class AchordionClientTest {
     }
 
     @Test
-    fun submitTrackLinks_returnsNoMbid_whenMbidIsBlank() = runTest {
+    fun submitTrackLinks_returnsNoKey_whenNeitherMbidNorIsrc() = runTest {
         val engine = MockEngine { _ -> error("should not be called") }
         val client = buildClient(engine)
-        val result = client.submitTrackLinks(sampleRequest.copy(mbid = ""))
-        assertEquals(SubmitResult.NoMbid, result)
+        val result = client.submitTrackLinks(sampleRequest.copy(mbid = "", isrc = null))
+        assertEquals(SubmitResult.NoKey, result)
+    }
+
+    @Test
+    fun submitTrackLinks_submitsIsrcOnlyTrack_withNoMbid() = runTest {
+        // #216: a track with an ISRC and no MBID must submit, and the body must
+        // carry `isrc` while OMITTING `mbid` (server zod rejects explicit null).
+        var sentBody: String? = null
+        val engine = MockEngine { req ->
+            sentBody = (req.body as io.ktor.http.content.TextContent).text
+            respond("", HttpStatusCode.OK)
+        }
+        val client = buildClient(engine)
+        val result = client.submitTrackLinks(
+            sampleRequest.copy(mbid = null, isrc = "USSM12203074"),
+        )
+        assertEquals(SubmitResult.Ok, result)
+        assertTrue(sentBody!!.contains("\"isrc\":\"USSM12203074\""), "body must include the isrc")
+        assertTrue(!sentBody!!.contains("\"mbid\""), "body must OMIT a null mbid (not send mbid:null)")
+    }
+
+    @Test
+    fun submitTrackLinks_dedupsByIsrc_whenNoMbid() = runTest {
+        val engine = MockEngine { _ -> respond("", HttpStatusCode.OK) }
+        val client = buildClient(engine)
+        val req = sampleRequest.copy(mbid = null, isrc = "USSM12203074")
+        assertEquals(SubmitResult.Ok, client.submitTrackLinks(req))
+        assertEquals(SubmitResult.AlreadySubmitted, client.submitTrackLinks(req))
     }
 
     @Test

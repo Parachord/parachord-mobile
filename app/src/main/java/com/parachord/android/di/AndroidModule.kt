@@ -586,6 +586,9 @@ val androidModule = module {
                     spotifyId = pick("spotify")?.spotifyId,
                     appleMusicId = pick("applemusic")?.appleMusicId,
                     soundcloudId = pick("soundcloud")?.soundcloudId,
+                    // ISRC from the best high-confidence source that carries one (#216).
+                    isrc = listOfNotNull(pick("spotify"), pick("applemusic"), pick("soundcloud"))
+                        .firstNotNullOfOrNull { it.isrc?.takeIf { s -> s.isNotBlank() } },
                 )
             },
         )
