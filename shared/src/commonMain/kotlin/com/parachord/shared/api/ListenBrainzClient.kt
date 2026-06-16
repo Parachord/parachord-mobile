@@ -48,6 +48,8 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         private const val BASE_URL = "https://api.listenbrainz.org"
         private const val MAPPER_URL = "https://mapper.listenbrainz.org"
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+        /** Canonical ISRC shape (after uppercasing): 2-char country + 3-char registrant + 7 digits. */
+        private val ISRC_REGEX = Regex("^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
     }
 
     /** Validate that a ListenBrainz user exists (no auth required). */
@@ -169,7 +171,12 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         musicService: String? = null,
         musicServiceName: String? = null,
         spotifyId: String? = null,
+        isrc: String? = null,
     ): Boolean {
+        // Normalize up-front: uppercase, keep ONLY a canonical ISRC. A bad
+        // value is omitted entirely (never null/""/malformed) so Achordion can
+        // key a mapper-less listen on the exact recording. (#216 / achordion#77)
+        val normalizedIsrc = isrc?.trim()?.uppercase()?.takeIf { ISRC_REGEX.matches(it) }
         return try {
             val payload = buildJsonObject {
                 put("listen_type", if (listenedAt == null) "playing_now" else "single")
@@ -184,7 +191,7 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                             putJsonObject("additional_info") {
                                 put("media_player", "Parachord")
                                 put("submission_client", "Parachord")
-                                put("submission_client_version", "1.0.0")
+                                put("submission_client_version", "1.1.0")
                                 if (durationMs != null) put("duration_ms", durationMs)
                                 if (!recordingMbid.isNullOrBlank()) put("recording_mbid", recordingMbid)
                                 if (!releaseMbid.isNullOrBlank()) put("release_mbid", releaseMbid)
@@ -196,6 +203,8 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                                 if (!musicService.isNullOrBlank()) put("music_service", musicService)
                                 if (!musicServiceName.isNullOrBlank()) put("music_service_name", musicServiceName)
                                 if (!spotifyId.isNullOrBlank()) put("spotify_id", spotifyId)
+                                // Exact recording key for Achordion when the mapper has no MBID.
+                                if (normalizedIsrc != null) put("isrc", normalizedIsrc)
                             }
                         }
                     }
