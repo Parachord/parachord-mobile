@@ -23,6 +23,8 @@ import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
+import com.parachord.shared.model.Album
+import com.parachord.shared.model.Artist
 import com.parachord.shared.model.Track
 import com.parachord.shared.playback.scrobbler.LastFmScrobbler
 import com.parachord.shared.playback.scrobbler.LibreFmScrobbler
@@ -227,6 +229,42 @@ class IosContainer private constructor() {
     val artistDao: ArtistDao by lazy { ArtistDao(database) }
     val playlistDao: PlaylistDao by lazy { PlaylistDao(database) }
     val playlistTrackDao: PlaylistTrackDao by lazy { PlaylistTrackDao(database) }
+
+    // ── Collection (#195) — DAO-backed facade ──────────────────────────
+    // Mirrors the NON-SYNC slice of the shared LibraryRepository. Deliberately
+    // does NOT construct LibraryRepository (its ctor requires SyncEngine — that's
+    // the #194 epic). Decision recorded in docs/plans/2026-06-17-ios-collection-195.md.
+    // Reads are reactive (FlowWatcher → Swift callback, cancel on disappear).
+
+    fun watchCollectionTracks(onEach: (List<Track>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(trackDao.getAll()) { onEach((it as? List<Track>) ?: emptyList()) }
+    fun watchCollectionAlbums(onEach: (List<Album>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(albumDao.getAll()) { onEach((it as? List<Album>) ?: emptyList()) }
+    fun watchCollectionArtists(onEach: (List<Artist>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(artistDao.getAll()) { onEach((it as? List<Artist>) ?: emptyList()) }
+
+    // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
+    fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(trackDao.existsByTitleAndArtist(title, artist)) { onEach((it as? Boolean) ?: false) }
+    fun watchAlbumInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(albumDao.existsByTitleAndArtist(title, artist)) { onEach((it as? Boolean) ?: false) }
+    fun watchArtistInCollection(name: String, onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(artistDao.existsByName(name)) { onEach((it as? Boolean) ?: false) }
+
+    // Add to collection: upsert + fire MBID enrichment. (Tombstone-clear and
+    // loves-push are intentionally no-ops here until #194 / #226 wire them.)
+    suspend fun addTrackToCollection(track: Track) {
+        trackDao.insert(track)
+        mbidEnrichmentService.enrichInBackground(track.id, track.artist, track.title)
+    }
+    suspend fun addAlbumToCollection(album: Album) { albumDao.insert(album) }
+    suspend fun addArtistToCollection(artist: Artist) { artistDao.insert(artist) }
+
+    // Remove from collection — LOCAL ONLY. #194 wires SyncEngine.onTrackRemoved
+    // (remote remove + tombstone) in here so removals propagate + don't re-import.
+    suspend fun removeTrackFromCollection(track: Track) { trackDao.delete(track) }
+    suspend fun removeAlbumFromCollection(album: Album) { albumDao.delete(album) }
+    suspend fun removeArtistFromCollection(artist: Artist) { artistDao.delete(artist) }
 
     // ── Charts (Pop of the Tops) ───────────────────────────────────────
     val appleMusicClient: AppleMusicClient by lazy { AppleMusicClient(httpClient) }
