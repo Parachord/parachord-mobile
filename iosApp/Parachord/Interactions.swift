@@ -24,7 +24,7 @@ extension View {
             Button { coordinator.addToQueue(track) } label: {
                 Label("Add to Queue", systemImage: "text.append")
             }
-            Button { } label: { Label("Add to Playlist…", systemImage: "music.note.list") }
+            PCAddToPlaylistMenu(track: track)
             // Queue-context only (#220): remove this track from the up-next list.
             if let onRemoveFromQueue {
                 Button(role: .destructive) { onRemoveFromQueue() } label: {
@@ -85,6 +85,34 @@ extension View {
         contextMenu {
             PCArtistMenuItems(name: name, imageUrl: imageUrl, coordinator: coordinator, onGoToArtist: onGoToArtist)
         }
+    }
+}
+
+// MARK: - Add to Playlist submenu (#240)
+
+/// Track-menu "Add to Playlist…" → a native submenu listing the saved playlists;
+/// tapping one appends the track. Loads the list when the menu opens. (Creating
+/// a NEW playlist needs a host-presented text prompt — tracked separately.)
+private struct PCAddToPlaylistMenu: View {
+    let track: Track
+    @State private var playlists: [Playlist] = []
+    private let container = IosContainer.companion.shared
+
+    var body: some View {
+        Menu {
+            if playlists.isEmpty {
+                Text("No playlists yet")
+            } else {
+                ForEach(playlists, id: \.id) { p in
+                    Button(p.name) {
+                        Task { try? await container.addTrackToPlaylist(playlistId: p.id, track: track) }
+                    }
+                }
+            }
+        } label: {
+            Label("Add to Playlist…", systemImage: "text.badge.plus")
+        }
+        .task { playlists = (try? await container.getSavedPlaylistsOnce()) ?? [] }
     }
 }
 

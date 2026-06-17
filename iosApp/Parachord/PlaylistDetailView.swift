@@ -264,6 +264,19 @@ struct PlaylistDetailView: View {
 // #220 List + .onMove + always-active editMode pattern). Saving a weekly
 // playlist (#236) lands here.
 
+/// PlaylistTrack → playable Track (19-param init in a helper to spare Swift's
+/// inline type-checker). Shared by the playlist detail + the "Play Playlist" menu.
+func pcTrack(from t: PlaylistTrack) -> Track {
+    Track(
+        id: "\(t.trackTitle)|\(t.trackArtist)", title: t.trackTitle, artist: t.trackArtist,
+        album: t.trackAlbum, albumId: nil, duration: t.trackDuration, artworkUrl: t.trackArtworkUrl,
+        sourceType: nil, sourceUrl: t.trackSourceUrl, addedAt: 0,
+        resolver: t.trackResolver, spotifyUri: t.trackSpotifyUri, soundcloudId: t.trackSoundcloudId,
+        spotifyId: t.trackSpotifyId, appleMusicId: t.trackAppleMusicId, isrc: nil,
+        recordingMbid: t.trackRecordingMbid, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+    )
+}
+
 @MainActor
 @Observable
 final class PlaylistsListModel {
@@ -280,6 +293,11 @@ final class PlaylistsListModel {
 struct PlaylistsScreen: View {
     @State private var model = PlaylistsListModel()
     @State private var path: [String] = []
+    @Environment(QueuePlaybackCoordinator.self) private var coordinator
+    private let container = IosContainer.companion.shared
+    @State private var renameTarget: Playlist?
+    @State private var renameText = ""
+    @State private var deleteTarget: Playlist?
     let onMenu: () -> Void
     init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
 
@@ -301,6 +319,11 @@ struct PlaylistsScreen: View {
                         LazyVStack(spacing: 0) {
                             ForEach(model.playlists, id: \.id) { p in
                                 Button { path.append(p.id) } label: { row(p) }.buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button { playPlaylist(p) } label: { Label("Play Playlist", systemImage: "play.fill") }
+                                        Button { renameTarget = p; renameText = p.name } label: { Label("Rename", systemImage: "pencil") }
+                                        Button(role: .destructive) { deleteTarget = p } label: { Label("Delete Playlist", systemImage: "trash") }
+                                    }
                             }
                         }.padding(.bottom, 130)
                     }
@@ -309,6 +332,31 @@ struct PlaylistsScreen: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in SavedPlaylistDetailView(playlistId: id) }
             .task { model.start() }
+            .alert("Rename Playlist", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
+                TextField("Name", text: $renameText)
+                Button("Cancel", role: .cancel) { renameTarget = nil }
+                Button("Save") {
+                    let n = renameText.trimmingCharacters(in: .whitespaces)
+                    if let p = renameTarget, !n.isEmpty { Task { try? await container.renamePlaylist(id: p.id, name: n) } }
+                    renameTarget = nil
+                }
+            }
+            .confirmationDialog("Delete this playlist?", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }), titleVisibility: .visible) {
+                Button("Delete Playlist", role: .destructive) {
+                    if let p = deleteTarget { Task { try? await container.deletePlaylist(id: p.id) } }
+                    deleteTarget = nil
+                }
+                Button("Cancel", role: .cancel) { deleteTarget = nil }
+            }
+        }
+    }
+
+    private func playPlaylist(_ p: Playlist) {
+        Task {
+            let tracks = (try? await container.getPlaylistTracksOnce(id: p.id)) ?? []
+            let entities = tracks.map { pcTrack(from: $0) }
+            guard !entities.isEmpty else { return }
+            coordinator.setQueue(entities, startIndex: 0, context: PlaybackContext(type: "playlist", name: p.name, id: p.id))
         }
     }
 
@@ -366,18 +414,7 @@ final class SavedPlaylistModel {
     func removeAt(_ i: Int) { Task { try? await container.removePlaylistTrackAt(id: playlistId, index: Int32(i)) } }
     func move(from: Int, to: Int) { Task { try? await container.movePlaylistTrack(id: playlistId, from: Int32(from), to: Int32(to)) } }
 
-    /// PlaylistTrack → playable Track (19-param init lives in a helper to spare
-    /// Swift's inline type-checker).
-    private static func makeTrack(_ t: PlaylistTrack) -> Track {
-        Track(
-            id: "\(t.trackTitle)|\(t.trackArtist)", title: t.trackTitle, artist: t.trackArtist,
-            album: t.trackAlbum, albumId: nil, duration: t.trackDuration, artworkUrl: t.trackArtworkUrl,
-            sourceType: nil, sourceUrl: t.trackSourceUrl, addedAt: 0,
-            resolver: t.trackResolver, spotifyUri: t.trackSpotifyUri, soundcloudId: t.trackSoundcloudId,
-            spotifyId: t.trackSpotifyId, appleMusicId: t.trackAppleMusicId, isrc: nil,
-            recordingMbid: t.trackRecordingMbid, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
-        )
-    }
+    private static func makeTrack(_ t: PlaylistTrack) -> Track { pcTrack(from: t) }
 }
 
 struct SavedPlaylistDetailView: View {
