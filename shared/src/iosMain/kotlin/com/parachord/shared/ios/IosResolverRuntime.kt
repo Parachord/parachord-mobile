@@ -152,8 +152,9 @@ class IosResolverRuntime(
                     soundcloudUrl = parsed.soundcloudUrl,
                     appleMusicId = parsed.appleMusicId,
                     // Optional `.axe` result field — a streaming resolver MAY
-                    // supply its ISRC for the MBID fallback.
-                    isrc = parsed.isrc?.takeIf { it.isNotBlank() },
+                    // supply its ISRC for the MBID fallback. Validated/normalized
+                    // so a malformed value never enters the source record (#217).
+                    isrc = com.parachord.shared.resolver.validateIsrc(parsed.isrc),
                     // Placeholder — overridden by scoreConfidence in resolveSources.
                     confidence = 0.9,
                     matchedTitle = parsed.title,
@@ -221,7 +222,7 @@ class IosResolverRuntime(
             appleMusicId = id,
             // Apple Music catalog attributes carry the ISRC — supply it for the
             // MBID fallback.
-            isrc = attrs["isrc"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() },
+            isrc = com.parachord.shared.resolver.validateIsrc(attrs["isrc"]?.jsonPrimitive?.contentOrNull),
             confidence = 0.9, // overridden by scoreConfidence in the coordinator
             matchedTitle = attrs["name"]?.jsonPrimitive?.contentOrNull,
             matchedArtist = attrs["artistName"]?.jsonPrimitive?.contentOrNull,

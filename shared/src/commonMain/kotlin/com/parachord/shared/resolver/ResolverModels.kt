@@ -155,3 +155,42 @@ fun scoreConfidence(
     // Desktop's validateResolvedTrack: both must match.
     return if (titleMatch && artistMatch) 0.95 else 0.50
 }
+
+// ── ISRC capture / walk (desktop parity, parachord#894 / mobile #217) ────────
+
+/**
+ * Canonical ISRC shape: 2-letter country, 3-char alphanumeric registrant,
+ * 7 digits (2-digit year + 5-digit designation). Matches desktop's
+ * `/^[A-Z]{2}[A-Z0-9]{3}\d{7}$/`.
+ */
+private val ISRC_REGEX = Regex("^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
+
+/**
+ * Normalize + validate a raw ISRC: trim, uppercase, then require the canonical
+ * shape. Returns null for malformed/blank input. Every resolver that captures
+ * an ISRC into a [ResolvedSource] runs the raw value through this so a malformed
+ * ISRC never poisons a source record (desktop drops rather than stores) — and so
+ * the value handed to MusicBrainz `/ws/2/isrc/{isrc}` is always well-formed.
+ */
+fun validateIsrc(raw: String?): String? =
+    raw?.trim()?.uppercase()?.takeIf { ISRC_REGEX.matches(it) }
+
+/**
+ * Pick the best ISRC for a track, mirroring desktop's `window.pickTrackIsrc`:
+ * the track's own (carried) ISRC first, then walk the resolved sources in order,
+ * skipping `noMatch`. Every candidate is [validateIsrc]-normalized, so the result
+ * is always canonical or null. Byte-equivalent precedence with desktop so the
+ * same track yields the same ISRC→MBID fallback result on either client.
+ *
+ * Mobile has no `track.sources` map (sources live in the resolver cache as a
+ * `List<ResolvedSource>`), so this takes the carried top-level ISRC + that list
+ * rather than a single track object.
+ */
+fun pickTrackIsrc(topLevelIsrc: String?, sources: List<ResolvedSource>): String? {
+    validateIsrc(topLevelIsrc)?.let { return it }
+    for (source in sources) {
+        if (source.noMatch) continue
+        validateIsrc(source.isrc)?.let { return it }
+    }
+    return null
+}

@@ -1873,8 +1873,10 @@ class PlaybackController constructor(
 
         // Attach the played source's ISRC for the MBID fallback even when the
         // resolver is unchanged — ISRC is never persisted on the track row, so
-        // it must be re-merged from the resolved source on each play.
-        val isrc = best.isrc?.takeIf { it.isNotBlank() } ?: track.isrc
+        // it must be re-merged from the resolved source on each play. Walk +
+        // validate with desktop-parity precedence (#217): carried top-level first,
+        // then sources (skipping noMatch), canonical-or-null.
+        val isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, cachedSources)
 
         // Only re-route if the best resolver actually changed (but still carry isrc).
         if (best.resolver == track.resolver) return track.copy(isrc = isrc)
@@ -1958,7 +1960,8 @@ class PlaybackController constructor(
                 spotifyId = best.spotifyId,
                 soundcloudId = best.soundcloudId,
                 appleMusicId = best.appleMusicId,
-                isrc = best.isrc?.takeIf { it.isNotBlank() } ?: track.isrc,
+                // Walk + validate, desktop-parity precedence (#217).
+                isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, sources),
             )
         } catch (e: Exception) {
             Log.e(TAG, "On-the-fly resolution failed for '${track.title}'", e)

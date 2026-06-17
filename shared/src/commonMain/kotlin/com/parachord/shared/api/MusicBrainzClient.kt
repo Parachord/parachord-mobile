@@ -114,8 +114,12 @@ class MusicBrainzClient(private val httpClient: HttpClient) {
      * MusicBrainz recording. Throws [MusicBrainzRateLimitedException] on 429/503;
      * callers wrap other failures (e.g. 404) and fall back to null.
      */
-    suspend fun lookupRecordingMbidByIsrc(isrc: String): String? =
-        guardedGet<MbIsrcLookupResponse>("$BASE_URL/isrc/$isrc") {}.recordings.firstOrNull()?.id
+    suspend fun lookupRecordingMbidByIsrc(isrc: String): String? {
+        // Validate/normalize before hitting MB (#217): a malformed ISRC just 404s,
+        // and /ws/2/isrc/ expects the canonical (uppercased) form.
+        val normalized = com.parachord.shared.resolver.validateIsrc(isrc) ?: return null
+        return guardedGet<MbIsrcLookupResponse>("$BASE_URL/isrc/$normalized") {}.recordings.firstOrNull()?.id
+    }
 
     suspend fun getRelease(
         releaseId: String,

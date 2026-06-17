@@ -587,9 +587,12 @@ val androidModule = module {
                     spotifyId = pick("spotify")?.spotifyId,
                     appleMusicId = pick("applemusic")?.appleMusicId,
                     soundcloudId = pick("soundcloud")?.soundcloudId,
-                    // ISRC from the best high-confidence source that carries one (#216).
-                    isrc = listOfNotNull(pick("spotify"), pick("applemusic"), pick("soundcloud"))
-                        .firstNotNullOfOrNull { it.isrc?.takeIf { s -> s.isNotBlank() } },
+                    // ISRC from the best high-confidence source that carries one
+                    // (#216), validated + walked with desktop-parity precedence (#217).
+                    isrc = com.parachord.shared.resolver.pickTrackIsrc(
+                        null,
+                        listOfNotNull(pick("spotify"), pick("applemusic"), pick("soundcloud")),
+                    ),
                 )
             },
         )

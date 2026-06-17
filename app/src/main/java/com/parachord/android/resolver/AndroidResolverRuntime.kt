@@ -100,8 +100,9 @@ class AndroidResolverRuntime constructor(
                         resolver = "applemusic",
                         appleMusicId = best.id,
                         // MusicKit catalog attributes carry the ISRC (iTunes-Search
-                        // Tier 2 below does not) — supply it for the MBID fallback.
-                        isrc = best.isrc?.takeIf { it.isNotBlank() },
+                        // Tier 2 below does not) — supply it for the MBID fallback,
+                        // validated/normalized so a malformed value never stores (#217).
+                        isrc = com.parachord.shared.resolver.validateIsrc(best.isrc),
                         confidence = 0.9, // Default — overridden by scoreConfidence() in resolve()
                         matchedTitle = best.title,
                         matchedArtist = best.artist,
@@ -343,8 +344,9 @@ class AndroidResolverRuntime constructor(
                 soundcloudId = result.soundcloudId,
                 appleMusicId = result.appleMusicId,
                 // Optional `.axe` result field — a plugin that resolves a
-                // streaming source MAY return its ISRC for the MBID fallback.
-                isrc = result.isrc?.takeIf { it.isNotBlank() },
+                // streaming source MAY return its ISRC for the MBID fallback,
+                // validated/normalized so a malformed value never stores (#217).
+                isrc = com.parachord.shared.resolver.validateIsrc(result.isrc),
                 confidence = 0.9,
                 matchedTitle = result.title,
                 matchedArtist = result.artist,

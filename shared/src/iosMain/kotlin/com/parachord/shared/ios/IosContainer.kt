@@ -1046,7 +1046,9 @@ class IosContainer private constructor() {
             spotifyUri = track.spotifyUri ?: pick { it.spotifyUri },
             appleMusicId = track.appleMusicId ?: pick { it.appleMusicId },
             soundcloudId = track.soundcloudId ?: pick { it.soundcloudId },
-            isrc = track.isrc ?: pick { it.isrc },
+            // Walk + validate ISRC with desktop-parity precedence (#217): carried
+            // top-level first, then sources (skipping noMatch), canonical-or-null.
+            isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, sources),
         )
     }
 
