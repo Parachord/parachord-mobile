@@ -89,8 +89,14 @@ struct ContentView: View {
                         tab = .home
                         homePendingRoute = .artistOnTour(name)
                     },
-                    // Queue-source banner (#209) → push the playlist/album/artist page.
+                    // Queue-source banner (#209) → open the source page. Pushable
+                    // pages go on the Home stack; Collection is a tab, so switch to it.
                     onNavigateToContext: { ctx in
+                        if ctx.type == "collection" {
+                            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                            tab = .collection
+                            return
+                        }
                         guard let route = pcRouteForContext(ctx) else { return }
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
                         tab = .home

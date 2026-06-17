@@ -42,6 +42,13 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
     }
 }
 
+/// Whether a queue-source context links anywhere on iOS — a pushable page
+/// (pcRouteForContext) OR the Collection tab (which is a tab, not a route, so
+/// the shell switches to it rather than pushing). #209.
+func pcContextIsNavigable(_ ctx: PlaybackContext) -> Bool {
+    pcRouteForContext(ctx) != nil || ctx.type == "collection"
+}
+
 @ViewBuilder
 func pcRouteDestination(_ route: PCRoute) -> some View {
     switch route {

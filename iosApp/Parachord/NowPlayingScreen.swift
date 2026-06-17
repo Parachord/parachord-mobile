@@ -531,9 +531,10 @@ struct PCQueuePanel: View {
     /// Falls back to the neutral subtitle when the queue has no source context.
     @ViewBuilder private var contextBanner: some View {
         if let ctx = coordinator.playbackContext {
-            // Navigable when iOS has a page for this context type (single source of
-            // truth = pcRouteForContext) — album/playlist/artist + charts/recs/history.
-            let navigable = onNavigateToContext != nil && pcRouteForContext(ctx) != nil
+            // Navigable when iOS can route to this context's source — a pushable
+            // page or the Collection tab (pcContextIsNavigable is the single
+            // source of truth). #209.
+            let navigable = onNavigateToContext != nil && pcContextIsNavigable(ctx)
             HStack(spacing: 4) {
                 Text(contextLabel(ctx)).font(.system(size: 12, weight: navigable ? .medium : .regular))
                     .foregroundStyle(contextColor(ctx)).lineLimit(1)
