@@ -223,7 +223,10 @@ struct PCAddSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onDismiss) } }
         }
-        .presentationDetents([.medium])
+        // Open at full height so all actions are visible without scrolling;
+        // still draggable down to medium.
+        .presentationDetents([.large, .medium])
+        .presentationDragIndicator(.visible)
     }
 }
 
