@@ -194,8 +194,10 @@ struct PCNowPlaying: View {
                 }
             }
             Spacer(minLength: 0)
-            Image(systemName: "heart").font(.system(size: 18)).foregroundStyle(PC.error)
-                .frame(width: 36, height: 36).background(.white.opacity(0.14), in: Circle())
+            if let t = track {
+                PCHeartButton(track: t, iconSize: 18, tap: 36)
+                    .background(.white.opacity(0.14), in: Circle())
+            }
         }
     }
 

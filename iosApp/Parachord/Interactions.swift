@@ -88,6 +88,46 @@ extension View {
     }
 }
 
+// MARK: - Heart (collection toggle) button — Now Playing + mini-player
+
+/// Reactive love/collection heart for the current track. Observes the DB so the
+/// fill reflects membership, and toggles add/remove on tap. Styled for the
+/// always-dark player surfaces (filled = brand red, empty = muted white).
+struct PCHeartButton: View {
+    let track: Track
+    var iconSize: CGFloat = 20
+    var tap: CGFloat = 40
+    @State private var inCollection = false
+    @State private var sub: Cancellable?
+    private let container = IosContainer.companion.shared
+
+    var body: some View {
+        Button { toggle() } label: {
+            Image(systemName: inCollection ? "heart.fill" : "heart")
+                .font(.system(size: iconSize))
+                .foregroundStyle(inCollection ? PC.error : .white.opacity(0.6))
+                .frame(width: tap, height: tap)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        // Re-watch when the track changes (the player stays mounted; currentTrack swaps).
+        .task(id: "\(track.title)\u{1}\(track.artist)") { watch() }
+        .onDisappear { sub?.cancel(); sub = nil }
+    }
+
+    private func watch() {
+        sub?.cancel()
+        sub = container.watchTrackInCollection(title: track.title, artist: track.artist) { yes in inCollection = yes.boolValue }
+    }
+
+    private func toggle() {
+        Task {
+            if inCollection { try? await container.removeTrackFromCollection(track: track) }
+            else { try? await container.addTrackToCollection(track: track) }
+        }
+    }
+}
+
 // MARK: - Add to Playlist submenu (#240)
 
 /// Track-menu "Add to Playlist…" → a native submenu listing the saved playlists;

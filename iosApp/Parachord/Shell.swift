@@ -123,6 +123,9 @@ struct PCTabBar: View {
 // MARK: - Floating mini-player
 
 struct PCMiniPlayer: View {
+    /// The current track — drives the love/collection heart (#…). title/artist/
+    /// artworkUrl stay separate so the mini can render before/without the full track.
+    var track: Track? = nil
     let title: String
     let artist: String
     var artworkUrl: String? = nil
@@ -145,8 +148,7 @@ struct PCMiniPlayer: View {
                     Text(artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "heart").font(.system(size: 20)).foregroundStyle(PC.error)
-                    .frame(width: 40, height: 40)
+                if let track { PCHeartButton(track: track, iconSize: 20, tap: 40) }
                 Button(action: onToggle) {
                     ZStack {
                         // Spinner while a tapped track is resolving/starting so

@@ -51,6 +51,7 @@ struct ContentView: View {
             VStack(spacing: 10) {
                 if let t = coordinator.currentTrack {
                     PCMiniPlayer(
+                        track: t,
                         title: t.title, artist: t.artist,
                         artworkUrl: pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
                         isPlaying: coordinator.isPlaying,
