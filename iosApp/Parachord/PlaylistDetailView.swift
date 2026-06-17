@@ -264,6 +264,34 @@ struct PlaylistDetailView: View {
 // #220 List + .onMove + always-active editMode pattern). Saving a weekly
 // playlist (#236) lands here.
 
+/// Global "new playlist" create prompt (#242). The track menu's Add-to-Playlist
+/// "New Playlist…" and the FAB's "New Playlist" both trigger it; a single alert
+/// hosted at the ContentView root presents the name field and creates the
+/// playlist — optionally appending a pending track (the add-to-playlist case).
+@MainActor
+@Observable
+final class PlaylistCreator {
+    static let shared = PlaylistCreator()
+    private init() {}
+    var showing = false
+    var name = ""
+    private var pendingTrack: Track?
+
+    func start(track: Track? = nil) { pendingTrack = track; name = ""; showing = true }
+
+    func create() {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        let track = pendingTrack
+        pendingTrack = nil
+        guard !n.isEmpty else { return }
+        Task {
+            let container = IosContainer.companion.shared
+            let id = try? await container.createPlaylist(name: n)
+            if let id, let track { try? await container.addTrackToPlaylist(playlistId: id, track: track) }
+        }
+    }
+}
+
 /// PlaylistTrack → playable Track (19-param init in a helper to spare Swift's
 /// inline type-checker). Shared by the playlist detail + the "Play Playlist" menu.
 func pcTrack(from t: PlaylistTrack) -> Track {

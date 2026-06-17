@@ -1299,6 +1299,16 @@ class IosContainer private constructor() {
         persistReorderedTracks(id, tracks)
     }
 
+    /** Create a new empty local playlist (#242); returns the new id. */
+    suspend fun createPlaylist(name: String): String {
+        val id = "local-${com.parachord.shared.platform.randomUUID()}"
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        playlistDao.insert(
+            Playlist(id = id, name = name, trackCount = 0, createdAt = now, updatedAt = now, lastModified = now, locallyModified = true),
+        )
+        return id
+    }
+
     /** One-shot saved-playlist list for the "Add to Playlist" picker (#240). */
     suspend fun getSavedPlaylistsOnce(): List<Playlist> = playlistDao.getAllSync()
 
