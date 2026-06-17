@@ -38,10 +38,7 @@ struct ContentView: View {
                 case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true })
                 case .search:     SearchView(onMenu: { showSidebar = true })
                 case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab)
-                case .playlists:  PCPlaceholder(title: "Playlists",
-                                                systemImage: "music.note.list",
-                                                note: "Your playlists. Lands with the iOS library layer.",
-                                                onMenu: { showSidebar = true })
+                case .playlists:  PlaylistsScreen(onMenu: { showSidebar = true })
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
