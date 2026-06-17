@@ -14,7 +14,8 @@ extension View {
         _ track: Track,
         coordinator: QueuePlaybackCoordinator,
         onGoToArtist: (() -> Void)? = nil,
-        onGoToAlbum: (() -> Void)? = nil
+        onGoToAlbum: (() -> Void)? = nil,
+        onRemoveFromQueue: (() -> Void)? = nil
     ) -> some View {
         contextMenu {
             Button { coordinator.playNext(track) } label: {
@@ -24,6 +25,12 @@ extension View {
                 Label("Add to Queue", systemImage: "text.append")
             }
             Button { } label: { Label("Add to Playlist…", systemImage: "music.note.list") }
+            // Queue-context only (#220): remove this track from the up-next list.
+            if let onRemoveFromQueue {
+                Button(role: .destructive) { onRemoveFromQueue() } label: {
+                    Label("Remove from Queue", systemImage: "text.badge.minus")
+                }
+            }
             if let onGoToArtist {
                 Button { onGoToArtist() } label: { Label("Go to Artist", systemImage: "music.mic") }
             }

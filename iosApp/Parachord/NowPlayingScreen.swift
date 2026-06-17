@@ -480,7 +480,8 @@ struct PCQueuePanel: View {
                             resolverCache.resolve(
                                 ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: idx)
                         }
-                        .pcTrackContextMenu(t, coordinator: coordinator)
+                        .pcTrackContextMenu(t, coordinator: coordinator,
+                                            onRemoveFromQueue: { withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { coordinator.removeFromQueue(idx) } })
                         // Removed (played-past) rows slide up and fade as the queue
                         // shifts; remaining rows move up into their place.
                         .transition(.move(edge: .top).combined(with: .opacity))

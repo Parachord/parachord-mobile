@@ -1705,6 +1705,13 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
+    /// Remove a single track from the up-next queue by its upNext index (#220).
+    /// Same index space as playFromQueue.
+    func removeFromQueue(_ index: Int) {
+        queueManager.removeFromQueue(index: Int32(index))
+        syncSnapshot()
+    }
+
     /// Insert a track right after the current one (context-menu "Play Next").
     func playNext(_ track: Track) {
         queueManager.insertNext(tracks: [track])
