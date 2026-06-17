@@ -1374,6 +1374,9 @@ final class QueuePlaybackCoordinator {
     var currentTrack: Track?
     var upNext: [Track] = []
     var shuffleEnabled = false
+    /// Where the current queue was populated from (#209) — drives the queue
+    /// panel's "Playing from: …" context banner/link. Nil for ad-hoc queues.
+    var playbackContext: PlaybackContext?
 
     /// Repeat mode (#221). off → all → one. Honored by AUTO-advance only
     /// (a track ending) — the manual Next button + lock-screen next always
@@ -1613,12 +1616,12 @@ final class QueuePlaybackCoordinator {
 
     /// Establish a new queue and start playing the track at
     /// `startIndex`. Mirrors `PlaybackEngine.setQueue`.
-    func setQueue(_ tracks: [Track], startIndex: Int) {
+    func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil) {
         originalQueue = tracks   // retained for repeat-ALL wrap (#221)
         let toPlay = queueManager.setQueue(
             tracks: tracks,
             startIndex: Int32(startIndex),
-            context: nil,
+            context: context,
             shuffle: shuffleEnabled
         )
         syncSnapshot()
@@ -1896,6 +1899,7 @@ final class QueuePlaybackCoordinator {
         guard let snap = queueManager.snapshot.value as? QueueSnapshot else { return }
         upNext = snap.upNext
         shuffleEnabled = snap.shuffleEnabled
+        playbackContext = snap.playbackContext   // #209 queue-source banner
         // Persist after every queue mutation (#220). Debounced + gated on the
         // setting inside persistSoon, so this is cheap to call on every sync.
         persistSoon()

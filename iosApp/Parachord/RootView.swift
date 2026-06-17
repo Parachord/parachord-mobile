@@ -88,6 +88,13 @@ struct ContentView: View {
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
                         tab = .home
                         homePendingRoute = .artistOnTour(name)
+                    },
+                    // Queue-source banner (#209) → push the playlist/album/artist page.
+                    onNavigateToContext: { ctx in
+                        guard let route = pcRouteForContext(ctx) else { return }
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                        tab = .home
+                        homePendingRoute = route
                     }
                 )
                 // NOTE: do NOT add .ignoresSafeArea() here — the content must

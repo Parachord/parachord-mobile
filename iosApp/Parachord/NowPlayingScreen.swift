@@ -37,6 +37,8 @@ struct PCNowPlaying: View {
     var onArtist: (String) -> Void = { _ in }
     /// Same nav path as `onArtist`, but opens the artist's On Tour tab (#201).
     var onArtistOnTour: (String) -> Void = { _ in }
+    /// Navigate to the queue's source page (album / playlist / artist) — #209.
+    var onNavigateToContext: (PlaybackContext) -> Void = { _ in }
 
     @State private var showQueue = false
     /// Whether the currently-playing artist has upcoming shows near the user's
@@ -137,7 +139,11 @@ struct PCNowPlaying: View {
                         .transition(.opacity)
                         .onTapGesture { withAnimation(.spring(duration: 0.32)) { showQueue = false } }
                     PCQueuePanel(coordinator: coordinator,
-                                 onClose: { withAnimation(.spring(duration: 0.32)) { showQueue = false } })
+                                 onClose: { withAnimation(.spring(duration: 0.32)) { showQueue = false } },
+                                 onNavigateToContext: { ctx in
+                                     withAnimation(.spring(duration: 0.32)) { showQueue = false }
+                                     onNavigateToContext(ctx)
+                                 })
                         .padding(.top, 90) // scrim gap at the top
                         .transition(.move(edge: .bottom))
                 }
@@ -434,6 +440,8 @@ struct PCResolverDeck: View {
 struct PCQueuePanel: View {
     @Bindable var coordinator: QueuePlaybackCoordinator
     let onClose: () -> Void
+    /// Navigate to the queue's source page (album / playlist / artist) — #209.
+    var onNavigateToContext: ((PlaybackContext) -> Void)? = nil
 
     /// Observed so resolver badges appear as background resolution lands.
     /// (Non-private so the memberwise init stays internal/callable.)
@@ -518,6 +526,42 @@ struct PCQueuePanel: View {
         .buttonStyle(.plain)
     }
 
+    /// "Playing from: …" queue-source line (#209). Mirrors Android's QueueSheet:
+    /// type-specific label + color; album/playlist/artist link to their page.
+    /// Falls back to the neutral subtitle when the queue has no source context.
+    @ViewBuilder private var contextBanner: some View {
+        if let ctx = coordinator.playbackContext {
+            let navigable = ["album", "playlist", "artist"].contains(ctx.type) && onNavigateToContext != nil
+            HStack(spacing: 4) {
+                Text(contextLabel(ctx)).font(.system(size: 12, weight: navigable ? .medium : .regular))
+                    .foregroundStyle(contextColor(ctx)).lineLimit(1)
+                if navigable {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(contextColor(ctx).opacity(0.8))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { if navigable { onNavigateToContext?(ctx) } }
+        } else {
+            Text("Playing from your queue").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    private func contextLabel(_ ctx: PlaybackContext) -> String {
+        switch ctx.type {
+        case "listen-along": return "Listening along with \(ctx.name)"
+        case "spinoff":      return ctx.name
+        default:             return "Playing from: \(ctx.name)"
+        }
+    }
+    private func contextColor(_ ctx: PlaybackContext) -> Color {
+        switch ctx.type {
+        case "listen-along": return Color(uiColor: UIColor(hex: 0x34D399)) // green (desktop parity)
+        case "spinoff":      return Color(uiColor: UIColor(hex: 0xC084FC)) // spinoff purple
+        default:             return PC.accentSoft
+        }
+    }
+
     /// Grabber + title + Clear + close. The drag-to-dismiss gesture lives HERE
     /// (not on the whole panel) so it never fights the list's scroll.
     private func header(count: Int) -> some View {
@@ -528,7 +572,7 @@ struct PCQueuePanel: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("UP NEXT · \(count) TRACKS").font(.system(size: 13, weight: .semibold)).tracking(2)
                         .foregroundStyle(PC.accentSoft)
-                    Text("Playing from your queue").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+                    contextBanner
                 }
                 Spacer()
                 Button("Clear") { coordinator.clearQueue() }

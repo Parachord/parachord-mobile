@@ -88,6 +88,12 @@ struct PlaylistDetailView: View {
         _model = State(initialValue: PlaylistDetailViewModel(playlistId: playlistId, title: title))
     }
 
+    /// Queue-source context (#209) so the queue panel shows a "Playing from: …"
+    /// link back to this playlist.
+    private var playlistContext: PlaybackContext {
+        PlaybackContext(type: "playlist", name: model.title, id: model.playlistId)
+    }
+
     /// First 4 distinct track covers for the header mosaic.
     private var covers: [String] {
         var seen = Set<String>(); var out: [String] = []
@@ -111,7 +117,7 @@ struct PlaylistDetailView: View {
                     header
                     LazyVStack(spacing: 0) {
                         ForEach(Array(model.tracks.enumerated()), id: \.element.id) { index, track in
-                            Button { coordinator.setQueue(model.trackEntities, startIndex: index) } label: {
+                            Button { coordinator.setQueue(model.trackEntities, startIndex: index, context: playlistContext) } label: {
                                 row(index: index, track: track)
                             }
                             .buttonStyle(.plain)
@@ -151,7 +157,7 @@ struct PlaylistDetailView: View {
             Text("ListenBrainz · \(model.tracks.count) tracks").font(.system(size: 13)).foregroundStyle(PC.fg2)
 
             HStack(spacing: 10) {
-                Button { coordinator.setQueue(model.trackEntities, startIndex: 0) } label: {
+                Button { coordinator.setQueue(model.trackEntities, startIndex: 0, context: playlistContext) } label: {
                     Label("Play All", systemImage: "play.fill").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white).padding(.horizontal, 22).frame(height: 40)
                         .background(PC.accent, in: Capsule())

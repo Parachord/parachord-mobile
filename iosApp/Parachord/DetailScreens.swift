@@ -433,6 +433,12 @@ struct AlbumScreen: View {
         _model = State(initialValue: AlbumDetailModel(title: title, artist: artist))
     }
 
+    /// Queue-source context (#209). iOS album routing needs title + artist, so the
+    /// artist rides in `id` (there's no album-id concept on the iOS detail route).
+    private var albumContext: PlaybackContext {
+        PlaybackContext(type: "album", name: model.title, id: model.artist)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // "More" (⋯) opens the album options sheet — mirrors Android's
@@ -445,7 +451,7 @@ struct AlbumScreen: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 if !model.entities.isEmpty {
-                    Button { coordinator.setQueue(model.entities, startIndex: 0) } label: {
+                    Button { coordinator.setQueue(model.entities, startIndex: 0, context: albumContext) } label: {
                         Label("Play All", systemImage: "play.fill")
                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 28).frame(height: 48)
@@ -507,7 +513,7 @@ struct AlbumScreen: View {
     private var tracklist: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array((model.detail?.tracks ?? []).enumerated()), id: \.offset) { index, t in
-                Button { coordinator.setQueue(model.entities, startIndex: index) } label: {
+                Button { coordinator.setQueue(model.entities, startIndex: index, context: albumContext) } label: {
                     HStack(spacing: 12) {
                         Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(PC.fg3).frame(width: 22)
@@ -750,6 +756,11 @@ struct ArtistScreen: View {
         _tab = State(initialValue: initialTab)
     }
 
+    /// Queue-source context (#209) for top-songs playback → links back here.
+    private var artistContext: PlaybackContext {
+        PlaybackContext(type: "artist", name: model.name, id: nil)
+    }
+
     // ART_COLOR (screens.jsx): hash(name) % 5 dark gradient pairs.
     private static let palettes: [(UInt32, UInt32)] = [
         (0x3d3d3d, 0x1a1a1a), (0x2a3a4a, 0x0e1822), (0x3a2a3a, 0x1a121a),
@@ -854,7 +865,7 @@ struct ArtistScreen: View {
 
     private var cta: some View {
         Button {
-            if !model.topEntities.isEmpty { coordinator.setQueue(model.topEntities, startIndex: 0) }
+            if !model.topEntities.isEmpty { coordinator.setQueue(model.topEntities, startIndex: 0, context: artistContext) }
         } label: {
             Label("Play Top Tracks", systemImage: "play.fill")
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
@@ -1066,7 +1077,7 @@ struct ArtistScreen: View {
     private var topTracksTab: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array(model.topTracks.enumerated()), id: \.offset) { index, t in
-                Button { coordinator.setQueue(model.topEntities, startIndex: index) } label: {
+                Button { coordinator.setQueue(model.topEntities, startIndex: index, context: artistContext) } label: {
                     HStack(spacing: 12) {
                         Text("\(index + 1)").font(.system(size: 15, weight: .bold)).foregroundStyle(PC.accent)
                             .frame(width: 22)
