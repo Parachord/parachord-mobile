@@ -1712,6 +1712,14 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
+    /// Drag-reorder an up-next item (#220). `to` is the destination in the
+    /// shared QueueManager's POST-removal index space — callers translating from
+    /// SwiftUI's `.onMove` (pre-removal `toOffset`) must adjust before calling.
+    func moveInQueue(from: Int, to: Int) {
+        queueManager.moveInQueue(fromIndex: Int32(from), toIndex: Int32(to))
+        syncSnapshot()
+    }
+
     /// Insert a track right after the current one (context-menu "Play Next").
     func playNext(_ track: Track) {
         queueManager.insertNext(tracks: [track])
@@ -1888,6 +1896,58 @@ final class QueuePlaybackCoordinator {
         guard let snap = queueManager.snapshot.value as? QueueSnapshot else { return }
         upNext = snap.upNext
         shuffleEnabled = snap.shuffleEnabled
+        // Persist after every queue mutation (#220). Debounced + gated on the
+        // setting inside persistSoon, so this is cheap to call on every sync.
+        persistSoon()
+    }
+
+    // MARK: - Queue persistence (#220)
+
+    /// Debounced save: coalesce bursts of mutations into one write ~500 ms later
+    /// (mirrors Android's QueuePersistence debounce). Cancels the prior pending
+    /// save so only the latest state is written.
+    @ObservationIgnored private var persistTask: Task<Void, Never>?
+    private func persistSoon() {
+        persistTask?.cancel()
+        persistTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if Task.isCancelled { return }
+            await self?.saveQueueNow()
+        }
+    }
+
+    private func saveQueueNow() async {
+        guard (try? await container.settingsStore.isPersistQueueEnabled()) == true else { return }
+        guard let snap = queueManager.snapshot.value as? QueueSnapshot else { return }
+        let state = PersistedQueueState(
+            currentTrack: currentTrack,
+            upNext: snap.upNext,
+            playHistory: queueManager.history,
+            playbackContext: snap.playbackContext,
+            shuffleEnabled: snap.shuffleEnabled,
+            originalOrder: queueManager.savedOriginalOrder)
+        let jsonStr = QueuePersistenceCodec.shared.encode(state: state)
+        try? await container.settingsStore.setPersistedQueueState(json: jsonStr)
+    }
+
+    /// Restore the saved queue on launch (paused — never auto-plays, Android
+    /// parity). Sets currentTrack + upNext/shuffle/context from the persisted
+    /// blob if the "Remember queue" setting is on and a blob exists.
+    func restoreQueue() async {
+        guard (try? await container.settingsStore.isPersistQueueEnabled()) == true else { return }
+        guard let jsonStr = try? await container.settingsStore.getPersistedQueueState(),
+              let state = QueuePersistenceCodec.shared.decode(jsonStr: jsonStr) else { return }
+        if state.upNext.isEmpty && state.currentTrack == nil { return }
+        queueManager.restoreState(
+            restoredUpNext: state.upNext,
+            restoredHistory: state.playHistory,
+            restoredOriginalOrder: state.originalOrder,
+            context: state.playbackContext,
+            shuffle: state.shuffleEnabled)
+        await MainActor.run {
+            self.currentTrack = state.currentTrack
+            self.syncSnapshot()
+        }
     }
 }
 

@@ -1,11 +1,17 @@
 package com.parachord.shared.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * Core track model — shared across Android and iOS.
  *
  * On Android, Room entities in the :app module map to/from this model.
  * On iOS, SQLDelight (future) will map to/from this model.
+ *
+ * `@Serializable` so the iOS queue-persistence layer (#220) can encode/decode
+ * tracks directly (no separate DTO). All fields are primitives/nullable strings.
  */
+@Serializable
 data class Track(
     val id: String,
     val title: String,

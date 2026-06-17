@@ -101,6 +101,7 @@ final class SettingsViewModel {
 
     var themeMode = "system"
     var scrobblingEnabled = false
+    var persistQueue = true   // "Remember queue" (#220) — default on, Android parity
     var spotifyConnected = false
     var spotifyClientId = ""        // BYO Developer Client ID (Parachord ships none)
     var spotifyError: String?
@@ -211,6 +212,7 @@ final class SettingsViewModel {
         guard subs.isEmpty else { return }
         subs.append(watcher.watch(flow: store.themeMode) { [weak self] v in if let s = v as? String { self?.themeMode = s } })
         subs.append(watcher.watch(flow: store.scrobblingEnabled) { [weak self] v in if let b = v as? Bool { self?.scrobblingEnabled = b } })
+        subs.append(watcher.watch(flow: store.persistQueue) { [weak self] v in if let b = v as? Bool { self?.persistQueue = b } })
         subs.append(watcher.watch(flow: store.getDisabledPluginsFlow()) { [weak self] v in self?.disabledPlugins = (v as? Set<String>) ?? [] })
         subs.append(watcher.watch(flow: container.getSpotifyConnectedFlow()) { [weak self] v in
             self?.spotifyConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
@@ -381,6 +383,7 @@ final class SettingsViewModel {
     }
     func setTheme(_ m: String) { themeMode = m; Task { try? await store.setThemeMode(mode: m) } }
     func setScrobbling(_ b: Bool) { scrobblingEnabled = b; Task { try? await store.setScrobblingEnabled(enabled: b) } }
+    func setPersistQueue(_ b: Bool) { persistQueue = b; Task { try? await store.setPersistQueue(enabled: b) } }
 
     // ── Spotify OAuth (BYO Client ID) ─────────────────────────────────
     func setSpotifyClientId(_ id: String) {
@@ -926,6 +929,17 @@ private struct GeneralTab: View {
             Picker("Theme", selection: Binding(get: { model.themeMode }, set: { model.setTheme($0) })) {
                 ForEach(themes, id: \.self) { Text($0.capitalized).tag($0) }
             }.pickerStyle(.segmented).padding(.horizontal, 20)
+
+            label("Playback")
+            Toggle(isOn: Binding(get: { model.persistQueue }, set: { model.setPersistQueue($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Remember queue").font(.system(size: 15)).foregroundStyle(PC.fg1)
+                    Text("Restore your queue and current track when the app restarts.")
+                        .font(.system(size: 12)).foregroundStyle(PC.fg3)
+                }
+            }
+            .tint(PC.accent)
+            .padding(.horizontal, 20).padding(.top, 4)
 
             label("Scrobbling")
             Text("Connect Last.fm, ListenBrainz, or Libre.fm under Plug-ins, then turn on “Scrobble my plays” in that service’s settings.")

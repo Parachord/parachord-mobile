@@ -445,50 +445,45 @@ struct PCQueuePanel: View {
         let up = coordinator.upNext
         VStack(spacing: 0) {
             header(count: up.count)
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(up.enumerated()), id: \.element.id) { idx, t in
-                        // Tapping a mid-queue track removes the tracks above it
-                        // (they're "played"); animate so the queue SHIFTS UP to the
-                        // top instead of hard-cutting (Android parity).
-                        Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { coordinator.playFromQueue(idx) } } label: {
-                            HStack(spacing: 12) {
-                                Text("\(idx + 1)").font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.4)).frame(width: 24, alignment: .trailing)
-                                pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title, size: 38, radius: 6)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.title).font(.system(size: 14, weight: .medium))
-                                        .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? Color.white.opacity(0.4) : .white).lineLimit(1)
-                                    Text(t.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
-                                }
-                                Spacer(minLength: 8)
-                                // Resolver badges — same confidence-aware row as
-                                // every other tracklist. Resolved per-row below.
-                                if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
-                                   !s.isEmpty {
-                                    ResolverBadgeRow(sources: s, size: 16)
-                                }
-                            }
-                            .padding(.horizontal, 20).padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+            // A styled `List` (not a LazyVStack) so `.onMove` drag-reorder + a
+            // swipe-to-delete back the shared QueueManager (#220). Chrome stripped
+            // to match the dark panel: plain style, clear rows, no separators/insets,
+            // hidden scroll background.
+            List {
+                ForEach(Array(up.enumerated()), id: \.element.id) { idx, t in
+                    queueRow(idx: idx, t: t)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets())
                         // Visibility-scoped resolution (mirrors the album/playlist
-                        // tracklists): resolve each row as it appears so badges
-                        // fill in and playback starts instantly from cache.
+                        // tracklists): resolve each row as it appears so badges fill
+                        // in and playback starts instantly from cache.
                         .onAppear {
                             resolverCache.resolve(
                                 ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: idx)
                         }
                         .pcTrackContextMenu(t, coordinator: coordinator,
                                             onRemoveFromQueue: { withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { coordinator.removeFromQueue(idx) } })
-                        // Removed (played-past) rows slide up and fade as the queue
-                        // shifts; remaining rows move up into their place.
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    }
                 }
-                .padding(.vertical, 8)
+                .onMove { source, dest in
+                    guard let from = source.first else { return }
+                    // SwiftUI's `toOffset` is the pre-removal insertion index;
+                    // QueueManager.moveInQueue wants the post-removal index.
+                    coordinator.moveInQueue(from: from, to: dest > from ? dest - 1 : dest)
+                }
+                // No `.onDelete`: in permanent edit mode it renders an oversized,
+                // non-resizable system delete (−) circle on every row. Removal stays
+                // on the long-press "Remove from Queue" context action (below),
+                // leaving just the reorder handle (Apple-Music style). #220
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .environment(\.defaultMinListRowHeight, 0)
+            // The queue is a dedicated editing surface — always in edit mode so the
+            // drag-reorder handles + delete controls are persistently visible (no
+            // Edit/Done toggle; Apple-Music-style). #220
+            .environment(\.editMode, .constant(.active))
+            .padding(.vertical, 8)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(
@@ -497,6 +492,30 @@ struct PCQueuePanel: View {
         )
         .offset(y: max(0, dragY))
         .preferredColorScheme(.dark)
+    }
+
+    /// One up-next row. Tapping a mid-queue track removes the tracks above it
+    /// (they're "played") and the queue shifts up (Android parity).
+    @ViewBuilder private func queueRow(idx: Int, t: Track) -> some View {
+        Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { coordinator.playFromQueue(idx) } } label: {
+            HStack(spacing: 12) {
+                Text("\(idx + 1)").font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4)).frame(width: 24, alignment: .trailing)
+                pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title, size: 38, radius: 6)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(t.title).font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? Color.white.opacity(0.4) : .white).lineLimit(1)
+                    Text(t.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
+                    ResolverBadgeRow(sources: s, size: 16)
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// Grabber + title + Clear + close. The drag-to-dismiss gesture lives HERE

@@ -119,6 +119,8 @@ struct ContentView: View {
         // Live Activity for background playback is a separate, larger feature.)
         .environment(coordinator)
         .task { ResolverPrefs.shared.start() }
+        // Restore the persisted queue on launch (paused — never auto-plays). #220
+        .task { await coordinator.restoreQueue() }
         // Resolve the current track as soon as it changes (incl. natural
         // auto-advance, where the next track may not have been pre-resolved) so
         // the mini-player art is ready and crossfades reliably — not only when the
