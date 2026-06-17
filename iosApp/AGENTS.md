@@ -299,6 +299,28 @@ When Library / Search / other list screens land, wire them the same way
 (`.onAppear { resolve(req, order: index) }`); don't bulk-submit and don't
 drop the index.
 
+### The disk cache is schema-VERSIONED — bump on any `ResolvedSource` shape change
+
+`IosTrackResolverCache` persists its resolved-source map to disk
+(`resolver-cache-v<N>.json`) and reuses it on launch **before** re-resolving, so
+a stale entry is reused verbatim and NEVER re-resolves on its own. That's the
+whole point (kills repeat Spotify/iTunes searches that re-arm the shared-key
+abuse window) — but it means a cached entry written before a `ResolvedSource`
+field was added keeps the old, field-less shape forever. This shipped a real
+bug: entries cached before `ResolvedSource.isrc` landed (commit `ccea230`) had
+`isrc=null`, were reused without re-resolving, so an Apple-Music-streamed track
+reached scrobble with no ISRC and its Achordion submit silently skipped.
+
+**The fix + the rule:** the version lives in the FILENAME
+(`private static let cacheSchemaVersion`), so a bump makes the prior file
+unreadable (we never open it) and `purgeStaleCacheFiles()` deletes it →
+every track re-resolves once into the new file. **Bump `cacheSchemaVersion`
+whenever a `ResolvedSource` field change makes OLD cached entries semantically
+wrong to reuse** (a new field the downstream pipeline now depends on). It's at
+v2 as of the ISRC work. Android has NO equivalent problem — it re-derives ISRC
+from fresh resolution every play (`reselectBestSource` / `resolveOnTheFly`),
+never from a persisted blob, so this is an iOS-only discipline.
+
 ---
 
 ## UIKit / CoreGraphics (mosaic, etc.)
