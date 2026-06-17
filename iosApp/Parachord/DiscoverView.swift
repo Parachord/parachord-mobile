@@ -74,20 +74,37 @@ final class DiscoverViewModel {
         previewSubs.append(watcher.watch(flow: container.recommendedArtistsFlow()) { [weak self] v in
             guard let self, let a = (v as? [RecommendedArtist])?.first else { return }
             let reason = a.reason.flatMap { $0.isEmpty ? nil : $0 } ?? "Based on your listening"
-            withAnimation(.easeInOut(duration: 0.45)) { self.previews["foryou"] = TilePreview(title: a.name, subtitle: reason, artworkUrl: a.imageUrl) }
+            self.setPreview("foryou", TilePreview(title: a.name, subtitle: reason, artworkUrl: a.imageUrl))
         })
         previewSubs.append(watcher.watch(flow: container.criticsPicksFlow()) { [weak self] v in
             guard let self, let al = (v as? [CriticsPickAlbum])?.first else { return }
-            withAnimation(.easeInOut(duration: 0.45)) { self.previews["critical"] = TilePreview(title: al.title, subtitle: al.artist, artworkUrl: al.albumArt) }
+            self.setPreview("critical", TilePreview(title: al.title, subtitle: al.artist, artworkUrl: al.albumArt))
         })
         previewSubs.append(watcher.watch(flow: container.freshDropsFlow()) { [weak self] v in
             guard let self, let d = (v as? [FreshDrop])?.first else { return }
-            withAnimation(.easeInOut(duration: 0.45)) { self.previews["fresh"] = TilePreview(title: d.title, subtitle: d.artist, artworkUrl: d.albumArt) }
+            self.setPreview("fresh", TilePreview(title: d.title, subtitle: d.artist, artworkUrl: d.albumArt))
         })
         Task { @MainActor [weak self] in
             guard let self, let al = (try? await self.container.loadPopOfTheTopsAlbums(countryCode: "us"))?.first else { return }
-            withAnimation(.easeInOut(duration: 0.45)) { self.previews["pop"] = TilePreview(title: al.title, subtitle: al.artist, artworkUrl: al.artworkUrl) }
+            self.setPreview("pop", TilePreview(title: al.title, subtitle: al.artist, artworkUrl: al.artworkUrl))
         }
+    }
+
+    /// Update a Discover tile preview defensively. For the SAME featured item,
+    /// never DOWNGRADE to an art-less value: the curated repos emit progressively
+    /// (cached → fresh → per-album art enrichment), and a transient art-less
+    /// re-emit would otherwise flash the thumb between the loaded art and the
+    /// placeholder (the reported Snowdrop flicker on Critical Darlings). No-op
+    /// when nothing changed, so redundant emissions don't churn the cross-fade.
+    private func setPreview(_ key: String, _ new: TilePreview) {
+        let old = previews[key]
+        var next = new
+        if let old, old.title == new.title, old.subtitle == new.subtitle,
+           (new.artworkUrl ?? "").isEmpty, !(old.artworkUrl ?? "").isEmpty {
+            next = TilePreview(title: new.title, subtitle: new.subtitle, artworkUrl: old.artworkUrl)
+        }
+        guard next != old else { return }
+        withAnimation(.easeInOut(duration: 0.45)) { previews[key] = next }
     }
 
     private func onUsernameChanged(_ username: String) {
