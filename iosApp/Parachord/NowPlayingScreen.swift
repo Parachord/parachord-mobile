@@ -262,9 +262,37 @@ struct PCNowPlaying: View {
                 .frame(maxWidth: .infinity)
             actionBtn("sparkles", "Spinoff") { }
             queueActionBtn
-            actionBtn("ellipsis", nil) { }
+            overflowMenu
         }
         .foregroundStyle(.white.opacity(0.65))
+    }
+
+    /// Now-Playing overflow (•••) — the track actions for the current track,
+    /// surfaced as a tap menu (the same set as the long-press track context
+    /// menu, #204). Was a no-op button before.
+    @ViewBuilder
+    private var overflowMenu: some View {
+        Menu {
+            if let t = coordinator.currentTrack {
+                Button { coordinator.playNext(t) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                Button { coordinator.addToQueue(t) } label: { Label("Add to Queue", systemImage: "text.append") }
+                PCAddToPlaylistMenu(track: t)
+                if !t.artist.isEmpty {
+                    Button { onArtist(t.artist) } label: { Label("Go to Artist", systemImage: "music.mic") }
+                }
+                if let album = t.album, !album.isEmpty {
+                    Button { onNavigateToContext(PlaybackContext(type: "album", name: album, id: t.artist)) } label: {
+                        Label("Go to Album", systemImage: "square.stack")
+                    }
+                }
+                Divider()
+                ShareLink(item: "\(t.title) — \(t.artist)") { Label("Share", systemImage: "square.and.arrow.up") }
+                PCCollectionToggleButton(target: .track(t))
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 21)).frame(maxWidth: .infinity, minHeight: 30)
+        }
+        .buttonStyle(.plain)
     }
 
     /// Queue action whose count badge anchors to the ICON glyph's top-right —

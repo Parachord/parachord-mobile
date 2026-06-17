@@ -93,7 +93,7 @@ extension View {
 /// Track-menu "Add to Playlist…" → a native submenu listing the saved playlists;
 /// tapping one appends the track. Loads the list when the menu opens. (Creating
 /// a NEW playlist needs a host-presented text prompt — tracked separately.)
-private struct PCAddToPlaylistMenu: View {
+struct PCAddToPlaylistMenu: View {
     let track: Track
     @State private var playlists: [Playlist] = []
     private let container = IosContainer.companion.shared
