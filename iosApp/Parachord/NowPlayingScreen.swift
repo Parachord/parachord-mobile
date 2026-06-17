@@ -1,5 +1,6 @@
 import SwiftUI
 import Shared
+import AVKit
 
 // MARK: - Now Playing (Phase 2 — docs/design/parachord-ios/nowplaying.jsx)
 //
@@ -238,7 +239,11 @@ struct PCNowPlaying: View {
                 Image(systemName: "forward.fill").font(.system(size: 26)).foregroundStyle(.white.opacity(0.88))
             }
             Spacer()
-            Image(systemName: "repeat").font(.system(size: 20)).foregroundStyle(.white.opacity(0.55))
+            Button { coordinator.cycleRepeatMode() } label: {
+                Image(systemName: coordinator.repeatMode == .one ? "repeat.1" : "repeat")
+                    .font(.system(size: 20))
+                    .foregroundStyle(coordinator.repeatMode == .off ? .white.opacity(0.55) : PC.accent)
+            }
         }
         .buttonStyle(.plain)
         .padding(.vertical, 4)
@@ -246,7 +251,9 @@ struct PCNowPlaying: View {
 
     private var bottomActions: some View {
         HStack(spacing: 0) {
-            actionBtn("airplayaudio", nil) { }
+            PCRoutePicker()
+                .frame(width: 30, height: 30)
+                .frame(maxWidth: .infinity)
             actionBtn("sparkles", "Spinoff") { }
             queueActionBtn
             actionBtn("ellipsis", nil) { }
@@ -276,6 +283,21 @@ struct PCNowPlaying: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+    }
+
+    // Wraps UIKit's AVRoutePickerView — the system AirPlay / output-route
+    // picker (#221). Replaces the previously-dead "airplayaudio" button. The
+    // glyph + active state are system-drawn; we just tint it to match.
+    private struct PCRoutePicker: UIViewRepresentable {
+        func makeUIView(context: Context) -> AVRoutePickerView {
+            let v = AVRoutePickerView()
+            v.tintColor = UIColor.white.withAlphaComponent(0.65)
+            v.activeTintColor = UIColor(PC.accent)
+            v.prioritizesVideoDevices = false
+            v.backgroundColor = .clear
+            return v
+        }
+        func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
     }
 
     private func actionBtn(_ icon: String, _ label: String?, _ go: @escaping () -> Void) -> some View {
