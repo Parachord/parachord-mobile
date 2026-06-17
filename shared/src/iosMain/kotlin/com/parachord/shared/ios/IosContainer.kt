@@ -1299,6 +1299,41 @@ class IosContainer private constructor() {
         persistReorderedTracks(id, tracks)
     }
 
+    /** One-shot saved-playlist list for the "Add to Playlist" picker (#240). */
+    suspend fun getSavedPlaylistsOnce(): List<Playlist> = playlistDao.getAllSync()
+
+    /** One-shot playlist tracks (for "Play Playlist" from the context menu). */
+    suspend fun getPlaylistTracksOnce(id: String): List<PlaylistTrack> =
+        playlistTrackDao.getByPlaylistIdSync(id)
+
+    /** Append a track to a playlist at the end (#240). Bumps trackCount + flags. */
+    suspend fun addTrackToPlaylist(playlistId: String, track: Track) {
+        val pos = playlistTrackDao.getByPlaylistIdSync(playlistId).size
+        playlistTrackDao.insertAll(
+            listOf(
+                PlaylistTrack(
+                    playlistId = playlistId,
+                    position = pos,
+                    trackTitle = track.title,
+                    trackArtist = track.artist,
+                    trackAlbum = track.album,
+                    trackDuration = track.duration,
+                    trackArtworkUrl = track.artworkUrl,
+                    trackSourceUrl = track.sourceUrl,
+                    trackResolver = track.resolver,
+                    trackSpotifyUri = track.spotifyUri,
+                    trackSoundcloudId = track.soundcloudId,
+                    trackSpotifyId = track.spotifyId,
+                    trackAppleMusicId = track.appleMusicId,
+                    trackRecordingMbid = track.recordingMbid,
+                ),
+            ),
+        )
+        playlistDao.getById(playlistId)?.let {
+            playlistDao.update(it.copy(trackCount = pos + 1, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
+        }
+    }
+
     /** Renumber positions + atomically replace the rows, then bump the playlist. */
     private suspend fun persistReorderedTracks(id: String, tracks: List<PlaylistTrack>) {
         playlistTrackDao.replaceAll(id, tracks.mapIndexed { i, t -> t.copy(position = i) })
