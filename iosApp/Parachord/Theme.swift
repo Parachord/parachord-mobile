@@ -1,4 +1,36 @@
 import SwiftUI
+import Shared
+
+// MARK: - Theme mode (#234 — Settings › General light/dark/system override)
+//
+// The `PC` palette below is already dark-aware via `dyn(light, dark)`, but `dyn`
+// keys off `UITraitCollection.userInterfaceStyle` — the SYSTEM appearance — so
+// the in-app Theme picker (system/light/dark, persisted as `themeMode`) was
+// stored but never applied. ThemeObserver watches that setting and resolves a
+// SwiftUI `ColorScheme?` the root applies via `.preferredColorScheme`; forcing
+// the scheme there ALSO flips `dyn` (SwiftUI overrides the trait), so the whole
+// palette follows the user's choice. Mirrors Android's `ParachordTheme.isDark`
+// (which likewise overrides, not `isSystemInDarkTheme()`).
+@MainActor
+@Observable
+final class ThemeObserver {
+    private let container = IosContainer.companion.shared
+    /// nil = follow system; .light / .dark = explicit override.
+    var scheme: ColorScheme?
+    private var sub: Cancellable?
+
+    /// Idempotent; appScope-backed watcher lives with the (root-persistent) view.
+    func start() {
+        guard sub == nil else { return }
+        sub = FlowWatcher(scope: container.appScope).watch(flow: container.settingsStore.themeMode) { [weak self] v in
+            switch v as? String {
+            case "light": self?.scheme = .light
+            case "dark": self?.scheme = .dark
+            default: self?.scheme = nil   // "system" / unknown → follow device
+            }
+        }
+    }
+}
 
 // MARK: - Parachord design system (ported from docs/design/parachord-ios)
 //

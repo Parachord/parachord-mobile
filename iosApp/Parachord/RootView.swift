@@ -9,6 +9,7 @@ import Shared
 /// Sidebar, and the Add action sheet. Components live in `Shell.swift`.
 struct ContentView: View {
     @State private var playback = AppPlayback()
+    @State private var theme = ThemeObserver()
     @State private var tab: PCTab = .home
     @State private var showSidebar = false
     @State private var showAdd = false
@@ -135,6 +136,12 @@ struct ContentView: View {
         // status bar / camera housing and is non-standard. (A real ActivityKit
         // Live Activity for background playback is a separate, larger feature.)
         .environment(coordinator)
+        // #234: honor the Settings › General theme override (system/light/dark).
+        // Forcing the scheme here also flips the `dyn()` palette (SwiftUI overrides
+        // the trait). NowPlaying stays dark regardless — its surfaces use the
+        // constant PC.Player.* tokens, not `dyn`.
+        .preferredColorScheme(theme.scheme)
+        .task { theme.start() }
         .task { ResolverPrefs.shared.start() }
         // Restore the persisted queue on launch (paused — never auto-plays). #220
         .task { await coordinator.restoreQueue() }
