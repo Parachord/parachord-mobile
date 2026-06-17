@@ -206,6 +206,10 @@ class AndroidResolverRuntime constructor(
                 matchedTitle = track.title,
                 matchedArtist = track.artist,
                 matchedDurationMs = track.duration,
+                // ISRC captured from the file's ID3 TSRC tag at scan time and
+                // persisted on the track row (#238) — surface it so pickTrackIsrc
+                // walks it and the ISRC→MBID fallback works for local files too.
+                isrc = com.parachord.shared.resolver.validateIsrc(track.isrc),
                 // Local files store their artworkUrl on the track row (either
                 // a content:// URI from MediaScanner's albumart resolution or
                 // a file:// URI from ID3 embedded art). Surface it so the
