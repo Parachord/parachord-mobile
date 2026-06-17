@@ -426,6 +426,8 @@ Recipients on Slack / Discord / iMessage get a rich Open Graph preview either wa
 3. Per-session dedup by lowercase MBID — repeat shares of the same track don't re-submit.
 4. Auth-failed kill-switch on 401 — flips off for the session so a bad bearer token doesn't spam the backend.
 
+**Client attribution — every Achordion submit MUST send `X-Parachord-Client`.** Achordion records the submitting platform from this header (allowlist `desktop | android | ios`; absent/unknown → `"unknown"`, see its `lib/parachord-client.ts`). There are TWO submit paths and BOTH must send it: the `.axe` plugin fetch sets it from `window.__parachordClient` (`'android'` in `bootstrap.html`, `'ios'` in `IosJsRuntime`), and the **native** `AchordionClient.submitTrackLinks` sends it from `AppConfig.parachordClient` (set `"android"` in `AndroidModule`, `"ios"` in `IosContainer`). The native client originally sent only `Authorization`, so every native submit logged as `"unknown"` (parachord-mobile#237) even though the `.axe` path was attributed correctly. Omitted when blank (server defaults to `"unknown"` anyway). When wiring a new platform, set BOTH its `window.__parachordClient` and its `AppConfig.parachordClient`.
+
 Album and artist shares call entity-link only — **no submit** (matches desktop; submits are recording-keyed).
 
 **Fallback when MBID is missing or the entity-link API errors:** Achordion lookup URL patterns do server-side MusicBrainz search and 302 to the canonical entity page:

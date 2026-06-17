@@ -154,6 +154,7 @@ class IosContainer private constructor() {
             (NSBundle.mainBundle.objectForInfoDictionaryKey(key) as? String ?: "").trim()
         AppConfig(
             userAgent = "Parachord/0.1 (iOS; https://parachord.com)",
+            parachordClient = "ios",
             isDebug = true,
             spotifyClientId = "",   // BYO — Parachord ships no Spotify key; user adds theirs in Settings
             lastFmApiKey = plist("LastFmApiKey"),
@@ -321,7 +322,11 @@ class IosContainer private constructor() {
      * [appConfig]; blank token = submit short-circuits inertly.
      */
     val achordionClient: AchordionClient by lazy {
-        AchordionClient(httpClient = httpClient, bearerToken = appConfig.achordionBearerToken)
+        AchordionClient(
+            httpClient = httpClient,
+            bearerToken = appConfig.achordionBearerToken,
+            clientId = appConfig.parachordClient,
+        )
     }
     val lastFmClient: LastFmClient by lazy { LastFmClient(httpClient) }
     val chartsRepository: ChartsRepository by lazy {
