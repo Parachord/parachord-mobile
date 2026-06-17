@@ -84,27 +84,39 @@ final class IosLocationManager: NSObject, CLLocationManagerDelegate {
 
     // MARK: - CLLocationManagerDelegate
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        // Only act on the auth response while we're mid-detect and haven't yet
-        // fired the fix (avoids reacting to unrelated authorization changes).
-        guard continuation != nil, !didRequestFix else { return }
-        switch manager.authorizationStatus {
-        case .authorizedWhenInUse, .authorizedAlways:
-            didRequestFix = true
-            manager.requestLocation()
-        case .denied, .restricted:
-            finish(nil)
-        default:
-            break  // still .notDetermined — keep waiting for the prompt result
+    // CLLocationManager delivers delegate callbacks on the queue the manager was
+    // created on — main here (this type is @MainActor, built on the main actor).
+    // So the callbacks are `nonisolated` (to satisfy the protocol without a
+    // main-actor-crossing warning, an error in Swift 6 mode) but immediately
+    // hop back onto the main actor via assumeIsolated, which is sound because
+    // we know they arrive on main.
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        MainActor.assumeIsolated {
+            // Only act on the auth response while we're mid-detect and haven't yet
+            // fired the fix (avoids reacting to unrelated authorization changes).
+            guard continuation != nil, !didRequestFix else { return }
+            switch manager.authorizationStatus {
+            case .authorizedWhenInUse, .authorizedAlways:
+                didRequestFix = true
+                manager.requestLocation()
+            case .denied, .restricted:
+                finish(nil)
+            default:
+                break  // still .notDetermined — keep waiting for the prompt result
+            }
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard let loc = locations.first else { finish(nil); return }
-        finish((lat: loc.coordinate.latitude, lon: loc.coordinate.longitude))
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        MainActor.assumeIsolated {
+            guard let loc = locations.first else { finish(nil); return }
+            finish((lat: loc.coordinate.latitude, lon: loc.coordinate.longitude))
+        }
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        finish(nil)
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        MainActor.assumeIsolated {
+            finish(nil)
+        }
     }
 }

@@ -89,8 +89,7 @@ final class IosTrackResolverCache {
     private func loadFromDisk() {
         guard let data = try? Data(contentsOf: persistURL),
               let blob = String(data: data, encoding: .utf8) else { return }
-        let map = container.decodeResolverCache(blob: blob)
-        cache = map as? [String: [ResolvedSource]] ?? [:]
+        cache = container.decodeResolverCache(blob: blob)
     }
 
     /// Debounced full-map write (coalesces a burst of resolves into one save).

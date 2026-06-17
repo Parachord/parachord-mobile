@@ -1,6 +1,6 @@
 import SwiftUI
 import Shared
-import Vision
+@preconcurrency import Vision
 
 // MARK: - Album & Artist detail (Phase 4 — docs/design/parachord-ios)
 //

@@ -258,7 +258,7 @@ final class SettingsViewModel {
             // Whether each actually reaches the priority list is gated by
             // isUsable (connected / no-auth) inside recomputeResolvers.
             let catalogIds = resolverCatalog.map { $0.id }
-            let storedActive = ((try? await store.getActiveResolvers()) as? [String]) ?? []
+            let storedActive = (try? await store.getActiveResolvers()) ?? []
             // Fresh install: only no-auth resolvers are enabled by default (matches
             // desktop's ['bandcamp','localfiles']); auth-gated ones (Spotify /
             // SoundCloud) join the enabled set when connected. A NEW marketplace
@@ -267,7 +267,7 @@ final class SettingsViewModel {
             // so we don't auto-enable it — avoids un-disabling a user's choice).
             let defaultActive = Set(catalogIds.filter { !requiresConnection($0) })
             activeResolvers = storedActive.isEmpty ? defaultActive : Set(storedActive).intersection(catalogIds)
-            resolverOrder = ((try? await store.getResolverOrder()) as? [String])?.filter { resolverService($0) != nil } ?? []
+            resolverOrder = ((try? await store.getResolverOrder())?.filter { resolverService($0) != nil }) ?? []
             resolversReady = true
             recomputeResolvers()
         }
