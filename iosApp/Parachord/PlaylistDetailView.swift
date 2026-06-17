@@ -24,6 +24,11 @@ final class PlaylistDetailViewModel {
     var trackEntities: [Track] = []
     var isLoading = false
     var loaded = false
+    /// Whether this ephemeral weekly playlist is already saved to the library
+    /// (#236). Reactive — flips when the save lands (or if it's already saved).
+    var saved = false
+    var saving = false
+    private var savedSub: Cancellable?
 
     init(playlistId: String, title: String) {
         self.playlistId = playlistId
@@ -31,6 +36,13 @@ final class PlaylistDetailViewModel {
     }
 
     func load() async {
+        // Start watching saved-state regardless of the early-return below, so a
+        // re-opened (already-saved) playlist shows "Saved".
+        if savedSub == nil {
+            savedSub = container.watchWeeklyPlaylistSaved(playlistId: playlistId) { [weak self] yes in
+                self?.saved = yes.boolValue
+            }
+        }
         guard !loaded else { return }
         isLoading = true
         tracks = (try? await container.loadWeeklyPlaylistTracks(playlistId: playlistId)) ?? []
@@ -46,6 +58,20 @@ final class PlaylistDetailViewModel {
         // searches (+ ~50 iTunes) in one burst, which tripped Spotify's
         // abuse window (HTTP 429, Retry-After ~3600s) on the shared client
         // ID. See `resolveVisible(_:)`.
+    }
+
+    /// Save this ephemeral weekly playlist to the library (#236). No-op if empty
+    /// or already saved/in-flight; `saved` flips reactively via the watcher.
+    func save() {
+        guard !saved, !saving, !trackEntities.isEmpty else { return }
+        saving = true
+        let artwork = tracks.compactMap { $0.albumArt }.first { !$0.isEmpty }
+        Task {
+            _ = try? await container.saveWeeklyPlaylist(
+                playlistId: playlistId, title: title, description: nil,
+                artworkUrl: artwork, tracks: trackEntities)
+            saving = false
+        }
     }
 
     /// Resolve a single track on demand (called when its row scrolls into
@@ -162,12 +188,18 @@ struct PlaylistDetailView: View {
                         .foregroundStyle(.white).padding(.horizontal, 22).frame(height: 40)
                         .background(PC.accent, in: Capsule())
                 }.buttonStyle(.plain)
-                // Save: needs the iOS library DB layer — present for parity, wired later.
-                Button {} label: {
-                    Label("Save", systemImage: "square.and.arrow.down").font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(PC.fg1).padding(.horizontal, 18).frame(height: 40)
-                        .overlay(Capsule().strokeBorder(PC.border))
-                }.buttonStyle(.plain).disabled(true).opacity(0.45)
+                // Save the ephemeral weekly playlist to the library (#236). Flips
+                // to "Saved" reactively once written (or if already saved).
+                Button { model.save() } label: {
+                    Label(model.saved ? "Saved" : "Save",
+                          systemImage: model.saved ? "checkmark" : "square.and.arrow.down")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(model.saved ? PC.accent : PC.fg1)
+                        .padding(.horizontal, 18).frame(height: 40)
+                        .overlay(Capsule().strokeBorder(model.saved ? PC.accent : PC.border))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.saved || model.saving || model.trackEntities.isEmpty)
             }
         }
         .frame(maxWidth: .infinity)

@@ -1201,6 +1201,63 @@ class IosContainer private constructor() {
         }
     }
 
+    /**
+     * Save an ephemeral ListenBrainz weekly playlist to the library (#236),
+     * mirroring Android's WeeklyPlaylistViewModel.saveToLibrary +
+     * LibraryRepository.createPlaylistWithTracks. The container can't use
+     * LibraryRepository (its ctor needs SyncEngine, not wired on iOS), so this
+     * writes the playlist + track rows directly via the DAOs. Saved id is
+     * "listenbrainz-<playlistId>" (Android parity). Returns the saved id.
+     */
+    suspend fun saveWeeklyPlaylist(
+        playlistId: String,
+        title: String,
+        description: String?,
+        artworkUrl: String?,
+        tracks: List<Track>,
+    ): String {
+        val id = "listenbrainz-$playlistId"
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        playlistDao.insert(
+            com.parachord.shared.model.Playlist(
+                id = id,
+                name = title,
+                description = description,
+                artworkUrl = artworkUrl,
+                trackCount = tracks.size,
+                createdAt = now,
+                updatedAt = now,
+                lastModified = now,
+                ownerName = "ListenBrainz",
+            ),
+        )
+        playlistTrackDao.insertAll(
+            tracks.mapIndexed { index, t ->
+                com.parachord.shared.model.PlaylistTrack(
+                    playlistId = id,
+                    position = index,
+                    trackTitle = t.title,
+                    trackArtist = t.artist,
+                    trackAlbum = t.album,
+                    trackDuration = t.duration,
+                    trackArtworkUrl = t.artworkUrl,
+                    trackSourceUrl = t.sourceUrl,
+                    trackResolver = t.resolver,
+                    trackSpotifyUri = t.spotifyUri,
+                    trackSoundcloudId = t.soundcloudId,
+                    trackSpotifyId = t.spotifyId,
+                    trackAppleMusicId = t.appleMusicId,
+                    trackRecordingMbid = t.recordingMbid,
+                )
+            },
+        )
+        return id
+    }
+
+    /** Reactive "is this weekly playlist already saved?" for the Save button (#236). */
+    fun watchWeeklyPlaylistSaved(playlistId: String, onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(playlistDao.getByIdFlow("listenbrainz-$playlistId")) { onEach(it != null) }
+
     private fun WeeklyPlaylistEntry.toIos(kind: String) = IosWeeklyEntry(
         id = id,
         title = title,
