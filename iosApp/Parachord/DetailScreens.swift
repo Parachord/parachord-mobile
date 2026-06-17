@@ -30,7 +30,7 @@ private func pcTrack(from t: TrackSearchResult) -> Track {
         album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
         sourceType: nil, sourceUrl: nil, addedAt: 0,
         resolver: nil, spotifyUri: nil, soundcloudId: nil,
-        spotifyId: t.spotifyId, appleMusicId: nil, recordingMbid: t.mbid,
+        spotifyId: t.spotifyId, appleMusicId: nil, isrc: nil, recordingMbid: t.mbid,
         artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
     )
 }

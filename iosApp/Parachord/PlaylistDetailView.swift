@@ -69,7 +69,7 @@ final class PlaylistDetailViewModel {
             album: t.album, albumId: nil, duration: nil, artworkUrl: t.albumArt,
             sourceType: nil, sourceUrl: nil, addedAt: 0,
             resolver: nil, spotifyUri: nil, soundcloudId: nil,
-            spotifyId: nil, appleMusicId: nil, recordingMbid: nil,
+            spotifyId: nil, appleMusicId: nil, isrc: nil, recordingMbid: nil,
             artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
         )
     }

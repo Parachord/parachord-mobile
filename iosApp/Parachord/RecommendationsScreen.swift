@@ -52,7 +52,7 @@ final class RecommendationsModel {
             album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
             sourceType: nil, sourceUrl: nil, addedAt: 0,
             resolver: nil, spotifyUri: nil, soundcloudId: nil,
-            spotifyId: nil, appleMusicId: nil, recordingMbid: nil,
+            spotifyId: nil, appleMusicId: nil, isrc: nil, recordingMbid: nil,
             artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
         )
     }

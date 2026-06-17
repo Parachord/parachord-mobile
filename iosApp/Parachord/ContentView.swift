@@ -2697,6 +2697,7 @@ struct DevSmokeTestView: View {
             soundcloudId: nil,
             spotifyId: nil,
             appleMusicId: nil,
+            isrc: nil,
             recordingMbid: nil,
             artistMbid: nil,
             releaseMbid: nil,
