@@ -99,6 +99,9 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import platform.Foundation.NSBundle
 
 /**
@@ -1060,6 +1063,45 @@ class IosContainer private constructor() {
     fun enrichTrackMbidInBackground(track: Track) {
         mbidEnrichmentService.enrichInBackground(track.id, track.artist, track.title)
     }
+
+    /**
+     * Resolve a recording MBID for the achordion LOVE path (#215), mirroring
+     * Android's `NativeBridge.resolveMbidForLove`. The achordion plugin's
+     * `resolveMbid(track)` fallback calls `window.resolveMbidForLove(track)`
+     * when the loved track's row carries no MBID; the Swift `NativeBridge`
+     * polyfill forwards the achordion track JSON here and resumes the JS promise
+     * with the result.
+     *
+     * Parses the track JSON; returns an already-present, well-formed MBID
+     * verbatim (short-circuit, no mapper call), else resolves (artist, title)
+     * through the shared mapper. Returns null when the track lacks artist/title
+     * or the mapper can't map it (correctly leaving it un-submitted). The
+     * parsing/logic lives here (shared, mirrors Android) so the Swift bridge
+     * stays a thin callback shim.
+     */
+    suspend fun resolveMbidForLove(trackJson: String): String? {
+        return try {
+            val obj = Json.parseToJsonElement(trackJson).jsonObject
+            val existing = obj["mbid"]?.jsonPrimitive?.contentOrNull
+            if (existing != null && MBID_REGEX.matches(existing)) {
+                existing
+            } else {
+                val title = obj["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                val artist = obj["artist"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                if (title != null && artist != null) {
+                    mbidEnrichmentService.getRecordingMbid(artist, title)
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("IosContainer", "resolveMbidForLove failed: ${e.message}")
+            null
+        }
+    }
+
+    private val MBID_REGEX =
+        Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
     /** Additive single-resolver resolution for [IosTrackResolverCache] when a
      *  resolver is enabled after a track was already cached (#1). */

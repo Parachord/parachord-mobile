@@ -2000,12 +2000,39 @@ enum JsPolyfills {
                 url: url, method: method, headersJson: headersJson, body: body
             )
         }
+        // achordion LOVE path (#215): JS `window.resolveMbidForLove(track)` →
+        // shared MbidEnrichmentService → resume the promise. The shared
+        // IosContainer owns the parse/short-circuit/mapper logic (mirrors
+        // Android's NativeBridge.resolveMbidForLove); this block is the thin
+        // async bridge. JSContext is main-thread-bound, so the callback fires
+        // on MainActor — same discipline as performFetch.
+        let resolveMbidForLove: @convention(block) (String, String) -> Void = { callbackId, trackJson in
+            Task {
+                let mbid = (try? await IosContainer.companion.shared.resolveMbidForLove(trackJson: trackJson)) ?? nil
+                await MainActor.run {
+                    fireMbidCallback(context: context, callbackId: callbackId, mbid: mbid)
+                }
+            }
+        }
 
         bridge.setObject(log, forKeyedSubscript: "log" as NSString)
         bridge.setObject(storageGet, forKeyedSubscript: "storageGet" as NSString)
         bridge.setObject(storageSet, forKeyedSubscript: "storageSet" as NSString)
         bridge.setObject(fetchAsync, forKeyedSubscript: "fetchAsync" as NSString)
+        bridge.setObject(resolveMbidForLove, forKeyedSubscript: "resolveMbidForLove" as NSString)
         context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
+    }
+
+    /// Resume the `window.resolveMbidForLove` promise (#215). Mirrors
+    /// `fireFetchCallback`: invoke `window.__resolveMbidCallbacks[callbackId]`
+    /// with the MBID string, or no args when null (JS `mbidOrNull || null`
+    /// resolves to null). Must run on the JSContext's thread (main).
+    private static func fireMbidCallback(context: JSContext, callbackId: String, mbid: String?) {
+        let callbacks = context.objectForKeyedSubscript("__resolveMbidCallbacks")
+        let callback = callbacks?.objectForKeyedSubscript(callbackId)
+        if let callback, !callback.isUndefined {
+            callback.call(withArguments: mbid != nil ? [mbid!] : [])
+        }
     }
 
     /// Shared fetch implementation: URLSession → `{ok,status,body}`

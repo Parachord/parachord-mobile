@@ -311,6 +311,32 @@ class IosJsRuntime : JsRuntime {
                     }
                 };
 
+                // ── MBID resolver shim (achordion LOVE path, #215) ───────────
+                // window.resolveMbidForLove(track) → Promise<string|null>. The
+                // achordion plugin's resolveMbid(track) fallback calls this when
+                // a loved track's row carries no MBID. Bridges to
+                // NativeBridge.resolveMbidForLove (Swift), which runs the shared
+                // MbidEnrichmentService and resumes the promise via
+                // __resolveMbidCallbacks. Byte-compatible with Android's
+                // bootstrap.html so the same achordion .axe works unmodified.
+                window.__resolveMbidCallbacks = {};
+                var __resolveMbidIdCounter = 0;
+                window.resolveMbidForLove = function(track) {
+                    return new Promise(function(resolve, reject) {
+                        var callbackId = 'mbid_' + (++__resolveMbidIdCounter);
+                        window.__resolveMbidCallbacks[callbackId] = function(mbidOrNull) {
+                            delete window.__resolveMbidCallbacks[callbackId];
+                            resolve(mbidOrNull || null);
+                        };
+                        try {
+                            NativeBridge.resolveMbidForLove(callbackId, JSON.stringify(track || {}));
+                        } catch (e) {
+                            delete window.__resolveMbidCallbacks[callbackId];
+                            reject(e);
+                        }
+                    });
+                };
+
                 window.__parachordClient = 'ios';
             })();
         """.trimIndent()
