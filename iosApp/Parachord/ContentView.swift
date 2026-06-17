@@ -367,6 +367,20 @@ final class IosSpotifyConnect {
     /// Android `resolveLocalDevice`). iOS wake = foreground `spotify://`.
     @MainActor
     private func resolveLocalDevice(_ client: SpotifyClient, playUri: String) async -> SpDevice? {
+        // FAST PATH (#232): if THIS device's Spotify is ALREADY a live Connect
+        // device, use it directly and NEVER foreground Spotify. iOS wake =
+        // foregrounding the Spotify app; the warm path in play() misses whenever
+        // `deviceVerified` was reset (Spotify briefly dropped from the device
+        // list between tracks), and without this guard every such play fell
+        // straight to wakeSpotifyPlaying — the "opens Spotify on virtually every
+        // track" bug. Match the LOCAL device by name (isLocalRealDevice), never a
+        // generic remote phone/tablet (a remote registers without local Spotify
+        // running, so finding *a* device isn't enough — see the poll fallback).
+        if client.rateLimitRemainingMs() == 0 {
+            let live = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
+            if let local = live.first(where: { isLocalRealDevice($0) }) { return local }
+        }
+
         // Poll at 1s (not 300ms) so a cold play makes ~18 getDevices calls over
         // ~18s instead of 66 — those ungated /v1/me/player/devices calls add up
         // fast and contribute to Spotify's shared-key abuse window. 1s
