@@ -1375,6 +1375,16 @@ final class QueuePlaybackCoordinator {
     var upNext: [Track] = []
     var shuffleEnabled = false
 
+    /// Repeat mode (#221). off → all → one. Honored by AUTO-advance only
+    /// (a track ending) — the manual Next button + lock-screen next always
+    /// advance one track. Repeat is a coordinator concern (not in the shared
+    /// QueueManager), matching Android where ExoPlayer owns repeat.
+    enum RepeatMode { case off, all, one }
+    var repeatMode: RepeatMode = .off
+    /// Full track list of the current queue, retained so repeat-ALL can wrap
+    /// back to the start when the queue is exhausted.
+    @ObservationIgnored private var originalQueue: [Track] = []
+
     /// Which engine the current track is playing on. The UI reads unified
     /// state below so it doesn't care which one.
     var activeEngine: PlaybackEngineKind = .avPlayer
@@ -1517,10 +1527,10 @@ final class QueuePlaybackCoordinator {
         // notification; MusicKit fires it from its state-polling loop
         // (ApplicationMusicPlayer has no native end callback).
         self.player.onTrackEnded = { [weak self] in
-            self?.skipNext()
+            self?.autoAdvance()
         }
         self.musicKit.onTrackEnded = { [weak self] in
-            self?.skipNext()
+            self?.autoAdvance()
         }
         // Lock-screen / Control-Center next & previous drive the QUEUE
         // (engine-agnostic), not a single player — the "real next/previous"
@@ -1604,6 +1614,7 @@ final class QueuePlaybackCoordinator {
     /// Establish a new queue and start playing the track at
     /// `startIndex`. Mirrors `PlaybackEngine.setQueue`.
     func setQueue(_ tracks: [Track], startIndex: Int) {
+        originalQueue = tracks   // retained for repeat-ALL wrap (#221)
         let toPlay = queueManager.setQueue(
             tracks: tracks,
             startIndex: Int32(startIndex),
@@ -1658,8 +1669,46 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
+    /// Cycle repeat OFF → ALL → ONE → OFF (#221).
+    func cycleRepeatMode() {
+        repeatMode = switch repeatMode {
+        case .off: .all
+        case .all: .one
+        case .one: .off
+        }
+    }
+
+    /// Auto-advance when a track ENDS (wired to every engine's onTrackEnded),
+    /// honoring repeat mode. The manual Next button keeps calling skipNext()
+    /// directly so it always advances regardless of repeat.
+    func autoAdvance() {
+        switch repeatMode {
+        case .one:
+            // Replay the just-finished track.
+            if let cur = currentTrack { playTrack(cur) } else { skipNext() }
+        case .all:
+            if let next = queueManager.skipNext(currentTrack: currentTrack) {
+                syncSnapshot()
+                playTrack(next)
+            } else if !originalQueue.isEmpty {
+                setQueue(originalQueue, startIndex: 0)   // wrap to the top
+            } else {
+                player.stop(); currentTrack = nil; syncSnapshot()
+            }
+        case .off:
+            skipNext()
+        }
+    }
+
     func clearQueue() {
         queueManager.clearQueue()
+        syncSnapshot()
+    }
+
+    /// Remove a single track from the up-next queue by its upNext index (#220).
+    /// Same index space as playFromQueue.
+    func removeFromQueue(_ index: Int) {
+        queueManager.removeFromQueue(index: Int32(index))
         syncSnapshot()
     }
 
@@ -1809,7 +1858,7 @@ final class QueuePlaybackCoordinator {
         let finished = !spotifyPlaying && spotifyPositionSec >= spotifyDurationSec - 1
         if nearEnd || finished {
             spotifyEndHandled = true
-            skipNext()
+            autoAdvance()
         }
     }
 
