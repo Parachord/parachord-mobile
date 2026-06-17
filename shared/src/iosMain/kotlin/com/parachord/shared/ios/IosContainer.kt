@@ -25,11 +25,14 @@ import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
+import com.parachord.shared.model.Friend
 import com.parachord.shared.model.Track
 import com.parachord.shared.playback.scrobbler.LastFmScrobbler
 import com.parachord.shared.playback.scrobbler.LibreFmScrobbler
 import com.parachord.shared.playback.scrobbler.ListenBrainzScrobbler
 import com.parachord.shared.platform.Log
+import com.parachord.shared.platform.randomUUID
+import kotlinx.coroutines.flow.first
 import com.parachord.shared.playback.scrobbler.ScrobbleManager
 import com.parachord.shared.playback.scrobbler.ScrobblePluginDispatch
 import com.parachord.shared.playback.scrobbler.ScrobbleState
@@ -47,6 +50,7 @@ import com.parachord.shared.db.DriverFactory
 import com.parachord.shared.db.ParachordDb
 import com.parachord.shared.db.dao.AlbumDao
 import com.parachord.shared.db.dao.ArtistDao
+import com.parachord.shared.db.dao.FriendDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
 import com.parachord.shared.db.dao.TrackDao
@@ -65,6 +69,7 @@ import com.parachord.shared.model.RecentTrack
 import com.parachord.shared.repository.CriticsPickAlbum
 import com.parachord.shared.repository.FreshDrop
 import com.parachord.shared.repository.FreshDropsRepository
+import com.parachord.shared.repository.FriendsRepository
 import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverCoordinator
@@ -229,6 +234,20 @@ class IosContainer private constructor() {
     val artistDao: ArtistDao by lazy { ArtistDao(database) }
     val playlistDao: PlaylistDao by lazy { PlaylistDao(database) }
     val playlistTrackDao: PlaylistTrackDao by lazy { PlaylistTrackDao(database) }
+    val friendDao: FriendDao by lazy { FriendDao(database) }
+
+    // Shared FriendsRepository — full add/remove/pin/sync/activity surface.
+    // Backs the Collection → Friends tab (#195). Mirrors AndroidModule's binding.
+    val friendsRepository: FriendsRepository by lazy {
+        FriendsRepository(
+            friendDao = friendDao,
+            lastFmClient = lastFmClient,
+            listenBrainzClient = listenBrainzClient,
+            metadataService = metadataService,
+            settingsStore = settingsStore,
+            lastFmApiKey = appConfig.lastFmApiKey,
+        )
+    }
 
     // ── Collection (#195) — DAO-backed facade ──────────────────────────
     // Mirrors the NON-SYNC slice of the shared LibraryRepository. Deliberately
@@ -242,6 +261,14 @@ class IosContainer private constructor() {
         FlowWatcher(appScope).watch(albumDao.getAll()) { onEach((it as? List<Album>) ?: emptyList()) }
     fun watchCollectionArtists(onEach: (List<Artist>) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(artistDao.getAll()) { onEach((it as? List<Artist>) ?: emptyList()) }
+    fun watchCollectionFriends(onEach: (List<Friend>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(friendsRepository.getAllFriends()) { onEach((it as? List<Friend>) ?: emptyList()) }
+
+    // Refresh each friend's cached now-playing (mirrors Android's friend activity
+    // refresh on the Friends tab). Fire-and-forget; failures are swallowed in the repo.
+    fun refreshFriendsActivity() { appScope.launch { runCatching { friendsRepository.refreshAllActivity() } } }
+    suspend fun removeFriend(friendId: String) { friendsRepository.removeFriend(friendId) }
+    suspend fun pinFriend(friendId: String, pinned: Boolean) { friendsRepository.pinFriend(friendId, pinned) }
 
     // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
     fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
@@ -265,6 +292,26 @@ class IosContainer private constructor() {
     suspend fun removeTrackFromCollection(track: Track) { trackDao.delete(track) }
     suspend fun removeAlbumFromCollection(album: Album) { albumDao.delete(album) }
     suspend fun removeArtistFromCollection(artist: Artist) { artistDao.delete(artist) }
+
+    // Toggle album/artist collection from detail screens (#195 M4). ID + row
+    // construction live in Kotlin so the `hashCode()`-based ID matches Android
+    // exactly (Swift's String.hashValue differs). year/trackCount use 0 as the
+    // "unknown" sentinel to keep the Swift→Kotlin bridge on primitive Int.
+    suspend fun toggleAlbumCollection(title: String, artist: String, artworkUrl: String?, year: Int, trackCount: Int) {
+        val existing = albumDao.getByTitleAndArtist(title, artist)
+        if (existing != null) { albumDao.delete(existing); return }
+        albumDao.insert(Album(
+            id = "album-${title.hashCode()}-${artist.hashCode()}",
+            title = title, artist = artist, artworkUrl = artworkUrl,
+            year = year.takeIf { it > 0 }, trackCount = trackCount.takeIf { it > 0 },
+        ))
+    }
+
+    suspend fun toggleArtistCollection(name: String, imageUrl: String?) {
+        val existing = artistDao.getByName(name).first()
+        if (existing != null) { artistDao.delete(existing); return }
+        artistDao.insert(Artist(id = "manual-${randomUUID()}", name = name, imageUrl = imageUrl))
+    }
 
     // ── Charts (Pop of the Tops) ───────────────────────────────────────
     val appleMusicClient: AppleMusicClient by lazy { AppleMusicClient(httpClient) }

@@ -14,7 +14,8 @@ extension View {
         _ track: Track,
         coordinator: QueuePlaybackCoordinator,
         onGoToArtist: (() -> Void)? = nil,
-        onGoToAlbum: (() -> Void)? = nil
+        onGoToAlbum: (() -> Void)? = nil,
+        onRemoveFromCollection: (() -> Void)? = nil
     ) -> some View {
         contextMenu {
             Button { coordinator.playNext(track) } label: {
@@ -33,6 +34,11 @@ extension View {
             Divider()
             ShareLink(item: "\(track.title) — \(track.artist)") {
                 Label("Share", systemImage: "square.and.arrow.up")
+            }
+            if let onRemoveFromCollection {
+                Button(role: .destructive) { onRemoveFromCollection() } label: {
+                    Label("Remove from Collection", systemImage: "heart.slash")
+                }
             }
         } preview: {
             // Rich preview: artwork + title/artist (Apple Music style).

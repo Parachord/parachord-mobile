@@ -361,10 +361,30 @@ final class AlbumDetailModel {
     var entities: [Track] = []
     var isLoading = false
     var loaded = false
+    /// Reactive in-collection state (#195 M4) backing the header heart toggle.
+    var inCollection = false
+    private var collectionSub: Cancellable?
     private let ttl: TimeInterval = 6 * 3600
     private var cacheKey: String { "\(title)|\(artist)".lowercased() }
 
     init(title: String, artist: String) { self.title = title; self.artist = artist }
+
+    /// Subscribe to the collection flow once (idempotent). Cancel on disappear.
+    func watchCollection() {
+        guard collectionSub == nil else { return }
+        collectionSub = container.watchAlbumInCollection(title: title, artist: artist) { [weak self] yes in
+            self?.inCollection = yes.boolValue
+        }
+    }
+    func stopWatching() { collectionSub?.cancel(); collectionSub = nil }
+
+    func toggleCollection() {
+        Task {
+            try? await container.toggleAlbumCollection(
+                title: title, artist: artist, artworkUrl: detail?.artworkUrl,
+                year: detail?.year?.int32Value ?? 0, trackCount: Int32(detail?.tracks.count ?? 0))
+        }
+    }
 
     func load() async {
         guard !loaded else { return }
@@ -407,6 +427,7 @@ struct AlbumScreen: View {
     /// (pushed the artist onto the wrong path → "album opened, artist appeared on
     /// top"). A self-contained `navigationDestination(item:)` works in ANY host.
     @State private var navArtist: String?
+    @State private var showAlbumMenu = false
 
     init(title: String, artist: String) {
         _model = State(initialValue: AlbumDetailModel(title: title, artist: artist))
@@ -414,7 +435,12 @@ struct AlbumScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: model.title, leading: .back, onLeading: { dismiss() })
+            // "More" (⋯) opens the album options sheet — mirrors Android's
+            // AlbumOptionsSheet + the iOS design's ios-detail-more button. The
+            // collection toggle lives here (Favorite/HeartBroken), NOT as a header
+            // icon (that's the artist screen's pattern — a header Star).
+            PCTopBar(title: model.title, leading: .back, onLeading: { dismiss() },
+                     trailingIcon: "ellipsis", onTrailing: { showAlbumMenu = true })
             ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 header
@@ -438,7 +464,14 @@ struct AlbumScreen: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
+        .confirmationDialog(model.title, isPresented: $showAlbumMenu, titleVisibility: .visible) {
+            Button("Queue Album") { model.entities.forEach { coordinator.addToQueue($0) } }
+            Button("Go to Artist") { navArtist = model.artist }
+            Button(model.inCollection ? "Remove from Collection" : "Add to Collection") { model.toggleCollection() }
+        }
         .task { await model.load() }
+        .onAppear { model.watchCollection() }
+        .onDisappear { model.stopWatching() }
     }
 
     private var header: some View {
@@ -552,8 +585,25 @@ final class ArtistDetailModel {
     /// — errored) vs. the artist genuinely having no releases. Drives the friendly
     /// "couldn't load, try again" state instead of a bare empty grid.
     var albumsError = false
+    /// Reactive in-collection state (#195 M4) backing the header heart toggle.
+    var inCollection = false
+    private var collectionSub: Cancellable?
 
     init(name: String) { self.name = name }
+
+    /// Subscribe to the collection flow once (idempotent). Cancel on disappear.
+    func watchCollection() {
+        guard collectionSub == nil else { return }
+        collectionSub = container.watchArtistInCollection(name: name) { [weak self] yes in
+            self?.inCollection = yes.boolValue
+        }
+    }
+    func stopWatching() { collectionSub?.cancel(); collectionSub = nil }
+
+    func toggleCollection() {
+        let image = ArtistImageCache.shared.image(for: name) ?? info?.imageUrl
+        Task { try? await container.toggleArtistCollection(name: name, imageUrl: image) }
+    }
 
     private let ttl: TimeInterval = 6 * 3600   // discography rarely changes — revalidate sparingly
 
@@ -739,9 +789,24 @@ struct ArtistScreen: View {
             }
             .padding(.leading, 16).padding(.top, 4)
         }
+        // Collection toggle (#195 M4) — mirrors Android's ArtistScreen header
+        // action: Star (saved, amber 0xF59E0B) / StarOutline (not saved). Glass
+        // treatment matches the back button (the hero is full-bleed, no PCTopBar).
+        .overlay(alignment: .topTrailing) {
+            Button { model.toggleCollection() } label: {
+                Image(systemName: model.inCollection ? "star.fill" : "star")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(model.inCollection ? Color(uiColor: UIColor(hex: 0xF59E0B)) : PC.fg1)
+                    .frame(width: 36, height: 36)
+                    .background(.ultraThinMaterial, in: Circle())
+            }
+            .padding(.trailing, 16).padding(.top, 4)
+        }
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .task { await model.load() }
+        .onAppear { model.watchCollection() }
+        .onDisappear { model.stopWatching() }
     }
 
     // MARK: Hero

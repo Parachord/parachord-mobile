@@ -33,10 +33,7 @@ struct ContentView: View {
                 switch tab {
                 case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true })
                 case .search:     SearchView(onMenu: { showSidebar = true })
-                case .collection: PCPlaceholder(title: "Collection",
-                                                systemImage: "square.stack",
-                                                note: "Your saved tracks, albums & artists. Lands with the iOS library layer.",
-                                                onMenu: { showSidebar = true })
+                case .collection: CollectionView(onMenu: { showSidebar = true })
                 case .playlists:  PCPlaceholder(title: "Playlists",
                                                 systemImage: "music.note.list",
                                                 note: "Your playlists. Lands with the iOS library layer.",

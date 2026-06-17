@@ -31,6 +31,7 @@
 		AA000000000000000000006B /* DetailScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006A /* DetailScreens.swift */; };
 		AA000000000000000000006D /* RecommendationsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006C /* RecommendationsScreen.swift */; };
 		AA0000000000000000000071 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000070 /* HistoryScreen.swift */; };
+		AA00000000000000000000D1 /* CollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000D0 /* CollectionView.swift */; };
 		AA000000000000000000006F /* CuratedAlbumScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006E /* CuratedAlbumScreens.swift */; };
 /* End PBXBuildFile section */
 
@@ -61,6 +62,7 @@
 		AA000000000000000000006A /* DetailScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailScreens.swift; sourceTree = "<group>"; };
 		AA000000000000000000006C /* RecommendationsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendationsScreen.swift; sourceTree = "<group>"; };
 		AA0000000000000000000070 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
+		AA00000000000000000000D0 /* CollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionView.swift; sourceTree = "<group>"; };
 		AA000000000000000000006E /* CuratedAlbumScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratedAlbumScreens.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -115,6 +117,7 @@
 				AA000000000000000000006A /* DetailScreens.swift */,
 				AA000000000000000000006C /* RecommendationsScreen.swift */,
 				AA0000000000000000000070 /* HistoryScreen.swift */,
+				AA00000000000000000000D0 /* CollectionView.swift */,
 				AA000000000000000000006E /* CuratedAlbumScreens.swift */,
 				AA0000000000000000000019 /* Resources/resolver-loader.js */,
 				AA000000000000000000001A /* Resources/plugins */,
@@ -238,6 +241,7 @@
 				AA000000000000000000006B /* DetailScreens.swift in Sources */,
 				AA000000000000000000006D /* RecommendationsScreen.swift in Sources */,
 				AA0000000000000000000071 /* HistoryScreen.swift in Sources */,
+				AA00000000000000000000D1 /* CollectionView.swift in Sources */,
 				AA000000000000000000006F /* CuratedAlbumScreens.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

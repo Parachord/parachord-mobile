@@ -15,6 +15,10 @@ struct PCTopBar: View {
     let title: String
     var leading: Leading = .back
     var onLeading: (() -> Void)? = nil
+    // Optional trailing icon action (e.g. Collection's Sync button). Default-nil
+    // so existing call sites are unaffected.
+    var trailingIcon: String? = nil
+    var onTrailing: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -30,6 +34,14 @@ struct PCTopBar: View {
                 .font(.system(size: 21, weight: .light)).tracking(3.6)  // titleLarge · Light · 0.2em
                 .foregroundStyle(PC.fg1).lineLimit(1)
             Spacer(minLength: 0)
+            if let trailingIcon {
+                Button { onTrailing?() } label: {
+                    Image(systemName: trailingIcon)
+                        .font(.system(size: 17, weight: .regular)).foregroundStyle(PC.fg1)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
         .frame(maxWidth: .infinity)
