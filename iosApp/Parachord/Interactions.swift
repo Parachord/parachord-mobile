@@ -100,9 +100,11 @@ private struct PCAddToPlaylistMenu: View {
 
     var body: some View {
         Menu {
-            if playlists.isEmpty {
-                Text("No playlists yet")
-            } else {
+            Button { PlaylistCreator.shared.start(track: track) } label: {
+                Label("New Playlist…", systemImage: "plus")
+            }
+            if !playlists.isEmpty {
+                Divider()
                 ForEach(playlists, id: \.id) { p in
                     Button(p.name) {
                         Task { try? await container.addTrackToPlaylist(playlistId: p.id, track: track) }

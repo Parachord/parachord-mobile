@@ -10,6 +10,7 @@ import Shared
 struct ContentView: View {
     @State private var playback = AppPlayback()
     @State private var theme = ThemeObserver()
+    @State private var creator = PlaylistCreator.shared
     @State private var tab: PCTab = .home
     @State private var showSidebar = false
     @State private var showAdd = false
@@ -155,6 +156,14 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAdd) {
             PCAddSheet(onShuffleupagus: { /* Phase: DJ chat */ }, onDismiss: { showAdd = false })
+        }
+        // New-playlist create prompt (#242), hosted once at the root so both the
+        // FAB's "New Playlist" and the track menu's "Add to Playlist → New
+        // Playlist…" route through it.
+        .alert("New Playlist", isPresented: Binding(get: { creator.showing }, set: { creator.showing = $0 })) {
+            TextField("Playlist name", text: Binding(get: { creator.name }, set: { creator.name = $0 }))
+            Button("Cancel", role: .cancel) { creator.showing = false }
+            Button("Create") { creator.create() }
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.
