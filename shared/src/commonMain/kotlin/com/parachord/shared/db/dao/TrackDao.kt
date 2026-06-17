@@ -63,6 +63,12 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.findLocalFile(title, artist).executeAsOneOrNull()?.toTrack()
     }
 
+    /** One-shot title/artist substring search (the [search] Flow's suspend twin —
+     *  used by iOS Search, which debounces in the VM and calls per query). */
+    suspend fun searchOnce(query: String): List<Track> = withContext(Dispatchers.Default) {
+        queries.search(query, query).executeAsList().map { it.toTrack() }
+    }
+
     /* ---- Writes ---- */
 
     suspend fun insert(track: Track): Unit = withContext(Dispatchers.Default) {

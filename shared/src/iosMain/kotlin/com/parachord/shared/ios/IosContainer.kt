@@ -53,7 +53,9 @@ import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.FriendDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
+import com.parachord.shared.db.dao.SearchHistoryDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.model.SearchHistory
 import com.parachord.shared.api.TicketmasterClient
 import com.parachord.shared.api.SeatGeekClient
 import com.parachord.shared.repository.ChartsRepository
@@ -1252,6 +1254,60 @@ class IosContainer private constructor() {
         }
         return IosSearchResults(artists = artists, releases = releases)
     }
+
+    // ── Full search (#233, Android parity) ───────────────────────────────────
+    // Android's SearchViewModel surfaces: local DB tracks ("Library"), remote
+    // artists / tracks / albums (MetadataService cascade), and search history.
+    // TrackSearchResult / AlbumSearchResult are already Swift-consumed elsewhere
+    // (DetailScreens), so they're returned directly; ArtistInfo is flattened.
+
+    val searchHistoryDao: SearchHistoryDao by lazy { SearchHistoryDao(database) }
+
+    /** Local DB tracks matching title/artist (the "Library" section). */
+    suspend fun searchLocalTracks(query: String): List<Track> =
+        if (query.isBlank()) emptyList() else try { trackDao.searchOnce(query) } catch (e: Exception) { emptyList() }
+
+    suspend fun searchTracksRemote(query: String, limit: Int = 20): List<TrackSearchResult> =
+        if (query.isBlank()) emptyList() else try { metadataService.searchTracks(query, limit) } catch (e: Exception) { emptyList() }
+
+    suspend fun searchAlbumsRemote(query: String, limit: Int = 10): List<AlbumSearchResult> =
+        if (query.isBlank()) emptyList() else try { metadataService.searchAlbums(query, limit) } catch (e: Exception) { emptyList() }
+
+    suspend fun searchArtistsRemote(query: String, limit: Int = 10): List<IosArtistResult> =
+        if (query.isBlank()) emptyList() else try {
+            metadataService.searchArtists(query, limit).map { IosArtistResult(it.name, it.imageUrl, it.mbid) }
+        } catch (e: Exception) { emptyList() }
+
+    // Search history (shared SearchHistoryDao; mirrors Android's save-on-select +
+    // dedup-by-query + trim-to-limit).
+    fun watchSearchHistory(onEach: (List<SearchHistory>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(searchHistoryDao.getRecent()) { onEach((it as? List<SearchHistory>) ?: emptyList()) }
+
+    suspend fun saveSearchHistory(
+        query: String,
+        resultType: String,
+        resultName: String,
+        resultArtist: String?,
+        artworkUrl: String?,
+    ) {
+        val q = query.trim()
+        if (q.isBlank()) return
+        searchHistoryDao.deleteByQuery(q)
+        searchHistoryDao.insert(
+            SearchHistory(
+                query = q,
+                resultType = resultType,
+                resultName = resultName,
+                resultArtist = resultArtist,
+                artworkUrl = artworkUrl,
+                timestamp = com.parachord.shared.platform.currentTimeMillis(),
+            ),
+        )
+        searchHistoryDao.trimToLimit()
+    }
+
+    suspend fun deleteSearchHistory(id: Long) { searchHistoryDao.deleteById(id) }
+    suspend fun clearSearchHistory() { searchHistoryDao.clearAll() }
 }
 
 /** Flat Swift-friendly search result bundle. */
@@ -1271,6 +1327,14 @@ data class IosSearchRelease(
     val title: String,
     val artist: String,
     val year: String?,
+)
+
+/** Flat artist result for the #233 search screen (MetadataService cascade →
+ *  name + image + MBID; the nested ArtistInfo bio/tags/similar aren't needed). */
+data class IosArtistResult(
+    val name: String,
+    val imageUrl: String?,
+    val mbid: String?,
 )
 
 /**
