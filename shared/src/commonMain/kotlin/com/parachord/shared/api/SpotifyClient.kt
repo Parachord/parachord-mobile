@@ -4,6 +4,7 @@ import com.parachord.shared.api.auth.AuthCredential
 import com.parachord.shared.api.auth.AuthRealm
 import com.parachord.shared.api.auth.AuthTokenProvider
 import com.parachord.shared.resolver.ResolvedSource
+import com.parachord.shared.resolver.validateIsrc
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.HttpRequestBuilder
@@ -252,7 +253,7 @@ class SpotifyClient(
             resolver = "spotify",
             spotifyUri = "spotify:track:${track.id}",
             spotifyId = track.id,
-            isrc = track.externalIds?.isrc?.takeIf { it.isNotBlank() },
+            isrc = validateIsrc(track.externalIds?.isrc),
             confidence = 0.9,
             matchedTitle = track.name,
             matchedArtist = track.artistName,

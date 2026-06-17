@@ -232,6 +232,11 @@ class ResolverManager constructor(
                 resolver = "spotify",
                 spotifyUri = "spotify:track:${track.id}",
                 spotifyId = track.id,
+                // Capture the ISRC on the cached-ID verify path too (#217) — the
+                // getTrack full-track object carries external_ids.isrc, and this is
+                // the common path (known spotifyId), so dropping it here starved
+                // the ISRC→MBID fallback for most Spotify tracks.
+                isrc = com.parachord.shared.resolver.validateIsrc(track.externalIds?.isrc),
                 // Direct-ID match — see SoundCloud branch above (~L190).
                 confidence = 1.0,
                 artworkUrl = track.album?.images?.firstOrNull()?.url,
