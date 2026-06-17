@@ -60,7 +60,7 @@ class JsScrobblePluginDispatcher(
 
     /**
      * Build the desktop-shaped track JSON the achordion plugin expects:
-     * `id`/`title`/`artist`/`album`/`duration` (seconds), `mbid`,
+     * `id`/`title`/`artist`/`album`/`duration` (seconds), `mbid`, `isrc`,
      * `_activeResolver`, and the per-resolver `sources` map. Source data comes
      * from [TrackResolverCache.getSources]; on a cache miss we synthesize a
      * single-entry map from the track's own IDs at confidence 0.95.
@@ -76,6 +76,10 @@ class JsScrobblePluginDispatcher(
             // Track.duration is milliseconds; plugin contract is seconds.
             track.duration?.let { put("duration", it / 1000.0) }
             track.recordingMbid?.let { put("mbid", it) }
+            // Parallel to `mbid` — achordion's tier-2 keys its submit on EITHER,
+            // and reports "no MBID or ISRC" when both are absent from this payload.
+            // Omitting it blocked ISRC-only submits even with a native ISRC (#216).
+            track.isrc?.let { put("isrc", it) }
             track.resolver?.let { put("_activeResolver", it) }
             putJsonObject("sources") {
                 for (source in sources) {

@@ -78,13 +78,44 @@ final class IosTrackResolverCache {
     // re-arming Spotify's shared-key abuse window. Persist the resolved-source
     // map to disk and reload on launch so a track resolved once never
     // re-searches. Mirrors Android's resolver-ID backfill.
+    //
+    // SCHEMA VERSION — the filename carries the version, so a bump makes the
+    // previous file unreadable (we never open it) → every track re-resolves once
+    // and repopulates the new file. Bump whenever a `ResolvedSource` field change
+    // makes OLD cached entries semantically wrong to reuse.
+    //   v2 (Jun 2026, commit ccea230): `ResolvedSource` gained `isrc`. v1 caches
+    //   stored Apple Music / Spotify sources with no ISRC and were reused verbatim
+    //   without re-resolving, so a track cached pre-v2 never gained an ISRC and its
+    //   Achordion submit (recording- or ISRC-keyed) silently skipped. Bumping to v2
+    //   discards those so the catalog re-resolve captures `attributes.isrc`.
+    // Android has no equivalent problem: it re-derives ISRC from fresh resolution
+    // every play (reselectBestSource / resolveOnTheFly), never from a stale blob.
+    private static let cacheSchemaVersion = 2
     private let persistURL: URL = {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return dir.appendingPathComponent("resolver-cache.json")
+        return dir.appendingPathComponent("resolver-cache-v\(IosTrackResolverCache.cacheSchemaVersion).json")
     }()
     private var saveScheduled = false
 
-    init() { loadFromDisk() }
+    init() {
+        purgeStaleCacheFiles()
+        loadFromDisk()
+    }
+
+    /// Delete any resolver-cache file that isn't the current schema version — the
+    /// legacy unversioned `resolver-cache.json` plus any prior `-vN`. Without this
+    /// each schema bump would leak a stale blob in the caches dir forever.
+    private func purgeStaleCacheFiles() {
+        let fm = FileManager.default
+        let dir = fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let current = persistURL.lastPathComponent
+        let contents = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        for url in contents {
+            let name = url.lastPathComponent
+            guard name == "resolver-cache.json" || name.hasPrefix("resolver-cache-v") else { continue }
+            if name != current { try? fm.removeItem(at: url) }
+        }
+    }
 
     private func loadFromDisk() {
         guard let data = try? Data(contentsOf: persistURL),

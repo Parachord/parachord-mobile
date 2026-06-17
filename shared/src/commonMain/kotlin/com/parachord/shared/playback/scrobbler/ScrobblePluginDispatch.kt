@@ -17,7 +17,7 @@ import kotlinx.serialization.json.putJsonObject
  * richer `sources` map from its resolver cache; this shared builder uses the
  * track's own resolver IDs (sufficient for achordion's `buildLinks`). Both
  * produce the desktop-shaped object documented in `assets/js/bootstrap.html`:
- * `id`/`title`/`artist`/`album`/`duration`(seconds)/`mbid`/`_activeResolver` +
+ * `id`/`title`/`artist`/`album`/`duration`(seconds)/`mbid`/`isrc`/`_activeResolver` +
  * a per-resolver `sources` map.
  */
 @OptIn(ExperimentalEncodingApi::class)
@@ -32,6 +32,12 @@ object ScrobblePluginDispatch {
         // Track.duration is milliseconds; the plugin contract is seconds.
         track.duration?.let { put("duration", it / 1000.0) }
         track.recordingMbid?.let { put("mbid", it) }
+        // Parallel to `mbid` — the achordion `.axe` tier-2 keys its submit on
+        // EITHER, and logs "no MBID or ISRC — cannot key submit" when both are
+        // absent from THIS payload. Omitting `isrc` here made that path unable to
+        // submit ISRC-only tracks (e.g. Apple-Music-streamed, mapper down) even
+        // when the native Track carried one. Mirrors the native submit gate (#216).
+        track.isrc?.let { put("isrc", it) }
         track.resolver?.let { put("_activeResolver", it) }
         putJsonObject("sources") {
             if (!track.spotifyId.isNullOrBlank() || !track.spotifyUri.isNullOrBlank()) {
