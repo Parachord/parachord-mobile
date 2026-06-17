@@ -21,6 +21,9 @@ struct ContentView: View {
     /// One-shot route the sidebar injects into the Home tab (HomeScreen owns
     /// the actual nav stack as internal @State so re-tap reliably pops to root).
     @State private var homePendingRoute: PCRoute?
+    /// One-shot sub-tab for the Collection tab, set when the queue-source banner
+    /// links to "Collection" so it opens on Songs rather than the default. (#209)
+    @State private var collectionPendingTab: CollectionTab?
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -33,7 +36,7 @@ struct ContentView: View {
                 switch tab {
                 case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true })
                 case .search:     SearchView(onMenu: { showSidebar = true })
-                case .collection: CollectionView(onMenu: { showSidebar = true })
+                case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab)
                 case .playlists:  PCPlaceholder(title: "Playlists",
                                                 systemImage: "music.note.list",
                                                 note: "Your playlists. Lands with the iOS library layer.",
@@ -94,6 +97,7 @@ struct ContentView: View {
                     onNavigateToContext: { ctx in
                         if ctx.type == "collection" {
                             withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                            collectionPendingTab = .songs   // land on Songs, not the default Artists
                             tab = .collection
                             return
                         }

@@ -172,10 +172,16 @@ final class CollectionModel {
 
 // Tab order mirrors Android LibraryScreen + the iOS design (Artists, Albums,
 // Songs, Friends) — not the Songs-first order from the original M3 sketch.
-private enum CollectionTab: Int, CaseIterable { case artists = 0, albums = 1, songs = 2, friends = 3 }
+// Internal (not private) so the shell can request a sub-tab when navigating from
+// the queue-source "Playing from: Collection" banner (#209).
+enum CollectionTab: Int, CaseIterable { case artists = 0, albums = 1, songs = 2, friends = 3 }
 
 struct CollectionView: View {
     let onMenu: () -> Void
+    /// One-shot sub-tab the shell injects when navigating from the queue-source
+    /// banner (#209) — e.g. "Playing from: Collection" lands on Songs. Consumed
+    /// once on appear, then cleared.
+    @Binding var pendingTab: CollectionTab?
 
     @State private var model = CollectionModel.shared
     @State private var tab: CollectionTab = .artists
@@ -218,6 +224,10 @@ struct CollectionView: View {
         // Refresh friend now-playing whenever the Friends tab is shown (mirrors
         // Android's activity refresh). Cheap + gated by the repo's rate guards.
         .onChange(of: tab) { _, t in if t == .friends { model.refreshFriends() } }
+        // Consume a shell-requested sub-tab (#209 queue-source banner → Songs).
+        .onChange(of: pendingTab, initial: true) { _, t in
+            if let t { tab = t; pendingTab = nil }
+        }
     }
 
     private var tabLabels: [String] {
