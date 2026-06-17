@@ -25,16 +25,20 @@ enum PCRoute: Hashable {
 /// navigation is VALUE-BASED — never destination-based `NavigationLink { … }`,
 /// which corrupts a typed-path NavigationStack on iOS 18+ (mixing the two broke
 /// push + back across the app; works on older iPad OS, not the iOS 18.3 sim).
-/// Map a queue-source `PlaybackContext` (#209) to its destination route. iOS
-/// album routing needs title + artist, so the album context carries the artist
-/// in `id` (set in AlbumScreen.albumContext). Returns nil for non-navigable
-/// types (listen-along / spinoff / unknown).
+/// Map a queue-source `PlaybackContext` (#209) to its destination route — every
+/// page a queue can be started from that iOS can navigate back to. iOS album
+/// routing needs title + artist, so the album context carries the artist in `id`
+/// (set in AlbumScreen.albumContext). Returns nil for types with no iOS page
+/// (listen-along / spinoff / unknown).
 func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
     switch ctx.type {
-    case "album":    return .album(title: ctx.name, artist: ctx.id ?? "")
-    case "playlist": return .playlist(id: ctx.id ?? "", title: ctx.name)
-    case "artist":   return .artist(ctx.name)
-    default:         return nil
+    case "album":           return .album(title: ctx.name, artist: ctx.id ?? "")
+    case "playlist":        return .playlist(id: ctx.id ?? "", title: ctx.name)
+    case "artist":          return .artist(ctx.name)
+    case "charts":          return .pop
+    case "recommendations": return .recommendations
+    case "history":         return .history
+    default:                return nil
     }
 }
 

@@ -180,7 +180,8 @@ struct RecommendationsScreen: View {
         LazyVStack(spacing: 0) {
             ForEach(Array(filteredSongs.enumerated()), id: \.offset) { index, pair in
                 Button {
-                    coordinator.setQueue(filteredSongs.map { $0.entity }, startIndex: index)
+                    coordinator.setQueue(filteredSongs.map { $0.entity }, startIndex: index,
+                                         context: PlaybackContext(type: "recommendations", name: "Recommended Songs", id: nil))
                 } label: {
                     HStack(spacing: 12) {
                         pcCover(pcTrackArt(pair.track.artworkUrl, artist: pair.track.artist, title: pair.track.title, album: pair.track.album), seed: pair.track.title + pair.track.artist, size: 44, radius: 6)

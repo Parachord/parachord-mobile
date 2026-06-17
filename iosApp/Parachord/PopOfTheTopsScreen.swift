@@ -140,7 +140,8 @@ struct PopOfTheTopsScreen: View {
         LazyVStack(spacing: 0) {
             ForEach(Array(model.songs.enumerated()), id: \.element.id) { index, song in
                 Button {
-                    coordinator.setQueue(model.songEntities, startIndex: index)
+                    coordinator.setQueue(model.songEntities, startIndex: index,
+                                         context: PlaybackContext(type: "charts", name: "Top Songs", id: nil))
                 } label: {
                     HStack(spacing: 12) {
                         Text("\(index + 1)").font(.system(size: 13, design: .monospaced))

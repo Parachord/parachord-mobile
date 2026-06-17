@@ -161,7 +161,8 @@ struct HistoryScreen: View {
     private var topSongs: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array(model.topTracks.enumerated()), id: \.offset) { i, t in
-                Button { coordinator.setQueue(model.trackEntities, startIndex: i) } label: {
+                Button { coordinator.setQueue(model.trackEntities, startIndex: i,
+                                              context: PlaybackContext(type: "history", name: "Top Songs", id: nil)) } label: {
                     HStack(spacing: 12) {
                         Text("\(t.rank)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
                         pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6)
@@ -235,7 +236,8 @@ struct HistoryScreen: View {
     private var recentList: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array(model.recent.enumerated()), id: \.offset) { i, t in
-                Button { coordinator.setQueue(model.recentEntities, startIndex: i) } label: {
+                Button { coordinator.setQueue(model.recentEntities, startIndex: i,
+                                              context: PlaybackContext(type: "history", name: "Recently Played", id: nil)) } label: {
                     HStack(spacing: 12) {
                         pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6)
                         VStack(alignment: .leading, spacing: 2) {
