@@ -55,6 +55,8 @@ import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
 import com.parachord.shared.db.dao.SearchHistoryDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.model.Playlist
+import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.model.SearchHistory
 import com.parachord.shared.api.TicketmasterClient
 import com.parachord.shared.api.SeatGeekClient
@@ -1257,6 +1259,53 @@ class IosContainer private constructor() {
     /** Reactive "is this weekly playlist already saved?" for the Save button (#236). */
     fun watchWeeklyPlaylistSaved(playlistId: String, onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(playlistDao.getByIdFlow("listenbrainz-$playlistId")) { onEach(it != null) }
+
+    // ── Saved-playlist library (iOS playlist views — list / detail / edit) ────
+    // Reads via the existing playlist DAOs (the container owns them); writes
+    // (rename / delete / remove-track / reorder) renumber positions + bump
+    // lastModified+locallyModified so a future sync picks the change up.
+
+    fun watchSavedPlaylists(onEach: (List<Playlist>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(playlistDao.getAll()) { onEach((it as? List<Playlist>) ?: emptyList()) }
+
+    fun watchPlaylist(id: String, onEach: (Playlist?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(playlistDao.getByIdFlow(id)) { onEach(it as? Playlist) }
+
+    fun watchPlaylistTracks(id: String, onEach: (List<PlaylistTrack>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(playlistTrackDao.getByPlaylistId(id)) { onEach((it as? List<PlaylistTrack>) ?: emptyList()) }
+
+    suspend fun renamePlaylist(id: String, name: String) {
+        val p = playlistDao.getById(id) ?: return
+        playlistDao.update(p.copy(name = name, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
+    }
+
+    suspend fun deletePlaylist(id: String) {
+        playlistTrackDao.deleteByPlaylistId(id)
+        playlistDao.getById(id)?.let { playlistDao.delete(it) }
+    }
+
+    suspend fun removePlaylistTrackAt(id: String, index: Int) {
+        val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()
+        if (index < 0 || index >= tracks.size) return
+        tracks.removeAt(index)
+        persistReorderedTracks(id, tracks)
+    }
+
+    suspend fun movePlaylistTrack(id: String, from: Int, to: Int) {
+        val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()
+        if (from < 0 || from >= tracks.size || to < 0 || to >= tracks.size || from == to) return
+        val moved = tracks.removeAt(from)
+        tracks.add(to, moved)
+        persistReorderedTracks(id, tracks)
+    }
+
+    /** Renumber positions + atomically replace the rows, then bump the playlist. */
+    private suspend fun persistReorderedTracks(id: String, tracks: List<PlaylistTrack>) {
+        playlistTrackDao.replaceAll(id, tracks.mapIndexed { i, t -> t.copy(position = i) })
+        playlistDao.getById(id)?.let {
+            playlistDao.update(it.copy(trackCount = tracks.size, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
+        }
+    }
 
     private fun WeeklyPlaylistEntry.toIos(kind: String) = IosWeeklyEntry(
         id = id,

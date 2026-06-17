@@ -254,3 +254,267 @@ struct PlaylistDetailView: View {
         return track.artist
     }
 }
+
+// MARK: - Saved playlists library (iOS playlist views — list / detail / edit)
+//
+// The Playlists tab + a saved-playlist detail backed by the SQLDelight DB
+// (playlistDao / playlistTrackDao via IosContainer), distinct from the
+// EPHEMERAL weekly PlaylistDetailView above (WeeklyPlaylistsRepository). Detail
+// supports full edit: rename, delete, remove track, and drag-to-reorder (the
+// #220 List + .onMove + always-active editMode pattern). Saving a weekly
+// playlist (#236) lands here.
+
+@MainActor
+@Observable
+final class PlaylistsListModel {
+    private let container = IosContainer.companion.shared
+    var playlists: [Playlist] = []
+    private var sub: Cancellable?
+
+    func start() {
+        guard sub == nil else { return }
+        sub = container.watchSavedPlaylists { [weak self] list in self?.playlists = list }
+    }
+}
+
+struct PlaylistsScreen: View {
+    @State private var model = PlaylistsListModel()
+    @State private var path: [String] = []
+    let onMenu: () -> Void
+    init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            VStack(spacing: 0) {
+                PCTopBar(title: "Playlists", leading: .menu, onLeading: onMenu)
+                if model.playlists.isEmpty {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Image(systemName: "music.note.list").font(.system(size: 34)).foregroundStyle(PC.fg3)
+                        Text("No saved playlists yet").font(.system(size: 14)).foregroundStyle(PC.fg2)
+                        Text("Save a Weekly Jam or Exploration to see it here.")
+                            .font(.system(size: 12)).foregroundStyle(PC.fg3).multilineTextAlignment(.center)
+                    }.padding(.horizontal, 40)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(model.playlists, id: \.id) { p in
+                                Button { path.append(p.id) } label: { row(p) }.buttonStyle(.plain)
+                            }
+                        }.padding(.bottom, 130)
+                    }
+                }
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: String.self) { id in SavedPlaylistDetailView(playlistId: id) }
+            .task { model.start() }
+        }
+    }
+
+    private func row(_ p: Playlist) -> some View {
+        HStack(spacing: 12) {
+            pcCover(p.artworkUrl, seed: p.name, size: 52, radius: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(p.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                Text(subtitle(p)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PC.fg3)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    }
+
+    private func subtitle(_ p: Playlist) -> String {
+        let n = Int(p.trackCount)
+        let t = "\(n) \(n == 1 ? "track" : "tracks")"
+        if let owner = p.ownerName, !owner.isEmpty { return "\(t) · \(owner)" }
+        return t
+    }
+}
+
+@MainActor
+@Observable
+final class SavedPlaylistModel {
+    private let container = IosContainer.companion.shared
+    let playlistId: String
+    var playlist: Playlist?
+    var tracks: [PlaylistTrack] = []
+    var entities: [Track] = []
+    private var pSub: Cancellable?
+    private var tSub: Cancellable?
+
+    init(playlistId: String) { self.playlistId = playlistId }
+    var name: String { playlist?.name ?? "Playlist" }
+
+    func start() {
+        if pSub == nil { pSub = container.watchPlaylist(id: playlistId) { [weak self] p in self?.playlist = p } }
+        if tSub == nil {
+            tSub = container.watchPlaylistTracks(id: playlistId) { [weak self] ts in
+                self?.tracks = ts
+                self?.entities = ts.map { Self.makeTrack($0) }
+            }
+        }
+    }
+
+    func rename(_ newName: String) {
+        let n = newName.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty else { return }
+        Task { try? await container.renamePlaylist(id: playlistId, name: n) }
+    }
+    func delete() { Task { try? await container.deletePlaylist(id: playlistId) } }
+    func removeAt(_ i: Int) { Task { try? await container.removePlaylistTrackAt(id: playlistId, index: Int32(i)) } }
+    func move(from: Int, to: Int) { Task { try? await container.movePlaylistTrack(id: playlistId, from: Int32(from), to: Int32(to)) } }
+
+    /// PlaylistTrack → playable Track (19-param init lives in a helper to spare
+    /// Swift's inline type-checker).
+    private static func makeTrack(_ t: PlaylistTrack) -> Track {
+        Track(
+            id: "\(t.trackTitle)|\(t.trackArtist)", title: t.trackTitle, artist: t.trackArtist,
+            album: t.trackAlbum, albumId: nil, duration: t.trackDuration, artworkUrl: t.trackArtworkUrl,
+            sourceType: nil, sourceUrl: t.trackSourceUrl, addedAt: 0,
+            resolver: t.trackResolver, spotifyUri: t.trackSpotifyUri, soundcloudId: t.trackSoundcloudId,
+            spotifyId: t.trackSpotifyId, appleMusicId: t.trackAppleMusicId, isrc: nil,
+            recordingMbid: t.trackRecordingMbid, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+        )
+    }
+}
+
+struct SavedPlaylistDetailView: View {
+    @State private var model: SavedPlaylistModel
+    @State private var editing = false
+    @State private var showRename = false
+    @State private var renameText = ""
+    @State private var showDelete = false
+    @State private var navArtist: String?
+    @State private var navAlbum: PCAlbumRef?
+    @Environment(QueuePlaybackCoordinator.self) private var coordinator
+    @Environment(\.dismiss) private var dismiss
+    private var resolverCache = IosTrackResolverCache.shared
+
+    init(playlistId: String) { _model = State(initialValue: SavedPlaylistModel(playlistId: playlistId)) }
+
+    private var ctx: PlaybackContext { PlaybackContext(type: "playlist", name: model.name, id: model.playlistId) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
+                     trailingIcon: editing ? "checkmark" : "pencil", onTrailing: { editing.toggle() })
+            if editing { editList } else { viewList }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
+        .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
+        .task { model.start() }
+        .alert("Rename Playlist", isPresented: $showRename) {
+            TextField("Name", text: $renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") { model.rename(renameText) }
+        }
+        .confirmationDialog("Delete “\(model.name)”?", isPresented: $showDelete, titleVisibility: .visible) {
+            Button("Delete Playlist", role: .destructive) { model.delete(); dismiss() }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var header: some View {
+        VStack(spacing: 12) {
+            pcCover(model.playlist?.artworkUrl, seed: model.name, size: 160, radius: 10)
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
+            Text(model.name).font(.system(size: 18, weight: .semibold)).foregroundStyle(PC.fg1)
+                .multilineTextAlignment(.center)
+            Text("\(model.tracks.count) \(model.tracks.count == 1 ? "track" : "tracks")")
+                .font(.system(size: 13)).foregroundStyle(PC.fg2)
+            HStack(spacing: 10) {
+                Button { coordinator.setQueue(model.entities, startIndex: 0, context: ctx) } label: {
+                    Label("Play All", systemImage: "play.fill").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white).padding(.horizontal, 22).frame(height: 40)
+                        .background(PC.accent, in: Capsule())
+                }.buttonStyle(.plain).disabled(model.entities.isEmpty)
+                if editing {
+                    Button { renameText = model.name; showRename = true } label: {
+                        Label("Rename", systemImage: "pencil").font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(PC.fg1).padding(.horizontal, 16).frame(height: 40)
+                            .overlay(Capsule().strokeBorder(PC.border))
+                    }.buttonStyle(.plain)
+                    Button { showDelete = true } label: {
+                        Image(systemName: "trash").font(.system(size: 15)).foregroundStyle(PC.error)
+                            .frame(width: 40, height: 40).overlay(Circle().strokeBorder(PC.border))
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
+    }
+
+    // View mode: tap-to-play rows with badges + context menus (app-wide style).
+    private var viewList: some View {
+        ScrollView {
+            header
+            if model.tracks.isEmpty {
+                Text("No tracks in this playlist.").font(.system(size: 14)).foregroundStyle(PC.fg3).padding(40)
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(model.tracks.enumerated()), id: \.offset) { i, t in
+                        Button { coordinator.setQueue(model.entities, startIndex: i, context: ctx) } label: {
+                            trackRow(t, index: i)
+                        }
+                        .buttonStyle(.plain)
+                        .onAppear { resolverCache.resolve(ResolveRequest(artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum), order: i) }
+                        .pcTrackContextMenu(
+                            model.entities[i], coordinator: coordinator,
+                            onGoToArtist: { navArtist = t.trackArtist },
+                            onGoToAlbum: t.trackAlbum.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.trackArtist) } })
+                    }
+                }
+                .padding(.bottom, 130)
+            }
+        }
+    }
+
+    private func trackRow(_ t: PlaylistTrack, index: Int) -> some View {
+        HStack(spacing: 12) {
+            Text("\(index + 1)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
+            pcCover(pcTrackArt(t.trackArtworkUrl, artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum),
+                    seed: t.trackTitle + t.trackArtist, size: 44, radius: 6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(t.trackTitle).font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1).lineLimit(1)
+                Text(t.trackAlbum.map { "\(t.trackArtist) · \($0)" } ?? t.trackArtist)
+                    .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let ranked = resolverCache.cached(artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum), !ranked.isEmpty {
+                ResolverBadgeRow(sources: ranked)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    }
+
+    // Edit mode: a styled List so .onMove (drag-reorder) + .onDelete (remove)
+    // work, with editMode forced active so the handles + delete controls are
+    // always visible (#220 queue-panel pattern).
+    private var editList: some View {
+        List {
+            ForEach(Array(model.tracks.enumerated()), id: \.offset) { _, t in
+                HStack(spacing: 12) {
+                    pcCover(t.trackArtworkUrl, seed: t.trackTitle + t.trackArtist, size: 40, radius: 6)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(t.trackTitle).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                        Text(t.trackArtist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .listRowBackground(PC.bgPrimary)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 12))
+            }
+            .onMove { src, dst in
+                guard let from = src.first else { return }
+                model.move(from: from, to: dst > from ? dst - 1 : dst)
+            }
+            .onDelete { idx in idx.sorted(by: >).forEach { model.removeAt($0) } }
+        }
+        .listStyle(.plain)
+        .environment(\.editMode, .constant(.active))
+    }
+}
