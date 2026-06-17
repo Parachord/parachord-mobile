@@ -176,18 +176,50 @@ class IosResolverRuntime(
      * in the coordinator's re-score, so a wrong-song catalog hit is still dropped
      * by the 0.60 floor.
      */
+    /**
+     * GET the Apple Music catalog with ONE spaced retry on a transient failure
+     * (429 / 5xx / network blip / blank body). Returns the response body on 2xx,
+     * or null when it can't get one. See the call site for why (#232).
+     */
+    private suspend fun fetchCatalog(url: String): String? {
+        repeat(2) { attempt ->
+            try {
+                val resp = httpClient.get(url) { header("Authorization", "Bearer $appleMusicDeveloperToken") }
+                val status = resp.status.value
+                val text = resp.bodyAsText()
+                if (status in 200..299 && text.isNotBlank()) return text
+                val transient = status == 429 || status >= 500 || text.isBlank()
+                if (attempt == 0 && transient) {
+                    delay(600)
+                } else {
+                    com.parachord.shared.platform.Log.w(
+                        "IosResolverRuntime",
+                        "AM catalog returned $status — Apple Music source dropped for this resolve (#232)",
+                    )
+                    return null
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (attempt == 0) delay(600) else return null
+            }
+        }
+        return null
+    }
+
     private suspend fun resolveAppleMusicNative(artist: String, title: String): ResolvedSource? {
         val storefront = settingsStore.getAppleMusicStorefront()?.ifBlank { null } ?: "us"
         val term = "$artist $title".encodeURLParameter()
         val url = "https://api.music.apple.com/v1/catalog/$storefront/search?types=songs&limit=10&term=$term"
-        val body = try {
-            httpClient.get(url) { header("Authorization", "Bearer $appleMusicDeveloperToken") }.bodyAsText()
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return null
-        }
-        if (body.isBlank()) return null
+        // Single spaced retry on a TRANSIENT failure (#232). The iOS MusicKit
+        // catalog is unthrottled (no per-request limiter yet — see CLAUDE.md), so
+        // resolving a list occasionally trips a 429; when this returns null the AM
+        // source drops out and the reliable Spotify hint wins over a
+        // higher-priority Apple Music — the "occasionally picks Spotify over AM"
+        // bug. IosTrackResolverCache already caps concurrency at 3, so one 600ms-
+        // spaced retry recovers a transient blip without meaningfully adding load;
+        // a sustained throttle still falls through to Spotify (correct).
+        val body = fetchCatalog(url) ?: return null
 
         val data = runCatching {
             json.parseToJsonElement(body).jsonObject["results"]?.jsonObject
