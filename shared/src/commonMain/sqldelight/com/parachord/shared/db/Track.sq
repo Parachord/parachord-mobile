@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     soundcloudId TEXT,
     spotifyId TEXT,
     appleMusicId TEXT,
+    isrc TEXT,
     recordingMbid TEXT,
     artistMbid TEXT,
     releaseMbid TEXT,
@@ -42,8 +43,8 @@ findLocalFile:
 SELECT * FROM tracks WHERE resolver = 'localfiles' AND LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) LIMIT 1;
 
 insert:
-INSERT OR REPLACE INTO tracks (id, title, artist, album, albumId, duration, artworkUrl, sourceType, sourceUrl, addedAt, resolver, spotifyUri, soundcloudId, spotifyId, appleMusicId, recordingMbid, artistMbid, releaseMbid)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO tracks (id, title, artist, album, albumId, duration, artworkUrl, sourceType, sourceUrl, addedAt, resolver, spotifyUri, soundcloudId, spotifyId, appleMusicId, isrc, recordingMbid, artistMbid, releaseMbid)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateArtworkById:
 UPDATE tracks SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artworkUrl = '');

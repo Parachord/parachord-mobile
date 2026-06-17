@@ -267,6 +267,15 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // Local-files ISRC capture (#238): persisted per-row from the file's ID3
+        // TSRC tag at scan time. New installs get it from Track.sq's CREATE TABLE;
+        // existing installs need this ALTER. (Unlike streaming ISRC — which stays
+        // in-memory — local-file ISRC is intrinsic to the file, read once at scan.)
+        try {
+            driver.execute(null, "ALTER TABLE tracks ADD COLUMN isrc TEXT", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // ListenBrainz playlist sync (#156): trackRecordingMbid carries the
         // recording MBID per-row so LB push/pull can identify tracks by MBID
         // (LB's only stable ID). New installs get the column from
