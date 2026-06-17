@@ -24,7 +24,9 @@ extension AlbumSearchResult {
     var discoId: String { "\(mbid ?? "")|\(releaseType ?? "")|\(title)|\(artist)" }
 }
 
-private func pcTrack(from t: TrackSearchResult) -> Track {
+// Non-private so the shared context menus (Interactions.swift) can build queue
+// entities from search/album/top-track results. (#204)
+func pcTrack(from t: TrackSearchResult) -> Track {
     Track(
         id: "\(t.title)|\(t.artist)", title: t.title, artist: t.artist,
         album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
@@ -1058,6 +1060,9 @@ struct ArtistScreen: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .pcAlbumContextMenu(title: album.title, artist: album.artist, artworkUrl: album.artworkUrl,
+                            coordinator: coordinator,
+                            onGoToAlbum: { navAlbum = PCAlbumRef(title: album.title, artist: album.artist) })
                         // NOTE: do NOT put `.id(album.discoId)` here. ArtistScreen
                         // re-renders often (it observes coordinator + resolverCache);
                         // an `.id` on a value-based NavigationLink makes SwiftUI
@@ -1157,6 +1162,8 @@ struct ArtistScreen: View {
                         }
                         .buttonStyle(.plain)
                         .onAppear { ArtistImageCache.shared.fetch(a.name) }
+                        .pcArtistContextMenu(name: a.name, imageUrl: a.imageUrl, coordinator: coordinator,
+                            onGoToArtist: { navArtist = a.name })
                     }
                 }
                 .padding(.horizontal, 16).padding(.vertical, 12)

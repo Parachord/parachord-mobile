@@ -155,6 +155,8 @@ struct RecommendationsScreen: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .pcArtistContextMenu(name: a.name, imageUrl: a.imageUrl, coordinator: coordinator,
+                        onGoToArtist: { navArtist = a.name })
                 }
             }
             .padding(.horizontal, 20).padding(.vertical, 12).padding(.bottom, 120)

@@ -340,8 +340,7 @@ struct CollectionView: View {
                 .onAppear { resolverCache.resolve(ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: i) }
                 .pcTrackContextMenu(t, coordinator: coordinator,
                     onGoToArtist: { path.append(.artist(t.artist)) },
-                    onGoToAlbum: t.album.map { a in { path.append(.album(title: a, artist: t.artist)) } },
-                    onRemoveFromCollection: { model.removeTrack(t) })
+                    onGoToAlbum: t.album.map { a in { path.append(.album(title: a, artist: t.artist)) } })
             }
             if items.isEmpty { emptyState(icon: "music.note", text: "No saved songs yet.") }
         }
@@ -362,6 +361,10 @@ struct CollectionView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .pcAlbumContextMenu(title: a.title, artist: a.artist, artworkUrl: a.artworkUrl,
+                    coordinator: coordinator,
+                    onGoToAlbum: { path.append(.album(title: a.title, artist: a.artist)) },
+                    onGoToArtist: { path.append(.artist(a.artist)) })
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8).padding(.bottom, 130)
@@ -390,6 +393,8 @@ struct CollectionView: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .pcArtistContextMenu(name: a.name, imageUrl: a.imageUrl, coordinator: coordinator,
+                    onGoToArtist: { path.append(.artist(a.name)) })
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12).padding(.bottom, 130)

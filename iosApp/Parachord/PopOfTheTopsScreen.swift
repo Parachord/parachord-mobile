@@ -115,6 +115,10 @@ struct PopOfTheTopsScreen: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .pcAlbumContextMenu(title: album.title, artist: album.artist, artworkUrl: album.artworkUrl,
+                    coordinator: coordinator,
+                    onGoToAlbum: { navAlbum = PCAlbumRef(title: album.title, artist: album.artist) },
+                    onGoToArtist: { navArtist = album.artist })
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8).padding(.bottom, 120)

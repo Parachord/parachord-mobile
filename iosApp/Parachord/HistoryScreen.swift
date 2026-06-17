@@ -208,6 +208,10 @@ struct HistoryScreen: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .pcAlbumContextMenu(title: a.name, artist: a.artist, artworkUrl: a.artworkUrl,
+                    coordinator: coordinator,
+                    onGoToAlbum: { navAlbum = PCAlbumRef(title: a.name, artist: a.artist) },
+                    onGoToArtist: { navArtist = a.artist })
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8).padding(.bottom, 120)
@@ -226,6 +230,8 @@ struct HistoryScreen: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .pcArtistContextMenu(name: a.name, imageUrl: a.imageUrl, coordinator: coordinator,
+                    onGoToArtist: { navArtist = a.name })
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12).padding(.bottom, 120)
