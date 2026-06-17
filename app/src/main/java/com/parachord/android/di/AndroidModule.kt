@@ -157,6 +157,7 @@ val androidModule = module {
             ticketmasterApiKey = com.parachord.android.BuildConfig.TICKETMASTER_API_KEY,
             seatGeekClientId = com.parachord.android.BuildConfig.SEATGEEK_CLIENT_ID,
             userAgent = "Parachord/${com.parachord.android.BuildConfig.VERSION_NAME} (Android; https://parachord.app)",
+            parachordClient = "android",
             isDebug = com.parachord.android.BuildConfig.DEBUG,
         )
     }

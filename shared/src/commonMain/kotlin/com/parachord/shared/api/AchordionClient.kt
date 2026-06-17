@@ -50,9 +50,16 @@ import kotlinx.serialization.json.Json
 class AchordionClient(
     private val httpClient: HttpClient,
     private val bearerToken: String,
+    /**
+     * Platform id for the `X-Parachord-Client` contribution header
+     * ("android" / "ios" / "desktop"). Blank → header omitted → Achordion
+     * records the submit as "unknown" (parachord-mobile#237).
+     */
+    private val clientId: String = "",
 ) {
     companion object {
         private const val TAG = "AchordionClient"
+        private const val CLIENT_HEADER = "X-Parachord-Client"
         private const val ENTITY_LINK_ENDPOINT = "https://achordion.xyz/api/entity-link"
         private const val SUBMIT_ENDPOINT = "https://achordion.xyz/api/track-links/submit"
         private const val ANNOUNCEMENTS_ENDPOINT = "https://achordion.xyz/api/announcements"
@@ -184,6 +191,11 @@ class AchordionClient(
         return try {
             val response = httpClient.post(SUBMIT_ENDPOINT) {
                 header(HttpHeaders.Authorization, "Bearer $bearerToken")
+                // Client attribution telemetry (parachord-mobile#237). The `.axe`
+                // path sends this via window.__parachordClient; the native submit
+                // must send it too or Achordion records "unknown". Omitted when
+                // blank so the server's normalize-to-"unknown" is the same default.
+                if (clientId.isNotBlank()) header(CLIENT_HEADER, clientId)
                 contentType(ContentType.Application.Json)
                 // Serialize with the local encodeDefaults=false json so null keys
                 // are OMITTED, not sent as `null` — the server's zod `.optional()`

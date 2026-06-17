@@ -95,6 +95,7 @@ val sharedModule = module {
         AchordionClient(
             httpClient = get(),
             bearerToken = get<AppConfig>().achordionBearerToken,
+            clientId = get<AppConfig>().parachordClient,
         )
     }
 }

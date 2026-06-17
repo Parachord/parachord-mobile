@@ -18,11 +18,11 @@ class AchordionClientTest {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun buildClient(engine: MockEngine, token: String = "test-token"): AchordionClient {
+    private fun buildClient(engine: MockEngine, token: String = "test-token", clientId: String = ""): AchordionClient {
         val httpClient = HttpClient(engine) {
             install(ContentNegotiation) { json(json) }
         }
-        return AchordionClient(httpClient, token)
+        return AchordionClient(httpClient, token, clientId)
     }
 
     // ── fetchEntityLink ─────────────────────────────────────────────
@@ -263,6 +263,34 @@ class AchordionClientTest {
         client.submitTrackLinks(sampleRequest)
         assertEquals("Bearer tok-xyz", seenAuth)
         assertEquals(true, seenContentType?.startsWith("application/json"))
+    }
+
+    @Test
+    fun submitTrackLinks_sendsParachordClientHeader_whenClientIdSet() = runTest {
+        // parachord-mobile#237: the native submit must identify the client or
+        // Achordion records it as "unknown".
+        var seenClient: String? = null
+        val engine = MockEngine { req ->
+            seenClient = req.headers["X-Parachord-Client"]
+            respond("", HttpStatusCode.OK)
+        }
+        val client = buildClient(engine, clientId = "ios")
+        client.submitTrackLinks(sampleRequest)
+        assertEquals("ios", seenClient)
+    }
+
+    @Test
+    fun submitTrackLinks_omitsParachordClientHeader_whenClientIdBlank() = runTest {
+        // Blank → omitted (not empty-string); server's normalize-to-"unknown"
+        // is the intended default, no need to send a header at all.
+        var headerPresent = true
+        val engine = MockEngine { req ->
+            headerPresent = req.headers["X-Parachord-Client"] != null
+            respond("", HttpStatusCode.OK)
+        }
+        val client = buildClient(engine, clientId = "")
+        client.submitTrackLinks(sampleRequest)
+        assertEquals(false, headerPresent)
     }
 
     @Test

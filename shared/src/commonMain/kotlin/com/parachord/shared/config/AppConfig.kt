@@ -26,6 +26,18 @@ data class AppConfig(
      */
     val userAgent: String = "",
     /**
+     * Platform identifier sent as the `X-Parachord-Client` header on Achordion
+     * contribution requests (`POST /api/track-links/submit`) so the server can
+     * split contribution metrics across clients. Achordion's allowlist is
+     * `desktop | android | ios`; anything else (including blank) normalizes to
+     * `"unknown"`. Set per-platform: "android" (AndroidModule), "ios"
+     * (IosContainer). The `.axe` plugin path already sends the same value via
+     * `window.__parachordClient`; this covers the NATIVE
+     * [com.parachord.shared.api.AchordionClient] submit, which otherwise sent no
+     * header → "unknown" (parachord-mobile#237).
+     */
+    val parachordClient: String = "",
+    /**
      * True for debug builds; controls log verbosity in the HTTP transport stack
      * (e.g., Ktor Logging plugin LogLevel).
      */
