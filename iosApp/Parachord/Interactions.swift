@@ -15,7 +15,6 @@ extension View {
         coordinator: QueuePlaybackCoordinator,
         onGoToArtist: (() -> Void)? = nil,
         onGoToAlbum: (() -> Void)? = nil,
-        onRemoveFromCollection: (() -> Void)? = nil,
         onRemoveFromQueue: (() -> Void)? = nil
     ) -> some View {
         contextMenu {
@@ -42,11 +41,10 @@ extension View {
             ShareLink(item: "\(track.title) — \(track.artist)") {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
-            if let onRemoveFromCollection {
-                Button(role: .destructive) { onRemoveFromCollection() } label: {
-                    Label("Remove from Collection", systemImage: "heart.slash")
-                }
-            }
+            // Always-on collection toggle (Android parity) — self-managed: observes
+            // the DB and adds/removes. On the Collection screen the row drops out
+            // reactively when removed (the collection flow re-emits). #204
+            PCCollectionToggleButton(target: .track(track))
         } preview: {
             // Rich preview: artwork + title/artist (Apple Music style).
             HStack(spacing: 12) {
@@ -59,6 +57,158 @@ extension View {
             }
             .padding(14)
             .frame(width: 280)
+        }
+    }
+
+    /// Long-press menu for an ALBUM card (#204, Android `AlbumContextMenu`):
+    /// Play / Queue album, Go to Album / Artist, collection toggle. Play/Queue
+    /// fetch the album's tracks (MetadataService) and route through the queue.
+    func pcAlbumContextMenu(
+        title: String, artist: String, artworkUrl: String? = nil,
+        coordinator: QueuePlaybackCoordinator,
+        onGoToAlbum: (() -> Void)? = nil,
+        onGoToArtist: (() -> Void)? = nil
+    ) -> some View {
+        contextMenu {
+            PCAlbumMenuItems(title: title, artist: artist, artworkUrl: artworkUrl,
+                             coordinator: coordinator, onGoToAlbum: onGoToAlbum, onGoToArtist: onGoToArtist)
+        }
+    }
+
+    /// Long-press menu for an ARTIST card (#204, Android `ArtistContextMenu`):
+    /// Play / Queue top songs, Go to Artist, collection toggle.
+    func pcArtistContextMenu(
+        name: String, imageUrl: String? = nil,
+        coordinator: QueuePlaybackCoordinator,
+        onGoToArtist: (() -> Void)? = nil
+    ) -> some View {
+        contextMenu {
+            PCArtistMenuItems(name: name, imageUrl: imageUrl, coordinator: coordinator, onGoToArtist: onGoToArtist)
+        }
+    }
+}
+
+// MARK: - Album / Artist context-menu content (#204)
+
+/// Album menu buttons. Play/Queue are async (fetch tracks → resolve-on-play via
+/// the coordinator). Collection toggle is self-managed via PCCollectionToggleButton.
+private struct PCAlbumMenuItems: View {
+    let title: String
+    let artist: String
+    let artworkUrl: String?
+    let coordinator: QueuePlaybackCoordinator
+    var onGoToAlbum: (() -> Void)?
+    var onGoToArtist: (() -> Void)?
+    private let container = IosContainer.companion.shared
+
+    var body: some View {
+        Button { play(queue: false) } label: { Label("Play Album", systemImage: "play.fill") }
+        Button { play(queue: true) } label: { Label("Queue Album", systemImage: "text.append") }
+        if let onGoToAlbum {
+            Button { onGoToAlbum() } label: { Label("Go to Album", systemImage: "square.stack") }
+        }
+        if let onGoToArtist {
+            Button { onGoToArtist() } label: { Label("Go to Artist", systemImage: "music.mic") }
+        }
+        Divider()
+        PCCollectionToggleButton(target: .album(title: title, artist: artist, artworkUrl: artworkUrl))
+    }
+
+    private func play(queue: Bool) {
+        Task {
+            guard let detail = try? await container.getAlbumDetail(albumTitle: title, artistName: artist) else { return }
+            let entities = detail.tracks.map { pcTrack(from: $0) }
+            guard !entities.isEmpty else { return }
+            let ctx = PlaybackContext(type: "album", name: title, id: "\(title)|\(artist)")
+            if queue {
+                entities.forEach { coordinator.addToQueue($0) }
+            } else {
+                coordinator.setQueue(entities, startIndex: 0, context: ctx)
+            }
+        }
+    }
+}
+
+/// Artist menu buttons. Play/Queue use the artist's top tracks.
+private struct PCArtistMenuItems: View {
+    let name: String
+    let imageUrl: String?
+    let coordinator: QueuePlaybackCoordinator
+    var onGoToArtist: (() -> Void)?
+    private let container = IosContainer.companion.shared
+
+    var body: some View {
+        Button { play(queue: false) } label: { Label("Play Top Songs", systemImage: "play.fill") }
+        Button { play(queue: true) } label: { Label("Queue Top Songs", systemImage: "text.append") }
+        if let onGoToArtist {
+            Button { onGoToArtist() } label: { Label("Go to Artist", systemImage: "music.mic") }
+        }
+        Divider()
+        PCCollectionToggleButton(target: .artist(name: name, imageUrl: imageUrl))
+    }
+
+    private func play(queue: Bool) {
+        Task {
+            let top = (try? await container.getArtistTopTracks(artistName: name)) ?? []
+            let entities = top.map { pcTrack(from: $0) }
+            guard !entities.isEmpty else { return }
+            let ctx = PlaybackContext(type: "artist", name: name, id: name)
+            if queue {
+                entities.forEach { coordinator.addToQueue($0) }
+            } else {
+                coordinator.setQueue(entities, startIndex: 0, context: ctx)
+            }
+        }
+    }
+}
+
+/// Self-managed Add/Remove-from-Collection button used by all three context
+/// menus (#204). Observes the DB for the live in-collection state (so the label
+/// is correct) and toggles via the container. Used inside `.contextMenu { }`,
+/// so the watcher starts when the menu opens.
+struct PCCollectionToggleButton: View {
+    enum Target {
+        case track(Track)
+        case album(title: String, artist: String, artworkUrl: String?)
+        case artist(name: String, imageUrl: String?)
+    }
+    let target: Target
+    @State private var inCollection = false
+    @State private var sub: Cancellable?
+    private let container = IosContainer.companion.shared
+
+    var body: some View {
+        Button(role: inCollection ? .destructive : nil) { toggle() } label: {
+            Label(inCollection ? "Remove from Collection" : "Add to Collection",
+                  systemImage: inCollection ? "heart.slash" : "heart")
+        }
+        .task { startWatch() }
+        .onDisappear { sub?.cancel(); sub = nil }
+    }
+
+    private func startWatch() {
+        guard sub == nil else { return }
+        switch target {
+        case .track(let t):
+            sub = container.watchTrackInCollection(title: t.title, artist: t.artist) { yes in inCollection = yes.boolValue }
+        case .album(let title, let artist, _):
+            sub = container.watchAlbumInCollection(title: title, artist: artist) { yes in inCollection = yes.boolValue }
+        case .artist(let name, _):
+            sub = container.watchArtistInCollection(name: name) { yes in inCollection = yes.boolValue }
+        }
+    }
+
+    private func toggle() {
+        Task {
+            switch target {
+            case .track(let t):
+                if inCollection { try? await container.removeTrackFromCollection(track: t) }
+                else { try? await container.addTrackToCollection(track: t) }
+            case .album(let title, let artist, let art):
+                try? await container.toggleAlbumCollection(title: title, artist: artist, artworkUrl: art, year: 0, trackCount: 0)
+            case .artist(let name, let image):
+                try? await container.toggleArtistCollection(name: name, imageUrl: image)
+            }
         }
     }
 }
