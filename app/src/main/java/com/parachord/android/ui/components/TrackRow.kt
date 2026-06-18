@@ -1,12 +1,17 @@
 package com.parachord.android.ui.components
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -37,6 +42,7 @@ fun TrackRow(
     duration: Long? = null,
     trackNumber: Int? = null,
     isPlaying: Boolean = false,
+    resolving: Boolean = false,
     onClick: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -70,14 +76,24 @@ fun TrackRow(
             )
         }
 
-        // Album art with gradient placeholder
-        AlbumArtCard(
-            artworkUrl = artworkUrl,
-            size = artSize,
-            cornerRadius = 4.dp,
-            elevation = 1.dp,
-            placeholderName = artist.ifBlank { title },
-        )
+        // Album art — shimmer skeleton while resolving with no art yet (e.g. just
+        // after a metadata edit), otherwise the cover / gradient placeholder.
+        if (artworkUrl == null && resolving) {
+            Box(
+                modifier = Modifier
+                    .size(artSize)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(shimmerBrush()),
+            )
+        } else {
+            AlbumArtCard(
+                artworkUrl = artworkUrl,
+                size = artSize,
+                cornerRadius = 4.dp,
+                elevation = 1.dp,
+                placeholderName = artist.ifBlank { title },
+            )
+        }
 
         Spacer(modifier = Modifier.width(12.dp))
 

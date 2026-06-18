@@ -149,6 +149,7 @@ fun CollectionScreen(
     val resolverOrder by viewModel.resolverOrder.collectAsStateWithLifecycle()
     val trackResolvers by viewModel.trackResolvers.collectAsStateWithLifecycle()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsStateWithLifecycle()
+    val resolvingKeys by viewModel.resolvingKeys.collectAsStateWithLifecycle()
     val listenBrainzConnected by viewModel.listenBrainzConnected.collectAsStateWithLifecycle()
 
     if (showSyncSheet) {
@@ -456,6 +457,7 @@ fun CollectionScreen(
                                         resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]
                                             ?: track.availableResolvers(resolverOrder),
                                         resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
+                                        resolving = resolvingKeys.contains("${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"),
                                         duration = track.duration,
                                         onClick = { viewModel.playTrack(track) },
                                         onLongClick = {
