@@ -18,6 +18,8 @@ enum PCRoute: Hashable {
     case artistOnTour(String)
     case album(title: String, artist: String)
     case playlist(id: String, title: String)
+    /// A friend's listening profile (#235 / #196).
+    case friend(id: String, username: String, service: String, name: String)
 }
 
 /// Single source of truth for every pushed destination. Used by EVERY tab's
@@ -38,6 +40,12 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
     case "charts":          return .pop
     case "recommendations": return .recommendations
     case "history":         return .history
+    case "listen-along":
+        // id encodes "friendId|username|service" (set in ListenAlongController) so
+        // the listen-along banner links to the friend's profile (#235).
+        let parts = (ctx.id ?? "").components(separatedBy: "|")
+        guard parts.count == 3, !parts[0].isEmpty else { return nil }
+        return .friend(id: parts[0], username: parts[1], service: parts[2], name: ctx.name)
     default:                return nil
     }
 }
@@ -62,6 +70,8 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .artistOnTour(let name):      ArtistScreen(artistName: name, initialTab: .onTour)
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
+    case .friend(let id, let username, let service, let name):
+        FriendProfileScreen(friendId: id, username: username, service: service, name: name)
     }
 }
 

@@ -252,6 +252,11 @@ final class SidebarFriendsModel {
     private var sub: Cancellable?
     var pinned: [Friend] = []
 
+    /// Signature of the LAST applied list — so a re-emit with identical display
+    /// data (the 2-min activity refresh re-writing on-air friends' now-playing)
+    /// doesn't reassign `pinned` and tear down an open row context menu.
+    private var lastSignature = ""
+
     func start() {
         guard sub == nil else { return }
         sub = container.watchPinnedFriends { [weak self] list in
@@ -260,7 +265,12 @@ final class SidebarFriendsModel {
                 if $0.isOnAir != $1.isOnAir { return $0.isOnAir && !$1.isOnAir }
                 return $0.cachedTrackTimestamp > $1.cachedTrackTimestamp
             }
-            Task { @MainActor in self?.pinned = sorted }
+            let sig = sorted.map { "\($0.id)|\($0.isOnAir)|\($0.cachedTrackName ?? "")" }.joined(separator: ",")
+            Task { @MainActor in
+                guard let self, sig != self.lastSignature else { return }
+                self.lastSignature = sig
+                self.pinned = sorted
+            }
         }
     }
 
@@ -273,6 +283,8 @@ struct PCSidebar: View {
     let onClose: () -> Void
     /// Start Listen Along with a pinned friend (#235). Wired in ContentView.
     var onListenAlong: (Friend) -> Void = { _ in }
+    /// Open a friend's profile (#235 / #196). Closes the drawer + pushes onto Home.
+    var onFriendProfile: (Friend) -> Void = { _ in }
 
     @State private var friends = SidebarFriendsModel()
 
@@ -327,13 +339,13 @@ struct PCSidebar: View {
         Text("Friends").font(.system(size: 11, weight: .bold)).tracking(1.6).textCase(.uppercase)
             .foregroundStyle(PC.fg3).padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 6)
         ForEach(friends.pinned, id: \.id) { f in
-            Button {
-                onListenAlong(f)
-                onClose()
-            } label: { friendRow(f) }
+            Button { onFriendProfile(f) } label: { friendRow(f) }
             .buttonStyle(.plain)
             .contextMenu {
-                Button { onListenAlong(f); onClose() } label: { Label("Listen Along", systemImage: "headphones") }
+                Button { onFriendProfile(f) } label: { Label("View Profile", systemImage: "person.crop.circle") }
+                if f.isOnAir {  // listen-along only when they're on air (Android parity)
+                    Button { onListenAlong(f); onClose() } label: { Label("Listen Along", systemImage: "headphones") }
+                }
                 Button { friends.unpin(f) } label: { Label("Unpin", systemImage: "pin.slash") }
                 Button(role: .destructive) { friends.remove(f) } label: { Label("Remove", systemImage: "trash") }
             }

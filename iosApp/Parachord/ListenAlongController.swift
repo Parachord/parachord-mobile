@@ -46,10 +46,17 @@ final class ListenAlongController {
         if isActive(f) { stop() } else { start(f) }
     }
 
+    /// True when the friend went offline — let the current song finish, then stop.
+    private var pendingOffline = false
+
     func start(_ f: Friend) {
         stop(silent: true)
         friend = f
         lastTrackKey = nil
+        pendingOffline = false
+        // Defer track switches to the current song's END so each song plays fully
+        // and scrobbles (#246). The coordinator calls this when a track finishes.
+        coordinator?.onTrackFinished = { [weak self] in Task { @MainActor in await self?.onSongEnded() } }
         playCurrent(f)
         pollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -63,16 +70,20 @@ final class ListenAlongController {
     func stop(silent: Bool = false) {
         pollTask?.cancel()
         pollTask = nil
+        coordinator?.onTrackFinished = nil
         friend = nil
         lastTrackKey = nil
+        pendingOffline = false
     }
 
+    /// 15s poll: keep `friend` fresh (the "pending" track the NEXT song jumps to)
+    /// and bail if the user took control. Does NOT switch playback mid-song — the
+    /// current song plays to its end (so it scrobbles), then onSongEnded() jumps to
+    /// the friend's latest track.
     private func pollOnce() async {
         guard let f = friend else { return }
-        // The user took control (played something outside listen-along) — bow out
-        // and never override their choice.
-        if coordinator?.playbackContext?.type != Self.listenAlongContext {
-            stop()
+        if let ctx = coordinator?.playbackContext, ctx.type != Self.listenAlongContext {
+            stop()  // user took control — never override their choice
             return
         }
         let refreshed: Friend?
@@ -81,14 +92,21 @@ final class ListenAlongController {
         } else {
             refreshed = (try? await container.refreshFriendActivity(friend: f)) ?? nil
         }
-        guard let r = refreshed, r.isOnAir else {
-            // Friend stopped / went offline — stop following but let the current
-            // track play out (don't cut audio mid-song).
-            stop()
+        guard let r = refreshed else { pendingOffline = true; return }
+        friend = r
+        pendingOffline = !r.isOnAir
+    }
+
+    /// The current listen-along song just finished (and scrobbled). Jump to the
+    /// friend's LATEST track — or stop if they went offline / the user took over.
+    private func onSongEnded() async {
+        if let ctx = coordinator?.playbackContext, ctx.type != Self.listenAlongContext {
+            stop()  // user took control before this track ended — don't hijack
             return
         }
-        friend = r
-        playCurrent(r)
+        guard let f = friend, !pendingOffline, f.isOnAir else { stop(); return }
+        lastTrackKey = nil   // allow replay so we stay synced if they're still on it
+        playCurrent(f)
     }
 
     private func playCurrent(_ f: Friend) {
@@ -97,9 +115,12 @@ final class ListenAlongController {
         if key == lastTrackKey { return }   // same track still playing — nothing to do
         lastTrackKey = key
         let track = Self.makeTrack(f, name: name, artist: artist, key: key)
+        // Encode the friend's identity in `id` ("friendId|username|service") so the
+        // Now Playing / queue context banner can link to their profile (#235).
         coordinator?.setQueue(
             [track], startIndex: 0,
-            context: PlaybackContext(type: Self.listenAlongContext, name: f.displayName, id: nil))
+            context: PlaybackContext(type: Self.listenAlongContext, name: f.displayName,
+                                     id: "\(f.id)|\(f.username)|\(f.service)"))
     }
 
     /// Metadata-only Track — the coordinator resolves it through the normal
