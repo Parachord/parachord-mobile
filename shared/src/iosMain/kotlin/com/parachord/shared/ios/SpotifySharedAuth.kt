@@ -4,6 +4,9 @@ import com.parachord.shared.api.auth.AuthCredential
 import com.parachord.shared.api.auth.AuthRealm
 import com.parachord.shared.api.auth.AuthTokenProvider
 import com.parachord.shared.api.auth.OAuthTokenRefresher
+import com.parachord.shared.api.auth.SpotifyRefreshOutcome
+import com.parachord.shared.api.auth.classifySpotifyRefresh
+import com.parachord.shared.api.auth.parseSpotifyErrorCode
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.settings.SettingsStore
@@ -97,7 +100,25 @@ class SpotifyTokenRefresher(
 
             val body = response.bodyAsText()
             if (!response.status.isSuccess()) {
-                Log.w(TAG, "Spotify token refresh failed (${response.status.value}): $body")
+                // Terminal vs. transient split (#243). A dead grant
+                // (invalid_grant/invalid_client on 400/401/403) — including
+                // Spotify's six-month refresh-token expiry, effective
+                // 2026-07-20 — means we must DISCARD the stored tokens so we
+                // never re-poke the dead grant. Clearing them flips the
+                // access-token flow to null, which Settings observes to show
+                // "Connect Spotify" (the reconnect affordance). A transient
+                // blip (429/5xx/network/unparseable) keeps the token and
+                // recovers on the next refresh — never log a user out over an
+                // outage.
+                val errorCode = parseSpotifyErrorCode(body)
+                if (classifySpotifyRefresh(response.status.value, errorCode) ==
+                    SpotifyRefreshOutcome.TERMINAL
+                ) {
+                    Log.w(TAG, "Spotify refresh token dead ($errorCode) — discarding tokens, reauth required")
+                    settingsStore.clearSpotifyTokens()
+                } else {
+                    Log.w(TAG, "Spotify token refresh failed (${response.status.value}): $body")
+                }
                 return null
             }
 
