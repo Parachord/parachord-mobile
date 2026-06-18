@@ -289,6 +289,12 @@ class IosContainer private constructor() {
     suspend fun pinFriend(friendId: String, pinned: Boolean) { friendsRepository.pinFriend(friendId, pinned) }
 
     // ── #235 Listen Along & Friends ────────────────────────────────────
+    /** Import the user's ListenBrainz following + Last.fm friends into the local
+     *  DB (mirrors Android's FriendsViewModel.init). Without this the Collection
+     *  Friends tab / sidebar stay empty even when LB/Last.fm are connected — the
+     *  reactive flows only ever show what's been imported. Fire-and-forget. */
+    fun syncFriends() { appScope.launch { runCatching { friendsRepository.syncFriendsFromServices() } } }
+
     /** Pinned friends only — drives the sidebar FRIENDS section (mirrors Android's
      *  DrawerContent). Sorted on-air-first in the UI. */
     fun watchPinnedFriends(onEach: (List<Friend>) -> Unit): Cancellable =

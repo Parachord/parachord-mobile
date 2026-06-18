@@ -106,6 +106,9 @@ final class CollectionModel {
 
     /// Refresh each friend's cached now-playing (fire-and-forget in the repo).
     func refreshFriends() { container.refreshFriendsActivity() }
+    /// Import friends from LB/Last.fm into the local DB (mirrors Android's
+    /// FriendsViewModel.init), then the reactive flow shows them.
+    func syncFriends() { container.syncFriends() }
 
     // Each `sorted*` view filters by `searchQuery` first, then sorts — same
     // fields Android filters on (LibraryViewModel.sorted{Tracks,Albums,Artists}
@@ -224,7 +227,7 @@ struct CollectionView: View {
         .task { model.start() }
         // Refresh friend now-playing whenever the Friends tab is shown (mirrors
         // Android's activity refresh). Cheap + gated by the repo's rate guards.
-        .onChange(of: tab) { _, t in if t == .friends { model.refreshFriends() } }
+        .onChange(of: tab) { _, t in if t == .friends { model.syncFriends(); model.refreshFriends() } }
         // Consume a shell-requested sub-tab (#209 queue-source banner → Songs).
         .onChange(of: pendingTab, initial: true) { _, t in
             if let t { tab = t; pendingTab = nil }

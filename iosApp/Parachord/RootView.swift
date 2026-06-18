@@ -154,6 +154,7 @@ struct ContentView: View {
         // pass on launch so currently-listening friends surface right away.
         .task {
             let container = IosContainer.companion.shared
+            container.syncFriends()   // import LB following + Last.fm friends on launch
             while !Task.isCancelled {
                 container.refreshFriendsAndAutoPin()
                 try? await Task.sleep(nanoseconds: 120_000_000_000)
