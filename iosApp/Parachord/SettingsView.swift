@@ -665,6 +665,7 @@ private struct PluginConfigSheet: View {
     @State private var draft = ""
     @State private var secretDraft = ""
     @State private var spotifyIdDraft = ""
+    @State private var scanner = MediaLibraryScanner.shared
 
     private var isAi: Bool { ["chatgpt", "claude", "gemini"].contains(service.id) }
 
@@ -732,7 +733,7 @@ private struct PluginConfigSheet: View {
                 case "lastfm": lastFmSection
                 case "librefm": libreFmSection
                 case "applemusic": infoSection("Apple Music is authorized at playback time via MusicKit. No key needed.")
-                case "localfiles": infoSection("Local files are scanned from your device's music library automatically.")
+                case "localfiles": localFilesSection
                 case "bandcamp": infoSection("Bandcamp needs no credentials — it resolves and opens tracks in the browser.")
                 // No key required (matches Android's toggle-only Discogs) — the
                 // public API works unauthenticated; a token would only raise rate
@@ -751,6 +752,40 @@ private struct PluginConfigSheet: View {
                 spotifyIdDraft = model.spotifyClientId
             }
         }
+    }
+
+    @ViewBuilder private var localFilesSection: some View {
+        Section {
+            Text("Scan your device's Music library to play local songs. Only downloaded, non-DRM tracks (with an on-device file) can play.")
+                .font(.system(size: 13)).foregroundStyle(PC.fg2)
+            switch scanner.phase {
+            case .requesting:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Requesting access…") }
+            case .scanning(let done, let total):
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Scanning… \(done)/\(total)") }
+            case .denied:
+                Text("Music access denied. Enable it in iOS Settings › Privacy › Media & Apple Music.")
+                    .font(.system(size: 13)).foregroundStyle(.red)
+            case .failed(let m):
+                Text("Scan failed: \(m)").font(.system(size: 13)).foregroundStyle(.red)
+            case .done(let n):
+                Text("Scanned \(n) tracks.").font(.system(size: 13)).foregroundStyle(PC.fg3)
+            case .idle:
+                if scanner.libraryCount > 0 {
+                    Text("\(scanner.libraryCount) local tracks in your library.").font(.system(size: 13)).foregroundStyle(PC.fg3)
+                }
+            }
+            Button { scanner.scan() } label: {
+                Label(scanner.libraryCount > 0 ? "Re-scan Library" : "Scan Music Library",
+                      systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(scanIsRunning)
+        }
+        .onAppear { scanner.refreshCount() }
+    }
+
+    private var scanIsRunning: Bool {
+        switch scanner.phase { case .scanning, .requesting: return true; default: return false }
     }
 
     @ViewBuilder private var lastFmSection: some View {

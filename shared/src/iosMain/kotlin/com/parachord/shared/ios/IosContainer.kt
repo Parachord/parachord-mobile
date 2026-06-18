@@ -364,6 +364,21 @@ class IosContainer private constructor() {
     suspend fun addAlbumToCollection(album: Album) { albumDao.insert(album) }
     suspend fun addArtistToCollection(artist: Artist) { artistDao.insert(artist) }
 
+    /**
+     * Persist a batch of scanned device-library tracks (#219). Upserts by the
+     * stable id (`local-<persistentID>`) so a re-scan refreshes in place, then
+     * fires MBID enrichment per track in the background (which also drives online
+     * artwork enrichment for files with no embedded art — Android parity).
+     */
+    suspend fun addLocalTracks(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        trackDao.insertAll(tracks)
+        for (t in tracks) mbidEnrichmentService.enrichInBackground(t.id, t.artist, t.title)
+    }
+
+    /** Number of scanned local-library tracks currently in the DB (Settings display). */
+    suspend fun localTrackCount(): Int = trackDao.getAll().first().count { it.resolver == "localfiles" }
+
     // Remove from collection — LOCAL ONLY. #194 wires SyncEngine.onTrackRemoved
     // (remote remove + tombstone) in here so removals propagate + don't re-import.
     suspend fun removeTrackFromCollection(track: Track) { trackDao.delete(track) }
@@ -1041,6 +1056,7 @@ class IosContainer private constructor() {
             settingsStore = settingsStore,
             httpClient = httpClient,
             appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
+            trackDao = trackDao,
         )
     }
 
