@@ -252,6 +252,11 @@ final class SidebarFriendsModel {
     private var sub: Cancellable?
     var pinned: [Friend] = []
 
+    /// Signature of the LAST applied list — so a re-emit with identical display
+    /// data (the 2-min activity refresh re-writing on-air friends' now-playing)
+    /// doesn't reassign `pinned` and tear down an open row context menu.
+    private var lastSignature = ""
+
     func start() {
         guard sub == nil else { return }
         sub = container.watchPinnedFriends { [weak self] list in
@@ -260,7 +265,12 @@ final class SidebarFriendsModel {
                 if $0.isOnAir != $1.isOnAir { return $0.isOnAir && !$1.isOnAir }
                 return $0.cachedTrackTimestamp > $1.cachedTrackTimestamp
             }
-            Task { @MainActor in self?.pinned = sorted }
+            let sig = sorted.map { "\($0.id)|\($0.isOnAir)|\($0.cachedTrackName ?? "")" }.joined(separator: ",")
+            Task { @MainActor in
+                guard let self, sig != self.lastSignature else { return }
+                self.lastSignature = sig
+                self.pinned = sorted
+            }
         }
     }
 
