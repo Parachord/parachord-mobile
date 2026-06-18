@@ -168,6 +168,7 @@ final class CollectionModel {
     func removeAlbum(_ a: Album)   { Task { try? await container.removeAlbumFromCollection(album: a) } }
     func removeArtist(_ a: Artist) { Task { try? await container.removeArtistFromCollection(artist: a) } }
     func removeFriend(_ f: Friend) { Task { try? await container.removeFriend(friendId: f.id) } }
+    func pinFriend(_ f: Friend, _ pinned: Bool) { Task { try? await container.pinFriend(friendId: f.id, pinned: pinned) } }
 }
 
 // Tab order mirrors Android LibraryScreen + the iOS design (Artists, Albums,
@@ -408,6 +409,15 @@ struct CollectionView: View {
             ForEach(items, id: \.id) { f in
                 friendRow(f)
                     .contextMenu {
+                        Button { ListenAlongController.shared.toggle(f) } label: {
+                            Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along",
+                                  systemImage: "headphones")
+                        }
+                        if f.pinnedToSidebar {
+                            Button { model.pinFriend(f, false) } label: { Label("Unpin from Sidebar", systemImage: "pin.slash") }
+                        } else {
+                            Button { model.pinFriend(f, true) } label: { Label("Pin to Sidebar", systemImage: "pin") }
+                        }
                         Button(role: .destructive) { model.removeFriend(f) } label: {
                             Label("Remove Friend", systemImage: "person.badge.minus")
                         }

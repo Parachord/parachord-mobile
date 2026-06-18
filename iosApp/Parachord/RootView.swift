@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var playback = AppPlayback()
     @State private var theme = ThemeObserver()
     @State private var creator = PlaylistCreator.shared
+    @State private var listenAlong = ListenAlongController.shared
     @State private var tab: PCTab = .home
     @State private var showSidebar = false
     @State private var showAdd = false
@@ -121,7 +122,8 @@ struct ContentView: View {
                     .transition(.opacity)
                     .onTapGesture { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
                 HStack(spacing: 0) {
-                    PCSidebar(onNav: handleSidebar, onClose: { closeSidebar() })
+                    PCSidebar(onNav: handleSidebar, onClose: { closeSidebar() },
+                              onListenAlong: { listenAlong.toggle($0) })
                         .ignoresSafeArea()
                     Spacer(minLength: 0)
                 }
@@ -142,6 +144,21 @@ struct ContentView: View {
         .preferredColorScheme(theme.scheme)
         .task { theme.start() }
         .task { ResolverPrefs.shared.start() }
+        // #235 Listen Along: bind the engine to the shared coordinator, and accept
+        // parachord://listen-along?service=&user= deep links.
+        .onAppear { listenAlong.bind(coordinator) }
+        .onOpenURL { handleListenAlongDeepLink($0) }
+        // #235 On-Air triggers: refresh every friend's now-playing and auto-pin
+        // on-air friends into the sidebar (auto-unpin when they go offline),
+        // every 2 min — mirrors Android's MainViewModel cycle. Runs an initial
+        // pass on launch so currently-listening friends surface right away.
+        .task {
+            let container = IosContainer.companion.shared
+            while !Task.isCancelled {
+                container.refreshFriendsAndAutoPin()
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+            }
+        }
         // Restore the persisted queue on launch (paused — never auto-plays). #220
         .task { await coordinator.restoreQueue() }
         // Resolve the current track as soon as it changes (incl. natural
@@ -181,6 +198,23 @@ struct ContentView: View {
     }
 
     private func closeSidebar() { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
+
+    /// `parachord://listen-along?service={lastfm|listenbrainz}&user={username}` (#235).
+    /// Fetches the (possibly non-local) friend's now-playing and starts listen-along;
+    /// no-op if they aren't currently listening.
+    private func handleListenAlongDeepLink(_ url: URL) {
+        guard url.scheme == "parachord", url.host == "listen-along" else { return }
+        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        guard let service = comps?.queryItems?.first(where: { $0.name == "service" })?.value,
+              let user = comps?.queryItems?.first(where: { $0.name == "user" })?.value,
+              !service.isEmpty, !user.isEmpty else { return }
+        Task { @MainActor in
+            if let f = (try? await IosContainer.companion.shared
+                .fetchTransientFriendNowPlaying(service: service, user: user)) ?? nil {
+                listenAlong.start(f)
+            }
+        }
+    }
 
     private func handleSidebar(_ id: String) {
         closeSidebar()

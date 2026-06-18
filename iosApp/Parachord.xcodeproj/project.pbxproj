@@ -17,6 +17,7 @@
 		AA0000000000000000000026 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000016 /* NowPlayingView.swift */; };
 		AA0000000000000000000027 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000017 /* DiscoverView.swift */; };
 		AA00000000000000000000E1 /* SpotifyReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E0 /* SpotifyReauthBanner.swift */; };
+		AA00000000000000000000E3 /* ListenAlongController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E2 /* ListenAlongController.swift */; };
 		AA0000000000000000000028 /* PlaylistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000018 /* PlaylistDetailView.swift */; };
 		AA0000000000000000000029 /* Resources/resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* Resources/resolver-loader.js */; };
 		AA000000000000000000002A /* Resources/plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* Resources/plugins */; };
@@ -49,6 +50,7 @@
 		AA0000000000000000000016 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000017 /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E0 /* SpotifyReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotifyReauthBanner.swift; sourceTree = "<group>"; };
+		AA00000000000000000000E2 /* ListenAlongController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenAlongController.swift; sourceTree = "<group>"; };
 		AA0000000000000000000018 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000019 /* Resources/resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
 		AA000000000000000000001A /* Resources/plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
@@ -107,6 +109,7 @@
 				AA0000000000000000000016 /* NowPlayingView.swift */,
 				AA0000000000000000000017 /* DiscoverView.swift */,
 				AA00000000000000000000E0 /* SpotifyReauthBanner.swift */,
+				AA00000000000000000000E2 /* ListenAlongController.swift */,
 				AA0000000000000000000018 /* PlaylistDetailView.swift */,
 				AA000000000000000000001B /* IosTrackResolverCache.swift */,
 				AA000000000000000000001C /* PlaybackRouter.swift */,
@@ -232,6 +235,7 @@
 				AA0000000000000000000026 /* NowPlayingView.swift in Sources */,
 				AA0000000000000000000027 /* DiscoverView.swift in Sources */,
 				AA00000000000000000000E1 /* SpotifyReauthBanner.swift in Sources */,
+				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,
 				AA0000000000000000000028 /* PlaylistDetailView.swift in Sources */,
 				AA000000000000000000002B /* IosTrackResolverCache.swift in Sources */,
 				AA000000000000000000002C /* PlaybackRouter.swift in Sources */,
