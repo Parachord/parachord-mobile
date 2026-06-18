@@ -1392,6 +1392,12 @@ final class QueuePlaybackCoordinator {
     /// panel's "Playing from: …" context banner/link. Nil for ad-hoc queues.
     var playbackContext: PlaybackContext?
 
+    /// Listen Along (#235/#246): when set, a NATURAL track-end defers to this hook
+    /// (the controller plays the friend's next track) instead of the single-track
+    /// queue just stopping — so each listen-along song plays to its end and
+    /// scrobbles. Nil for normal playback. Set on start, cleared on stop.
+    var onTrackFinished: (() -> Void)?
+
     /// Repeat mode (#221). off → all → one. Honored by AUTO-advance only
     /// (a track ending) — the manual Next button + lock-screen next always
     /// advance one track. Repeat is a coordinator concern (not in the shared
@@ -1699,6 +1705,9 @@ final class QueuePlaybackCoordinator {
     /// honoring repeat mode. The manual Next button keeps calling skipNext()
     /// directly so it always advances regardless of repeat.
     func autoAdvance() {
+        // Listen Along owns end-of-track: let the controller pick the friend's
+        // next song so the just-finished one plays fully (and scrobbles), #246.
+        if let hook = onTrackFinished { hook(); return }
         switch repeatMode {
         case .one:
             // Replay the just-finished track.
