@@ -333,7 +333,9 @@ struct PCSidebar: View {
             .buttonStyle(.plain)
             .contextMenu {
                 Button { onFriendProfile(f) } label: { Label("View Profile", systemImage: "person.crop.circle") }
-                Button { onListenAlong(f); onClose() } label: { Label("Listen Along", systemImage: "headphones") }
+                if f.isOnAir {  // listen-along only when they're on air (Android parity)
+                    Button { onListenAlong(f); onClose() } label: { Label("Listen Along", systemImage: "headphones") }
+                }
                 Button { friends.unpin(f) } label: { Label("Unpin", systemImage: "pin.slash") }
                 Button(role: .destructive) { friends.remove(f) } label: { Label("Remove", systemImage: "trash") }
             }

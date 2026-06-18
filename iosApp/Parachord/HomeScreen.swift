@@ -40,6 +40,12 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
     case "charts":          return .pop
     case "recommendations": return .recommendations
     case "history":         return .history
+    case "listen-along":
+        // id encodes "friendId|username|service" (set in ListenAlongController) so
+        // the listen-along banner links to the friend's profile (#235).
+        let parts = (ctx.id ?? "").components(separatedBy: "|")
+        guard parts.count == 3, !parts[0].isEmpty else { return nil }
+        return .friend(id: parts[0], username: parts[1], service: parts[2], name: ctx.name)
     default:                return nil
     }
 }

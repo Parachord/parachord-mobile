@@ -156,16 +156,19 @@ struct FriendProfileScreen: View {
                     Text("Listening activity from \(serviceName)")
                         .font(.system(size: 13)).foregroundStyle(PC.fg3).lineLimit(1)
                 }
+                // You can only listen along while the friend is on air (Android
+                // parity) — but stay enabled while already listening so you can stop.
+                let canListenAlong = (model.friend?.isOnAir == true) || isListening
                 Button {
                     if let f = model.friend { listenAlong.toggle(f) }
                 } label: {
                     Label(isListening ? "Stop" : "Listen Along", systemImage: "headphones")
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                         .padding(.horizontal, 14).frame(height: 32)
-                        .background(isListening ? PC.fg3 : PC.accent, in: Capsule())
+                        .background(isListening ? PC.fg3 : (canListenAlong ? PC.accent : PC.fg3.opacity(0.5)), in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .disabled(model.friend == nil)
+                .disabled(!canListenAlong)
                 .padding(.top, 2)
             }
             Spacer(minLength: 0)

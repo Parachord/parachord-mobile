@@ -427,9 +427,13 @@ struct CollectionView: View {
                 }
                 .buttonStyle(.plain)
                     .contextMenu {
-                        Button { ListenAlongController.shared.toggle(f) } label: {
-                            Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along",
-                                  systemImage: "headphones")
+                        // Listen along only while they're on air (Android parity);
+                        // keep it available to STOP if already listening.
+                        if f.isOnAir || ListenAlongController.shared.isActive(f) {
+                            Button { ListenAlongController.shared.toggle(f) } label: {
+                                Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along",
+                                      systemImage: "headphones")
+                            }
                         }
                         if f.pinnedToSidebar {
                             Button { model.pinFriend(f, false) } label: { Label("Unpin from Sidebar", systemImage: "pin.slash") }
@@ -501,7 +505,7 @@ struct CollectionView: View {
     private func serviceBadge(_ service: String) -> (String, Color) {
         switch service {
         case "lastfm":       return ("Last.fm", Color(uiColor: UIColor(hex: 0xD51007)))
-        case "listenbrainz": return ("LB", Color(uiColor: UIColor(hex: 0xEB743B)))
+        case "listenbrainz": return ("ListenBrainz", Color(uiColor: UIColor(hex: 0xEB743B)))
         default:             return (service, PC.fg3)
         }
     }

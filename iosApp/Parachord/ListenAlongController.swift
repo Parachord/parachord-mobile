@@ -97,9 +97,12 @@ final class ListenAlongController {
         if key == lastTrackKey { return }   // same track still playing — nothing to do
         lastTrackKey = key
         let track = Self.makeTrack(f, name: name, artist: artist, key: key)
+        // Encode the friend's identity in `id` ("friendId|username|service") so the
+        // Now Playing / queue context banner can link to their profile (#235).
         coordinator?.setQueue(
             [track], startIndex: 0,
-            context: PlaybackContext(type: Self.listenAlongContext, name: f.displayName, id: nil))
+            context: PlaybackContext(type: Self.listenAlongContext, name: f.displayName,
+                                     id: "\(f.id)|\(f.username)|\(f.service)"))
     }
 
     /// Metadata-only Track — the coordinator resolves it through the normal
