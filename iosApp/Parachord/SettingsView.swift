@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import Shared
 
 // MARK: - Settings (full, tabbed) — Plug-ins / General / About
@@ -666,6 +667,7 @@ private struct PluginConfigSheet: View {
     @State private var secretDraft = ""
     @State private var spotifyIdDraft = ""
     @State private var scanner = MediaLibraryScanner.shared
+    @State private var showImporter = false
 
     private var isAi: Bool { ["chatgpt", "claude", "gemini"].contains(service.id) }
 
@@ -756,18 +758,22 @@ private struct PluginConfigSheet: View {
 
     @ViewBuilder private var localFilesSection: some View {
         Section {
-            Text("Scan your device's Music library to play local songs. Only downloaded, non-DRM tracks (with an on-device file) can play.")
+            Text("Play local songs two ways: scan your device's Music library (downloaded, non-DRM tracks only), or import audio files from the Files app — iOS sandboxing hides Files-app audio from the library scan, so a downloaded WAV/MP3 needs Import.")
                 .font(.system(size: 13)).foregroundStyle(PC.fg2)
             switch scanner.phase {
             case .requesting:
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Requesting access…") }
             case .scanning(let done, let total):
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Scanning… \(done)/\(total)") }
+            case .importing(let done, let total):
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Importing… \(done)/\(total)") }
+            case .imported(let n):
+                Text("Imported \(n) file\(n == 1 ? "" : "s").").font(.system(size: 13)).foregroundStyle(PC.fg3)
             case .denied:
                 Text("Music access denied. Enable it in iOS Settings › Privacy › Media & Apple Music.")
                     .font(.system(size: 13)).foregroundStyle(.red)
             case .failed(let m):
-                Text("Scan failed: \(m)").font(.system(size: 13)).foregroundStyle(.red)
+                Text("Failed: \(m)").font(.system(size: 13)).foregroundStyle(.red)
             case .done(let n):
                 Text("Scanned \(n) tracks.").font(.system(size: 13)).foregroundStyle(PC.fg3)
             case .idle:
@@ -779,13 +785,25 @@ private struct PluginConfigSheet: View {
                 Label(scanner.libraryCount > 0 ? "Re-scan Library" : "Scan Music Library",
                       systemImage: "arrow.triangle.2.circlepath")
             }
-            .disabled(scanIsRunning)
+            .disabled(localFilesBusy)
+            Button { showImporter = true } label: {
+                Label("Import Files…", systemImage: "folder.badge.plus")
+            }
+            .disabled(localFilesBusy)
+            .fileImporter(isPresented: $showImporter,
+                          allowedContentTypes: [.audio],
+                          allowsMultipleSelection: true) { result in
+                if case .success(let urls) = result, !urls.isEmpty { scanner.importFiles(urls) }
+            }
         }
         .onAppear { scanner.refreshCount() }
     }
 
-    private var scanIsRunning: Bool {
-        switch scanner.phase { case .scanning, .requesting: return true; default: return false }
+    private var localFilesBusy: Bool {
+        switch scanner.phase {
+        case .scanning, .requesting, .importing: return true
+        default: return false
+        }
     }
 
     @ViewBuilder private var lastFmSection: some View {

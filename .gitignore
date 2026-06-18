@@ -27,6 +27,7 @@ play-service-account.json
 
 # iOS / Xcode — generated build outputs, per-user state, derived data
 iosApp/build/
+iosApp/build-device/
 iosApp/Parachord.xcodeproj/xcuserdata/
 iosApp/Parachord.xcodeproj/project.xcworkspace/xcuserdata/
 iosApp/Parachord.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist

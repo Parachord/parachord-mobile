@@ -53,6 +53,13 @@ func pcTrackNoMatch(artist: String, title: String, album: String?) -> Bool {
     return !s.contains { !$0.noMatch && ($0.confidence?.doubleValue ?? 0) >= 0.60 }
 }
 
+/// Whether this track is actively re-resolving with no art yet — drives the art
+/// skeleton (after a metadata edit, while the new title/artist resolves art).
+@MainActor
+func pcTrackResolving(artist: String, title: String, album: String?) -> Bool {
+    IosTrackResolverCache.shared.isResolving(artist: artist, title: title, album: album)
+}
+
 @MainActor
 func pcTrackArt(_ artworkUrl: String?, artist: String, title: String, album: String?) -> String? {
     if let a = artworkUrl, !a.isEmpty, !a.contains("2a96cbd8b46e442fc41c2b86b821562f") { return a }
@@ -64,16 +71,20 @@ func pcTrackArt(_ artworkUrl: String?, artist: String, title: String, album: Str
 }
 
 @ViewBuilder
-func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat) -> some View {
+func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, resolving: Bool = false) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     // Cover content: real art fill-cropped, gradient placeholder on miss/load.
+    // While the track is still resolving (no art yet) show the shimmer skeleton
+    // instead of the gradient letter tile — art pops in once resolution lands.
     let content = ZStack {
         if let url, let u = URL(string: url) {
             PCCachedImage(url: u) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
-                PCArtwork(name: seed, radius: radius)
+                if resolving { PCSkeletonBox(radius: radius) } else { PCArtwork(name: seed, radius: radius) }
             }
+        } else if resolving {
+            PCSkeletonBox(radius: radius)
         } else {
             PCArtwork(name: seed, radius: radius)
         }

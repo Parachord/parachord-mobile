@@ -1116,12 +1116,30 @@ final class IosAVPlayer {
         }
     }
 
+    /// Imported local files are referenced container-relative (`pcfile://…`) or,
+    /// for rows written before that, as an absolute `file://` embedding an OLD
+    /// app-container UUID. iOS changes the data-container UUID across reinstalls /
+    /// App Store updates (it migrates the files, but a stored absolute path then
+    /// points at the gone container). Re-root any imported-file reference to the
+    /// CURRENT Documents dir; pass everything else (ipod-library://, http://, a
+    /// current file://) through unchanged.
+    static func resolveLocalImportPath(_ s: String) -> String {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        if s.hasPrefix("pcfile://") {
+            return docs.appendingPathComponent(String(s.dropFirst(9))).absoluteString
+        }
+        if let r = s.range(of: "/Documents/localfiles/") {
+            return docs.appendingPathComponent("localfiles/" + String(s[r.upperBound...])).absoluteString
+        }
+        return s
+    }
+
     func load(
         url urlString: String,
         title: String = "",
         artist: String = ""
     ) {
-        guard let url = URL(string: urlString) else {
+        guard let url = URL(string: Self.resolveLocalImportPath(urlString)) else {
             status = .failed
             errorMessage = "Invalid URL"
             return

@@ -25,6 +25,16 @@ extension View {
                 Label("Add to Queue", systemImage: "text.append")
             }
             PCAddToPlaylistMenu(track: track)
+            // Edit Metadata (iOS local-files tag editor) — local files only.
+            // Streaming tracks resolve BY
+            // title/artist against Spotify/Apple Music, so editing those would
+            // break resolution; local files carry their own row metadata (often
+            // just a filename after import), so cleaning it up is safe + useful.
+            if track.resolver == "localfiles" {
+                Button { TrackMetadataEditor.shared.start(track) } label: {
+                    Label("Edit Metadata", systemImage: "pencil")
+                }
+            }
             // Queue-context only (#220): remove this track from the up-next list.
             if let onRemoveFromQueue {
                 Button(role: .destructive) { onRemoveFromQueue() } label: {
@@ -155,6 +165,82 @@ struct PCAddToPlaylistMenu: View {
             Label("Add to Playlist…", systemImage: "text.badge.plus")
         }
         .task { playlists = (try? await container.getSavedPlaylistsOnce()) ?? [] }
+    }
+}
+
+// MARK: - Track metadata (tag) editor (#248)
+
+/// Global presenter for the in-app metadata editor, hosted once at the root
+/// (mirrors `PlaylistCreator`) so a context-menu button — which can't host its
+/// own sheet — can trigger it. Edits the DB row's title/artist/album; does NOT
+/// rewrite the on-disk file's tags.
+@MainActor
+@Observable
+final class TrackMetadataEditor {
+    static let shared = TrackMetadataEditor()
+    private init() {}
+    var showing = false
+    var trackId = ""
+    var title = ""
+    var artist = ""
+    var album = ""
+
+    func start(_ track: Track) {
+        trackId = track.id
+        title = track.title
+        artist = track.artist
+        album = track.album ?? ""
+        showing = true
+    }
+
+    func save() {
+        let id = trackId, t = title, a = artist, al = album
+        showing = false
+        guard !id.isEmpty else { return }
+        let albumOpt = al.isEmpty ? nil : al
+        Task { @MainActor in
+            try? await IosContainer.companion.shared.updateTrackMetadata(
+                id: id, title: t, artist: a, album: albumOpt)
+            // Re-resolve under the NEW title/artist so badges + album art refresh.
+            // The DB write lands first so the localfiles match (findLocalFile) uses
+            // the corrected metadata; the art skeleton shows until this resolves.
+            IosTrackResolverCache.shared.resolve(
+                ResolveRequest(artist: a, title: t, album: albumOpt), order: 0)
+        }
+    }
+}
+
+/// The editor sheet — title / artist / album fields. Hosted from RootView via
+/// `TrackMetadataEditor.shared.showing`.
+struct TrackMetadataEditorSheet: View {
+    @Bindable var editor: TrackMetadataEditor
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Track Info") {
+                    TextField("Title", text: $editor.title)
+                    TextField("Artist", text: $editor.artist)
+                    TextField("Album", text: $editor.album)
+                }
+                Section {
+                    Text("Updates how this track appears in Parachord — its title, artist, and album for display, playback, and scrobbles. The original file on disk isn't changed.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Edit Metadata")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { editor.showing = false; dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { editor.save(); dismiss() }
+                        .disabled(editor.title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
     }
 }
 
