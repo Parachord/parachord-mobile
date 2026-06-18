@@ -72,9 +72,13 @@ struct HomeScreen: View {
     /// a hoisted binding raced the recreation and re-pushed the screen.
     @Binding var pendingRoute: PCRoute?
     let onMenu: () -> Void
+    /// Opened by the Spotify reauth banner when there's no stored Client ID to
+    /// OAuth with (the user sets it + connects in Settings).
+    var onOpenSettings: () -> Void = {}
 
     @State private var path: [PCRoute] = []
     @State private var model = DiscoverViewModel.shared
+    @State private var reauth = SpotifyReauthModel()
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
@@ -83,6 +87,12 @@ struct HomeScreen: View {
                 PCTopBar(title: "Parachord", leading: .menu, onLeading: onMenu)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if reauth.required {
+                            PCSpotifyReauthBanner(connecting: reauth.connecting) {
+                                reauth.reconnect(onNeedsSetup: onOpenSettings)
+                            }
+                        }
+
                         if let t = coordinator.currentTrack {
                             sectionHeader("Continue Listening")
                             continueCard(t)
@@ -109,6 +119,7 @@ struct HomeScreen: View {
             if let route { path = [route]; pendingRoute = nil }
         }
         .task { model.start(); await model.load() }
+        .task { reauth.start() }
     }
 
     // MARK: Sections

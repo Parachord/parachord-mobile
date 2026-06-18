@@ -7,6 +7,9 @@ import com.parachord.shared.platform.Log
 import androidx.browser.customtabs.CustomTabsIntent
 import com.parachord.android.BuildConfig
 import com.parachord.android.data.store.SettingsStore
+import com.parachord.shared.api.auth.SpotifyRefreshOutcome
+import com.parachord.shared.api.auth.classifySpotifyRefresh
+import com.parachord.shared.api.auth.parseSpotifyErrorCode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -156,20 +159,30 @@ class OAuthManager constructor(
                 }
 
                 if (!response.isSuccessful) {
-                    // `invalid_grant` on 400 means the refresh token is dead
-                    // — typically the user revoked Parachord from
-                    // accounts.spotify.com/account/apps. Trip the
-                    // kill-switch so the storm of concurrent retries
-                    // (device poller, scrobbler, sync) stops immediately.
-                    if (response.code == 400 && isInvalidGrant(responseBody)) {
+                    // Terminal (`invalid_grant`/`invalid_client` on 400/401/403)
+                    // means the refresh token is dead — revoked from
+                    // accounts.spotify.com/account/apps, OR expired under
+                    // Spotify's six-month refresh-token TTL (effective
+                    // 2026-07-20, #243). Discard the stored tokens so we never
+                    // re-poke the dead grant (NOT just this session — the
+                    // kill-switch is process-scoped), trip the kill-switch so
+                    // the storm of concurrent retries (device poller,
+                    // scrobbler, sync) stops immediately, and signal re-auth.
+                    val errorCode = parseSpotifyErrorCode(responseBody)
+                    if (classifySpotifyRefresh(response.code, errorCode) ==
+                        SpotifyRefreshOutcome.TERMINAL
+                    ) {
                         Log.w(
                             TAG,
-                            "Spotify refresh token revoked — tripping session kill-switch",
+                            "Spotify refresh token dead ($errorCode) — discarding tokens, reauth required",
                         )
+                        settingsStore.clearSpotifyTokens()
                         spotifyRefreshTerminallyFailedForSession = true
                         _spotifyReauthRequired.value = true
                         throw SpotifyReauthRequiredException()
                     }
+                    // Transient (429/5xx/network/unparseable) — keep the token,
+                    // fail just this attempt, recover on the next refresh.
                     Log.e(TAG, "Spotify token refresh failed (${response.code}): $responseBody")
                     return@withContext false
                 }
@@ -194,17 +207,6 @@ class OAuthManager constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Spotify token refresh error", e)
             false
-        }
-    }
-
-    private fun isInvalidGrant(responseBody: String): Boolean {
-        return try {
-            json.decodeFromString<SpotifyTokenError>(responseBody).error == "invalid_grant"
-        } catch (_: Exception) {
-            // Fall back to substring match for non-JSON or unexpected shapes
-            // — Spotify's response is documented JSON, but a transient proxy
-            // error could land here.
-            responseBody.contains("\"invalid_grant\"")
         }
     }
 
@@ -600,12 +602,6 @@ private data class SpotifyRefreshResponse(
     @SerialName("access_token") val accessToken: String,
     @SerialName("refresh_token") val refreshToken: String? = null,
     @SerialName("expires_in") val expiresIn: Long? = null,
-)
-
-@Serializable
-private data class SpotifyTokenError(
-    val error: String,
-    @SerialName("error_description") val errorDescription: String? = null,
 )
 
 @Serializable

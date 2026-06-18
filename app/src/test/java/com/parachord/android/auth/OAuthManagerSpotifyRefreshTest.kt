@@ -4,6 +4,7 @@ import android.content.Context
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.shared.store.SecureTokenStore
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.async
@@ -107,6 +108,49 @@ class OAuthManagerSpotifyRefreshTest {
             manager.spotifyReauthRequired.value,
         )
         assertEquals("first call must hit the endpoint", 1, server.requestCount)
+        // #243: the dead refresh token MUST be discarded so it's never
+        // re-poked on the next launch (the kill-switch is process-scoped).
+        coVerify(exactly = 1) { settings.clearSpotifyTokens() }
+    }
+
+    @Test
+    fun `invalid_client on 401 is terminal - discards tokens and trips kill-switch`() = runBlocking {
+        // Desktop-parity widening (#243): not just 400 invalid_grant.
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(401)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"error\":\"invalid_client\"}"),
+        )
+
+        try {
+            manager.refreshSpotifyTokenWithConfig("test-client-id")
+            fail("Expected SpotifyReauthRequiredException")
+        } catch (_: SpotifyReauthRequiredException) {
+            // expected
+        }
+
+        assertTrue(manager.spotifyReauthRequired.value)
+        coVerify(exactly = 1) { settings.clearSpotifyTokens() }
+    }
+
+    @Test
+    fun `transient 5xx keeps the token - no discard, no kill-switch`() = runBlocking {
+        // A Spotify outage must NOT log the user out.
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(503)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"error\":\"server_error\"}"),
+        )
+
+        val result = manager.refreshSpotifyTokenWithConfig("test-client-id")
+        assertFalse("transient failure should return false", result)
+        assertFalse(
+            "kill-switch must NOT trip for a transient 5xx",
+            manager.spotifyReauthRequired.value,
+        )
+        coVerify(exactly = 0) { settings.clearSpotifyTokens() }
     }
 
     @Test
@@ -176,5 +220,6 @@ class OAuthManagerSpotifyRefreshTest {
             "kill-switch must NOT trip for non-invalid_grant errors",
             manager.spotifyReauthRequired.value,
         )
+        coVerify(exactly = 0) { settings.clearSpotifyTokens() }
     }
 }

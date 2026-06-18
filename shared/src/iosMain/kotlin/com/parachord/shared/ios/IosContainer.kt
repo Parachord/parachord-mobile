@@ -193,9 +193,19 @@ class IosContainer private constructor() {
         }
     }
 
+    /**
+     * iOS equivalent of Android's `OAuthManager.spotifyReauthRequired` — flips
+     * true when a refresh fails terminally (dead grant: revoked, or the
+     * six-month expiry, #243), driving the Home reconnect banner. Cleared on a
+     * successful (re)connect and on explicit disconnect.
+     */
+    private val _spotifyReauthRequired = MutableStateFlow(false)
+
     /** Spotify 401-refresh (plain client — no plugin recursion). */
     val spotifyTokenRefresher: SpotifyTokenRefresher by lazy {
-        SpotifyTokenRefresher(settingsStore, authHttpClient)
+        SpotifyTokenRefresher(settingsStore, authHttpClient) {
+            _spotifyReauthRequired.value = true
+        }
     }
 
     /** Request-time Spotify bearer lookup. Cached-read only; the reactive,
@@ -716,16 +726,25 @@ class IosContainer private constructor() {
      */
     suspend fun connectSpotify(code: String, codeVerifier: String) {
         spotifyAuth.exchangeCode(code, codeVerifier, "parachord://auth/callback/spotify")
+        _spotifyReauthRequired.value = false // a fresh grant clears the reauth banner
     }
 
     /** Clear stored Spotify tokens (disconnect). */
     suspend fun disconnectSpotify() {
         settingsStore.clearSpotifyTokens()
+        _spotifyReauthRequired.value = false // user-initiated; not a reauth-needed state
     }
 
     /** Emits true when a Spotify access token is present, false otherwise. */
     fun getSpotifyConnectedFlow(): Flow<Boolean> =
         settingsStore.getSpotifyAccessTokenFlow().map { it != null }
+
+    /**
+     * Emits true when a Spotify token refresh failed terminally (dead grant) —
+     * drives the Home reconnect banner. Distinct from [getSpotifyConnectedFlow]:
+     * a user who never connected is "not connected" but does NOT need re-auth.
+     */
+    fun getSpotifyReauthRequiredFlow(): Flow<Boolean> = _spotifyReauthRequired
 
     // ── Libre.fm (auth.getMobileSession via the shared LibreFmClient) ───
     val libreFmClient: com.parachord.shared.api.LibreFmClient by lazy {

@@ -36,7 +36,7 @@ struct ContentView: View {
             // ── Active tab content ───────────────────────────────────
             Group {
                 switch tab {
-                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true })
+                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { showSettings = true })
                 case .search:     SearchView(onMenu: { showSidebar = true })
                 case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab)
                 case .playlists:  PlaylistsScreen(onMenu: { showSidebar = true })
