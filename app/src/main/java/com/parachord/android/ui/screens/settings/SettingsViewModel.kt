@@ -195,6 +195,60 @@ class SettingsViewModel constructor(
     val resolverOrder: StateFlow<List<String>> = settingsStore.getResolverOrderFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // ── Resolver enable/disable (#213, iOS/desktop parity) ────────────
+    // User intent (`active_resolvers`): resolvers the user wants ON. The
+    // shared ResolverCoordinator gates native resolvers on this set and
+    // ResolverScoring filters cached sources/badges on it, so removing an id
+    // here fully disables a resolver for playback AND the UI — without
+    // disconnecting (the credential/connection state is untouched). Empty =
+    // "all on" (the legacy default), so the FIRST disable seeds the full live
+    // catalog minus that id (otherwise an empty→{id-removed} write would
+    // accidentally disable every OTHER resolver, including bandcamp's .axe).
+    val activeResolvers: StateFlow<Set<String>> = settingsStore.getActiveResolversFlow()
+        .map { it.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    /** Native resolvers with a real implementation, used to seed `active_resolvers`. */
+    private val nativeResolverIds = listOf("spotify", "applemusic", "soundcloud", "localfiles")
+
+    /** The full live resolver catalog (native + loaded resolve-capable .axe, mobile-allowed). */
+    private fun resolverCatalogIds(): List<String> {
+        val axe = loadedPlugins.value
+            .filter { it.capabilities["resolve"] == true && it.capabilities["mobile"] != false }
+            .map { it.id }
+        return (nativeResolverIds + axe).distinct()
+    }
+
+    /** Empty `active_resolvers` = all on. */
+    fun isResolverEnabled(id: String, active: Set<String>): Boolean = active.isEmpty() || id in active
+
+    /**
+     * Toggle a resolver on/off WITHOUT disconnecting (#213). Writes only
+     * `active_resolvers` (the coordinator + scoring gate) — NOT `disabled_plugins`,
+     * so the connection state and metadata provider are left intact (a resolver
+     * toggle ≠ a service kill). On a fresh `active_resolvers` (all-on default) the
+     * set is first seeded with the full catalog so only [id] is affected.
+     */
+    fun setResolverEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch {
+            val current = settingsStore.getActiveResolvers()
+            val base = (if (current.isEmpty()) resolverCatalogIds() else current).toMutableSet()
+            if (enabled) base.add(id) else base.remove(id)
+            settingsStore.setActiveResolvers(base.toList())
+        }
+    }
+
+    /** Re-enable a resolver when it (re)connects, so a prior disable doesn't persist
+     *  through a disconnect/reconnect. No-op when `active_resolvers` is the all-on default. */
+    private fun ensureResolverEnabledOnConnect(id: String) {
+        viewModelScope.launch {
+            val current = settingsStore.getActiveResolvers()
+            if (current.isNotEmpty() && id !in current) {
+                settingsStore.setActiveResolvers(current + id)
+            }
+        }
+    }
+
     fun setResolverOrder(order: List<String>) {
         viewModelScope.launch { settingsStore.setResolverOrder(order) }
     }
@@ -238,6 +292,7 @@ class SettingsViewModel constructor(
 
     fun connectSpotify(clientId: String) {
         oAuthManager.launchSpotifyAuth(clientId)
+        ensureResolverEnabledOnConnect("spotify")
     }
 
     fun connectLastFm(apiKey: String) {
@@ -287,6 +342,7 @@ class SettingsViewModel constructor(
             _appleMusicConnecting.value = true
             try {
                 musicKitBridge.authorize()
+                ensureResolverEnabledOnConnect("applemusic")
             } finally {
                 _appleMusicConnecting.value = false
             }
@@ -362,6 +418,7 @@ class SettingsViewModel constructor(
         viewModelScope.launch {
             oAuthManager.launchSoundCloudAuth()
         }
+        ensureResolverEnabledOnConnect("soundcloud")
     }
 
     fun disconnectSoundCloud() {

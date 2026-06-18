@@ -307,13 +307,18 @@ final class SettingsViewModel {
     /// Toggle user intent; recompute rebuilds the usable priority list + persists.
     /// A not-connected auth-gated resolver won't reach the list — connecting it
     /// (which calls recompute) is what enables it.
+    ///
+    /// Gates ONLY the resolver, via `active_resolvers`: the coordinator skips
+    /// natives not in the set, `ResolverScoring` filters cached badges/selection
+    /// on it, and `axeResolverIds` gates `.axe` on it (active is seeded to all,
+    /// so removing one leaves the rest on). We deliberately do NOT also write
+    /// `disabled_plugins` — that key gates the METADATA cascade
+    /// (`getDisabledProviders`), and disabling a resolver should not silence that
+    /// source's album-art metadata. A resolver toggle ≠ a service kill. This
+    /// keeps resolver-disable and metadata-disable independent, matching Android
+    /// (#213).
     func setResolverEnabled(_ id: String, _ enabled: Bool) {
         if enabled { activeResolvers.insert(id) } else { activeResolvers.remove(id) }
-        // Also record the AUTHORITATIVE on/off in disabled_plugins. The resolver
-        // coordinator gates native Spotify/Apple Music + .axe resolvers on this set,
-        // so a disabled resolver is never RESOLVED (not merely hidden/unranked) —
-        // even when active_resolvers is empty (the "all on" default).
-        setPluginEnabled(id, enabled)
         recomputeResolvers()
     }
 
