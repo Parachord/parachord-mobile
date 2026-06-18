@@ -202,30 +202,41 @@ struct PCAddSheet: View {
             .init(icon: "person.badge.plus", label: "Add Friend", sub: "Follow a ListenBrainz / Last.fm user", go: nil),
         ]
         return NavigationStack {
-            List {
-                Section("Add to Parachord") {
-                    ForEach(actions.indices, id: \.self) { i in
-                        let a = actions[i]
-                        Button { onDismiss(); a.go?() } label: {
-                            HStack(spacing: 16) {
-                                Image(systemName: a.icon).font(.system(size: 22)).foregroundStyle(PC.accent).frame(width: 30)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(a.label).font(.system(size: 17)).foregroundStyle(PC.fg1)
-                                    Text(a.sub).font(.system(size: 13)).foregroundStyle(PC.fg2)
-                                }
-                            }.padding(.vertical, 2)
+            // A plain VStack (NOT a List): the content is only 4 fixed rows, so it
+            // never needs to scroll — and a List inside a content-height sheet
+            // clipped the last row ("Add Friend") on the iPad form sheet, whose
+            // height ignores presentationDetents. A top-aligned VStack lays the
+            // rows out compactly and can't clip.
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Add to Parachord")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(PC.fg2)
+                    .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 4)
+                ForEach(actions.indices, id: \.self) { i in
+                    let a = actions[i]
+                    Button { onDismiss(); a.go?() } label: {
+                        HStack(spacing: 16) {
+                            Image(systemName: a.icon).font(.system(size: 22)).foregroundStyle(PC.accent).frame(width: 30)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(a.label).font(.system(size: 17)).foregroundStyle(PC.fg1)
+                                Text(a.sub).font(.system(size: 13)).foregroundStyle(PC.fg2)
+                            }
+                            Spacer(minLength: 0)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 20).padding(.vertical, 10).contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .navigationTitle("Add")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onDismiss) } }
         }
-        // Open at full height so all actions are visible without scrolling;
-        // still draggable down to medium.
-        .presentationDetents([.large, .medium])
+        // iPhone: medium is plenty for the compact VStack (no scroll). iPad
+        // presents a fixed-size form sheet regardless of detents — the VStack
+        // fits it without the old List clipping.
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
     }
 }
