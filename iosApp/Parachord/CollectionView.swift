@@ -422,7 +422,10 @@ struct CollectionView: View {
         let items = model.sortedFriends
         return LazyVStack(spacing: 0) {
             ForEach(items, id: \.id) { f in
-                friendRow(f)
+                NavigationLink(value: PCRoute.friend(id: f.id, username: f.username, service: f.service, name: f.displayName)) {
+                    friendRow(f)
+                }
+                .buttonStyle(.plain)
                     .contextMenu {
                         Button { ListenAlongController.shared.toggle(f) } label: {
                             Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along",

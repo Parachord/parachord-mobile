@@ -123,7 +123,12 @@ struct ContentView: View {
                     .onTapGesture { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
                 HStack(spacing: 0) {
                     PCSidebar(onNav: handleSidebar, onClose: { closeSidebar() },
-                              onListenAlong: { listenAlong.toggle($0) })
+                              onListenAlong: { listenAlong.toggle($0) },
+                              onFriendProfile: { f in
+                                  closeSidebar()
+                                  tab = .home
+                                  homePendingRoute = .friend(id: f.id, username: f.username, service: f.service, name: f.displayName)
+                              })
                         .ignoresSafeArea()
                     Spacer(minLength: 0)
                 }

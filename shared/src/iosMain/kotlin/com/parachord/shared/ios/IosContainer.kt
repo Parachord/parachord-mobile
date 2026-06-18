@@ -325,6 +325,28 @@ class IosContainer private constructor() {
     suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
         friendsRepository.fetchTransientFriendNowPlaying(service, user)
 
+    // ── Friend profile (#235 / #196) — a friend's History, flat for Swift ──
+    suspend fun getFriendTopTracks(username: String, service: String, period: String): List<HistoryTrack> {
+        var out = emptyList<HistoryTrack>()
+        friendsRepository.getFriendTopTracks(username, service, period).collect { if (it is Resource.Success) out = it.data }
+        return out
+    }
+    suspend fun getFriendTopAlbums(username: String, service: String, period: String): List<HistoryAlbum> {
+        var out = emptyList<HistoryAlbum>()
+        friendsRepository.getFriendTopAlbums(username, service, period).collect { if (it is Resource.Success) out = it.data }
+        return out
+    }
+    suspend fun getFriendTopArtists(username: String, service: String, period: String): List<HistoryArtist> {
+        var out = emptyList<HistoryArtist>()
+        friendsRepository.getFriendTopArtists(username, service, period).collect { if (it is Resource.Success) out = it.data }
+        return out
+    }
+    suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> {
+        var out = emptyList<RecentTrack>()
+        friendsRepository.getFriendRecentTracks(username, service).collect { if (it is Resource.Success) out = it.data }
+        return out
+    }
+
     // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
     fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(trackDao.existsByTitleAndArtist(title, artist)) { onEach((it as? Boolean) ?: false) }

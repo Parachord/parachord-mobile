@@ -18,6 +18,8 @@ enum PCRoute: Hashable {
     case artistOnTour(String)
     case album(title: String, artist: String)
     case playlist(id: String, title: String)
+    /// A friend's listening profile (#235 / #196).
+    case friend(id: String, username: String, service: String, name: String)
 }
 
 /// Single source of truth for every pushed destination. Used by EVERY tab's
@@ -62,6 +64,8 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .artistOnTour(let name):      ArtistScreen(artistName: name, initialTab: .onTour)
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
+    case .friend(let id, let username, let service, let name):
+        FriendProfileScreen(friendId: id, username: username, service: service, name: name)
     }
 }
 
