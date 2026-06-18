@@ -104,8 +104,15 @@ final class ListenAlongController {
             stop()  // user took control before this track ended — don't hijack
             return
         }
-        guard let f = friend, !pendingOffline, f.isOnAir else { stop(); return }
-        lastTrackKey = nil   // allow replay so we stay synced if they're still on it
+        guard let f = friend, !pendingOffline, f.isOnAir,
+              let name = f.cachedTrackName, let artist = f.cachedTrackArtist else { stop(); return }
+        // If the friend is STILL on the song we just finished (they haven't moved
+        // on), do NOT repeat it — end the listen-along session. Android parity:
+        // playFriendCurrentTrack dedups on the same trackKey (no replay) and
+        // onTrackEnded has no pending track to play, so the session just ends.
+        let currentKey = "\(name.lowercased())|\(artist.lowercased())"
+        if currentKey == lastTrackKey { stop(); return }
+        // Friend moved to a NEW track — follow it.
         playCurrent(f)
     }
 

@@ -185,7 +185,11 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                                 put("media_player", "Parachord")
                                 put("submission_client", "Parachord")
                                 put("submission_client_version", "1.0.0")
-                                if (durationMs != null) put("duration_ms", durationMs)
+                                // MUST be a positive integer — ListenBrainz rejects the
+                                // whole listen with HTTP 400 on duration_ms <= 0 (e.g. an
+                                // ephemeral listen-along / recommendation track whose Track
+                                // .duration was never populated). Omit it when unknown.
+                                if (durationMs != null && durationMs > 0) put("duration_ms", durationMs)
                                 if (!recordingMbid.isNullOrBlank()) put("recording_mbid", recordingMbid)
                                 if (!releaseMbid.isNullOrBlank()) put("release_mbid", releaseMbid)
                                 if (artistMbids.isNotEmpty()) {
