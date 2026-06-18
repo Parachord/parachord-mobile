@@ -38,6 +38,16 @@ class WeeklyPlaylistViewModel constructor(
     private val _weekLabel = MutableStateFlow("")
     val weekLabel: StateFlow<String> = _weekLabel
 
+    /** Clean playlist type ("Weekly Jams" / "Weekly Exploration"), for the detail
+     *  header — iOS parity (#205), not the verbose LB title. */
+    private val _kind = MutableStateFlow("")
+    val kind: StateFlow<String> = _kind
+
+    /** Playlist creation date formatted "Jun 15, 2026" — shown on the detail
+     *  header instead of the relative week label (#205, matches desktop/iOS). */
+    private val _dateLabel = MutableStateFlow("")
+    val dateLabel: StateFlow<String> = _dateLabel
+
     private val _description = MutableStateFlow("")
     val description: StateFlow<String> = _description
 
@@ -82,8 +92,12 @@ class WeeklyPlaylistViewModel constructor(
             val allEntries = (result?.jams.orEmpty()) + (result?.exploration.orEmpty())
             val entry = allEntries.find { it.id == playlistId }
 
-            _title.value = entry?.title ?: if (contextType == "weekly-jam") "Weekly Jams" else "Weekly Exploration"
+            // "Weekly Jam" (singular) to parallel "Weekly Exploration" in the header.
+            val kindLabel = if (contextType == "weekly-jam") "Weekly Jam" else "Weekly Exploration"
+            _title.value = entry?.title ?: kindLabel
             _weekLabel.value = entry?.weekLabel ?: ""
+            _kind.value = kindLabel
+            _dateLabel.value = entry?.dateLabel ?: ""
             _description.value = entry?.description ?: ""
 
             // Load tracks

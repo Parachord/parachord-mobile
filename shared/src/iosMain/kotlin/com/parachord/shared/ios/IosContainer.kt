@@ -1197,7 +1197,9 @@ class IosContainer private constructor() {
         }
         val result = weeklyPlaylistsRepository.loadWeeklyPlaylists(forceRefresh)
             ?: return emptyList()
-        val jams = (result.jams ?: emptyList()).map { it.toIos(kind = "Weekly Jams") }
+        // "Weekly Jam" (singular) to parallel "Weekly Exploration" in the detail
+        // header. NOTE: keep DiscoverViewModel's `kind == "Weekly Jam"` filter in sync.
+        val jams = (result.jams ?: emptyList()).map { it.toIos(kind = "Weekly Jam") }
         val exploration = (result.exploration ?: emptyList())
             .map { it.toIos(kind = "Weekly Exploration") }
         return jams + exploration
@@ -1376,37 +1378,13 @@ class IosContainer private constructor() {
         title = title,
         weekLabel = weekLabel,
         // #205: show the playlist's creation date ("Jun 15, 2026") rather than a
-        // relative "This Week"/"Last Week" label (matches desktop). Falls back to
-        // the relative label if the LB date is missing/unparseable.
-        dateLabel = formatWeeklyDate(date).ifBlank { weekLabel },
-        // LB annotations carry HTML (<p>…</p>, <a>…</a>). Strip tags +
-        // decode the few entities that show up so the row reads clean.
-        summary = description.stripHtml(),
+        // relative "This Week"/"Last Week" label (matches desktop). The shared
+        // repo formats it; fall back to the relative label if it's blank.
+        dateLabel = this.dateLabel.ifBlank { weekLabel },
+        // Description is already HTML-stripped by the shared repo.
+        summary = description,
         kind = kind,
     )
-
-    /** Format an LB playlist date (ISO, optionally with a time suffix) as "Jun 15, 2026". */
-    private fun formatWeeklyDate(raw: String): String {
-        if (raw.isBlank()) return ""
-        return try {
-            val d = kotlinx.datetime.LocalDate.parse(raw.take(10))
-            val m = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-            "${m[d.monthNumber - 1]} ${d.dayOfMonth}, ${d.year}"
-        } catch (e: Exception) {
-            ""
-        }
-    }
-
-    private fun String.stripHtml(): String =
-        replace(Regex("<[^>]+>"), "")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace(Regex("\\s+"), " ")
-            .trim()
 
     /**
      * Search MusicBrainz for artists + releases, returning flat

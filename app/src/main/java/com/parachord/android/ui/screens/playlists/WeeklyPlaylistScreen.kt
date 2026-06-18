@@ -61,8 +61,8 @@ fun WeeklyPlaylistScreen(
     modifier: Modifier = Modifier,
     viewModel: WeeklyPlaylistViewModel = koinViewModel(),
 ) {
-    val title by viewModel.title.collectAsStateWithLifecycle()
-    val weekLabel by viewModel.weekLabel.collectAsStateWithLifecycle()
+    val kind by viewModel.kind.collectAsStateWithLifecycle()
+    val dateLabel by viewModel.dateLabel.collectAsStateWithLifecycle()
     val description by viewModel.description.collectAsStateWithLifecycle()
     val tracks by viewModel.tracks.collectAsStateWithLifecycle()
     val coverUrls by viewModel.coverUrls.collectAsStateWithLifecycle()
@@ -77,7 +77,7 @@ fun WeeklyPlaylistScreen(
         TopAppBar(
             title = {
                 Text(
-                    text = (if (weekLabel.isNotEmpty()) "$weekLabel — " else "") + title.uppercase(),
+                    text = kind.uppercase(),
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Light,
                         letterSpacing = 0.2.em,
@@ -117,8 +117,11 @@ fun WeeklyPlaylistScreen(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
+                        // Lead with the playlist name + creation date (iOS parity,
+                        // #205): "Weekly Jams · Jun 15, 2026" rather than the
+                        // relative "This Week" label or the verbose LB title.
                         Text(
-                            text = title,
+                            text = if (dateLabel.isNotEmpty()) "$kind · $dateLabel" else kind,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.SemiBold,
                             ),
@@ -132,10 +135,6 @@ fun WeeklyPlaylistScreen(
                                 append("ListenBrainz")
                                 append(" · ")
                                 append("${tracks.size} tracks")
-                                if (weekLabel.isNotEmpty()) {
-                                    append(" · ")
-                                    append(weekLabel)
-                                }
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
