@@ -125,7 +125,7 @@ final class DiscoverViewModel {
         isLoading = true
         let entries = (try? await container.loadWeeklyPlaylists(forceRefresh: forceRefresh)) ?? []
         if !entries.isEmpty {
-            jams = entries.filter { $0.kind == "Weekly Jams" }
+            jams = entries.filter { $0.kind == "Weekly Jam" }
             exploration = entries.filter { $0.kind == "Weekly Exploration" }
             loadTrackCounts(entries)
         }

@@ -68,8 +68,9 @@ class WeeklyPlaylistsRepository(
                         id = p.id,
                         title = p.title,
                         weekLabel = weekLabels.getOrElse(i) { "${i} Weeks Ago" },
-                        description = p.annotation.ifBlank { defaultDesc },
+                        description = stripHtml(p.annotation).ifBlank { defaultDesc },
                         date = p.date,
+                        dateLabel = formatWeeklyPlaylistDate(p.date),
                     )
                 }
 
@@ -143,7 +144,39 @@ data class WeeklyPlaylistsResult(
 data class WeeklyPlaylistEntry(
     val id: String,             // Playlist MBID
     val title: String,
-    val weekLabel: String,      // "This Week", "Last Week", etc.
+    val weekLabel: String,      // "This Week", "Last Week", etc. (used on carousel cards)
     val description: String,
-    val date: String,
+    val date: String,           // raw LB createdfor date (ISO)
+    /** [date] formatted "Jun 15, 2026" — shown on the playlist detail header
+     *  (matches desktop). Empty when [date] is missing/unparseable. */
+    val dateLabel: String = "",
 )
+
+/**
+ * Strip HTML tags + decode the few entities that show up in LB playlist
+ * annotations (`<p>…</p>`, `<a>…</a>`, `&amp;`, …) so the description reads
+ * clean on both platforms. Done in the shared repo so neither client renders
+ * raw markup.
+ */
+internal fun stripHtml(raw: String): String =
+    raw.replace(Regex("<[^>]+>"), "")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+
+/** Format an LB playlist date (ISO, optionally with a time suffix) as "Jun 15, 2026". */
+internal fun formatWeeklyPlaylistDate(raw: String): String {
+    if (raw.isBlank()) return ""
+    return try {
+        val d = kotlinx.datetime.LocalDate.parse(raw.take(10))
+        val m = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        "${m[d.monthNumber - 1]} ${d.dayOfMonth}, ${d.year}"
+    } catch (e: Exception) {
+        ""
+    }
+}
