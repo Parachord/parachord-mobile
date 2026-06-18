@@ -148,6 +148,23 @@ class LibraryRepository(
         // Background MBID enrichment for batch imports
         mbidEnrichBatch(tracks)
     }
+    /**
+     * In-app metadata edit for a track row (local-files tag editor — Android +
+     * iOS parity). Overwrites ONLY title/artist/album; every other field
+     * (sourceUrl, streaming IDs, MBIDs, artwork) is preserved via copy. This is
+     * the metadata Parachord displays / resolves / scrobbles — it does NOT
+     * rewrite the on-disk file's tags. Re-fires MBID enrichment for the corrected
+     * title/artist. No-op if the id isn't found.
+     */
+    suspend fun updateTrackMetadata(id: String, title: String, artist: String, album: String?) {
+        val existing = trackDao.getById(id) ?: return
+        val t = title.trim().ifBlank { existing.title }
+        val a = artist.trim().ifBlank { "Unknown Artist" }
+        val al = album?.trim()?.ifBlank { null }
+        trackDao.update(existing.copy(title = t, artist = a, album = al))
+        mbidEnrichTrack(id, a, t)
+    }
+
     suspend fun addAlbum(album: Album) = albumDao.insert(album)
     suspend fun addAlbums(albums: List<Album>) = albumDao.insertAll(albums)
     suspend fun addArtist(artist: Artist) = artistDao.insert(artist)

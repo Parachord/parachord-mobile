@@ -151,6 +151,17 @@ class TrackResolverCache constructor(
     private val inFlight = mutableSetOf<String>()
 
     /**
+     * Observable view of [inFlight] — track keys with a resolution in progress.
+     * Drives the row art skeleton (e.g. after a metadata edit, the new title/artist
+     * key shows a shimmer until its resolve lands and art backfills onto the row).
+     */
+    private val _inFlightKeys = MutableStateFlow<Set<String>>(emptySet())
+    val inFlightKeys: StateFlow<Set<String>> = _inFlightKeys.asStateFlow()
+    private fun publishInFlight() {
+        _inFlightKeys.value = synchronized(inFlight) { inFlight.toSet() }
+    }
+
+    /**
      * Submit tracks for background resolution with concurrent workers.
      *
      * Matches the desktop's context-priority pattern:
@@ -194,6 +205,7 @@ class TrackResolverCache constructor(
             // Skip if already in-flight from another context
             val shouldResolve = synchronized(inFlight) { inFlight.add(key) }
             if (!shouldResolve) continue
+            publishInFlight()
 
             // Launch concurrent resolution (bounded by chosen semaphore)
             launch {
@@ -218,6 +230,7 @@ class TrackResolverCache constructor(
                     Log.w(TAG, "Failed to resolve '${track.title}': ${e.message}")
                 } finally {
                     synchronized(inFlight) { inFlight.remove(key) }
+                    publishInFlight()
                 }
             }
         }
@@ -244,6 +257,7 @@ class TrackResolverCache constructor(
             if (_trackSources.value.containsKey(key)) continue
             val shouldResolve = synchronized(inFlight) { inFlight.add(key) }
             if (!shouldResolve) continue
+            publishInFlight()
 
             launch {
                 try {
@@ -265,6 +279,7 @@ class TrackResolverCache constructor(
                     Log.w(TAG, "Failed to resolve '${track.title}': ${e.message}")
                 } finally {
                     synchronized(inFlight) { inFlight.remove(key) }
+                    publishInFlight()
                 }
             }
         }

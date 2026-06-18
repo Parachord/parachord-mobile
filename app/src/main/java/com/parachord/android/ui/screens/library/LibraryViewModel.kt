@@ -47,6 +47,9 @@ class LibraryViewModel constructor(
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
 
+    /** Track keys with a resolution in flight — drives the row art skeleton (e.g. after a metadata edit). */
+    val resolvingKeys: StateFlow<Set<String>> = trackResolverCache.inFlightKeys
+
     val tracks: StateFlow<List<TrackEntity>> = repository.getAllTracks()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 

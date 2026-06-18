@@ -32,6 +32,8 @@ class TrackContextMenuState {
         private set
     var showPlaylistPicker by mutableStateOf(false)
         private set
+    var showEditMetadata by mutableStateOf(false)
+        private set
 
     fun show(info: TrackContextInfo, entity: TrackEntity) {
         contextTrack = info
@@ -55,6 +57,18 @@ class TrackContextMenuState {
 
     fun dismissPlaylistPicker() {
         showPlaylistPicker = false
+        contextTrackEntity = null
+    }
+
+    /** Transition from context menu to the metadata (tag) editor dialog. */
+    fun openEditMetadata() {
+        contextTrack = null // Remove context menu sheet from composition
+        showEditMetadata = true
+        // contextTrackEntity is preserved for the editor dialog.
+    }
+
+    fun dismissEditMetadata() {
+        showEditMetadata = false
         contextTrackEntity = null
     }
 }
@@ -83,6 +97,7 @@ fun TrackContextMenuHost(
 ) {
     val context = LocalContext.current
     val shareTrack = rememberShareTrack()
+    val editMetadata = rememberEditTrackMetadata()
     val track = state.contextTrack
     val entity = state.contextTrackEntity
 
@@ -91,6 +106,11 @@ fun TrackContextMenuHost(
             track = track,
             onDismiss = { state.dismiss() },
             onShare = { shareTrack(entity) },
+            // Local files only — editing a streaming track's title/artist would
+            // break the resolution that keys on them.
+            onEditMetadata = if (entity.resolver == "localfiles") {
+                { state.openEditMetadata() }
+            } else null,
             onPlayNext = {
                 onPlayNext(entity)
                 Toast.makeText(context, "Playing next: ${entity.title}", Toast.LENGTH_SHORT).show()
@@ -119,6 +139,14 @@ fun TrackContextMenuHost(
                     Toast.makeText(context, "Removed from playlist", Toast.LENGTH_SHORT).show()
                 }
             } else null,
+        )
+    }
+
+    if (state.showEditMetadata && entity != null) {
+        EditMetadataDialog(
+            track = entity,
+            onSave = { title, artist, album -> editMetadata(entity, title, artist, album) },
+            onDismiss = { state.dismissEditMetadata() },
         )
     }
 

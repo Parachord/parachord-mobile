@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Person
@@ -93,6 +94,7 @@ fun TrackContextMenu(
     onToggleCollection: () -> Unit,
     onRemoveFromPlaylist: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    onEditMetadata: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -205,6 +207,16 @@ fun TrackContextMenu(
                     icon = Icons.Filled.Album,
                     label = "Go to Album",
                     onClick = { onGoToAlbum(); onDismiss() },
+                )
+            }
+
+            // Edit Metadata — local files only (gated by the host); editing a
+            // streaming track's title/artist would break resolution.
+            if (onEditMetadata != null) {
+                ContextMenuItem(
+                    icon = Icons.Filled.Edit,
+                    label = "Edit Metadata",
+                    onClick = { onEditMetadata() },
                 )
             }
 
