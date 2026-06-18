@@ -40,6 +40,15 @@ final class FriendProfileModel {
 
     func loadFriend() async { friend = (try? await container.getFriend(friendId: friendId)) ?? nil }
 
+    /// Pin/unpin from the top bar (Android parity), then re-read for the icon state.
+    func togglePin() {
+        guard let f = friend else { return }
+        Task {
+            try? await container.pinFriend(friendId: f.id, pinned: !f.pinnedToSidebar)
+            friend = (try? await container.getFriend(friendId: friendId)) ?? friend
+        }
+    }
+
     func load(tab: Int, period: String) async {
         let key = tab == 3 ? "recent" : "\(tab)-\(period)"
         applyCache(tab: tab, key: key)
@@ -101,7 +110,6 @@ struct FriendProfileScreen: View {
     @State private var period = "7day"
     @State private var navArtist: String?
     @State private var navAlbum: PCAlbumRef?
-    @State private var listenAlong = ListenAlongController.shared
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     private var resolverCache = IosTrackResolverCache.shared
@@ -110,11 +118,13 @@ struct FriendProfileScreen: View {
         _model = State(initialValue: FriendProfileModel(friendId: friendId, username: username, service: service, name: name))
     }
 
-    private var isListening: Bool { model.friend.map { listenAlong.isActive($0) } ?? false }
-
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() })
+            // Pin/unpin lives in the top bar (Android parity); Listen Along is NOT
+            // on the profile (it's on the friend list rows + sidebar, like Android).
+            PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
+                     trailingIcon: model.friend?.pinnedToSidebar == true ? "pin.fill" : "pin",
+                     onTrailing: { model.togglePin() })
             header
             PCTabs(tabs: ["Top Songs", "Top Albums", "Top Artists", "Recent"], selection: $tabIndex)
             if tabIndex != 3 { periodChips }
@@ -140,39 +150,21 @@ struct FriendProfileScreen: View {
         .task(id: "\(tabIndex)-\(period)") { await model.load(tab: tabIndex, period: period) }
     }
 
-    // ── Header (avatar + now-playing + Listen Along) ───────────────────
+    // ── Header — centered, matches Android FriendDetailScreen ──────────
+    private static let onAirGreen = Color(uiColor: UIColor(hex: 0x22C55E))
+
     private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Circle().fill(PC.bgInset).frame(width: 64, height: 64)
+        VStack(spacing: 6) {
+            Circle().fill(PC.bgInset).frame(width: 80, height: 80)
                 .overlay { PCArtistImage(url: model.friend?.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: model.name, size: nil, radius: 999) } }
                 .clipShape(Circle())
-            VStack(alignment: .leading, spacing: 4) {
-                Text(model.name).font(.system(size: 19, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(1)
-                if let f = model.friend, f.isOnAir, let track = f.cachedTrackName {
-                    Text("● ON AIR").font(.system(size: 11, weight: .bold)).foregroundStyle(Color(uiColor: UIColor(hex: 0x22C55E)))
-                    Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
-                        .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                } else {
-                    Text("Listening activity from \(serviceName)")
-                        .font(.system(size: 13)).foregroundStyle(PC.fg3).lineLimit(1)
-                }
-                // You can only listen along while the friend is on air (Android
-                // parity) — but stay enabled while already listening so you can stop.
-                let canListenAlong = (model.friend?.isOnAir == true) || isListening
-                Button {
-                    if let f = model.friend { listenAlong.toggle(f) }
-                } label: {
-                    Label(isListening ? "Stop" : "Listen Along", systemImage: "headphones")
-                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 14).frame(height: 32)
-                        .background(isListening ? PC.fg3 : (canListenAlong ? PC.accent : PC.fg3.opacity(0.5)), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(!canListenAlong)
-                .padding(.top, 2)
+            if model.friend?.isOnAir == true {
+                Text("● ON AIR").font(.system(size: 11, weight: .bold)).foregroundStyle(Self.onAirGreen)
             }
-            Spacer(minLength: 0)
+            Text("@\(model.username)").font(.system(size: 13)).foregroundStyle(PC.fg2)
+            Text("Listening activity from \(serviceName)").font(.system(size: 11)).foregroundStyle(PC.fg3)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
     }
 
