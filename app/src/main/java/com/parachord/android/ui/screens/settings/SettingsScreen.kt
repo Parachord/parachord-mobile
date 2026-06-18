@@ -392,6 +392,9 @@ private fun PlugInsTab(
     val settingsViewModel: SettingsViewModel = koinViewModel()
     val axePlugins by settingsViewModel.loadedPlugins.collectAsStateWithLifecycle()
     val disabledPlugins by settingsViewModel.disabledPlugins.collectAsStateWithLifecycle()
+    // #213: per-resolver enable/disable (independent of connection). Empty = all on.
+    val activeResolvers by settingsViewModel.activeResolvers.collectAsStateWithLifecycle()
+    fun isResolverEnabled(id: String): Boolean = activeResolvers.isEmpty() || id in activeResolvers
     val allPlugins = remember(axePlugins) { buildPluginList(axePlugins) }
 
     val resolverPlugins = allPlugins.filter { it.category == PluginCategory.RESOLVER }
@@ -440,13 +443,19 @@ private fun PlugInsTab(
         }
     }
 
-    // Split resolvers into enabled (connected) and disabled (not connected).
-    // Enabled resolvers are shown in drag-to-reorder with priority numbers.
-    // Disabled resolvers are shown grayed out below.
+    // Split resolvers three ways (#213):
+    //  • enabled     — connected AND user-enabled → draggable priority list
+    //  • off         — connected but user-DISABLED → "Disabled" section (toggle back on)
+    //  • unconnected — no credentials yet → "Not connected" section
     // resolverOrder uses resolverId values (e.g. "localfiles", "spotify")
     val enabledResolverIds = resolverOrder.filter { id ->
         val plugin = findPlugin(id)
-        plugin != null && plugin.category == PluginCategory.RESOLVER && isConnected(id)
+        plugin != null && plugin.category == PluginCategory.RESOLVER &&
+            isConnected(id) && isResolverEnabled(id)
+    }
+    // Connected but turned off by the user — distinct from "not connected".
+    val offResolverPlugins = resolverPlugins.filter {
+        isConnected(it.resolverId) && !isResolverEnabled(it.resolverId)
     }
     val disabledResolverPlugins = resolverPlugins.filter { !isConnected(it.resolverId) }
 
@@ -486,6 +495,44 @@ private fun PlugInsTab(
                     },
                     onPluginClick = { id -> findPlugin(id)?.let { selectedPlugin = it } },
                 )
+            }
+        }
+
+        // Disabled resolvers — connected but turned off by the user (#213).
+        // Tap to open the config sheet and flip "Enabled" back on.
+        if (offResolverPlugins.isNotEmpty()) {
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Disabled",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 0.dp),
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            item {
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    offResolverPlugins.forEach { plugin ->
+                        PluginTile(
+                            plugin = plugin,
+                            isConnected = false,
+                            priorityNumber = null,
+                            onClick = { selectedPlugin = plugin },
+                            modifier = Modifier.width(100.dp),
+                            grayed = true,
+                        )
+                    }
+                    repeat(3 - offResolverPlugins.size) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
             }
         }
 
@@ -671,6 +718,11 @@ private fun PlugInsTab(
             plugin = plugin,
             isConnected = isConnected(plugin.id),
             onDismiss = { selectedPlugin = null },
+            isResolver = plugin.category == PluginCategory.RESOLVER,
+            resolverEnabled = isResolverEnabled(plugin.resolverId),
+            onResolverEnabledChange = { enabled ->
+                settingsViewModel.setResolverEnabled(plugin.resolverId, enabled)
+            },
             onToggleConnection = {
                 when (plugin.id) {
                     "spotify" -> onSpotifyToggle()
@@ -945,6 +997,11 @@ private fun PluginConfigSheet(
     isConnected: Boolean,
     onDismiss: () -> Unit,
     onToggleConnection: () -> Unit,
+    // #213: per-resolver enable/disable (independent of connection). Only
+    // meaningful for resolver-category plugins; shown when connected/usable.
+    isResolver: Boolean = false,
+    resolverEnabled: Boolean = true,
+    onResolverEnabledChange: (Boolean) -> Unit = {},
     scrobbling: Boolean,
     onScrobblingChanged: (Boolean) -> Unit,
     soundCloudCredentialsSaved: Boolean = false,
@@ -1081,6 +1138,32 @@ private fun PluginConfigSheet(
                         fontWeight = FontWeight.SemiBold,
                         color = if (isConnected) Success else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+
+            // #213: per-resolver Enabled toggle — turn a resolver off WITHOUT
+            // disconnecting it. Shown for connected/usable resolvers only;
+            // gates the resolver via active_resolvers (playback + badges),
+            // leaving credentials + metadata untouched.
+            if (isResolver && isConnected) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Enabled",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = "Use this resolver for playback",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = resolverEnabled, onCheckedChange = onResolverEnabledChange)
                 }
             }
 
