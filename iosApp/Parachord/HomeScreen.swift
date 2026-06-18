@@ -260,7 +260,7 @@ struct HomeScreen: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     ForEach(entries, id: \.id) { entry in
-                        NavigationLink(value: PCRoute.playlist(id: entry.id, title: "\(entry.weekLabel) · \(entry.kind)")) {
+                        NavigationLink(value: PCRoute.playlist(id: entry.id, title: "\(entry.kind) · \(entry.dateLabel)")) {
                             weeklyCard(entry)
                         }
                         .buttonStyle(.plain)

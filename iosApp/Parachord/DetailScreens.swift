@@ -484,8 +484,18 @@ struct AlbumScreen: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
-            pcCover(model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12)
-                .shadow(color: .black.opacity(0.18), radius: 9, y: 6)
+            // #206: shimmer skeleton while the album DETAIL is still loading
+            // (artworkUrl is nil until the fetch returns, so pcCover would
+            // otherwise show the gradient placeholder, not a skeleton). Once
+            // detail lands, pcCover's cached-image path handles skeleton→art.
+            Group {
+                if model.isLoading && !model.loaded {
+                    PCSkeletonBox(radius: 12).frame(width: 132, height: 132)
+                } else {
+                    pcCover(model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12)
+                }
+            }
+            .shadow(color: .black.opacity(0.18), radius: 9, y: 6)
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.title).font(.system(size: 21, weight: .semibold)).foregroundStyle(PC.fg1)
                 Button { navArtist = model.artist } label: {

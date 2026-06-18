@@ -72,12 +72,24 @@ struct RecommendationsScreen: View {
     private let sources: [(key: String, label: String)] =
         [("all", "All"), ("listenbrainz", "ListenBrainz"), ("lastfm", "Last.fm")]
 
-    private func matchSource(_ s: String) -> Bool {
-        source == "all" || s.lowercased().replacingOccurrences(of: ".", with: "").contains(source)
+    /// True if a record's source string matches a chip key (dot-insensitive,
+    /// so "Last.fm"/"lastfm" both match "lastfm").
+    private func sourceMatches(_ s: String, _ key: String) -> Bool {
+        key == "all" || s.lowercased().replacingOccurrences(of: ".", with: "").contains(key)
     }
-    private var filteredArtists: [RecommendedArtist] { model.artists.filter { matchSource($0.source) } }
+    /// Items (artists + songs) available for a source key — drives chip counts
+    /// AND chip visibility (a source with zero items shows no chip, so the
+    /// filter can never strand the page on an empty source). Mirrors Android.
+    private func sourceCount(_ key: String) -> Int {
+        model.artists.filter { sourceMatches($0.source, key) }.count
+            + model.tracks.filter { sourceMatches($0.source, key) }.count
+    }
+    /// The selected source, falling back to "all" if it currently has no items
+    /// (e.g. a chip disappeared on refresh).
+    private var effectiveSource: String { sourceCount(source) > 0 ? source : "all" }
+    private var filteredArtists: [RecommendedArtist] { model.artists.filter { sourceMatches($0.source, effectiveSource) } }
     private var filteredSongs: [(track: RecommendedTrack, entity: Track)] {
-        Array(zip(model.tracks, model.entities)).filter { matchSource($0.0.source) }.map { (track: $0.0, entity: $0.1) }
+        Array(zip(model.tracks, model.entities)).filter { sourceMatches($0.0.source, effectiveSource) }.map { (track: $0.0, entity: $0.1) }
     }
 
     private var bannerCount: String? {
@@ -120,10 +132,13 @@ struct RecommendationsScreen: View {
     private var sourceChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(sources, id: \.key) { s in
-                    let on = source == s.key
+                // Only show a source chip when it has items (All always shown) —
+                // never present a dead filter that empties the page (#207).
+                ForEach(sources.filter { $0.key == "all" || sourceCount($0.key) > 0 }, id: \.key) { s in
+                    let on = effectiveSource == s.key
+                    let label = s.key == "all" ? s.label : "\(s.label) \(sourceCount(s.key))"
                     Button { source = s.key } label: {
-                        Text(s.label).font(.system(size: 13, weight: .medium))
+                        Text(label).font(.system(size: 13, weight: .medium))
                             .foregroundStyle(on ? .white : PC.fg1)
                             .padding(.horizontal, 14).padding(.vertical, 6)
                             .background(on ? PC.accent : PC.bgInset, in: Capsule())
@@ -142,7 +157,7 @@ struct RecommendationsScreen: View {
             Text("Based on your listening").font(.system(size: 12, weight: .medium))
                 .foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 2)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 18) {
-                ForEach(Array(filteredArtists.enumerated()), id: \.offset) { _, a in
+                ForEach(filteredArtists, id: \.name) { a in
                     NavigationLink(value: PCRoute.artist(a.name)) {
                         VStack(spacing: 6) {
                             artistSquare(a)
@@ -180,7 +195,7 @@ struct RecommendationsScreen: View {
     // ── Songs tab: track list (resolver pipeline per row) ──────────────
     private var songsList: some View {
         LazyVStack(spacing: 0) {
-            ForEach(Array(filteredSongs.enumerated()), id: \.offset) { index, pair in
+            ForEach(Array(filteredSongs.enumerated()), id: \.element.entity.id) { index, pair in
                 Button {
                     coordinator.setQueue(filteredSongs.map { $0.entity }, startIndex: index,
                                          context: PlaybackContext(type: "recommendations", name: "Recommended Songs", id: nil))
