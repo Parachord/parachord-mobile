@@ -1,5 +1,6 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverRuntime
@@ -47,6 +48,7 @@ class IosResolverRuntime(
     private val settingsStore: SettingsStore,
     private val httpClient: HttpClient,
     private val appleMusicDeveloperToken: String,
+    private val trackDao: TrackDao,
 ) : ResolverRuntime {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -54,7 +56,9 @@ class IosResolverRuntime(
     // plain counter is race-free — there is no true parallelism.
     private var callCounter = 0
 
-    override val nativeResolverIds = setOf("applemusic")
+    // localfiles joins the native set (#219) — resolved from the scanned
+    // device-library rows in the DB, played via AVPlayer (no .axe / network).
+    override val nativeResolverIds = setOf("applemusic", "localfiles")
 
     override suspend fun resolveNative(
         resolverId: String,
@@ -62,15 +66,40 @@ class IosResolverRuntime(
         targetTitle: String?,
         targetArtist: String?,
         album: String?,
-    ): ResolvedSource? =
+    ): ResolvedSource? = when (resolverId) {
         // Blank dev token → skip (parity with the pre-#210 fan-out's
         // `amAvailable = … && appleMusicDeveloperToken.isNotBlank()` gate, and
         // with resolveSingle's gate) — avoids a wasted empty-Bearer catalog call.
-        if (resolverId == "applemusic" && appleMusicDeveloperToken.isNotBlank()) {
+        "applemusic" -> if (appleMusicDeveloperToken.isNotBlank()) {
             resolveAppleMusicNative(targetArtist ?: "", targetTitle ?: "")
-        } else {
-            null
-        }
+        } else null
+        "localfiles" -> resolveLocalFileNative(targetTitle, targetArtist)
+        else -> null
+    }
+
+    /**
+     * Native localfiles resolution (#219) — exact, case-insensitive title+artist
+     * match against the scanned device-library rows in the DB; deterministic 1.0
+     * confidence (Android parity, AndroidResolverRuntime.resolveLocalFile). The
+     * sourceUrl is the MPMediaItem `assetURL` (file://) the scanner persisted, which
+     * AVPlayer plays directly (PlaybackRouter already routes "localfiles" → avPlayer).
+     */
+    private suspend fun resolveLocalFileNative(targetTitle: String?, targetArtist: String?): ResolvedSource? {
+        if (targetTitle.isNullOrBlank() || targetArtist.isNullOrBlank()) return null
+        val track = trackDao.findLocalFile(targetTitle, targetArtist) ?: return null
+        val sourceUrl = track.sourceUrl ?: return null
+        return ResolvedSource(
+            url = sourceUrl,
+            sourceType = "local",
+            resolver = "localfiles",
+            confidence = 1.0,
+            matchedTitle = track.title,
+            matchedArtist = track.artist,
+            matchedDurationMs = track.duration,
+            isrc = com.parachord.shared.resolver.validateIsrc(track.isrc),
+            artworkUrl = track.artworkUrl,
+        )
+    }
 
     override suspend fun resolveAxe(
         resolverId: String,

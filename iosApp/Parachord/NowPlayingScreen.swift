@@ -71,7 +71,8 @@ struct PCNowPlaying: View {
                         // top-anchored — these spacers collapse there).
                         if hSize == .regular { Spacer(minLength: 0) }
                         pcCover(track.flatMap { pcTrackArt($0.artworkUrl, artist: $0.artist, title: $0.title, album: $0.album) },
-                                seed: track?.title ?? "P", size: nil, radius: 14)
+                                seed: track?.title ?? "P", size: nil, radius: 14,
+                                resolving: track.map { pcTrackResolving(artist: $0.artist, title: $0.title, album: $0.album) } ?? false)
                             // Cap the art so the transport, resolver deck and
                             // bottom actions stay on-screen above the Up-Next
                             // peek; larger cap on iPad so it isn't tiny in the
@@ -539,7 +540,8 @@ struct PCQueuePanel: View {
             HStack(spacing: 12) {
                 Text("\(idx + 1)").font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.4)).frame(width: 24, alignment: .trailing)
-                pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title, size: 38, radius: 6)
+                pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title, size: 38, radius: 6,
+                        resolving: pcTrackResolving(artist: t.artist, title: t.title, album: t.album))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(t.title).font(.system(size: 14, weight: .medium))
                         .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? Color.white.opacity(0.4) : .white).lineLimit(1)

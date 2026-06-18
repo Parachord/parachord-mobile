@@ -364,6 +364,65 @@ class IosContainer private constructor() {
     suspend fun addAlbumToCollection(album: Album) { albumDao.insert(album) }
     suspend fun addArtistToCollection(artist: Artist) { artistDao.insert(artist) }
 
+    /**
+     * Persist a batch of scanned device-library tracks (#219). Upserts by the
+     * stable id (`local-<persistentID>`) so a re-scan refreshes in place, then
+     * fires MBID enrichment per track in the background (which also drives online
+     * artwork enrichment for files with no embedded art — Android parity).
+     */
+    suspend fun addLocalTracks(tracks: List<Track>) {
+        // Full replace of the SCANNED set: a re-scan reflects the CURRENT Music
+        // library. Prune existing scanned rows (id prefix "local-") no longer in
+        // the scan — a track deleted from the device, OR one now filtered out as
+        // DRM-protected (.movpkg/.m4p). Imported files ("fileimport-" prefix) are
+        // a SEPARATE, additive set and must survive a re-scan, so the prune is
+        // scoped to scanned ids only. NOTE: must run even when `tracks` is empty
+        // (a library of only DRM Apple Music downloads scans to zero), so there
+        // is NO early return.
+        val keepIds = tracks.map { it.id }.toSet()
+        val stale = trackDao.getAll().first()
+            .filter { it.resolver == "localfiles" && it.id.startsWith("local-") && it.id !in keepIds }
+        for (t in stale) trackDao.delete(t)
+        if (tracks.isNotEmpty()) trackDao.insertAll(tracks)
+        for (t in tracks) mbidEnrichmentService.enrichInBackground(t.id, t.artist, t.title)
+    }
+
+    /**
+     * Add user-imported local audio files (Files app → document picker). ADDITIVE
+     * — unlike [addLocalTracks] (a full replace of the Music-library scan),
+     * imported files persist until the user explicitly removes them, so this
+     * never prunes. Imported rows carry the "fileimport-" id prefix so a Music
+     * library re-scan leaves them untouched. Each track's sourceUrl is a `file://`
+     * URL in the app sandbox, which AVPlayer plays natively (no DRM, no
+     * ipod-library:// round-trip).
+     */
+    suspend fun addImportedFiles(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        trackDao.insertAll(tracks)
+        for (t in tracks) mbidEnrichmentService.enrichInBackground(t.id, t.artist, t.title)
+    }
+
+    /**
+     * In-app metadata edit for a track row (iOS local-files tag editor). Reads the
+     * existing row, overwrites only title/artist/album (every other field —
+     * sourceUrl, streaming IDs, MBIDs, artwork — is preserved via copy), and
+     * persists. This is the metadata Parachord displays / resolves / scrobbles;
+     * it does NOT rewrite the on-disk file's tags. Re-fires MBID enrichment for
+     * the corrected title/artist. Primarily for `localfiles` tracks (whose import
+     * metadata is often just a filename), but works for any row by id.
+     */
+    suspend fun updateTrackMetadata(id: String, title: String, artist: String, album: String?) {
+        val existing = trackDao.getAll().first().firstOrNull { it.id == id } ?: return
+        val t = title.trim().ifBlank { existing.title }
+        val a = artist.trim().ifBlank { "Unknown Artist" }
+        val al = album?.trim()?.ifBlank { null }
+        trackDao.update(existing.copy(title = t, artist = a, album = al))
+        mbidEnrichmentService.enrichInBackground(id, a, t)
+    }
+
+    /** Number of scanned local-library tracks currently in the DB (Settings display). */
+    suspend fun localTrackCount(): Int = trackDao.getAll().first().count { it.resolver == "localfiles" }
+
     // Remove from collection — LOCAL ONLY. #194 wires SyncEngine.onTrackRemoved
     // (remote remove + tombstone) in here so removals propagate + don't re-import.
     suspend fun removeTrackFromCollection(track: Track) { trackDao.delete(track) }
@@ -1041,6 +1100,7 @@ class IosContainer private constructor() {
             settingsStore = settingsStore,
             httpClient = httpClient,
             appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
+            trackDao = trackDao,
         )
     }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import Shared
 
 // MARK: - Settings (full, tabbed) — Plug-ins / General / About
@@ -665,6 +666,8 @@ private struct PluginConfigSheet: View {
     @State private var draft = ""
     @State private var secretDraft = ""
     @State private var spotifyIdDraft = ""
+    @State private var scanner = MediaLibraryScanner.shared
+    @State private var showImporter = false
 
     private var isAi: Bool { ["chatgpt", "claude", "gemini"].contains(service.id) }
 
@@ -732,7 +735,7 @@ private struct PluginConfigSheet: View {
                 case "lastfm": lastFmSection
                 case "librefm": libreFmSection
                 case "applemusic": infoSection("Apple Music is authorized at playback time via MusicKit. No key needed.")
-                case "localfiles": infoSection("Local files are scanned from your device's music library automatically.")
+                case "localfiles": localFilesSection
                 case "bandcamp": infoSection("Bandcamp needs no credentials — it resolves and opens tracks in the browser.")
                 // No key required (matches Android's toggle-only Discogs) — the
                 // public API works unauthenticated; a token would only raise rate
@@ -750,6 +753,56 @@ private struct PluginConfigSheet: View {
                 draft = model.values[service.id] ?? ""
                 spotifyIdDraft = model.spotifyClientId
             }
+        }
+    }
+
+    @ViewBuilder private var localFilesSection: some View {
+        Section {
+            Text("Play local songs two ways: scan your device's Music library (downloaded, non-DRM tracks only), or import audio files from the Files app — iOS sandboxing hides Files-app audio from the library scan, so a downloaded WAV/MP3 needs Import.")
+                .font(.system(size: 13)).foregroundStyle(PC.fg2)
+            switch scanner.phase {
+            case .requesting:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Requesting access…") }
+            case .scanning(let done, let total):
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Scanning… \(done)/\(total)") }
+            case .importing(let done, let total):
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Importing… \(done)/\(total)") }
+            case .imported(let n):
+                Text("Imported \(n) file\(n == 1 ? "" : "s").").font(.system(size: 13)).foregroundStyle(PC.fg3)
+            case .denied:
+                Text("Music access denied. Enable it in iOS Settings › Privacy › Media & Apple Music.")
+                    .font(.system(size: 13)).foregroundStyle(.red)
+            case .failed(let m):
+                Text("Failed: \(m)").font(.system(size: 13)).foregroundStyle(.red)
+            case .done(let n):
+                Text("Scanned \(n) tracks.").font(.system(size: 13)).foregroundStyle(PC.fg3)
+            case .idle:
+                if scanner.libraryCount > 0 {
+                    Text("\(scanner.libraryCount) local tracks in your library.").font(.system(size: 13)).foregroundStyle(PC.fg3)
+                }
+            }
+            Button { scanner.scan() } label: {
+                Label(scanner.libraryCount > 0 ? "Re-scan Library" : "Scan Music Library",
+                      systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(localFilesBusy)
+            Button { showImporter = true } label: {
+                Label("Import Files…", systemImage: "folder.badge.plus")
+            }
+            .disabled(localFilesBusy)
+            .fileImporter(isPresented: $showImporter,
+                          allowedContentTypes: [.audio],
+                          allowsMultipleSelection: true) { result in
+                if case .success(let urls) = result, !urls.isEmpty { scanner.importFiles(urls) }
+            }
+        }
+        .onAppear { scanner.refreshCount() }
+    }
+
+    private var localFilesBusy: Bool {
+        switch scanner.phase {
+        case .scanning, .requesting, .importing: return true
+        default: return false
         }
     }
 

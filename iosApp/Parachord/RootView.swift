@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var playback = AppPlayback()
     @State private var theme = ThemeObserver()
     @State private var creator = PlaylistCreator.shared
+    @State private var metaEditor = TrackMetadataEditor.shared
     @State private var listenAlong = ListenAlongController.shared
     @State private var tab: PCTab = .home
     @State private var showSidebar = false
@@ -188,6 +189,12 @@ struct ContentView: View {
             TextField("Playlist name", text: Binding(get: { creator.name }, set: { creator.name = $0 }))
             Button("Cancel", role: .cancel) { creator.showing = false }
             Button("Create") { creator.create() }
+        }
+        // In-app track metadata editor (#248), hosted once at the root so the
+        // track context menu's "Edit Metadata" can present it (a contextMenu
+        // can't host its own sheet).
+        .sheet(isPresented: Binding(get: { metaEditor.showing }, set: { metaEditor.showing = $0 })) {
+            TrackMetadataEditorSheet(editor: metaEditor)
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.

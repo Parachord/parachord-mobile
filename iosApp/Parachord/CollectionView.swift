@@ -339,7 +339,8 @@ struct CollectionView: View {
                                               context: PlaybackContext(type: "collection", name: "Collection", id: nil)) } label: {
                     HStack(spacing: 12) {
                         pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
-                                seed: t.title + t.artist, size: 44, radius: 6)
+                                seed: t.title + t.artist, size: 44, radius: 6,
+                                resolving: pcTrackResolving(artist: t.artist, title: t.title, album: t.album))
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(coordinator.currentTrack?.id == t.id ? PC.accent : PC.fg1).lineLimit(1)

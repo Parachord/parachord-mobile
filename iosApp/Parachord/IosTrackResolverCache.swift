@@ -139,6 +139,15 @@ final class IosTrackResolverCache {
         cache[ResolveRequest(artist: artist, title: title, album: album).key]
     }
 
+    /// True while a full resolve for this key is in flight and has NOT yet produced
+    /// a cached result — drives the art skeleton (e.g. after a metadata edit, the
+    /// new title/artist key re-resolves and art appears once it lands). `@Observable`
+    /// tracks `cache`/`inFlight`, so a view reading this re-renders when either flips.
+    func isResolving(artist: String, title: String, album: String?) -> Bool {
+        let key = ResolveRequest(artist: artist, title: title, album: album).key
+        return cache[key] == nil && inFlight.contains(key)
+    }
+
     /// Submit ONE track for resolution with a priority `order` (its row index).
     /// Lower `order` resolves first → top-down. Skips already-cached, in-flight,
     /// or already-queued keys. Call from a row's `.onAppear` so only visible
