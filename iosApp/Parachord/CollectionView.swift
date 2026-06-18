@@ -245,7 +245,9 @@ struct CollectionView: View {
     // right (mirrors Android's CollectionFilterBar). ──────────────────────
     private var sortBar: some View {
         HStack(spacing: 8) {
-            Button { cycleSort() } label: {
+            Menu {
+                sortMenuItems
+            } label: {
                 HStack(spacing: 4) {
                     Text(currentSortLabel).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
                     Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(PC.fg2)
@@ -301,21 +303,31 @@ struct CollectionView: View {
         }
     }
 
-    private func cycleSort() {
+    /// Sort options for the active tab — a real dropdown (was a tap-to-cycle
+    /// button that confused the chevron-down affordance). Checkmarks the active one.
+    @ViewBuilder private var sortMenuItems: some View {
         switch tab {
         case .songs:
-            let all = CollectionTrackSort.allCases
-            model.trackSort = all[(all.firstIndex(of: model.trackSort)! + 1) % all.count]
+            ForEach(CollectionTrackSort.allCases, id: \.self) { s in
+                Button { model.trackSort = s } label: { sortItemLabel(s.label, s == model.trackSort) }
+            }
         case .albums:
-            let all = CollectionAlbumSort.allCases
-            model.albumSort = all[(all.firstIndex(of: model.albumSort)! + 1) % all.count]
+            ForEach(CollectionAlbumSort.allCases, id: \.self) { s in
+                Button { model.albumSort = s } label: { sortItemLabel(s.label, s == model.albumSort) }
+            }
         case .artists:
-            let all = CollectionArtistSort.allCases
-            model.artistSort = all[(all.firstIndex(of: model.artistSort)! + 1) % all.count]
+            ForEach(CollectionArtistSort.allCases, id: \.self) { s in
+                Button { model.artistSort = s } label: { sortItemLabel(s.label, s == model.artistSort) }
+            }
         case .friends:
-            let all = CollectionFriendSort.allCases
-            model.friendSort = all[(all.firstIndex(of: model.friendSort)! + 1) % all.count]
+            ForEach(CollectionFriendSort.allCases, id: \.self) { s in
+                Button { model.friendSort = s } label: { sortItemLabel(s.label, s == model.friendSort) }
+            }
         }
+    }
+
+    @ViewBuilder private func sortItemLabel(_ text: String, _ selected: Bool) -> some View {
+        if selected { Label(text, systemImage: "checkmark") } else { Text(text) }
     }
 
     // ── Songs (list + resolver badges + context menu) ──────────────────
