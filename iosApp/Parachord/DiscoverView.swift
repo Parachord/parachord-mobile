@@ -210,7 +210,7 @@ struct DiscoverView: View {
         NavigationLink {
             PlaylistDetailView(
                 playlistId: entry.id,
-                title: "\(entry.weekLabel) · \(entry.kind)"
+                title: "\(entry.kind) · \(entry.dateLabel)"
             )
         } label: {
             VStack(alignment: .leading, spacing: 3) {
