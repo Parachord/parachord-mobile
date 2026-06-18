@@ -468,7 +468,9 @@ struct CollectionView: View {
                     Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
                         .font(.system(size: 13)).foregroundStyle(Color(uiColor: UIColor(hex: 0x10B981))).lineLimit(1)
                 } else if let track = f.cachedTrackName {
-                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                    // Offline: last track + when they were last active (Android parity).
+                    let ago = f.cachedTrackTimestamp > 0 ? " · \(pcTimeAgo(f.cachedTrackTimestamp))" : ""
+                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")\(ago)")
                         .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                 } else {
                     Text("Offline").font(.system(size: 13)).foregroundStyle(PC.fg3)
@@ -477,6 +479,20 @@ struct CollectionView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    }
+
+    /// Relative "last active" label — port of Android FriendsScreen.formatTimeAgo.
+    /// `timestampSeconds` is seconds-since-epoch (Friend.cachedTrackTimestamp).
+    private func pcTimeAgo(_ timestampSeconds: Int64) -> String {
+        let diff = Int64(Date().timeIntervalSince1970) - timestampSeconds
+        switch diff {
+        case ..<60:     return "Just now"
+        case ..<3600:   return "\(diff / 60)m ago"
+        case ..<86400:  return "\(diff / 3600)h ago"
+        case ..<172800: return "Yesterday"
+        case ..<604800: return "\(diff / 86400)d ago"
+        default:        return "\(diff / 604800)w ago"
+        }
     }
 
     private func serviceBadge(_ service: String) -> (String, Color) {
