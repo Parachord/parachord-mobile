@@ -70,6 +70,13 @@ class SpotifyAuthTokenProvider(
 class SpotifyTokenRefresher(
     private val settingsStore: SettingsStore,
     private val authHttpClient: HttpClient,
+    /**
+     * Invoked once when a refresh fails terminally (dead grant). The host
+     * (IosContainer) flips its reauth-required signal so the UI can surface a
+     * reconnect banner — the iOS equivalent of Android's
+     * `OAuthManager.spotifyReauthRequired` StateFlow.
+     */
+    private val onReauthRequired: () -> Unit = {},
 ) : OAuthTokenRefresher {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -116,6 +123,7 @@ class SpotifyTokenRefresher(
                 ) {
                     Log.w(TAG, "Spotify refresh token dead ($errorCode) — discarding tokens, reauth required")
                     settingsStore.clearSpotifyTokens()
+                    onReauthRequired()
                 } else {
                     Log.w(TAG, "Spotify token refresh failed (${response.status.value}): $body")
                 }
