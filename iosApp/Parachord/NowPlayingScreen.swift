@@ -348,32 +348,53 @@ struct PCNowPlaying: View {
         .buttonStyle(.plain)
     }
 
-    private var upNextPeek: some View {
-        let next = coordinator.upNext.first
-        return Button { withAnimation(.spring(duration: 0.32)) { showQueue = true } } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "chevron.up").font(.system(size: 14)).foregroundStyle(.white.opacity(0.5))
-                Text("UP NEXT").font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(.white.opacity(0.5))
-                Spacer()
-                Text(next.map { "\($0.title) · \($0.artist)" } ?? "End of queue")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-            }
-            .padding(.horizontal, 22).padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .background(.white.opacity(0.03))
-            .overlay(Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5), alignment: .top)
-        }
-        .buttonStyle(.plain)
-        // Swipe up on the peek also opens the queue (highPriority so it wins
-        // over the sheet's swipe-DOWN-to-close drag on the root).
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 12)
-                .onEnded { v in
-                    if v.translation.height < -30 {
-                        withAnimation(.spring(duration: 0.32)) { showQueue = true }
-                    }
+    @ViewBuilder private var upNextPeek: some View {
+        // While listening along, the bottom peek shows "Listening along with X" in
+        // green and links to the friend's profile (in addition to the queue's
+        // context banner). Otherwise it's the normal Up-Next peek that opens the queue.
+        if let ctx = coordinator.playbackContext, ctx.type == "listen-along" {
+            let green = Color(uiColor: UIColor(hex: 0x34D399))
+            Button { onNavigateToContext(ctx) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "headphones").font(.system(size: 13)).foregroundStyle(green)
+                    Text("LISTENING ALONG WITH \(ctx.name.uppercased())")
+                        .font(.system(size: 11, weight: .semibold)).tracking(1).foregroundStyle(green).lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(green.opacity(0.85))
                 }
-        )
+                .padding(.horizontal, 22).padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .background(green.opacity(0.08))
+                .overlay(Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5), alignment: .top)
+            }
+            .buttonStyle(.plain)
+        } else {
+            let next = coordinator.upNext.first
+            Button { withAnimation(.spring(duration: 0.32)) { showQueue = true } } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.up").font(.system(size: 14)).foregroundStyle(.white.opacity(0.5))
+                    Text("UP NEXT").font(.system(size: 11, weight: .semibold)).tracking(1.5).foregroundStyle(.white.opacity(0.5))
+                    Spacer()
+                    Text(next.map { "\($0.title) · \($0.artist)" } ?? "End of queue")
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                }
+                .padding(.horizontal, 22).padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .background(.white.opacity(0.03))
+                .overlay(Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5), alignment: .top)
+            }
+            .buttonStyle(.plain)
+            // Swipe up on the peek also opens the queue (highPriority so it wins
+            // over the sheet's swipe-DOWN-to-close drag on the root).
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 12)
+                    .onEnded { v in
+                        if v.translation.height < -30 {
+                            withAnimation(.spring(duration: 0.32)) { showQueue = true }
+                        }
+                    }
+            )
+        }
     }
 }
 

@@ -38,7 +38,22 @@ final class FriendProfileModel {
         self.friendId = friendId; self.username = username; self.service = service; self.name = name
     }
 
-    func loadFriend() async { friend = (try? await container.getFriend(friendId: friendId)) ?? nil }
+    func loadFriend() async {
+        // DB-cached friend first (instant), then refresh activity so the on-air
+        // now-playing track is CURRENT — the cached copy may be stale or empty
+        // until the periodic 2-min refresh runs, so opening a profile would show
+        // no "now playing" (and you couldn't tell what you'd listen along to).
+        let base = (try? await container.getFriend(friendId: friendId)) ?? nil
+        friend = base
+        guard let cur = base else {
+            // Transient (deeplink) friend isn't in the DB — fetch their now-playing.
+            friend = (try? await container.fetchTransientFriendNowPlaying(service: service, user: username)) ?? nil
+            return
+        }
+        if let refreshed = (try? await container.refreshFriendActivity(friend: cur)) ?? nil {
+            friend = refreshed
+        }
+    }
 
     /// Pin/unpin from the top bar (Android parity), then re-read for the icon state.
     func togglePin() {
@@ -113,6 +128,8 @@ struct FriendProfileScreen: View {
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     private var resolverCache = IosTrackResolverCache.shared
+    /// Observed so the Listen Along button's label flips Start↔Stop reactively.
+    @State private var listenAlong = ListenAlongController.shared
 
     init(friendId: String, username: String, service: String, name: String) {
         _model = State(initialValue: FriendProfileModel(friendId: friendId, username: username, service: service, name: name))
@@ -120,8 +137,9 @@ struct FriendProfileScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Pin/unpin lives in the top bar (Android parity); Listen Along is NOT
-            // on the profile (it's on the friend list rows + sidebar, like Android).
+            // Pin/unpin lives in the top bar (Android parity). Listen Along sits in
+            // the header below — shown ONLY when the friend is on air (or already
+            // being listened-along with, so you can stop).
             PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
                      trailingIcon: model.friend?.pinnedToSidebar == true ? "pin.fill" : "pin",
                      onTrailing: { model.togglePin() })
@@ -160,9 +178,32 @@ struct FriendProfileScreen: View {
                 .clipShape(Circle())
             if model.friend?.isOnAir == true {
                 Text("● ON AIR").font(.system(size: 11, weight: .bold)).foregroundStyle(Self.onAirGreen)
+                // What they're listening to right now (Android parity — the friend's
+                // cached now-playing track, shown in on-air green).
+                if let track = model.friend?.cachedTrackName, !track.isEmpty {
+                    Text("♫ \(track)\(model.friend?.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Self.onAirGreen)
+                        .lineLimit(1)
+                        .padding(.horizontal, 24)
+                }
             }
             Text("@\(model.username)").font(.system(size: 13)).foregroundStyle(PC.fg2)
             Text("Listening activity from \(serviceName)").font(.system(size: 11)).foregroundStyle(PC.fg3)
+            // Listen Along — on air only (or active, to stop). Gating matches the
+            // friend rows + sidebar; the controller is already bound to the coordinator.
+            if let f = model.friend, f.isOnAir || listenAlong.isActive(f) {
+                let active = listenAlong.isActive(f)
+                Button { listenAlong.toggle(f) } label: {
+                    Label(active ? "Stop Listening Along" : "Listen Along", systemImage: "headphones")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 9)
+                        .background(active ? PC.fg3 : Self.onAirGreen, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)

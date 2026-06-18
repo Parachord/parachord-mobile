@@ -339,16 +339,27 @@ struct PCSidebar: View {
         Text("Friends").font(.system(size: 11, weight: .bold)).tracking(1.6).textCase(.uppercase)
             .foregroundStyle(PC.fg3).padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 6)
         ForEach(friends.pinned, id: \.id) { f in
-            Button { onFriendProfile(f) } label: { friendRow(f) }
-            .buttonStyle(.plain)
-            .contextMenu {
-                Button { onFriendProfile(f) } label: { Label("View Profile", systemImage: "person.crop.circle") }
-                if f.isOnAir {  // listen-along only when they're on air (Android parity)
-                    Button { onListenAlong(f); onClose() } label: { Label("Listen Along", systemImage: "headphones") }
+            // Plain tappable row (NOT a Button) + .contextMenu: a Button inside this
+            // custom slide-in overlay swallows the long-press so the context menu
+            // never opens. onTapGesture keeps the tap-to-profile while leaving the
+            // long-press free for the menu (matches the CollectionView pattern that
+            // works because it sits on a NavigationLink).
+            friendRow(f)
+                .contentShape(Rectangle())
+                .onTapGesture { onFriendProfile(f) }
+                .contextMenu {
+                    Button { onFriendProfile(f) } label: { Label("View Profile", systemImage: "person.crop.circle") }
+                    // Listen along only while on air (Android parity); keep it
+                    // available to STOP if already listening along with them.
+                    if f.isOnAir || ListenAlongController.shared.isActive(f) {
+                        Button { onListenAlong(f); onClose() } label: {
+                            Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along",
+                                  systemImage: "headphones")
+                        }
+                    }
+                    Button { friends.unpin(f) } label: { Label("Unpin", systemImage: "pin.slash") }
+                    Button(role: .destructive) { friends.remove(f) } label: { Label("Remove", systemImage: "trash") }
                 }
-                Button { friends.unpin(f) } label: { Label("Unpin", systemImage: "pin.slash") }
-                Button(role: .destructive) { friends.remove(f) } label: { Label("Remove", systemImage: "trash") }
-            }
         }
     }
 
