@@ -243,9 +243,38 @@ struct PCAddSheet: View {
 
 // MARK: - Sidebar drawer
 
+/// Watches the PINNED friends (sidebar FRIENDS section, #235). Pinned set is
+/// driven by manual pins + the app-level on-air auto-pin cycle (RootView).
+@MainActor
+@Observable
+final class SidebarFriendsModel {
+    private let container = IosContainer.companion.shared
+    private var sub: Cancellable?
+    var pinned: [Friend] = []
+
+    func start() {
+        guard sub == nil else { return }
+        sub = container.watchPinnedFriends { [weak self] list in
+            // On-air first, then most-recently-active (mirrors Android DrawerContent).
+            let sorted = list.sorted {
+                if $0.isOnAir != $1.isOnAir { return $0.isOnAir && !$1.isOnAir }
+                return $0.cachedTrackTimestamp > $1.cachedTrackTimestamp
+            }
+            Task { @MainActor in self?.pinned = sorted }
+        }
+    }
+
+    func unpin(_ f: Friend) { Task { try? await container.pinFriend(friendId: f.id, pinned: false) } }
+    func remove(_ f: Friend) { Task { try? await container.removeFriend(friendId: f.id) } }
+}
+
 struct PCSidebar: View {
     let onNav: (String) -> Void
     let onClose: () -> Void
+    /// Start Listen Along with a pinned friend (#235). Wired in ContentView.
+    var onListenAlong: (Friend) -> Void = { _ in }
+
+    @State private var friends = SidebarFriendsModel()
 
     private struct Row: Identifiable { let id: String; let label: String; let icon: String; let color: Color }
 
@@ -270,6 +299,7 @@ struct PCSidebar: View {
                 .padding(.horizontal, 24).padding(.top, 4).padding(.bottom, 22)
             group("Your Music", yourMusic)
             group("Discover", discover)
+            if !friends.pinned.isEmpty { friendsSection }
             Spacer(minLength: 0)
             Divider()
             Button { onNav("settings") } label: {
@@ -287,6 +317,63 @@ struct PCSidebar: View {
         .background(PC.bgPrimary)
         .clipShape(.rect(bottomTrailingRadius: 28, topTrailingRadius: 28))
         .shadow(color: .black.opacity(0.24), radius: 14, x: 6)
+        .task { friends.start() }
+    }
+
+    // ── FRIENDS section (#235) — pinned friends, on-air first ──────────
+    private static let onAirGreen = Color(uiColor: UIColor(hex: 0x22C55E))
+
+    @ViewBuilder private var friendsSection: some View {
+        Text("Friends").font(.system(size: 11, weight: .bold)).tracking(1.6).textCase(.uppercase)
+            .foregroundStyle(PC.fg3).padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 6)
+        ForEach(friends.pinned, id: \.id) { f in
+            Button {
+                onListenAlong(f)
+                onClose()
+            } label: { friendRow(f) }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button { onListenAlong(f); onClose() } label: { Label("Listen Along", systemImage: "headphones") }
+                Button { friends.unpin(f) } label: { Label("Unpin", systemImage: "pin.slash") }
+                Button(role: .destructive) { friends.remove(f) } label: { Label("Remove", systemImage: "trash") }
+            }
+        }
+    }
+
+    @ViewBuilder private func friendRow(_ f: Friend) -> some View {
+        HStack(spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                friendAvatar(f, size: 36)
+                if f.isOnAir {
+                    Circle().fill(PC.bgPrimary).frame(width: 13, height: 13)
+                        .overlay(Circle().fill(Self.onAirGreen).frame(width: 9, height: 9))
+                        .offset(x: 2, y: 2)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(f.displayName).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                if f.isOnAir, let track = f.cachedTrackName {
+                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                        .font(.system(size: 11)).foregroundStyle(Self.onAirGreen).lineLimit(1)
+                } else if let track = f.cachedTrackName {
+                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                        .font(.system(size: 11)).foregroundStyle(PC.fg3).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24).padding(.vertical, 9)
+    }
+
+    @ViewBuilder private func friendAvatar(_ f: Friend, size: CGFloat) -> some View {
+        Circle().fill(PC.bgInset)
+            .frame(width: size, height: size)
+            .overlay {
+                PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) {
+                    PCArtwork(name: f.displayName, size: nil, radius: 999)
+                }
+            }
+            .clipShape(Circle())
     }
 
     @ViewBuilder private func group(_ header: String, _ rows: [Row]) -> some View {

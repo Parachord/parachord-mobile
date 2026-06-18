@@ -106,6 +106,9 @@ final class CollectionModel {
 
     /// Refresh each friend's cached now-playing (fire-and-forget in the repo).
     func refreshFriends() { container.refreshFriendsActivity() }
+    /// Import friends from LB/Last.fm into the local DB (mirrors Android's
+    /// FriendsViewModel.init), then the reactive flow shows them.
+    func syncFriends() { container.syncFriends() }
 
     // Each `sorted*` view filters by `searchQuery` first, then sorts — same
     // fields Android filters on (LibraryViewModel.sorted{Tracks,Albums,Artists}
@@ -168,6 +171,7 @@ final class CollectionModel {
     func removeAlbum(_ a: Album)   { Task { try? await container.removeAlbumFromCollection(album: a) } }
     func removeArtist(_ a: Artist) { Task { try? await container.removeArtistFromCollection(artist: a) } }
     func removeFriend(_ f: Friend) { Task { try? await container.removeFriend(friendId: f.id) } }
+    func pinFriend(_ f: Friend, _ pinned: Bool) { Task { try? await container.pinFriend(friendId: f.id, pinned: pinned) } }
 }
 
 // Tab order mirrors Android LibraryScreen + the iOS design (Artists, Albums,
@@ -223,7 +227,7 @@ struct CollectionView: View {
         .task { model.start() }
         // Refresh friend now-playing whenever the Friends tab is shown (mirrors
         // Android's activity refresh). Cheap + gated by the repo's rate guards.
-        .onChange(of: tab) { _, t in if t == .friends { model.refreshFriends() } }
+        .onChange(of: tab) { _, t in if t == .friends { model.syncFriends(); model.refreshFriends() } }
         // Consume a shell-requested sub-tab (#209 queue-source banner → Songs).
         .onChange(of: pendingTab, initial: true) { _, t in
             if let t { tab = t; pendingTab = nil }
@@ -241,7 +245,9 @@ struct CollectionView: View {
     // right (mirrors Android's CollectionFilterBar). ──────────────────────
     private var sortBar: some View {
         HStack(spacing: 8) {
-            Button { cycleSort() } label: {
+            Menu {
+                sortMenuItems
+            } label: {
                 HStack(spacing: 4) {
                     Text(currentSortLabel).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
                     Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(PC.fg2)
@@ -297,21 +303,31 @@ struct CollectionView: View {
         }
     }
 
-    private func cycleSort() {
+    /// Sort options for the active tab — a real dropdown (was a tap-to-cycle
+    /// button that confused the chevron-down affordance). Checkmarks the active one.
+    @ViewBuilder private var sortMenuItems: some View {
         switch tab {
         case .songs:
-            let all = CollectionTrackSort.allCases
-            model.trackSort = all[(all.firstIndex(of: model.trackSort)! + 1) % all.count]
+            ForEach(CollectionTrackSort.allCases, id: \.self) { s in
+                Button { model.trackSort = s } label: { sortItemLabel(s.label, s == model.trackSort) }
+            }
         case .albums:
-            let all = CollectionAlbumSort.allCases
-            model.albumSort = all[(all.firstIndex(of: model.albumSort)! + 1) % all.count]
+            ForEach(CollectionAlbumSort.allCases, id: \.self) { s in
+                Button { model.albumSort = s } label: { sortItemLabel(s.label, s == model.albumSort) }
+            }
         case .artists:
-            let all = CollectionArtistSort.allCases
-            model.artistSort = all[(all.firstIndex(of: model.artistSort)! + 1) % all.count]
+            ForEach(CollectionArtistSort.allCases, id: \.self) { s in
+                Button { model.artistSort = s } label: { sortItemLabel(s.label, s == model.artistSort) }
+            }
         case .friends:
-            let all = CollectionFriendSort.allCases
-            model.friendSort = all[(all.firstIndex(of: model.friendSort)! + 1) % all.count]
+            ForEach(CollectionFriendSort.allCases, id: \.self) { s in
+                Button { model.friendSort = s } label: { sortItemLabel(s.label, s == model.friendSort) }
+            }
         }
+    }
+
+    @ViewBuilder private func sortItemLabel(_ text: String, _ selected: Bool) -> some View {
+        if selected { Label(text, systemImage: "checkmark") } else { Text(text) }
     }
 
     // ── Songs (list + resolver badges + context menu) ──────────────────
@@ -408,6 +424,15 @@ struct CollectionView: View {
             ForEach(items, id: \.id) { f in
                 friendRow(f)
                     .contextMenu {
+                        Button { ListenAlongController.shared.toggle(f) } label: {
+                            Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along",
+                                  systemImage: "headphones")
+                        }
+                        if f.pinnedToSidebar {
+                            Button { model.pinFriend(f, false) } label: { Label("Unpin from Sidebar", systemImage: "pin.slash") }
+                        } else {
+                            Button { model.pinFriend(f, true) } label: { Label("Pin to Sidebar", systemImage: "pin") }
+                        }
                         Button(role: .destructive) { model.removeFriend(f) } label: {
                             Label("Remove Friend", systemImage: "person.badge.minus")
                         }
@@ -443,7 +468,9 @@ struct CollectionView: View {
                     Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
                         .font(.system(size: 13)).foregroundStyle(Color(uiColor: UIColor(hex: 0x10B981))).lineLimit(1)
                 } else if let track = f.cachedTrackName {
-                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                    // Offline: last track + when they were last active (Android parity).
+                    let ago = f.cachedTrackTimestamp > 0 ? " · \(pcTimeAgo(f.cachedTrackTimestamp))" : ""
+                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")\(ago)")
                         .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                 } else {
                     Text("Offline").font(.system(size: 13)).foregroundStyle(PC.fg3)
@@ -452,6 +479,20 @@ struct CollectionView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    }
+
+    /// Relative "last active" label — port of Android FriendsScreen.formatTimeAgo.
+    /// `timestampSeconds` is seconds-since-epoch (Friend.cachedTrackTimestamp).
+    private func pcTimeAgo(_ timestampSeconds: Int64) -> String {
+        let diff = Int64(Date().timeIntervalSince1970) - timestampSeconds
+        switch diff {
+        case ..<60:     return "Just now"
+        case ..<3600:   return "\(diff / 60)m ago"
+        case ..<86400:  return "\(diff / 3600)h ago"
+        case ..<172800: return "Yesterday"
+        case ..<604800: return "\(diff / 86400)d ago"
+        default:        return "\(diff / 604800)w ago"
+        }
     }
 
     private func serviceBadge(_ service: String) -> (String, Color) {

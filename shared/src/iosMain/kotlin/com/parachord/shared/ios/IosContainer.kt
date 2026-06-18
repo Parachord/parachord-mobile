@@ -288,6 +288,43 @@ class IosContainer private constructor() {
     suspend fun removeFriend(friendId: String) { friendsRepository.removeFriend(friendId) }
     suspend fun pinFriend(friendId: String, pinned: Boolean) { friendsRepository.pinFriend(friendId, pinned) }
 
+    // ── #235 Listen Along & Friends ────────────────────────────────────
+    /** Import the user's ListenBrainz following + Last.fm friends into the local
+     *  DB (mirrors Android's FriendsViewModel.init). Without this the Collection
+     *  Friends tab / sidebar stay empty even when LB/Last.fm are connected — the
+     *  reactive flows only ever show what's been imported. Fire-and-forget. */
+    fun syncFriends() { appScope.launch { runCatching { friendsRepository.syncFriendsFromServices() } } }
+
+    /** Pinned friends only — drives the sidebar FRIENDS section (mirrors Android's
+     *  DrawerContent). Sorted on-air-first in the UI. */
+    fun watchPinnedFriends(onEach: (List<Friend>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(friendsRepository.getPinnedFriends()) { onEach((it as? List<Friend>) ?: emptyList()) }
+
+    /** App-level On-Air trigger (mirrors Android MainViewModel's 2-min cycle):
+     *  refresh every friend's now-playing, then auto-pin on-air / auto-unpin offline
+     *  so currently-listening friends surface into the sidebar. Fire-and-forget. */
+    fun refreshFriendsAndAutoPin() {
+        appScope.launch {
+            runCatching {
+                friendsRepository.refreshAllActivity()
+                friendsRepository.updateAutoPins()
+            }
+        }
+    }
+
+    suspend fun getFriend(friendId: String): Friend? = friendsRepository.getFriendById(friendId)
+
+    /** Refresh one saved friend's cached now-playing + re-read the row (listen-along poll). */
+    suspend fun refreshFriendActivity(friend: Friend): Friend? {
+        friendsRepository.refreshFriendActivity(friend)
+        return friendsRepository.getFriendById(friend.id)
+    }
+
+    /** Now-playing for a friend NOT in the local DB (deeplink listen-along). Synthetic,
+     *  non-persisted; null when they aren't currently listening. */
+    suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
+        friendsRepository.fetchTransientFriendNowPlaying(service, user)
+
     // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
     fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(trackDao.existsByTitleAndArtist(title, artist)) { onEach((it as? Boolean) ?: false) }
