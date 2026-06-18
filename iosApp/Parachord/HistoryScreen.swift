@@ -160,7 +160,14 @@ struct HistoryScreen: View {
     // ── Top Songs (list) ───────────────────────────────────────────────
     private var topSongs: some View {
         LazyVStack(spacing: 0) {
-            ForEach(Array(model.topTracks.enumerated()), id: \.offset) { i, t in
+            // zip(topTracks, trackEntities) so the row's entity comes from the SAME
+            // sequence as `t` — never a parallel index into trackEntities, which
+            // crashed (Index out of range) when a period-filter change updated the
+            // two @Observable arrays in separate writes and a render interleaved
+            // with topTracks longer than trackEntities. zip truncates to the
+            // shorter, so a transient mismatch just renders fewer rows for a frame.
+            ForEach(Array(zip(model.topTracks, model.trackEntities).enumerated()), id: \.offset) { i, pair in
+                let (t, entity) = pair
                 Button { coordinator.setQueue(model.trackEntities, startIndex: i,
                                               context: PlaybackContext(type: "history", name: "Top Songs", id: nil)) } label: {
                     HStack(spacing: 12) {
@@ -169,7 +176,7 @@ struct HistoryScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
-                                    : (coordinator.currentTrack?.id == model.trackEntities[i].id ? PC.accent : PC.fg1)).lineLimit(1)
+                                    : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1)).lineLimit(1)
                             Text("\(t.artist) · \(plays(t.playCount))").font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                         }
                         Spacer(minLength: 8)
@@ -181,7 +188,7 @@ struct HistoryScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(artist: t.artist, title: t.title, album: t.album, index: i) }
-                .pcTrackContextMenu(model.trackEntities[i], coordinator: coordinator,
+                .pcTrackContextMenu(entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })
             }
@@ -241,7 +248,10 @@ struct HistoryScreen: View {
     // ── Recent (list) ──────────────────────────────────────────────────
     private var recentList: some View {
         LazyVStack(spacing: 0) {
-            ForEach(Array(model.recent.enumerated()), id: \.offset) { i, t in
+            // zip so the entity comes from the same sequence (see Top Songs) —
+            // avoids the parallel recentEntities[i] index-out-of-range crash.
+            ForEach(Array(zip(model.recent, model.recentEntities).enumerated()), id: \.offset) { i, pair in
+                let (t, entity) = pair
                 Button { coordinator.setQueue(model.recentEntities, startIndex: i,
                                               context: PlaybackContext(type: "history", name: "Recently Played", id: nil)) } label: {
                     HStack(spacing: 12) {
@@ -249,7 +259,7 @@ struct HistoryScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text((t.nowPlaying ? "▶ " : "") + t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) && !t.nowPlaying ? PC.fg3
-                                    : (t.nowPlaying ? PC.accent : (coordinator.currentTrack?.id == model.recentEntities[i].id ? PC.accent : PC.fg1))).lineLimit(1)
+                                    : (t.nowPlaying ? PC.accent : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1))).lineLimit(1)
                             HStack(spacing: 6) {
                                 Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                                 if !t.source.isEmpty {
@@ -269,7 +279,7 @@ struct HistoryScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(artist: t.artist, title: t.title, album: t.album, index: i) }
-                .pcTrackContextMenu(model.recentEntities[i], coordinator: coordinator,
+                .pcTrackContextMenu(entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })
             }
