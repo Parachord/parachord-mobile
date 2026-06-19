@@ -284,6 +284,8 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
     val isOnline by mainViewModel.isOnline.collectAsStateWithLifecycle()
     val friends by mainViewModel.friends.collectAsStateWithLifecycle()
     val listenAlongFriend by mainViewModel.listenAlongFriend.collectAsStateWithLifecycle()
+    val listenAlongSuspendedQueue by mainViewModel.listenAlongSuspendedQueue.collectAsStateWithLifecycle()
+    val listenAlongCanAdvance by mainViewModel.listenAlongFriendIsAhead.collectAsStateWithLifecycle()
 
     // Observe toast events from ViewModel (listen-along notifications, etc.)
     val context = LocalContext.current
@@ -654,6 +656,9 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                         },
                         listenAlongFriend = listenAlongFriend,
                         onStopListenAlong = { mainViewModel.stopListenAlong() },
+                        listenAlongSuspendedQueue = listenAlongSuspendedQueue,
+                        listenAlongCanAdvance = listenAlongCanAdvance,
+                        onListenAlongNext = { mainViewModel.advanceToFriend() },
                     )
 
                     // Right-edge swipe zone — swipe left from the right edge to open chat.

@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -271,8 +272,9 @@ class MainViewModel constructor(
         }
     }
 
-    /** Track key of last played track to avoid replaying the same one. */
-    private var lastListenAlongTrackKey: String? = null
+    /** Track key of last played track to avoid replaying the same one. Observable
+     *  so [listenAlongFriendIsAhead] re-derives when we catch up to a new song. */
+    private val _lastListenAlongKey = MutableStateFlow<String?>(null)
 
     /** Pending track to play when current finishes (desktop: listenAlongPendingTrackRef). */
     private var pendingListenAlongTrack: TrackEntity? = null
@@ -284,14 +286,52 @@ class MainViewModel constructor(
     private var isListenAlongPlayback = false
 
     /**
+     * The user's queue suspended while listening along — restored on disconnect
+     * ("YOUR QUEUE" suspend/resume, desktop parity). Captured ONCE on entering
+     * listen-along, preserved across friend-switches, cleared on restore.
+     */
+    private data class QueueSuspension(val tracks: List<TrackEntity>, val context: PlaybackContext?)
+    private var suspendedQueue: QueueSuspension? = null
+    private val _listenAlongSuspendedQueue = MutableStateFlow<List<TrackEntity>>(emptyList())
+    /** Shown dimmed as "YOUR QUEUE" in the queue sheet while listening along. */
+    val listenAlongSuspendedQueue: StateFlow<List<TrackEntity>> = _listenAlongSuspendedQueue
+
+    /** While listening along: true when the friend has moved to a track DIFFERENT
+     *  from the one we're playing — Now Playing's Next button is enabled (catch up);
+     *  false when in sync (Next disabled). Re-derives when the friend's now-playing
+     *  changes (15s poll) OR when we catch up ([_lastListenAlongKey]). */
+    val listenAlongFriendIsAhead: StateFlow<Boolean> =
+        combine(_listenAlongFriend, _lastListenAlongKey) { friend, lastKey ->
+            val name = friend?.cachedTrackName
+            val artist = friend?.cachedTrackArtist
+            if (friend?.isOnAir == true && name != null && artist != null) {
+                "${name.lowercase()}|${artist.lowercase()}" != lastKey
+            } else {
+                false
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Catch up to the friend's CURRENT track (Now Playing's Next button while
+     *  listening along). No-op when already in sync. */
+    fun advanceToFriend() {
+        val friend = _listenAlongFriend.value ?: return
+        viewModelScope.launch { playFriendCurrentTrack(friend, immediate = true) }
+    }
+
+    /**
      * Start listening along with a friend.
      * Resolves their current track and plays it, then polls every 15s
      * to follow track changes (mirrors desktop behavior).
      */
     fun startListenAlong(friend: FriendEntity) {
-        stopListenAlong(silent = true)
+        // Light teardown of any prior poll WITHOUT restoring the suspended queue —
+        // switching friends stays in listen-along and keeps the same suspension.
+        listenAlongJob?.cancel()
+        listenAlongJob = null
+        // Suspend the user's queue the FIRST time we enter listen-along.
+        if (suspendedQueue == null) captureSuspendedQueue()
         _listenAlongFriend.value = friend
-        lastListenAlongTrackKey = null
+        _lastListenAlongKey.value = null
         pendingListenAlongTrack = null
         deferredStopFriendName = null
 
@@ -371,12 +411,17 @@ class MainViewModel constructor(
         }
     }
 
-    fun stopListenAlong(silent: Boolean = false) {
+    /**
+     * Stop listening along. [restore] = true (manual stop, friend offline, friend
+     * idle at song-end) RESUMES the user's suspended queue; false (the user took
+     * control by playing something else) DISCARDS it so we don't clobber their choice.
+     */
+    fun stopListenAlong(silent: Boolean = false, restore: Boolean = true) {
         val friendName = _listenAlongFriend.value?.displayName
         listenAlongJob?.cancel()
         listenAlongJob = null
         _listenAlongFriend.value = null
-        lastListenAlongTrackKey = null
+        _lastListenAlongKey.value = null
         pendingListenAlongTrack = null
         deferredStopFriendName = null
         isListenAlongPlayback = false
@@ -384,11 +429,33 @@ class MainViewModel constructor(
             listenAlongWakeLock.release()
             Log.d(TAG, "Released WakeLock for listen-along polling")
         }
+        // Resume (or discard) the user's suspended queue. Friend is already cleared
+        // above, so the playQueue below won't recursively stop via onUserPlaybackAction.
+        val s = suspendedQueue
+        suspendedQueue = null
+        _listenAlongSuspendedQueue.value = emptyList()
+        if (restore && s != null) {
+            if (s.tracks.isNotEmpty()) playbackController.playQueue(s.tracks, 0, s.context)
+            else playbackController.clearQueue()
+        }
         if (!silent && friendName != null) {
             viewModelScope.launch {
                 _toastEvents.emit("Stopped listening along with $friendName")
             }
         }
+    }
+
+    /** Snapshot the user's current queue (current track + up-next + context) before
+     *  listen-along replaces it. Empty snapshot when nothing was playing. */
+    private fun captureSuspendedQueue() {
+        val state = playbackState.value
+        if (state.playbackContext?.type == "listen-along") {
+            suspendedQueue = QueueSuspension(emptyList(), null)
+            return
+        }
+        val tracks = listOfNotNull(state.currentTrack) + state.upNext
+        suspendedQueue = QueueSuspension(tracks, state.playbackContext)
+        _listenAlongSuspendedQueue.value = tracks
     }
 
     /**
@@ -398,7 +465,8 @@ class MainViewModel constructor(
     private fun onUserPlaybackAction() {
         if (isListenAlongPlayback) return // Listen-along driving playback, not the user
         if (_listenAlongFriend.value != null) {
-            stopListenAlong()
+            // User chose new playback — keep it; DON'T restore the suspended queue over it.
+            stopListenAlong(restore = false)
         }
     }
 
@@ -431,8 +499,8 @@ class MainViewModel constructor(
         val trackKey = "${trackName.lowercase()}|${trackArtist.lowercase()}"
 
         // Don't re-play the same track
-        if (trackKey == lastListenAlongTrackKey) return
-        lastListenAlongTrackKey = trackKey
+        if (trackKey == _lastListenAlongKey.value) return
+        _lastListenAlongKey.value = trackKey
 
         try {
             // Listen-along friend tracks must pass the resolver confidence

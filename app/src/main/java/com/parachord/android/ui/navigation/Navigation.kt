@@ -75,6 +75,9 @@ fun ParachordNavHost(
     onListenAlong: (com.parachord.android.data.db.entity.FriendEntity) -> Unit = {},
     listenAlongFriend: com.parachord.android.data.db.entity.FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
+    listenAlongSuspendedQueue: List<com.parachord.android.data.db.entity.TrackEntity> = emptyList(),
+    listenAlongCanAdvance: Boolean = false,
+    onListenAlongNext: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     NavHost(
@@ -251,6 +254,9 @@ fun ParachordNavHost(
                 },
                 listenAlongFriend = listenAlongFriend,
                 onStopListenAlong = onStopListenAlong,
+                suspendedQueue = listenAlongSuspendedQueue,
+                listenAlongCanAdvance = listenAlongCanAdvance,
+                onListenAlongNext = onListenAlongNext,
             )
         }
         composable(Routes.SETTINGS) {

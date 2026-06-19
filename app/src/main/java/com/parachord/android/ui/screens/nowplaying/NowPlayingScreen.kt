@@ -88,6 +88,14 @@ fun NowPlayingScreen(
     onNavigateToPlaylist: (playlistId: String) -> Unit = {},
     listenAlongFriend: FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
+    /** The user's suspended queue while listening along — shown dimmed as "YOUR
+     *  QUEUE" (the active queue is cleared during listen-along). */
+    suspendedQueue: List<com.parachord.android.data.db.entity.TrackEntity> = emptyList(),
+    /** While listening along: true when the friend is ahead (Next catches up);
+     *  false when in sync (Next disabled). */
+    listenAlongCanAdvance: Boolean = false,
+    /** Catch up to the friend's current song (Next while listening along). */
+    onListenAlongNext: () -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: NowPlayingViewModel = koinViewModel(),
 ) {
@@ -100,6 +108,10 @@ fun NowPlayingScreen(
     val isOnTour by viewModel.isOnTour.collectAsStateWithLifecycle()
     val track = playbackState.currentTrack
     val upNext = playbackState.upNext
+    // While listening along, Next catches up to the friend's current song when
+    // they're ahead, and is DISABLED when in sync (nothing to advance to).
+    val inListenAlong = playbackState.playbackContext?.type == "listen-along"
+    val canAdvanceNext = !inListenAlong || listenAlongCanAdvance
     val scope = rememberCoroutineScope()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val contextMenuState = rememberTrackContextMenuState()
@@ -152,7 +164,9 @@ fun NowPlayingScreen(
         modifier = modifier,
         sheetContent = {
             QueueSheet(
-                upNext = upNext,
+                // During listen-along the active queue is cleared — show the
+                // SUSPENDED queue dimmed as "YOUR QUEUE" (it resumes on disconnect).
+                upNext = if (playbackState.playbackContext?.type == "listen-along") suspendedQueue else upNext,
                 playbackContext = playbackState.playbackContext,
                 onPlayFromQueue = { viewModel.playFromQueue(it) },
                 onMoveInQueue = { from, to -> viewModel.moveInQueue(from, to) },
@@ -308,7 +322,10 @@ fun NowPlayingScreen(
                     onDoubleTapLove = {
                         track?.let { viewModel.addToCollection(it) }
                     },
-                    onSwipeNext = { viewModel.skipNext() },
+                    onSwipeNext = {
+                        if (inListenAlong) { if (listenAlongCanAdvance) onListenAlongNext() }
+                        else viewModel.skipNext()
+                    },
                     onSwipePrevious = { viewModel.skipPrevious() },
                     placeholderName = track?.artist ?: track?.title,
                     modifier = Modifier
@@ -504,11 +521,13 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    // Skip Next
+                    // Skip Next — catch up to the friend while listening along.
                     IconButton(
-                        onClick = { haptic(); viewModel.skipNext() },
+                        onClick = { haptic(); if (inListenAlong) onListenAlongNext() else viewModel.skipNext() },
+                        enabled = canAdvanceNext,
                         colors = IconButtonDefaults.iconButtonColors(
                             contentColor = PlayerTextPrimary,
+                            disabledContentColor = PlayerTextPrimary.copy(alpha = 0.3f),
                         ),
                     ) {
                         Icon(
