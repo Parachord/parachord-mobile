@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var creator = PlaylistCreator.shared
     @State private var metaEditor = TrackMetadataEditor.shared
     @State private var listenAlong = ListenAlongController.shared
+    @State private var spinoff = SpinoffController.shared
     @State private var tab: PCTab = .home
     @State private var showSidebar = false
     @State private var showAdd = false
@@ -153,7 +154,7 @@ struct ContentView: View {
         .task { ResolverPrefs.shared.start() }
         // #235 Listen Along: bind the engine to the shared coordinator, and accept
         // parachord://listen-along?service=&user= deep links.
-        .onAppear { listenAlong.bind(coordinator) }
+        .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator) }
         .onOpenURL { handleListenAlongDeepLink($0) }
         // #235 On-Air triggers: refresh every friend's now-playing and auto-pin
         // on-air friends into the sidebar (auto-unpin when they go offline),

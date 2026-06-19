@@ -82,6 +82,10 @@ final class ListenAlongController {
         // suspension; only a full stop/disconnect resumes it.
         pollTask?.cancel(); pollTask = nil
         coordinator?.onTrackFinished = nil
+        // Switching from a Spinoff → Listen Along: exit the spinoff first so its
+        // separate pool tears down and the saved context is restored before we
+        // suspend for listen-along (the two modes are mutually exclusive) (#231).
+        coordinator?.exitSpinoff()
         // Suspend the user's queue the FIRST time we enter listen-along.
         if suspended == nil { captureSuspension() }
         friend = f

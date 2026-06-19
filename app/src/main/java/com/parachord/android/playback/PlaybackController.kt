@@ -1449,7 +1449,7 @@ class PlaybackController constructor(
         startSpinoffWithSeed(
             seedArtist = track.artist,
             seedTitle = track.title,
-            displayName = "Spinoff from ${track.title}",
+            displayName = "Spinoff from ${track.title} by ${track.artist}",
         )
     }
 

@@ -325,6 +325,50 @@ class IosContainer private constructor() {
     suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
         friendsRepository.fetchTransientFriendNowPlaying(service, user)
 
+    // ── Spinoff (#231) — seed-based radio pool, Android parity ──────────────
+    // Mirrors Android PlaybackController.startSpinoffWithSeed's Mode B: Last.fm
+    // `track.getsimilar` for the (artist, title) seed → metadata-only Tracks that
+    // resolve on-the-fly at play time (same lazy path as listen-along, so it stays
+    // visibility-scoped and doesn't burst the resolver — see iOS CLAUDE.md). Returns
+    // shuffled, capped, and EXCLUDING the seed itself. Empty on no-results/error so
+    // the caller can surface "no similar tracks" without starting a spinoff.
+    suspend fun spinoffPool(seedArtist: String, seedTitle: String, limit: Int = 30): List<Track> {
+        val resp = runCatching {
+            lastFmClient.getSimilarTracks(
+                track = seedTitle, artist = seedArtist,
+                apiKey = appConfig.lastFmApiKey, limit = limit,
+            )
+        }.getOrNull() ?: return emptyList()
+        val seedKey = "${seedTitle.lowercase()}|${seedArtist.lowercase()}"
+        return resp.similartracks?.track.orEmpty()
+            .mapNotNull { t ->
+                val artist = t.artist?.name ?: return@mapNotNull null
+                if ("${t.name.lowercase()}|${artist.lowercase()}" == seedKey) return@mapNotNull null
+                makeSpinoffTrack(t.name, artist)
+            }
+            .shuffled()
+    }
+
+    // Lightweight spinoff-availability probe (Android's checkSpinoffAvailability,
+    // limit=1) — does the seed have ANY Last.fm similar tracks? Throws on API error
+    // so the caller (iOS) can map a failure to "unchecked" (nil) rather than false.
+    suspend fun spinoffAvailable(seedArtist: String, seedTitle: String): Boolean {
+        val resp = lastFmClient.getSimilarTracks(
+            track = seedTitle, artist = seedArtist,
+            apiKey = appConfig.lastFmApiKey, limit = 1,
+        )
+        return !resp.similartracks?.track.isNullOrEmpty()
+    }
+
+    private fun makeSpinoffTrack(title: String, artist: String): Track = Track(
+        id = "spinoff:${title.lowercase()}|${artist.lowercase()}", title = title, artist = artist,
+        album = null, albumId = null, duration = 0, artworkUrl = null,
+        sourceType = null, sourceUrl = null, addedAt = 0,
+        resolver = null, spotifyUri = null, soundcloudId = null,
+        spotifyId = null, appleMusicId = null, isrc = null, recordingMbid = null,
+        artistMbid = null, releaseMbid = null, crossResolverEnrichedAt = null,
+    )
+
     // ── Friend profile (#235 / #196) — a friend's History, flat for Swift ──
     suspend fun getFriendTopTracks(username: String, service: String, period: String): List<HistoryTrack> {
         var out = emptyList<HistoryTrack>()
