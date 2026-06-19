@@ -25,6 +25,9 @@ import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
+import com.parachord.shared.deeplink.DeepLinkAction
+import com.parachord.shared.deeplink.DeepLinkParser
+import com.parachord.shared.deeplink.SimpleDeepLinkUri
 import com.parachord.shared.model.Friend
 import com.parachord.shared.model.Track
 import com.parachord.shared.playback.scrobbler.LastFmScrobbler
@@ -142,6 +145,30 @@ import platform.Foundation.NSBundle
 private const val TOP_TRACKS_FILE = "history_top_tracks.json"
 private const val TOP_ALBUMS_FILE = "history_top_albums.json"
 private const val TOP_ARTISTS_FILE = "history_top_artists.json"
+
+/**
+ * Flat, Swift-friendly deep-link command (#228). [kind] selects the dispatch
+ * branch on the Swift side; the rest are the payload for that kind (only the
+ * relevant fields are populated). `kind = "unsupported"` means parsed-but-
+ * deferred (protocol play / radio / import / external) or unrecognized.
+ */
+data class IosDeepLinkCommand(
+    val kind: String,
+    val artist: String? = null,
+    val title: String? = null,
+    val album: String? = null,
+    val name: String? = null,
+    val id: String? = null,
+    val query: String? = null,
+    val service: String? = null,
+    val user: String? = null,
+    val tab: String? = null,
+    val period: String? = null,
+    val prompt: String? = null,
+    val action: String? = null,
+    val level: Int = -1,
+    val shuffleOn: Boolean = false,
+)
 
 // Concert artist seed: top artists across EVERY time window, both services.
 private val CONCERT_LASTFM_PERIODS = listOf("7day", "1month", "3month", "6month", "12month", "overall")
@@ -347,6 +374,59 @@ class IosContainer private constructor() {
     }
 
     suspend fun getFriend(friendId: String): Friend? = friendsRepository.getFriendById(friendId)
+
+    // ── Deep links (#228) ───────────────────────────────────────────────
+    /**
+     * Parse a `parachord://` URL into a flat [IosDeepLinkCommand] for Swift to
+     * dispatch. Swift extracts scheme/host/path/query via `URLComponents`
+     * (reliable percent-decoding) and passes them here; the shared
+     * [DeepLinkParser] produces a [DeepLinkAction], which we flatten to a
+     * Swift-friendly DTO (the iOS guide's "flatten nested types" pattern).
+     * Returns a command with `kind = "unsupported"` for parsed-but-deferred or
+     * unrecognized links so the caller can ack honestly. Null only when the
+     * scheme isn't ours.
+     */
+    fun parseDeepLink(
+        scheme: String?,
+        host: String?,
+        path: List<String>,
+        query: Map<String, String>,
+    ): IosDeepLinkCommand? {
+        if (scheme != "parachord") return null
+        val action = DeepLinkParser.parse(SimpleDeepLinkUri(scheme, host, path, query))
+        return when (action) {
+            is DeepLinkAction.Play -> IosDeepLinkCommand("play", artist = action.artist, title = action.title)
+            is DeepLinkAction.Control -> IosDeepLinkCommand("control", action = action.action)
+            is DeepLinkAction.QueueAdd -> IosDeepLinkCommand("queueAdd", artist = action.artist, title = action.title, album = action.album)
+            is DeepLinkAction.QueueClear -> IosDeepLinkCommand("queueClear")
+            is DeepLinkAction.Shuffle -> IosDeepLinkCommand("shuffle", shuffleOn = action.enabled)
+            is DeepLinkAction.Volume -> IosDeepLinkCommand("volume", level = action.level)
+            is DeepLinkAction.ListenAlong -> IosDeepLinkCommand("listenAlong", service = action.service, user = action.user)
+            is DeepLinkAction.NavigateHome -> IosDeepLinkCommand("navHome")
+            is DeepLinkAction.NavigateArtist -> IosDeepLinkCommand("navArtist", name = action.name, tab = action.tab)
+            is DeepLinkAction.NavigateAlbum -> IosDeepLinkCommand("navAlbum", artist = action.artist, title = action.title)
+            is DeepLinkAction.NavigateLibrary -> IosDeepLinkCommand("navLibrary", tab = action.tab)
+            is DeepLinkAction.NavigateHistory -> IosDeepLinkCommand("navHistory", tab = action.tab, period = action.period)
+            is DeepLinkAction.NavigateFriend -> IosDeepLinkCommand("navFriend", id = action.id, tab = action.tab)
+            is DeepLinkAction.NavigateRecommendations -> IosDeepLinkCommand("navRecommendations", tab = action.tab)
+            is DeepLinkAction.NavigateCharts -> IosDeepLinkCommand("navCharts")
+            is DeepLinkAction.NavigateCriticalDarlings -> IosDeepLinkCommand("navCritical")
+            is DeepLinkAction.NavigatePlaylists -> IosDeepLinkCommand("navPlaylists")
+            is DeepLinkAction.NavigatePlaylist -> IosDeepLinkCommand("navPlaylist", id = action.id)
+            is DeepLinkAction.NavigateSettings -> IosDeepLinkCommand("navSettings", tab = action.tab)
+            is DeepLinkAction.NavigateSearch -> IosDeepLinkCommand("navSearch", query = action.query)
+            is DeepLinkAction.NavigateChat -> IosDeepLinkCommand("navChat", prompt = action.prompt)
+            else -> IosDeepLinkCommand("unsupported") // protocol-play / radio / import / external — follow-up
+        }
+    }
+
+    /** Build a metadata-only [Track] for a deep-link play/queue (resolved
+     *  on-the-fly at play time, like DJ-chat tracks). */
+    fun metadataTrack(artist: String, title: String, album: String?): Track = Track(
+        id = "deeplink:${title.lowercase()}|${artist.lowercase()}",
+        title = title, artist = artist, album = album, albumId = null,
+        duration = 0, artworkUrl = null, sourceType = null, sourceUrl = null, addedAt = 0,
+    )
 
     /** Refresh one saved friend's cached now-playing + re-read the row (listen-along poll). */
     suspend fun refreshFriendActivity(friend: Friend): Friend? {

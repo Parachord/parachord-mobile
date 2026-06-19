@@ -32,6 +32,10 @@ struct ContentView: View {
     /// One-shot sub-tab for the Collection tab, set when the queue-source banner
     /// links to "Collection" so it opens on Songs rather than the default. (#209)
     @State private var collectionPendingTab: CollectionTab?
+    /// Deep-link (#228): transient ack banner + the queue-mutating command
+    /// awaiting confirmation (queue add / clear).
+    @State private var dlToast: String?
+    @State private var dlConfirm: IosDeepLinkCommand?
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -183,7 +187,32 @@ struct ContentView: View {
         // #235 Listen Along: bind the engine to the shared coordinator, and accept
         // parachord://listen-along?service=&user= deep links.
         .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator); bindChatPlayback() }
-        .onOpenURL { handleListenAlongDeepLink($0) }
+        .onOpenURL { handleDeepLink($0) }
+        // Deep-link queue-mutation confirmation (#228 — parity with Android's
+        // QueueAdd/QueueClear confirm dialogs).
+        .alert("Deep link", isPresented: Binding(get: { dlConfirm != nil }, set: { if !$0 { dlConfirm = nil } })) {
+            Button("Cancel", role: .cancel) { dlConfirm = nil }
+            Button(dlConfirm?.kind == "queueClear" ? "Clear" : "Add") {
+                if let c = dlConfirm { performConfirmed(c) }
+                dlConfirm = nil
+            }
+        } message: {
+            Text(dlConfirm?.kind == "queueClear"
+                 ? "An external link wants to clear your queue."
+                 : "An external link wants to add a track to your queue:\n\n\(dlConfirm?.artist ?? "") – \(dlConfirm?.title ?? "")")
+        }
+        // Deep-link ack banner (#228) — top, auto-dismissing.
+        .overlay(alignment: .top) {
+            if let msg = dlToast {
+                Text(msg)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Capsule().fill(Color.black.opacity(0.82)))
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         // #235 On-Air triggers: refresh every friend's now-playing and auto-pin
         // on-air friends into the sidebar (auto-unpin when they go offline),
         // every 2 min — mirrors Android's MainViewModel cycle. Runs an initial
@@ -266,20 +295,115 @@ struct ContentView: View {
 
     private func closeSidebar() { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
 
-    /// `parachord://listen-along?service={lastfm|listenbrainz}&user={username}` (#235).
-    /// Fetches the (possibly non-local) friend's now-playing and starts listen-along;
-    /// no-op if they aren't currently listening.
-    private func handleListenAlongDeepLink(_ url: URL) {
-        guard url.scheme == "parachord", url.host == "listen-along" else { return }
-        let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        guard let service = comps?.queryItems?.first(where: { $0.name == "service" })?.value,
-              let user = comps?.queryItems?.first(where: { $0.name == "user" })?.value,
-              !service.isEmpty, !user.isEmpty else { return }
-        Task { @MainActor in
-            if let f = (try? await IosContainer.companion.shared
-                .fetchTransientFriendNowPlaying(service: service, user: user)) ?? nil {
-                listenAlong.start(f)
+    /// Full `parachord://` deep-link dispatch (#228). Parses via the shared
+    /// `DeepLinkParser` (through the container) and drives navigation / playback.
+    /// Protocol-play, radio, import, and external Spotify/Apple links are parsed
+    /// as `unsupported` (a follow-up ticket); listen-along (#235) keeps working.
+    private func handleDeepLink(_ url: URL) {
+        guard url.scheme == "parachord",
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        let segs = comps.path.split(separator: "/").map(String.init)
+        var query: [String: String] = [:]
+        for item in comps.queryItems ?? [] { if let v = item.value { query[item.name] = v } }
+        guard let cmd = IosContainer.companion.shared.parseDeepLink(
+            scheme: url.scheme, host: comps.host, path: segs, query: query) else { return }
+        dispatchDeepLink(cmd)
+    }
+
+    private func dispatchDeepLink(_ cmd: IosDeepLinkCommand) {
+        let coord = coordinator
+        switch cmd.kind {
+        // ── Playback ──
+        case "play":
+            guard let a = cmd.artist, let t = cmd.title else { return }
+            let track = IosContainer.companion.shared.metadataTrack(artist: a, title: t, album: cmd.album)
+            coord.setQueue([track], startIndex: 0,
+                           context: PlaybackContext(type: "deeplink", name: t, id: nil))
+            dlAck("Playing \(t)")
+        case "control":
+            switch cmd.action {
+            case "pause", "resume", "play": coord.togglePlayPause()
+            case "skip", "next": coord.skipNext()
+            case "previous": coord.skipPrevious()
+            default: break
             }
+        case "queueAdd", "queueClear": dlConfirm = cmd   // confirm first
+        case "shuffle":
+            if coord.shuffleEnabled != cmd.shuffleOn { coord.toggleShuffle() }
+            dlAck(cmd.shuffleOn ? "Shuffle on" : "Shuffle off")
+        case "volume": break   // system-level on iOS; ignored (parity with Android)
+        case "listenAlong":
+            guard let s = cmd.service, let u = cmd.user else { return }
+            dlAck("Catching up to \(u)…")
+            Task { @MainActor in
+                if let f = (try? await IosContainer.companion.shared
+                    .fetchTransientFriendNowPlaying(service: s, user: u)) ?? nil {
+                    listenAlong.start(f)
+                } else {
+                    dlAck("\(u) isn't listening on \(s) right now")
+                }
+            }
+        // ── Navigation ──
+        case "navHome": tab = .home; homePendingRoute = nil
+        case "navArtist": if let n = cmd.name { tab = .home; homePendingRoute = .artist(n) }
+        case "navAlbum": if let a = cmd.artist, let t = cmd.title { tab = .home; homePendingRoute = .album(title: t, artist: a) }
+        case "navLibrary": tab = .collection; collectionPendingTab = libraryTab(cmd.tab)
+        case "navHistory": tab = .home; homePendingRoute = .history
+        case "navFriend": if let id = cmd.id { navigateToFriend(id) }
+        case "navRecommendations": tab = .home; homePendingRoute = .recommendations
+        case "navCharts": tab = .home; homePendingRoute = .pop
+        case "navCritical": tab = .home; homePendingRoute = .critical
+        case "navPlaylists": tab = .playlists
+        case "navPlaylist": if let id = cmd.id { tab = .home; homePendingRoute = .playlist(id: id, title: "") }
+        case "navSettings": showSettings = true
+        case "navSearch": tab = .search   // query pre-fill: follow-up
+        case "navChat": withAnimation(.easeInOut(duration: 0.3)) { showChat = true }   // prompt injection: follow-up
+        case "unsupported": dlAck("That link type isn't supported yet")
+        default: break
+        }
+    }
+
+    private func performConfirmed(_ cmd: IosDeepLinkCommand) {
+        let coord = coordinator
+        switch cmd.kind {
+        case "queueAdd":
+            guard let a = cmd.artist, let t = cmd.title else { return }
+            coord.addToQueue(IosContainer.companion.shared.metadataTrack(artist: a, title: t, album: cmd.album))
+            dlAck("Added to queue: \(t)")
+        case "queueClear":
+            coord.clearQueue(); dlAck("Queue cleared")
+        default: break
+        }
+    }
+
+    private func navigateToFriend(_ id: String) {
+        Task { @MainActor in
+            if let f = (try? await IosContainer.companion.shared.getFriend(friendId: id)) ?? nil {
+                tab = .home
+                homePendingRoute = .friend(id: f.id, username: f.username, service: f.service, name: f.displayName)
+            } else {
+                dlAck("Friend not found")
+            }
+        }
+    }
+
+    private func libraryTab(_ tab: String?) -> CollectionTab? {
+        switch tab?.lowercased() {
+        case "albums": return .albums
+        case "artists": return .artists
+        case "songs", "tracks": return .songs
+        case "friends": return .friends
+        default: return nil
+        }
+    }
+
+    /// Show a transient ack banner (#228). Auto-dismisses after ~2.6s.
+    private func dlAck(_ message: String) {
+        withAnimation(.easeInOut(duration: 0.25)) { dlToast = message }
+        let shown = message
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_600_000_000)
+            if dlToast == shown { withAnimation(.easeInOut(duration: 0.25)) { dlToast = nil } }
         }
     }
 
