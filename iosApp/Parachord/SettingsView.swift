@@ -1133,9 +1133,9 @@ private final class SyncModel {
     func syncNow() async {
         guard anyOn, !syncing else { return }
         syncing = true; status = nil
-        let ok = (try? await container.syncNow())?.boolValue ?? false
+        let err = (try? await container.syncNow()) ?? "Sync error"   // "" = success
         syncing = false
-        status = ok ? "Synced" : "Sync failed"
+        status = err.isEmpty ? "Synced ✓" : "Failed: \(err)"
     }
 }
 

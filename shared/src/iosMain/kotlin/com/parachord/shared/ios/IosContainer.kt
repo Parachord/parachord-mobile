@@ -371,8 +371,41 @@ class IosContainer private constructor() {
     }
 
     /** Run a full sync (gated internally on Settings → sync enabled). Returns
-     *  true on success. Safe to call from a foreground timer / "Sync now". */
-    suspend fun syncNow(): Boolean = syncEngine.syncAll().success
+     *  the empty string on success, else the error message (so "Sync now" can
+     *  surface WHY it failed instead of a generic toast). Safe to call from the
+     *  foreground timer (which ignores the result). */
+    suspend fun syncNow(): String {
+        ensureListenBrainzUsername()
+        val r = syncEngine.syncAll()
+        return if (r.success) {
+            Log.i("IosSync", "Sync OK")
+            ""
+        } else {
+            Log.w("IosSync", "Sync failed: ${r.error}")
+            r.error ?: "Sync failed"
+        }
+    }
+
+    /**
+     * LB sync needs BOTH the token and the username. The plugin config derives
+     * the username from the token via `validateToken` on entry, but if that
+     * didn't stick (token entered before that was wired, or a transient validate
+     * failure) the username is blank and LB sync can't fetch the user's
+     * playlists. Re-derive + persist it here so a sync self-heals. No-op when the
+     * token is absent or the username is already known.
+     */
+    private suspend fun ensureListenBrainzUsername() {
+        val token = settingsStore.getListenBrainzToken()
+        if (token.isNullOrBlank()) return
+        if (!settingsStore.getListenBrainzUsername().isNullOrBlank()) return
+        val username = try { listenBrainzClient.validateToken(token) } catch (e: Exception) { null }
+        if (!username.isNullOrBlank()) {
+            settingsStore.setListenBrainzUsername(username)
+            Log.i("IosSync", "Derived ListenBrainz username from token")
+        } else {
+            Log.w("IosSync", "Could not derive ListenBrainz username — token may be invalid")
+        }
+    }
 
     /** Sweep expired track tombstones once per launch (Android parity). */
     suspend fun pruneTombstonesOnLaunch() {
