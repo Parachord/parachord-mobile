@@ -15,6 +15,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -289,6 +290,93 @@ class IosResolverRuntime(
             matchedArtist = attrs["artistName"]?.jsonPrimitive?.contentOrNull,
             artworkUrl = artwork,
         )
+    }
+
+    /** The plugin's model `setting` object, read SYNCHRONOUSLY from the loaded
+     *  `.axe` (a property read, no Promise) — `{type, default, options, fallbackOptions}`. */
+    private suspend fun readModelSetting(pluginId: String): JsonObject? {
+        val raw = jsRuntime.evaluate(
+            """
+            (function() {
+                var r = window.__resolverLoader.getResolver('$pluginId');
+                var m = (r && r.settings && r.settings.configurable && r.settings.configurable.model)
+                     || (r && r.configurable && r.configurable.model);
+                return m ? JSON.stringify(m) : 'null';
+            })()
+            """.trimIndent(),
+        )
+        return if (raw != null && raw != "null") runCatching { json.parseToJsonElement(raw).jsonObject }.getOrNull() else null
+    }
+
+    /** The plugin's default model id — desktop seeds the picker with this
+     *  (`metaServiceConfigs[id].model || modelSetting.default`, app.js:59532). */
+    suspend fun aiModelDefault(pluginId: String): String =
+        readModelSetting(pluginId)?.get("default")?.jsonPrimitive?.contentOrNull ?: ""
+
+    /**
+     * Model list for an AI `.axe` plugin, mirroring desktop's render precedence
+     * (app.js ~L59519): a `dynamic-select` plugin fetches live via `listModels`,
+     * falling back to the plugin's curated `fallbackOptions` when that's empty/keyless;
+     * a static `select` plugin shows its curated `options`. All marketplace-driven.
+     */
+    suspend fun aiModels(pluginId: String, apiKey: String): List<String> {
+        val setting = readModelSetting(pluginId)
+        fun opts(field: String): List<String> =
+            setting?.get(field)?.jsonArray?.mapNotNull {
+                runCatching { it.jsonObject["value"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+            }.orEmpty()
+        return if (setting?.get("type")?.jsonPrimitive?.contentOrNull == "dynamic-select") {
+            val dynamic = if (apiKey.isNotBlank()) listModelsDynamic(pluginId, apiKey) else emptyList()
+            dynamic.ifEmpty { opts("fallbackOptions") }
+        } else {
+            opts("options")
+        }
+    }
+
+    /**
+     * Run an AI `.axe` plugin's `listModels(config)` via the SAME JSC unique-key
+     * polling as [resolveOne] (a bare `(async()=>)()` returns `[object Promise]` on
+     * JavaScriptCore). The plugin owns the provider's model API + filtering — this
+     * is just the host glue, so iOS shares the marketplace `.axe` like Android does.
+     * Returns the model ids the plugin reports; [] on no key / error.
+     */
+    private suspend fun listModelsDynamic(pluginId: String, apiKey: String): List<String> {
+        val key = "lm_${callCounter++}"
+        val k = apiKey.jsEsc()
+        jsRuntime.evaluate(
+            """
+            (function() {
+                window.__resolveResults = window.__resolveResults || {};
+                window.__resolveResults['$key'] = 'pending';
+                (async () => {
+                    try {
+                        var r = window.__resolverLoader.getResolver('$pluginId');
+                        if (!r || !r.listModels) { window.__resolveResults['$key'] = 'null'; return; }
+                        var result = await r.listModels({ apiKey: '$k' });
+                        window.__resolveResults['$key'] = result ? JSON.stringify(result) : 'null';
+                    } catch (e) {
+                        window.__resolveResults['$key'] = 'error:' + ((e && e.message) ? e.message : String(e));
+                    }
+                })();
+            })();
+            """.trimIndent(),
+        )
+        repeat(POLL_ATTEMPTS) {
+            delay(POLL_INTERVAL_MS)
+            val raw = jsRuntime.evaluate("window.__resolveResults['$key']")
+            if (raw != null && raw != "pending") {
+                jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
+                if (raw == "null" || raw.startsWith("error:")) return emptyList()
+                // The .axe returns [{value,label}, …] (or bare strings) — take the value.
+                return runCatching {
+                    json.parseToJsonElement(raw).jsonArray.mapNotNull { el ->
+                        runCatching { el.jsonObject["value"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                            ?: runCatching { el.jsonPrimitive.contentOrNull }.getOrNull()
+                    }
+                }.getOrElse { emptyList() }
+            }
+        }
+        return emptyList()
     }
 
     private fun String.jsEsc(): String = replace("\\", "\\\\").replace("'", "\\'")

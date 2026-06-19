@@ -408,5 +408,10 @@ private fun ChatMessage.toEntity(providerId: String): ChatMessageRecord {
         toolCallsJson = toolCallsJsonStr,
         toolCallId = toolCallId,
         toolName = toolName,
+        // MUST stamp the real time — ChatMessageRecord defaults to 0L, and
+        // ensureLoaded() prunes timestamp < now-30d on every load, so a 0
+        // timestamp means the message is deleted on the next load (history is
+        // never remembered across sessions, on either platform).
+        timestamp = currentTimeMillis(),
     )
 }

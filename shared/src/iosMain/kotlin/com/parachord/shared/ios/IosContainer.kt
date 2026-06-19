@@ -75,6 +75,17 @@ import com.parachord.shared.repository.FreshDrop
 import com.parachord.shared.repository.FreshDropsRepository
 import com.parachord.shared.repository.FriendsRepository
 import com.parachord.shared.repository.RecommendationsRepository
+import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiChatService
+import com.parachord.shared.ai.AiProviderConfig
+import com.parachord.shared.ai.ChatCardEnricher
+import com.parachord.shared.ai.ChatContextProvider
+import com.parachord.shared.ai.ChatMessage
+import com.parachord.shared.ai.ChatPlaybackSnapshot
+import com.parachord.shared.ai.providers.ChatGptProvider
+import com.parachord.shared.ai.providers.ClaudeProvider
+import com.parachord.shared.ai.providers.GeminiProvider
+import com.parachord.shared.db.dao.ChatMessageDao
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverCoordinator
 import com.parachord.shared.resolver.ResolverScoring
@@ -1590,6 +1601,124 @@ class IosContainer private constructor() {
     // (DetailScreens), so they're returned directly; ArtistInfo is flattened.
 
     val searchHistoryDao: SearchHistoryDao by lazy { SearchHistoryDao(database) }
+
+    // ── DJ Chat / Shuffleupagus (#223 / #202) ───────────────────────────────
+    // Wires the SHARED chat orchestration into the iOS container. Nothing here is
+    // new logic — AiChatService, the 3 providers, ChatContextProvider, ChatCard
+    // Enricher all live in commonMain; this just constructs them + bridges playback
+    // to the Swift coordinator (IosChatPlaybackBridge). Per-provider history +
+    // tool loop are handled by the shared service.
+    private val chatJson = Json { ignoreUnknownKeys = true; isLenient = true }
+    val chatMessageDao: ChatMessageDao by lazy { ChatMessageDao(database, sqlDriver) }
+    val chatPlaybackBridge: IosChatPlaybackBridge by lazy { IosChatPlaybackBridge() }
+    private val chatGptProvider: ChatGptProvider by lazy { ChatGptProvider(httpClient, chatJson) }
+    private val claudeProvider: ClaudeProvider by lazy { ClaudeProvider(httpClient, chatJson) }
+    private val geminiProvider: GeminiProvider by lazy { GeminiProvider(httpClient, chatJson) }
+    private val chatProviders: List<AiChatProvider> by lazy { listOf(chatGptProvider, claudeProvider, geminiProvider) }
+    private val djToolExecutor: IosDjToolExecutor by lazy { IosDjToolExecutor(metadataService, settingsStore, chatPlaybackBridge) }
+    private val chatContextProvider: ChatContextProvider by lazy {
+        ChatContextProvider(
+            getPlaybackSnapshot = { chatPlaybackBridge.current },
+            settingsStore = settingsStore,
+            historyRepository = historyRepository,
+            // libraryRepository null on iOS (no collection repo yet, #194).
+        )
+    }
+    private val aiChatService: AiChatService by lazy {
+        AiChatService(djToolExecutor, chatContextProvider, chatMessageDao, chatJson)
+    }
+    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService) }
+
+    // Flat Swift-facing API (mirrors Android's ChatViewModel calls).
+    suspend fun chatSend(providerId: String, userMessage: String, onProgress: (String) -> Unit): String {
+        val provider = chatProviders.firstOrNull { it.id == providerId } ?: return "That AI provider isn't available."
+        // No explicit model picked → use the plugin's `default` (marketplace-driven),
+        // not the provider's hardcoded fallback (desktop parity).
+        val model = settingsStore.getAiProviderModel(providerId)
+            .ifBlank { runCatching { resolverRuntime.aiModelDefault(providerId) }.getOrDefault("") }
+        val config = AiProviderConfig(
+            apiKey = settingsStore.getAiProviderApiKey(providerId) ?: "",
+            model = model,
+        )
+        return aiChatService.sendMessage(provider, config, userMessage, onProgress)
+    }
+    /** The plugin's default model id — the Settings picker seeds its selection with this. */
+    suspend fun chatModelDefault(providerId: String): String =
+        try { resolverRuntime.aiModelDefault(providerId) } catch (e: Exception) { "" }
+    suspend fun chatMessages(providerId: String): List<IosChatMessage> =
+        aiChatService.getDisplayMessages(providerId).map { IosChatMessage(it.role.name.lowercase(), it.content) }
+    suspend fun chatClear(providerId: String) = aiChatService.clearHistory(providerId)
+    suspend fun chatSelectedProvider(): String? = settingsStore.getSelectedChatProvider()
+    suspend fun chatSetSelectedProvider(id: String) = settingsStore.setSelectedChatProvider(id)
+    suspend fun chatProviderConfigured(providerId: String): Boolean =
+        !settingsStore.getAiProviderApiKey(providerId).isNullOrBlank()
+    /** Model list for the provider, from the marketplace `.axe` plugin's model
+     *  setting (curated `options` for static `select`, live `listModels` for
+     *  `dynamic-select`) — desktop parity, nothing reimplemented natively. */
+    suspend fun chatListModels(providerId: String, apiKey: String): List<String> =
+        try { resolverRuntime.aiModels(providerId, apiKey) } catch (e: Exception) { emptyList() }
+    suspend fun chatTrackArtwork(title: String, artist: String, album: String): String? =
+        chatCardEnricher.getTrackArtwork(title, artist, album)
+    suspend fun chatAlbumArtwork(title: String, artist: String): String? =
+        chatCardEnricher.getAlbumArtwork(title, artist)
+    suspend fun chatArtistImage(name: String): String? = chatCardEnricher.getArtistImage(name)
+
+    // Card taps in the chat play directly (DJ context): track → play it; album →
+    // play the album; artist → play their top tracks. All route through the same
+    // bridge, resolving on-the-fly. (Navigating to album/artist detail pages from
+    // the chat cover is a follow-up.)
+    suspend fun chatPlayTrack(title: String, artist: String, album: String?) {
+        chatPlaybackBridge.onClearQueue()
+        chatPlaybackBridge.onPlayTrack(chatTrack(title, artist, album))
+    }
+    suspend fun chatPlayAlbum(title: String, artist: String) {
+        val tracks = (metadataService.getAlbumTracks(title, artist)?.tracks ?: emptyList())
+            .map { chatTrack(it.title, it.artist, it.album) }
+        if (tracks.isEmpty()) return
+        chatPlaybackBridge.onClearQueue()
+        chatPlaybackBridge.onPlayTrack(tracks.first())
+        tracks.drop(1).forEach { chatPlaybackBridge.onAddToQueue(it) }
+    }
+    suspend fun chatPlayArtist(name: String) {
+        val tops = metadataService.getArtistTopTracks(name, 20).map { chatTrack(it.title, it.artist, it.album) }
+        if (tops.isEmpty()) return
+        chatPlaybackBridge.onClearQueue()
+        chatPlaybackBridge.onPlayTrack(tops.first())
+        tops.drop(1).forEach { chatPlaybackBridge.onAddToQueue(it) }
+    }
+    private fun chatTrack(title: String, artist: String, album: String?): Track = Track(
+        id = "chat:${title.lowercase()}|${artist.lowercase()}", title = title, artist = artist, album = album,
+        albumId = null, duration = 0, artworkUrl = null, sourceType = null, sourceUrl = null, addedAt = 0,
+        resolver = null, spotifyUri = null, soundcloudId = null, spotifyId = null, appleMusicId = null,
+        isrc = null, recordingMbid = null, artistMbid = null, releaseMbid = null, crossResolverEnrichedAt = null,
+    )
+
+    /** Swift binds the playback coordinator hooks once at app start. */
+    fun bindChatPlayback(
+        onPlayTrack: (Track) -> Unit,
+        onAddToQueue: (Track) -> Unit,
+        onClearQueue: () -> Unit,
+        onPause: () -> Unit,
+        onResume: () -> Unit,
+        onSkipNext: () -> Unit,
+        onSkipPrevious: () -> Unit,
+        onSetShuffle: (Boolean) -> Unit,
+    ) {
+        chatPlaybackBridge.onPlayTrack = onPlayTrack
+        chatPlaybackBridge.onAddToQueue = onAddToQueue
+        chatPlaybackBridge.onClearQueue = onClearQueue
+        chatPlaybackBridge.onPause = onPause
+        chatPlaybackBridge.onResume = onResume
+        chatPlaybackBridge.onSkipNext = onSkipNext
+        chatPlaybackBridge.onSkipPrevious = onSkipPrevious
+        chatPlaybackBridge.onSetShuffle = onSetShuffle
+    }
+
+    /** Swift pushes the latest playback state so the system-prompt context + the
+     *  shuffle/control tools read fresh state without a cross-thread @MainActor read. */
+    fun updateChatPlaybackSnapshot(currentTrack: Track?, isPlaying: Boolean, upNext: List<Track>, shuffleEnabled: Boolean) {
+        chatPlaybackBridge.current = ChatPlaybackSnapshot(currentTrack, isPlaying, upNext, shuffleEnabled)
+    }
 
     /** Local DB tracks matching title/artist (the "Library" section). */
     suspend fun searchLocalTracks(query: String): List<Track> =
