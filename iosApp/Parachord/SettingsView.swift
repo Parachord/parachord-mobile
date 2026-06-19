@@ -149,6 +149,8 @@ final class SettingsViewModel {
     var values: [String: String] = [:]
     var aiModels: [String: String] = ["chatgpt": "", "claude": "", "gemini": ""]
     var selectedAiProvider = "chatgpt"
+    /// Global "let the DJ see my listening data" gate (shared `send_listening_history`).
+    var sendListeningHistory = false
 
     var libreFmConnected = false
     var libreFmUser = ""
@@ -230,6 +232,7 @@ final class SettingsViewModel {
     private func loadAll() {
         Task { @MainActor in
             selectedAiProvider = (try? await store.getSelectedChatProvider()) ?? "chatgpt"
+            sendListeningHistory = (try? await store.getSendListeningHistory())?.boolValue ?? false
             values["lastfm"] = (try? await store.getLastFmUsername()) ?? ""
             values["listenbrainz"] = (try? await store.getListenBrainzToken()) ?? ""
             values["discogs"] = (try? await store.getDiscogsToken()) ?? ""
@@ -386,6 +389,41 @@ final class SettingsViewModel {
     func setSelectedAiProvider(_ p: String) {
         selectedAiProvider = p
         Task { try? await store.setSelectedChatProvider(providerId: p) }
+    }
+
+    func setSendListeningHistory(_ on: Bool) {
+        sendListeningHistory = on
+        Task { try? await store.setSendListeningHistory(enabled: on) }
+    }
+
+    // Dynamic model lists fetched live from each provider's API (the static
+    // `aiModelOptions` below is only a fallback when there's no key / fetch fails).
+    var dynamicModels: [String: [String]] = [:]
+    var pluginDefault: [String: String] = [:]
+    var loadingModels: Set<String> = []
+    func loadModels(_ id: String) {
+        guard ["chatgpt", "claude", "gemini"].contains(id), !loadingModels.contains(id) else { return }
+        // No key gate: static `select` plugins (e.g. claude) expose their curated
+        // options without one; dynamic-select plugins return [] when the key's blank.
+        let key = values[id] ?? ""
+        loadingModels.insert(id)
+        Task { @MainActor in
+            if let def = try? await container.chatModelDefault(providerId: id), !def.isEmpty { pluginDefault[id] = def }
+            let models = (try? await container.chatListModels(providerId: id, apiKey: key)) ?? []
+            if !models.isEmpty { dynamicModels[id] = models }
+            loadingModels.remove(id)
+        }
+    }
+    /// Live model list if fetched, else the static fallback.
+    func modelOptions(_ id: String) -> [String] {
+        if let dyn = dynamicModels[id], !dyn.isEmpty { return dyn }
+        return Self.aiModelOptions[id] ?? []
+    }
+    /// Picker selection: the user's stored choice, else the plugin's `default`
+    /// (desktop: `metaServiceConfigs[id].model || modelSetting.default`).
+    func selectedModel(_ id: String) -> String {
+        let v = aiModels[id] ?? ""
+        return v.isEmpty ? (pluginDefault[id] ?? "") : v
     }
     func setTheme(_ m: String) { themeMode = m; Task { try? await store.setThemeMode(mode: m) } }
     func setScrobbling(_ b: Bool) { scrobblingEnabled = b; Task { try? await store.setScrobblingEnabled(enabled: b) } }
@@ -917,13 +955,27 @@ private struct PluginConfigSheet: View {
 
         if isAi {
             Section("Model") {
-                Picker("Model", selection: Binding(get: { model.aiModels[service.id] ?? "" }, set: { model.setAiModel(service.id, $0) })) {
+                Picker("Model", selection: Binding(get: { model.selectedModel(service.id) }, set: { model.setAiModel(service.id, $0) })) {
                     Text("Default").tag("")
-                    ForEach(SettingsViewModel.aiModelOptions[service.id] ?? [], id: \.self) { Text($0).tag($0) }
+                    ForEach(model.modelOptions(service.id), id: \.self) { Text($0).tag($0) }
+                }
+                .task(id: model.values[service.id] ?? "") { model.loadModels(service.id) }
+                if model.loadingModels.contains(service.id) {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading models…").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Toggle("Use as DJ provider", isOn: Binding(
                     get: { model.selectedAiProvider == service.id },
                     set: { if $0 { model.setSelectedAiProvider(service.id) } }))
+            }
+            Section {
+                Toggle("Share my listening history", isOn: Binding(
+                    get: { model.sendListeningHistory },
+                    set: { model.setSendListeningHistory($0) }))
+            } footer: {
+                Text("Lets the DJ use your recent listening, top artists, and library to personalize replies. Applies to all AI providers.")
             }
         }
     }

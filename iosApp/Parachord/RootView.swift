@@ -19,6 +19,9 @@ struct ContentView: View {
     @State private var showAdd = false
     @State private var showNowPlaying = false
     @State private var showSettings = false
+    @State private var showChat = false
+    @State private var pendingChat = false
+    @State private var chatDragX: CGFloat = 0
     /// Bumped when the active tab is re-tapped; folded into the tab content's
     /// `.id` so re-tapping pops that tab's NavigationStack to root (and thus
     /// back to where the sidebar menu lives).
@@ -137,6 +140,31 @@ struct ContentView: View {
                 }
                 .transition(.move(edge: .leading))
             }
+
+            // ── DJ Chat / Shuffleupagus (slides in from the RIGHT, Android parity) ──
+            if showChat {
+                ChatScreen(onClose: { closeChat() })
+                    .environment(coordinator)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(PC.Player.bg)
+                    .offset(x: chatDragX)
+                    .ignoresSafeArea()
+                    .overlay(alignment: .leading) {
+                        // Thin leading-edge swipe-right-to-close zone — a screen-wide
+                        // drag would fight the chat's scroll/input, so scope it to the edge.
+                        Color.clear.frame(width: 22).contentShape(Rectangle()).ignoresSafeArea()
+                            .highPriorityGesture(
+                                DragGesture(minimumDistance: 10)
+                                    .onChanged { v in chatDragX = max(0, v.translation.width) }
+                                    .onEnded { v in
+                                        if v.translation.width > 90 { closeChat() }
+                                        else { withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { chatDragX = 0 } }
+                                    }
+                            )
+                    }
+                    .transition(.move(edge: .trailing))
+                    .zIndex(60)
+            }
         }
         // NOTE: no faux Dynamic Island while the app is in the FOREGROUND — the
         // mini-player already shows what's playing, and a real Dynamic Island is
@@ -154,7 +182,7 @@ struct ContentView: View {
         .task { ResolverPrefs.shared.start() }
         // #235 Listen Along: bind the engine to the shared coordinator, and accept
         // parachord://listen-along?service=&user= deep links.
-        .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator) }
+        .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator); bindChatPlayback() }
         .onOpenURL { handleListenAlongDeepLink($0) }
         // #235 On-Air triggers: refresh every friend's now-playing and auto-pin
         // on-air friends into the sidebar (auto-unpin when they go offline),
@@ -181,8 +209,11 @@ struct ContentView: View {
                     ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: 0)
             }
         }
-        .sheet(isPresented: $showAdd) {
-            PCAddSheet(onShuffleupagus: { /* Phase: DJ chat */ }, onDismiss: { showAdd = false })
+        .sheet(isPresented: $showAdd, onDismiss: {
+            // Slide the chat in AFTER the add sheet finishes dismissing.
+            if pendingChat { pendingChat = false; withAnimation(.easeInOut(duration: 0.3)) { showChat = true } }
+        }) {
+            PCAddSheet(onShuffleupagus: { pendingChat = true; showAdd = false }, onDismiss: { showAdd = false })
         }
         // New-playlist create prompt (#242), hosted once at the root so both the
         // FAB's "New Playlist" and the track menu's "Add to Playlist → New
@@ -211,6 +242,27 @@ struct ContentView: View {
             SpotifyDevicePickerSheet(request: request) { playback.spotify.onDevicePicked($0) }
         }
     }
+
+    /// Wire the DJ-chat tool surface to the live playback coordinator (#223). The
+    /// shared IosDjToolExecutor calls these closures; we hop to the main actor and
+    /// drive the coordinator (fire-and-forget, like the spinoff/scrobble bridges).
+    private func bindChatPlayback() {
+        let coord = coordinator
+        IosContainer.companion.shared.bindChatPlayback(
+            onPlayTrack: { track in Task { @MainActor in
+                coord.setQueue([track], startIndex: 0,
+                               context: PlaybackContext(type: "chat", name: "Shuffleupagus", id: nil)) } },
+            onAddToQueue: { track in Task { @MainActor in coord.addToQueue(track) } },
+            onClearQueue: { Task { @MainActor in coord.clearQueue() } },
+            onPause: { Task { @MainActor in if coord.isPlaying { coord.togglePlayPause() } } },
+            onResume: { Task { @MainActor in if !coord.isPlaying { coord.togglePlayPause() } } },
+            onSkipNext: { Task { @MainActor in coord.skipNext() } },
+            onSkipPrevious: { Task { @MainActor in coord.skipPrevious() } },
+            onSetShuffle: { _ in Task { @MainActor in coord.toggleShuffle() } }
+        )
+    }
+
+    private func closeChat() { withAnimation(.easeInOut(duration: 0.28)) { showChat = false; chatDragX = 0 } }
 
     private func closeSidebar() { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
 
