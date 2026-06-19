@@ -28,6 +28,15 @@ import com.parachord.shared.model.Artist
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.DeepLinkParser
 import com.parachord.shared.deeplink.SimpleDeepLinkUri
+import com.parachord.shared.db.dao.SyncSourceDao
+import com.parachord.shared.db.dao.SyncPlaylistLinkDao
+import com.parachord.shared.db.dao.SyncPlaylistSourceDao
+import com.parachord.shared.repository.LibraryRepository
+import com.parachord.shared.sync.KvTombstoneStore
+import com.parachord.shared.sync.ListenBrainzSyncProvider
+import com.parachord.shared.sync.SpotifySyncProvider
+import com.parachord.shared.sync.SyncEngine
+import com.parachord.shared.sync.TrackTombstoneService
 import com.parachord.shared.model.Friend
 import com.parachord.shared.model.Track
 import com.parachord.shared.playback.scrobbler.LastFmScrobbler
@@ -315,6 +324,105 @@ class IosContainer private constructor() {
     val playlistTrackDao: PlaylistTrackDao by lazy { PlaylistTrackDao(database) }
     val friendDao: FriendDao by lazy { FriendDao(database) }
 
+    // ── Collection sync (#194, Phase 1: Spotify + ListenBrainz) ──────────
+    // The whole sync stack (SyncEngine + providers + LibraryRepository +
+    // tombstones) is commonMain — iOS just wires it. Apple Music sync is a
+    // follow-up (needs the Music User Token via SKCloudServiceController).
+    val syncSourceDao: SyncSourceDao by lazy { SyncSourceDao(database) }
+    val syncPlaylistLinkDao: SyncPlaylistLinkDao by lazy { SyncPlaylistLinkDao(database) }
+    val syncPlaylistSourceDao: SyncPlaylistSourceDao by lazy { SyncPlaylistSourceDao(database) }
+
+    // Track-remove tombstones (#172 parity) — local-per-device JSON blob so a
+    // user-removed track isn't re-imported on the next pull. App-start prune is
+    // wired via [pruneTombstonesOnLaunch].
+    val tombstoneService: TrackTombstoneService by lazy {
+        TrackTombstoneService(KvTombstoneStore(
+            loadBlob = { IosFileCache.read("track_tombstones.json") },
+            saveBlob = { IosFileCache.write("track_tombstones.json", it) },
+        ))
+    }
+
+    val spotifySyncProvider: SpotifySyncProvider by lazy { SpotifySyncProvider(spotifyClient) }
+    val listenBrainzSyncProvider: ListenBrainzSyncProvider by lazy {
+        ListenBrainzSyncProvider(listenBrainzClient, settingsStore, mbidEnrichmentService)
+    }
+
+    val syncEngine: SyncEngine by lazy {
+        SyncEngine(
+            db = database, driver = sqlDriver,
+            trackDao = trackDao, albumDao = albumDao, artistDao = artistDao,
+            playlistDao = playlistDao, playlistTrackDao = playlistTrackDao,
+            syncSourceDao = syncSourceDao, syncPlaylistLinkDao = syncPlaylistLinkDao,
+            syncPlaylistSourceDao = syncPlaylistSourceDao,
+            settingsStore = settingsStore,
+            providers = listOf(spotifySyncProvider, listenBrainzSyncProvider),
+            tombstones = tombstoneService,
+        )
+    }
+
+    val libraryRepository: LibraryRepository by lazy {
+        LibraryRepository(
+            trackDao, albumDao, artistDao, playlistDao, playlistTrackDao,
+            syncEngine, syncPlaylistLinkDao, syncPlaylistSourceDao,
+            mbidEnrichTrack = { trackId, artist, title -> mbidEnrichmentService.enrichInBackground(trackId, artist, title) },
+            mbidEnrichBatch = { tracks -> tracks.forEach { mbidEnrichmentService.enrichInBackground(it.id, it.artist, it.title) } },
+            tombstones = tombstoneService,
+        )
+    }
+
+    /** Run a full sync (gated internally on Settings → sync enabled). Returns
+     *  true on success. Safe to call from a foreground timer / "Sync now". */
+    suspend fun syncNow(): Boolean = syncEngine.syncAll().success
+
+    /** Sweep expired track tombstones once per launch (Android parity). */
+    suspend fun pruneTombstonesOnLaunch() {
+        try { tombstoneService.prune() } catch (_: Exception) {}
+    }
+
+    // ── Sync settings (Phase 1 toggles for the iOS Settings screen) ──────
+    suspend fun isSyncEnabled(): Boolean = settingsStore.getSyncSettings().enabled
+
+    /**
+     * Effective per-provider sync state = master switch ON **and** provider in
+     * the enabled set. The set defaults to `{spotify}` even when sync is off, so
+     * membership alone would wrongly show Spotify "on" on a fresh install — gate
+     * on the master flag too.
+     */
+    suspend fun isProviderSyncEnabled(providerId: String): Boolean =
+        settingsStore.getSyncSettings().enabled && providerId in settingsStore.getEnabledSyncProviders()
+
+    suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
+
+    /**
+     * Enable/disable one provider for sync. Mirrors the relevant slice of
+     * Android's sync wizard: seeds default per-provider axes (Spotify gets all
+     * four; ListenBrainz is playlists-only) and flips the global `enabled` flag
+     * on iff any provider is on, satisfying both SyncEngine gates (global axes +
+     * per-provider collections). When sync is currently OFF, the enabled-set is
+     * rebuilt from scratch (ignoring the default `{spotify}`) so enabling one
+     * provider never silently lights up another.
+     */
+    suspend fun setSyncProviderEnabled(providerId: String, enabled: Boolean) {
+        val masterOn = settingsStore.getSyncSettings().enabled
+        val current = if (masterOn) settingsStore.getEnabledSyncProviders().toMutableSet() else mutableSetOf()
+        if (enabled) {
+            current.add(providerId)
+            val axes = if (providerId == "listenbrainz") setOf("playlists")
+                       else setOf("tracks", "albums", "artists", "playlists")
+            settingsStore.setSyncCollectionsForProvider(providerId, axes)
+        } else {
+            current.remove(providerId)
+        }
+        settingsStore.setEnabledSyncProviders(current)
+        val s = settingsStore.getSyncSettings()
+        settingsStore.saveSyncSettings(
+            s.copy(
+                enabled = current.isNotEmpty(),
+                syncTracks = true, syncAlbums = true, syncArtists = true, syncPlaylists = true,
+            ),
+        )
+    }
+
     // Shared FriendsRepository — full add/remove/pin/sync/activity surface.
     // Backs the Collection → Friends tab (#195). Mirrors AndroidModule's binding.
     val friendsRepository: FriendsRepository by lazy {
@@ -521,14 +629,12 @@ class IosContainer private constructor() {
     fun watchArtistInCollection(name: String, onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(artistDao.existsByName(name)) { onEach((it as? Boolean) ?: false) }
 
-    // Add to collection: upsert + fire MBID enrichment. (Tombstone-clear and
-    // loves-push are intentionally no-ops here until #194 / #226 wire them.)
-    suspend fun addTrackToCollection(track: Track) {
-        trackDao.insert(track)
-        mbidEnrichmentService.enrichInBackground(track.id, track.artist, track.title)
-    }
-    suspend fun addAlbumToCollection(album: Album) { albumDao.insert(album) }
-    suspend fun addArtistToCollection(artist: Artist) { artistDao.insert(artist) }
+    // Add to collection (user-intent) — routes through LibraryRepository so a
+    // re-add clears the track's remove-tombstones (#194) and fires MBID
+    // enrichment. Sync push happens on the next sync cycle.
+    suspend fun addTrackToCollection(track: Track) { libraryRepository.addToCollection(track) }
+    suspend fun addAlbumToCollection(album: Album) { libraryRepository.addAlbum(album) }
+    suspend fun addArtistToCollection(artist: Artist) { libraryRepository.addArtist(artist) }
 
     /**
      * Persist a batch of scanned device-library tracks (#219). Upserts by the
@@ -589,11 +695,12 @@ class IosContainer private constructor() {
     /** Number of scanned local-library tracks currently in the DB (Settings display). */
     suspend fun localTrackCount(): Int = trackDao.getAll().first().count { it.resolver == "localfiles" }
 
-    // Remove from collection — LOCAL ONLY. #194 wires SyncEngine.onTrackRemoved
-    // (remote remove + tombstone) in here so removals propagate + don't re-import.
-    suspend fun removeTrackFromCollection(track: Track) { trackDao.delete(track) }
-    suspend fun removeAlbumFromCollection(album: Album) { albumDao.delete(album) }
-    suspend fun removeArtistFromCollection(artist: Artist) { artistDao.delete(artist) }
+    // Remove from collection — sync-aware (#194): tombstones the item + attempts
+    // remote removal on each linked provider BEFORE the local delete, so the next
+    // pull doesn't re-import it.
+    suspend fun removeTrackFromCollection(track: Track) { libraryRepository.deleteTrackWithSync(track) }
+    suspend fun removeAlbumFromCollection(album: Album) { libraryRepository.deleteAlbumWithSync(album) }
+    suspend fun removeArtistFromCollection(artist: Artist) { libraryRepository.deleteArtistWithSync(artist) }
 
     // Toggle album/artist collection from detail screens (#195 M4). ID + row
     // construction live in Kotlin so the `hashCode()`-based ID matches Android
@@ -601,8 +708,8 @@ class IosContainer private constructor() {
     // "unknown" sentinel to keep the Swift→Kotlin bridge on primitive Int.
     suspend fun toggleAlbumCollection(title: String, artist: String, artworkUrl: String?, year: Int, trackCount: Int) {
         val existing = albumDao.getByTitleAndArtist(title, artist)
-        if (existing != null) { albumDao.delete(existing); return }
-        albumDao.insert(Album(
+        if (existing != null) { libraryRepository.deleteAlbumWithSync(existing); return }
+        libraryRepository.addAlbum(Album(
             id = "album-${title.hashCode()}-${artist.hashCode()}",
             title = title, artist = artist, artworkUrl = artworkUrl,
             year = year.takeIf { it > 0 }, trackCount = trackCount.takeIf { it > 0 },
@@ -611,8 +718,8 @@ class IosContainer private constructor() {
 
     suspend fun toggleArtistCollection(name: String, imageUrl: String?) {
         val existing = artistDao.getByName(name).first()
-        if (existing != null) { artistDao.delete(existing); return }
-        artistDao.insert(Artist(id = "manual-${randomUUID()}", name = name, imageUrl = imageUrl))
+        if (existing != null) { libraryRepository.deleteArtistWithSync(existing); return }
+        libraryRepository.addArtist(Artist(id = "manual-${randomUUID()}", name = name, imageUrl = imageUrl))
     }
 
     // ── Charts (Pop of the Tops) ───────────────────────────────────────

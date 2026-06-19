@@ -225,6 +225,18 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 120_000_000_000)
             }
         }
+        // Collection sync (#194, Phase 1): prune expired tombstones once, then
+        // run a foreground sync on launch + every 15 min. syncNow() is gated
+        // internally on Settings → sync enabled, so this no-ops until the user
+        // turns it on. (Background BGTaskScheduler is a follow-up.)
+        .task {
+            let container = IosContainer.companion.shared
+            try? await container.pruneTombstonesOnLaunch()
+            while !Task.isCancelled {
+                _ = try? await container.syncNow()
+                try? await Task.sleep(nanoseconds: 900_000_000_000)   // 15 min
+            }
+        }
         // Restore the persisted queue on launch (paused — never auto-plays). #220
         .task { await coordinator.restoreQueue() }
         // Resolve the current track as soon as it changes (incl. natural
