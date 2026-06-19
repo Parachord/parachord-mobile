@@ -1,0 +1,70 @@
+name: Sync Plugins from Marketplace
+
+# Mobile is a CONSUMER of plugins, never a source. The desktop monorepo authors
+# them; the desktop forward-sync ships them to `parachord-plugins` (the
+# marketplace), and the app downloads updates at runtime via PluginSyncService.
+# This job keeps the BUNDLED copies (the offline fallback shipped in the app) in
+# step with the marketplace so a fresh install isn't stale. ONE direction only —
+# there is deliberately no mobile -> marketplace push (that would let an in-repo
+# bundled edit leak upstream). Version-aware: only adopts a STRICTLY-greater
+# version, never downgrades (mirrors the desktop reverse-sync's #754 guard).
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # daily, after the desktop syncs have settled
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-plugins:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mobile repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Clone marketplace (public repo, no token needed)
+        run: git clone --depth 1 https://github.com/Parachord/parachord-plugins.git /tmp/marketplace
+
+      - name: Version-aware update of bundled plugins (Android + iOS)
+        run: node .github/scripts/sync-bundled-plugins.js
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Bundled plugins already current."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+
+      - name: Open pull request
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="sync/plugins-$(date +%Y%m%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add app/src/main/assets/plugins iosApp/Parachord/Resources/plugins
+          git commit -m "Sync bundled plugins from marketplace"
+          git push -u origin "$BRANCH" --force-with-lease
+
+          EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
+          if [ -n "$EXISTING" ]; then
+            echo "PR #${EXISTING} already open; updated branch."
+          else
+            gh pr create \
+              --title "Sync bundled plugins from marketplace" \
+              --body "Automated version-aware update of the bundled \`.axe\` fallback (Android \`app/src/main/assets/plugins\` + iOS \`iosApp/Parachord/Resources/plugins\`) from [parachord-plugins](https://github.com/Parachord/parachord-plugins). Only strictly-greater versions are adopted; nothing is downgraded, added, or removed. Runtime delivery already happens via PluginSyncService — this just keeps fresh installs from shipping stale plugins."
+          fi
