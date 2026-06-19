@@ -1071,6 +1071,14 @@ private struct GeneralTab: View {
                    isOn: sync.spotifyOn) { sync.setProvider("spotify", $0) }
         syncToggle("ListenBrainz", desc: "Sync your playlists.",
                    isOn: sync.listenBrainzOn) { sync.setProvider("listenbrainz", $0) }
+        if let cd = sync.spotifyCooldownText {
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge.exclamationmark").font(.system(size: 12))
+                Text(cd).font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(PC.warning)
+            .padding(.horizontal, 20).padding(.top, 8)
+        }
         HStack {
             Button {
                 Task { await sync.syncNow() }
@@ -1115,11 +1123,22 @@ private final class SyncModel {
     var listenBrainzOn = false
     var syncing = false
     var status: String?
+    var spotifyCooldownMs: Int64 = 0
     var anyOn: Bool { spotifyOn || listenBrainzOn }
+
+    /// Local read (no network) — "retry in 3h 12m" while Spotify is in a 429 cooldown.
+    var spotifyCooldownText: String? {
+        guard spotifyCooldownMs > 0 else { return nil }
+        let mins = Int(spotifyCooldownMs / 60_000)
+        let h = mins / 60, m = mins % 60
+        let when_ = h > 0 ? "\(h)h \(m)m" : "\(max(m, 1))m"
+        return "Spotify rate-limited — retry in \(when_)"
+    }
 
     func load() async {
         spotifyOn = (try? await container.isProviderSyncEnabled(providerId: "spotify"))?.boolValue ?? false
         listenBrainzOn = (try? await container.isProviderSyncEnabled(providerId: "listenbrainz"))?.boolValue ?? false
+        spotifyCooldownMs = container.spotifyCooldownRemainingMs()
     }
 
     func setProvider(_ id: String, _ on: Bool) {
@@ -1135,6 +1154,7 @@ private final class SyncModel {
         syncing = true; status = nil
         let err = (try? await container.syncNow()) ?? "Sync error"   // "" = success
         syncing = false
+        spotifyCooldownMs = container.spotifyCooldownRemainingMs()   // a 429 may have armed it
         status = err.isEmpty ? "Synced ✓" : "Failed: \(err)"
     }
 }

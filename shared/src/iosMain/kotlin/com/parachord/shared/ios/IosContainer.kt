@@ -412,6 +412,12 @@ class IosContainer private constructor() {
         try { tombstoneService.prune() } catch (_: Exception) {}
     }
 
+    /** Remaining Spotify rate-limit cooldown in ms (0 = clear). PURELY LOCAL —
+     *  reads the persisted cooldown timestamp and subtracts now; hits NO Spotify
+     *  endpoint, so calling it can't extend the window. Surfaced in Library Sync
+     *  so a 429/abuse cooldown is visible instead of a mystery "Failed". */
+    fun spotifyCooldownRemainingMs(): Long = spotifyClient.rateLimitRemainingMs()
+
     // ── Sync settings (Phase 1 toggles for the iOS Settings screen) ──────
     suspend fun isSyncEnabled(): Boolean = settingsStore.getSyncSettings().enabled
 
