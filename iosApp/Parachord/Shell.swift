@@ -122,6 +122,24 @@ struct PCTabBar: View {
 
 // MARK: - Floating mini-player
 
+/// Hexagonal clip for FRIEND / user avatars — the cross-platform shape
+/// convention (users = hexagons, album art = square, artists = circles).
+/// Mirrors Android's HomeHexagonShape (pointy-top vertical hexagon).
+struct PCHexagon: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
+        var p = Path()
+        p.move(to: CGPoint(x: w * 0.5, y: 0))
+        p.addLine(to: CGPoint(x: w, y: h * 0.25))
+        p.addLine(to: CGPoint(x: w, y: h * 0.75))
+        p.addLine(to: CGPoint(x: w * 0.5, y: h))
+        p.addLine(to: CGPoint(x: 0, y: h * 0.75))
+        p.addLine(to: CGPoint(x: 0, y: h * 0.25))
+        p.closeSubpath()
+        return p
+    }
+}
+
 struct PCMiniPlayer: View {
     /// The current track — drives the love/collection heart (#…). title/artist/
     /// artworkUrl stay separate so the mini can render before/without the full track.
@@ -135,6 +153,7 @@ struct PCMiniPlayer: View {
     var artNamespace: Namespace.ID
     var artIsSource: Bool = true
     let onToggle: () -> Void
+    var onNext: () -> Void = {}
     let onExpand: () -> Void
 
     var body: some View {
@@ -165,6 +184,13 @@ struct PCMiniPlayer: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isStarting)
+                // Next — matches Android's mini player (heart + play/pause + next).
+                Button(action: onNext) {
+                    Image(systemName: "forward.fill")
+                        .font(.system(size: 18)).foregroundStyle(PC.fg1)
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
 
@@ -389,14 +415,14 @@ struct PCSidebar: View {
     }
 
     @ViewBuilder private func friendAvatar(_ f: Friend, size: CGFloat) -> some View {
-        Circle().fill(PC.bgInset)
+        PCHexagon().fill(PC.bgInset)
             .frame(width: size, height: size)
             .overlay {
                 PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) {
-                    PCArtwork(name: f.displayName, size: nil, radius: 999)
+                    PCArtwork(name: f.displayName, size: nil, radius: 0)
                 }
             }
-            .clipShape(Circle())
+            .clipShape(PCHexagon())   // friends = hexagons (cross-platform convention)
     }
 
     @ViewBuilder private func group(_ header: String, _ rows: [Row]) -> some View {

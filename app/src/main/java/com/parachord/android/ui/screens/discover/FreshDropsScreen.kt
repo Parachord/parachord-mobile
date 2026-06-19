@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.screens.artist.releaseTypeBadgeColor
+
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -314,13 +316,16 @@ private fun FreshDropsFilterBar(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 filters.forEach { (key, label) ->
+                    // Per-type color so the selected filter chip matches the row
+                    // badge (#247); "all" falls through to gray.
+                    val chipColor = releaseTypeBadgeColor(key)
                     FilterChip(
                         selected = filterType == key,
                         onClick = { onFilterTypeChange(key) },
                         label = { Text(label, style = MaterialTheme.typography.labelMedium) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
-                            selectedLabelColor = MaterialTheme.colorScheme.primary,
+                            selectedContainerColor = chipColor.copy(alpha = 0.20f),
+                            selectedLabelColor = chipColor,
                         ),
                     )
                 }
@@ -461,13 +466,9 @@ private fun FreshDropRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                // Release type badge
-                val badgeColor = when (release.releaseType) {
-                    "album" -> Color(0xFF7C3AED) // purple
-                    "ep" -> Color(0xFF06B6D4) // cyan
-                    "single" -> Color(0xFFF59E0B) // amber
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                }
+                // Release type badge — shared desktop-colored map, matches the
+                // filter chips below (#247). Was a divergent purple/cyan/amber set.
+                val badgeColor = releaseTypeBadgeColor(release.releaseType)
                 Text(
                     text = release.releaseType.uppercase(),
                     style = MaterialTheme.typography.labelSmall.copy(
