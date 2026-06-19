@@ -1,5 +1,10 @@
 package com.parachord.shared.model
 
+import kotlinx.serialization.Serializable
+
+// @Serializable so the iOS container can persist top-data lists to a disk cache
+// (keyed per timeframe). Recently Played is NOT cached, so RecentTrack stays plain.
+@Serializable
 data class HistoryTrack(
     val title: String,
     val artist: String,
@@ -9,6 +14,7 @@ data class HistoryTrack(
     val rank: Int = 0,
 )
 
+@Serializable
 data class HistoryAlbum(
     val name: String,
     val artist: String,
@@ -17,6 +23,7 @@ data class HistoryAlbum(
     val rank: Int = 0,
 )
 
+@Serializable
 data class HistoryArtist(
     val name: String,
     val imageUrl: String? = null,

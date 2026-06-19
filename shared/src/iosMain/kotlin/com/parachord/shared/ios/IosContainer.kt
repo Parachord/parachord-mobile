@@ -111,6 +111,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -134,6 +136,27 @@ import platform.Foundation.NSBundle
  * repositories come online, this grows to host the Ktor client + DAOs
  * (or gets replaced by an `initKoin()` once the auth module lands).
  */
+// ── Top-data disk-cache shapes (own history + friend profiles) ──────────
+// One file per type; the map key is the timeframe filter for own history
+// (e.g. "7day") or "friend:<user>:<service>:<period>" for friend profiles.
+private const val TOP_TRACKS_FILE = "history_top_tracks.json"
+private const val TOP_ALBUMS_FILE = "history_top_albums.json"
+private const val TOP_ARTISTS_FILE = "history_top_artists.json"
+
+// Concert artist seed: top artists across EVERY time window, both services.
+private val CONCERT_LASTFM_PERIODS = listOf("7day", "1month", "3month", "6month", "12month", "overall")
+private val CONCERT_LB_RANGES = listOf("week", "month", "quarter", "half_yearly", "year", "all_time")
+private const val CONCERT_SEED_MAX = 40 // matches Android ConcertsViewModel.MAX_ARTISTS
+
+@kotlinx.serialization.Serializable
+private data class TimedTracks(val fetchedAt: Long, val data: List<HistoryTrack>)
+
+@kotlinx.serialization.Serializable
+private data class TimedAlbums(val fetchedAt: Long, val data: List<HistoryAlbum>)
+
+@kotlinx.serialization.Serializable
+private data class TimedArtists(val fetchedAt: Long, val data: List<HistoryArtist>)
+
 class IosContainer private constructor() {
 
     companion object {
@@ -381,21 +404,29 @@ class IosContainer private constructor() {
     )
 
     // ── Friend profile (#235 / #196) — a friend's History, flat for Swift ──
-    suspend fun getFriendTopTracks(username: String, service: String, period: String): List<HistoryTrack> {
-        var out = emptyList<HistoryTrack>()
-        friendsRepository.getFriendTopTracks(username, service, period).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
-    suspend fun getFriendTopAlbums(username: String, service: String, period: String): List<HistoryAlbum> {
-        var out = emptyList<HistoryAlbum>()
-        friendsRepository.getFriendTopAlbums(username, service, period).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
-    suspend fun getFriendTopArtists(username: String, service: String, period: String): List<HistoryArtist> {
-        var out = emptyList<HistoryArtist>()
-        friendsRepository.getFriendTopArtists(username, service, period).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
+    // Friend top-data: same per-timeframe disk cache as own history, keyed by
+    // friend + service + period so every (friend × filter) is cached. The
+    // FriendProfileModel is recreated on every open (per-screen @State), so
+    // without this each visit re-fetched from scratch. Friend Recently Played
+    // stays live (getFriendRecentTracks below — not cached).
+    suspend fun getFriendTopTracks(username: String, service: String, period: String): List<HistoryTrack> =
+        cachedTopTracks(TOP_TRACKS_FILE, "friend:$username:$service:$period") {
+            var out = emptyList<HistoryTrack>()
+            friendsRepository.getFriendTopTracks(username, service, period).collect { if (it is Resource.Success) out = it.data }
+            out
+        }
+    suspend fun getFriendTopAlbums(username: String, service: String, period: String): List<HistoryAlbum> =
+        cachedTopAlbums(TOP_ALBUMS_FILE, "friend:$username:$service:$period") {
+            var out = emptyList<HistoryAlbum>()
+            friendsRepository.getFriendTopAlbums(username, service, period).collect { if (it is Resource.Success) out = it.data }
+            out
+        }
+    suspend fun getFriendTopArtists(username: String, service: String, period: String): List<HistoryArtist> =
+        cachedTopArtists(TOP_ARTISTS_FILE, "friend:$username:$service:$period") {
+            var out = emptyList<HistoryArtist>()
+            friendsRepository.getFriendTopArtists(username, service, period).collect { if (it is Resource.Success) out = it.data }
+            out
+        }
     suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> {
         var out = emptyList<RecentTrack>()
         friendsRepository.getFriendRecentTracks(username, service).collect { if (it is Resource.Success) out = it.data }
@@ -756,10 +787,17 @@ class IosContainer private constructor() {
      * no iOS-side duplicate cache (fixes the two-caches-fighting bug).
      */
     fun concertsFlow(): Flow<List<ConcertEvent>> = flow {
-        val artists = (try { loadRecommendedArtists() } catch (e: Exception) { emptyList() })
-            .take(12)
-            .map { ConcertArtist(name = it.name, source = "history", imageUrl = it.imageUrl) }
-        if (artists.isEmpty()) { emit(emptyList()); return@flow }
+        // Cache-first paint: emit the last-known events immediately (no artist-seed
+        // build, no network). Previously the slow loadRecommendedArtists() rebuild
+        // ran first on EVERY subscribe, blocking the cache and making the Concerts
+        // page slow every visit. If the cache is still fresh, we're done — skip the
+        // rebuild + revalidation entirely.
+        val cached = concertsRepository.loadCachedEvents()
+        if (!cached.isNullOrEmpty()) emit(cached)
+        if (cached != null && !concertsRepository.isCacheStale) return@flow
+
+        val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
+        if (artists.isEmpty()) { if (cached == null) emit(emptyList()); return@flow }
         val loc = settingsStore.getConcertLocation()
         emitAll(
             concertsRepository.getPersonalizedEvents(
@@ -781,13 +819,11 @@ class IosContainer private constructor() {
         )
     }
 
-    /** Upcoming shows from the user's top recommended artists (the iOS stand-in
-     *  for the library until the DB lands). Bounded to keep the per-artist
-     *  Ticketmaster/SeatGeek fan-out small. */
+    /** Upcoming shows from the user's TOP ARTISTS across every time window.
+     *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is
+     *  safe. */
     suspend fun loadConcerts(): List<ConcertEvent> {
-        val artists = (try { loadRecommendedArtists() } catch (e: Exception) { emptyList() })
-            .take(12)
-            .map { ConcertArtist(name = it.name, source = "history", imageUrl = it.imageUrl) }
+        val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
         if (artists.isEmpty()) return emptyList()
         val loc = settingsStore.getConcertLocation()
         var out = emptyList<ConcertEvent>()
@@ -795,6 +831,65 @@ class IosContainer private constructor() {
             artists, lat = loc.latitude, lon = loc.longitude, radiusMiles = loc.radiusMiles,
         ).collect { res ->
             if (res is Resource.Success) out = res.data
+        }
+        return out
+    }
+
+    /**
+     * The concert artist SEED: the user's TOP ARTISTS across EVERY time window
+     * — Last.fm periods (7day…overall, reusing the per-period disk cache via
+     * [loadTopArtists]) AND ListenBrainz ranges (week…all_time). Deduped by name
+     * and round-robin interleaved across the two services for fair
+     * representation, capped at [CONCERT_SEED_MAX]. Mirrors Android
+     * `ConcertsViewModel.gatherArtists`'s history source (Android additionally
+     * folds in collection/library artists from the DB — not available on iOS
+     * until the DB lands). This deliberately replaces the old
+     * recommended-artists stand-in, which seeded concerts off AI suggestions
+     * rather than what the user actually listens to.
+     */
+    suspend fun topArtistsAllWindows(): List<ConcertArtist> {
+        val lastfm = mutableListOf<ConcertArtist>()
+        val lb = mutableListOf<ConcertArtist>()
+
+        // Last.fm: every period (cached per-period on disk → warm builds are cheap).
+        if (settingsStore.getLastFmUsername() != null) {
+            val seen = mutableSetOf<String>()
+            for (p in CONCERT_LASTFM_PERIODS) {
+                val list = try { loadTopArtists(p) } catch (e: Exception) { emptyList() }
+                for (a in list) {
+                    val k = a.name.lowercase()
+                    if (a.name.isNotBlank() && seen.add(k)) lastfm.add(ConcertArtist(a.name, "history", a.imageUrl))
+                }
+            }
+        }
+
+        // ListenBrainz: every range.
+        val lbUser = settingsStore.getListenBrainzUsername()
+        if (lbUser != null) {
+            val seen = mutableSetOf<String>()
+            for (r in CONCERT_LB_RANGES) {
+                val list = try { listenBrainzClient.getUserTopArtists(lbUser, r, 50) } catch (e: Exception) { emptyList() }
+                for (a in list) {
+                    val k = a.name.lowercase()
+                    if (a.name.isNotBlank() && seen.add(k)) lb.add(ConcertArtist(a.name, "history"))
+                }
+            }
+        }
+
+        // Round-robin interleave the two services, dedupe across them, cap at
+        // CONCERT_SEED_MAX (mirrors Android interleaveAndDedupe).
+        val out = mutableListOf<ConcertArtist>()
+        val seen = mutableSetOf<String>()
+        val itA = lastfm.iterator()
+        val itB = lb.iterator()
+        while (out.size < CONCERT_SEED_MAX && (itA.hasNext() || itB.hasNext())) {
+            for (it in listOf(itA, itB)) {
+                if (out.size >= CONCERT_SEED_MAX) break
+                while (it.hasNext()) {
+                    val a = it.next()
+                    if (seen.add(a.name.lowercase())) { out.add(a); break }
+                }
+            }
         }
         return out
     }
@@ -823,26 +918,109 @@ class IosContainer private constructor() {
     val historyRepository: HistoryRepository by lazy {
         HistoryRepository(lastFmClient, listenBrainzClient, settingsStore, metadataService, appConfig.lastFmApiKey)
     }
-    suspend fun loadTopTracks(period: String): List<HistoryTrack> {
-        var out = emptyList<HistoryTrack>()
-        historyRepository.getTopTracks(period, 50).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
-    suspend fun loadTopAlbums(period: String): List<HistoryAlbum> {
-        var out = emptyList<HistoryAlbum>()
-        historyRepository.getTopAlbums(period, 50).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
-    suspend fun loadTopArtists(period: String): List<HistoryArtist> {
-        var out = emptyList<HistoryArtist>()
-        historyRepository.getTopArtists(period, 50).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
+    // ── Top-data disk cache (own history + friend profiles) ─────────────
+    // Top tracks/albums/artists change slowly, so a 24h disk cache makes cold
+    // launches instant instead of re-hitting Last.fm/ListenBrainz + artwork
+    // enrichment every time. Keyed per timeframe filter (and per friend), so
+    // every period (7day…overall) is cached independently. Recently Played is
+    // deliberately NOT cached — it updates constantly (see loadRecentTracks /
+    // getFriendRecentTracks, which stay on the live repo flow).
+    private val topCacheTtlMs = 24L * 60 * 60 * 1000
+    private val topCacheMutex = Mutex()
+    private val topCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    suspend fun loadTopTracks(period: String): List<HistoryTrack> =
+        cachedTopTracks(TOP_TRACKS_FILE, period) {
+            var out = emptyList<HistoryTrack>()
+            historyRepository.getTopTracks(period, 50).collect { if (it is Resource.Success) out = it.data }
+            out
+        }
+    suspend fun loadTopAlbums(period: String): List<HistoryAlbum> =
+        cachedTopAlbums(TOP_ALBUMS_FILE, period) {
+            var out = emptyList<HistoryAlbum>()
+            historyRepository.getTopAlbums(period, 50).collect { if (it is Resource.Success) out = it.data }
+            out
+        }
+    suspend fun loadTopArtists(period: String): List<HistoryArtist> =
+        cachedTopArtists(TOP_ARTISTS_FILE, period) {
+            var out = emptyList<HistoryArtist>()
+            historyRepository.getTopArtists(period, 50).collect { if (it is Resource.Success) out = it.data }
+            out
+        }
     suspend fun loadRecentTracks(): List<RecentTrack> {
         var out = emptyList<RecentTrack>()
         historyRepository.getRecentTracks().collect { if (it is Resource.Success) out = it.data }
         return out
     }
+
+    // Three concrete helpers (kotlinx-serialization generics are fragile on
+    // Kotlin/Native, so we avoid a generic helper). Each does: fresh-enough
+    // disk hit → return it (no network); else fetch, then merge-write under the
+    // mutex (re-read so a concurrent writer for a different key isn't clobbered);
+    // a fetch that comes back empty falls back to any stale cache rather than
+    // wiping the row.
+    private suspend fun cachedTopTracks(
+        file: String,
+        key: String,
+        fetch: suspend () -> List<HistoryTrack>,
+    ): List<HistoryTrack> {
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        readTopTracksCache(file)[key]?.let {
+            if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
+        }
+        val fresh = fetch()
+        if (fresh.isEmpty()) return readTopTracksCache(file)[key]?.data ?: emptyList()
+        topCacheMutex.withLock {
+            val map = readTopTracksCache(file)
+            map[key] = TimedTracks(now, fresh)
+            try { IosFileCache.write(file, topCacheJson.encodeToString(map.toMap())) } catch (_: Exception) {}
+        }
+        return fresh
+    }
+    private fun readTopTracksCache(file: String): MutableMap<String, TimedTracks> =
+        try { IosFileCache.read(file)?.let { topCacheJson.decodeFromString<Map<String, TimedTracks>>(it).toMutableMap() } } catch (_: Exception) { null } ?: mutableMapOf()
+
+    private suspend fun cachedTopAlbums(
+        file: String,
+        key: String,
+        fetch: suspend () -> List<HistoryAlbum>,
+    ): List<HistoryAlbum> {
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        readTopAlbumsCache(file)[key]?.let {
+            if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
+        }
+        val fresh = fetch()
+        if (fresh.isEmpty()) return readTopAlbumsCache(file)[key]?.data ?: emptyList()
+        topCacheMutex.withLock {
+            val map = readTopAlbumsCache(file)
+            map[key] = TimedAlbums(now, fresh)
+            try { IosFileCache.write(file, topCacheJson.encodeToString(map.toMap())) } catch (_: Exception) {}
+        }
+        return fresh
+    }
+    private fun readTopAlbumsCache(file: String): MutableMap<String, TimedAlbums> =
+        try { IosFileCache.read(file)?.let { topCacheJson.decodeFromString<Map<String, TimedAlbums>>(it).toMutableMap() } } catch (_: Exception) { null } ?: mutableMapOf()
+
+    private suspend fun cachedTopArtists(
+        file: String,
+        key: String,
+        fetch: suspend () -> List<HistoryArtist>,
+    ): List<HistoryArtist> {
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        readTopArtistsCache(file)[key]?.let {
+            if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
+        }
+        val fresh = fetch()
+        if (fresh.isEmpty()) return readTopArtistsCache(file)[key]?.data ?: emptyList()
+        topCacheMutex.withLock {
+            val map = readTopArtistsCache(file)
+            map[key] = TimedArtists(now, fresh)
+            try { IosFileCache.write(file, topCacheJson.encodeToString(map.toMap())) } catch (_: Exception) {}
+        }
+        return fresh
+    }
+    private fun readTopArtistsCache(file: String): MutableMap<String, TimedArtists> =
+        try { IosFileCache.read(file)?.let { topCacheJson.decodeFromString<Map<String, TimedArtists>>(it).toMutableMap() } } catch (_: Exception) { null } ?: mutableMapOf()
 
     val freshDropsRepository: FreshDropsRepository by lazy {
         FreshDropsRepository(
