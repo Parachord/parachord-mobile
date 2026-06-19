@@ -47,6 +47,8 @@ struct PCNowPlaying: View {
     /// a stale dot never lingers from the previous artist (Android parity).
     @State private var isOnTour = false
     @State private var dragY: CGFloat = 0
+    /// Observed so the Next button reacts to the friend moving on while listening along.
+    @State private var listenAlong = ListenAlongController.shared
     /// Observed so the hero art re-renders the moment the current track resolves
     /// and its playing-source artwork (Spotify / Apple Music / SoundCloud) lands.
     /// Non-private so the synthesized memberwise init stays accessible to RootView.
@@ -228,7 +230,11 @@ struct PCNowPlaying: View {
     }
 
     private var transport: some View {
-        HStack {
+        // While listening along, Next catches up to the friend's current song when
+        // they're ahead, and is DISABLED when you're in sync (nothing to advance to).
+        let inListenAlong = coordinator.playbackContext?.type == "listen-along"
+        let canNext = !inListenAlong || listenAlong.friendIsAhead
+        return HStack {
             Button { coordinator.toggleShuffle() } label: {
                 Image(systemName: "shuffle").font(.system(size: 20)).foregroundStyle(.white.opacity(0.55))
             }
@@ -244,9 +250,13 @@ struct PCNowPlaying: View {
                     .shadow(color: .black.opacity(0.3), radius: 12, y: 8)
             }
             Spacer()
-            Button { coordinator.skipNext() } label: {
-                Image(systemName: "forward.fill").font(.system(size: 26)).foregroundStyle(.white.opacity(0.88))
+            Button {
+                if inListenAlong { listenAlong.advanceToFriend() } else { coordinator.skipNext() }
+            } label: {
+                Image(systemName: "forward.fill").font(.system(size: 26))
+                    .foregroundStyle(.white.opacity(canNext ? 0.88 : 0.3))
             }
+            .disabled(!canNext)
             Spacer()
             Button { coordinator.cycleRepeatMode() } label: {
                 Image(systemName: coordinator.repeatMode == .one ? "repeat.1" : "repeat")
@@ -498,13 +508,40 @@ struct PCQueuePanel: View {
     /// Observed so resolver badges appear as background resolution lands.
     /// (Non-private so the memberwise init stays internal/callable.)
     var resolverCache = IosTrackResolverCache.shared
+    /// Observed so the panel flips to the suspended "YOUR QUEUE" view while listening along.
+    var listenAlong = ListenAlongController.shared
     @State var dragY: CGFloat = 0
     private var npBg: Color { Color(uiColor: UIColor(hex: 0x1e1e20)) }
 
     var body: some View {
-        let up = coordinator.upNext
+        // While listening along, the queue is SUSPENDED: show the user's saved
+        // queue dimmed as "YOUR QUEUE" (it resumes on disconnect), not editable.
+        let listeningAlong = coordinator.playbackContext?.type == "listen-along"
+        let up = listeningAlong ? listenAlong.suspendedQueue : coordinator.upNext
         VStack(spacing: 0) {
-            header(count: up.count)
+            header(count: up.count, suspended: listeningAlong)
+            if listeningAlong {
+                // Suspended preview: dimmed, non-interactive (no reorder/remove/tap)
+                // — it's paused and resumes when you disconnect.
+                List {
+                    ForEach(Array(up.enumerated()), id: \.element.id) { idx, t in
+                        queueRow(idx: idx, t: t)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets())
+                            .opacity(0.45)
+                            .allowsHitTesting(false)
+                            .onAppear {
+                                resolverCache.resolve(
+                                    ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: idx)
+                            }
+                    }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.defaultMinListRowHeight, 0)
+                .padding(.vertical, 8)
+            } else {
             // A styled `List` (not a LazyVStack) so `.onMove` drag-reorder + a
             // swipe-to-delete back the shared QueueManager (#220). Chrome stripped
             // to match the dark panel: plain style, clear rows, no separators/insets,
@@ -544,6 +581,7 @@ struct PCQueuePanel: View {
             // Edit/Done toggle; Apple-Music-style). #220
             .environment(\.editMode, .constant(.active))
             .padding(.vertical, 8)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(
@@ -620,19 +658,24 @@ struct PCQueuePanel: View {
 
     /// Grabber + title + Clear + close. The drag-to-dismiss gesture lives HERE
     /// (not on the whole panel) so it never fights the list's scroll.
-    private func header(count: Int) -> some View {
+    private func header(count: Int, suspended: Bool = false) -> some View {
         VStack(spacing: 0) {
             Capsule().fill(.white.opacity(0.35)).frame(width: 36, height: 5)
                 .padding(.top, 8).padding(.bottom, 6)
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("UP NEXT · \(count) TRACKS").font(.system(size: 13, weight: .semibold)).tracking(2)
-                        .foregroundStyle(PC.accentSoft)
+                    Text("\(suspended ? "YOUR QUEUE" : "UP NEXT") · \(count) TRACKS")
+                        .font(.system(size: 13, weight: .semibold)).tracking(2)
+                        .foregroundStyle(suspended ? .white.opacity(0.5) : PC.accentSoft)
                     contextBanner
                 }
                 Spacer()
-                Button("Clear") { coordinator.clearQueue() }
-                    .font(.system(size: 15, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                // No Clear while suspended — it's the paused queue that resumes,
+                // not the active one.
+                if !suspended {
+                    Button("Clear") { coordinator.clearQueue() }
+                        .font(.system(size: 15, weight: .medium)).foregroundStyle(.white.opacity(0.75))
+                }
                 Button(action: onClose) {
                     Image(systemName: "chevron.down").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white).frame(width: 30, height: 30)

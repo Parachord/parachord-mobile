@@ -55,11 +55,20 @@ final class FriendProfileModel {
         }
     }
 
+    /// True only for a MANUAL sidebar pin — NOT a friend that's transiently in the
+    /// sidebar because they're on-air (`autoPinned`). The pin icon + toggle key off
+    /// this so an on-air friend isn't shown as pinned.
+    var isManuallyPinned: Bool { (friend?.pinnedToSidebar == true) && (friend?.autoPinned != true) }
+
     /// Pin/unpin from the top bar (Android parity), then re-read for the icon state.
+    /// `pinFriend(pinned:true)` always sets a MANUAL pin (clears autoPinned), so
+    /// tapping pin on an auto-pinned on-air friend converts it to a real pin that
+    /// persists after they go offline.
     func togglePin() {
         guard let f = friend else { return }
+        let manual = isManuallyPinned
         Task {
-            try? await container.pinFriend(friendId: f.id, pinned: !f.pinnedToSidebar)
+            try? await container.pinFriend(friendId: f.id, pinned: !manual)
             friend = (try? await container.getFriend(friendId: friendId)) ?? friend
         }
     }
@@ -141,7 +150,7 @@ struct FriendProfileScreen: View {
             // the header below — shown ONLY when the friend is on air (or already
             // being listened-along with, so you can stop).
             PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
-                     trailingIcon: model.friend?.pinnedToSidebar == true ? "pin.fill" : "pin",
+                     trailingIcon: model.isManuallyPinned ? "pin.fill" : "pin",
                      onTrailing: { model.togglePin() })
             header
             PCTabs(tabs: ["Top Songs", "Top Albums", "Top Artists", "Recent"], selection: $tabIndex)
