@@ -49,6 +49,8 @@ struct PCNowPlaying: View {
     @State private var dragY: CGFloat = 0
     /// Observed so the Next button reacts to the friend moving on while listening along.
     @State private var listenAlong = ListenAlongController.shared
+    /// Observed so the Spinoff button shows a spinner while the pool is fetching (#231).
+    @State private var spinoff = SpinoffController.shared
     /// Observed so the hero art re-renders the moment the current track resolves
     /// and its playing-source artwork (Spotify / Apple Music / SoundCloud) lands.
     /// Non-private so the synthesized memberwise init stays accessible to RootView.
@@ -273,11 +275,39 @@ struct PCNowPlaying: View {
             PCRoutePicker()
                 .frame(width: 30, height: 30)
                 .frame(maxWidth: .infinity)
-            actionBtn("sparkles", "Spinoff") { }
+            if spinoff.loading {
+                VStack(spacing: 4) {
+                    ProgressView().controlSize(.small).tint(.white)
+                    Text("Spinoff").font(.system(size: 11))
+                }.frame(maxWidth: .infinity)
+            } else {
+                // Spinoff (#231): toggle a Last.fm-similar radio off the current
+                // track. Active = purple; dimmed + disabled when the track has no
+                // similar tracks (Android: enabled = !loading && available != false).
+                // The current song keeps playing — the pool starts when it ends.
+                Button { spinoff.toggle() } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: "sparkles").font(.system(size: 21))
+                        Text("Spinoff").font(.system(size: 11))
+                    }.frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(spinoffTint)
+                .disabled(coordinator.currentTrack == nil || coordinator.spinoffAvailable == false)
+            }
             queueActionBtn
             overflowMenu
         }
         .foregroundStyle(.white.opacity(0.65))
+        .alert(
+            "No similar tracks",
+            isPresented: Binding(get: { spinoff.lastEmptySeed != nil },
+                                 set: { if !$0 { spinoff.lastEmptySeed = nil } })
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Couldn't find tracks similar to “\(spinoff.lastEmptySeed ?? "")”.")
+        }
     }
 
     /// Now-Playing overflow (•••) — the track actions for the current track,
@@ -316,11 +346,19 @@ struct PCNowPlaying: View {
             VStack(spacing: 4) {
                 Image(systemName: "list.bullet").font(.system(size: 21))
                     .overlay(alignment: .topTrailing) {
-                        let n = coordinator.upNext.count
+                        // Desktop parity (app.js:55178): the count badge is GRAY
+                        // (#6B7280) while spun off / listening along, purple
+                        // otherwise. Counts the queue that RESUMES — intact upNext
+                        // during spinoff, the suspended queue during listen-along
+                        // (the active queue there is just the friend's track).
+                        let listeningAlong = coordinator.playbackContext?.type == "listen-along"
+                        let suspended = coordinator.spinoffMode || listeningAlong
+                        let n = listeningAlong ? listenAlong.suspendedQueue.count : coordinator.upNext.count
                         if n > 0 {
-                            Text("\(n)").font(.system(size: 10, weight: .bold)).foregroundStyle(.black)
+                            Text("\(n)").font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(suspended ? .white : .black)
                                 .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(PC.accentSoft, in: Capsule())
+                                .background(suspended ? Color(uiColor: UIColor(hex: 0x6B7280)) : PC.accentSoft, in: Capsule())
                                 .fixedSize()
                                 .offset(x: 11, y: -7)
                         }
@@ -345,6 +383,14 @@ struct PCNowPlaying: View {
             return v
         }
         func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+    }
+
+    /// ✨ Spinoff button tint: active = purple (#C084FC), unavailable = very dim,
+    /// otherwise the normal control gray (#231 / Android parity).
+    private var spinoffTint: Color {
+        if coordinator.spinoffMode { return Color(uiColor: UIColor(hex: 0xC084FC)) }
+        if coordinator.spinoffAvailable == false { return .white.opacity(0.25) }
+        return .white.opacity(0.65)
     }
 
     private func actionBtn(_ icon: String, _ label: String?, _ go: @escaping () -> Void) -> some View {
@@ -375,6 +421,25 @@ struct PCNowPlaying: View {
                 .padding(.horizontal, 22).padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
                 .background(green.opacity(0.08))
+                .overlay(Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5), alignment: .top)
+            }
+            .buttonStyle(.plain)
+        } else if let ctx = coordinator.playbackContext, ctx.type == "spinoff" {
+            // While spun off, the peek highlights the STATION SEED ("Spinoff from
+            // X") in purple — NOT the next pool track (#231). Tap opens the queue,
+            // which shows the user's suspended "YOUR QUEUE".
+            let purple = Color(uiColor: UIColor(hex: 0xC084FC))
+            Button { withAnimation(.spring(duration: 0.32)) { showQueue = true } } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(purple)
+                    Text(ctx.name.uppercased())
+                        .font(.system(size: 11, weight: .semibold)).tracking(1).foregroundStyle(purple).lineLimit(1)
+                    Spacer()
+                    Image(systemName: "chevron.up").font(.system(size: 13, weight: .semibold)).foregroundStyle(purple.opacity(0.85))
+                }
+                .padding(.horizontal, 22).padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .background(purple.opacity(0.08))
                 .overlay(Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5), alignment: .top)
             }
             .buttonStyle(.plain)
@@ -516,16 +581,22 @@ struct PCQueuePanel: View {
     var body: some View {
         // While listening along, the queue is SUSPENDED: show the user's saved
         // queue dimmed as "YOUR QUEUE" (it resumes on disconnect), not editable.
+        // SUSPENDED while listening along OR during a spinoff (#231): show the
+        // user's queue dimmed as "YOUR QUEUE", non-interactive — it resumes when
+        // the spinoff pool exhausts / you disconnect. Spinoff never modifies the
+        // queue (the pool is separate), so it reads the live upNext; Listen Along
+        // replaced the queue with the friend's track, so it reads its saved snapshot.
         let listeningAlong = coordinator.playbackContext?.type == "listen-along"
+        let suspended = listeningAlong || coordinator.spinoffMode
         let up = listeningAlong ? listenAlong.suspendedQueue : coordinator.upNext
         VStack(spacing: 0) {
-            header(count: up.count, suspended: listeningAlong)
-            if listeningAlong {
+            header(count: up.count, suspended: suspended)
+            if suspended {
                 // Suspended preview: dimmed, non-interactive (no reorder/remove/tap)
                 // — it's paused and resumes when you disconnect.
                 List {
                     ForEach(Array(up.enumerated()), id: \.element.id) { idx, t in
-                        queueRow(idx: idx, t: t)
+                        queueRow(idx: idx, t: t, suspended: true)
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets())
@@ -594,10 +665,12 @@ struct PCQueuePanel: View {
 
     /// One up-next row. Tapping a mid-queue track removes the tracks above it
     /// (they're "played") and the queue shifts up (Android parity).
-    @ViewBuilder private func queueRow(idx: Int, t: Track) -> some View {
+    @ViewBuilder private func queueRow(idx: Int, t: Track, suspended: Bool = false) -> some View {
         Button { withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) { coordinator.playFromQueue(idx) } } label: {
             HStack(spacing: 12) {
-                Text("\(idx + 1)").font(.system(size: 12, design: .monospaced))
+                // "··" instead of the track number while suspended (spinoff /
+                // listen-along) — Android QueueSheet parity (#231).
+                Text(suspended ? "··" : "\(idx + 1)").font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.4)).frame(width: 24, alignment: .trailing)
                 pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title, size: 38, radius: 6,
                         resolving: pcTrackResolving(artist: t.artist, title: t.title, album: t.album))

@@ -614,7 +614,12 @@ fun NowPlayingScreen(
                                     .align(Alignment.TopEnd)
                                     .offset(x = (-2).dp, y = 4.dp)
                                     .size(16.dp)
-                                    .background(PurpleDark, CircleShape),
+                                    // Desktop parity (app.js:55180): gray while spun
+                                    // off / listening along, purple otherwise.
+                                    .background(
+                                        if (playbackState.spinoffMode || inListenAlong) Color(0xFF6B7280) else PurpleDark,
+                                        CircleShape,
+                                    ),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(

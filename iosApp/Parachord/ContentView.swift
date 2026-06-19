@@ -1426,6 +1426,76 @@ final class QueuePlaybackCoordinator {
     /// back to the start when the queue is exhausted.
     @ObservationIgnored private var originalQueue: [Track] = []
 
+    // ── Spinoff (#231) — Android PlaybackController parity ──────────────────
+    // The pool is a SEPARATE hidden list; the user's QueueManager queue is NEVER
+    // modified — only the playback CONTEXT is saved + restored — so it resumes
+    // intact after the pool exhausts. On start the current song KEEPS PLAYING;
+    // skipNext()/autoAdvance() pull from the pool when it ends (matches Android's
+    // kickStartFirstTrack=false in-app path). Mutually exclusive with Listen Along.
+    @ObservationIgnored private var spinoffPool: [Track] = []
+    @ObservationIgnored private var preSpinoffContext: PlaybackContext?
+    /// True while a spinoff station is active — observed; gates the ✨ button, the
+    /// "YOUR QUEUE" suspended queue display, and the "Spinoff from X" peek.
+    var spinoffMode = false
+    /// Last.fm availability for the CURRENT track: nil = unchecked (button enabled),
+    /// true = has similar tracks, false = none (button DISABLED). Refreshed on every
+    /// track change (Android's checkSpinoffAvailability, limit=1).
+    var spinoffAvailable: Bool? = nil
+    @ObservationIgnored private var spinoffCheckTask: Task<Void, Never>?
+
+    /// Enter spinoff: stash the pool, save the current context, set the spinoff
+    /// banner. Does NOT touch playback — the current song finishes first, then the
+    /// pool plays. No-op on an empty pool.
+    func beginSpinoff(pool: [Track], displayName: String) {
+        guard !pool.isEmpty else { return }
+        preSpinoffContext = playbackContext
+        spinoffPool = pool
+        spinoffMode = true
+        queueManager.setContext(context: PlaybackContext(type: "spinoff", name: displayName, id: nil))
+        syncSnapshot()
+    }
+
+    /// Pull the next pool track if a spinoff is active. Returns true when it handled
+    /// the advance (caller returns). On pool-exhaustion it exits spinoff and returns
+    /// false so the caller falls through to the normal queue ("return to queue").
+    private func advanceSpinoff() -> Bool {
+        guard spinoffMode else { return false }
+        if !spinoffPool.isEmpty {
+            playTrack(spinoffPool.removeFirst())
+            return true
+        }
+        exitSpinoff()
+        return false
+    }
+
+    /// Exit spinoff: drop the pool, restore the saved context. The queue was never
+    /// modified, so the next skipNext resumes it. Also the ✨ button's toggle-off.
+    func exitSpinoff() {
+        guard spinoffMode else { return }
+        spinoffPool.removeAll()
+        spinoffMode = false
+        queueManager.setContext(context: preSpinoffContext)
+        preSpinoffContext = nil
+        syncSnapshot()
+    }
+
+    /// Refresh `spinoffAvailable` for `track` (Android parity: a limit=1
+    /// getSimilarTracks on every track change). Skipped during spinoff; nil while
+    /// in flight or on error (button stays enabled until proven unavailable).
+    func checkSpinoffAvailability(for track: Track) {
+        guard !spinoffMode else { return }
+        spinoffCheckTask?.cancel()
+        spinoffAvailable = nil
+        let artist = track.artist, title = track.title
+        guard !artist.isEmpty, !title.isEmpty else { return }
+        spinoffCheckTask = Task { @MainActor [weak self] in
+            guard let container = self?.container else { return }
+            let ok = try? await container.spinoffAvailable(seedArtist: artist, seedTitle: title)
+            if Task.isCancelled { return }
+            self?.spinoffAvailable = ok?.boolValue
+        }
+    }
+
     /// Which engine the current track is playing on. The UI reads unified
     /// state below so it doesn't care which one.
     var activeEngine: PlaybackEngineKind = .avPlayer
@@ -1655,6 +1725,10 @@ final class QueuePlaybackCoordinator {
     /// Establish a new queue and start playing the track at
     /// `startIndex`. Mirrors `PlaybackEngine.setQueue`.
     func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil) {
+        // Spinoff (#231): the user starting their own playback ends any active
+        // spinoff (it's not the pool driving this setQueue). Exclude the spinoff's
+        // own context so beginSpinoff's setContext path isn't mistaken for takeover.
+        if spinoffMode, context?.type != "spinoff" { exitSpinoff() }
         originalQueue = tracks   // retained for repeat-ALL wrap (#221)
         let toPlay = queueManager.setQueue(
             tracks: tracks,
@@ -1669,6 +1743,10 @@ final class QueuePlaybackCoordinator {
     }
 
     func skipNext() {
+        // Spinoff (#231): pull from the separate pool, bypassing the queue. When the
+        // pool exhausts, advanceSpinoff() exits spinoff and returns false so we fall
+        // through to the user's (never-modified) queue, which resumes here.
+        if advanceSpinoff() { return }
         guard let next = queueManager.skipNext(currentTrack: currentTrack) else {
             // Queue exhausted — stop cleanly.
             player.stop()
@@ -1726,6 +1804,10 @@ final class QueuePlaybackCoordinator {
         // Listen Along owns end-of-track: let the controller pick the friend's
         // next song so the just-finished one plays fully (and scrobbles), #246.
         if let hook = onTrackFinished { hook(); return }
+        // Spinoff (#231): the just-finished song was the seed (or a pool track) —
+        // pull the next pool track. On exhaustion this exits spinoff and returns
+        // false, falling through to repeat/queue handling below.
+        if advanceSpinoff() { return }
         switch repeatMode {
         case .one:
             // Replay the just-finished track.
@@ -1778,6 +1860,9 @@ final class QueuePlaybackCoordinator {
 
     private func playTrack(_ track: Track) {
         currentTrack = track
+        // Refresh whether spinoff is available for this track (#231) — no-op during
+        // spinoff (the pool tracks don't re-check; the ✨ button shows "exit").
+        checkSpinoffAvailability(for: track)
         isStarting = true
         // Supersede any in-flight start so only the LATEST request reaches the
         // router (rapid tap B-then-C before B resolves; or a user tap racing an
