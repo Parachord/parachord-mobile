@@ -456,8 +456,8 @@ struct CollectionView: View {
             // Circular avatar + on-air green dot (design's ios-drawer__avatar).
             ZStack(alignment: .bottomTrailing) {
                 Color.clear.frame(width: 46, height: 46)
-                    .overlay { PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: f.displayName, size: nil, radius: 999) } }
-                    .clipShape(Circle())
+                    .overlay { PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: f.displayName, size: nil, radius: 0) } }
+                    .clipShape(PCHexagon())   // friends = hexagons
                 if f.isOnAir {
                     Circle().fill(Color(uiColor: UIColor(hex: 0x10B981)))
                         .frame(width: 12, height: 12)

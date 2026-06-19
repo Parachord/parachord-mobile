@@ -89,6 +89,7 @@ struct HomeScreen: View {
     @State private var path: [PCRoute] = []
     @State private var model = DiscoverViewModel.shared
     @State private var reauth = SpotifyReauthModel()
+    private let container = IosContainer.companion.shared
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
@@ -118,6 +119,11 @@ struct HomeScreen: View {
                             weeklySection("Weekly Jams", model.jams)
                             weeklySection("Weekly Exploration", model.exploration)
                         }
+
+                        if !model.friendActivity.isEmpty {
+                            sectionHeader("Friend Activity")
+                            friendActivitySection
+                        }
                     }
                     .padding(.bottom, 130) // clear the floating tab bar
                 }
@@ -133,6 +139,62 @@ struct HomeScreen: View {
     }
 
     // MARK: Sections
+
+    // ── Friend Activity (#235) — friends with a now-playing/last track, on-air
+    // first, tap → profile, long-press → Listen Along / Pin. Matches Android.
+    private var friendActivitySection: some View {
+        VStack(spacing: 0) {
+            ForEach(model.friendActivity, id: \.id) { f in
+                NavigationLink(value: PCRoute.friend(id: f.id, username: f.username, service: f.service, name: f.displayName)) {
+                    friendActivityRow(f)
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    if f.isOnAir || ListenAlongController.shared.isActive(f) {
+                        Button { ListenAlongController.shared.toggle(f) } label: {
+                            Label(ListenAlongController.shared.isActive(f) ? "Stop Listening Along" : "Listen Along", systemImage: "headphones")
+                        }
+                    }
+                    if f.pinnedToSidebar {
+                        Button { Task { try? await container.pinFriend(friendId: f.id, pinned: false) } } label: { Label("Unpin from Sidebar", systemImage: "pin.slash") }
+                    } else {
+                        Button { Task { try? await container.pinFriend(friendId: f.id, pinned: true) } } label: { Label("Pin to Sidebar", systemImage: "pin") }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    @ViewBuilder private func friendActivityRow(_ f: Friend) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                Color.clear.frame(width: 44, height: 44)
+                    .overlay { PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: f.displayName, size: nil, radius: 0) } }
+                    .clipShape(PCHexagon())   // friends = hexagons
+                if f.isOnAir {
+                    Circle().fill(Color(uiColor: UIColor(hex: 0x10B981)))
+                        .frame(width: 12, height: 12)
+                        .overlay(Circle().strokeBorder(PC.bgPrimary, lineWidth: 2))
+                }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(f.displayName).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                if f.isOnAir, let track = f.cachedTrackName {
+                    Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                        .font(.system(size: 13)).foregroundStyle(Color(uiColor: UIColor(hex: 0x10B981))).lineLimit(1)
+                } else if let track = f.cachedTrackName {
+                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
+                        .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                } else {
+                    Text("Offline").font(.system(size: 13)).foregroundStyle(PC.fg3)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
 
     private func sectionHeader(_ text: String) -> some View {
         Text(text).pcSectionHeader()
@@ -220,6 +282,9 @@ struct HomeScreen: View {
                 Text(tile.subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85))
                     .transition(.opacity)
             }
+            // Balancing spacer so the preview sits vertically centered in the
+            // space below the header (was bottom-anchored with only the top spacer).
+            Spacer(minLength: 0)
         }
         .padding(14)
         .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)

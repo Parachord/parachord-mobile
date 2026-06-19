@@ -385,12 +385,14 @@ private val RELEASE_FILTERS = listOf(
     ReleaseFilter("compilation", "Compilations"),
 )
 
-private fun releaseTypeBadgeColor(type: String?): Color = when (type?.lowercase()) {
+/** Per-release-type color — desktop `badgeStyles` map (app.js), the source of
+ *  truth (#247). Shared by the artist discography filters/badges AND Fresh Drops. */
+fun releaseTypeBadgeColor(type: String?): Color = when (type?.lowercase()) {
     "album" -> Color(0xFF6366F1)        // indigo
     "ep" -> Color(0xFFA855F7)           // purple
-    "single" -> Color(0xFFEC4899)       // pink
-    "live" -> Color(0xFFF59E0B)         // amber
-    "compilation" -> Color(0xFF14B8A6)  // teal
+    "single" -> Color(0xFFDB2777)       // rose
+    "live" -> Color(0xFFD97706)         // amber
+    "compilation" -> Color(0xFF0EB3A0)  // teal
     else -> Color(0xFF9CA3AF)           // gray
 }
 

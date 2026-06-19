@@ -59,15 +59,19 @@ struct PCSkeletonBox: View {
     var height: CGFloat? = nil
     var radius: CGFloat = 6
     @State private var x: CGFloat = -1
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        RoundedRectangle(cornerRadius: radius, style: .continuous)
+        // The sweeping highlight is near-white in light mode but far too bright on
+        // the dark inset surface — dim it heavily in dark mode.
+        let highlight = Color.white.opacity(scheme == .dark ? 0.08 : 0.32)
+        return RoundedRectangle(cornerRadius: radius, style: .continuous)
             .fill(PC.bgInset)
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil)
             .overlay(
                 GeometryReader { g in
-                    LinearGradient(colors: [.clear, .white.opacity(0.32), .clear],
+                    LinearGradient(colors: [.clear, highlight, .clear],
                                    startPoint: .leading, endPoint: .trailing)
                         .frame(width: g.size.width * 0.6)
                         .offset(x: x * g.size.width)
@@ -290,14 +294,17 @@ final class FreshDropsModel {
 private let freshFilters: [(key: String, label: String)] =
     [("all", "All"), ("album", "Albums"), ("ep", "EPs"), ("single", "Singles")]
 
-/// Per-release-type pill/badge color (shared with the artist discography filters).
+/// Per-release-type pill/badge color (shared by the Fresh Drops chips/filters AND
+/// the artist discography filters). Colors are the DESKTOP `badgeStyles` map
+/// (app.js) — the source of truth (#247). Note Android's Fresh Drops uses a
+/// different purple/cyan/amber set; desktop is canonical, so iOS follows it.
 func pcReleaseTypeColor(_ key: String?) -> Color {
     switch key?.lowercased() {
     case "album":       return Color(uiColor: UIColor(hex: 0x6366F1)) // indigo
     case "ep":          return Color(uiColor: UIColor(hex: 0xA855F7)) // purple
-    case "single":      return Color(uiColor: UIColor(hex: 0xEC4899)) // pink
-    case "live":        return Color(uiColor: UIColor(hex: 0xF59E0B)) // amber
-    case "compilation": return Color(uiColor: UIColor(hex: 0x14B8A6)) // teal
+    case "single":      return Color(uiColor: UIColor(hex: 0xDB2777)) // rose
+    case "live":        return Color(uiColor: UIColor(hex: 0xD97706)) // amber
+    case "compilation": return Color(uiColor: UIColor(hex: 0x0EB3A0)) // teal
     default:            return Color(uiColor: UIColor(hex: 0x9CA3AF)) // gray
     }
 }
@@ -409,10 +416,12 @@ struct FreshDropsScreen: View {
                 Text(drop.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(drop.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                 HStack(spacing: 8) {
+                    // Badge color = the per-type color (matches the filter chip), #247.
+                    let typeColor = pcReleaseTypeColor(drop.releaseType)
                     Text(drop.releaseType.uppercased()).font(.system(size: 9, weight: .bold)).tracking(0.5)
-                        .foregroundStyle(PC.accent)
+                        .foregroundStyle(typeColor)
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(PC.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
+                        .background(typeColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
                     if let d = freshDate(drop.date) {
                         Text(d.text).font(.system(size: 12))
                             .foregroundStyle(d.upcoming ? Color(uiColor: UIColor(hex: 0x10B981)) : PC.fg3)
@@ -691,7 +700,12 @@ struct ConcertsScreen: View {
                             ForEach(grouped, id: \.month) { group in
                                 Text(group.month).font(.system(size: 13, weight: .semibold)).foregroundStyle(PC.fg2)
                                     .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 6)
-                                ForEach(Array(group.events.enumerated()), id: \.offset) { _, e in
+                                // Use the stable event id, NOT enumerated offset:
+                                // enumerated() restarts at 0 per month group, so
+                                // offsets collided across groups in this one LazyVStack
+                                // → duplicate ForEach ids → blank/mis-rendered rows
+                                // (worse on iPad, where more groups are on-screen).
+                                ForEach(group.events, id: \.id) { e in
                                     eventRow(e)
                                     Divider().padding(.leading, 80)
                                 }

@@ -182,9 +182,9 @@ struct FriendProfileScreen: View {
 
     private var header: some View {
         VStack(spacing: 6) {
-            Circle().fill(PC.bgInset).frame(width: 80, height: 80)
-                .overlay { PCArtistImage(url: model.friend?.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: model.name, size: nil, radius: 999) } }
-                .clipShape(Circle())
+            PCHexagon().fill(PC.bgInset).frame(width: 80, height: 80)
+                .overlay { PCArtistImage(url: model.friend?.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: model.name, size: nil, radius: 0) } }
+                .clipShape(PCHexagon())   // friends = hexagons
             if model.friend?.isOnAir == true {
                 Text("● ON AIR").font(.system(size: 11, weight: .bold)).foregroundStyle(Self.onAirGreen)
                 // What they're listening to right now (Android parity — the friend's

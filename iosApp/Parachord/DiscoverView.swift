@@ -42,6 +42,10 @@ final class DiscoverViewModel {
     /// preset → featured item shown inside each Discover tile (matches Android's
     /// per-tile DiscoverPreview). Loaded in the background from each tile's repo.
     var previews: [String: TilePreview] = [:]
+    /// Friend Activity for the home page (#235) — friends with a now-playing/last
+    /// track, on-air first, capped at 5 (matches Android HomeViewModel.friendActivity).
+    var friendActivity: [Friend] = []
+    private var friendSub: Cancellable?
     var isLoading = false
     var loaded = false
 
@@ -60,6 +64,21 @@ final class DiscoverViewModel {
             Task { @MainActor in self?.onUsernameChanged(username) }
         }
         loadPreviews()
+        // Friend Activity (#235): all friends with a cached track, on-air first,
+        // capped at 5 (Android parity).
+        if friendSub == nil {
+            friendSub = container.watchCollectionFriends { [weak self] friends in
+                let activity = friends
+                    .filter { $0.cachedTrackName != nil }
+                    .sorted { a, b in
+                        if a.isOnAir != b.isOnAir { return a.isOnAir }
+                        return a.cachedTrackTimestamp > b.cachedTrackTimestamp
+                    }
+                    .prefix(5)
+                    .map { $0 }
+                Task { @MainActor in self?.friendActivity = activity }
+            }
+        }
     }
 
     /// Each Discover tile's featured item, from its own repo's first entry

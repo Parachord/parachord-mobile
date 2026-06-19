@@ -61,6 +61,7 @@ struct ContentView: View {
                         progress: coordinator.duration > 0 ? coordinator.currentTime / coordinator.duration : 0,
                         artNamespace: artNS, artIsSource: !showNowPlaying,
                         onToggle: { coordinator.togglePlayPause() },
+                        onNext: { coordinator.skipNext() },
                         onExpand: { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = true } }
                     )
                 }
