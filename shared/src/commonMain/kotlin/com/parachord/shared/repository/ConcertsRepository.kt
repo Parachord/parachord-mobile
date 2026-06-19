@@ -144,6 +144,17 @@ class ConcertsRepository(
 
     val isCacheStale: Boolean get() = currentTimeMillis() - localFetchedAt > STALE_THRESHOLD
 
+    /**
+     * Ensure the disk cache is loaded and return the cached events (or null)
+     * WITHOUT triggering a network fetch or needing the artist seed. Lets a
+     * caller paint the last-known events instantly before the (slow) artist
+     * rebuild that [getPersonalizedEvents] requires — see iOS `concertsFlow`.
+     */
+    suspend fun loadCachedEvents(): List<ConcertEvent>? {
+        if (!diskCacheLoaded) loadDiskCache()
+        return cachedLocalEvents
+    }
+
     private suspend fun loadDiskCache() {
         diskCacheLoaded = true
         try {
