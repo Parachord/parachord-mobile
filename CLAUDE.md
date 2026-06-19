@@ -1031,6 +1031,42 @@ A full security review was completed April 2026. The review plan is at `.claude/
 
   This is a separate token from the on-device *playback* token (the App Service token used by `ApplicationMusicPlayer` on iOS — see `iosApp/AGENTS.md`). The hand-paste drift + silent expiry is tracked for build-time generation from the `.p8` in [parachord-mobile#186](https://github.com/Parachord/parachord-mobile/issues/186); until that lands, **rotation = update both files above.**
 
+## Plugin Marketplace & `.axe` Repo Sync
+
+`.axe` plugins are the **cross-platform source of truth** for resolvers, AI providers, meta-services, AND their behavior (model lists, filters, scrobble payloads). **Do NOT natively reimplement what an `.axe` already does** — see the rule in Common Mistakes below.
+
+**Sync topology — the hub is the desktop monorepo, NOT the mobile repo:**
+- **Authoring source:** `parachord-desktop/plugins/` (GitHub `Parachord/parachord`). Plugins are edited here.
+- **Forward sync** (`parachord-desktop/.github/workflows/sync-repos.yml`): push to monorepo `main` touching `plugins/**` → unconditional `cp` to `Parachord/parachord-plugins` (the marketplace) + manifest merge. **NOT version-aware** — a stale monorepo plugin DOWNGRADES the marketplace (the #754 clobber class).
+- **Reverse sync** (`reverse-sync.yml`, daily 6 AM UTC + dispatch): marketplace → monorepo, **version-aware (strictly-greater only, never downgrade)**, opens a PR. Pulls community contributions back.
+- **Apps consume the marketplace at runtime** via `PluginSyncService` (fetches `manifest.json` from `raw.githubusercontent.com/Parachord/parachord-plugins/main/`, downloads newer `.axe`, semver-dedups vs the bundled copy — higher wins).
+
+**Mobile (`parachord-android`) is OUTSIDE the desktop sync.** Its bundled copies — `app/src/main/assets/plugins/*.axe` (Android) AND `iosApp/Parachord/Resources/plugins/*.axe` (iOS — a **separate** copy) — are an offline fallback; runtime sync delivers updates. A **one-direction** (marketplace → mobile) pull keeps the bundle fresh: `.github/workflows/sync-plugins.yml` + `.github/scripts/sync-bundled-plugins.js` (version-aware; updates only already-bundled plugins; never downgrades/adds/removes; PR). **No mobile → marketplace forward sync exists** — mobile never authors plugins, so one would only leak in-repo bundled edits upstream.
+
+**Landing a plugin change — two paths:**
+1. **Monorepo-first (safest):** edit `parachord-desktop/plugins/<x>.axe` + bump its `manifest.version` + `marketplace-manifest.json`, push → forward-sync ships it. No clobber window.
+2. **Direct-to-`parachord-plugins` (faster):** edit the marketplace `.axe` + **bump the version** (in the `.axe` AND `manifest.json`) → the reverse-sync adopts it (strictly-greater) and PRs it back. Without a version bump the no-downgrade guard ignores it. **Clobber window:** until that reverse PR merges into the monorepo, any monorepo `plugins/**` push `cp`s the older monorepo copy over your change — merge the reverse PR promptly.
+
+**Verify against the live remote, not the local checkout.** A local `parachord-plugins` clone may sit on a stale feature branch (it was once 50 commits behind `main`, which made the marketplace *look* drifted when it wasn't). Always check `origin/main` / the `raw.githubusercontent.com/.../main/` URL.
+
+## DJ Chat / Shuffleupagus — shared, both platforms (#223 / #202)
+
+- **Reuse the shared stack.** `AiChatService` (the tool loop), the 3 providers, `DjToolDefinitions`, `ChatContextProvider`, `ChatCardEnricher`, `ChatMessageDao` (per-provider history) all live in `commonMain`. A platform needs only: a `DjToolExecutor` impl (8-tool dispatch), container wiring, and the UI. Don't re-derive any of this.
+- **System prompt = desktop's full `AI_CHAT_SYSTEM_PROMPT`** (`app.js` ~L5286), ported verbatim into `ChatContextProvider.buildSystemPrompt()` (scoped to the 8 mobile tools). Don't author an abridged prompt — the personality, the "you MUST call the tool (saying ≠ doing)" guardrail, the album-vs-track queueing rules (never `play`+`queue_add` together), strict personalization, and the card-syntax / common-mistakes blocks all change behavior.
+- **Per-provider history — STAMP the timestamp.** `ChatMessage.toEntity()` MUST set `timestamp = currentTimeMillis()`. `ChatMessageRecord` defaults to `0L`, and `AiChatService.ensureLoaded()` prunes `timestamp < now-30d` on every load — so a 0 timestamp means history is deleted on the next load / app restart (never remembered across sessions). Was a silent bug on BOTH platforms.
+- **Cards trigger the player via DIRECT calls, not `parachord://`** (desktop 20508+ / Android `onPlayTrack`). Syntax: `{{track|t|a|al}}` / `{{album|t|a}}` / `{{artist|n}}` parsed from the assistant text.
+- **Model lists come from the `.axe`, never native.** Read the plugin's model setting: static `select` → its curated `options`; `dynamic-select` → `listModels` (live) falling back to the plugin's curated `fallbackOptions` when empty/keyless; seed the picker with the plugin's `default` (desktop: `metaServiceConfigs[id].model || modelSetting.default`, `app.js:59532`). On iOS the `.axe` async (`listModels`) needs the JSC unique-key poll — see `iosApp/AGENTS.md`.
+
+## Spinoff + Listen Along — queue model (#231 / #235 / #246)
+
+Both are iOS ports of Android's `PlaybackController`; **read desktop + Android FIRST.** A by-eye first cut of Spinoff got the model wrong (pool-as-queue + immediate kick-start) and had to be rebuilt against Android.
+
+- **Spinoff = a SEPARATE hidden pool, NOT a replaced queue.** On start the user's `QueueManager` queue is NEVER modified — only the playback `context` is saved (`preSpinoffContext`); the current song KEEPS PLAYING (`kickStartFirstTrack=false`); `skipNext`/auto-advance pull from the pool; on exhaustion `exitSpinoff` restores the context and the untouched queue resumes. Pool seed = Last.fm `track.getsimilar`; availability is pre-checked (limit=1 `getSimilarTracks`) to gate/dim the ✨ button (`spinoffAvailable != false`). The ✨ button toggles (purple when active). Mutually exclusive with Listen Along (each exits the other).
+- **UP NEXT shows the station SEED** ("Spinoff from `<track>` by `<artist>`"), NOT the next pool track. The open queue shows the user's queue dimmed as **"YOUR QUEUE"** with **"··"** track numbers (suspended state, also used by Listen Along).
+- **Queue count badge turns GRAY (`#6B7280`)** while spun off / listening along, purple otherwise (desktop `app.js:55180`).
+- **Listen Along** plays the friend's current track, defers track-changes to the current song's END (so each scrobbles), polls every 15s, and stops following the moment the user takes control (context ≠ `listen-along`).
+- **Scrobbling metadata-only tracks (both features):** their Track entities have `duration: 0`. The scrobble THRESHOLD reads the live ENGINE duration (so it fires), but the LB submit must OMIT `duration_ms <= 0` or LB 400s the whole listen. Shared fix in `ListenBrainzClient.submitListens` + `ListenBrainzScrobbler` (guarded by `ListenBrainzSubmitListensTest`); applies to ANY metadata-only track (weekly playlists, recommendations, DJ chat).
+
 ## Common Mistakes to Avoid
 
 ### Both Platforms
@@ -1040,6 +1076,7 @@ A full security review was completed April 2026. The review plan is at `.claude/
 3. **Don't skip the resolver pipeline.** Even if you have a direct URL, route through `ResolverManager` → `ResolverScoring` → `PlaybackRouter` to maintain consistent behavior.
 4. **Don't use blue as the accent color.** The brand accent is purple (`#7c3aed` light / `#a78bfa` dark).
 5. **Don't return or select sources below the confidence floor.** `ResolverScoring.selectBest()` filters out sources with confidence < `MIN_CONFIDENCE_THRESHOLD` (0.60). `scoreConfidence()` returns 0.95 ONLY when BOTH title AND artist substring-match — single-axis matches (wrong artist, or wrong title) collapse to 0.50 so the floor filters them. This mirrors desktop's `validateResolvedTrack` two-stage gate exactly: validation pass + priority sort. A title-only match (e.g., a different artist's "Mariana") must NOT win against a correct local file just because applemusic has higher priority. If porting to iOS, replicate this gate.
+6. **Don't natively reimplement `.axe` plugin functionality — ASK FIRST.** The `.axe`/marketplace plugin is the cross-platform source of truth: portability, marketplace updates, "one place for everyone." If a plugin already provides something — `resolve`, `listModels`, the model `options`/`fallbackOptions`/`default`, scrobble, AI chat — **call the plugin, don't write a native Kotlin/Swift equivalent.** A native reimplementation forks behavior and goes stale (we shipped a native per-provider `listModels` when `chatgpt.axe`/`gemini.axe` already had one — #223; it was reverted). **Before writing any native reimplementation of `.axe` logic, STOP and check with the user, with a concrete reason** (e.g. the `.axe` genuinely can't do it on this platform). The ONE legitimate native layer is the host GLUE that *runs* the `.axe` (e.g. iOS's JavaScriptCore unique-key polling for async `.axe` calls, the `NativeBridge` fetch polyfill) — never a reimplementation of the plugin's own logic.
 
 ### KMP / shared/commonMain rules
 
