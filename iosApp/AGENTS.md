@@ -272,6 +272,17 @@ there**, so several gaps only surface on iOS:
   fail). Symptom of regressing this: resolution works only after visiting the
   Dev tab. Keep the installer wired in `ParachordApp.init()` + pre-warm there.
 
+### Running `.axe` async on iOS — poll, don't reimplement (DJ chat + dynamic models)
+
+**RULE: don't natively reimplement what an `.axe` already does — ask first.** This bit us on dynamic AI models (#223): a native per-provider `listModels` (OpenAI/Anthropic/Gemini HTTP) got written when `chatgpt.axe`/`gemini.axe` already had `listModels`, and was reverted. The `.axe`/marketplace is the source of truth (portability, marketplace updates, one place for desktop + both mobile platforms). The ONLY legitimate native iOS layer is the GLUE that *runs* the `.axe` in JavaScriptCore — never a reimplementation of the plugin's logic. See root `CLAUDE.md` → Common Mistakes #6.
+
+- **Any async `.axe` function returns `[object Promise]` on JSC if read synchronously** (same gotcha as `resolve` — a bare `(async()=>…)()` doesn't await). Use the SAME `window.__resolveResults['<unique-key>']` poll as `IosResolverRuntime.resolveOne`. `IosResolverRuntime.listModels(pluginId, apiKey)` does this for the AI plugins' `listModels`; `aiModels(pluginId, apiKey)` wraps it with the desktop precedence: a static `select` setting's curated `options` win, a `dynamic-select` setting fetches live via `listModels` and falls back to the plugin's `fallbackOptions` when empty/keyless. `aiModelDefault(pluginId)` reads the setting's `default` (synchronous property read — no Promise). The Settings picker seeds `stored || pluginDefault` (`app.js:59532`).
+- **DJ chat tool execution bridges Kotlin → the Swift coordinator via lambdas.** `IosDjToolExecutor` (iosMain) does search/resolve in Kotlin (`metadataService`) and delegates the playback verbs to `IosChatPlaybackBridge` closures that Swift sets at app start (`IosContainer.bindChatPlayback(...)`), fire-and-forget on `@MainActor` (like the scrobble/spinoff bridges). Pool/queue tracks are metadata-only and resolve on-the-fly at play time. The `ChatContextProvider` playback snapshot is PUSHED from Swift (`updateChatPlaybackSnapshot`) so the Kotlin side never reads `@MainActor` state cross-thread.
+
+### Spinoff + Listen Along on iOS — coordinator-level, not a queue swap
+
+Model + cross-platform details live in root `CLAUDE.md` → "Spinoff + Listen Along". iOS specifics: the spinoff pool + `spinoffMode` + `preSpinoffContext` live on `QueuePlaybackCoordinator` (ContentView.swift) — `beginSpinoff`/`advanceSpinoff`/`exitSpinoff`; `skipNext` + `autoAdvance` check the pool BEFORE the queue. Listen Along keeps its OWN suspension in `ListenAlongController`; the two never co-exist (each `stop`s/`exitSpinoff`s the other). The chat/spinoff/listen-along screens slide in as **trailing-edge drawers** (`.transition(.move(edge: .trailing))` + a left-edge swipe-to-close zone in the RootView ZStack), NOT bottom covers — matches Android's right-slide.
+
 ### Tracklist resolution: visibility-scoped, top-down, globally bounded
 
 Every list screen that shows resolver badges MUST submit its tracks the same
