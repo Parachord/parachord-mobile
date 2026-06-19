@@ -1031,6 +1031,7 @@ private struct PluginConfigSheet: View {
 
 private struct GeneralTab: View {
     @Bindable var model: SettingsViewModel
+    @State private var sync = SyncModel()
     private let themes = ["system", "light", "dark"]
 
     var body: some View {
@@ -1051,15 +1052,90 @@ private struct GeneralTab: View {
             .tint(PC.accent)
             .padding(.horizontal, 20).padding(.top, 4)
 
+            syncSection
+
             label("Scrobbling")
             Text("Connect Last.fm, ListenBrainz, or Libre.fm under Plug-ins, then turn on “Scrobble my plays” in that service’s settings.")
                 .font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.top, 6)
         }
         .padding(.bottom, 130)
+        .task { await sync.load() }
     }
+
+    // Library Sync (#194, Phase 1). Per-service toggles mirror "what we support":
+    // Spotify syncs saved tracks/albums/artists + playlists; ListenBrainz syncs
+    // playlists. Apple Music sync is a follow-up.
+    @ViewBuilder private var syncSection: some View {
+        label("Library Sync")
+        syncToggle("Spotify", desc: "Sync your saved tracks, albums, artists, and playlists.",
+                   isOn: sync.spotifyOn) { sync.setProvider("spotify", $0) }
+        syncToggle("ListenBrainz", desc: "Sync your playlists.",
+                   isOn: sync.listenBrainzOn) { sync.setProvider("listenbrainz", $0) }
+        HStack {
+            Button {
+                Task { await sync.syncNow() }
+            } label: {
+                Text(sync.syncing ? "Syncing…" : "Sync now")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .background(Capsule().fill(sync.anyOn ? PC.accent : PC.fg3))
+            }
+            .disabled(!sync.anyOn || sync.syncing)
+            Spacer()
+            if let s = sync.status {
+                Text(s).font(.system(size: 12)).foregroundStyle(PC.fg3)
+            }
+        }
+        .padding(.horizontal, 20).padding(.top, 8)
+        Text("Apple Music sync is coming soon.")
+            .font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.top, 8)
+    }
+
+    private func syncToggle(_ title: String, desc: String, isOn: Bool, set: @escaping (Bool) -> Void) -> some View {
+        Toggle(isOn: Binding(get: { isOn }, set: set)) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 15)).foregroundStyle(PC.fg1)
+                Text(desc).font(.system(size: 12)).foregroundStyle(PC.fg3)
+            }
+        }
+        .tint(PC.accent)
+        .padding(.horizontal, 20).padding(.top, 4)
+    }
+
     private func label(_ t: String) -> some View {
         Text(t.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.4).foregroundStyle(PC.fg3)
             .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+    }
+}
+
+@MainActor @Observable
+private final class SyncModel {
+    private let container = IosContainer.companion.shared
+    var spotifyOn = false
+    var listenBrainzOn = false
+    var syncing = false
+    var status: String?
+    var anyOn: Bool { spotifyOn || listenBrainzOn }
+
+    func load() async {
+        spotifyOn = (try? await container.isProviderSyncEnabled(providerId: "spotify"))?.boolValue ?? false
+        listenBrainzOn = (try? await container.isProviderSyncEnabled(providerId: "listenbrainz"))?.boolValue ?? false
+    }
+
+    func setProvider(_ id: String, _ on: Bool) {
+        if id == "spotify" { spotifyOn = on } else { listenBrainzOn = on }
+        Task {
+            try? await container.setSyncProviderEnabled(providerId: id, enabled: on)
+            if on { await syncNow() }
+        }
+    }
+
+    func syncNow() async {
+        guard anyOn, !syncing else { return }
+        syncing = true; status = nil
+        let ok = (try? await container.syncNow())?.boolValue ?? false
+        syncing = false
+        status = ok ? "Synced" : "Sync failed"
     }
 }
 
