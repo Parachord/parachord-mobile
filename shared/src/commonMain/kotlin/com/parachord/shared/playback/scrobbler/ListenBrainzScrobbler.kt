@@ -51,6 +51,7 @@ class ListenBrainzScrobbler(
             musicService = e.musicService,
             musicServiceName = e.musicServiceName,
             spotifyId = e.spotifyId,
+            isrc = track.isrc,
         )
         if (ok) Log.d(TAG, "Now playing: ${track.artist} - ${track.title}")
     }
@@ -72,6 +73,7 @@ class ListenBrainzScrobbler(
             musicService = e.musicService,
             musicServiceName = e.musicServiceName,
             spotifyId = e.spotifyId,
+            isrc = track.isrc,
         )
         if (ok) Log.d(TAG, "Scrobbled: ${track.artist} - ${track.title}")
     }
