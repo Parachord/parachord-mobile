@@ -65,11 +65,24 @@ jobs:
           # earlier same-day run. Unconditional overwrite is safe + idempotent here.
           git push -u origin "$BRANCH" --force
 
+          BODY="Automated version-aware update of the bundled \`.axe\` fallback (Android \`app/src/main/assets/plugins\` + iOS \`iosApp/Parachord/Resources/plugins\`) from [parachord-plugins](https://github.com/Parachord/parachord-plugins). Only strictly-greater versions are adopted; nothing is downgraded, added, or removed. Runtime delivery already happens via PluginSyncService — this just keeps fresh installs from shipping stale plugins."
+          COMPARE="${{ github.server_url }}/${{ github.repository }}/compare/main...${BRANCH}?expand=1"
+
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
           if [ -n "$EXISTING" ]; then
             echo "PR #${EXISTING} already open; updated branch."
+          # `if ! gh ...` keeps `set -e` from aborting on a failed create. Creation
+          # is blocked when the repo's "Allow GitHub Actions to create and approve
+          # pull requests" setting is off — in that case the branch is already
+          # pushed, so surface a one-click compare link instead of failing the job.
+          elif gh pr create --title "Sync bundled plugins from marketplace" --body "$BODY"; then
+            echo "Opened PR for $BRANCH."
           else
-            gh pr create \
-              --title "Sync bundled plugins from marketplace" \
-              --body "Automated version-aware update of the bundled \`.axe\` fallback (Android \`app/src/main/assets/plugins\` + iOS \`iosApp/Parachord/Resources/plugins\`) from [parachord-plugins](https://github.com/Parachord/parachord-plugins). Only strictly-greater versions are adopted; nothing is downgraded, added, or removed. Runtime delivery already happens via PluginSyncService — this just keeps fresh installs from shipping stale plugins."
+            echo "::warning::Could not auto-open a PR (the repo's 'Allow GitHub Actions to create and approve pull requests' setting is likely off). The branch '$BRANCH' is pushed — open the PR manually."
+            {
+              echo "### Plugin sync — open the PR manually"
+              echo "Branch \`$BRANCH\` is pushed, but GitHub Actions isn't permitted to create PRs in this repo."
+              echo ""
+              echo "[Create the pull request]($COMPARE)"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
