@@ -20,6 +20,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -49,6 +50,9 @@ class AppleMusicLibraryClient(
 ) {
     companion object {
         private const val BASE_URL = "https://api.music.apple.com"
+        // Cross-provider ISRC lookup bounds (runs inside syncAll — must not hang).
+        private const val ISRC_REQUEST_DELAY_MS = 200L
+        private const val MAX_ISRC_BATCHES = 40   // 40 × 300 = 12k songs
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     }
 
@@ -269,16 +273,29 @@ class AppleMusicLibraryClient(
     suspend fun getCatalogSongIsrcs(storefront: String, catalogIds: List<String>): Map<String, String> {
         if (storefront.isBlank() || catalogIds.isEmpty()) return emptyMap()
         val out = mutableMapOf<String, String>()
-        catalogIds.distinct().chunked(300).forEach { batch ->
+        // BOUNDED + STOP-ON-FAILURE: this runs inside syncAll holding the sync
+        // mutex, so it must never hang or hammer Apple. A 200ms inter-request gap
+        // respects the catalog rate limit; we stop on the FIRST failure (rate
+        // limit / error / timeout) instead of grinding every batch; and a hard
+        // cap bounds huge libraries. Songs past the cap (or after a stop) keep
+        // their `applemusic-` id and just don't cross-provider-merge.
+        val batches = catalogIds.distinct().chunked(300)
+        for ((i, batch) in batches.withIndex()) {
+            if (i >= MAX_ISRC_BATCHES) break
+            if (i > 0) delay(ISRC_REQUEST_DELAY_MS)
             try {
                 val response = httpClient.get("$BASE_URL/v1/catalog/$storefront/songs") {
                     applyAuth(this)
                     parameter("ids", batch.joinToString(","))
                 }
-                if (!response.status.isSuccess()) return@forEach
+                if (!response.status.isSuccess()) break
                 val parsed = json.decodeFromString<AmCatalogSongsResponse>(response.bodyAsText())
                 parsed.data.forEach { song -> song.attributes?.isrc?.let { out[song.id] = it } }
-            } catch (e: Exception) { /* best-effort: skip this batch */ }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                break
+            }
         }
         return out
     }
