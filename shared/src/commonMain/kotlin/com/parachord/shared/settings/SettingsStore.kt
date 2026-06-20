@@ -122,6 +122,13 @@ class SettingsStore(
          *  that existed before per-provider opt-in landed). */
         fun syncCollectionsKey(providerId: String) = "sync_collections_$providerId"
 
+        /** Per-provider playlist-push selection. `sync_playlist_mode_<id>` holds
+         *  ALL|NONE|SELECTED; `sync_playlist_ids_<id>` holds the CSV of local
+         *  playlist ids used when SELECTED. Absent mode ⇒ ALL for spotify /
+         *  applemusic, NONE for listenbrainz (desktop parity). */
+        fun playlistModeKey(providerId: String) = "sync_playlist_mode_$providerId"
+        fun playlistIdsKey(providerId: String) = "sync_playlist_ids_$providerId"
+
         /** Marker key — set to `true` once the one-shot DataStore→KvStore
          *  copy completes. Lives in KvStore so it survives across reboots
          *  without re-running the migration. */
@@ -771,6 +778,32 @@ class SettingsStore(
         if (raw == null) ALL_SYNC_COLLECTIONS
         else if (raw.isBlank()) emptySet()
         else raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    override suspend fun getPlaylistSelection(
+        providerId: String,
+    ): com.parachord.shared.sync.ProviderPlaylistSelection {
+        ensureMigrated()
+        val rawMode = kv.getStringOrNull(playlistModeKey(providerId))
+        val mode = when (rawMode) {
+            "ALL" -> com.parachord.shared.sync.PlaylistSyncMode.ALL
+            "NONE" -> com.parachord.shared.sync.PlaylistSyncMode.NONE
+            "SELECTED" -> com.parachord.shared.sync.PlaylistSyncMode.SELECTED
+            // Unset → provider default (LB=NONE, others=ALL).
+            else -> com.parachord.shared.sync.ProviderPlaylistSelection.defaultMode(providerId)
+        }
+        val ids = (kv.getStringOrNull(playlistIdsKey(providerId)) ?: "")
+            .split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        return com.parachord.shared.sync.ProviderPlaylistSelection(mode, ids)
+    }
+
+    override suspend fun setPlaylistSelection(
+        providerId: String,
+        selection: com.parachord.shared.sync.ProviderPlaylistSelection,
+    ) {
+        ensureMigrated()
+        kv.setString(playlistModeKey(providerId), selection.mode.name)
+        kv.setString(playlistIdsKey(providerId), selection.localPlaylistIds.joinToString(","))
+    }
 
     override suspend fun clearSyncSettings() {
         ensureMigrated()

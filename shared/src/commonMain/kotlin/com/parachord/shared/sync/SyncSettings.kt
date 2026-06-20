@@ -23,6 +23,41 @@ data class SyncSettings(
 )
 
 /**
+ * How a given provider mirrors local playlists. Per-provider, so the user can
+ * push everything to Spotify, a hand-picked subset to Apple Music, and nothing
+ * to ListenBrainz (its default).
+ */
+enum class PlaylistSyncMode { ALL, NONE, SELECTED }
+
+/**
+ * A provider's playlist-push selection. [localPlaylistIds] (local row ids,
+ * e.g. `local-…`, `spotify-…`, `applemusic-…`) is only consulted when
+ * [mode] == [PlaylistSyncMode.SELECTED].
+ */
+data class ProviderPlaylistSelection(
+    val mode: PlaylistSyncMode,
+    val localPlaylistIds: Set<String> = emptySet(),
+) {
+    /** Whether a local playlist row should mirror to this provider. */
+    fun includes(localPlaylistId: String): Boolean = when (mode) {
+        PlaylistSyncMode.ALL -> true
+        PlaylistSyncMode.NONE -> false
+        PlaylistSyncMode.SELECTED -> localPlaylistId in localPlaylistIds
+    }
+
+    companion object {
+        /**
+         * The mode for a provider with nothing stored yet. ListenBrainz →
+         * [PlaylistSyncMode.NONE] (desktop parity — never push until opt-in,
+         * the fix for the LB flood); everyone else → [PlaylistSyncMode.ALL]
+         * (preserve mirror-everything).
+         */
+        fun defaultMode(providerId: String): PlaylistSyncMode =
+            if (providerId == "listenbrainz") PlaylistSyncMode.NONE else PlaylistSyncMode.ALL
+    }
+}
+
+/**
  * Platform-agnostic gateway to the user's sync configuration. The Android
  * implementation wraps the existing DataStore-backed `SettingsStore`; the
  * iOS implementation will write through the same shared keys via
@@ -47,6 +82,18 @@ interface SyncSettingsProvider {
      * every provider uniformly.
      */
     suspend fun getSyncCollectionsForProvider(providerId: String): Set<String>
+
+    /**
+     * Per-provider playlist-push selection (which local playlists mirror to
+     * [providerId]). Defaults: `spotify`/`applemusic` → [PlaylistSyncMode.ALL]
+     * (preserve mirror-everything); `listenbrainz` → [PlaylistSyncMode.NONE]
+     * (desktop parity — never push to LB until the user opts in). The push loop
+     * in [SyncEngine.pushPlaylistsForProvider] filters candidates by this.
+     */
+    suspend fun getPlaylistSelection(providerId: String): ProviderPlaylistSelection
+
+    /** Persist a provider's playlist-push selection (see [getPlaylistSelection]). */
+    suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection)
 
     /**
      * Sync data version — bumped to force a full re-fetch after schema/migration

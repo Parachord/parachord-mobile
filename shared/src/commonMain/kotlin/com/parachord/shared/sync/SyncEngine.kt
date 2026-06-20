@@ -1849,9 +1849,19 @@ class SyncEngine constructor(
         val providerId = provider.id
         var added = 0
 
+        // Per-provider playlist-push selection (the user's "which playlists, if
+        // any" choice). ListenBrainz defaults to NONE, so a fresh install never
+        // pushes to LB — NONE makes `candidates` empty, short-circuiting the
+        // whole push (no fetch-remote, no loop). SELECTED restricts to the
+        // chosen local ids; ALL preserves mirror-everything.
+        val selection = settingsStore.getPlaylistSelection(providerId)
         val allPlaylists = playlistDao.getAllSync()
-        val candidates = allPlaylists.filter {
-            it.name.isNotBlank() && isPushCandidate(it, providerId)
+        val candidates = if (selection.mode == PlaylistSyncMode.NONE) {
+            emptyList()
+        } else {
+            allPlaylists.filter {
+                it.name.isNotBlank() && isPushCandidate(it, providerId) && selection.includes(it.id)
+            }
         }
 
         val liveRemote = remotePlaylists.filter { it.spotifyId !in deletedExternalIds }
