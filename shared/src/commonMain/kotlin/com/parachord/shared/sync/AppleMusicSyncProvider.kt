@@ -439,8 +439,13 @@ class AppleMusicSyncProvider(
         // local state. The probe also returns meta.total which we use
         // for accurate progress reporting through pagination.
         delay(INTER_REQUEST_DELAY_MS)
+        // Probe must compute the SAME external id storage uses
+        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // `id`. Comparing library-id to the stored catalog-id never matched, so
+        // the unchanged-shortcut never fired and the WHOLE song library
+        // re-fetched on every sync (#261, same bug as albums).
         val probe = api.listLibrarySongs(limit = 1, offset = 0)
-        val probeId = probe.data.firstOrNull()?.id
+        val probeId = probe.data.firstOrNull()?.let { it.attributes?.playParams?.id ?: it.id }
         if (probeId == latestExternalId && localCount > 0) {
             // Nothing's changed at the head; assume rest is unchanged.
             return null
@@ -532,8 +537,13 @@ class AppleMusicSyncProvider(
     ): List<SyncedAlbum>? {
         val all = mutableListOf<SyncedAlbum>()
         delay(INTER_REQUEST_DELAY_MS)
+        // Probe must compute the SAME external id storage uses
+        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // `id`. The mismatch made the unchanged-shortcut never fire, re-fetching
+        // the WHOLE album library every sync — the multi-minute (albums) grind (#261).
         val probe = api.listLibraryAlbums(limit = 1, offset = 0)
-        if (probe.data.firstOrNull()?.id == latestExternalId && localCount > 0) return null
+        val probeExternalId = probe.data.firstOrNull()?.let { it.attributes.playParams?.id ?: it.id }
+        if (probeExternalId == latestExternalId && localCount > 0) return null
         var total = probe.meta?.total ?: 0
         var offset = 0
         while (true) {
