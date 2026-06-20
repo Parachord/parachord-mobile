@@ -529,26 +529,34 @@ class SyncEngine constructor(
 
         val now = currentTimeMillis()
 
-        // Batch all writes in a single transaction so Room emits only one Flow update
+        // BATCHED writes — load existing canonical rows in a handful of getByIds
+        // queries (chunked) and write with insertAll, instead of a getById+insert
+        // per track. The per-row form made a large first-time Apple Music sync
+        // crawl for minutes (thousands of sequential DB round-trips), which read
+        // as a stuck "Syncing…".
         run {
-            // ADD: the row id is canonical (ISRC-keyed when present), so a row may
-            // already exist from ANOTHER provider — merge service IDs onto it
-            // instead of clobbering (cross-provider dedup). Then record THIS
-            // provider's sync_source for the canonical row.
-            toAdd.forEach { synced ->
-                val existing = trackDao.getById(synced.entity.id)
-                if (existing != null) trackDao.update(mergeSyncedTrack(existing, synced.entity))
-                else trackDao.insert(synced.entity)
-                syncSourceDao.insert(
-                    SyncSource(
-                        itemId = synced.entity.id,
-                        itemType = "track",
-                        providerId = providerId,
-                        externalId = synced.spotifyId,
-                        addedAt = synced.addedAt,
-                        syncedAt = now,
-                    ),
-                )
+            // ADD: the canonical (ISRC-keyed) row may already exist from ANOTHER
+            // provider — merge service IDs onto it (null-only) instead of
+            // clobbering. `seen` collapses an intra-batch duplicate canonical id
+            // (same recording twice in the library) to one row.
+            if (toAdd.isNotEmpty()) {
+                val existingById = trackDao.getByIds(toAdd.map { it.entity.id }).associateBy { it.id }
+                val seen = HashSet<String>()
+                val rows = ArrayList<Track>(toAdd.size)
+                val sources = ArrayList<SyncSource>(toAdd.size)
+                for (synced in toAdd) {
+                    sources.add(
+                        SyncSource(
+                            itemId = synced.entity.id, itemType = "track", providerId = providerId,
+                            externalId = synced.spotifyId, addedAt = synced.addedAt, syncedAt = now,
+                        ),
+                    )
+                    if (!seen.add(synced.entity.id)) continue
+                    val existing = existingById[synced.entity.id]
+                    rows.add(if (existing != null) mergeSyncedTrack(existing, synced.entity) else synced.entity)
+                }
+                trackDao.insertAll(rows)
+                syncSourceDao.insertAll(sources)
             }
 
             toRemove.forEach { source ->
@@ -562,12 +570,16 @@ class SyncEngine constructor(
             // UPDATE: membership unchanged — bump syncedAt and merge (additive, so a
             // re-pull from THIS provider never wipes another provider's IDs off a
             // shared canonical row).
-            toUpdate.forEach { synced ->
-                trackDao.getById(synced.entity.id)?.let { existing ->
-                    trackDao.update(mergeSyncedTrack(existing, synced.entity))
+            if (toUpdate.isNotEmpty()) {
+                val existingById = trackDao.getByIds(toUpdate.map { it.entity.id }).associateBy { it.id }
+                val seen = HashSet<String>()
+                val rows = ArrayList<Track>(toUpdate.size)
+                for (synced in toUpdate) {
+                    if (!seen.add(synced.entity.id)) continue
+                    existingById[synced.entity.id]?.let { rows.add(mergeSyncedTrack(it, synced.entity)) }
                 }
-                val existingSource = localByExternalId[synced.spotifyId]!!
-                syncSourceDao.insert(existingSource.copy(syncedAt = now))
+                if (rows.isNotEmpty()) trackDao.insertAll(rows)
+                syncSourceDao.insertAll(toUpdate.map { localByExternalId[it.spotifyId]!!.copy(syncedAt = now) })
             }
         }
 
