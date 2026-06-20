@@ -27,6 +27,24 @@ data class SyncSettings(
  * push everything to Spotify, a hand-picked subset to Apple Music, and nothing
  * to ListenBrainz (its default).
  */
+/**
+ * Whether [playlist] is eligible to be PUSHED (mirrored) to [providerId],
+ * BEFORE the user's per-provider playlist selection is applied. Shared so the
+ * settings "which playlists" picker shows exactly the rows the push loop would
+ * consider. Mirrors `SyncEngine.isPushCandidate` (which delegates here).
+ */
+fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, providerId: String): Boolean {
+    val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
+    return when (providerId) {
+        "spotify" -> playlist.spotifyId == null && base
+        "applemusic" -> base || playlist.id.startsWith("spotify-")
+        "listenbrainz" -> base ||
+            playlist.id.startsWith("spotify-") ||
+            playlist.id.startsWith("applemusic-")
+        else -> base
+    }
+}
+
 enum class PlaylistSyncMode { ALL, NONE, SELECTED }
 
 /**

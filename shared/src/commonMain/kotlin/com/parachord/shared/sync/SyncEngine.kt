@@ -2042,23 +2042,8 @@ class SyncEngine constructor(
      * `syncedFrom` guard correctly skips a Spotify-imported playlist
      * when targeting Spotify but not when targeting Apple Music.
      */
-    private fun isPushCandidate(playlist: Playlist, providerId: String): Boolean {
-        val baseEligible = playlist.id.startsWith("local-") || playlist.sourceUrl != null
-        return when (providerId) {
-            SpotifySyncProvider.PROVIDER_ID ->
-                playlist.spotifyId == null && baseEligible
-            AppleMusicSyncProvider.PROVIDER_ID ->
-                baseEligible || playlist.id.startsWith("spotify-")
-            ListenBrainzSyncProvider.PROVIDER_ID ->
-                // LB mirrors any source-of-truth playlist: local-*, hosted XSPF,
-                // spotify-*, applemusic-*. The runtime `syncedFrom` guard skips
-                // listenbrainz-imported playlists when targeting LB.
-                baseEligible
-                    || playlist.id.startsWith("spotify-")
-                    || playlist.id.startsWith("applemusic-")
-            else -> baseEligible
-        }
-    }
+    private fun isPushCandidate(playlist: Playlist, providerId: String): Boolean =
+        isPlaylistPushCandidate(playlist, providerId)
 
     /**
      * Extracts the per-provider external IDs from a playlist's tracks.

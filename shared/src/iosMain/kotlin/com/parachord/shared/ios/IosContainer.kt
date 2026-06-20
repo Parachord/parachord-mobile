@@ -472,6 +472,45 @@ class IosContainer private constructor() {
 
     suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
 
+    // ── Per-provider sync selection (axes + playlist picker) ──────────────
+    // Backs the iOS provider-config sheet. Axes and the playlist selection are
+    // both per-provider in shared `SettingsStore`; these are thin flat wrappers
+    // for Swift.
+
+    /** The axes this provider syncs (subset of tracks/albums/artists/playlists). */
+    suspend fun getSyncCollections(providerId: String): List<String> =
+        settingsStore.getSyncCollectionsForProvider(providerId).toList()
+
+    suspend fun setSyncCollections(providerId: String, axes: List<String>) {
+        settingsStore.setSyncCollectionsForProvider(providerId, axes.toSet())
+    }
+
+    /** "ALL" | "NONE" | "SELECTED" — the provider's playlist-push mode. */
+    suspend fun getPlaylistSelectionMode(providerId: String): String =
+        settingsStore.getPlaylistSelection(providerId).mode.name
+
+    /** Local playlist ids selected when mode == SELECTED. */
+    suspend fun getPlaylistSelectionIds(providerId: String): List<String> =
+        settingsStore.getPlaylistSelection(providerId).localPlaylistIds.toList()
+
+    suspend fun setPlaylistSelection(providerId: String, mode: String, ids: List<String>) {
+        val m = when (mode) {
+            "NONE" -> com.parachord.shared.sync.PlaylistSyncMode.NONE
+            "SELECTED" -> com.parachord.shared.sync.PlaylistSyncMode.SELECTED
+            else -> com.parachord.shared.sync.PlaylistSyncMode.ALL
+        }
+        settingsStore.setPlaylistSelection(
+            providerId,
+            com.parachord.shared.sync.ProviderPlaylistSelection(m, ids.toSet()),
+        )
+    }
+
+    /** Local playlists eligible to push to [providerId] (the picker's rows). */
+    suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =
+        playlistDao.getAllSync()
+            .filter { it.name.isNotBlank() && com.parachord.shared.sync.isPlaylistPushCandidate(it, providerId) }
+            .map { IosSyncPlaylist(id = it.id, name = it.name, trackCount = it.trackCount) }
+
     /**
      * Enable/disable one provider for sync. Mirrors the relevant slice of
      * Android's sync wizard: seeds default per-provider axes (Spotify gets all
@@ -2227,6 +2266,13 @@ class IosContainer private constructor() {
 }
 
 /** Flat Swift-friendly search result bundle. */
+/** A local playlist row the per-provider sync picker can select. */
+data class IosSyncPlaylist(
+    val id: String,
+    val name: String,
+    val trackCount: Int,
+)
+
 data class IosSearchResults(
     val artists: List<IosSearchArtist>,
     val releases: List<IosSearchRelease>,

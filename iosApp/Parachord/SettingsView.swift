@@ -1033,6 +1033,7 @@ private struct PluginConfigSheet: View {
 private struct GeneralTab: View {
     @Bindable var model: SettingsViewModel
     @State private var sync = SyncModel()
+    @State private var configProvider: ProviderConfigTarget?
     private let themes = ["system", "light", "dark"]
 
     var body: some View {
@@ -1071,6 +1072,9 @@ private struct GeneralTab: View {
             Text("Remove the items that came only from this service? Items also synced from another service are kept.")
         }
         .onDisappear { sync.stopWatching() }
+        .sheet(item: $configProvider) { target in
+            ProviderSyncConfigSheet(target: target)
+        }
     }
 
     private func syncProviderName(_ id: String?) -> String {
@@ -1093,11 +1097,14 @@ private struct GeneralTab: View {
         // authorization + MUT acquisition itself, so it stays enabled.
         syncToggle("Spotify", desc: "Sync your saved tracks, albums, artists, and playlists.",
                    isOn: sync.spotifyOn, connected: model.isConnected("spotify")) { sync.setProvider("spotify", $0) }
+        if sync.spotifyOn { configureRow("spotify", "Spotify") }
         syncToggle("ListenBrainz", desc: "Sync your playlists.",
                    isOn: sync.listenBrainzOn, connected: model.isConnected("listenbrainz")) { sync.setProvider("listenbrainz", $0) }
+        if sync.listenBrainzOn { configureRow("listenbrainz", "ListenBrainz") }
         syncToggle(sync.appleMusicBusy ? "Apple Music (authorizing…)" : "Apple Music",
                    desc: "Sync your saved tracks, albums, artists, and playlists. (No delete/rename — Apple's API limitation.)",
                    isOn: sync.appleMusicOn) { sync.setAppleMusic($0) }
+        if sync.appleMusicOn { configureRow("applemusic", "Apple Music") }
         if let cd = sync.spotifyCooldownText {
             HStack(spacing: 6) {
                 Image(systemName: "clock.badge.exclamationmark").font(.system(size: 12))
@@ -1139,9 +1146,179 @@ private struct GeneralTab: View {
         .padding(.horizontal, 20).padding(.top, 4)
     }
 
+    /// Tappable "Configure what syncs ›" row shown under an enabled provider.
+    private func configureRow(_ id: String, _ name: String) -> some View {
+        Button {
+            configProvider = ProviderConfigTarget(id: id, name: name)
+        } label: {
+            HStack(spacing: 6) {
+                Text("Configure what syncs").font(.system(size: 13, weight: .medium)).foregroundStyle(PC.accent)
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(PC.accent)
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.top, 2).padding(.bottom, 6)
+        }
+        .buttonStyle(.plain)
+    }
+
     private func label(_ t: String) -> some View {
         Text(t.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.4).foregroundStyle(PC.fg3)
             .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+    }
+}
+
+/// Identifies which provider's sync-config sheet is open.
+struct ProviderConfigTarget: Identifiable {
+    let id: String
+    let name: String
+}
+
+// MARK: - Per-provider sync config sheet
+
+@MainActor @Observable
+private final class ProviderConfigModel {
+    private let container = IosContainer.companion.shared
+    let providerId: String
+    var axes: Set<String> = []
+    var playlistMode: String = "ALL"     // ALL | NONE | SELECTED
+    var selectedIds: Set<String> = []
+    var pushable: [IosSyncPlaylist] = []
+    var loading = true
+
+    init(providerId: String) { self.providerId = providerId }
+
+    /// Axes a provider can sync. ListenBrainz is playlists-only (loved tracks go
+    /// via the scrobbler, not collection sync).
+    var supportedAxes: [String] {
+        providerId == "listenbrainz" ? ["playlists"] : ["tracks", "albums", "artists", "playlists"]
+    }
+
+    func load() async {
+        let ax = (try? await container.getSyncCollections(providerId: providerId)) as? [String] ?? []
+        let mode = (try? await container.getPlaylistSelectionMode(providerId: providerId)) ?? "ALL"
+        let ids = (try? await container.getPlaylistSelectionIds(providerId: providerId)) as? [String] ?? []
+        let pl = (try? await container.getPushablePlaylists(providerId: providerId)) as? [IosSyncPlaylist] ?? []
+        axes = Set(ax)
+        playlistMode = mode
+        selectedIds = Set(ids)
+        pushable = pl
+        loading = false
+    }
+
+    func toggleAxis(_ axis: String, _ on: Bool) {
+        if on { axes.insert(axis) } else { axes.remove(axis) }
+        let snapshot = Array(axes)
+        Task { try? await container.setSyncCollections(providerId: providerId, axes: snapshot) }
+    }
+
+    func setMode(_ m: String) { playlistMode = m; persistSelection() }
+
+    func toggleSelected(_ id: String) {
+        if selectedIds.contains(id) { selectedIds.remove(id) } else { selectedIds.insert(id) }
+        persistSelection()
+    }
+
+    private func persistSelection() {
+        let m = playlistMode
+        let ids = Array(selectedIds)
+        Task { try? await container.setPlaylistSelection(providerId: providerId, mode: m, ids: ids) }
+    }
+}
+
+private struct ProviderSyncConfigSheet: View {
+    let target: ProviderConfigTarget
+    @Environment(\.dismiss) private var dismiss
+    @State private var m: ProviderConfigModel
+
+    init(target: ProviderConfigTarget) {
+        self.target = target
+        _m = State(initialValue: ProviderConfigModel(providerId: target.id))
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    sectionLabel("What syncs")
+                    ForEach(m.supportedAxes, id: \.self) { axis in axisToggle(axis) }
+
+                    if m.axes.contains("playlists") {
+                        sectionLabel("Playlists to mirror to \(target.name)")
+                        Picker("", selection: Binding(get: { m.playlistMode }, set: { m.setMode($0) })) {
+                            Text("All").tag("ALL")
+                            Text("Choose").tag("SELECTED")
+                            Text("None").tag("NONE")
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 20).padding(.top, 4)
+
+                        if m.playlistMode == "SELECTED" { selectedList }
+                    }
+                    Spacer(minLength: 40)
+                }
+                .padding(.top, 8)
+            }
+            .background(PC.bgPrimary.ignoresSafeArea())
+            .navigationTitle(target.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }.foregroundStyle(PC.accent)
+                }
+            }
+        }
+        .task { await m.load() }
+    }
+
+    @ViewBuilder private var selectedList: some View {
+        if m.pushable.isEmpty {
+            Text("No playlists eligible to mirror to \(target.name) yet.")
+                .font(.system(size: 13)).foregroundStyle(PC.fg3)
+                .padding(.horizontal, 20).padding(.top, 10)
+        } else {
+            ForEach(m.pushable, id: \.id) { pl in playlistRow(pl) }
+        }
+    }
+
+    private func axisToggle(_ axis: String) -> some View {
+        Toggle(isOn: Binding(get: { m.axes.contains(axis) }, set: { m.toggleAxis(axis, $0) })) {
+            Text(axisLabel(axis)).font(.system(size: 15)).foregroundStyle(PC.fg1)
+        }
+        .tint(PC.accent)
+        .padding(.horizontal, 20).padding(.vertical, 6)
+    }
+
+    private func playlistRow(_ pl: IosSyncPlaylist) -> some View {
+        Button { m.toggleSelected(pl.id) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: m.selectedIds.contains(pl.id) ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18)).foregroundStyle(m.selectedIds.contains(pl.id) ? PC.accent : PC.fg3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pl.name).font(.system(size: 14)).foregroundStyle(PC.fg1).lineLimit(1)
+                    Text("\(pl.trackCount) track\(pl.trackCount == 1 ? "" : "s")")
+                        .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func sectionLabel(_ t: String) -> some View {
+        Text(t.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.4).foregroundStyle(PC.fg3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 6)
+    }
+
+    private func axisLabel(_ a: String) -> String {
+        switch a {
+        case "tracks": return "Saved Songs"
+        case "albums": return "Saved Albums"
+        case "artists": return "Followed Artists"
+        case "playlists": return "Playlists"
+        default: return a.capitalized
+        }
     }
 }
 
