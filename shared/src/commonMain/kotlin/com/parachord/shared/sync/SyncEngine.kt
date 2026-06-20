@@ -1557,15 +1557,25 @@ class SyncEngine constructor(
             return TypeSyncResult()
         }
 
+        // Per-provider PULL allowlist (the user's "which of my <provider>
+        // playlists to sync" choice). EMPTY = import all. The IMPORT loop uses
+        // the filtered list; the REMOVAL cleanup below intentionally uses the
+        // FULL `remotePlaylists` so a merely-deselected (but still-remote)
+        // playlist is NOT auto-deleted here — the picker's keep/remove prompt
+        // handles deselection explicitly (detach to keep, delete to remove).
+        val pullAllow = settingsStore.getPullPlaylists(providerId)
+        val importPlaylists = if (pullAllow.isEmpty()) remotePlaylists
+            else remotePlaylists.filter { it.spotifyId in pullAllow }
+
         val localSources = syncSourceDao.getByProvider(providerId, "playlist")
         val localByExternalId = localSources.associateBy { it.externalId }
 
-        for ((index, remote) in remotePlaylists.withIndex()) {
-            _syncPhase.value = "playlists · $providerId pull ${index + 1}/${remotePlaylists.size}"
+        for ((index, remote) in importPlaylists.withIndex()) {
+            _syncPhase.value = "playlists · $providerId pull ${index + 1}/${importPlaylists.size}"
             onProgress(SyncProgress(
                 SyncPhase.PLAYLISTS,
                 index + 1,
-                remotePlaylists.size,
+                importPlaylists.size,
                 "Syncing ${provider.displayName} playlist: ${remote.entity.name}",
             ))
             val existingSource = localByExternalId[remote.spotifyId]
@@ -2520,6 +2530,22 @@ class SyncEngine constructor(
         }
         syncPlaylistSourceDao.deleteForLocal(playlist.id)
         return attempts
+    }
+
+    /**
+     * Detach a playlist from sync entirely WITHOUT deleting it: drop its sync
+     * sources, push links, and pull-source row, keeping the local row. Used by
+     * the per-playlist "keep local copy, stop syncing" choice. The caller MUST
+     * also exclude this playlist's external id from the provider's pull
+     * allowlist ([SyncSettingsProvider.setPullPlaylists]) — otherwise the next
+     * pull re-imports it by name-match. The row survives as a local-only copy.
+     */
+    suspend fun detachPlaylistFromSync(localPlaylistId: String) {
+        syncPlaylistLinkDao.deleteForLocal(localPlaylistId)
+        syncSourceDao.getByItem(localPlaylistId, "playlist").forEach {
+            syncSourceDao.deleteByKey(localPlaylistId, "playlist", it.providerId)
+        }
+        syncPlaylistSourceDao.deleteForLocal(localPlaylistId)
     }
 
     /**

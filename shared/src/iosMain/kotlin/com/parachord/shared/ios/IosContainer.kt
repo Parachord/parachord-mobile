@@ -525,6 +525,48 @@ class IosContainer private constructor() {
             .filter { it.name.isNotBlank() && com.parachord.shared.sync.isPlaylistPushCandidate(it, providerId) }
             .map { IosSyncPlaylist(id = it.id, name = it.name, trackCount = it.trackCount) }
 
+    // ── Pull-source providers (Spotify / Apple Music) playlist picker ─────────
+
+    /** The user's imported playlists FROM [providerId] (id-prefix `<provider>-`),
+     *  for the per-provider PULL picker. */
+    suspend fun getImportedProviderPlaylists(providerId: String): List<IosSyncPlaylist> =
+        playlistDao.getAllSync()
+            .filter { it.id.startsWith("$providerId-") && it.name.isNotBlank() }
+            .map { IosSyncPlaylist(id = it.id, name = it.name, trackCount = it.trackCount) }
+
+    /** The provider's pull allowlist (remote external ids). Empty = import all. */
+    suspend fun getPullAllowlist(providerId: String): List<String> =
+        settingsStore.getPullPlaylists(providerId).toList()
+
+    /** Whether [providerId]'s picker is a PULL selector (choose which of the
+     *  service's playlists to import) vs a PUSH selector (which local playlists
+     *  to mirror up). Spotify + Apple Music pull; ListenBrainz pushes. */
+    fun isPullProvider(providerId: String): Boolean =
+        providerId == "spotify" || providerId == "applemusic"
+
+    /**
+     * Apply the pull picker's result: persist the allowlist (remote ids to keep
+     * importing), and resolve each deselected playlist — REMOVE deletes the
+     * local copy (keeps it on the service), KEEP detaches it from sync so the
+     * row survives but never re-syncs. The allowlist MUST exclude the kept ids
+     * (the caller passes only the still-checked ids) or detached rows re-import.
+     */
+    suspend fun applyPullSelection(
+        providerId: String,
+        allowlist: List<String>,
+        removeLocalIds: List<String>,
+        keepLocalIds: List<String>,
+    ) {
+        for (id in removeLocalIds) {
+            playlistDao.getById(id)?.let { libraryRepository.deletePlaylistWithSync(it, emptySet()) }
+            playlistTrackDao.deleteByPlaylistId(id)
+        }
+        for (id in keepLocalIds) {
+            syncEngine.detachPlaylistFromSync(id)
+        }
+        settingsStore.setPullPlaylists(providerId, allowlist.toSet())
+    }
+
     /**
      * Enable/disable one provider for sync. Mirrors the relevant slice of
      * Android's sync wizard: seeds default per-provider axes (Spotify gets all

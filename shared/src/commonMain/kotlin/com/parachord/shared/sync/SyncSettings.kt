@@ -114,6 +114,18 @@ interface SyncSettingsProvider {
     suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection)
 
     /**
+     * Per-provider PULL allowlist: which of the provider's remote playlists to
+     * import (keyed on the provider's external id). EMPTY = import all (no
+     * filter). A non-empty set imports only those ids. Spotify migrates from the
+     * legacy global `selectedPlaylistIds`. Used by the Spotify + Apple Music pull
+     * paths so the user can choose which of their service playlists sync.
+     */
+    suspend fun getPullPlaylists(providerId: String): Set<String>
+
+    /** Persist a provider's pull allowlist (see [getPullPlaylists]). */
+    suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>)
+
+    /**
      * Sync data version — bumped to force a full re-fetch after schema/migration
      * changes. SyncEngine compares against its own `SYNC_DATA_VERSION` constant.
      */

@@ -1183,6 +1183,14 @@ struct AxisRemovalPrompt: Identifiable {
     let axes: [String]        // dropped axes that have items
 }
 
+/// Keep-or-remove prompt when the user deselects imported playlists in a
+/// pull-source provider's picker.
+struct PullRemovalPrompt: Identifiable {
+    let id = UUID()
+    let names: [String]
+    var count: Int { names.count }
+}
+
 @MainActor @Observable
 private final class ProviderConfigModel {
     private let container = IosContainer.companion.shared
@@ -1195,7 +1203,19 @@ private final class ProviderConfigModel {
     private var originalAxes: Set<String> = []   // axes at load, for drop detection
     var pendingRemoval: AxisRemovalPrompt?
 
+    // Pull-source (Spotify / Apple Music) picker: choose which of the service's
+    // imported playlists to keep syncing.
+    var imported: [IosSyncPlaylist] = []
+    var pullChecked: Set<String> = []            // local ids the user keeps syncing
+    var pendingPullRemoval: PullRemovalPrompt?
+    var isPull: Bool { container.isPullProvider(providerId: providerId) }
+
     init(providerId: String) { self.providerId = providerId }
+
+    private func remoteId(_ localId: String) -> String {
+        let prefix = "\(providerId)-"
+        return localId.hasPrefix(prefix) ? String(localId.dropFirst(prefix.count)) : localId
+    }
 
     /// Axes a provider can sync. ListenBrainz is playlists-only (loved tracks go
     /// via the scrobbler, not collection sync).
@@ -1213,7 +1233,59 @@ private final class ProviderConfigModel {
         playlistMode = mode
         selectedIds = Set(ids)
         pushable = pl
+        if isPull {
+            let imp = (try? await container.getImportedProviderPlaylists(providerId: providerId)) as? [IosSyncPlaylist] ?? []
+            let allow = (try? await container.getPullAllowlist(providerId: providerId)) as? [String] ?? []
+            imported = imp
+            let allowSet = Set(allow)
+            // Empty allowlist = sync all → everything checked. Otherwise check
+            // only the imported rows whose remote id is in the allowlist.
+            pullChecked = allow.isEmpty
+                ? Set(imp.map { $0.id })
+                : Set(imp.filter { allowSet.contains(remoteId($0.id)) }.map { $0.id })
+        }
         loading = false
+    }
+
+    func togglePullChecked(_ id: String) {
+        if pullChecked.contains(id) { pullChecked.remove(id) } else { pullChecked.insert(id) }
+    }
+
+    /// Called on Done for a pull provider. If any imported playlist was
+    /// unchecked, raise a keep/remove prompt and return true. Otherwise persist
+    /// (allowlist = checked) and return false.
+    func needsPullPrompt() async -> Bool {
+        guard isPull else { return false }
+        let deselected = imported.filter { !pullChecked.contains($0.id) }
+        if deselected.isEmpty {
+            await applyPull(removeIds: [], keepIds: [])
+            return false
+        }
+        pendingPullRemoval = PullRemovalPrompt(names: deselected.map { $0.name })
+        return true
+    }
+
+    private func applyPull(removeIds: [String], keepIds: [String]) async {
+        // allowlist = checked remote ids; empty when everything is checked (so
+        // new service playlists keep auto-syncing).
+        let allChecked = pullChecked.count == imported.count
+        let allowlist = allChecked ? [] : imported.filter { pullChecked.contains($0.id) }.map { remoteId($0.id) }
+        try? await container.applyPullSelection(
+            providerId: providerId, allowlist: allowlist,
+            removeLocalIds: removeIds, keepLocalIds: keepIds,
+        )
+    }
+
+    func confirmPullRemove() async {
+        let d = imported.filter { !pullChecked.contains($0.id) }.map { $0.id }
+        await applyPull(removeIds: d, keepIds: [])
+        pendingPullRemoval = nil
+    }
+
+    func confirmPullKeep() async {
+        let d = imported.filter { !pullChecked.contains($0.id) }.map { $0.id }
+        await applyPull(removeIds: [], keepIds: d)
+        pendingPullRemoval = nil
     }
 
     /// Called on Done. If the user turned OFF any axis that still has synced
@@ -1301,16 +1373,29 @@ private struct ProviderSyncConfigSheet: View {
                     ForEach(m.supportedAxes, id: \.self) { axis in axisToggle(axis) }
 
                     if m.axes.contains("playlists") {
-                        sectionLabel("Playlists to mirror to \(target.name)")
-                        Picker("", selection: Binding(get: { m.playlistMode }, set: { m.setMode($0) })) {
-                            Text("All").tag("ALL")
-                            Text("Choose").tag("SELECTED")
-                            Text("None").tag("NONE")
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal, 20).padding(.top, 4)
+                        if m.isPull {
+                            // Pull provider: choose which of YOUR service playlists to sync.
+                            sectionLabel("\(target.name) playlists to sync")
+                            if m.imported.isEmpty {
+                                Text("No \(target.name) playlists imported yet. Run a sync first.")
+                                    .font(.system(size: 13)).foregroundStyle(PC.fg3)
+                                    .padding(.horizontal, 20).padding(.top, 10)
+                            } else {
+                                ForEach(m.imported, id: \.id) { pl in pullRow(pl) }
+                            }
+                        } else {
+                            // Push provider (ListenBrainz): which local playlists to mirror up.
+                            sectionLabel("Playlists to mirror to \(target.name)")
+                            Picker("", selection: Binding(get: { m.playlistMode }, set: { m.setMode($0) })) {
+                                Text("All").tag("ALL")
+                                Text("Choose").tag("SELECTED")
+                                Text("None").tag("NONE")
+                            }
+                            .pickerStyle(.segmented)
+                            .padding(.horizontal, 20).padding(.top, 4)
 
-                        if m.playlistMode == "SELECTED" { selectedList }
+                            if m.playlistMode == "SELECTED" { selectedList }
+                        }
                     }
                     Spacer(minLength: 40)
                 }
@@ -1322,7 +1407,12 @@ private struct ProviderSyncConfigSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
-                        Task { if await !m.needsRemovalPrompt() { dismiss() } }
+                        Task {
+                            // Axis-off keep/remove first, then playlist-deselect keep/remove.
+                            if await m.needsRemovalPrompt() { return }
+                            if await m.needsPullPrompt() { return }
+                            dismiss()
+                        }
                     }.foregroundStyle(PC.accent)
                 }
             }
@@ -1342,6 +1432,37 @@ private struct ProviderSyncConfigSheet: View {
         } message: {
             Text("You turned off syncing for \(m.pendingRemoval?.summary ?? "items") from \(target.name). Remove them from your collection, or keep them? Items also synced from another service are kept either way.")
         }
+        // Keep-or-remove when imported playlists were deselected in the pull picker.
+        .confirmationDialog(
+            "Stop syncing \(m.pendingPullRemoval?.count ?? 0) playlist\((m.pendingPullRemoval?.count ?? 0) == 1 ? "" : "s")?",
+            isPresented: Binding(get: { m.pendingPullRemoval != nil }, set: { if !$0 { m.pendingPullRemoval = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove from Parachord", role: .destructive) {
+                Task { await m.confirmPullRemove(); dismiss() }
+            }
+            Button("Keep local copy") { Task { await m.confirmPullKeep(); dismiss() } }
+            Button("Cancel", role: .cancel) { m.pendingPullRemoval = nil }
+        } message: {
+            Text("These \(target.name) playlists will stop syncing. Remove them from Parachord (they stay on \(target.name)), or keep a local copy that no longer updates?")
+        }
+    }
+
+    private func pullRow(_ pl: IosSyncPlaylist) -> some View {
+        Button { m.togglePullChecked(pl.id) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: m.pullChecked.contains(pl.id) ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18)).foregroundStyle(m.pullChecked.contains(pl.id) ? PC.accent : PC.fg3)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(pl.name).font(.system(size: 14)).foregroundStyle(PC.fg1).lineLimit(1)
+                    Text("\(pl.trackCount) track\(pl.trackCount == 1 ? "" : "s")")
+                        .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.vertical, 7)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private var selectedList: some View {

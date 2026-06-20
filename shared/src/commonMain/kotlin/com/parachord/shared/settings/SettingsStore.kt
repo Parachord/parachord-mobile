@@ -129,6 +129,9 @@ class SettingsStore(
         fun playlistModeKey(providerId: String) = "sync_playlist_mode_$providerId"
         fun playlistIdsKey(providerId: String) = "sync_playlist_ids_$providerId"
 
+        /** Per-provider PULL allowlist (which remote playlists to import). */
+        fun pullPlaylistsKey(providerId: String) = "sync_pull_playlists_$providerId"
+
         /** Marker key — set to `true` once the one-shot DataStore→KvStore
          *  copy completes. Lives in KvStore so it survives across reboots
          *  without re-running the migration. */
@@ -803,6 +806,29 @@ class SettingsStore(
         ensureMigrated()
         kv.setString(playlistModeKey(providerId), selection.mode.name)
         kv.setString(playlistIdsKey(providerId), selection.localPlaylistIds.joinToString(","))
+    }
+
+    override suspend fun getPullPlaylists(providerId: String): Set<String> {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(pullPlaylistsKey(providerId))
+        if (raw != null) return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        // Migration: Spotify's pull allowlist used to be the global
+        // SYNC_SELECTED_PLAYLIST_IDS. Seed from it so existing installs keep
+        // their selection. Other providers default to empty (= import all).
+        if (providerId == "spotify") {
+            return (kv.getStringOrNull(SYNC_SELECTED_PLAYLIST_IDS) ?: "")
+                .split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        }
+        return emptySet()
+    }
+
+    override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {
+        ensureMigrated()
+        val csv = externalIds.joinToString(",")
+        kv.setString(pullPlaylistsKey(providerId), csv)
+        // Keep the legacy global key in sync for Spotify so any code still
+        // reading SyncSettings.selectedPlaylistIds stays consistent.
+        if (providerId == "spotify") kv.setString(SYNC_SELECTED_PLAYLIST_IDS, csv)
     }
 
     override suspend fun clearSyncSettings() {
