@@ -58,7 +58,12 @@ jobs:
           git checkout -b "$BRANCH"
           git add app/src/main/assets/plugins iosApp/Parachord/Resources/plugins
           git commit -m "Sync bundled plugins from marketplace"
-          git push -u origin "$BRANCH" --force-with-lease
+          # Plain --force (not --force-with-lease): this is a disposable bot
+          # branch regenerated each run, and the shallow checkout has no
+          # remote-tracking ref for it — so --force-with-lease rejects with
+          # "(stale info)" when the date-named branch already exists from an
+          # earlier same-day run. Unconditional overwrite is safe + idempotent here.
+          git push -u origin "$BRANCH" --force
 
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
           if [ -n "$EXISTING" ]; then
