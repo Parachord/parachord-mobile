@@ -25,6 +25,7 @@ import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
+import com.parachord.shared.api.AppleMusicLibraryClient
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.DeepLinkParser
 import com.parachord.shared.deeplink.SimpleDeepLinkUri
@@ -32,6 +33,7 @@ import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.repository.LibraryRepository
+import com.parachord.shared.sync.AppleMusicSyncProvider
 import com.parachord.shared.sync.KvTombstoneStore
 import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.SpotifySyncProvider
@@ -347,6 +349,22 @@ class IosContainer private constructor() {
         ListenBrainzSyncProvider(listenBrainzClient, settingsStore, mbidEnrichmentService)
     }
 
+    // Apple Music sync (#257, Phase 2). The library API needs dev-token + MUT;
+    // the MUT is acquired on the Swift side (SKCloudServiceController) and
+    // persisted to SecureTokenStore. [appleMusicClient] (catalog/iTunes search,
+    // no auth) hydrates appleMusicId before push. Provider stays inert until a
+    // MUT is present (AppleMusicLibraryClient throws reauth-required, which the
+    // engine treats as a per-provider skip).
+    val appleMusicAuthProvider: IosAppleMusicAuthProvider by lazy {
+        IosAppleMusicAuthProvider(settingsStore, appConfig.appleMusicDeveloperToken)
+    }
+    val appleMusicLibraryClient: AppleMusicLibraryClient by lazy {
+        AppleMusicLibraryClient(httpClient, appleMusicAuthProvider)
+    }
+    val appleMusicSyncProvider: AppleMusicSyncProvider by lazy {
+        AppleMusicSyncProvider(appleMusicLibraryClient, appleMusicClient)
+    }
+
     val syncEngine: SyncEngine by lazy {
         SyncEngine(
             db = database, driver = sqlDriver,
@@ -355,7 +373,7 @@ class IosContainer private constructor() {
             syncSourceDao = syncSourceDao, syncPlaylistLinkDao = syncPlaylistLinkDao,
             syncPlaylistSourceDao = syncPlaylistSourceDao,
             settingsStore = settingsStore,
-            providers = listOf(spotifySyncProvider, listenBrainzSyncProvider),
+            providers = listOf(spotifySyncProvider, listenBrainzSyncProvider, appleMusicSyncProvider),
             tombstones = tombstoneService,
         )
     }
@@ -412,6 +430,13 @@ class IosContainer private constructor() {
         try { tombstoneService.prune() } catch (_: Exception) {}
     }
 
+    /** Persist the Apple Music Music User Token (acquired Swift-side via
+     *  SKCloudServiceController). Enables the Apple Music library API for sync. */
+    suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)
+    suspend fun hasAppleMusicUserToken(): Boolean = !settingsStore.getAppleMusicUserToken().isNullOrBlank()
+    /** The ES256 dev token SKCloudServiceController.requestUserToken needs. */
+    suspend fun appleMusicDeveloperToken(): String = appConfig.appleMusicDeveloperToken
+
     /** Remaining Spotify rate-limit cooldown in ms (0 = clear). PURELY LOCAL —
      *  reads the persisted cooldown timestamp and subtracts now; hits NO Spotify
      *  endpoint, so calling it can't extend the window. Surfaced in Library Sync
@@ -460,6 +485,21 @@ class IosContainer private constructor() {
                 syncTracks = true, syncAlbums = true, syncArtists = true, syncPlaylists = true,
             ),
         )
+    }
+
+    /**
+     * Disable a provider's sync. [removeItems] = true deletes items sourced ONLY
+     * by this provider; items also synced from another provider survive (lose
+     * just this provider's source). Then drops it from the enabled set + flips
+     * the master flag off iff no providers remain. (Keep = removeItems false.)
+     */
+    suspend fun disableSyncProvider(providerId: String, removeItems: Boolean) {
+        syncEngine.stopProviderSync(providerId, removeItems)
+        val current = settingsStore.getEnabledSyncProviders().toMutableSet()
+        current.remove(providerId)
+        settingsStore.setEnabledSyncProviders(current)
+        val s = settingsStore.getSyncSettings()
+        settingsStore.saveSyncSettings(s.copy(enabled = current.isNotEmpty()))
     }
 
     // Shared FriendsRepository — full add/remove/pin/sync/activity surface.

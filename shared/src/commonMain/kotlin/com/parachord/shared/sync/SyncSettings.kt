@@ -57,6 +57,11 @@ interface SyncSettingsProvider {
     /** Persist the new data version after a successful migration / refetch. */
     suspend fun setSyncDataVersion(version: Int)
 
+    /** One-shot cross-provider track-dedup migration flag (independent of the
+     *  SYNC_DATA_VERSION counter). */
+    suspend fun getTrackDedupV1Done(): Boolean
+    suspend fun setTrackDedupV1Done()
+
     /** Persist the timestamp of the last successful sync (epoch millis). */
     suspend fun setLastSyncAt(timestamp: Long)
 

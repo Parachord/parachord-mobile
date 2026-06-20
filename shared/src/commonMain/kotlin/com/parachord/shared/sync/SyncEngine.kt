@@ -350,6 +350,8 @@ class SyncEngine constructor(
         onProgress: (SyncProgress) -> Unit,
         providerFilter: String? = null,
     ): TypeSyncResult {
+        // One-time cross-provider track-dedup wipe (runs before any fetch below).
+        migrateCrossProviderTrackDedup()
         // Spotify legacy path runs only when no filter, OR the filter
         // selects Spotify. Skipping it for non-Spotify wizards keeps
         // the user-visible progress bar focused on the provider the
@@ -368,6 +370,31 @@ class SyncEngine constructor(
             aggregate += syncTracksForProvider(provider, onProgress)
         }
         return aggregate
+    }
+
+    /**
+     * One-shot cross-provider track-dedup migration. Older syncs stored saved
+     * tracks with provider-prefixed ids (`spotify-…` / `applemusic-…`) and no
+     * ISRC, so the same recording is two rows. Those rows have no ISRC to merge
+     * in place, so wipe the synced track rows + their sources once (prefix-
+     * agnostic — collected from `sync_sources`, since `deleteSyncedTracks` only
+     * catches `spotify-%`) and let the normal re-fetch re-create them with
+     * canonical ISRC-keyed ids that merge across providers. Gated on a dedicated
+     * flag (not the shared SYNC_DATA_VERSION counter).
+     */
+    private suspend fun migrateCrossProviderTrackDedup() {
+        if (settingsStore.getTrackDedupV1Done()) return
+        val trackItemIds = providers
+            .flatMap { syncSourceDao.getAllByProvider(it.id) }
+            .filter { it.itemType == "track" }
+            .map { it.itemId }
+            .toSet()
+        if (trackItemIds.isNotEmpty()) {
+            Log.d(TAG, "track dedup migration: wiping ${trackItemIds.size} synced tracks for clean re-sync")
+            providers.forEach { syncSourceDao.deleteByProviderAndType(it.id, "track") }
+            trackItemIds.forEach { id -> trackDao.getById(id)?.let { trackDao.delete(it) } }
+        }
+        settingsStore.setTrackDedupV1Done()
     }
 
     /** Per-provider axis opt-in lookup. Defaults to all axes for back-compat. */
@@ -2428,9 +2455,21 @@ class SyncEngine constructor(
 
     // ── Stop syncing ─────────────────────────────────────────────
 
+    /** Legacy single-provider (Spotify) stop — also wipes ALL sync settings.
+     *  Kept for the Android wizard's existing "disconnect sync" action. */
     suspend fun stopSyncing(removeItems: Boolean) {
-        val providerId = SpotifySyncProvider.PROVIDER_ID
+        stopProviderSync(SpotifySyncProvider.PROVIDER_ID, removeItems)
+        settingsStore.clearSyncSettings()
+    }
 
+    /**
+     * Stop syncing ONE provider (multi-provider). [removeItems] deletes items
+     * sourced ONLY by this provider; an item still sourced by another provider
+     * survives (it just loses this provider's `sync_source`). Settings / enabled-
+     * provider-set management is the CALLER's job (iOS `setSyncProviderEnabled`,
+     * Android wizard) — this only touches the per-provider sync data.
+     */
+    suspend fun stopProviderSync(providerId: String, removeItems: Boolean) {
         if (removeItems) {
             val allSources = syncSourceDao.getAllByProvider(providerId)
             for (source in allSources) {
@@ -2449,10 +2488,8 @@ class SyncEngine constructor(
                 }
             }
         }
-
         syncSourceDao.deleteAllForProvider(providerId)
         syncPlaylistLinkDao.deleteForProvider(providerId)
-        settingsStore.clearSyncSettings()
     }
 
     /**

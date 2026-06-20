@@ -109,6 +109,11 @@ class SettingsStore(
         const val SYNC_LAST_COMPLETED_AT = "sync_last_completed_at"
         const val SYNC_PUSH_LOCAL_PLAYLISTS = "sync_push_local_playlists"
         const val SYNC_DATA_VERSION = "sync_data_version"
+        // Dedicated one-shot flag for the cross-provider track-dedup wipe. NOT on
+        // the SYNC_DATA_VERSION counter — that counter is shared by the playlist
+        // dedup migration, and bumping it here would skip migrations that haven't
+        // run yet on a fresh-from-old install.
+        const val TRACK_DEDUP_V1_DONE = "track_dedup_v1_done"
         const val ENABLED_SYNC_PROVIDERS = "enabled_sync_providers"
 
         /** Per-provider opt-in for which collection axes to sync.
@@ -410,6 +415,14 @@ class SettingsStore(
 
     suspend fun isPersistQueueEnabled(): Boolean {
         ensureMigrated(); return kv.getBoolean(PERSIST_QUEUE, default = true)
+    }
+
+    /** One-shot cross-provider track-dedup migration flag (#cross-provider-track-dedup). */
+    override suspend fun getTrackDedupV1Done(): Boolean {
+        ensureMigrated(); return kv.getBoolean(TRACK_DEDUP_V1_DONE, default = false)
+    }
+    override suspend fun setTrackDedupV1Done() {
+        ensureMigrated(); kv.setBoolean(TRACK_DEDUP_V1_DONE, true)
     }
 
     suspend fun getPersistedQueueState(): String? {

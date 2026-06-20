@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import StoreKit
 import Shared
 
 // MARK: - Settings (full, tabbed) — Plug-ins / General / About
@@ -1053,13 +1054,31 @@ private struct GeneralTab: View {
             .padding(.horizontal, 20).padding(.top, 4)
 
             syncSection
-
-            label("Scrobbling")
-            Text("Connect Last.fm, ListenBrainz, or Libre.fm under Plug-ins, then turn on “Scrobble my plays” in that service’s settings.")
-                .font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.top, 6)
         }
         .padding(.bottom, 130)
         .task { await sync.load() }
+        // Keep-or-remove on disable (#194 / cross-provider dedup). Dismissing
+        // without a choice defaults to keep (the provider is disabled either way).
+        .confirmationDialog(
+            "Disable \(syncProviderName(sync.pendingDisable)) sync",
+            isPresented: Binding(get: { sync.pendingDisable != nil },
+                                 set: { presented in if !presented { sync.confirmDisable(removeItems: false) } }),
+            titleVisibility: .visible
+        ) {
+            Button("Keep synced items") { sync.confirmDisable(removeItems: false) }
+            Button("Remove from this device", role: .destructive) { sync.confirmDisable(removeItems: true) }
+        } message: {
+            Text("Remove the items that came only from this service? Items also synced from another service are kept.")
+        }
+    }
+
+    private func syncProviderName(_ id: String?) -> String {
+        switch id {
+        case "spotify": return "Spotify"
+        case "listenbrainz": return "ListenBrainz"
+        case "applemusic": return "Apple Music"
+        default: return "service"
+        }
     }
 
     // Library Sync (#194, Phase 1). Per-service toggles mirror "what we support":
@@ -1067,10 +1086,17 @@ private struct GeneralTab: View {
     // playlists. Apple Music sync is a follow-up.
     @ViewBuilder private var syncSection: some View {
         label("Library Sync")
+        // Each toggle is gated on the service being connected: Spotify (OAuth)
+        // and ListenBrainz (token) must be set up under Plug-ins first. Apple
+        // Music has no separate connect flow — its toggle triggers Apple Music
+        // authorization + MUT acquisition itself, so it stays enabled.
         syncToggle("Spotify", desc: "Sync your saved tracks, albums, artists, and playlists.",
-                   isOn: sync.spotifyOn) { sync.setProvider("spotify", $0) }
+                   isOn: sync.spotifyOn, connected: model.isConnected("spotify")) { sync.setProvider("spotify", $0) }
         syncToggle("ListenBrainz", desc: "Sync your playlists.",
-                   isOn: sync.listenBrainzOn) { sync.setProvider("listenbrainz", $0) }
+                   isOn: sync.listenBrainzOn, connected: model.isConnected("listenbrainz")) { sync.setProvider("listenbrainz", $0) }
+        syncToggle(sync.appleMusicBusy ? "Apple Music (authorizing…)" : "Apple Music",
+                   desc: "Sync your saved tracks, albums, artists, and playlists. (No delete/rename — Apple's API limitation.)",
+                   isOn: sync.appleMusicOn) { sync.setAppleMusic($0) }
         if let cd = sync.spotifyCooldownText {
             HStack(spacing: 6) {
                 Image(systemName: "clock.badge.exclamationmark").font(.system(size: 12))
@@ -1095,18 +1121,20 @@ private struct GeneralTab: View {
             }
         }
         .padding(.horizontal, 20).padding(.top, 8)
-        Text("Apple Music sync is coming soon.")
-            .font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.top, 8)
     }
 
-    private func syncToggle(_ title: String, desc: String, isOn: Bool, set: @escaping (Bool) -> Void) -> some View {
-        Toggle(isOn: Binding(get: { isOn }, set: set)) {
+    private func syncToggle(_ title: String, desc: String, isOn: Bool, connected: Bool = true, set: @escaping (Bool) -> Void) -> some View {
+        // Disabled (greyed) until the service is connected; a stale "on" can't
+        // sit enabled for a disconnected service (get returns isOn && connected).
+        Toggle(isOn: Binding(get: { isOn && connected }, set: { if connected { set($0) } })) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 15)).foregroundStyle(PC.fg1)
-                Text(desc).font(.system(size: 12)).foregroundStyle(PC.fg3)
+                Text(title).font(.system(size: 15)).foregroundStyle(connected ? PC.fg1 : PC.fg3)
+                Text(connected ? desc : "Connect \(title) under Plug-ins first.")
+                    .font(.system(size: 12)).foregroundStyle(PC.fg3)
             }
         }
         .tint(PC.accent)
+        .disabled(!connected)
         .padding(.horizontal, 20).padding(.top, 4)
     }
 
@@ -1121,10 +1149,13 @@ private final class SyncModel {
     private let container = IosContainer.companion.shared
     var spotifyOn = false
     var listenBrainzOn = false
+    var appleMusicOn = false
+    var appleMusicBusy = false   // acquiring the MUT
+    var pendingDisable: String?  // provider awaiting a keep/remove choice
     var syncing = false
     var status: String?
     var spotifyCooldownMs: Int64 = 0
-    var anyOn: Bool { spotifyOn || listenBrainzOn }
+    var anyOn: Bool { spotifyOn || listenBrainzOn || appleMusicOn }
 
     /// Local read (no network) — "retry in 3h 12m" while Spotify is in a 429 cooldown.
     var spotifyCooldownText: String? {
@@ -1138,14 +1169,57 @@ private final class SyncModel {
     func load() async {
         spotifyOn = (try? await container.isProviderSyncEnabled(providerId: "spotify"))?.boolValue ?? false
         listenBrainzOn = (try? await container.isProviderSyncEnabled(providerId: "listenbrainz"))?.boolValue ?? false
+        appleMusicOn = (try? await container.isProviderSyncEnabled(providerId: "applemusic"))?.boolValue ?? false
         spotifyCooldownMs = container.spotifyCooldownRemainingMs()
     }
 
     func setProvider(_ id: String, _ on: Bool) {
         if id == "spotify" { spotifyOn = on } else { listenBrainzOn = on }
+        if on {
+            Task {
+                try? await container.setSyncProviderEnabled(providerId: id, enabled: true)
+                await syncNow()
+            }
+        } else {
+            pendingDisable = id   // prompt keep-or-remove before tearing down
+        }
+    }
+
+    /// Resolve a pending disable with the user's keep/remove choice. Clears the
+    /// pending state FIRST so the dialog's dismissal binding doesn't double-fire.
+    func confirmDisable(removeItems: Bool) {
+        guard let id = pendingDisable else { return }
+        pendingDisable = nil
+        Task { try? await container.disableSyncProvider(providerId: id, removeItems: removeItems) }
+    }
+
+    /// Apple Music needs a Music User Token for the library API. Acquire it via
+    /// StoreKit the first time the user enables sync; revert the toggle if the
+    /// user denies authorization.
+    func setAppleMusic(_ on: Bool) {
+        if !on {
+            appleMusicOn = false
+            pendingDisable = "applemusic"   // prompt keep-or-remove
+            return
+        }
         Task {
-            try? await container.setSyncProviderEnabled(providerId: id, enabled: on)
-            if on { await syncNow() }
+            appleMusicBusy = true; status = nil
+            let hasMut = (try? await container.hasAppleMusicUserToken())?.boolValue ?? false
+            if !hasMut {
+                let devToken = (try? await container.appleMusicDeveloperToken()) ?? ""
+                if let mut = await acquireAppleMusicMUT(developerToken: devToken), !mut.isEmpty {
+                    try? await container.setAppleMusicUserToken(token: mut)
+                } else {
+                    appleMusicBusy = false
+                    appleMusicOn = false
+                    status = "Apple Music authorization failed"
+                    return
+                }
+            }
+            try? await container.setSyncProviderEnabled(providerId: "applemusic", enabled: true)
+            appleMusicOn = true
+            appleMusicBusy = false
+            await syncNow()
         }
     }
 
@@ -1156,6 +1230,31 @@ private final class SyncModel {
         syncing = false
         spotifyCooldownMs = container.spotifyCooldownRemainingMs()   // a 429 may have armed it
         status = err.isEmpty ? "Synced ✓" : "Failed: \(err)"
+    }
+}
+
+/// Acquire the Apple Music **Music User Token** (for the library Web API) via
+/// StoreKit — `SKCloudServiceController.requestUserToken(forDeveloperToken:)`.
+/// Distinct from the MusicKit playback token. Returns nil on denial/error.
+/// Requires the ES256 developer token + the user's Apple Music authorization
+/// (same grant MusicKit playback uses).
+private func acquireAppleMusicMUT(developerToken: String) async -> String? {
+    guard !developerToken.isEmpty else { return nil }
+    let current = SKCloudServiceController.authorizationStatus()
+    let status: SKCloudServiceAuthorizationStatus
+    if current == .notDetermined {
+        status = await withCheckedContinuation { cont in
+            SKCloudServiceController.requestAuthorization { cont.resume(returning: $0) }
+        }
+    } else {
+        status = current
+    }
+    guard status == .authorized else { return nil }
+    let controller = SKCloudServiceController()
+    return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+        controller.requestUserToken(forDeveloperToken: developerToken) { token, error in
+            cont.resume(returning: error == nil ? token : nil)
+        }
     }
 }
 
