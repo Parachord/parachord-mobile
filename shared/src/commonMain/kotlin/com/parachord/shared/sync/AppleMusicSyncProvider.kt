@@ -463,7 +463,30 @@ class AppleMusicSyncProvider(
             if (resp.next == null || resp.data.size < PAGE_SIZE) break
             offset += resp.data.size
         }
-        return all
+        // Cross-provider dedup: the library API has no ISRC, so fetch it from the
+        // catalog and re-key each row by ISRC — the same recording in Spotify
+        // Liked Songs then collapses onto one collection row instead of two.
+        return attachIsrcs(all)
+    }
+
+    /** Re-key AM library tracks by ISRC (fetched from the catalog by catalog id).
+     *  Tracks with no catalog ISRC keep their `applemusic-…` id (no merge). */
+    private suspend fun attachIsrcs(tracks: List<SyncedTrack>): List<SyncedTrack> {
+        if (tracks.isEmpty()) return tracks
+        val storefront = try { api.getStorefront().data.firstOrNull()?.id } catch (e: Exception) { null }
+            ?: return tracks
+        // `spotifyId` is the reused external-id field — for AM it holds the catalog id.
+        val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map { it.spotifyId })
+        if (isrcs.isEmpty()) return tracks
+        return tracks.map { synced ->
+            val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[synced.spotifyId]) ?: return@map synced
+            synced.copy(
+                entity = synced.entity.copy(
+                    id = TrackIdentity.canonicalTrackId(isrc, synced.entity.id),
+                    isrc = isrc,
+                ),
+            )
+        }
     }
 
     /**

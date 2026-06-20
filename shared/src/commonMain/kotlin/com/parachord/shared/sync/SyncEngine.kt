@@ -492,9 +492,15 @@ class SyncEngine constructor(
 
         // Batch all writes in a single transaction so Room emits only one Flow update
         run {
-            if (toAdd.isNotEmpty()) {
-                trackDao.insertAll(toAdd.map { it.entity })
-                syncSourceDao.insertAll(toAdd.map { synced ->
+            // ADD: the row id is canonical (ISRC-keyed when present), so a row may
+            // already exist from ANOTHER provider — merge service IDs onto it
+            // instead of clobbering (cross-provider dedup). Then record THIS
+            // provider's sync_source for the canonical row.
+            toAdd.forEach { synced ->
+                val existing = trackDao.getById(synced.entity.id)
+                if (existing != null) trackDao.update(mergeSyncedTrack(existing, synced.entity))
+                else trackDao.insert(synced.entity)
+                syncSourceDao.insert(
                     SyncSource(
                         itemId = synced.entity.id,
                         itemType = "track",
@@ -502,8 +508,8 @@ class SyncEngine constructor(
                         externalId = synced.spotifyId,
                         addedAt = synced.addedAt,
                         syncedAt = now,
-                    )
-                })
+                    ),
+                )
             }
 
             toRemove.forEach { source ->
@@ -514,12 +520,15 @@ class SyncEngine constructor(
                 }
             }
 
-            if (toUpdate.isNotEmpty()) {
-                trackDao.insertAll(toUpdate.map { it.entity })
-                syncSourceDao.insertAll(toUpdate.map { synced ->
-                    val existing = localByExternalId[synced.spotifyId]!!
-                    existing.copy(syncedAt = now)
-                })
+            // UPDATE: membership unchanged — bump syncedAt and merge (additive, so a
+            // re-pull from THIS provider never wipes another provider's IDs off a
+            // shared canonical row).
+            toUpdate.forEach { synced ->
+                trackDao.getById(synced.entity.id)?.let { existing ->
+                    trackDao.update(mergeSyncedTrack(existing, synced.entity))
+                }
+                val existingSource = localByExternalId[synced.spotifyId]!!
+                syncSourceDao.insert(existingSource.copy(syncedAt = now))
             }
         }
 
@@ -530,6 +539,24 @@ class SyncEngine constructor(
             unchanged = toUpdate.size,
         )
     }
+
+    /**
+     * Additive merge of an incoming synced track's service IDs onto an existing
+     * (possibly other-provider) canonical row. Never overwrites a populated field
+     * (null-only fill, mirroring backfillResolverIds); keeps the existing display
+     * metadata so the first provider to add the song owns its title/artist/art.
+     */
+    private fun mergeSyncedTrack(existing: Track, incoming: Track): Track = existing.copy(
+        spotifyId = existing.spotifyId ?: incoming.spotifyId,
+        appleMusicId = existing.appleMusicId ?: incoming.appleMusicId,
+        soundcloudId = existing.soundcloudId ?: incoming.soundcloudId,
+        spotifyUri = existing.spotifyUri ?: incoming.spotifyUri,
+        isrc = existing.isrc ?: incoming.isrc,
+        recordingMbid = existing.recordingMbid ?: incoming.recordingMbid,
+        artworkUrl = existing.artworkUrl ?: incoming.artworkUrl,
+        album = existing.album ?: incoming.album,
+        albumId = existing.albumId ?: incoming.albumId,
+    )
 
     // ── Album sync ───────────────────────────────────────────────
 

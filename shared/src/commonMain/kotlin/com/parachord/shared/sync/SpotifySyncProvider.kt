@@ -136,9 +136,12 @@ class SpotifySyncProvider(
                     val key = "local:${track.name.orEmpty()}:${track.artistName}"
                     key.hashCode().toUInt().toString(16)
                 }
+                // Cross-provider dedup: key the collection row by ISRC when present so
+                // the same recording saved on Apple Music collapses onto this row.
+                val isrc = com.parachord.shared.resolver.validateIsrc(track.externalIds?.isrc)
                 all.add(SyncedTrack(
                     entity = Track(
-                        id = "spotify-$trackId",
+                        id = TrackIdentity.canonicalTrackId(isrc, "spotify-$trackId"),
                         title = track.name ?: "Unknown",
                         artist = track.artistName,
                         album = track.album?.name,
@@ -147,6 +150,7 @@ class SpotifySyncProvider(
                         artworkUrl = track.album?.images?.bestImageUrl(),
                         spotifyUri = if (!isLocalFile) "spotify:track:$trackId" else null,
                         spotifyId = track.id,
+                        isrc = isrc,
                         resolver = if (!isLocalFile) "spotify" else "localfiles",
                         sourceType = "synced",
                         addedAt = spotifyAddedAt,

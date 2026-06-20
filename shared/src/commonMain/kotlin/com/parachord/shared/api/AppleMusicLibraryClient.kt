@@ -256,7 +256,42 @@ class AppleMusicLibraryClient(
         ensureSuccessOrThrowTyped(response)
         return json.decodeFromString(response.bodyAsText())
     }
+
+    /**
+     * Batch-fetch ISRCs for catalog song ids via the CATALOG API. The library
+     * API (`/me/library/songs`) doesn't return ISRC, so cross-provider dedup
+     * needs this extra lookup (#cross-provider-track-dedup). Returns
+     * `catalogId -> ISRC` only for ids that have one. Chunked at 300 (Apple's
+     * `ids=` cap). Best-effort: a failed batch just yields no ISRCs for it, so
+     * those tracks fall back to their `applemusic-…` id (no merge) rather than
+     * failing the sync.
+     */
+    suspend fun getCatalogSongIsrcs(storefront: String, catalogIds: List<String>): Map<String, String> {
+        if (storefront.isBlank() || catalogIds.isEmpty()) return emptyMap()
+        val out = mutableMapOf<String, String>()
+        catalogIds.distinct().chunked(300).forEach { batch ->
+            try {
+                val response = httpClient.get("$BASE_URL/v1/catalog/$storefront/songs") {
+                    applyAuth(this)
+                    parameter("ids", batch.joinToString(","))
+                }
+                if (!response.status.isSuccess()) return@forEach
+                val parsed = json.decodeFromString<AmCatalogSongsResponse>(response.bodyAsText())
+                parsed.data.forEach { song -> song.attributes?.isrc?.let { out[song.id] = it } }
+            } catch (e: Exception) { /* best-effort: skip this batch */ }
+        }
+        return out
+    }
 }
+
+@Serializable
+data class AmCatalogSongsResponse(val data: List<AmCatalogSong> = emptyList())
+
+@Serializable
+data class AmCatalogSong(val id: String, val attributes: AmCatalogSongAttributes? = null)
+
+@Serializable
+data class AmCatalogSongAttributes(val isrc: String? = null)
 
 // ── Library JSON models ──────────────────────────────────────────────
 
