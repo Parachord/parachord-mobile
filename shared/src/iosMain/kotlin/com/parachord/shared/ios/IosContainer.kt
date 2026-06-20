@@ -505,6 +505,16 @@ class IosContainer private constructor() {
         )
     }
 
+    /** How many synced items a provider has for an axis (tracks/albums/artists/
+     *  playlists) — drives the keep/remove prompt when an axis is deselected. */
+    suspend fun countSyncedItems(providerId: String, axis: String): Int =
+        syncEngine.countItemsForProviderAxis(providerId, axis).toInt()
+
+    /** Remove the items a provider contributed for [axis]. Items also synced from
+     *  another provider survive (lose just this provider's source). */
+    suspend fun removeSyncedItems(providerId: String, axis: String): Int =
+        syncEngine.removeItemsForProviderAxis(providerId, axis).toInt()
+
     /** Persisted playlists-screen sort key (matches Android's PlaylistSort.name). */
     suspend fun getPlaylistsSort(): String? = settingsStore.getSortPlaylists()
     suspend fun setPlaylistsSort(sort: String) { settingsStore.setSortPlaylists(sort) }

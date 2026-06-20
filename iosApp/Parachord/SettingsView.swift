@@ -1175,6 +1175,14 @@ struct ProviderConfigTarget: Identifiable {
 
 // MARK: - Per-provider sync config sheet
 
+/// A keep-or-remove prompt shown when the user deselects sync axes that already
+/// have items in the collection.
+struct AxisRemovalPrompt: Identifiable {
+    let id = UUID()
+    let summary: String       // e.g. "2 albums and 84 artists"
+    let axes: [String]        // dropped axes that have items
+}
+
 @MainActor @Observable
 private final class ProviderConfigModel {
     private let container = IosContainer.companion.shared
@@ -1184,6 +1192,8 @@ private final class ProviderConfigModel {
     var selectedIds: Set<String> = []
     var pushable: [IosSyncPlaylist] = []
     var loading = true
+    private var originalAxes: Set<String> = []   // axes at load, for drop detection
+    var pendingRemoval: AxisRemovalPrompt?
 
     init(providerId: String) { self.providerId = providerId }
 
@@ -1199,10 +1209,58 @@ private final class ProviderConfigModel {
         let ids = (try? await container.getPlaylistSelectionIds(providerId: providerId)) as? [String] ?? []
         let pl = (try? await container.getPushablePlaylists(providerId: providerId)) as? [IosSyncPlaylist] ?? []
         axes = Set(ax)
+        originalAxes = Set(ax)
         playlistMode = mode
         selectedIds = Set(ids)
         pushable = pl
         loading = false
+    }
+
+    /// Called on Done. If the user turned OFF any axis that still has synced
+    /// items in the collection, build a keep/remove prompt and return true
+    /// (caller waits for the choice). Otherwise return false → safe to dismiss.
+    func needsRemovalPrompt() async -> Bool {
+        let dropped = originalAxes.subtracting(axes)
+        guard !dropped.isEmpty else { return false }
+        var withItems: [(String, Int)] = []
+        for axis in dropped.sorted() {
+            let n = Int((try? await container.countSyncedItems(providerId: providerId, axis: axis)) ?? 0)
+            if n > 0 { withItems.append((axis, n)) }
+        }
+        guard !withItems.isEmpty else { return false }
+        let parts = withItems.map { "\($0.1) \(axisNoun($0.0, $0.1))" }
+        pendingRemoval = AxisRemovalPrompt(summary: joinParts(parts), axes: withItems.map { $0.0 })
+        return true
+    }
+
+    /// Remove the dropped axes' provider-sourced items, then clear the prompt.
+    func confirmRemoval() async {
+        if let p = pendingRemoval {
+            for axis in p.axes { _ = try? await container.removeSyncedItems(providerId: providerId, axis: axis) }
+        }
+        originalAxes = axes
+        pendingRemoval = nil
+    }
+
+    func keepItems() { originalAxes = axes; pendingRemoval = nil }
+
+    private func axisNoun(_ axis: String, _ n: Int) -> String {
+        switch axis {
+        case "tracks": return n == 1 ? "saved song" : "saved songs"
+        case "albums": return n == 1 ? "album" : "albums"
+        case "artists": return n == 1 ? "artist" : "artists"
+        case "playlists": return n == 1 ? "playlist" : "playlists"
+        default: return "items"
+        }
+    }
+
+    private func joinParts(_ parts: [String]) -> String {
+        switch parts.count {
+        case 0: return ""
+        case 1: return parts[0]
+        case 2: return "\(parts[0]) and \(parts[1])"
+        default: return parts.dropLast().joined(separator: ", ") + ", and " + parts.last!
+        }
     }
 
     func toggleAxis(_ axis: String, _ on: Bool) {
@@ -1263,11 +1321,27 @@ private struct ProviderSyncConfigSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }.foregroundStyle(PC.accent)
+                    Button("Done") {
+                        Task { if await !m.needsRemovalPrompt() { dismiss() } }
+                    }.foregroundStyle(PC.accent)
                 }
             }
         }
         .task { await m.load() }
+        // Keep-or-remove when an axis with existing items was switched off.
+        .confirmationDialog(
+            "Stop syncing from \(target.name)?",
+            isPresented: Binding(get: { m.pendingRemoval != nil }, set: { if !$0 { m.pendingRemoval = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Remove \(m.pendingRemoval?.summary ?? "items")", role: .destructive) {
+                Task { await m.confirmRemoval(); dismiss() }
+            }
+            Button("Keep in collection") { m.keepItems(); dismiss() }
+            Button("Cancel", role: .cancel) { m.pendingRemoval = nil }
+        } message: {
+            Text("You turned off syncing for \(m.pendingRemoval?.summary ?? "items") from \(target.name). Remove them from your collection, or keep them? Items also synced from another service are kept either way.")
+        }
     }
 
     @ViewBuilder private var selectedList: some View {
