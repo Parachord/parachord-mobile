@@ -518,7 +518,7 @@ class SyncEngine constructor(
         val toUpdate = remote.filter { synced ->
             synced.spotifyId in localByExternalId
         }
-        Log.d(TAG, "applyTrackDiff: remote=${remote.size}, localSources=${localSources.size}, toAdd=${toAdd.size}, toRemove=${toRemove.size}, toUpdate=${toUpdate.size}")
+        Log.i(TAG, "applyTrackDiff[$providerId]: remote=${remote.size}, localSources=${localSources.size}, toAdd=${toAdd.size}, toRemove=${toRemove.size}, toUpdate=${toUpdate.size}")
 
         if (toRemove.size > localSources.size * MASS_REMOVAL_THRESHOLD_PERCENT
             && toRemove.size > MASS_REMOVAL_THRESHOLD_COUNT

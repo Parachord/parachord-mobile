@@ -311,14 +311,18 @@ data class AmListMeta(
 @Serializable
 data class AmLibrarySong(
     val id: String,
-    val type: String,
-    val attributes: AmLibrarySongAttributes,
+    val type: String? = null,
+    val attributes: AmLibrarySongAttributes? = null,
 )
 
 @Serializable
 data class AmLibrarySongAttributes(
-    val name: String,
-    val artistName: String,
+    // Nullable + defaulted so ONE library song with incomplete metadata (no
+    // name/artist — e.g. a cloud-uploaded or oddly-tagged track) can't throw
+    // during decode and take the whole songs page down with it. The mapper skips
+    // songs missing essentials instead.
+    val name: String? = null,
+    val artistName: String? = null,
     val albumName: String? = null,
     val durationInMillis: Long? = null,
     val artwork: AmArtwork? = null,

@@ -455,7 +455,7 @@ class AppleMusicSyncProvider(
             // Refresh total in case the library shifted mid-paginate.
             resp.meta?.total?.let { total = it }
             for (am in resp.data) {
-                all.add(am.toSyncedTrack())
+                am.toSyncedTrack()?.let { all.add(it) }   // skip songs with no usable title
             }
             // Floor total to the running count so progress never reports
             // more than 100% if the remote shrunk during pagination.
@@ -473,10 +473,13 @@ class AppleMusicSyncProvider(
      *  Tracks with no catalog ISRC keep their `applemusic-…` id (no merge). */
     private suspend fun attachIsrcs(tracks: List<SyncedTrack>): List<SyncedTrack> {
         if (tracks.isEmpty()) return tracks
-        val storefront = try { api.getStorefront().data.firstOrNull()?.id } catch (e: Exception) { null }
-            ?: return tracks
+        Log.i(TAG, "attachIsrcs: ${tracks.size} AM library songs to re-key by ISRC")
+        val storefront = try { api.getStorefront().data.firstOrNull()?.id } catch (e: Exception) {
+            Log.w(TAG, "attachIsrcs: getStorefront failed; keeping applemusic- ids", e); null
+        } ?: return tracks
         // `spotifyId` is the reused external-id field — for AM it holds the catalog id.
         val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map { it.spotifyId })
+        Log.i(TAG, "attachIsrcs: storefront=$storefront, resolved ${isrcs.size} ISRCs for ${tracks.size} songs")
         if (isrcs.isEmpty()) return tracks
         return tracks.map { synced ->
             val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[synced.spotifyId]) ?: return@map synced
@@ -663,18 +666,22 @@ class AppleMusicSyncProvider(
      * `id` is the library ID; `playParams.id` is the catalog ID. We
      * store the catalog ID in [TrackEntity.appleMusicId] so playback
      * can resolve via MusicKit. */
-    private fun AmLibrarySong.toSyncedTrack(): SyncedTrack {
-        val catalogId = attributes.playParams?.id ?: id
-        val addedAt = attributes.dateAdded?.let { parseIso(it) } ?: 0L
+    /** Library song → cross-provider [SyncedTrack], or null for a song with no
+     *  usable title (skip it rather than fail the whole page). */
+    private fun AmLibrarySong.toSyncedTrack(): SyncedTrack? {
+        val attrs = attributes ?: return null
+        val title = attrs.name?.takeIf { it.isNotBlank() } ?: return null
+        val catalogId = attrs.playParams?.id ?: id
+        val addedAt = attrs.dateAdded?.let { parseIso(it) } ?: 0L
         return SyncedTrack(
             entity = Track(
                 id = "applemusic-$catalogId",
-                title = attributes.name,
-                artist = attributes.artistName,
-                album = attributes.albumName,
+                title = title,
+                artist = attrs.artistName?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
+                album = attrs.albumName,
                 albumId = null,
-                duration = attributes.durationInMillis,
-                artworkUrl = resolveArtworkUrl(attributes.artwork?.url),
+                duration = attrs.durationInMillis,
+                artworkUrl = resolveArtworkUrl(attrs.artwork?.url),
                 spotifyUri = null,
                 spotifyId = null,
                 appleMusicId = catalogId,
