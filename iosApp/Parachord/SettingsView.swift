@@ -1110,7 +1110,7 @@ private struct GeneralTab: View {
             Button {
                 Task { await sync.syncNow() }
             } label: {
-                Text(sync.syncing ? "Syncing…" : "Sync now")
+                Text(sync.syncing ? (sync.syncPhase.map { "Syncing… (\($0))" } ?? "Syncing…") : "Sync now")
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
                     .padding(.horizontal, 16).padding(.vertical, 9)
                     .background(Capsule().fill(sync.anyOn ? PC.accent : PC.fg3))
@@ -1154,10 +1154,12 @@ private final class SyncModel {
     var appleMusicBusy = false   // acquiring the MUT
     var pendingDisable: String?  // provider awaiting a keep/remove choice
     var syncing = false          // driven by the shared engine state (any trigger)
+    var syncPhase: String?       // coarse phase (tracks/albums/artists/playlists)
     var status: String?
     var spotifyCooldownMs: Int64 = 0
     private var pendingResync = false   // re-sync once an in-flight sync finishes
     private var syncWatcher: Cancellable?
+    private var phaseWatcher: Cancellable?
     var anyOn: Bool { spotifyOn || listenBrainzOn || appleMusicOn }
 
     /// Local read (no network) — "retry in 3h 12m" while Spotify is in a 429 cooldown.
@@ -1191,9 +1193,15 @@ private final class SyncModel {
                 }
             }
         }
+        phaseWatcher = container.watchSyncPhase { [weak self] phase in
+            Task { @MainActor in self?.syncPhase = phase as String? }
+        }
     }
 
-    func stopWatching() { syncWatcher?.cancel(); syncWatcher = nil }
+    func stopWatching() {
+        syncWatcher?.cancel(); syncWatcher = nil
+        phaseWatcher?.cancel(); phaseWatcher = nil
+    }
 
     func setProvider(_ id: String, _ on: Bool) {
         if id == "spotify" { spotifyOn = on } else { listenBrainzOn = on }

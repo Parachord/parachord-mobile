@@ -413,6 +413,12 @@ class IosContainer private constructor() {
     fun watchSyncing(onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(syncEngine.syncing) { onEach((it as? Boolean) ?: false) }
 
+    /** Observe the coarse current sync phase (tracks/albums/artists/playlists) or
+     *  null when idle — lets the button show "Syncing… (playlists)" so we can see
+     *  which phase a stuck sync is in. */
+    fun watchSyncPhase(onEach: (String?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.syncPhase) { onEach(it as? String) }
+
     /**
      * LB sync needs BOTH the token and the username. The plugin config derives
      * the username from the token via `validateToken` on entry, but if that

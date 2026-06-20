@@ -246,6 +246,12 @@ class SyncEngine constructor(
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing
 
+    // Coarse current-phase signal (tracks/albums/artists/playlists/complete) so
+    // the UI can show "Syncing… (playlists)" and we can SEE which phase hangs.
+    // Null when idle.
+    private val _syncPhase = MutableStateFlow<String?>(null)
+    val syncPhase: StateFlow<String?> = _syncPhase
+
     data class TypeSyncResult(
         val added: Int = 0,
         val removed: Int = 0,
@@ -309,6 +315,7 @@ class SyncEngine constructor(
             var playlistResult = TypeSyncResult()
 
             if (settings.syncTracks) {
+                _syncPhase.value = "tracks"
                 onProgress(SyncProgress(SyncPhase.TRACKS,
                     message = if (providerLabel != null) "Syncing $providerLabel songs..."
                               else "Syncing liked songs..."))
@@ -316,6 +323,7 @@ class SyncEngine constructor(
             }
 
             if (settings.syncAlbums) {
+                _syncPhase.value = "albums"
                 onProgress(SyncProgress(SyncPhase.ALBUMS,
                     message = if (providerLabel != null) "Syncing $providerLabel albums..."
                               else "Syncing saved albums..."))
@@ -323,6 +331,7 @@ class SyncEngine constructor(
             }
 
             if (settings.syncArtists) {
+                _syncPhase.value = "artists"
                 onProgress(SyncProgress(SyncPhase.ARTISTS,
                     message = if (providerLabel != null) "Syncing $providerLabel artists..."
                               else "Syncing followed artists..."))
@@ -330,6 +339,7 @@ class SyncEngine constructor(
             }
 
             if (settings.syncPlaylists) {
+                _syncPhase.value = "playlists"
                 onProgress(SyncProgress(SyncPhase.PLAYLISTS,
                     message = if (providerLabel != null) "Syncing $providerLabel playlists..."
                               else "Syncing playlists..."))
@@ -351,6 +361,7 @@ class SyncEngine constructor(
             Log.e(TAG, "Sync failed", e)
             FullSyncResult(success = false, error = e.message)
         } finally {
+            _syncPhase.value = null
             _syncing.value = false
             syncMutex.unlock()
         }
@@ -1421,6 +1432,7 @@ class SyncEngine constructor(
                     remotePlaylists
                 } else {
                     try {
+                        _syncPhase.value = "playlists · ${provider.id} fetch-remote"
                         provider.fetchPlaylists(null)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to fetch ${provider.id} playlists for push pass", e)
@@ -1529,6 +1541,7 @@ class SyncEngine constructor(
         val localByExternalId = localSources.associateBy { it.externalId }
 
         for ((index, remote) in remotePlaylists.withIndex()) {
+            _syncPhase.value = "playlists · $providerId pull ${index + 1}/${remotePlaylists.size}"
             onProgress(SyncProgress(
                 SyncPhase.PLAYLISTS,
                 index + 1,
@@ -1846,7 +1859,8 @@ class SyncEngine constructor(
         val ownedRemoteByName = liveRemote.filter { it.isOwned }
             .groupBy { it.entity.name.trim().lowercase() }
 
-        for (playlist in candidates) {
+        for ((pIdx, playlist) in candidates.withIndex()) {
+            _syncPhase.value = "playlists · $providerId push ${pIdx + 1}/${candidates.size}"
             try {
                 // Phase 3 — Fix 3 + pendingAction skip:
                 // Skip rows the user marked remote-deleted; the playlist
@@ -1914,6 +1928,23 @@ class SyncEngine constructor(
                     }
                 }
 
+                // Resolve the pushable tracklist BEFORE deciding to create a
+                // remote. A playlist with no pushable tracks must NEVER create
+                // a fresh empty mirror (desktop's "don't create an empty
+                // mirror" rule). This is what flooded ListenBrainz with
+                // hundreds of 0-track playlists: Apple-Music-imported rows
+                // whose tracks were never fetched locally have an empty
+                // `playlist_track` table, so the create ran but the track push
+                // was skipped — leaving an empty remote playlist. Hydration is
+                // a no-op for a 0-track playlist, so this adds no cost there.
+                val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
+                val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
+                val externalTrackIds = extractExternalTrackIds(tracks, providerId)
+                if (externalTrackIds.isEmpty() && existing == null) {
+                    Log.d(TAG, "Skip push '${playlist.name}' to $providerId — 0 pushable tracks, refusing to create an empty mirror")
+                    continue
+                }
+
                 val externalId: String
                 val snapshotId: String?
                 if (existing != null) {
@@ -1938,14 +1969,6 @@ class SyncEngine constructor(
                     snapshotId = snapshotId,
                 )
 
-                val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
-                // Hydrate provider-specific IDs for tracks lacking them
-                // (e.g. freshly-imported hosted XSPF where the resolver
-                // pipeline hasn't backfilled appleMusicId yet) so the
-                // first push ships a complete tracklist instead of an
-                // empty mirror.
-                val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
-                val externalTrackIds = extractExternalTrackIds(tracks, providerId)
                 if (externalTrackIds.isNotEmpty()) {
                     // Skip-unchanged short-circuit (desktop's
                     // canShortCircuitPlaylistUpdate, sync-providers/listenbrainz.js
