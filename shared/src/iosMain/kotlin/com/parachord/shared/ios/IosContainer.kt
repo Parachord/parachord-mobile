@@ -2002,6 +2002,13 @@ class IosContainer private constructor() {
     suspend fun getPlaylistMirrorProviders(id: String): List<String> =
         libraryRepository.getPlaylistMirrors(id).keys.toList()
 
+    /** A playlist's mirrors as (providerId, externalId) pairs, for the detail
+     *  page's "open on <service>" chips. */
+    suspend fun getPlaylistMirrorLinks(id: String): List<IosPlaylistMirrorLink> =
+        libraryRepository.getPlaylistMirrors(id).map { (provider, externalId) ->
+            IosPlaylistMirrorLink(providerId = provider, externalId = externalId)
+        }
+
     /** Delete a playlist locally + remote-delete from [fromProviders] (provider
      *  ids). Returns the display names of providers that DON'T support API
      *  deletion (e.g. Apple Music) so the UI can tell the user to remove it
@@ -2318,6 +2325,13 @@ data class IosSyncPlaylist(
 data class IosPlaylistMirrors(
     val localPlaylistId: String,
     val providerIds: List<String>,
+)
+
+/** A single remote a playlist mirrors to: provider + its external id (used to
+ *  build the "open on <service>" link on the detail page). */
+data class IosPlaylistMirrorLink(
+    val providerId: String,
+    val externalId: String,
 )
 
 data class IosSearchResults(

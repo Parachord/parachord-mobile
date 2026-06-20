@@ -55,6 +55,12 @@ class PlaylistDetailViewModel constructor(
     val playlist: StateFlow<PlaylistEntity?> = playlistDao.getByIdFlow(playlistId)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** providerId -> externalId for every remote this playlist mirrors to, for
+     *  the detail-page "open on <service>" chips. Reloads when the row changes. */
+    val mirrors: StateFlow<Map<String, String>> = playlist
+        .map { runCatching { libraryRepository.getPlaylistMirrors(playlistId) }.getOrDefault(emptyMap()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
     /** Title of the currently playing track (for highlight). */
     val nowPlayingTitle: StateFlow<String?> = playbackStateHolder.state
         .map { it.currentTrack?.title }

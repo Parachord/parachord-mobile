@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.playlists
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -91,6 +93,7 @@ fun PlaylistDetailScreen(
     viewModel: PlaylistDetailViewModel = koinViewModel(),
 ) {
     val playlist by viewModel.playlist.collectAsStateWithLifecycle()
+    val mirrors by viewModel.mirrors.collectAsStateWithLifecycle()
     val tracks by viewModel.tracks.collectAsStateWithLifecycle()
     val allPlaylists by viewModel.allPlaylists.collectAsStateWithLifecycle()
     val nowPlayingTitle by viewModel.nowPlayingTitle.collectAsStateWithLifecycle()
@@ -295,6 +298,28 @@ fun PlaylistDetailScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+
+                    // Source/mirror chips — each opens the playlist on that
+                    // service. Driven off sync_playlist_link (+ id-prefix /
+                    // pull source), so a multi-mirror playlist shows them all.
+                    if (mirrors.isNotEmpty()) {
+                        val mirrorCtx = LocalContext.current
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            mirrors.forEach { (providerId, externalId) ->
+                                playlistMirrorUrl(providerId, externalId)?.let { url ->
+                                    MirrorLinkChip(
+                                        label = playlistProviderLabel(providerId),
+                                        color = playlistProviderColor(providerId),
+                                    ) {
+                                        runCatching {
+                                            mirrorCtx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // "Last updated" line. Uses `lastModified` (set on every
                     // content change — hosted-XSPF refresh, manual edit, or
@@ -642,4 +667,40 @@ private fun formatPlaylistRelativeTime(timestamp: Long): String {
             "on ${fmt.format(java.util.Date(timestamp))}"
         }
     }
+}
+
+/** Web URL for a playlist on a given service, or null if not linkable. */
+private fun playlistMirrorUrl(providerId: String, externalId: String): String? = when (providerId) {
+    "spotify" -> "https://open.spotify.com/playlist/$externalId"
+    "listenbrainz" -> "https://listenbrainz.org/playlist/$externalId/"
+    "applemusic" -> "https://music.apple.com/library/playlist/$externalId"
+    else -> null
+}
+
+private fun playlistProviderLabel(providerId: String): String = when (providerId) {
+    "spotify" -> "Spotify"
+    "applemusic" -> "Apple Music"
+    "listenbrainz" -> "ListenBrainz"
+    else -> providerId.replaceFirstChar { it.uppercase() }
+}
+
+private fun playlistProviderColor(providerId: String): Color = when (providerId) {
+    "spotify" -> Color(0xFF1DB954)
+    "applemusic" -> Color(0xFFFA243C)
+    "listenbrainz" -> Color(0xFFEB743B)
+    else -> Color(0xFF9CA3AF)
+}
+
+@Composable
+private fun MirrorLinkChip(label: String, color: Color, onClick: () -> Unit) {
+    Text(
+        text = "$label ↗",
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(color = color.copy(alpha = 0.12f))
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    )
 }

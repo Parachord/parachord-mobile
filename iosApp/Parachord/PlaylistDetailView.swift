@@ -618,6 +618,8 @@ final class SavedPlaylistModel {
     private var pSub: Cancellable?
     private var tSub: Cancellable?
 
+    var mirrors: [IosPlaylistMirrorLink] = []
+
     init(playlistId: String) { self.playlistId = playlistId }
     var name: String { playlist?.name ?? "Playlist" }
 
@@ -629,6 +631,7 @@ final class SavedPlaylistModel {
                 self?.entities = ts.map { Self.makeTrack($0) }
             }
         }
+        Task { mirrors = (try? await container.getPlaylistMirrorLinks(id: playlistId)) as? [IosPlaylistMirrorLink] ?? [] }
     }
 
     func rename(_ newName: String) {
@@ -688,6 +691,18 @@ struct SavedPlaylistDetailView: View {
                 .multilineTextAlignment(.center)
             Text("\(model.tracks.count) \(model.tracks.count == 1 ? "track" : "tracks")")
                 .font(.system(size: 13)).foregroundStyle(PC.fg2)
+            // Source/mirror chips — each opens the playlist on that service.
+            if !model.mirrors.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(model.mirrors, id: \.providerId) { link in
+                        if let url = mirrorURL(link) {
+                            Link(destination: url) { mirrorChip(link.providerId) }
+                        } else {
+                            mirrorChip(link.providerId)
+                        }
+                    }
+                }
+            }
             HStack(spacing: 10) {
                 Button { coordinator.setQueue(model.entities, startIndex: 0, context: ctx) } label: {
                     Label("Play All", systemImage: "play.fill").font(.system(size: 15, weight: .semibold))
@@ -708,6 +723,35 @@ struct SavedPlaylistDetailView: View {
             }
         }
         .frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
+    }
+
+    /// Web URL for a playlist on a given service, or nil if not linkable.
+    private func mirrorURL(_ link: IosPlaylistMirrorLink) -> URL? {
+        switch link.providerId {
+        case "spotify": return URL(string: "https://open.spotify.com/playlist/\(link.externalId)")
+        case "listenbrainz": return URL(string: "https://listenbrainz.org/playlist/\(link.externalId)/")
+        case "applemusic": return URL(string: "https://music.apple.com/library/playlist/\(link.externalId)")
+        default: return nil
+        }
+    }
+
+    @ViewBuilder private func mirrorChip(_ providerId: String) -> some View {
+        let (label, hex): (String, UInt32) = {
+            switch providerId {
+            case "spotify": return ("Spotify", 0x1DB954)
+            case "applemusic": return ("Apple Music", 0xFA243C)
+            case "listenbrainz": return ("ListenBrainz", 0xEB743B)
+            default: return (providerId.capitalized, 0x9CA3AF)
+            }
+        }()
+        let c = Color(uiColor: UIColor(hex: hex))
+        HStack(spacing: 3) {
+            Text(label).font(.system(size: 11, weight: .semibold))
+            Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
+        }
+        .foregroundStyle(c)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Capsule().fill(c.opacity(0.12)))
     }
 
     // View mode: tap-to-play rows with badges + context menus (app-wide style).
