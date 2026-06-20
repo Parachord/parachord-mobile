@@ -505,6 +505,10 @@ class IosContainer private constructor() {
         )
     }
 
+    /** Persisted playlists-screen sort key (matches Android's PlaylistSort.name). */
+    suspend fun getPlaylistsSort(): String? = settingsStore.getSortPlaylists()
+    suspend fun setPlaylistsSort(sort: String) { settingsStore.setSortPlaylists(sort) }
+
     /** Local playlists eligible to push to [providerId] (the picker's rows). */
     suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =
         playlistDao.getAllSync()

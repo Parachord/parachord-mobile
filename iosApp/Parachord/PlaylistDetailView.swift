@@ -305,16 +305,53 @@ func pcTrack(from t: PlaylistTrack) -> Track {
     )
 }
 
+/// Playlist sort options — mirrors Android's `PlaylistSort` (same `name` keys,
+/// so the persisted choice is shared across platforms).
+enum PlaylistSort: String, CaseIterable {
+    case RECENT, CREATED, MODIFIED, ALPHA_ASC, ALPHA_DESC
+    var label: String {
+        switch self {
+        case .RECENT: return "Recently Added"
+        case .CREATED: return "Date Created"
+        case .MODIFIED: return "Recently Modified"
+        case .ALPHA_ASC: return "A-Z"
+        case .ALPHA_DESC: return "Z-A"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class PlaylistsListModel {
     private let container = IosContainer.companion.shared
-    var playlists: [Playlist] = []
+    private var raw: [Playlist] = []
+    var sort: PlaylistSort = .RECENT
+    var playlists: [Playlist] { sorted(raw) }
     private var sub: Cancellable?
 
     func start() {
         guard sub == nil else { return }
-        sub = container.watchSavedPlaylists { [weak self] list in self?.playlists = list }
+        sub = container.watchSavedPlaylists { [weak self] list in self?.raw = list }
+        Task {
+            if let s = try? await container.getPlaylistsSort(), let parsed = PlaylistSort(rawValue: s) {
+                sort = parsed
+            }
+        }
+    }
+
+    func setSort(_ s: PlaylistSort) {
+        sort = s
+        Task { try? await container.setPlaylistsSort(sort: s.rawValue) }
+    }
+
+    private func sorted(_ list: [Playlist]) -> [Playlist] {
+        switch sort {
+        case .RECENT: return list.sorted { $0.createdAt > $1.createdAt }
+        case .CREATED: return list.sorted { $0.createdAt < $1.createdAt }
+        case .MODIFIED: return list.sorted { $0.lastModified > $1.lastModified }
+        case .ALPHA_ASC: return list.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        case .ALPHA_DESC: return list.sorted { $0.name.lowercased() > $1.name.lowercased() }
+        }
     }
 }
 
@@ -333,6 +370,26 @@ struct PlaylistsScreen: View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 PCTopBar(title: "Playlists", leading: .menu, onLeading: onMenu)
+                if !model.playlists.isEmpty {
+                    HStack {
+                        Menu {
+                            ForEach(PlaylistSort.allCases, id: \.self) { s in
+                                Button { model.setSort(s) } label: {
+                                    if model.sort == s { Label(s.label, systemImage: "checkmark") } else { Text(s.label) }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.arrow.down").font(.system(size: 11))
+                                Text(model.sort.label).font(.system(size: 13, weight: .medium))
+                                Image(systemName: "chevron.down").font(.system(size: 9))
+                            }
+                            .foregroundStyle(PC.fg2)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 8)
+                }
                 if model.playlists.isEmpty {
                     Spacer()
                     VStack(spacing: 8) {
@@ -394,11 +451,41 @@ struct PlaylistsScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(subtitle(p)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                if hasChips(p) { chips(p) }
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PC.fg3)
         }
         .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    }
+
+    // Source chips — help spot cross-provider duplicates (a playlist that exists
+    // as both a `spotify-` and an `applemusic-` row). Mirrors Android's
+    // PlaylistsScreen chips + the hosted-XSPF badge.
+    private func isSpotify(_ p: Playlist) -> Bool { p.spotifyId != nil || p.id.hasPrefix("spotify-") }
+    private func isAppleMusic(_ p: Playlist) -> Bool { p.id.hasPrefix("applemusic-") }
+    private func hasChips(_ p: Playlist) -> Bool { p.sourceUrl != nil || isSpotify(p) || isAppleMusic(p) }
+
+    @ViewBuilder private func chips(_ p: Playlist) -> some View {
+        HStack(spacing: 5) {
+            if p.sourceUrl != nil {
+                Text("🌐 Hosted").font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(uiColor: UIColor(hex: 0x3B82F6)))
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: UIColor(hex: 0xEFF6FF))))
+            }
+            if isSpotify(p) { sourceChip("Spotify", 0x1DB954) }
+            if isAppleMusic(p) { sourceChip("Apple Music", 0xFA243C) }
+        }
+        .padding(.top, 1)
+    }
+
+    private func sourceChip(_ text: String, _ hex: UInt32) -> some View {
+        let c = Color(uiColor: UIColor(hex: hex))
+        return Text(text).font(.system(size: 10, weight: .medium))
+            .foregroundStyle(c)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(RoundedRectangle(cornerRadius: 4).fill(c.opacity(0.12)))
     }
 
     private func subtitle(_ p: Playlist) -> String {
