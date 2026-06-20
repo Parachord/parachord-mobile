@@ -1991,6 +1991,33 @@ class IosContainer private constructor() {
         playlistDao.getById(id)?.let { playlistDao.delete(it) }
     }
 
+    /** localPlaylistId -> push-mirror providers, for the playlists-list chips. */
+    suspend fun getAllPlaylistMirrors(): List<IosPlaylistMirrors> =
+        libraryRepository.getAllPlaylistLinkProviders().map { (id, providers) ->
+            IosPlaylistMirrors(localPlaylistId = id, providerIds = providers)
+        }
+
+    /** The providers a playlist mirrors to (source + push links), for the
+     *  per-mirror delete dialog. */
+    suspend fun getPlaylistMirrorProviders(id: String): List<String> =
+        libraryRepository.getPlaylistMirrors(id).keys.toList()
+
+    /** Delete a playlist locally + remote-delete from [fromProviders] (provider
+     *  ids). Returns the display names of providers that DON'T support API
+     *  deletion (e.g. Apple Music) so the UI can tell the user to remove it
+     *  manually. */
+    suspend fun deletePlaylistFromMirrors(id: String, fromProviders: List<String>): List<String> {
+        val pl = playlistDao.getById(id) ?: run {
+            playlistTrackDao.deleteByPlaylistId(id)
+            return emptyList()
+        }
+        val attempts = libraryRepository.deletePlaylistWithSync(pl, fromProviders.toSet())
+        playlistTrackDao.deleteByPlaylistId(id)
+        return attempts
+            .filter { it.result is com.parachord.shared.sync.DeleteResult.Unsupported }
+            .map { it.providerDisplayName }
+    }
+
     suspend fun removePlaylistTrackAt(id: String, index: Int) {
         val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()
         if (index < 0 || index >= tracks.size) return
@@ -2285,6 +2312,12 @@ data class IosSyncPlaylist(
     val id: String,
     val name: String,
     val trackCount: Int,
+)
+
+/** A playlist's push-mirror providers, for the playlists-list source chips. */
+data class IosPlaylistMirrors(
+    val localPlaylistId: String,
+    val providerIds: List<String>,
 )
 
 data class IosSearchResults(

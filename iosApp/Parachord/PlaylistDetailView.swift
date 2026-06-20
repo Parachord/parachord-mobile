@@ -326,17 +326,29 @@ final class PlaylistsListModel {
     private let container = IosContainer.companion.shared
     private var raw: [Playlist] = []
     var sort: PlaylistSort = .RECENT
+    var mirrors: [String: [String]] = [:]   // localPlaylistId -> push-mirror provider ids
     var playlists: [Playlist] { sorted(raw) }
     private var sub: Cancellable?
 
     func start() {
         guard sub == nil else { return }
-        sub = container.watchSavedPlaylists { [weak self] list in self?.raw = list }
+        sub = container.watchSavedPlaylists { [weak self] list in
+            self?.raw = list
+            Task { await self?.loadMirrors() }   // refresh chips when the list changes (post-sync)
+        }
         Task {
             if let s = try? await container.getPlaylistsSort(), let parsed = PlaylistSort(rawValue: s) {
                 sort = parsed
             }
+            await loadMirrors()
         }
+    }
+
+    func loadMirrors() async {
+        let list = (try? await container.getAllPlaylistMirrors()) as? [IosPlaylistMirrors] ?? []
+        var dict: [String: [String]] = [:]
+        for m in list { dict[m.localPlaylistId] = m.providerIds }
+        mirrors = dict
     }
 
     func setSort(_ s: PlaylistSort) {
@@ -426,12 +438,11 @@ struct PlaylistsScreen: View {
                     renameTarget = nil
                 }
             }
-            .confirmationDialog("Delete this playlist?", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }), titleVisibility: .visible) {
-                Button("Delete Playlist", role: .destructive) {
-                    if let p = deleteTarget { Task { try? await container.deletePlaylist(id: p.id) } }
-                    deleteTarget = nil
+            .sheet(isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
+                if let p = deleteTarget {
+                    DeletePlaylistSheet(playlist: p) { deleteTarget = nil }
+                        .presentationDetents([.medium])
                 }
-                Button("Cancel", role: .cancel) { deleteTarget = nil }
             }
         }
     }
@@ -462,17 +473,21 @@ struct PlaylistsScreen: View {
     // Source chips — help spot cross-provider duplicates (a playlist that exists
     // as both a `spotify-` and an `applemusic-` row). Mirrors Android's
     // PlaylistsScreen chips + the hosted-XSPF badge.
-    private func isSpotify(_ p: Playlist) -> Bool { p.spotifyId != nil || p.id.hasPrefix("spotify-") }
-    private func isAppleMusic(_ p: Playlist) -> Bool { p.id.hasPrefix("applemusic-") }
-    private func isListenBrainz(_ p: Playlist) -> Bool { p.id.hasPrefix("listenbrainz-") }
-    // Every row gets at least one chip: if no provider/hosted source applies it's
-    // a user-created local playlist.
-    private func isLocalOnly(_ p: Playlist) -> Bool {
-        p.sourceUrl == nil && !isSpotify(p) && !isAppleMusic(p) && !isListenBrainz(p)
+    // Full source/mirror set: own source (id-prefix / spotifyId) UNION the push
+    // mirrors from sync_playlist_link. So a local playlist mirrored to Spotify +
+    // Apple Music shows both; a Spotify import mirrored to LB shows Spotify + LB.
+    private func mergedProviders(_ p: Playlist) -> Set<String> {
+        var set = Set<String>()
+        if p.spotifyId != nil || p.id.hasPrefix("spotify-") { set.insert("spotify") }
+        if p.id.hasPrefix("applemusic-") { set.insert("applemusic") }
+        if p.id.hasPrefix("listenbrainz-") { set.insert("listenbrainz") }
+        for pid in (model.mirrors[p.id] ?? []) { set.insert(pid) }
+        return set
     }
     private func hasChips(_ p: Playlist) -> Bool { true }
 
     @ViewBuilder private func chips(_ p: Playlist) -> some View {
+        let providers = mergedProviders(p)
         HStack(spacing: 5) {
             if p.sourceUrl != nil {
                 Text("🌐 Hosted").font(.system(size: 10, weight: .medium))
@@ -480,10 +495,11 @@ struct PlaylistsScreen: View {
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: UIColor(hex: 0xEFF6FF))))
             }
-            if isSpotify(p) { sourceChip("Spotify", 0x1DB954) }
-            if isAppleMusic(p) { sourceChip("Apple Music", 0xFA243C) }
-            if isListenBrainz(p) { sourceChip("ListenBrainz", 0xEB743B) }
-            if isLocalOnly(p) { sourceChip("Local", 0x9CA3AF) }
+            if providers.contains("spotify") { sourceChip("Spotify", 0x1DB954) }
+            if providers.contains("applemusic") { sourceChip("Apple Music", 0xFA243C) }
+            if providers.contains("listenbrainz") { sourceChip("ListenBrainz", 0xEB743B) }
+            // Fallback: a user-created playlist with no source and no mirrors.
+            if providers.isEmpty && p.sourceUrl == nil { sourceChip("Local", 0x9CA3AF) }
         }
         .padding(.top, 1)
     }
@@ -501,6 +517,93 @@ struct PlaylistsScreen: View {
         let t = "\(n) \(n == 1 ? "track" : "tracks")"
         if let owner = p.ownerName, !owner.isEmpty { return "\(t) · \(owner)" }
         return t
+    }
+}
+
+/// Delete a playlist with a per-mirror choice: each remote it's linked to gets a
+/// toggle (default on) for "also delete from there". Unchecked services keep
+/// their copy. Apple Music can't be deleted via its API (handled server-side as
+/// Unsupported — local removal still happens).
+private struct DeletePlaylistSheet: View {
+    let playlist: Playlist
+    let onClose: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let container = IosContainer.companion.shared
+    @State private var providers: [String] = []
+    @State private var selected: Set<String> = []
+    @State private var working = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("This removes “\(playlist.name)” from Parachord.")
+                        .font(.system(size: 14)).foregroundStyle(PC.fg2)
+                        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
+
+                    if !providers.isEmpty {
+                        sectionLabel("Also delete from")
+                        ForEach(providers, id: \.self) { pid in mirrorToggle(pid) }
+                        Text("Unchecked services keep their copy (it may re-import on the next sync). Apple Music can’t be deleted via its API — remove it in the Apple Music app.")
+                            .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 20).padding(.top, 8)
+                    }
+
+                    Button(role: .destructive) { confirm() } label: {
+                        Text(working ? "Deleting…" : "Delete Playlist")
+                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Capsule().fill(Color(uiColor: UIColor(hex: 0xEF4444))))
+                    }
+                    .disabled(working)
+                    .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 24)
+                }
+            }
+            .background(PC.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Delete Playlist").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss(); onClose() }.foregroundStyle(PC.accent)
+                }
+            }
+        }
+        .task {
+            providers = (try? await container.getPlaylistMirrorProviders(id: playlist.id)) as? [String] ?? []
+            selected = Set(providers)
+        }
+    }
+
+    private func mirrorToggle(_ pid: String) -> some View {
+        Toggle(isOn: Binding(get: { selected.contains(pid) }, set: { on in
+            if on { selected.insert(pid) } else { selected.remove(pid) }
+        })) {
+            Text(providerName(pid)).font(.system(size: 15)).foregroundStyle(PC.fg1)
+        }
+        .tint(PC.accent).padding(.horizontal, 20).padding(.vertical, 6)
+    }
+
+    private func confirm() {
+        working = true
+        Task {
+            _ = try? await container.deletePlaylistFromMirrors(id: playlist.id, fromProviders: Array(selected))
+            dismiss(); onClose()
+        }
+    }
+
+    private func providerName(_ id: String) -> String {
+        switch id {
+        case "spotify": return "Spotify"
+        case "applemusic": return "Apple Music"
+        case "listenbrainz": return "ListenBrainz"
+        default: return id.capitalized
+        }
+    }
+
+    private func sectionLabel(_ t: String) -> some View {
+        Text(t.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.4).foregroundStyle(PC.fg3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
     }
 }
 

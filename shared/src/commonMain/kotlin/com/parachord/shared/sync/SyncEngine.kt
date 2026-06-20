@@ -2485,35 +2485,73 @@ class SyncEngine constructor(
      * cleanup so it composes with `LibraryRepository.deletePlaylist`
      * without ordering surprises.
      */
-    suspend fun onPlaylistRemoved(playlist: Playlist): List<PlaylistDeletionAttempt> {
+    suspend fun onPlaylistRemoved(
+        playlist: Playlist,
+        deleteFromProviders: Set<String>? = null,
+    ): List<PlaylistDeletionAttempt> {
         val attempts = mutableListOf<PlaylistDeletionAttempt>()
-        val links = syncPlaylistLinkDao.selectForLocal(playlist.id)
-        for (link in links) {
-            val provider = providers.firstOrNull { it.id == link.providerId } ?: continue
+        val mirrors = getPlaylistMirrors(playlist.id)
+        for ((providerId, externalId) in mirrors) {
+            // null = delete from EVERY mirror (legacy behavior). Otherwise only
+            // the user-selected providers get a remote delete; the rest keep
+            // their remote playlist. Local cleanup below runs regardless.
+            if (deleteFromProviders != null && providerId !in deleteFromProviders) continue
+            val provider = providers.firstOrNull { it.id == providerId } ?: continue
             val result = try {
-                provider.deletePlaylist(link.externalId)
+                provider.deletePlaylist(externalId)
             } catch (e: Exception) {
-                Log.e(TAG, "deletePlaylist threw for ${provider.id}:${link.externalId}", e)
+                Log.e(TAG, "deletePlaylist threw for $providerId:$externalId", e)
                 com.parachord.shared.sync.DeleteResult.Failed(e)
             }
             attempts.add(PlaylistDeletionAttempt(
-                providerId = provider.id,
+                providerId = providerId,
                 providerDisplayName = provider.displayName,
-                externalId = link.externalId,
+                externalId = externalId,
                 result = result,
             ))
-            // Always clean up the local link + sync source — even when
-            // the remote returned Unsupported, the user's intent is
-            // "stop syncing this playlist." Leaving the link would
-            // re-link on next sync via three-layer dedup.
-            syncPlaylistLinkDao.deleteForLink(playlist.id, provider.id)
-            syncSourceDao.deleteByKey(playlist.id, "playlist", provider.id)
         }
-        // Drop the syncedFrom row too, in case this was a pull-source
-        // playlist (avoids the next sync re-importing it).
+        // Local cleanup — drop every link, sync source, and the pull source so
+        // the next sync can't re-link or re-import the deleted playlist. (Kept
+        // remotes may still re-import on a later pull — playlist tombstones are
+        // out of scope; matches desktop.)
+        syncPlaylistLinkDao.deleteForLocal(playlist.id)
+        syncSourceDao.getByItem(playlist.id, "playlist").forEach {
+            syncSourceDao.deleteByKey(playlist.id, "playlist", it.providerId)
+        }
         syncPlaylistSourceDao.deleteForLocal(playlist.id)
         return attempts
     }
+
+    /**
+     * All remote mirrors of a local playlist: providerId -> externalId. Union of
+     * the id-prefix-derived source, the pull-source row, and every push link.
+     * Each entry is a remote we can show a chip for / offer to delete from.
+     */
+    suspend fun getPlaylistMirrors(localPlaylistId: String): Map<String, String> {
+        val out = linkedMapOf<String, String>()
+        when {
+            localPlaylistId.startsWith("spotify-") ->
+                out["spotify"] = localPlaylistId.removePrefix("spotify-")
+            localPlaylistId.startsWith("applemusic-") ->
+                out["applemusic"] = localPlaylistId.removePrefix("applemusic-")
+            localPlaylistId.startsWith("listenbrainz-") ->
+                out["listenbrainz"] = localPlaylistId.removePrefix("listenbrainz-")
+        }
+        syncPlaylistSourceDao.selectForLocal(localPlaylistId)?.let { out[it.providerId] = it.externalId }
+        // Push links last — they carry the authoritative externalId.
+        syncPlaylistLinkDao.selectForLocal(localPlaylistId).forEach { out[it.providerId] = it.externalId }
+        return out
+    }
+
+    /**
+     * localPlaylistId -> the providers it mirrors to (push links). Batch (one
+     * query) for the playlist-list source chips. The id-prefix source is derived
+     * by the UI; this adds the cross-provider push mirrors the id can't reveal.
+     */
+    suspend fun getAllPlaylistLinkProviders(): Map<String, List<String>> =
+        syncPlaylistLinkDao.selectAll()
+            .groupBy { it.localPlaylistId }
+            .mapValues { e -> e.value.map { it.providerId }.distinct() }
 
     // ── Stop syncing ─────────────────────────────────────────────
 
