@@ -464,7 +464,13 @@ struct PlaylistsScreen: View {
     // PlaylistsScreen chips + the hosted-XSPF badge.
     private func isSpotify(_ p: Playlist) -> Bool { p.spotifyId != nil || p.id.hasPrefix("spotify-") }
     private func isAppleMusic(_ p: Playlist) -> Bool { p.id.hasPrefix("applemusic-") }
-    private func hasChips(_ p: Playlist) -> Bool { p.sourceUrl != nil || isSpotify(p) || isAppleMusic(p) }
+    private func isListenBrainz(_ p: Playlist) -> Bool { p.id.hasPrefix("listenbrainz-") }
+    // Every row gets at least one chip: if no provider/hosted source applies it's
+    // a user-created local playlist.
+    private func isLocalOnly(_ p: Playlist) -> Bool {
+        p.sourceUrl == nil && !isSpotify(p) && !isAppleMusic(p) && !isListenBrainz(p)
+    }
+    private func hasChips(_ p: Playlist) -> Bool { true }
 
     @ViewBuilder private func chips(_ p: Playlist) -> some View {
         HStack(spacing: 5) {
@@ -476,6 +482,8 @@ struct PlaylistsScreen: View {
             }
             if isSpotify(p) { sourceChip("Spotify", 0x1DB954) }
             if isAppleMusic(p) { sourceChip("Apple Music", 0xFA243C) }
+            if isListenBrainz(p) { sourceChip("ListenBrainz", 0xEB743B) }
+            if isLocalOnly(p) { sourceChip("Local", 0x9CA3AF) }
         }
         .padding(.top, 1)
     }

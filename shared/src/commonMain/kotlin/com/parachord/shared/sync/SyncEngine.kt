@@ -379,11 +379,18 @@ class SyncEngine constructor(
         // selects Spotify. Skipping it for non-Spotify wizards keeps
         // the user-visible progress bar focused on the provider the
         // wizard is configuring.
+        val enabled = settingsStore.getEnabledSyncProviders()
+        // Spotify legacy path gates on BOTH the enabled set AND the axis. A
+        // connected-but-not-enabled Spotify (OAuth token present, but the user
+        // never turned Spotify sync on) must NOT sync — albums/artists already
+        // gate on the set via their generic provider loop, but the tracks +
+        // playlists legacy paths historically checked only `providerHasAxis`
+        // (which defaults to ALL), so a connected Spotify synced uninvited.
         val runSpotify = (providerFilter == null || providerFilter == SpotifySyncProvider.PROVIDER_ID)
+            && SpotifySyncProvider.PROVIDER_ID in enabled
             && providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "tracks")
         var aggregate = if (runSpotify) syncTracksForSpotify(onProgress) else TypeSyncResult()
 
-        val enabled = settingsStore.getEnabledSyncProviders()
         val others = providers.filter {
             it.id in enabled && it.id != SpotifySyncProvider.PROVIDER_ID
                 && (providerFilter == null || providerFilter == it.id)
@@ -1127,7 +1134,14 @@ class SyncEngine constructor(
         // of the playlists axis (per-provider opt-in via the wizard),
         // skip the fetch entirely — the push and non-Spotify-pull loops
         // below have their own per-axis gates.
-        val spotifyPlaylistsEnabled = providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "playlists")
+        // Gate the Spotify pull on the enabled set too (not just the axis) — a
+        // connected-but-not-enabled Spotify must not pull playlists. The removal
+        // cleanup below is ALSO gated on this flag: skipping the fetch leaves
+        // `remotePlaylists` empty, and an empty remote must NOT be read as
+        // "everything was deleted remotely" (that would wipe the user's Spotify
+        // playlist rows).
+        val spotifyPlaylistsEnabled = SpotifySyncProvider.PROVIDER_ID in settingsStore.getEnabledSyncProviders()
+            && providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "playlists")
             && (providerFilter == null || providerFilter == SpotifySyncProvider.PROVIDER_ID)
         val remotePlaylists = if (spotifyPlaylistsEnabled) {
             spotifyProvider.fetchPlaylists { current, total ->
@@ -1451,9 +1465,15 @@ class SyncEngine constructor(
             }
         }
 
-        // Handle remote removals
+        // Handle remote removals — ONLY when the Spotify pull actually ran. If
+        // Spotify is connected but not enabled (or the playlists axis is off),
+        // `remotePlaylists`/`selectedRemote` are empty by design, and treating
+        // that empty list as the source of truth would delete every Spotify
+        // playlist row. Skip the cleanup entirely in that case.
         val remoteIds = selectedRemote.map { it.spotifyId }.toSet()
-        val removedSources = localSources.filter { it.externalId != null && it.externalId !in remoteIds }
+        val removedSources = if (spotifyPlaylistsEnabled) {
+            localSources.filter { it.externalId != null && it.externalId !in remoteIds }
+        } else emptyList()
         removedSources.forEach { source ->
             val localPlaylist = playlistDao.getById(source.itemId)
             // Locally-owned playlists (hosted XSPF — canonical via `sourceUrl`
