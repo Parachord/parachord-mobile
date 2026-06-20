@@ -1070,6 +1070,7 @@ private struct GeneralTab: View {
         } message: {
             Text("Remove the items that came only from this service? Items also synced from another service are kept.")
         }
+        .onDisappear { sync.stopWatching() }
     }
 
     private func syncProviderName(_ id: String?) -> String {
@@ -1152,9 +1153,11 @@ private final class SyncModel {
     var appleMusicOn = false
     var appleMusicBusy = false   // acquiring the MUT
     var pendingDisable: String?  // provider awaiting a keep/remove choice
-    var syncing = false
+    var syncing = false          // driven by the shared engine state (any trigger)
     var status: String?
     var spotifyCooldownMs: Int64 = 0
+    private var pendingResync = false   // re-sync once an in-flight sync finishes
+    private var syncWatcher: Cancellable?
     var anyOn: Bool { spotifyOn || listenBrainzOn || appleMusicOn }
 
     /// Local read (no network) — "retry in 3h 12m" while Spotify is in a 429 cooldown.
@@ -1171,7 +1174,26 @@ private final class SyncModel {
         listenBrainzOn = (try? await container.isProviderSyncEnabled(providerId: "listenbrainz"))?.boolValue ?? false
         appleMusicOn = (try? await container.isProviderSyncEnabled(providerId: "applemusic"))?.boolValue ?? false
         spotifyCooldownMs = container.spotifyCooldownRemainingMs()
+        startWatching()
     }
+
+    /// Reflect the shared engine's live "is a sync running" state (any trigger),
+    /// and re-run a deferred sync once an in-flight one finishes.
+    private func startWatching() {
+        guard syncWatcher == nil else { return }
+        syncWatcher = container.watchSyncing { [weak self] running in
+            Task { @MainActor in
+                guard let self else { return }
+                self.syncing = running.boolValue
+                if !running.boolValue && self.pendingResync {
+                    self.pendingResync = false
+                    await self.syncNow()
+                }
+            }
+        }
+    }
+
+    func stopWatching() { syncWatcher?.cancel(); syncWatcher = nil }
 
     func setProvider(_ id: String, _ on: Bool) {
         if id == "spotify" { spotifyOn = on } else { listenBrainzOn = on }
@@ -1224,11 +1246,17 @@ private final class SyncModel {
     }
 
     func syncNow() async {
-        guard anyOn, !syncing else { return }
-        syncing = true; status = nil
+        guard anyOn else { return }
+        status = nil
         let err = (try? await container.syncNow()) ?? "Sync error"   // "" = success
-        syncing = false
         spotifyCooldownMs = container.spotifyCooldownRemainingMs()   // a 429 may have armed it
+        // A sync was already running (launch/15-min timer, or another toggle) —
+        // benign, NOT a failure. Re-run once it finishes so the just-enabled
+        // provider gets included; the live `syncing` state shows "Syncing…".
+        if err == container.syncInProgressMessage {
+            pendingResync = true
+            return
+        }
         status = err.isEmpty ? "Synced ✓" : "Failed: \(err)"
     }
 }

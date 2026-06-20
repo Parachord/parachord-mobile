@@ -404,6 +404,15 @@ class IosContainer private constructor() {
         }
     }
 
+    /** Sentinel returned by [syncNow] when a sync was already running (benign,
+     *  not a failure) — the caller re-syncs when [watchSyncing] goes idle. */
+    val syncInProgressMessage: String get() = SyncEngine.SYNC_IN_PROGRESS
+
+    /** Observe whether ANY sync is currently running (manual, timer, etc.) so the
+     *  UI can show a live "Syncing…" state regardless of who started it. */
+    fun watchSyncing(onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.syncing) { onEach((it as? Boolean) ?: false) }
+
     /**
      * LB sync needs BOTH the token and the username. The plugin config derives
      * the username from the token via `validateToken` on entry, but if that

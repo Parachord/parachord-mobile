@@ -20,6 +20,8 @@ import com.parachord.shared.platform.currentTimeMillis
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -51,6 +53,8 @@ class SyncEngine constructor(
         get() = providers.first { it.id == SpotifySyncProvider.PROVIDER_ID } as SpotifySyncProvider
     companion object {
         private const val TAG = "SyncEngine"
+        /** Benign skip result when a sync is already running (tryLock held). Not a failure. */
+        const val SYNC_IN_PROGRESS = "Sync already in progress"
         private const val MASS_REMOVAL_THRESHOLD_PERCENT = 0.25
         private const val MASS_REMOVAL_THRESHOLD_COUNT = 50
         /**
@@ -236,6 +240,12 @@ class SyncEngine constructor(
 
     private val syncMutex = Mutex()
 
+    // True while a syncAll is running (any trigger: manual, the in-app timer,
+    // WorkManager). UIs observe this to show a "Syncing…" state regardless of
+    // who started it, and to treat a tryLock skip as benign, not a failure.
+    private val _syncing = MutableStateFlow(false)
+    val syncing: StateFlow<Boolean> = _syncing
+
     data class TypeSyncResult(
         val added: Int = 0,
         val removed: Int = 0,
@@ -277,8 +287,9 @@ class SyncEngine constructor(
         // work and — before the three-layer dedup — produce remote duplicates.
         if (!syncMutex.tryLock()) {
             Log.i(TAG, "Sync already in progress, skipping")
-            return FullSyncResult(success = false, error = "Sync already in progress")
+            return FullSyncResult(success = false, error = SYNC_IN_PROGRESS)
         }
+        _syncing.value = true
 
         // When called from a single-provider wizard, filter the enabled
         // providers down to just the one being configured. Otherwise
@@ -340,6 +351,7 @@ class SyncEngine constructor(
             Log.e(TAG, "Sync failed", e)
             FullSyncResult(success = false, error = e.message)
         } finally {
+            _syncing.value = false
             syncMutex.unlock()
         }
     }
