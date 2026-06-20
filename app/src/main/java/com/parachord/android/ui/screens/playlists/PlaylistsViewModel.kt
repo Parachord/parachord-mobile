@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -34,6 +35,17 @@ class PlaylistsViewModel constructor(
 
     val playlists: StateFlow<List<PlaylistEntity>> = libraryRepository.getAllPlaylists()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** localPlaylistId -> push-mirror provider ids (sync_playlist_link), for the
+     *  source chips. Reloads whenever the playlist list changes (post-sync). */
+    val mirrors: StateFlow<Map<String, List<String>>> = playlists
+        .map { runCatching { libraryRepository.getAllPlaylistLinkProviders() }.getOrDefault(emptyMap()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /** All remotes a playlist mirrors to (source + links) — drives the per-mirror
+     *  delete dialog. */
+    suspend fun getDeletableMirrors(playlistId: String): List<String> =
+        libraryRepository.getPlaylistMirrors(playlistId).keys.toList()
 
     private val _sort = MutableStateFlow(PlaylistSort.RECENT)
     val sort: StateFlow<PlaylistSort> = _sort
@@ -89,9 +101,9 @@ class PlaylistsViewModel constructor(
     )
     val toastEvents: kotlinx.coroutines.flow.Flow<String> = _toastEvents.receiveAsFlow()
 
-    fun deletePlaylist(playlist: PlaylistEntity) {
+    fun deletePlaylist(playlist: PlaylistEntity, deleteFromProviders: Set<String>? = null) {
         viewModelScope.launch {
-            val attempts = libraryRepository.deletePlaylistWithSync(playlist)
+            val attempts = libraryRepository.deletePlaylistWithSync(playlist, deleteFromProviders)
             val unsupported = attempts.filter {
                 it.result is com.parachord.shared.sync.DeleteResult.Unsupported
             }
