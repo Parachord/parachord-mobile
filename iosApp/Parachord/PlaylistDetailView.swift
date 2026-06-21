@@ -622,6 +622,8 @@ private struct PlaylistSyncChannelsSheet: View {
     @Environment(\.dismiss) private var dismiss
     private let container = IosContainer.companion.shared
     @State private var channels: [IosSyncChannel] = []
+    @State private var pendingOff: IosSyncChannel?   // channel awaiting keep/delete choice
+    @State private var note: String?                 // e.g. AM-can't-delete message
 
     var body: some View {
         NavigationStack {
@@ -647,6 +649,25 @@ private struct PlaylistSyncChannelsSheet: View {
             }
         }
         .task { await reload() }
+        // Toggle a channel OFF → keep on the service, or delete it there too?
+        .confirmationDialog(
+            "Stop syncing to \(pendingOff?.displayName ?? "")?",
+            isPresented: Binding(get: { pendingOff != nil }, set: { if !$0 { pendingOff = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let ch = pendingOff {
+                Button("Just stop syncing") { Task { await applyOff(ch.providerId, deleteRemote: false); pendingOff = nil } }
+                Button("Delete from \(ch.displayName) too", role: .destructive) {
+                    Task { await applyOff(ch.providerId, deleteRemote: true); pendingOff = nil }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingOff = nil }
+        } message: {
+            Text("Keep “\(playlist.name)” on \(pendingOff?.displayName ?? "") and just stop syncing it, or delete it from \(pendingOff?.displayName ?? "") too?")
+        }
+        .alert("Heads up", isPresented: Binding(get: { note != nil }, set: { if !$0 { note = nil } })) {
+            Button("OK") { note = nil }
+        } message: { Text(note ?? "") }
     }
 
     private func channelRow(_ ch: IosSyncChannel) -> some View {
@@ -664,7 +685,10 @@ private struct PlaylistSyncChannelsSheet: View {
                 }
             }
             Spacer()
-            Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in Task { await set(ch.providerId, on) } }))
+            Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in
+                if on { Task { await set(ch.providerId, true) } }   // enable: apply directly
+                else { pendingOff = ch }                            // disable: ask keep/delete
+            }))
                 .labelsHidden().tint(PC.accent).disabled(!interactive)
         }
         .padding(.horizontal, 20).padding(.vertical, 10)
@@ -672,6 +696,15 @@ private struct PlaylistSyncChannelsSheet: View {
 
     private func set(_ pid: String, _ on: Bool) async {
         try? await container.setPlaylistChannel(localId: playlist.id, providerId: pid, enabled: on)
+        await reload()
+    }
+
+    private func applyOff(_ pid: String, deleteRemote: Bool) async {
+        let unsupported = (try? await container.disablePlaylistChannel(
+            localId: playlist.id, providerId: pid, deleteRemote: deleteRemote)) ?? nil
+        if let u = unsupported {
+            note = "\(u) doesn’t allow deletion via its API — remove “\(playlist.name)” manually in the \(u) app."
+        }
         await reload()
     }
 

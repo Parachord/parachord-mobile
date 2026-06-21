@@ -2594,6 +2594,27 @@ class SyncEngine constructor(
     }
 
     /**
+     * Delete a playlist from ONE provider's remote (used by the Sync menu's
+     * "delete from this service" choice). Returns the [DeleteResult] so the UI
+     * can surface an Unsupported (e.g. Apple Music can't delete via its API).
+     * Does NOT touch the local row or other mirrors — pair with
+     * [detachPlaylistFromProvider] for the local cleanup.
+     */
+    suspend fun deletePlaylistOnProvider(
+        providerId: String,
+        externalId: String,
+    ): com.parachord.shared.sync.DeleteResult {
+        val provider = providers.firstOrNull { it.id == providerId }
+            ?: return com.parachord.shared.sync.DeleteResult.Unsupported(0)
+        return try {
+            provider.deletePlaylist(externalId)
+        } catch (e: Exception) {
+            Log.e(TAG, "deletePlaylistOnProvider threw for $providerId:$externalId", e)
+            com.parachord.shared.sync.DeleteResult.Failed(e)
+        }
+    }
+
+    /**
      * Detach a playlist from ONE provider's sync, leaving every OTHER provider's
      * linkage intact. Used by the per-provider pull picker's "keep local copy"
      * choice: deselecting a playlist in the Spotify picker must NOT strip its

@@ -2101,6 +2101,35 @@ class IosContainer private constructor() {
         }
     }
 
+    /**
+     * Turn a channel OFF for a playlist, with the "delete from this service too"
+     * choice. [deleteRemote] = true also removes the playlist on that provider's
+     * remote (best-effort); false just stops syncing (keeps the remote). Returns
+     * the provider display name when the remote delete was UNSUPPORTED (Apple
+     * Music) so the UI can say "remove it manually", else null.
+     */
+    suspend fun disablePlaylistChannel(
+        localId: String,
+        providerId: String,
+        deleteRemote: Boolean,
+    ): String? {
+        // Capture the external id BEFORE we change the override (getPlaylistMirrors
+        // is override-aware, and the override still includes this provider here).
+        val externalId = libraryRepository.getPlaylistMirrors(localId)[providerId]
+        var unsupported: String? = null
+        if (deleteRemote && externalId != null) {
+            val result = syncEngine.deletePlaylistOnProvider(providerId, externalId)
+            if (result is com.parachord.shared.sync.DeleteResult.Unsupported) {
+                unsupported = providerDisplay(providerId)
+            }
+        }
+        val override = settingsStore.getPlaylistChannels(localId)
+        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
+        settingsStore.setPlaylistChannels(localId, current - providerId)
+        syncEngine.detachPlaylistFromProvider(localId, providerId)
+        return unsupported
+    }
+
     /** Delete a playlist locally + remote-delete from [fromProviders] (provider
      *  ids). Returns the display names of providers that DON'T support API
      *  deletion (e.g. Apple Music) so the UI can tell the user to remove it
