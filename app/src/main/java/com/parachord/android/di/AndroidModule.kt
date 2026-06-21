@@ -259,6 +259,13 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // #269: writable (owned OR collaborative on the source). Read-only
+        // followed playlists are 0 and never become push/mirror candidates.
+        try {
+            driver.execute(null, "ALTER TABLE playlists ADD COLUMN writable INTEGER NOT NULL DEFAULT 1", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // Slow-trickle cross-resolver enrichment (#150): tracks the last time
         // we tried to backfill streaming-service IDs for a localfiles-only
         // track. Same idempotent ALTER pattern as above.

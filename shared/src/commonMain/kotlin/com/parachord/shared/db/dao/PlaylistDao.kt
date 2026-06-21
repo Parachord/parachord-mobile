@@ -38,6 +38,7 @@ class PlaylistDao(private val db: ParachordDb) {
         sourceUrl = sourceUrl,
         sourceContentHash = sourceContentHash,
         localOnly = localOnly != 0L,
+        writable = writable != 0L,
     )
 
     /* ---- Queries returning Flow ---- */
@@ -78,7 +79,7 @@ class PlaylistDao(private val db: ParachordDb) {
             id,
         ) { rowId, name, description, artworkUrl, trackCount, createdAt, updatedAt,
             spotifyId, snapshotId, lastModified, locallyModified, ownerName, sourceUrl,
-            sourceContentHash, localOnly, linkSpotifyId, linkSnapshotId ->
+            sourceContentHash, localOnly, writable, linkSpotifyId, linkSnapshotId ->
             PlaylistWithLink(
                 entity = Playlist(
                     id = rowId,
@@ -96,6 +97,7 @@ class PlaylistDao(private val db: ParachordDb) {
                     sourceUrl = sourceUrl,
                     sourceContentHash = sourceContentHash,
                     localOnly = localOnly != 0L,
+                    writable = writable != 0L,
                 ),
                 linkSpotifyId = linkSpotifyId,
                 linkSnapshotId = linkSnapshotId,
@@ -130,6 +132,7 @@ class PlaylistDao(private val db: ParachordDb) {
             sourceUrl = playlist.sourceUrl,
             sourceContentHash = playlist.sourceContentHash,
             localOnly = if (playlist.localOnly) 1L else 0L,
+            writable = if (playlist.writable) 1L else 0L,
         )
     }
 
@@ -159,6 +162,7 @@ class PlaylistDao(private val db: ParachordDb) {
         sourceUrl = sourceUrl,
         sourceContentHash = sourceContentHash,
         localOnly = localOnly != 0L,
+        writable = writable != 0L,
     )
 
     suspend fun updateHostedSnapshot(
