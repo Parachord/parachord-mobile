@@ -26,6 +26,7 @@ import com.parachord.shared.sync.SyncProvider
 import com.parachord.shared.sync.SyncSettings
 import com.parachord.shared.sync.SyncSettingsProvider
 import com.parachord.shared.sync.SyncedPlaylist
+import com.parachord.shared.sync.TrackKeys
 import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -330,8 +331,11 @@ class ListenBrainzPushShortCircuitTest {
         val baseline = h.baselineDao.selectForLocal("local-0")
         assertNotNull("baseline seeded on the migration pass", baseline)
         assertEquals(
-            "baseline = current local tracklist as canonical keys",
-            listOf("mbid-mbid-track-local-0-0", "mbid-mbid-track-local-0-1"),
+            "baseline = current local tracklist as TrackKeys (mbid + norm; no isrc on PlaylistTrack)",
+            listOf(
+                TrackKeys(isrc = null, mbid = "mbid-track-local-0-0", norm = "artist 0|deep focus track 0"),
+                TrackKeys(isrc = null, mbid = "mbid-track-local-0-1", norm = "artist 1|deep focus track 1"),
+            ),
             baseline!!.tracks,
         )
         val state = h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)

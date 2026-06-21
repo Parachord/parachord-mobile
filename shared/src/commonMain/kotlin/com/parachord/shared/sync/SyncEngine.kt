@@ -1099,10 +1099,14 @@ class SyncEngine constructor(
      * per-provider edit time is captured the next time that token changes).
      */
     private suspend fun migratePlaylistToNway(playlist: Playlist): Boolean {
-        if (syncPlaylistBaselineDao.selectForLocal(playlist.id) != null) return false
+        val existing = syncPlaylistBaselineDao.selectForLocal(playlist.id)
+        val localTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
+        // Skip if already migrated in the current (TrackKeys) format. An existing
+        // row that decodes EMPTY while the playlist has tracks is the old Phase
+        // 1/2 single-key-string format → re-seed it as TrackKeys.
+        if (existing != null && (existing.tracks.isNotEmpty() || localTracks.isEmpty())) return false
         val now = currentTimeMillis()
-        val keys = nwayBaselineKeys(playlistTrackDao.getByPlaylistIdSync(playlist.id))
-        syncPlaylistBaselineDao.upsert(playlist.id, keys, now)
+        syncPlaylistBaselineDao.upsert(playlist.id, nwayBaselineTrackKeys(localTracks), now)
         val source = syncPlaylistSourceDao.selectForLocal(playlist.id)
         for ((providerId, _) in getPlaylistMirrors(playlist.id)) {
             val token = syncPlaylistLinkDao.selectForLink(playlist.id, providerId)?.snapshotId
@@ -1111,6 +1115,15 @@ class SyncEngine constructor(
         }
         return true
     }
+
+    /** One copy's pre-unification TrackKeys + detection result, gathered before
+     *  [unifyTrackKeys] rewrites them to representative keys. */
+    private data class ShadowCopyInput(
+        val id: String,
+        val keys: List<TrackKeys>,
+        val editedAt: Long,
+        val changed: Boolean,
+    )
 
     /**
      * N-way SHADOW MODE (Phase 3). For every migrated playlist, detect which
@@ -1171,17 +1184,20 @@ class SyncEngine constructor(
         val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
         val now = currentTimeMillis()
 
-        val copies = mutableListOf<NwayCopyState>()
-        // Local copy — changed if flagged or edited since the baseline was set.
-        val localKeys = nwayBaselineKeys(playlistTrackDao.getByPlaylistIdSync(localId))
+        // Gather each copy's TrackKeys (NOT yet unified). An unchanged copy reuses
+        // the baseline's TrackKeys (no fetch). editedAt = detection-time (now) for
+        // changed provider copies is a Phase 4 refinement (Spotify MAX(added_at) /
+        // AM·LB last_modified); it only affects ORDER, not presence.
+        val inputs = mutableListOf<ShadowCopyInput>()
         val localChanged = playlist.locallyModified || playlist.lastModified > baseline.baselineSyncedAt
-        copies.add(NwayCopyState("local", localKeys, playlist.lastModified, localChanged))
-
-        // Provider mirrors — detect CHEAPLY from the pre-fetched list (snapshot
-        // if present, else trackCount), fetch the tracklist ONLY when changed.
-        // editedAt = detection-time (now) for changed provider copies is a Phase
-        // 4 refinement target (Spotify MAX(added_at) / AM·LB last_modified); it
-        // only affects ORDER, so shadow validation of presence is unaffected.
+        inputs.add(
+            ShadowCopyInput(
+                "local",
+                nwayBaselineTrackKeys(playlistTrackDao.getByPlaylistIdSync(localId)),
+                playlist.lastModified,
+                localChanged,
+            ),
+        )
         for ((providerId, externalId) in mirrors) {
             val provider = providers.firstOrNull { it.id == providerId } ?: continue
             val listEntry = remoteLists[providerId]?.get(externalId)
@@ -1192,15 +1208,24 @@ class SyncEngine constructor(
                 else -> listEntry.trackCount != baseline.tracks.size
             }
             if (!changed) {
-                copies.add(NwayCopyState(providerId, baseline.tracks, now, changed = false))
+                inputs.add(ShadowCopyInput(providerId, baseline.tracks, now, changed = false))
                 continue
             }
-            val keys = provider.fetchPlaylistTracks(externalId).map { canonicalTrackKey(it) }
-            copies.add(NwayCopyState(providerId, keys, now, changed = true))
+            val keys = provider.fetchPlaylistTracks(externalId).map {
+                trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+            }
+            inputs.add(ShadowCopyInput(providerId, keys, now, changed = true))
         }
 
-        val plan = computeNwayShadowPlan(baseline.tracks, copies) ?: return null
-        val dropFraction = nwayBaselineDropFraction(baseline.tracks, plan.merged)
+        // Cross-copy key unification (Phase 4): unify baseline + all copies so the
+        // same song matches across services BEFORE the merge runs on the resulting
+        // representative keys. This is what collapses the norm-/mbid- false-drops.
+        val unified = unifyTrackKeys(listOf(baseline.tracks) + inputs.map { it.keys })
+        val baselineRepr = unified[0]
+        val copies = inputs.mapIndexed { i, c -> NwayCopyState(c.id, unified[i + 1], c.editedAt, c.changed) }
+
+        val plan = computeNwayShadowPlan(baselineRepr, copies) ?: return null
+        val dropFraction = nwayBaselineDropFraction(baselineRepr, plan.merged)
         val dropPercent = (dropFraction * 100).toInt()
         val massChange = dropFraction > MASS_REMOVAL_THRESHOLD_PERCENT
         Log.d(

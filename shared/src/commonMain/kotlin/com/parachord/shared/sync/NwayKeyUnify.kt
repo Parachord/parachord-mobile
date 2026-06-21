@@ -1,12 +1,17 @@
 package com.parachord.shared.sync
 
+import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.resolver.validateIsrc
+import kotlinx.serialization.Serializable
 
 /**
  * A track's identity tiers for cross-copy unification. [norm] is always present
  * (lower+trim `artist|title`); [isrc]/[mbid] are present only when known
- * (validated / normalized identically to [canonicalTrackKey]).
+ * (validated / normalized identically to [canonicalTrackKey]). `@Serializable`
+ * because the N-way baseline persists these (richer than a single key string, so
+ * the merge ancestor retains all tiers for bridging).
  */
+@Serializable
 data class TrackKeys(val isrc: String?, val mbid: String?, val norm: String)
 
 /** Build [TrackKeys] from raw track fields — same normalization as [canonicalTrackKey]. */
@@ -19,6 +24,13 @@ fun trackKeysOf(isrc: String?, recordingMbid: String?, artist: String?, title: S
         norm = "$a|$t",
     )
 }
+
+/** Ordered [TrackKeys] for a playlist's local tracks (position order) — the
+ *  N-way baseline ancestor (Phase 4). PlaylistTrack carries no ISRC, so the isrc
+ *  tier is null here; mbid + norm drive unification. */
+fun nwayBaselineTrackKeys(tracks: List<PlaylistTrack>): List<TrackKeys> =
+    tracks.sortedBy { it.position }
+        .map { trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle) }
 
 /**
  * Cross-copy key unification — the N-way Phase 4 prerequisite that fixes the
