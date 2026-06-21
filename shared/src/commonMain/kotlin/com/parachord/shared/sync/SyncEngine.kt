@@ -1809,7 +1809,15 @@ class SyncEngine constructor(
                         pushPlaylist(localPlaylist, provider)
                         updated++
                     }
-                    remoteSnapshotId != localSnapshotId || needsTrackRecovery -> {
+                    // Receive a changed remote (e.g. edited on desktop, pushed to
+                    // LB). Snapshot/last-modified is the primary signal; a
+                    // track-count difference is a cheap, robust fallback so a
+                    // remote edit is caught even if the timestamp were stale.
+                    // `remote.trackCount > 0` guards providers that don't report
+                    // a real count (Apple Music's library list always returns 0)
+                    // — they fall back to the snapshot check only.
+                    remoteSnapshotId != localSnapshotId || needsTrackRecovery ||
+                        (remote.trackCount > 0 && remote.trackCount != localTrackCount) -> {
                         if (needsTrackRecovery) {
                             Log.d(TAG, "Self-heal: ${provider.id} playlist " +
                                 "'${localPlaylist.name}' has 0 local tracks; " +
