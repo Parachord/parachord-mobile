@@ -170,11 +170,27 @@ echo loop.
 - Collaborative-playlist permission semantics beyond what exists.
 - Album/artist/track collection N-way (this is playlists only).
 
+## Code-sharing decision (settled)
+
+- **Mobile (Android + iOS): one shared KMP implementation** in
+  `shared/commonMain` — the existing `SyncEngine` extended. Android + iOS run
+  identical Kotlin.
+- **Desktop: a SEPARATE JavaScript implementation** in `app.js` (it is not a KMP
+  target — Kotlin can't compile into the Electron app). We deliberately accept
+  two implementations rather than a WASM/single-engine bridge.
+- **Parity is enforced by a SHARED TEST-VECTOR SUITE, not shared code.** The
+  pure 3-way merge is a deterministic function (`baseline + copies → result`).
+  Author the fixtures ONCE as plain JSON (input baseline + per-copy edits +
+  expected merged output) and run the SAME fixtures against both the Kotlin
+  merge and the JS merge. Identical fixtures passing on both sides is what
+  proves the two engines can't drift apart and start fighting over the same
+  remote playlists. This is why Phase 0 (the pure merge module) is first — it is
+  the one piece that must be bit-for-bit identical across Kotlin and JS.
+
 ## Open questions for implementation
 
 - Where to store `baseline` (new table `sync_playlist_baseline` vs JSON blob on
   the playlist row). Leaning: new table keyed by `localPlaylistId`.
 - Exact mass-change threshold N% (reuse the existing track/album safeguard value).
-- Desktop port: shared `commonMain` is Kotlin; desktop is JS. Either port the
-  pure merge to JS or keep two implementations with a shared test-vector suite
-  (preferred — same fixtures prove parity).
+- Fixture format + location for the cross-engine test-vector suite (a shared
+  `docs/`/repo-root JSON directory both the Kotlin tests and the JS tests read).
