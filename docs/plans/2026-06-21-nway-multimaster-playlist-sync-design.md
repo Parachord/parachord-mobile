@@ -187,10 +187,25 @@ echo loop.
   remote playlists. This is why Phase 0 (the pure merge module) is first — it is
   the one piece that must be bit-for-bit identical across Kotlin and JS.
 
+## Resolved during implementation
+
+- **Baseline storage** → new table `sync_playlist_baseline` keyed by
+  `localPlaylistId` (Phase 1, shipped). Per-provider token state in a sibling
+  `sync_playlist_nway` table, isolated from the canonical-source link/source
+  DAOs during migration + shadow mode.
+- **Presence conflict policy** → **delete always wins; `editedAt` affects order
+  only, never presence.** A baseline key dropped by any copy is gone even if a
+  newer copy still holds it (un-propagated baseline ≠ re-add). `added`/`removed`
+  are disjoint by construction, so there is no same-key add-vs-delete race to
+  LWW-tiebreak — the doc's "re-add beats stale delete" clause is vacuous and was
+  removed. Confirmed with the user; both engines conform.
+- **Cross-engine fixtures** → `docs/nway-playlist-merge-fixtures.json` is the
+  canonical, language-neutral vector file. Mobile's `PlaylistMergeTest` is a 1:1
+  transcription; desktop transcribes the same cases into its JS test. (Wiring
+  the Kotlin test to READ the JSON directly is blocked on a commonTest resource
+  loader for iOS Native — tracked nicety; the file is the human-diffable
+  contract today.)
+
 ## Open questions for implementation
 
-- Where to store `baseline` (new table `sync_playlist_baseline` vs JSON blob on
-  the playlist row). Leaning: new table keyed by `localPlaylistId`.
 - Exact mass-change threshold N% (reuse the existing track/album safeguard value).
-- Fixture format + location for the cross-engine test-vector suite (a shared
-  `docs/`/repo-root JSON directory both the Kotlin tests and the JS tests read).
