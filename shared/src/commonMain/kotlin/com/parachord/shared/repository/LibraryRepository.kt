@@ -224,6 +224,11 @@ class LibraryRepository(
     suspend fun getAllPlaylistLinkProviders(): Map<String, List<String>> =
         syncEngine.getAllPlaylistLinkProviders()
 
+    /** localPlaylistId -> providers it EFFECTIVELY syncs with (override-aware) —
+     *  the live source for playlist-list chips. */
+    suspend fun getAllEffectivePlaylistChannels(): Map<String, List<String>> =
+        syncEngine.getAllEffectivePlaylistChannels()
+
     // ── Sync-aware deletions (push removal back to source) ───────────
 
     suspend fun deleteTrackWithSync(track: Track) {

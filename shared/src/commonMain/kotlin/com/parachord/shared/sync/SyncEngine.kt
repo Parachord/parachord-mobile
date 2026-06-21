@@ -1615,6 +1615,22 @@ class SyncEngine constructor(
                 }
                 val targetId = existingLocalPlaylist?.id ?: remote.entity.id
 
+                // Per-playlist channel override on the MATCHED local row. The
+                // upfront `importPlaylists` filter keys the override on the
+                // would-be id (`<provider>-<remoteId>`), which MISSES a
+                // cross-mirrored playlist whose local row has a DIFFERENT id
+                // (e.g. a Spotify-imported `spotify-X` row that's also on LB —
+                // the LB pull's would-be id is `listenbrainz-<mbid>`). Re-check
+                // against the resolved local id so turning a provider off in the
+                // playlist Sync menu actually stops the re-link/re-import here.
+                if (existingLocalPlaylist != null) {
+                    val ov = settingsStore.getPlaylistChannels(existingLocalPlaylist.id)
+                    if (ov != null && providerId !in ov) {
+                        Log.d(TAG, "Pull skip: '${existingLocalPlaylist.name}' channel override excludes $providerId")
+                        continue
+                    }
+                }
+
                 // Phase 3 — cross-provider syncedFrom preservation:
                 // if the local row's pull source points at a DIFFERENT
                 // provider, this match fired because we're a push mirror
@@ -2595,6 +2611,35 @@ class SyncEngine constructor(
         syncPlaylistSourceDao.selectForLocal(localPlaylistId)?.let { out[it.providerId] = it.externalId }
         // Push links last — they carry the authoritative externalId.
         syncPlaylistLinkDao.selectForLocal(localPlaylistId).forEach { out[it.providerId] = it.externalId }
+        // A per-playlist channel override is authoritative — hide providers the
+        // user turned off (so chips / delete options reflect the live sync state,
+        // not the id-prefix of a since-detached row).
+        val override = settingsStore.getPlaylistChannels(localPlaylistId)
+        return if (override == null) out else out.filterKeys { it in override }
+    }
+
+    /**
+     * localPlaylistId -> the providers it EFFECTIVELY syncs with (override, else
+     * id-prefix source + push links). Batch, for the playlist-list source chips
+     * so they reflect the live channel state rather than the row's id-prefix.
+     */
+    suspend fun getAllEffectivePlaylistChannels(): Map<String, List<String>> {
+        val links = syncPlaylistLinkDao.selectAll()
+            .groupBy { it.localPlaylistId }
+            .mapValues { e -> e.value.map { it.providerId }.toMutableSet() }
+        val out = mutableMapOf<String, List<String>>()
+        for (p in playlistDao.getAllSync()) {
+            val override = settingsStore.getPlaylistChannels(p.id)
+            val effective = override ?: buildSet {
+                when {
+                    p.id.startsWith("spotify-") -> add("spotify")
+                    p.id.startsWith("applemusic-") -> add("applemusic")
+                    p.id.startsWith("listenbrainz-") -> add("listenbrainz")
+                }
+                links[p.id]?.let { addAll(it) }
+            }
+            out[p.id] = effective.toList()
+        }
         return out
     }
 

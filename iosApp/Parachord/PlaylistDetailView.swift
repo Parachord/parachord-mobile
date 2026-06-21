@@ -448,8 +448,11 @@ struct PlaylistsScreen: View {
             }
             .sheet(isPresented: Binding(get: { syncTarget != nil }, set: { if !$0 { syncTarget = nil } })) {
                 if let p = syncTarget {
-                    PlaylistSyncChannelsSheet(playlist: p) { syncTarget = nil }
-                        .presentationDetents([.medium])
+                    PlaylistSyncChannelsSheet(playlist: p) {
+                        syncTarget = nil
+                        Task { await model.loadMirrors() }   // refresh chips after channel edits
+                    }
+                    .presentationDetents([.medium])
                 }
             }
         }
@@ -481,16 +484,11 @@ struct PlaylistsScreen: View {
     // Source chips — help spot cross-provider duplicates (a playlist that exists
     // as both a `spotify-` and an `applemusic-` row). Mirrors Android's
     // PlaylistsScreen chips + the hosted-XSPF badge.
-    // Full source/mirror set: own source (id-prefix / spotifyId) UNION the push
-    // mirrors from sync_playlist_link. So a local playlist mirrored to Spotify +
-    // Apple Music shows both; a Spotify import mirrored to LB shows Spotify + LB.
+    // The providers a playlist EFFECTIVELY syncs with (override-aware, from the
+    // shared effective-channels map) — reflects the live Sync-menu state, NOT the
+    // row's id-prefix, so a fully-deselected playlist shows no provider chips.
     private func mergedProviders(_ p: Playlist) -> Set<String> {
-        var set = Set<String>()
-        if p.spotifyId != nil || p.id.hasPrefix("spotify-") { set.insert("spotify") }
-        if p.id.hasPrefix("applemusic-") { set.insert("applemusic") }
-        if p.id.hasPrefix("listenbrainz-") { set.insert("listenbrainz") }
-        for pid in (model.mirrors[p.id] ?? []) { set.insert(pid) }
-        return set
+        Set(model.mirrors[p.id] ?? [])
     }
     private func hasChips(_ p: Playlist) -> Bool { true }
 

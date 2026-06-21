@@ -2035,9 +2035,10 @@ class IosContainer private constructor() {
         playlistDao.getById(id)?.let { playlistDao.delete(it) }
     }
 
-    /** localPlaylistId -> push-mirror providers, for the playlists-list chips. */
+    /** localPlaylistId -> the providers each playlist EFFECTIVELY syncs with
+     *  (override-aware), for the playlists-list source chips. */
     suspend fun getAllPlaylistMirrors(): List<IosPlaylistMirrors> =
-        libraryRepository.getAllPlaylistLinkProviders().map { (id, providers) ->
+        libraryRepository.getAllEffectivePlaylistChannels().map { (id, providers) ->
             IosPlaylistMirrors(localPlaylistId = id, providerIds = providers)
         }
 
