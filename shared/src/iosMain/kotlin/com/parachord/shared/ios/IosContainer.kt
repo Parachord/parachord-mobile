@@ -25,6 +25,7 @@ import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
+import com.parachord.shared.api.AppleMusicLibraryClient
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.DeepLinkParser
 import com.parachord.shared.deeplink.SimpleDeepLinkUri
@@ -32,6 +33,7 @@ import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.repository.LibraryRepository
+import com.parachord.shared.sync.AppleMusicSyncProvider
 import com.parachord.shared.sync.KvTombstoneStore
 import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.SpotifySyncProvider
@@ -331,6 +333,14 @@ class IosContainer private constructor() {
     val syncSourceDao: SyncSourceDao by lazy { SyncSourceDao(database) }
     val syncPlaylistLinkDao: SyncPlaylistLinkDao by lazy { SyncPlaylistLinkDao(database) }
     val syncPlaylistSourceDao: SyncPlaylistSourceDao by lazy { SyncPlaylistSourceDao(database) }
+    // N-way multimaster sync (Phase 1) — baseline + per-provider token state,
+    // isolated from the live canonical-source engine during migration/shadow.
+    val syncPlaylistBaselineDao: com.parachord.shared.db.dao.SyncPlaylistBaselineDao by lazy {
+        com.parachord.shared.db.dao.SyncPlaylistBaselineDao(database)
+    }
+    val syncPlaylistNwayDao: com.parachord.shared.db.dao.SyncPlaylistNwayDao by lazy {
+        com.parachord.shared.db.dao.SyncPlaylistNwayDao(database)
+    }
 
     // Track-remove tombstones (#172 parity) — local-per-device JSON blob so a
     // user-removed track isn't re-imported on the next pull. App-start prune is
@@ -347,6 +357,22 @@ class IosContainer private constructor() {
         ListenBrainzSyncProvider(listenBrainzClient, settingsStore, mbidEnrichmentService)
     }
 
+    // Apple Music sync (#257, Phase 2). The library API needs dev-token + MUT;
+    // the MUT is acquired on the Swift side (SKCloudServiceController) and
+    // persisted to SecureTokenStore. [appleMusicClient] (catalog/iTunes search,
+    // no auth) hydrates appleMusicId before push. Provider stays inert until a
+    // MUT is present (AppleMusicLibraryClient throws reauth-required, which the
+    // engine treats as a per-provider skip).
+    val appleMusicAuthProvider: IosAppleMusicAuthProvider by lazy {
+        IosAppleMusicAuthProvider(settingsStore, appConfig.appleMusicDeveloperToken)
+    }
+    val appleMusicLibraryClient: AppleMusicLibraryClient by lazy {
+        AppleMusicLibraryClient(httpClient, appleMusicAuthProvider)
+    }
+    val appleMusicSyncProvider: AppleMusicSyncProvider by lazy {
+        AppleMusicSyncProvider(appleMusicLibraryClient, appleMusicClient)
+    }
+
     val syncEngine: SyncEngine by lazy {
         SyncEngine(
             db = database, driver = sqlDriver,
@@ -355,7 +381,7 @@ class IosContainer private constructor() {
             syncSourceDao = syncSourceDao, syncPlaylistLinkDao = syncPlaylistLinkDao,
             syncPlaylistSourceDao = syncPlaylistSourceDao,
             settingsStore = settingsStore,
-            providers = listOf(spotifySyncProvider, listenBrainzSyncProvider),
+            providers = listOf(spotifySyncProvider, listenBrainzSyncProvider, appleMusicSyncProvider),
             tombstones = tombstoneService,
         )
     }
@@ -386,6 +412,21 @@ class IosContainer private constructor() {
         }
     }
 
+    /** Sentinel returned by [syncNow] when a sync was already running (benign,
+     *  not a failure) — the caller re-syncs when [watchSyncing] goes idle. */
+    val syncInProgressMessage: String get() = SyncEngine.SYNC_IN_PROGRESS
+
+    /** Observe whether ANY sync is currently running (manual, timer, etc.) so the
+     *  UI can show a live "Syncing…" state regardless of who started it. */
+    fun watchSyncing(onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.syncing) { onEach((it as? Boolean) ?: false) }
+
+    /** Observe the coarse current sync phase (tracks/albums/artists/playlists) or
+     *  null when idle — lets the button show "Syncing… (playlists)" so we can see
+     *  which phase a stuck sync is in. */
+    fun watchSyncPhase(onEach: (String?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.syncPhase) { onEach(it as? String) }
+
     /**
      * LB sync needs BOTH the token and the username. The plugin config derives
      * the username from the token via `validateToken` on entry, but if that
@@ -412,6 +453,13 @@ class IosContainer private constructor() {
         try { tombstoneService.prune() } catch (_: Exception) {}
     }
 
+    /** Persist the Apple Music Music User Token (acquired Swift-side via
+     *  SKCloudServiceController). Enables the Apple Music library API for sync. */
+    suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)
+    suspend fun hasAppleMusicUserToken(): Boolean = !settingsStore.getAppleMusicUserToken().isNullOrBlank()
+    /** The ES256 dev token SKCloudServiceController.requestUserToken needs. */
+    suspend fun appleMusicDeveloperToken(): String = appConfig.appleMusicDeveloperToken
+
     /** Remaining Spotify rate-limit cooldown in ms (0 = clear). PURELY LOCAL —
      *  reads the persisted cooldown timestamp and subtracts now; hits NO Spotify
      *  endpoint, so calling it can't extend the window. Surfaced in Library Sync
@@ -431,6 +479,103 @@ class IosContainer private constructor() {
         settingsStore.getSyncSettings().enabled && providerId in settingsStore.getEnabledSyncProviders()
 
     suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
+
+    // ── Per-provider sync selection (axes + playlist picker) ──────────────
+    // Backs the iOS provider-config sheet. Axes and the playlist selection are
+    // both per-provider in shared `SettingsStore`; these are thin flat wrappers
+    // for Swift.
+
+    /** The axes this provider syncs (subset of tracks/albums/artists/playlists). */
+    suspend fun getSyncCollections(providerId: String): List<String> =
+        settingsStore.getSyncCollectionsForProvider(providerId).toList()
+
+    suspend fun setSyncCollections(providerId: String, axes: List<String>) {
+        settingsStore.setSyncCollectionsForProvider(providerId, axes.toSet())
+    }
+
+    /** "ALL" | "NONE" | "SELECTED" — the provider's playlist-push mode. */
+    suspend fun getPlaylistSelectionMode(providerId: String): String =
+        settingsStore.getPlaylistSelection(providerId).mode.name
+
+    /** Local playlist ids selected when mode == SELECTED. */
+    suspend fun getPlaylistSelectionIds(providerId: String): List<String> =
+        settingsStore.getPlaylistSelection(providerId).localPlaylistIds.toList()
+
+    suspend fun setPlaylistSelection(providerId: String, mode: String, ids: List<String>) {
+        val m = when (mode) {
+            "NONE" -> com.parachord.shared.sync.PlaylistSyncMode.NONE
+            "SELECTED" -> com.parachord.shared.sync.PlaylistSyncMode.SELECTED
+            else -> com.parachord.shared.sync.PlaylistSyncMode.ALL
+        }
+        settingsStore.setPlaylistSelection(
+            providerId,
+            com.parachord.shared.sync.ProviderPlaylistSelection(m, ids.toSet()),
+        )
+    }
+
+    /** How many synced items a provider has for an axis (tracks/albums/artists/
+     *  playlists) — drives the keep/remove prompt when an axis is deselected. */
+    suspend fun countSyncedItems(providerId: String, axis: String): Int =
+        syncEngine.countItemsForProviderAxis(providerId, axis).toInt()
+
+    /** Remove the items a provider contributed for [axis]. Items also synced from
+     *  another provider survive (lose just this provider's source). */
+    suspend fun removeSyncedItems(providerId: String, axis: String): Int =
+        syncEngine.removeItemsForProviderAxis(providerId, axis).toInt()
+
+    /** Persisted playlists-screen sort key (matches Android's PlaylistSort.name). */
+    suspend fun getPlaylistsSort(): String? = settingsStore.getSortPlaylists()
+    suspend fun setPlaylistsSort(sort: String) { settingsStore.setSortPlaylists(sort) }
+
+    /** Local playlists eligible to push to [providerId] (the picker's rows). */
+    suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =
+        playlistDao.getAllSync()
+            .filter { it.name.isNotBlank() && com.parachord.shared.sync.isPlaylistPushCandidate(it, providerId) }
+            .map { IosSyncPlaylist(id = it.id, name = it.name, trackCount = it.trackCount) }
+
+    // ── Pull-source providers (Spotify / Apple Music) playlist picker ─────────
+
+    /** The user's imported playlists FROM [providerId] (id-prefix `<provider>-`),
+     *  for the per-provider PULL picker. */
+    suspend fun getImportedProviderPlaylists(providerId: String): List<IosSyncPlaylist> =
+        playlistDao.getAllSync()
+            .filter { it.id.startsWith("$providerId-") && it.name.isNotBlank() }
+            .map { IosSyncPlaylist(id = it.id, name = it.name, trackCount = it.trackCount) }
+
+    /** The provider's pull allowlist (remote external ids). Empty = import all. */
+    suspend fun getPullAllowlist(providerId: String): List<String> =
+        settingsStore.getPullPlaylists(providerId).toList()
+
+    /** Whether [providerId]'s picker is a PULL selector (choose which of the
+     *  service's playlists to import) vs a PUSH selector (which local playlists
+     *  to mirror up). Spotify + Apple Music pull; ListenBrainz pushes. */
+    fun isPullProvider(providerId: String): Boolean =
+        providerId == "spotify" || providerId == "applemusic"
+
+    /**
+     * Apply the pull picker's result: persist the allowlist (remote ids to keep
+     * importing), and resolve each deselected playlist — REMOVE deletes the
+     * local copy (keeps it on the service), KEEP detaches it from sync so the
+     * row survives but never re-syncs. The allowlist MUST exclude the kept ids
+     * (the caller passes only the still-checked ids) or detached rows re-import.
+     */
+    suspend fun applyPullSelection(
+        providerId: String,
+        allowlist: List<String>,
+        removeLocalIds: List<String>,
+        keepLocalIds: List<String>,
+    ) {
+        for (id in removeLocalIds) {
+            playlistDao.getById(id)?.let { libraryRepository.deletePlaylistWithSync(it, emptySet()) }
+            playlistTrackDao.deleteByPlaylistId(id)
+        }
+        for (id in keepLocalIds) {
+            // Detach from THIS provider only — stripping all links would let
+            // another mirror's pull (e.g. ListenBrainz) re-import a duplicate.
+            syncEngine.detachPlaylistFromProvider(id, providerId)
+        }
+        settingsStore.setPullPlaylists(providerId, allowlist.toSet())
+    }
 
     /**
      * Enable/disable one provider for sync. Mirrors the relevant slice of
@@ -460,6 +605,21 @@ class IosContainer private constructor() {
                 syncTracks = true, syncAlbums = true, syncArtists = true, syncPlaylists = true,
             ),
         )
+    }
+
+    /**
+     * Disable a provider's sync. [removeItems] = true deletes items sourced ONLY
+     * by this provider; items also synced from another provider survive (lose
+     * just this provider's source). Then drops it from the enabled set + flips
+     * the master flag off iff no providers remain. (Keep = removeItems false.)
+     */
+    suspend fun disableSyncProvider(providerId: String, removeItems: Boolean) {
+        syncEngine.stopProviderSync(providerId, removeItems)
+        val current = settingsStore.getEnabledSyncProviders().toMutableSet()
+        current.remove(providerId)
+        settingsStore.setEnabledSyncProviders(current)
+        val s = settingsStore.getSyncSettings()
+        settingsStore.saveSyncSettings(s.copy(enabled = current.isNotEmpty()))
     }
 
     // Shared FriendsRepository — full add/remove/pin/sync/activity surface.
@@ -1883,6 +2043,129 @@ class IosContainer private constructor() {
         playlistDao.getById(id)?.let { playlistDao.delete(it) }
     }
 
+    /** localPlaylistId -> the providers each playlist EFFECTIVELY syncs with
+     *  (override-aware), for the playlists-list source chips. */
+    suspend fun getAllPlaylistMirrors(): List<IosPlaylistMirrors> =
+        libraryRepository.getAllEffectivePlaylistChannels().map { (id, providers) ->
+            IosPlaylistMirrors(localPlaylistId = id, providerIds = providers)
+        }
+
+    /** The providers a playlist mirrors to (source + push links), for the
+     *  per-mirror delete dialog. */
+    suspend fun getPlaylistMirrorProviders(id: String): List<String> =
+        libraryRepository.getPlaylistMirrors(id).keys.toList()
+
+    /**
+     * The Achordion share URL for a playlist (`achordion.xyz/playlist/<lbMbid>`),
+     * or null when the playlist isn't on ListenBrainz (the share anchor). Matches
+     * desktop — sync the playlist to ListenBrainz to enable sharing. Override-
+     * aware (a Sync-menu-disabled LB channel won't share).
+     */
+    suspend fun playlistShareUrl(localId: String): String? {
+        val lbMbid = libraryRepository.getPlaylistMirrors(localId)["listenbrainz"]
+            ?: localId.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
+        return lbMbid?.let { achordionClient.playlistShareUrl(it) }
+    }
+
+    /** A playlist's mirrors as (providerId, externalId) pairs, for the detail
+     *  page's "open on <service>" chips. */
+    suspend fun getPlaylistMirrorLinks(id: String): List<IosPlaylistMirrorLink> =
+        libraryRepository.getPlaylistMirrors(id).map { (provider, externalId) ->
+            IosPlaylistMirrorLink(providerId = provider, externalId = externalId)
+        }
+
+    // ── Per-playlist Sync menu ────────────────────────────────────────────────
+
+    private val syncChannelProviders = listOf("spotify", "applemusic", "listenbrainz")
+
+    private fun providerDisplay(id: String): String = when (id) {
+        "spotify" -> "Spotify"
+        "applemusic" -> "Apple Music"
+        "listenbrainz" -> "ListenBrainz"
+        else -> id.replaceFirstChar { it.uppercase() }
+    }
+
+    /** The sync channels for one playlist — each provider with connected /
+     *  enabled / available state, for the playlist Sync menu. */
+    suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> {
+        val enabledProviders = settingsStore.getEnabledSyncProviders()
+        val override = settingsStore.getPlaylistChannels(localId)
+        val mirrors = libraryRepository.getPlaylistMirrors(localId).keys
+        val effective = override ?: mirrors
+        val playlist = playlistDao.getById(localId)
+        return syncChannelProviders.map { pid ->
+            val isSource = localId.startsWith("$pid-")
+            val canPush = playlist != null && com.parachord.shared.sync.isPlaylistPushCandidate(playlist, pid)
+            IosSyncChannel(
+                providerId = pid,
+                displayName = providerDisplay(pid),
+                connected = pid in enabledProviders,
+                enabled = pid in effective,
+                available = isSource || canPush,
+            )
+        }
+    }
+
+    /** Toggle one channel for one playlist. Writes the per-playlist override
+     *  (authoritative). Disabling also detaches the existing linkage so the
+     *  state updates immediately and the next sync's override gate keeps it off.
+     *  Enabling sets the override; the next sync mirrors it (push) if it's a
+     *  valid target. */
+    suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) {
+        val override = settingsStore.getPlaylistChannels(localId)
+        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
+        val updated = if (enabled) current + providerId else current - providerId
+        settingsStore.setPlaylistChannels(localId, updated)
+        if (!enabled) {
+            syncEngine.detachPlaylistFromProvider(localId, providerId)
+        }
+    }
+
+    /**
+     * Turn a channel OFF for a playlist, with the "delete from this service too"
+     * choice. [deleteRemote] = true also removes the playlist on that provider's
+     * remote (best-effort); false just stops syncing (keeps the remote). Returns
+     * the provider display name when the remote delete was UNSUPPORTED (Apple
+     * Music) so the UI can say "remove it manually", else null.
+     */
+    suspend fun disablePlaylistChannel(
+        localId: String,
+        providerId: String,
+        deleteRemote: Boolean,
+    ): String? {
+        // Capture the external id BEFORE we change the override (getPlaylistMirrors
+        // is override-aware, and the override still includes this provider here).
+        val externalId = libraryRepository.getPlaylistMirrors(localId)[providerId]
+        var unsupported: String? = null
+        if (deleteRemote && externalId != null) {
+            val result = syncEngine.deletePlaylistOnProvider(providerId, externalId)
+            if (result is com.parachord.shared.sync.DeleteResult.Unsupported) {
+                unsupported = providerDisplay(providerId)
+            }
+        }
+        val override = settingsStore.getPlaylistChannels(localId)
+        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
+        settingsStore.setPlaylistChannels(localId, current - providerId)
+        syncEngine.detachPlaylistFromProvider(localId, providerId)
+        return unsupported
+    }
+
+    /** Delete a playlist locally + remote-delete from [fromProviders] (provider
+     *  ids). Returns the display names of providers that DON'T support API
+     *  deletion (e.g. Apple Music) so the UI can tell the user to remove it
+     *  manually. */
+    suspend fun deletePlaylistFromMirrors(id: String, fromProviders: List<String>): List<String> {
+        val pl = playlistDao.getById(id) ?: run {
+            playlistTrackDao.deleteByPlaylistId(id)
+            return emptyList()
+        }
+        val attempts = libraryRepository.deletePlaylistWithSync(pl, fromProviders.toSet())
+        playlistTrackDao.deleteByPlaylistId(id)
+        return attempts
+            .filter { it.result is com.parachord.shared.sync.DeleteResult.Unsupported }
+            .map { it.providerDisplayName }
+    }
+
     suspend fun removePlaylistTrackAt(id: String, index: Int) {
         val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()
         if (index < 0 || index >= tracks.size) return
@@ -2172,6 +2455,39 @@ class IosContainer private constructor() {
 }
 
 /** Flat Swift-friendly search result bundle. */
+/** A local playlist row the per-provider sync picker can select. */
+data class IosSyncPlaylist(
+    val id: String,
+    val name: String,
+    val trackCount: Int,
+)
+
+/** A playlist's push-mirror providers, for the playlists-list source chips. */
+data class IosPlaylistMirrors(
+    val localPlaylistId: String,
+    val providerIds: List<String>,
+)
+
+/** A single remote a playlist mirrors to: provider + its external id (used to
+ *  build the "open on <service>" link on the detail page). */
+data class IosPlaylistMirrorLink(
+    val providerId: String,
+    val externalId: String,
+)
+
+/** A sync channel row in a playlist's Sync menu. [connected] = the provider is
+ *  enabled for sync (else dim + "connect in Settings"); [enabled] = this
+ *  playlist currently syncs with it; [available] = the playlist CAN sync with it
+ *  (it's the source, or a valid push target) — a non-available channel can't be
+ *  toggled on. */
+data class IosSyncChannel(
+    val providerId: String,
+    val displayName: String,
+    val connected: Boolean,
+    val enabled: Boolean,
+    val available: Boolean,
+)
+
 data class IosSearchResults(
     val artists: List<IosSearchArtist>,
     val releases: List<IosSearchRelease>,

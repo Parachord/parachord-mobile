@@ -439,8 +439,13 @@ class AppleMusicSyncProvider(
         // local state. The probe also returns meta.total which we use
         // for accurate progress reporting through pagination.
         delay(INTER_REQUEST_DELAY_MS)
+        // Probe must compute the SAME external id storage uses
+        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // `id`. Comparing library-id to the stored catalog-id never matched, so
+        // the unchanged-shortcut never fired and the WHOLE song library
+        // re-fetched on every sync (#261, same bug as albums).
         val probe = api.listLibrarySongs(limit = 1, offset = 0)
-        val probeId = probe.data.firstOrNull()?.id
+        val probeId = probe.data.firstOrNull()?.let { it.attributes?.playParams?.id ?: it.id }
         if (probeId == latestExternalId && localCount > 0) {
             // Nothing's changed at the head; assume rest is unchanged.
             return null
@@ -455,7 +460,7 @@ class AppleMusicSyncProvider(
             // Refresh total in case the library shifted mid-paginate.
             resp.meta?.total?.let { total = it }
             for (am in resp.data) {
-                all.add(am.toSyncedTrack())
+                am.toSyncedTrack()?.let { all.add(it) }   // skip songs with no usable title
             }
             // Floor total to the running count so progress never reports
             // more than 100% if the remote shrunk during pagination.
@@ -463,7 +468,33 @@ class AppleMusicSyncProvider(
             if (resp.next == null || resp.data.size < PAGE_SIZE) break
             offset += resp.data.size
         }
-        return all
+        // Cross-provider dedup: the library API has no ISRC, so fetch it from the
+        // catalog and re-key each row by ISRC — the same recording in Spotify
+        // Liked Songs then collapses onto one collection row instead of two.
+        return attachIsrcs(all)
+    }
+
+    /** Re-key AM library tracks by ISRC (fetched from the catalog by catalog id).
+     *  Tracks with no catalog ISRC keep their `applemusic-…` id (no merge). */
+    private suspend fun attachIsrcs(tracks: List<SyncedTrack>): List<SyncedTrack> {
+        if (tracks.isEmpty()) return tracks
+        Log.i(TAG, "attachIsrcs: ${tracks.size} AM library songs to re-key by ISRC")
+        val storefront = try { api.getStorefront().data.firstOrNull()?.id } catch (e: Exception) {
+            Log.w(TAG, "attachIsrcs: getStorefront failed; keeping applemusic- ids", e); null
+        } ?: return tracks
+        // `spotifyId` is the reused external-id field — for AM it holds the catalog id.
+        val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map { it.spotifyId })
+        Log.i(TAG, "attachIsrcs: storefront=$storefront, resolved ${isrcs.size} ISRCs for ${tracks.size} songs")
+        if (isrcs.isEmpty()) return tracks
+        return tracks.map { synced ->
+            val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[synced.spotifyId]) ?: return@map synced
+            synced.copy(
+                entity = synced.entity.copy(
+                    id = TrackIdentity.canonicalTrackId(isrc, synced.entity.id),
+                    isrc = isrc,
+                ),
+            )
+        }
     }
 
     /**
@@ -506,8 +537,13 @@ class AppleMusicSyncProvider(
     ): List<SyncedAlbum>? {
         val all = mutableListOf<SyncedAlbum>()
         delay(INTER_REQUEST_DELAY_MS)
+        // Probe must compute the SAME external id storage uses
+        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // `id`. The mismatch made the unchanged-shortcut never fire, re-fetching
+        // the WHOLE album library every sync — the multi-minute (albums) grind (#261).
         val probe = api.listLibraryAlbums(limit = 1, offset = 0)
-        if (probe.data.firstOrNull()?.id == latestExternalId && localCount > 0) return null
+        val probeExternalId = probe.data.firstOrNull()?.let { it.attributes.playParams?.id ?: it.id }
+        if (probeExternalId == latestExternalId && localCount > 0) return null
         var total = probe.meta?.total ?: 0
         var offset = 0
         while (true) {
@@ -640,18 +676,22 @@ class AppleMusicSyncProvider(
      * `id` is the library ID; `playParams.id` is the catalog ID. We
      * store the catalog ID in [TrackEntity.appleMusicId] so playback
      * can resolve via MusicKit. */
-    private fun AmLibrarySong.toSyncedTrack(): SyncedTrack {
-        val catalogId = attributes.playParams?.id ?: id
-        val addedAt = attributes.dateAdded?.let { parseIso(it) } ?: 0L
+    /** Library song → cross-provider [SyncedTrack], or null for a song with no
+     *  usable title (skip it rather than fail the whole page). */
+    private fun AmLibrarySong.toSyncedTrack(): SyncedTrack? {
+        val attrs = attributes ?: return null
+        val title = attrs.name?.takeIf { it.isNotBlank() } ?: return null
+        val catalogId = attrs.playParams?.id ?: id
+        val addedAt = attrs.dateAdded?.let { parseIso(it) } ?: 0L
         return SyncedTrack(
             entity = Track(
                 id = "applemusic-$catalogId",
-                title = attributes.name,
-                artist = attributes.artistName,
-                album = attributes.albumName,
+                title = title,
+                artist = attrs.artistName?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
+                album = attrs.albumName,
                 albumId = null,
-                duration = attributes.durationInMillis,
-                artworkUrl = resolveArtworkUrl(attributes.artwork?.url),
+                duration = attrs.durationInMillis,
+                artworkUrl = resolveArtworkUrl(attrs.artwork?.url),
                 spotifyUri = null,
                 spotifyId = null,
                 appleMusicId = catalogId,

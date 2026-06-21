@@ -208,11 +208,26 @@ class LibraryRepository(
      */
     suspend fun deletePlaylistWithSync(
         playlist: Playlist,
+        deleteFromProviders: Set<String>? = null,
     ): List<SyncEngine.PlaylistDeletionAttempt> {
-        val attempts = syncEngine.onPlaylistRemoved(playlist)
+        val attempts = syncEngine.onPlaylistRemoved(playlist, deleteFromProviders)
         playlistDao.delete(playlist)
         return attempts
     }
+
+    /** All remote mirrors of a playlist (providerId -> externalId) — drives the
+     *  per-mirror delete dialog. */
+    suspend fun getPlaylistMirrors(localPlaylistId: String): Map<String, String> =
+        syncEngine.getPlaylistMirrors(localPlaylistId)
+
+    /** localPlaylistId -> push-mirror providers, for the playlist-list chips. */
+    suspend fun getAllPlaylistLinkProviders(): Map<String, List<String>> =
+        syncEngine.getAllPlaylistLinkProviders()
+
+    /** localPlaylistId -> providers it EFFECTIVELY syncs with (override-aware) —
+     *  the live source for playlist-list chips. */
+    suspend fun getAllEffectivePlaylistChannels(): Map<String, List<String>> =
+        syncEngine.getAllEffectivePlaylistChannels()
 
     // ── Sync-aware deletions (push removal back to source) ───────────
 

@@ -1,0 +1,40 @@
+-- N-way multimaster sync (Phase 1). Per-(playlist, provider) sync state for the
+-- N-way engine, kept SEPARATE from `sync_playlist_link` so the live
+-- canonical-source engine + its DAO are untouched during migration/shadow mode.
+--   changeToken — Spotify `snapshot_id` / AM·LB `last_modified`, captured AFTER
+--                 our own push (echo suppression — next cycle's token matches so
+--                 nothing is detected).
+--   editedAt    — Spotify MAX(track.added_at) (detection-time floor on a pure
+--                 reorder/delete) / AM·LB `last_modified`. The LWW order signal.
+--   lastSyncedAt — when this row was last reconciled.
+CREATE TABLE IF NOT EXISTS sync_playlist_nway (
+    localPlaylistId TEXT NOT NULL,
+    providerId      TEXT NOT NULL,
+    changeToken     TEXT,
+    editedAt        INTEGER,
+    lastSyncedAt    INTEGER NOT NULL,
+    PRIMARY KEY (localPlaylistId, providerId)
+);
+
+selectAll:
+SELECT * FROM sync_playlist_nway;
+
+selectForLocal:
+SELECT * FROM sync_playlist_nway WHERE localPlaylistId = ?;
+
+selectForLink:
+SELECT * FROM sync_playlist_nway WHERE localPlaylistId = ? AND providerId = ?;
+
+upsert:
+INSERT OR REPLACE INTO sync_playlist_nway
+    (localPlaylistId, providerId, changeToken, editedAt, lastSyncedAt)
+VALUES (?, ?, ?, ?, ?);
+
+deleteForLink:
+DELETE FROM sync_playlist_nway WHERE localPlaylistId = ? AND providerId = ?;
+
+deleteForLocal:
+DELETE FROM sync_playlist_nway WHERE localPlaylistId = ?;
+
+deleteForProvider:
+DELETE FROM sync_playlist_nway WHERE providerId = ?;

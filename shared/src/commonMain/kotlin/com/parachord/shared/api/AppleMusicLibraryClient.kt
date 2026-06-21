@@ -20,6 +20,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -49,6 +50,9 @@ class AppleMusicLibraryClient(
 ) {
     companion object {
         private const val BASE_URL = "https://api.music.apple.com"
+        // Cross-provider ISRC lookup bounds (runs inside syncAll — must not hang).
+        private const val ISRC_REQUEST_DELAY_MS = 200L
+        private const val MAX_ISRC_BATCHES = 40   // 40 × 300 = 12k songs
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     }
 
@@ -256,7 +260,55 @@ class AppleMusicLibraryClient(
         ensureSuccessOrThrowTyped(response)
         return json.decodeFromString(response.bodyAsText())
     }
+
+    /**
+     * Batch-fetch ISRCs for catalog song ids via the CATALOG API. The library
+     * API (`/me/library/songs`) doesn't return ISRC, so cross-provider dedup
+     * needs this extra lookup (#cross-provider-track-dedup). Returns
+     * `catalogId -> ISRC` only for ids that have one. Chunked at 300 (Apple's
+     * `ids=` cap). Best-effort: a failed batch just yields no ISRCs for it, so
+     * those tracks fall back to their `applemusic-…` id (no merge) rather than
+     * failing the sync.
+     */
+    suspend fun getCatalogSongIsrcs(storefront: String, catalogIds: List<String>): Map<String, String> {
+        if (storefront.isBlank() || catalogIds.isEmpty()) return emptyMap()
+        val out = mutableMapOf<String, String>()
+        // BOUNDED + STOP-ON-FAILURE: this runs inside syncAll holding the sync
+        // mutex, so it must never hang or hammer Apple. A 200ms inter-request gap
+        // respects the catalog rate limit; we stop on the FIRST failure (rate
+        // limit / error / timeout) instead of grinding every batch; and a hard
+        // cap bounds huge libraries. Songs past the cap (or after a stop) keep
+        // their `applemusic-` id and just don't cross-provider-merge.
+        val batches = catalogIds.distinct().chunked(300)
+        for ((i, batch) in batches.withIndex()) {
+            if (i >= MAX_ISRC_BATCHES) break
+            if (i > 0) delay(ISRC_REQUEST_DELAY_MS)
+            try {
+                val response = httpClient.get("$BASE_URL/v1/catalog/$storefront/songs") {
+                    applyAuth(this)
+                    parameter("ids", batch.joinToString(","))
+                }
+                if (!response.status.isSuccess()) break
+                val parsed = json.decodeFromString<AmCatalogSongsResponse>(response.bodyAsText())
+                parsed.data.forEach { song -> song.attributes?.isrc?.let { out[song.id] = it } }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                break
+            }
+        }
+        return out
+    }
 }
+
+@Serializable
+data class AmCatalogSongsResponse(val data: List<AmCatalogSong> = emptyList())
+
+@Serializable
+data class AmCatalogSong(val id: String, val attributes: AmCatalogSongAttributes? = null)
+
+@Serializable
+data class AmCatalogSongAttributes(val isrc: String? = null)
 
 // ── Library JSON models ──────────────────────────────────────────────
 
@@ -276,14 +328,18 @@ data class AmListMeta(
 @Serializable
 data class AmLibrarySong(
     val id: String,
-    val type: String,
-    val attributes: AmLibrarySongAttributes,
+    val type: String? = null,
+    val attributes: AmLibrarySongAttributes? = null,
 )
 
 @Serializable
 data class AmLibrarySongAttributes(
-    val name: String,
-    val artistName: String,
+    // Nullable + defaulted so ONE library song with incomplete metadata (no
+    // name/artist — e.g. a cloud-uploaded or oddly-tagged track) can't throw
+    // during decode and take the whole songs page down with it. The mapper skips
+    // songs missing essentials instead.
+    val name: String? = null,
+    val artistName: String? = null,
     val albumName: String? = null,
     val durationInMillis: Long? = null,
     val artwork: AmArtwork? = null,

@@ -44,6 +44,7 @@ class ShareManager constructor(
     private val achordionClient: AchordionClient,
     private val playlistDao: PlaylistDao,
     private val playlistTrackDao: PlaylistTrackDao,
+    private val syncPlaylistLinkDao: com.parachord.shared.db.dao.SyncPlaylistLinkDao,
 ) {
     companion object {
         private const val TAG = "ShareManager"
@@ -157,6 +158,17 @@ class ShareManager constructor(
 
     suspend fun sharePlaylist(playlist: PlaylistEntity, tracks: List<PlaylistTrackEntity>): ShareResult {
         val subject = playlist.name
+
+        // Prefer the Achordion playlist page, keyed on the ListenBrainz MBID
+        // (the cross-platform anchor) — matches desktop app.js:14583. The mbid
+        // is the LB push-link, or the id-prefix when LB is the source. Falls
+        // through to the smart-link / deeplink only when the playlist isn't on
+        // ListenBrainz.
+        val lbMbid = syncPlaylistLinkDao.selectForLink(playlist.id, "listenbrainz")?.externalId
+            ?: playlist.id.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
+        if (lbMbid != null) {
+            return ShareResult(achordionClient.playlistShareUrl(lbMbid), subject, true)
+        }
         // If the playlist has been pushed to Spotify, include that URL on the
         // smart-link so recipients can open it directly in Spotify too.
         val playlistUrls = buildMap<String, String> {

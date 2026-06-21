@@ -1,0 +1,24 @@
+-- N-way multimaster sync (Phase 1). The per-playlist 3-way-merge ANCESTOR:
+-- the last tracklist all copies agreed on, as an ordered list of canonical
+-- track keys (`isrc-…` / `mbid-…` / `norm-artist|title`). Stored as a JSON
+-- string array in `baseline`. Lives ALONGSIDE the legacy canonical-source
+-- fields during migration + shadow mode (design doc 2026-06-21); not yet wired
+-- into live reconciliation.
+CREATE TABLE IF NOT EXISTS sync_playlist_baseline (
+    localPlaylistId  TEXT NOT NULL PRIMARY KEY,
+    baseline         TEXT NOT NULL,
+    baselineSyncedAt INTEGER NOT NULL
+);
+
+selectAll:
+SELECT * FROM sync_playlist_baseline;
+
+selectForLocal:
+SELECT * FROM sync_playlist_baseline WHERE localPlaylistId = ?;
+
+upsert:
+INSERT OR REPLACE INTO sync_playlist_baseline (localPlaylistId, baseline, baselineSyncedAt)
+VALUES (?, ?, ?);
+
+deleteForLocal:
+DELETE FROM sync_playlist_baseline WHERE localPlaylistId = ?;

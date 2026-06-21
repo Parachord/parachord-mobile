@@ -59,9 +59,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.HostedBadge
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.Checkbox
 import com.parachord.android.ui.components.ModalBg
 import com.parachord.android.ui.components.ModalTextActive
 import com.parachord.android.ui.components.ModalTextPrimary
+import com.parachord.android.ui.components.ModalTextSecondary
 import com.parachord.android.ui.components.PlaylistContextMenu
 import com.parachord.android.ui.screens.library.CollectionFilterBar
 
@@ -78,6 +82,7 @@ fun PlaylistsScreen(
     val sortedPlaylists by viewModel.sortedPlaylists.collectAsStateWithLifecycle()
     val currentSort by viewModel.sort.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val mirrors by viewModel.mirrors.collectAsStateWithLifecycle()
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -154,6 +159,17 @@ fun PlaylistsScreen(
             )
 
             var pendingDeletePlaylist by remember { mutableStateOf<PlaylistEntity?>(null) }
+            var deleteMirrors by remember { mutableStateOf<List<String>>(emptyList()) }
+            var deleteSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+            LaunchedEffect(pendingDeletePlaylist) {
+                val pl = pendingDeletePlaylist
+                if (pl != null) {
+                    val m = viewModel.getDeletableMirrors(pl.id)
+                    deleteMirrors = m
+                    deleteSelected = m.toSet()   // default: also delete from every mirror
+                }
+            }
 
             pendingDeletePlaylist?.let { playlist ->
                 AlertDialog(
@@ -162,10 +178,45 @@ fun PlaylistsScreen(
                     titleContentColor = ModalTextActive,
                     textContentColor = ModalTextPrimary,
                     title = { Text("Delete Playlist") },
-                    text = { Text("Are you sure you want to delete \"${playlist.name}\"?") },
+                    text = {
+                        Column {
+                            Text("Remove \"${playlist.name}\" from Parachord.")
+                            if (deleteMirrors.isNotEmpty()) {
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    "Also delete from:",
+                                    color = ModalTextSecondary,
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                                deleteMirrors.forEach { pid ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            deleteSelected = if (pid in deleteSelected) deleteSelected - pid else deleteSelected + pid
+                                        },
+                                    ) {
+                                        Checkbox(
+                                            checked = pid in deleteSelected,
+                                            onCheckedChange = { on ->
+                                                deleteSelected = if (on) deleteSelected + pid else deleteSelected - pid
+                                            },
+                                        )
+                                        Text(playlistProviderLabel(pid), color = ModalTextPrimary)
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Unchecked services keep their copy (may re-import on next sync). " +
+                                        "Apple Music can't be deleted via its API.",
+                                    color = ModalTextSecondary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                    },
                     confirmButton = {
                         TextButton(onClick = {
-                            viewModel.deletePlaylist(playlist)
+                            viewModel.deletePlaylist(playlist, deleteSelected)
                             pendingDeletePlaylist = null
                         }) {
                             Text("Delete", color = Color(0xFFEF4444))
@@ -291,44 +342,22 @@ fun PlaylistsScreen(
                                         if (playlist.sourceUrl != null) {
                                             HostedBadge()
                                         }
-                                        // Provider chips. id-prefix is the
-                                        // primary signal (every pulled row
-                                        // is namespaced); Spotify scalar is
-                                        // a secondary fallback for legacy
-                                        // rows that pre-date id namespacing.
-                                        // Multi-mirror display (a single
-                                        // local row linked to BOTH providers)
-                                        // is a future follow-up — would need
-                                        // sync_playlist_link query in the VM.
-                                        val isSpotify = playlist.spotifyId != null
-                                            || playlist.id.startsWith("spotify-")
-                                        val isAppleMusic = playlist.id.startsWith("applemusic-")
-                                        if (isSpotify) {
-                                            Text(
-                                                text = "Spotify",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = SpotifyGreen,
-                                                modifier = Modifier
-                                                    .background(
-                                                        color = SpotifyGreen.copy(alpha = 0.12f),
-                                                        shape = RoundedCornerShape(4.dp),
-                                                    )
-                                                    .padding(horizontal = 6.dp, vertical = 1.dp),
-                                            )
+                                        // Source/mirror chips: own source
+                                        // (id-prefix / spotifyId scalar) UNION
+                                        // the push mirrors from
+                                        // sync_playlist_link. So a local
+                                        // playlist mirrored to Spotify + Apple
+                                        // Music shows both, and a cross-provider
+                                        // duplicate shows two service chips.
+                                        val providerSet = buildSet {
+                                            if (playlist.spotifyId != null || playlist.id.startsWith("spotify-")) add("spotify")
+                                            if (playlist.id.startsWith("applemusic-")) add("applemusic")
+                                            if (playlist.id.startsWith("listenbrainz-")) add("listenbrainz")
+                                            addAll(mirrors[playlist.id].orEmpty())
                                         }
-                                        if (isAppleMusic) {
-                                            Text(
-                                                text = "Apple Music",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = AppleMusicRed,
-                                                modifier = Modifier
-                                                    .background(
-                                                        color = AppleMusicRed.copy(alpha = 0.12f),
-                                                        shape = RoundedCornerShape(4.dp),
-                                                    )
-                                                    .padding(horizontal = 6.dp, vertical = 1.dp),
-                                            )
-                                        }
+                                        if ("spotify" in providerSet) PlaylistSourceChip("Spotify", SpotifyGreen)
+                                        if ("applemusic" in providerSet) PlaylistSourceChip("Apple Music", AppleMusicRed)
+                                        if ("listenbrainz" in providerSet) PlaylistSourceChip("ListenBrainz", Color(0xFFEB743B))
                                     }
                                 }
                             }
@@ -360,3 +389,22 @@ fun PlaylistsScreen(
 
 private val SpotifyGreen = Color(0xFF1DB954)
 private val AppleMusicRed = Color(0xFFFA243C)
+
+@Composable
+private fun PlaylistSourceChip(text: String, color: Color) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = color,
+        modifier = Modifier
+            .background(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    )
+}
+
+private fun playlistProviderLabel(providerId: String): String = when (providerId) {
+    "spotify" -> "Spotify"
+    "applemusic" -> "Apple Music"
+    "listenbrainz" -> "ListenBrainz"
+    else -> providerId.replaceFirstChar { it.uppercase() }
+}

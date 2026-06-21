@@ -27,6 +27,9 @@ SELECT * FROM tracks ORDER BY addedAt DESC;
 getById:
 SELECT * FROM tracks WHERE id = ?;
 
+getByIds:
+SELECT * FROM tracks WHERE id IN ?;
+
 getByAlbumId:
 SELECT * FROM tracks WHERE albumId = ? ORDER BY title;
 

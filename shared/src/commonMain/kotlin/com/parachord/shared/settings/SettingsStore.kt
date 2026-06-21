@@ -109,6 +109,11 @@ class SettingsStore(
         const val SYNC_LAST_COMPLETED_AT = "sync_last_completed_at"
         const val SYNC_PUSH_LOCAL_PLAYLISTS = "sync_push_local_playlists"
         const val SYNC_DATA_VERSION = "sync_data_version"
+        // Dedicated one-shot flag for the cross-provider track-dedup wipe. NOT on
+        // the SYNC_DATA_VERSION counter — that counter is shared by the playlist
+        // dedup migration, and bumping it here would skip migrations that haven't
+        // run yet on a fresh-from-old install.
+        const val TRACK_DEDUP_V1_DONE = "track_dedup_v1_done"
         const val ENABLED_SYNC_PROVIDERS = "enabled_sync_providers"
 
         /** Per-provider opt-in for which collection axes to sync.
@@ -116,6 +121,19 @@ class SettingsStore(
          *  Absent ⇒ default to ALL axes (preserves the global-toggle behavior
          *  that existed before per-provider opt-in landed). */
         fun syncCollectionsKey(providerId: String) = "sync_collections_$providerId"
+
+        /** Per-provider playlist-push selection. `sync_playlist_mode_<id>` holds
+         *  ALL|NONE|SELECTED; `sync_playlist_ids_<id>` holds the CSV of local
+         *  playlist ids used when SELECTED. Absent mode ⇒ ALL for spotify /
+         *  applemusic, NONE for listenbrainz (desktop parity). */
+        fun playlistModeKey(providerId: String) = "sync_playlist_mode_$providerId"
+        fun playlistIdsKey(providerId: String) = "sync_playlist_ids_$providerId"
+
+        /** Per-provider PULL allowlist (which remote playlists to import). */
+        fun pullPlaylistsKey(providerId: String) = "sync_pull_playlists_$providerId"
+
+        /** Per-playlist channel override (which providers ONE playlist syncs with). */
+        fun playlistChannelsKey(localPlaylistId: String) = "sync_playlist_channels_$localPlaylistId"
 
         /** Marker key — set to `true` once the one-shot DataStore→KvStore
          *  copy completes. Lives in KvStore so it survives across reboots
@@ -410,6 +428,14 @@ class SettingsStore(
 
     suspend fun isPersistQueueEnabled(): Boolean {
         ensureMigrated(); return kv.getBoolean(PERSIST_QUEUE, default = true)
+    }
+
+    /** One-shot cross-provider track-dedup migration flag (#cross-provider-track-dedup). */
+    override suspend fun getTrackDedupV1Done(): Boolean {
+        ensureMigrated(); return kv.getBoolean(TRACK_DEDUP_V1_DONE, default = false)
+    }
+    override suspend fun setTrackDedupV1Done() {
+        ensureMigrated(); kv.setBoolean(TRACK_DEDUP_V1_DONE, true)
     }
 
     suspend fun getPersistedQueueState(): String? {
@@ -758,6 +784,73 @@ class SettingsStore(
         if (raw == null) ALL_SYNC_COLLECTIONS
         else if (raw.isBlank()) emptySet()
         else raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    override suspend fun getPlaylistSelection(
+        providerId: String,
+    ): com.parachord.shared.sync.ProviderPlaylistSelection {
+        ensureMigrated()
+        val rawMode = kv.getStringOrNull(playlistModeKey(providerId))
+        val mode = when (rawMode) {
+            "ALL" -> com.parachord.shared.sync.PlaylistSyncMode.ALL
+            "NONE" -> com.parachord.shared.sync.PlaylistSyncMode.NONE
+            "SELECTED" -> com.parachord.shared.sync.PlaylistSyncMode.SELECTED
+            // Unset → provider default (LB=NONE, others=ALL).
+            else -> com.parachord.shared.sync.ProviderPlaylistSelection.defaultMode(providerId)
+        }
+        val ids = (kv.getStringOrNull(playlistIdsKey(providerId)) ?: "")
+            .split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        return com.parachord.shared.sync.ProviderPlaylistSelection(mode, ids)
+    }
+
+    override suspend fun setPlaylistSelection(
+        providerId: String,
+        selection: com.parachord.shared.sync.ProviderPlaylistSelection,
+    ) {
+        ensureMigrated()
+        kv.setString(playlistModeKey(providerId), selection.mode.name)
+        kv.setString(playlistIdsKey(providerId), selection.localPlaylistIds.joinToString(","))
+    }
+
+    override suspend fun getPullPlaylists(providerId: String): Set<String> {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(pullPlaylistsKey(providerId))
+        if (raw != null) return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        // Migration: Spotify's pull allowlist used to be the global
+        // SYNC_SELECTED_PLAYLIST_IDS. Seed from it so existing installs keep
+        // their selection. Other providers default to empty (= import all).
+        if (providerId == "spotify") {
+            return (kv.getStringOrNull(SYNC_SELECTED_PLAYLIST_IDS) ?: "")
+                .split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        }
+        return emptySet()
+    }
+
+    override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {
+        ensureMigrated()
+        val csv = externalIds.joinToString(",")
+        kv.setString(pullPlaylistsKey(providerId), csv)
+        // Keep the legacy global key in sync for Spotify so any code still
+        // reading SyncSettings.selectedPlaylistIds stays consistent.
+        if (providerId == "spotify") kv.setString(SYNC_SELECTED_PLAYLIST_IDS, csv)
+    }
+
+    override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(playlistChannelsKey(localPlaylistId)) ?: return null
+        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {
+        ensureMigrated()
+        if (channels == null) {
+            kv.remove(playlistChannelsKey(localPlaylistId))
+        } else {
+            // Empty-but-present override = "syncs with nothing" (fully local) —
+            // distinct from null (= no override). Store a sentinel so an empty
+            // set round-trips as empty, not as absent.
+            kv.setString(playlistChannelsKey(localPlaylistId), if (channels.isEmpty()) " " else channels.joinToString(","))
+        }
+    }
 
     override suspend fun clearSyncSettings() {
         ensureMigrated()

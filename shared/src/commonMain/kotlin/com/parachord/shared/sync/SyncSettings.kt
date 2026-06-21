@@ -23,6 +23,59 @@ data class SyncSettings(
 )
 
 /**
+ * How a given provider mirrors local playlists. Per-provider, so the user can
+ * push everything to Spotify, a hand-picked subset to Apple Music, and nothing
+ * to ListenBrainz (its default).
+ */
+/**
+ * Whether [playlist] is eligible to be PUSHED (mirrored) to [providerId],
+ * BEFORE the user's per-provider playlist selection is applied. Shared so the
+ * settings "which playlists" picker shows exactly the rows the push loop would
+ * consider. Mirrors `SyncEngine.isPushCandidate` (which delegates here).
+ */
+fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, providerId: String): Boolean {
+    val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
+    return when (providerId) {
+        "spotify" -> playlist.spotifyId == null && base
+        "applemusic" -> base || playlist.id.startsWith("spotify-")
+        "listenbrainz" -> base ||
+            playlist.id.startsWith("spotify-") ||
+            playlist.id.startsWith("applemusic-")
+        else -> base
+    }
+}
+
+enum class PlaylistSyncMode { ALL, NONE, SELECTED }
+
+/**
+ * A provider's playlist-push selection. [localPlaylistIds] (local row ids,
+ * e.g. `local-…`, `spotify-…`, `applemusic-…`) is only consulted when
+ * [mode] == [PlaylistSyncMode.SELECTED].
+ */
+data class ProviderPlaylistSelection(
+    val mode: PlaylistSyncMode,
+    val localPlaylistIds: Set<String> = emptySet(),
+) {
+    /** Whether a local playlist row should mirror to this provider. */
+    fun includes(localPlaylistId: String): Boolean = when (mode) {
+        PlaylistSyncMode.ALL -> true
+        PlaylistSyncMode.NONE -> false
+        PlaylistSyncMode.SELECTED -> localPlaylistId in localPlaylistIds
+    }
+
+    companion object {
+        /**
+         * The mode for a provider with nothing stored yet. ListenBrainz →
+         * [PlaylistSyncMode.NONE] (desktop parity — never push until opt-in,
+         * the fix for the LB flood); everyone else → [PlaylistSyncMode.ALL]
+         * (preserve mirror-everything).
+         */
+        fun defaultMode(providerId: String): PlaylistSyncMode =
+            if (providerId == "listenbrainz") PlaylistSyncMode.NONE else PlaylistSyncMode.ALL
+    }
+}
+
+/**
  * Platform-agnostic gateway to the user's sync configuration. The Android
  * implementation wraps the existing DataStore-backed `SettingsStore`; the
  * iOS implementation will write through the same shared keys via
@@ -49,6 +102,43 @@ interface SyncSettingsProvider {
     suspend fun getSyncCollectionsForProvider(providerId: String): Set<String>
 
     /**
+     * Per-provider playlist-push selection (which local playlists mirror to
+     * [providerId]). Defaults: `spotify`/`applemusic` → [PlaylistSyncMode.ALL]
+     * (preserve mirror-everything); `listenbrainz` → [PlaylistSyncMode.NONE]
+     * (desktop parity — never push to LB until the user opts in). The push loop
+     * in [SyncEngine.pushPlaylistsForProvider] filters candidates by this.
+     */
+    suspend fun getPlaylistSelection(providerId: String): ProviderPlaylistSelection
+
+    /** Persist a provider's playlist-push selection (see [getPlaylistSelection]). */
+    suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection)
+
+    /**
+     * Per-provider PULL allowlist: which of the provider's remote playlists to
+     * import (keyed on the provider's external id). EMPTY = import all (no
+     * filter). A non-empty set imports only those ids. Spotify migrates from the
+     * legacy global `selectedPlaylistIds`. Used by the Spotify + Apple Music pull
+     * paths so the user can choose which of their service playlists sync.
+     */
+    suspend fun getPullPlaylists(providerId: String): Set<String>
+
+    /** Persist a provider's pull allowlist (see [getPullPlaylists]). */
+    suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>)
+
+    /**
+     * Per-playlist channel override: the exact set of providers a single
+     * playlist syncs with, set via the playlist's Sync menu. `null` = no
+     * override (fall back to the per-provider push selection / pull allowlist).
+     * When present it is AUTHORITATIVE for that playlist on both push and pull —
+     * so the user can sync one playlist to exactly the services they choose,
+     * independent of the global per-provider defaults.
+     */
+    suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>?
+
+    /** Persist (or clear, with `null`) a playlist's channel override. */
+    suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?)
+
+    /**
      * Sync data version — bumped to force a full re-fetch after schema/migration
      * changes. SyncEngine compares against its own `SYNC_DATA_VERSION` constant.
      */
@@ -56,6 +146,11 @@ interface SyncSettingsProvider {
 
     /** Persist the new data version after a successful migration / refetch. */
     suspend fun setSyncDataVersion(version: Int)
+
+    /** One-shot cross-provider track-dedup migration flag (independent of the
+     *  SYNC_DATA_VERSION counter). */
+    suspend fun getTrackDedupV1Done(): Boolean
+    suspend fun setTrackDedupV1Done()
 
     /** Persist the timestamp of the last successful sync (epoch millis). */
     suspend fun setLastSyncAt(timestamp: Long)

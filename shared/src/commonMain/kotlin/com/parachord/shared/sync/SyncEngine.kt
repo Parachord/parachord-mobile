@@ -20,6 +20,8 @@ import com.parachord.shared.platform.currentTimeMillis
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -51,6 +53,8 @@ class SyncEngine constructor(
         get() = providers.first { it.id == SpotifySyncProvider.PROVIDER_ID } as SpotifySyncProvider
     companion object {
         private const val TAG = "SyncEngine"
+        /** Benign skip result when a sync is already running (tryLock held). Not a failure. */
+        const val SYNC_IN_PROGRESS = "Sync already in progress"
         private const val MASS_REMOVAL_THRESHOLD_PERCENT = 0.25
         private const val MASS_REMOVAL_THRESHOLD_COUNT = 50
         /**
@@ -236,6 +240,18 @@ class SyncEngine constructor(
 
     private val syncMutex = Mutex()
 
+    // True while a syncAll is running (any trigger: manual, the in-app timer,
+    // WorkManager). UIs observe this to show a "Syncing…" state regardless of
+    // who started it, and to treat a tryLock skip as benign, not a failure.
+    private val _syncing = MutableStateFlow(false)
+    val syncing: StateFlow<Boolean> = _syncing
+
+    // Coarse current-phase signal (tracks/albums/artists/playlists/complete) so
+    // the UI can show "Syncing… (playlists)" and we can SEE which phase hangs.
+    // Null when idle.
+    private val _syncPhase = MutableStateFlow<String?>(null)
+    val syncPhase: StateFlow<String?> = _syncPhase
+
     data class TypeSyncResult(
         val added: Int = 0,
         val removed: Int = 0,
@@ -277,8 +293,9 @@ class SyncEngine constructor(
         // work and — before the three-layer dedup — produce remote duplicates.
         if (!syncMutex.tryLock()) {
             Log.i(TAG, "Sync already in progress, skipping")
-            return FullSyncResult(success = false, error = "Sync already in progress")
+            return FullSyncResult(success = false, error = SYNC_IN_PROGRESS)
         }
+        _syncing.value = true
 
         // When called from a single-provider wizard, filter the enabled
         // providers down to just the one being configured. Otherwise
@@ -298,6 +315,7 @@ class SyncEngine constructor(
             var playlistResult = TypeSyncResult()
 
             if (settings.syncTracks) {
+                _syncPhase.value = "tracks"
                 onProgress(SyncProgress(SyncPhase.TRACKS,
                     message = if (providerLabel != null) "Syncing $providerLabel songs..."
                               else "Syncing liked songs..."))
@@ -305,6 +323,7 @@ class SyncEngine constructor(
             }
 
             if (settings.syncAlbums) {
+                _syncPhase.value = "albums"
                 onProgress(SyncProgress(SyncPhase.ALBUMS,
                     message = if (providerLabel != null) "Syncing $providerLabel albums..."
                               else "Syncing saved albums..."))
@@ -312,6 +331,7 @@ class SyncEngine constructor(
             }
 
             if (settings.syncArtists) {
+                _syncPhase.value = "artists"
                 onProgress(SyncProgress(SyncPhase.ARTISTS,
                     message = if (providerLabel != null) "Syncing $providerLabel artists..."
                               else "Syncing followed artists..."))
@@ -319,6 +339,7 @@ class SyncEngine constructor(
             }
 
             if (settings.syncPlaylists) {
+                _syncPhase.value = "playlists"
                 onProgress(SyncProgress(SyncPhase.PLAYLISTS,
                     message = if (providerLabel != null) "Syncing $providerLabel playlists..."
                               else "Syncing playlists..."))
@@ -340,6 +361,8 @@ class SyncEngine constructor(
             Log.e(TAG, "Sync failed", e)
             FullSyncResult(success = false, error = e.message)
         } finally {
+            _syncPhase.value = null
+            _syncing.value = false
             syncMutex.unlock()
         }
     }
@@ -350,15 +373,24 @@ class SyncEngine constructor(
         onProgress: (SyncProgress) -> Unit,
         providerFilter: String? = null,
     ): TypeSyncResult {
+        // One-time cross-provider track-dedup wipe (runs before any fetch below).
+        migrateCrossProviderTrackDedup()
         // Spotify legacy path runs only when no filter, OR the filter
         // selects Spotify. Skipping it for non-Spotify wizards keeps
         // the user-visible progress bar focused on the provider the
         // wizard is configuring.
+        val enabled = settingsStore.getEnabledSyncProviders()
+        // Spotify legacy path gates on BOTH the enabled set AND the axis. A
+        // connected-but-not-enabled Spotify (OAuth token present, but the user
+        // never turned Spotify sync on) must NOT sync — albums/artists already
+        // gate on the set via their generic provider loop, but the tracks +
+        // playlists legacy paths historically checked only `providerHasAxis`
+        // (which defaults to ALL), so a connected Spotify synced uninvited.
         val runSpotify = (providerFilter == null || providerFilter == SpotifySyncProvider.PROVIDER_ID)
+            && SpotifySyncProvider.PROVIDER_ID in enabled
             && providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "tracks")
         var aggregate = if (runSpotify) syncTracksForSpotify(onProgress) else TypeSyncResult()
 
-        val enabled = settingsStore.getEnabledSyncProviders()
         val others = providers.filter {
             it.id in enabled && it.id != SpotifySyncProvider.PROVIDER_ID
                 && (providerFilter == null || providerFilter == it.id)
@@ -368,6 +400,31 @@ class SyncEngine constructor(
             aggregate += syncTracksForProvider(provider, onProgress)
         }
         return aggregate
+    }
+
+    /**
+     * One-shot cross-provider track-dedup migration. Older syncs stored saved
+     * tracks with provider-prefixed ids (`spotify-…` / `applemusic-…`) and no
+     * ISRC, so the same recording is two rows. Those rows have no ISRC to merge
+     * in place, so wipe the synced track rows + their sources once (prefix-
+     * agnostic — collected from `sync_sources`, since `deleteSyncedTracks` only
+     * catches `spotify-%`) and let the normal re-fetch re-create them with
+     * canonical ISRC-keyed ids that merge across providers. Gated on a dedicated
+     * flag (not the shared SYNC_DATA_VERSION counter).
+     */
+    private suspend fun migrateCrossProviderTrackDedup() {
+        if (settingsStore.getTrackDedupV1Done()) return
+        val trackItemIds = providers
+            .flatMap { syncSourceDao.getAllByProvider(it.id) }
+            .filter { it.itemType == "track" }
+            .map { it.itemId }
+            .toSet()
+        if (trackItemIds.isNotEmpty()) {
+            Log.d(TAG, "track dedup migration: wiping ${trackItemIds.size} synced tracks for clean re-sync")
+            providers.forEach { syncSourceDao.deleteByProviderAndType(it.id, "track") }
+            trackItemIds.forEach { id -> trackDao.getById(id)?.let { trackDao.delete(it) } }
+        }
+        settingsStore.setTrackDedupV1Done()
     }
 
     /** Per-provider axis opt-in lookup. Defaults to all axes for back-compat. */
@@ -479,7 +536,7 @@ class SyncEngine constructor(
         val toUpdate = remote.filter { synced ->
             synced.spotifyId in localByExternalId
         }
-        Log.d(TAG, "applyTrackDiff: remote=${remote.size}, localSources=${localSources.size}, toAdd=${toAdd.size}, toRemove=${toRemove.size}, toUpdate=${toUpdate.size}")
+        Log.i(TAG, "applyTrackDiff[$providerId]: remote=${remote.size}, localSources=${localSources.size}, toAdd=${toAdd.size}, toRemove=${toRemove.size}, toUpdate=${toUpdate.size}")
 
         if (toRemove.size > localSources.size * MASS_REMOVAL_THRESHOLD_PERCENT
             && toRemove.size > MASS_REMOVAL_THRESHOLD_COUNT
@@ -490,20 +547,34 @@ class SyncEngine constructor(
 
         val now = currentTimeMillis()
 
-        // Batch all writes in a single transaction so Room emits only one Flow update
+        // BATCHED writes — load existing canonical rows in a handful of getByIds
+        // queries (chunked) and write with insertAll, instead of a getById+insert
+        // per track. The per-row form made a large first-time Apple Music sync
+        // crawl for minutes (thousands of sequential DB round-trips), which read
+        // as a stuck "Syncing…".
         run {
+            // ADD: the canonical (ISRC-keyed) row may already exist from ANOTHER
+            // provider — merge service IDs onto it (null-only) instead of
+            // clobbering. `seen` collapses an intra-batch duplicate canonical id
+            // (same recording twice in the library) to one row.
             if (toAdd.isNotEmpty()) {
-                trackDao.insertAll(toAdd.map { it.entity })
-                syncSourceDao.insertAll(toAdd.map { synced ->
-                    SyncSource(
-                        itemId = synced.entity.id,
-                        itemType = "track",
-                        providerId = providerId,
-                        externalId = synced.spotifyId,
-                        addedAt = synced.addedAt,
-                        syncedAt = now,
+                val existingById = trackDao.getByIds(toAdd.map { it.entity.id }).associateBy { it.id }
+                val seen = HashSet<String>()
+                val rows = ArrayList<Track>(toAdd.size)
+                val sources = ArrayList<SyncSource>(toAdd.size)
+                for (synced in toAdd) {
+                    sources.add(
+                        SyncSource(
+                            itemId = synced.entity.id, itemType = "track", providerId = providerId,
+                            externalId = synced.spotifyId, addedAt = synced.addedAt, syncedAt = now,
+                        ),
                     )
-                })
+                    if (!seen.add(synced.entity.id)) continue
+                    val existing = existingById[synced.entity.id]
+                    rows.add(if (existing != null) mergeSyncedTrack(existing, synced.entity) else synced.entity)
+                }
+                trackDao.insertAll(rows)
+                syncSourceDao.insertAll(sources)
             }
 
             toRemove.forEach { source ->
@@ -514,12 +585,19 @@ class SyncEngine constructor(
                 }
             }
 
+            // UPDATE: membership unchanged — bump syncedAt and merge (additive, so a
+            // re-pull from THIS provider never wipes another provider's IDs off a
+            // shared canonical row).
             if (toUpdate.isNotEmpty()) {
-                trackDao.insertAll(toUpdate.map { it.entity })
-                syncSourceDao.insertAll(toUpdate.map { synced ->
-                    val existing = localByExternalId[synced.spotifyId]!!
-                    existing.copy(syncedAt = now)
-                })
+                val existingById = trackDao.getByIds(toUpdate.map { it.entity.id }).associateBy { it.id }
+                val seen = HashSet<String>()
+                val rows = ArrayList<Track>(toUpdate.size)
+                for (synced in toUpdate) {
+                    if (!seen.add(synced.entity.id)) continue
+                    existingById[synced.entity.id]?.let { rows.add(mergeSyncedTrack(it, synced.entity)) }
+                }
+                if (rows.isNotEmpty()) trackDao.insertAll(rows)
+                syncSourceDao.insertAll(toUpdate.map { localByExternalId[it.spotifyId]!!.copy(syncedAt = now) })
             }
         }
 
@@ -530,6 +608,24 @@ class SyncEngine constructor(
             unchanged = toUpdate.size,
         )
     }
+
+    /**
+     * Additive merge of an incoming synced track's service IDs onto an existing
+     * (possibly other-provider) canonical row. Never overwrites a populated field
+     * (null-only fill, mirroring backfillResolverIds); keeps the existing display
+     * metadata so the first provider to add the song owns its title/artist/art.
+     */
+    private fun mergeSyncedTrack(existing: Track, incoming: Track): Track = existing.copy(
+        spotifyId = existing.spotifyId ?: incoming.spotifyId,
+        appleMusicId = existing.appleMusicId ?: incoming.appleMusicId,
+        soundcloudId = existing.soundcloudId ?: incoming.soundcloudId,
+        spotifyUri = existing.spotifyUri ?: incoming.spotifyUri,
+        isrc = existing.isrc ?: incoming.isrc,
+        recordingMbid = existing.recordingMbid ?: incoming.recordingMbid,
+        artworkUrl = existing.artworkUrl ?: incoming.artworkUrl,
+        album = existing.album ?: incoming.album,
+        albumId = existing.albumId ?: incoming.albumId,
+    )
 
     // ── Album sync ───────────────────────────────────────────────
 
@@ -1038,7 +1134,14 @@ class SyncEngine constructor(
         // of the playlists axis (per-provider opt-in via the wizard),
         // skip the fetch entirely — the push and non-Spotify-pull loops
         // below have their own per-axis gates.
-        val spotifyPlaylistsEnabled = providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "playlists")
+        // Gate the Spotify pull on the enabled set too (not just the axis) — a
+        // connected-but-not-enabled Spotify must not pull playlists. The removal
+        // cleanup below is ALSO gated on this flag: skipping the fetch leaves
+        // `remotePlaylists` empty, and an empty remote must NOT be read as
+        // "everything was deleted remotely" (that would wipe the user's Spotify
+        // playlist rows).
+        val spotifyPlaylistsEnabled = SpotifySyncProvider.PROVIDER_ID in settingsStore.getEnabledSyncProviders()
+            && providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "playlists")
             && (providerFilter == null || providerFilter == SpotifySyncProvider.PROVIDER_ID)
         val remotePlaylists = if (spotifyPlaylistsEnabled) {
             spotifyProvider.fetchPlaylists { current, total ->
@@ -1046,10 +1149,14 @@ class SyncEngine constructor(
             }
         } else emptyList()
 
-        val selectedRemote = if (settings.selectedPlaylistIds.isEmpty()) {
-            remotePlaylists
-        } else {
-            remotePlaylists.filter { it.spotifyId in settings.selectedPlaylistIds }
+        // Pull allowlist (per-provider) + per-playlist channel override. The
+        // override is authoritative for a given playlist; otherwise the allowlist
+        // (empty = import all) applies.
+        val spotifyAllow = settingsStore.getPullPlaylists(SpotifySyncProvider.PROVIDER_ID)
+        val selectedRemote = remotePlaylists.filter {
+            val override = settingsStore.getPlaylistChannels("spotify-${it.spotifyId}")
+            if (override != null) SpotifySyncProvider.PROVIDER_ID in override
+            else spotifyAllow.isEmpty() || it.spotifyId in spotifyAllow
         }
 
         val localSources = syncSourceDao.getByProvider(providerId, "playlist")
@@ -1343,6 +1450,7 @@ class SyncEngine constructor(
                     remotePlaylists
                 } else {
                     try {
+                        _syncPhase.value = "playlists · ${provider.id} fetch-remote"
                         provider.fetchPlaylists(null)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to fetch ${provider.id} playlists for push pass", e)
@@ -1361,9 +1469,15 @@ class SyncEngine constructor(
             }
         }
 
-        // Handle remote removals
+        // Handle remote removals — ONLY when the Spotify pull actually ran. If
+        // Spotify is connected but not enabled (or the playlists axis is off),
+        // `remotePlaylists`/`selectedRemote` are empty by design, and treating
+        // that empty list as the source of truth would delete every Spotify
+        // playlist row. Skip the cleanup entirely in that case.
         val remoteIds = selectedRemote.map { it.spotifyId }.toSet()
-        val removedSources = localSources.filter { it.externalId != null && it.externalId !in remoteIds }
+        val removedSources = if (spotifyPlaylistsEnabled) {
+            localSources.filter { it.externalId != null && it.externalId !in remoteIds }
+        } else emptyList()
         removedSources.forEach { source ->
             val localPlaylist = playlistDao.getById(source.itemId)
             // Locally-owned playlists (hosted XSPF — canonical via `sourceUrl`
@@ -1447,14 +1561,28 @@ class SyncEngine constructor(
             return TypeSyncResult()
         }
 
+        // Per-provider PULL allowlist (the user's "which of my <provider>
+        // playlists to sync" choice). EMPTY = import all. The IMPORT loop uses
+        // the filtered list; the REMOVAL cleanup below intentionally uses the
+        // FULL `remotePlaylists` so a merely-deselected (but still-remote)
+        // playlist is NOT auto-deleted here — the picker's keep/remove prompt
+        // handles deselection explicitly (detach to keep, delete to remove).
+        val pullAllow = settingsStore.getPullPlaylists(providerId)
+        val importPlaylists = remotePlaylists.filter {
+            val override = settingsStore.getPlaylistChannels("$providerId-${it.spotifyId}")
+            if (override != null) providerId in override
+            else pullAllow.isEmpty() || it.spotifyId in pullAllow
+        }
+
         val localSources = syncSourceDao.getByProvider(providerId, "playlist")
         val localByExternalId = localSources.associateBy { it.externalId }
 
-        for ((index, remote) in remotePlaylists.withIndex()) {
+        for ((index, remote) in importPlaylists.withIndex()) {
+            _syncPhase.value = "playlists · $providerId pull ${index + 1}/${importPlaylists.size}"
             onProgress(SyncProgress(
                 SyncPhase.PLAYLISTS,
                 index + 1,
-                remotePlaylists.size,
+                importPlaylists.size,
                 "Syncing ${provider.displayName} playlist: ${remote.entity.name}",
             ))
             val existingSource = localByExternalId[remote.spotifyId]
@@ -1486,6 +1614,22 @@ class SyncEngine constructor(
                     }
                 }
                 val targetId = existingLocalPlaylist?.id ?: remote.entity.id
+
+                // Per-playlist channel override on the MATCHED local row. The
+                // upfront `importPlaylists` filter keys the override on the
+                // would-be id (`<provider>-<remoteId>`), which MISSES a
+                // cross-mirrored playlist whose local row has a DIFFERENT id
+                // (e.g. a Spotify-imported `spotify-X` row that's also on LB —
+                // the LB pull's would-be id is `listenbrainz-<mbid>`). Re-check
+                // against the resolved local id so turning a provider off in the
+                // playlist Sync menu actually stops the re-link/re-import here.
+                if (existingLocalPlaylist != null) {
+                    val ov = settingsStore.getPlaylistChannels(existingLocalPlaylist.id)
+                    if (ov != null && providerId !in ov) {
+                        Log.d(TAG, "Pull skip: '${existingLocalPlaylist.name}' channel override excludes $providerId")
+                        continue
+                    }
+                }
 
                 // Phase 3 — cross-provider syncedFrom preservation:
                 // if the local row's pull source points at a DIFFERENT
@@ -1665,7 +1809,15 @@ class SyncEngine constructor(
                         pushPlaylist(localPlaylist, provider)
                         updated++
                     }
-                    remoteSnapshotId != localSnapshotId || needsTrackRecovery -> {
+                    // Receive a changed remote (e.g. edited on desktop, pushed to
+                    // LB). Snapshot/last-modified is the primary signal; a
+                    // track-count difference is a cheap, robust fallback so a
+                    // remote edit is caught even if the timestamp were stale.
+                    // `remote.trackCount > 0` guards providers that don't report
+                    // a real count (Apple Music's library list always returns 0)
+                    // — they fall back to the snapshot check only.
+                    remoteSnapshotId != localSnapshotId || needsTrackRecovery ||
+                        (remote.trackCount > 0 && remote.trackCount != localTrackCount) -> {
                         if (needsTrackRecovery) {
                             Log.d(TAG, "Self-heal: ${provider.id} playlist " +
                                 "'${localPlaylist.name}' has 0 local tracks; " +
@@ -1758,9 +1910,21 @@ class SyncEngine constructor(
         val providerId = provider.id
         var added = 0
 
+        // Per-provider playlist-push selection (the user's "which playlists, if
+        // any" choice). ListenBrainz defaults to NONE, so a fresh install never
+        // pushes to LB — NONE makes `candidates` empty, short-circuiting the
+        // whole push (no fetch-remote, no loop). SELECTED restricts to the
+        // chosen local ids; ALL preserves mirror-everything.
+        val selection = settingsStore.getPlaylistSelection(providerId)
         val allPlaylists = playlistDao.getAllSync()
+        // A per-playlist channel override (from the playlist Sync menu) is
+        // AUTHORITATIVE — it overrides the provider's push mode for that one
+        // playlist. Otherwise fall back to the per-provider selection.
         val candidates = allPlaylists.filter {
-            it.name.isNotBlank() && isPushCandidate(it, providerId)
+            it.name.isNotBlank() && isPushCandidate(it, providerId) && run {
+                val override = settingsStore.getPlaylistChannels(it.id)
+                if (override != null) providerId in override else selection.includes(it.id)
+            }
         }
 
         val liveRemote = remotePlaylists.filter { it.spotifyId !in deletedExternalIds }
@@ -1768,7 +1932,8 @@ class SyncEngine constructor(
         val ownedRemoteByName = liveRemote.filter { it.isOwned }
             .groupBy { it.entity.name.trim().lowercase() }
 
-        for (playlist in candidates) {
+        for ((pIdx, playlist) in candidates.withIndex()) {
+            _syncPhase.value = "playlists · $providerId push ${pIdx + 1}/${candidates.size}"
             try {
                 // Phase 3 — Fix 3 + pendingAction skip:
                 // Skip rows the user marked remote-deleted; the playlist
@@ -1812,6 +1977,18 @@ class SyncEngine constructor(
                     }
                 }
 
+                // Cheap unchanged short-circuit. An already-linked playlist with
+                // NO local edits has nothing to push — skip the hydrate + remote
+                // tracklist fetch + replace entirely (the link already exists and
+                // its content is current). This is what stops ListenBrainz from
+                // doing a per-playlist round-trip for ALL N playlists on every
+                // sync; the previous skip-unchanged still fetched each remote
+                // tracklist to compare. A `locallyModified` playlist (or one
+                // whose link is missing/stale) falls through to the full push.
+                if (matchSource == "id-link" && !playlist.locallyModified) {
+                    continue
+                }
+
                 // Layer 2: playlist.spotifyId (Spotify-only convenience
                 // cache; the candidate filter already excludes rows
                 // with this set when iterating Spotify, so this only
@@ -1834,6 +2011,23 @@ class SyncEngine constructor(
                             "name-match (${nameCandidates.size} candidates)"
                         else "name-match"
                     }
+                }
+
+                // Resolve the pushable tracklist BEFORE deciding to create a
+                // remote. A playlist with no pushable tracks must NEVER create
+                // a fresh empty mirror (desktop's "don't create an empty
+                // mirror" rule). This is what flooded ListenBrainz with
+                // hundreds of 0-track playlists: Apple-Music-imported rows
+                // whose tracks were never fetched locally have an empty
+                // `playlist_track` table, so the create ran but the track push
+                // was skipped — leaving an empty remote playlist. Hydration is
+                // a no-op for a 0-track playlist, so this adds no cost there.
+                val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
+                val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
+                val externalTrackIds = extractExternalTrackIds(tracks, providerId)
+                if (externalTrackIds.isEmpty() && existing == null) {
+                    Log.d(TAG, "Skip push '${playlist.name}' to $providerId — 0 pushable tracks, refusing to create an empty mirror")
+                    continue
                 }
 
                 val externalId: String
@@ -1860,14 +2054,6 @@ class SyncEngine constructor(
                     snapshotId = snapshotId,
                 )
 
-                val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
-                // Hydrate provider-specific IDs for tracks lacking them
-                // (e.g. freshly-imported hosted XSPF where the resolver
-                // pipeline hasn't backfilled appleMusicId yet) so the
-                // first push ships a complete tracklist instead of an
-                // empty mirror.
-                val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
-                val externalTrackIds = extractExternalTrackIds(tracks, providerId)
                 if (externalTrackIds.isNotEmpty()) {
                     // Skip-unchanged short-circuit (desktop's
                     // canShortCircuitPlaylistUpdate, sync-providers/listenbrainz.js
@@ -1931,23 +2117,8 @@ class SyncEngine constructor(
      * `syncedFrom` guard correctly skips a Spotify-imported playlist
      * when targeting Spotify but not when targeting Apple Music.
      */
-    private fun isPushCandidate(playlist: Playlist, providerId: String): Boolean {
-        val baseEligible = playlist.id.startsWith("local-") || playlist.sourceUrl != null
-        return when (providerId) {
-            SpotifySyncProvider.PROVIDER_ID ->
-                playlist.spotifyId == null && baseEligible
-            AppleMusicSyncProvider.PROVIDER_ID ->
-                baseEligible || playlist.id.startsWith("spotify-")
-            ListenBrainzSyncProvider.PROVIDER_ID ->
-                // LB mirrors any source-of-truth playlist: local-*, hosted XSPF,
-                // spotify-*, applemusic-*. The runtime `syncedFrom` guard skips
-                // listenbrainz-imported playlists when targeting LB.
-                baseEligible
-                    || playlist.id.startsWith("spotify-")
-                    || playlist.id.startsWith("applemusic-")
-            else -> baseEligible
-        }
-    }
+    private fun isPushCandidate(playlist: Playlist, providerId: String): Boolean =
+        isPlaylistPushCandidate(playlist, providerId)
 
     /**
      * Extracts the per-provider external IDs from a playlist's tracks.
@@ -2369,41 +2540,177 @@ class SyncEngine constructor(
      * cleanup so it composes with `LibraryRepository.deletePlaylist`
      * without ordering surprises.
      */
-    suspend fun onPlaylistRemoved(playlist: Playlist): List<PlaylistDeletionAttempt> {
+    suspend fun onPlaylistRemoved(
+        playlist: Playlist,
+        deleteFromProviders: Set<String>? = null,
+    ): List<PlaylistDeletionAttempt> {
         val attempts = mutableListOf<PlaylistDeletionAttempt>()
-        val links = syncPlaylistLinkDao.selectForLocal(playlist.id)
-        for (link in links) {
-            val provider = providers.firstOrNull { it.id == link.providerId } ?: continue
+        val mirrors = getPlaylistMirrors(playlist.id)
+        for ((providerId, externalId) in mirrors) {
+            // null = delete from EVERY mirror (legacy behavior). Otherwise only
+            // the user-selected providers get a remote delete; the rest keep
+            // their remote playlist. Local cleanup below runs regardless.
+            if (deleteFromProviders != null && providerId !in deleteFromProviders) continue
+            val provider = providers.firstOrNull { it.id == providerId } ?: continue
             val result = try {
-                provider.deletePlaylist(link.externalId)
+                provider.deletePlaylist(externalId)
             } catch (e: Exception) {
-                Log.e(TAG, "deletePlaylist threw for ${provider.id}:${link.externalId}", e)
+                Log.e(TAG, "deletePlaylist threw for $providerId:$externalId", e)
                 com.parachord.shared.sync.DeleteResult.Failed(e)
             }
             attempts.add(PlaylistDeletionAttempt(
-                providerId = provider.id,
+                providerId = providerId,
                 providerDisplayName = provider.displayName,
-                externalId = link.externalId,
+                externalId = externalId,
                 result = result,
             ))
-            // Always clean up the local link + sync source — even when
-            // the remote returned Unsupported, the user's intent is
-            // "stop syncing this playlist." Leaving the link would
-            // re-link on next sync via three-layer dedup.
-            syncPlaylistLinkDao.deleteForLink(playlist.id, provider.id)
-            syncSourceDao.deleteByKey(playlist.id, "playlist", provider.id)
         }
-        // Drop the syncedFrom row too, in case this was a pull-source
-        // playlist (avoids the next sync re-importing it).
+        // Local cleanup — drop every link, sync source, and the pull source so
+        // the next sync can't re-link or re-import the deleted playlist. (Kept
+        // remotes may still re-import on a later pull — playlist tombstones are
+        // out of scope; matches desktop.)
+        syncPlaylistLinkDao.deleteForLocal(playlist.id)
+        syncSourceDao.getByItem(playlist.id, "playlist").forEach {
+            syncSourceDao.deleteByKey(playlist.id, "playlist", it.providerId)
+        }
         syncPlaylistSourceDao.deleteForLocal(playlist.id)
         return attempts
     }
 
+    /**
+     * Detach a playlist from sync entirely WITHOUT deleting it: drop its sync
+     * sources, push links, and pull-source row, keeping the local row. Used by
+     * the per-playlist "keep local copy, stop syncing" choice. The caller MUST
+     * also exclude this playlist's external id from the provider's pull
+     * allowlist ([SyncSettingsProvider.setPullPlaylists]) — otherwise the next
+     * pull re-imports it by name-match. The row survives as a local-only copy.
+     */
+    suspend fun detachPlaylistFromSync(localPlaylistId: String) {
+        syncPlaylistLinkDao.deleteForLocal(localPlaylistId)
+        syncSourceDao.getByItem(localPlaylistId, "playlist").forEach {
+            syncSourceDao.deleteByKey(localPlaylistId, "playlist", it.providerId)
+        }
+        syncPlaylistSourceDao.deleteForLocal(localPlaylistId)
+    }
+
+    /**
+     * Delete a playlist from ONE provider's remote (used by the Sync menu's
+     * "delete from this service" choice). Returns the [DeleteResult] so the UI
+     * can surface an Unsupported (e.g. Apple Music can't delete via its API).
+     * Does NOT touch the local row or other mirrors — pair with
+     * [detachPlaylistFromProvider] for the local cleanup.
+     */
+    suspend fun deletePlaylistOnProvider(
+        providerId: String,
+        externalId: String,
+    ): com.parachord.shared.sync.DeleteResult {
+        val provider = providers.firstOrNull { it.id == providerId }
+            ?: return com.parachord.shared.sync.DeleteResult.Unsupported(0)
+        return try {
+            provider.deletePlaylist(externalId)
+        } catch (e: Exception) {
+            Log.e(TAG, "deletePlaylistOnProvider threw for $providerId:$externalId", e)
+            com.parachord.shared.sync.DeleteResult.Failed(e)
+        }
+    }
+
+    /**
+     * Detach a playlist from ONE provider's sync, leaving every OTHER provider's
+     * linkage intact. Used by the per-provider pull picker's "keep local copy"
+     * choice: deselecting a playlist in the Spotify picker must NOT strip its
+     * ListenBrainz link — doing so makes the LB pull's name-match
+     * ([findCrossProviderNameMatch] requires "no link for this provider") re-claim
+     * the row and re-import a DUPLICATE on the next sync. Removing only the
+     * deselected provider's source + link keeps the row recognized by its other
+     * mirrors, so nothing re-imports. Also clears the pull-source row only when
+     * it points at THIS provider.
+     */
+    suspend fun detachPlaylistFromProvider(localPlaylistId: String, providerId: String) {
+        syncPlaylistLinkDao.deleteForLink(localPlaylistId, providerId)
+        syncSourceDao.deleteByKey(localPlaylistId, "playlist", providerId)
+        val pullSource = syncPlaylistSourceDao.selectForLocal(localPlaylistId)
+        if (pullSource?.providerId == providerId) {
+            syncPlaylistSourceDao.deleteForLocal(localPlaylistId)
+        }
+    }
+
+    /**
+     * All remote mirrors of a local playlist: providerId -> externalId. Union of
+     * the id-prefix-derived source, the pull-source row, and every push link.
+     * Each entry is a remote we can show a chip for / offer to delete from.
+     */
+    suspend fun getPlaylistMirrors(localPlaylistId: String): Map<String, String> {
+        val out = linkedMapOf<String, String>()
+        when {
+            localPlaylistId.startsWith("spotify-") ->
+                out["spotify"] = localPlaylistId.removePrefix("spotify-")
+            localPlaylistId.startsWith("applemusic-") ->
+                out["applemusic"] = localPlaylistId.removePrefix("applemusic-")
+            localPlaylistId.startsWith("listenbrainz-") ->
+                out["listenbrainz"] = localPlaylistId.removePrefix("listenbrainz-")
+        }
+        syncPlaylistSourceDao.selectForLocal(localPlaylistId)?.let { out[it.providerId] = it.externalId }
+        // Push links last — they carry the authoritative externalId.
+        syncPlaylistLinkDao.selectForLocal(localPlaylistId).forEach { out[it.providerId] = it.externalId }
+        // A per-playlist channel override is authoritative — hide providers the
+        // user turned off (so chips / delete options reflect the live sync state,
+        // not the id-prefix of a since-detached row).
+        val override = settingsStore.getPlaylistChannels(localPlaylistId)
+        return if (override == null) out else out.filterKeys { it in override }
+    }
+
+    /**
+     * localPlaylistId -> the providers it EFFECTIVELY syncs with (override, else
+     * id-prefix source + push links). Batch, for the playlist-list source chips
+     * so they reflect the live channel state rather than the row's id-prefix.
+     */
+    suspend fun getAllEffectivePlaylistChannels(): Map<String, List<String>> {
+        val links = syncPlaylistLinkDao.selectAll()
+            .groupBy { it.localPlaylistId }
+            .mapValues { e -> e.value.map { it.providerId }.toMutableSet() }
+        val out = mutableMapOf<String, List<String>>()
+        for (p in playlistDao.getAllSync()) {
+            val override = settingsStore.getPlaylistChannels(p.id)
+            val effective = override ?: buildSet {
+                when {
+                    p.id.startsWith("spotify-") -> add("spotify")
+                    p.id.startsWith("applemusic-") -> add("applemusic")
+                    p.id.startsWith("listenbrainz-") -> add("listenbrainz")
+                }
+                links[p.id]?.let { addAll(it) }
+            }
+            out[p.id] = effective.toList()
+        }
+        return out
+    }
+
+    /**
+     * localPlaylistId -> the providers it mirrors to (push links). Batch (one
+     * query) for the playlist-list source chips. The id-prefix source is derived
+     * by the UI; this adds the cross-provider push mirrors the id can't reveal.
+     */
+    suspend fun getAllPlaylistLinkProviders(): Map<String, List<String>> =
+        syncPlaylistLinkDao.selectAll()
+            .groupBy { it.localPlaylistId }
+            .mapValues { e -> e.value.map { it.providerId }.distinct() }
+
     // ── Stop syncing ─────────────────────────────────────────────
 
+    /** Legacy single-provider (Spotify) stop — also wipes ALL sync settings.
+     *  Kept for the Android wizard's existing "disconnect sync" action. */
     suspend fun stopSyncing(removeItems: Boolean) {
-        val providerId = SpotifySyncProvider.PROVIDER_ID
+        stopProviderSync(SpotifySyncProvider.PROVIDER_ID, removeItems)
+        settingsStore.clearSyncSettings()
+    }
 
+    /**
+     * Stop syncing ONE provider (multi-provider). [removeItems] deletes items
+     * sourced ONLY by this provider; an item still sourced by another provider
+     * survives (it just loses this provider's `sync_source`). Settings / enabled-
+     * provider-set management is the CALLER's job (iOS `setSyncProviderEnabled`,
+     * Android wizard) — this only touches the per-provider sync data.
+     */
+    suspend fun stopProviderSync(providerId: String, removeItems: Boolean) {
         if (removeItems) {
             val allSources = syncSourceDao.getAllByProvider(providerId)
             for (source in allSources) {
@@ -2422,10 +2729,8 @@ class SyncEngine constructor(
                 }
             }
         }
-
         syncSourceDao.deleteAllForProvider(providerId)
         syncPlaylistLinkDao.deleteForProvider(providerId)
-        settingsStore.clearSyncSettings()
     }
 
     /**

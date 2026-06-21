@@ -55,6 +55,16 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.getById(id).executeAsOneOrNull()?.toTrack()
     }
 
+    /** Batch fetch by id. Chunked at 900 to stay under SQLite's bound-variable
+     *  limit (~999). Used by sync's cross-provider merge to load existing
+     *  canonical rows in a handful of queries instead of one-per-track. */
+    suspend fun getByIds(ids: List<String>): List<Track> = withContext(Dispatchers.Default) {
+        if (ids.isEmpty()) return@withContext emptyList()
+        ids.distinct().chunked(900).flatMap { chunk ->
+            queries.getByIds(chunk).executeAsList().map { it.toTrack() }
+        }
+    }
+
     suspend fun getRecentSync(limit: Int): List<Track> = withContext(Dispatchers.Default) {
         queries.getRecentSync(limit.toLong()).executeAsList().map { it.toTrack() }
     }

@@ -305,17 +305,81 @@ func pcTrack(from t: PlaylistTrack) -> Track {
     )
 }
 
+/// Playlist sort options — mirrors Android's `PlaylistSort` (same `name` keys,
+/// so the persisted choice is shared across platforms).
+enum PlaylistSort: String, CaseIterable {
+    case RECENT, CREATED, MODIFIED, ALPHA_ASC, ALPHA_DESC
+    var label: String {
+        switch self {
+        case .RECENT: return "Recently Added"
+        case .CREATED: return "Date Created"
+        case .MODIFIED: return "Recently Modified"
+        case .ALPHA_ASC: return "A-Z"
+        case .ALPHA_DESC: return "Z-A"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class PlaylistsListModel {
     private let container = IosContainer.companion.shared
-    var playlists: [Playlist] = []
+    private var raw: [Playlist] = []
+    var sort: PlaylistSort = .RECENT
+    var mirrors: [String: [String]] = [:]   // localPlaylistId -> push-mirror provider ids
+    var playlists: [Playlist] { sorted(raw) }
     private var sub: Cancellable?
 
     func start() {
         guard sub == nil else { return }
-        sub = container.watchSavedPlaylists { [weak self] list in self?.playlists = list }
+        sub = container.watchSavedPlaylists { [weak self] list in
+            self?.raw = list
+            Task { await self?.loadMirrors() }   // refresh chips when the list changes (post-sync)
+        }
+        Task {
+            if let s = try? await container.getPlaylistsSort(), let parsed = PlaylistSort(rawValue: s) {
+                sort = parsed
+            }
+            await loadMirrors()
+        }
     }
+
+    func loadMirrors() async {
+        let list = (try? await container.getAllPlaylistMirrors()) as? [IosPlaylistMirrors] ?? []
+        var dict: [String: [String]] = [:]
+        for m in list { dict[m.localPlaylistId] = m.providerIds }
+        mirrors = dict
+    }
+
+    func setSort(_ s: PlaylistSort) {
+        sort = s
+        Task { try? await container.setPlaylistsSort(sort: s.rawValue) }
+    }
+
+    private func sorted(_ list: [Playlist]) -> [Playlist] {
+        switch sort {
+        case .RECENT: return list.sorted { $0.createdAt > $1.createdAt }
+        case .CREATED: return list.sorted { $0.createdAt < $1.createdAt }
+        case .MODIFIED: return list.sorted { $0.lastModified > $1.lastModified }
+        case .ALPHA_ASC: return list.sorted { $0.name.lowercased() < $1.name.lowercased() }
+        case .ALPHA_DESC: return list.sorted { $0.name.lowercased() > $1.name.lowercased() }
+        }
+    }
+}
+
+/// Wrapper so a share URL can drive a `.sheet(item:)`.
+struct PCShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Minimal system share sheet (iOS has no other UIActivityViewController use yet).
+struct PCActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 struct PlaylistsScreen: View {
@@ -326,6 +390,9 @@ struct PlaylistsScreen: View {
     @State private var renameTarget: Playlist?
     @State private var renameText = ""
     @State private var deleteTarget: Playlist?
+    @State private var syncTarget: Playlist?
+    @State private var shareItem: PCShareItem?
+    @State private var shareNote: String?
     let onMenu: () -> Void
     init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
 
@@ -333,6 +400,26 @@ struct PlaylistsScreen: View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 PCTopBar(title: "Playlists", leading: .menu, onLeading: onMenu)
+                if !model.playlists.isEmpty {
+                    HStack {
+                        Menu {
+                            ForEach(PlaylistSort.allCases, id: \.self) { s in
+                                Button { model.setSort(s) } label: {
+                                    if model.sort == s { Label(s.label, systemImage: "checkmark") } else { Text(s.label) }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.up.arrow.down").font(.system(size: 11))
+                                Text(model.sort.label).font(.system(size: 13, weight: .medium))
+                                Image(systemName: "chevron.down").font(.system(size: 9))
+                            }
+                            .foregroundStyle(PC.fg2)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 8)
+                }
                 if model.playlists.isEmpty {
                     Spacer()
                     VStack(spacing: 8) {
@@ -349,6 +436,8 @@ struct PlaylistsScreen: View {
                                 Button { path.append(p.id) } label: { row(p) }.buttonStyle(.plain)
                                     .contextMenu {
                                         Button { playPlaylist(p) } label: { Label("Play Playlist", systemImage: "play.fill") }
+                                        Button { sharePlaylist(p) } label: { Label("Share…", systemImage: "square.and.arrow.up") }
+                                        Button { syncTarget = p } label: { Label("Sync…", systemImage: "arrow.triangle.2.circlepath") }
                                         Button { renameTarget = p; renameText = p.name } label: { Label("Rename", systemImage: "pencil") }
                                         Button(role: .destructive) { deleteTarget = p } label: { Label("Delete Playlist", systemImage: "trash") }
                                     }
@@ -369,12 +458,35 @@ struct PlaylistsScreen: View {
                     renameTarget = nil
                 }
             }
-            .confirmationDialog("Delete this playlist?", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }), titleVisibility: .visible) {
-                Button("Delete Playlist", role: .destructive) {
-                    if let p = deleteTarget { Task { try? await container.deletePlaylist(id: p.id) } }
-                    deleteTarget = nil
+            .sheet(isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
+                if let p = deleteTarget {
+                    DeletePlaylistSheet(playlist: p) { deleteTarget = nil }
+                        .presentationDetents([.medium])
                 }
-                Button("Cancel", role: .cancel) { deleteTarget = nil }
+            }
+            .sheet(isPresented: Binding(get: { syncTarget != nil }, set: { if !$0 { syncTarget = nil } })) {
+                if let p = syncTarget {
+                    PlaylistSyncChannelsSheet(playlist: p) {
+                        syncTarget = nil
+                        Task { await model.loadMirrors() }   // refresh chips after channel edits
+                    }
+                    .presentationDetents([.medium])
+                }
+            }
+            .sheet(item: $shareItem) { item in PCActivityView(items: [item.url]) }
+            .alert("Sharing", isPresented: Binding(get: { shareNote != nil }, set: { if !$0 { shareNote = nil } })) {
+                Button("OK") { shareNote = nil }
+            } message: { Text(shareNote ?? "") }
+        }
+    }
+
+    private func sharePlaylist(_ p: Playlist) {
+        Task {
+            let raw = (try? await container.playlistShareUrl(localId: p.id)) ?? nil
+            if let s = raw, let url = URL(string: s) {
+                shareItem = PCShareItem(url: url)
+            } else {
+                shareNote = "Sync “\(p.name)” to ListenBrainz first to share it via Achordion."
             }
         }
     }
@@ -394,6 +506,7 @@ struct PlaylistsScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(subtitle(p)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                if hasChips(p) { chips(p) }
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PC.fg3)
@@ -401,11 +514,244 @@ struct PlaylistsScreen: View {
         .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
     }
 
+    // Source chips — help spot cross-provider duplicates (a playlist that exists
+    // as both a `spotify-` and an `applemusic-` row). Mirrors Android's
+    // PlaylistsScreen chips + the hosted-XSPF badge.
+    // The providers a playlist EFFECTIVELY syncs with (override-aware, from the
+    // shared effective-channels map) — reflects the live Sync-menu state, NOT the
+    // row's id-prefix, so a fully-deselected playlist shows no provider chips.
+    private func mergedProviders(_ p: Playlist) -> Set<String> {
+        Set(model.mirrors[p.id] ?? [])
+    }
+    private func hasChips(_ p: Playlist) -> Bool { true }
+
+    @ViewBuilder private func chips(_ p: Playlist) -> some View {
+        let providers = mergedProviders(p)
+        HStack(spacing: 5) {
+            if p.sourceUrl != nil {
+                Text("🌐 Hosted").font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color(uiColor: UIColor(hex: 0x3B82F6)))
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: UIColor(hex: 0xEFF6FF))))
+            }
+            if providers.contains("spotify") { sourceChip("Spotify", 0x1DB954) }
+            if providers.contains("applemusic") { sourceChip("Apple Music", 0xFA243C) }
+            if providers.contains("listenbrainz") { sourceChip("ListenBrainz", 0xEB743B) }
+            // Fallback: a user-created playlist with no source and no mirrors.
+            if providers.isEmpty && p.sourceUrl == nil { sourceChip("Local", 0x9CA3AF) }
+        }
+        .padding(.top, 1)
+    }
+
+    private func sourceChip(_ text: String, _ hex: UInt32) -> some View {
+        let c = Color(uiColor: UIColor(hex: hex))
+        return Text(text).font(.system(size: 10, weight: .medium))
+            .foregroundStyle(c)
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(RoundedRectangle(cornerRadius: 4).fill(c.opacity(0.12)))
+    }
+
     private func subtitle(_ p: Playlist) -> String {
         let n = Int(p.trackCount)
         let t = "\(n) \(n == 1 ? "track" : "tracks")"
         if let owner = p.ownerName, !owner.isEmpty { return "\(t) · \(owner)" }
         return t
+    }
+}
+
+/// Delete a playlist with a per-mirror choice: each remote it's linked to gets a
+/// toggle (default on) for "also delete from there". Unchecked services keep
+/// their copy. Apple Music can't be deleted via its API (handled server-side as
+/// Unsupported — local removal still happens).
+private struct DeletePlaylistSheet: View {
+    let playlist: Playlist
+    let onClose: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let container = IosContainer.companion.shared
+    @State private var providers: [String] = []
+    @State private var selected: Set<String> = []
+    @State private var working = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("This removes “\(playlist.name)” from Parachord.")
+                        .font(.system(size: 14)).foregroundStyle(PC.fg2)
+                        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
+
+                    if !providers.isEmpty {
+                        sectionLabel("Also delete from")
+                        ForEach(providers, id: \.self) { pid in mirrorToggle(pid) }
+                        Text("Unchecked services keep their copy (it may re-import on the next sync). Apple Music can’t be deleted via its API — remove it in the Apple Music app.")
+                            .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 20).padding(.top, 8)
+                    }
+
+                    Button(role: .destructive) { confirm() } label: {
+                        Text(working ? "Deleting…" : "Delete Playlist")
+                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Capsule().fill(Color(uiColor: UIColor(hex: 0xEF4444))))
+                    }
+                    .disabled(working)
+                    .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 24)
+                }
+            }
+            .background(PC.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Delete Playlist").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss(); onClose() }.foregroundStyle(PC.accent)
+                }
+            }
+        }
+        .task {
+            providers = (try? await container.getPlaylistMirrorProviders(id: playlist.id)) as? [String] ?? []
+            selected = Set(providers)
+        }
+    }
+
+    private func mirrorToggle(_ pid: String) -> some View {
+        Toggle(isOn: Binding(get: { selected.contains(pid) }, set: { on in
+            if on { selected.insert(pid) } else { selected.remove(pid) }
+        })) {
+            Text(providerName(pid)).font(.system(size: 15)).foregroundStyle(PC.fg1)
+        }
+        .tint(PC.accent).padding(.horizontal, 20).padding(.vertical, 6)
+    }
+
+    private func confirm() {
+        working = true
+        Task {
+            _ = try? await container.deletePlaylistFromMirrors(id: playlist.id, fromProviders: Array(selected))
+            dismiss(); onClose()
+        }
+    }
+
+    private func providerName(_ id: String) -> String {
+        switch id {
+        case "spotify": return "Spotify"
+        case "applemusic": return "Apple Music"
+        case "listenbrainz": return "ListenBrainz"
+        default: return id.capitalized
+        }
+    }
+
+    private func sectionLabel(_ t: String) -> some View {
+        Text(t.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.4).foregroundStyle(PC.fg3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
+    }
+}
+
+/// Per-playlist Sync menu: toggle which services this playlist syncs with. The
+/// per-playlist channel override is authoritative — disabling detaches (no dup),
+/// enabling mirrors it to that service on the next sync.
+private struct PlaylistSyncChannelsSheet: View {
+    let playlist: Playlist
+    let onClose: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let container = IosContainer.companion.shared
+    @State private var channels: [IosSyncChannel] = []
+    @State private var pendingOff: IosSyncChannel?   // channel awaiting keep/delete choice
+    @State private var note: String?                 // e.g. AM-can't-delete message
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Choose which services “\(playlist.name)” syncs with.")
+                        .font(.system(size: 13)).foregroundStyle(PC.fg2)
+                        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 8)
+                    ForEach(channels, id: \.providerId) { ch in channelRow(ch) }
+                    Text("Turning a service off keeps the playlist in Parachord but stops syncing it there. Turning one on mirrors it to that service on the next sync.")
+                        .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 20).padding(.top, 10)
+                    Spacer(minLength: 24)
+                }
+            }
+            .background(PC.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Sync").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss(); onClose() }.foregroundStyle(PC.accent)
+                }
+            }
+        }
+        .task { await reload() }
+        // Toggle a channel OFF → keep on the service, or delete it there too?
+        .confirmationDialog(
+            "Stop syncing to \(pendingOff?.displayName ?? "")?",
+            isPresented: Binding(get: { pendingOff != nil }, set: { if !$0 { pendingOff = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let ch = pendingOff {
+                Button("Just stop syncing") { Task { await applyOff(ch.providerId, deleteRemote: false); pendingOff = nil } }
+                Button("Delete from \(ch.displayName) too", role: .destructive) {
+                    Task { await applyOff(ch.providerId, deleteRemote: true); pendingOff = nil }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingOff = nil }
+        } message: {
+            Text("Keep “\(playlist.name)” on \(pendingOff?.displayName ?? "") and just stop syncing it, or delete it from \(pendingOff?.displayName ?? "") too?")
+        }
+        .alert("Heads up", isPresented: Binding(get: { note != nil }, set: { if !$0 { note = nil } })) {
+            Button("OK") { note = nil }
+        } message: { Text(note ?? "") }
+    }
+
+    private func channelRow(_ ch: IosSyncChannel) -> some View {
+        // Toggleable when connected AND (can mirror here OR already on — so you
+        // can always turn an enabled channel off).
+        let interactive = ch.connected && (ch.available || ch.enabled)
+        return HStack(spacing: 12) {
+            Circle().fill(channelColor(ch.providerId)).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(ch.displayName).font(.system(size: 15)).foregroundStyle(interactive ? PC.fg1 : PC.fg3)
+                if !ch.connected {
+                    Text("Connect in Settings to sync here").font(.system(size: 11)).foregroundStyle(PC.fg3)
+                } else if !ch.available && !ch.enabled {
+                    Text("Can’t mirror this playlist here").font(.system(size: 11)).foregroundStyle(PC.fg3)
+                }
+            }
+            Spacer()
+            Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in
+                if on { Task { await set(ch.providerId, true) } }   // enable: apply directly
+                else { pendingOff = ch }                            // disable: ask keep/delete
+            }))
+                .labelsHidden().tint(PC.accent).disabled(!interactive)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+    }
+
+    private func set(_ pid: String, _ on: Bool) async {
+        try? await container.setPlaylistChannel(localId: playlist.id, providerId: pid, enabled: on)
+        await reload()
+    }
+
+    private func applyOff(_ pid: String, deleteRemote: Bool) async {
+        let unsupported = (try? await container.disablePlaylistChannel(
+            localId: playlist.id, providerId: pid, deleteRemote: deleteRemote)) ?? nil
+        if let u = unsupported {
+            note = "\(u) doesn’t allow deletion via its API — remove “\(playlist.name)” manually in the \(u) app."
+        }
+        await reload()
+    }
+
+    private func reload() async {
+        channels = (try? await container.getPlaylistSyncChannels(localId: playlist.id)) as? [IosSyncChannel] ?? []
+    }
+
+    private func channelColor(_ id: String) -> Color {
+        switch id {
+        case "spotify": return Color(uiColor: UIColor(hex: 0x1DB954))
+        case "applemusic": return Color(uiColor: UIColor(hex: 0xFA243C))
+        case "listenbrainz": return Color(uiColor: UIColor(hex: 0xEB743B))
+        default: return PC.fg3
+        }
     }
 }
 
@@ -420,6 +766,8 @@ final class SavedPlaylistModel {
     private var pSub: Cancellable?
     private var tSub: Cancellable?
 
+    var mirrors: [IosPlaylistMirrorLink] = []
+
     init(playlistId: String) { self.playlistId = playlistId }
     var name: String { playlist?.name ?? "Playlist" }
 
@@ -431,6 +779,7 @@ final class SavedPlaylistModel {
                 self?.entities = ts.map { Self.makeTrack($0) }
             }
         }
+        Task { mirrors = (try? await container.getPlaylistMirrorLinks(id: playlistId)) as? [IosPlaylistMirrorLink] ?? [] }
     }
 
     func rename(_ newName: String) {
@@ -490,6 +839,18 @@ struct SavedPlaylistDetailView: View {
                 .multilineTextAlignment(.center)
             Text("\(model.tracks.count) \(model.tracks.count == 1 ? "track" : "tracks")")
                 .font(.system(size: 13)).foregroundStyle(PC.fg2)
+            // Source/mirror chips — each opens the playlist on that service.
+            if !model.mirrors.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(model.mirrors, id: \.providerId) { link in
+                        if let url = mirrorURL(link) {
+                            Link(destination: url) { mirrorChip(link.providerId) }
+                        } else {
+                            mirrorChip(link.providerId)
+                        }
+                    }
+                }
+            }
             HStack(spacing: 10) {
                 Button { coordinator.setQueue(model.entities, startIndex: 0, context: ctx) } label: {
                     Label("Play All", systemImage: "play.fill").font(.system(size: 15, weight: .semibold))
@@ -510,6 +871,35 @@ struct SavedPlaylistDetailView: View {
             }
         }
         .frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
+    }
+
+    /// Web URL for a playlist on a given service, or nil if not linkable.
+    private func mirrorURL(_ link: IosPlaylistMirrorLink) -> URL? {
+        switch link.providerId {
+        case "spotify": return URL(string: "https://open.spotify.com/playlist/\(link.externalId)")
+        case "listenbrainz": return URL(string: "https://listenbrainz.org/playlist/\(link.externalId)/")
+        case "applemusic": return URL(string: "https://music.apple.com/library/playlist/\(link.externalId)")
+        default: return nil
+        }
+    }
+
+    @ViewBuilder private func mirrorChip(_ providerId: String) -> some View {
+        let (label, hex): (String, UInt32) = {
+            switch providerId {
+            case "spotify": return ("Spotify", 0x1DB954)
+            case "applemusic": return ("Apple Music", 0xFA243C)
+            case "listenbrainz": return ("ListenBrainz", 0xEB743B)
+            default: return (providerId.capitalized, 0x9CA3AF)
+            }
+        }()
+        let c = Color(uiColor: UIColor(hex: hex))
+        HStack(spacing: 3) {
+            Text(label).font(.system(size: 11, weight: .semibold))
+            Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
+        }
+        .foregroundStyle(c)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(Capsule().fill(c.opacity(0.12)))
     }
 
     // View mode: tap-to-play rows with badges + context menus (app-wide style).
