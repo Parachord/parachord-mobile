@@ -6,7 +6,9 @@ import com.parachord.shared.db.dao.AlbumDao
 import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
+import com.parachord.shared.db.dao.SyncPlaylistBaselineDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
+import com.parachord.shared.db.dao.SyncPlaylistNwayDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.TrackDao
@@ -82,6 +84,8 @@ class SyncEngineIdempotencyTest {
         val syncSourceDao = SyncSourceDao(db)
         val linkDao = SyncPlaylistLinkDao(db)
         val sourceDao = SyncPlaylistSourceDao(db)
+        val baselineDao = SyncPlaylistBaselineDao(db)
+        val nwayDao = SyncPlaylistNwayDao(db)
 
         val provider = FakeSyncProvider()
         val settings = FakeSyncSettings(
@@ -105,6 +109,8 @@ class SyncEngineIdempotencyTest {
             syncSourceDao = syncSourceDao,
             syncPlaylistLinkDao = linkDao,
             syncPlaylistSourceDao = sourceDao,
+            syncPlaylistBaselineDao = baselineDao,
+            syncPlaylistNwayDao = nwayDao,
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
@@ -395,6 +401,8 @@ class SyncEngineIdempotencyTest {
         val syncSourceDao = SyncSourceDao(db)
         val linkDao = SyncPlaylistLinkDao(db)
         val sourceDao = SyncPlaylistSourceDao(db)
+        val baselineDao = SyncPlaylistBaselineDao(db)
+        val nwayDao = SyncPlaylistNwayDao(db)
 
         // Seed the tombstone into the SAME store instance the service wraps,
         // BEFORE the sync, so applyTrackDiff's filterRemote sees it.
@@ -416,6 +424,8 @@ class SyncEngineIdempotencyTest {
             syncSourceDao = syncSourceDao,
             syncPlaylistLinkDao = linkDao,
             syncPlaylistSourceDao = sourceDao,
+            syncPlaylistBaselineDao = baselineDao,
+            syncPlaylistNwayDao = nwayDao,
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(tombstoneStore),

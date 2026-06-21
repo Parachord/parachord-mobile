@@ -380,6 +380,8 @@ class IosContainer private constructor() {
             playlistDao = playlistDao, playlistTrackDao = playlistTrackDao,
             syncSourceDao = syncSourceDao, syncPlaylistLinkDao = syncPlaylistLinkDao,
             syncPlaylistSourceDao = syncPlaylistSourceDao,
+            syncPlaylistBaselineDao = syncPlaylistBaselineDao,
+            syncPlaylistNwayDao = syncPlaylistNwayDao,
             settingsStore = settingsStore,
             providers = listOf(spotifySyncProvider, listenBrainzSyncProvider, appleMusicSyncProvider),
             tombstones = tombstoneService,

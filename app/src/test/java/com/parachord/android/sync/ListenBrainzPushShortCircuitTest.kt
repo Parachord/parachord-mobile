@@ -6,7 +6,9 @@ import com.parachord.shared.db.dao.AlbumDao
 import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
+import com.parachord.shared.db.dao.SyncPlaylistBaselineDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
+import com.parachord.shared.db.dao.SyncPlaylistNwayDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.TrackDao
@@ -27,6 +29,8 @@ import com.parachord.shared.sync.SyncedPlaylist
 import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -52,7 +56,7 @@ import org.junit.Test
  */
 class ListenBrainzPushShortCircuitTest {
 
-    private class Harness {
+    private class Harness(nway: Boolean = false) {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also {
             ParachordDb.Schema.create(it)
         }
@@ -66,6 +70,8 @@ class ListenBrainzPushShortCircuitTest {
         val syncSourceDao = SyncSourceDao(db)
         val linkDao = SyncPlaylistLinkDao(db)
         val sourceDao = SyncPlaylistSourceDao(db)
+        val baselineDao = SyncPlaylistBaselineDao(db)
+        val nwayDao = SyncPlaylistNwayDao(db)
 
         val provider = RemoteModelingProvider()
         val settings = FakeSyncSettings(
@@ -73,6 +79,7 @@ class ListenBrainzPushShortCircuitTest {
             collectionsByProvider = mapOf(
                 ListenBrainzSyncProvider.PROVIDER_ID to setOf("playlists"),
             ),
+            nway = nway,
         )
 
         val engine = SyncEngine(
@@ -86,6 +93,8 @@ class ListenBrainzPushShortCircuitTest {
             syncSourceDao = syncSourceDao,
             syncPlaylistLinkDao = linkDao,
             syncPlaylistSourceDao = sourceDao,
+            syncPlaylistBaselineDao = baselineDao,
+            syncPlaylistNwayDao = nwayDao,
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
@@ -190,6 +199,7 @@ class ListenBrainzPushShortCircuitTest {
     private class FakeSyncSettings(
         private val enabledProviders: Set<String>,
         private val collectionsByProvider: Map<String, Set<String>>,
+        private val nway: Boolean = false,
     ) : SyncSettingsProvider {
         private var dataVersion = 5
 
@@ -222,7 +232,7 @@ class ListenBrainzPushShortCircuitTest {
         override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {}
         override suspend fun getTrackDedupV1Done(): Boolean = true
         override suspend fun setTrackDedupV1Done() {}
-        override suspend fun isNwayEnabled(): Boolean = false
+        override suspend fun isNwayEnabled(): Boolean = nway
     }
 
     // ── Tests ───────────────────────────────────────────────────────
@@ -299,6 +309,46 @@ class ListenBrainzPushShortCircuitTest {
             h.provider.replaceCalls.size,
         )
         assertEquals("the re-push carries all three tracks", 3, h.provider.replaceCalls.last().second.size)
+    }
+
+    @Test
+    fun `N-way migration seeds baseline and per-provider state once enabled`() = runBlocking {
+        val h = Harness(nway = true)
+        h.seedLocalPlaylist("local-0", "Deep Focus")
+
+        // First sync creates the LB playlist + link. No baseline yet — the
+        // migration pass runs BEFORE the push, when local-0 has no mirror.
+        h.engine.syncAll()
+        assertNull("no baseline before the playlist has a mirror", h.baselineDao.selectForLocal("local-0"))
+        val link = h.linkDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        assertNotNull("first sync linked the playlist to LB", link)
+
+        // Second sync: the migration bootstrap now sees the LB mirror and seeds
+        // the baseline (current local keys) + the per-provider N-way state.
+        h.engine.syncAll()
+
+        val baseline = h.baselineDao.selectForLocal("local-0")
+        assertNotNull("baseline seeded on the migration pass", baseline)
+        assertEquals(
+            "baseline = current local tracklist as canonical keys",
+            listOf("mbid-mbid-track-local-0-0", "mbid-mbid-track-local-0-1"),
+            baseline!!.tracks,
+        )
+        val state = h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        assertNotNull("per-provider N-way state seeded for the mirror", state)
+        assertEquals(
+            "changeToken seeded from the link's stored snapshot (no provider fetch)",
+            link!!.snapshotId,
+            state!!.changeToken,
+        )
+
+        // Idempotent: a third sync must not change the baseline.
+        h.engine.syncAll()
+        assertEquals(
+            "migration is idempotent — baseline unchanged on re-run",
+            baseline.tracks,
+            h.baselineDao.selectForLocal("local-0")!!.tracks,
+        )
     }
 
     /**

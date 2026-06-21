@@ -37,6 +37,11 @@ class SyncEngine constructor(
     private val syncSourceDao: SyncSourceDao,
     private val syncPlaylistLinkDao: SyncPlaylistLinkDao,
     private val syncPlaylistSourceDao: SyncPlaylistSourceDao,
+    // N-way multimaster state (Phase 1 tables). Written by the Phase 2 migration
+    // bootstrap; not yet read by live reconciliation. Isolated from the
+    // canonical-source link/source DAOs above.
+    private val syncPlaylistBaselineDao: com.parachord.shared.db.dao.SyncPlaylistBaselineDao,
+    private val syncPlaylistNwayDao: com.parachord.shared.db.dao.SyncPlaylistNwayDao,
     private val settingsStore: SyncSettingsProvider,
     /**
      * Multi-provider sync surface (Phase 2). Today only Spotify is
@@ -1054,6 +1059,50 @@ class SyncEngine constructor(
 
     // ── Playlist sync ────────────────────────────────────────────
 
+    /**
+     * N-way migration bootstrap (Phase 2). Run once per synced playlist the
+     * first time N-way is enabled: seed the 3-way-merge baseline from the
+     * current LOCAL tracklist and seed each mirror's N-way state from the token
+     * we already have stored. Idempotent (skips a playlist that already has a
+     * baseline row) and READ-ONLY against providers — the "normalize mirrors"
+     * push from the design is DEFERRED to the propagation phase so the merge
+     * logic is validated (shadow mode) before we ever push. Gated entirely on
+     * [SyncSettingsProvider.isNwayEnabled]; inert (early return) while OFF.
+     */
+    private suspend fun migrateAllPlaylistsToNway() {
+        if (!settingsStore.isNwayEnabled()) return
+        val channels = getAllEffectivePlaylistChannels()
+        if (channels.isEmpty()) return
+        var migrated = 0
+        for ((localId, providers) in channels) {
+            if (providers.isEmpty()) continue
+            val playlist = playlistDao.getById(localId) ?: continue
+            if (migratePlaylistToNway(playlist)) migrated++
+        }
+        if (migrated > 0) Log.d(TAG, "N-way migration: seeded baseline for $migrated playlist(s)")
+    }
+
+    /**
+     * Seed one playlist's baseline + per-provider N-way state. Returns true if
+     * it migrated, false if already migrated (idempotent). No provider writes —
+     * each mirror's `changeToken` is seeded from the canonical-source snapshot
+     * we already hold; `editedAt = now` is a bootstrap floor (the true
+     * per-provider edit time is captured the next time that token changes).
+     */
+    private suspend fun migratePlaylistToNway(playlist: Playlist): Boolean {
+        if (syncPlaylistBaselineDao.selectForLocal(playlist.id) != null) return false
+        val now = currentTimeMillis()
+        val keys = nwayBaselineKeys(playlistTrackDao.getByPlaylistIdSync(playlist.id))
+        syncPlaylistBaselineDao.upsert(playlist.id, keys, now)
+        val source = syncPlaylistSourceDao.selectForLocal(playlist.id)
+        for ((providerId, _) in getPlaylistMirrors(playlist.id)) {
+            val token = syncPlaylistLinkDao.selectForLink(playlist.id, providerId)?.snapshotId
+                ?: source?.takeIf { it.providerId == providerId }?.snapshotId
+            syncPlaylistNwayDao.upsert(playlist.id, providerId, token, now, now)
+        }
+        return true
+    }
+
     private suspend fun syncPlaylists(
         settings: SyncSettings,
         onProgress: (SyncProgress) -> Unit,
@@ -1099,6 +1148,13 @@ class SyncEngine constructor(
             syncPlaylistSourceDao,
             syncPlaylistLinkDao,
         )
+
+        // N-way migration bootstrap (Phase 2) — gated on isNwayEnabled (OFF by
+        // default → inert). Seeds the baseline + per-provider state for every
+        // synced playlist the first time N-way activates. Runs AFTER the
+        // link/source migrations so mirrors are resolved; read-only vs providers
+        // (the normalize push is deferred to the propagation phase).
+        migrateAllPlaylistsToNway()
 
         // One-shot cleanup for installs that pre-date the cross-provider
         // pull-path name-match (commit ef5a3c2). Walks all playlist
