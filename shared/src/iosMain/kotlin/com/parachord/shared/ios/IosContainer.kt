@@ -333,6 +333,14 @@ class IosContainer private constructor() {
     val syncSourceDao: SyncSourceDao by lazy { SyncSourceDao(database) }
     val syncPlaylistLinkDao: SyncPlaylistLinkDao by lazy { SyncPlaylistLinkDao(database) }
     val syncPlaylistSourceDao: SyncPlaylistSourceDao by lazy { SyncPlaylistSourceDao(database) }
+    // N-way multimaster sync (Phase 1) — baseline + per-provider token state,
+    // isolated from the live canonical-source engine during migration/shadow.
+    val syncPlaylistBaselineDao: com.parachord.shared.db.dao.SyncPlaylistBaselineDao by lazy {
+        com.parachord.shared.db.dao.SyncPlaylistBaselineDao(database)
+    }
+    val syncPlaylistNwayDao: com.parachord.shared.db.dao.SyncPlaylistNwayDao by lazy {
+        com.parachord.shared.db.dao.SyncPlaylistNwayDao(database)
+    }
 
     // Track-remove tombstones (#172 parity) — local-per-device JSON blob so a
     // user-removed track isn't re-imported on the next pull. App-start prune is

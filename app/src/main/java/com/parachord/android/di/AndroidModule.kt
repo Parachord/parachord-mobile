@@ -285,6 +285,32 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // N-way multimaster sync (Phase 1): the 3-way-merge baseline (ancestor)
+        // per playlist + per-(playlist, provider) change-token/edit-time state.
+        // New tables, isolated from the live canonical-source engine. New
+        // installs get them from the .sq CREATE TABLEs; existing installs need
+        // these explicit re-runs (same frozen-schema reason as above).
+        driver.execute(
+            null,
+            """CREATE TABLE IF NOT EXISTS sync_playlist_baseline (
+                localPlaylistId  TEXT NOT NULL PRIMARY KEY,
+                baseline         TEXT NOT NULL,
+                baselineSyncedAt INTEGER NOT NULL
+            )""".trimIndent(),
+            0,
+        )
+        driver.execute(
+            null,
+            """CREATE TABLE IF NOT EXISTS sync_playlist_nway (
+                localPlaylistId TEXT NOT NULL,
+                providerId      TEXT NOT NULL,
+                changeToken     TEXT,
+                editedAt        INTEGER,
+                lastSyncedAt    INTEGER NOT NULL,
+                PRIMARY KEY (localPlaylistId, providerId)
+            )""".trimIndent(),
+            0,
+        )
         com.parachord.shared.db.ParachordDb(driver)
     }
 
@@ -320,6 +346,8 @@ val androidModule = module {
     single { SyncSourceDao(get()) }
     single { SyncPlaylistLinkDao(get()) }
     single { SyncPlaylistSourceDao(get()) }
+    single { com.parachord.shared.db.dao.SyncPlaylistBaselineDao(get()) }
+    single { com.parachord.shared.db.dao.SyncPlaylistNwayDao(get()) }
 
     // ── Settings & Auth ──────────────────────────────────────────────
 
