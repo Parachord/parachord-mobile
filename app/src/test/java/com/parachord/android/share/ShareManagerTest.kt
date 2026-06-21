@@ -35,6 +35,8 @@ class ShareManagerTest {
         achordionClient = achordion,
         playlistDao = mockk(relaxed = true),
         playlistTrackDao = mockk(relaxed = true),
+        // No LB link by default → playlist shares fall through to smart-links.
+        syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
     )
 
     private fun sampleTrack(
@@ -235,6 +237,8 @@ class ShareManagerTest {
             achordionClient = achordion,
             playlistDao = playlistDao,
             playlistTrackDao = playlistTrackDao,
+            // No LB link → this unchanged playlist must use smart-links, not Achordion.
+            syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
         )
 
         val result = mgr.sharePlaylist("p1")

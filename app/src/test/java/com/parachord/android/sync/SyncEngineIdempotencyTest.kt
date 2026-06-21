@@ -14,7 +14,9 @@ import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.sync.DeleteResult
 import com.parachord.shared.sync.ListenBrainzSyncProvider
+import com.parachord.shared.sync.PlaylistSyncMode
 import com.parachord.shared.sync.ProviderFeatures
+import com.parachord.shared.sync.ProviderPlaylistSelection
 import com.parachord.shared.sync.RemoteCreated
 import com.parachord.shared.sync.SnapshotKind
 import com.parachord.shared.sync.SyncEngine
@@ -232,6 +234,20 @@ class SyncEngineIdempotencyTest {
         override suspend fun setSyncDataVersion(version: Int) { dataVersion = version }
         override suspend fun setLastSyncAt(timestamp: Long) {}
         override suspend fun clearSyncSettings() {}
+        // Per-provider selection gate (branch addition): ALL so the push loop
+        // pushes like it did before the gate (preserves this harness's intent).
+        // Pull allowlist empty (= import all); no channel override; dedup done;
+        // N-way off.
+        override suspend fun getPlaylistSelection(providerId: String) =
+            ProviderPlaylistSelection(PlaylistSyncMode.ALL)
+        override suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection) {}
+        override suspend fun getPullPlaylists(providerId: String): Set<String> = emptySet()
+        override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {}
+        override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? = null
+        override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {}
+        override suspend fun getTrackDedupV1Done(): Boolean = true
+        override suspend fun setTrackDedupV1Done() {}
+        override suspend fun isNwayEnabled(): Boolean = false
     }
 
     // ── Tests ───────────────────────────────────────────────────────
@@ -455,6 +471,20 @@ class SyncEngineIdempotencyTest {
         override suspend fun setSyncDataVersion(version: Int) { dataVersion = version }
         override suspend fun setLastSyncAt(timestamp: Long) {}
         override suspend fun clearSyncSettings() {}
+        // Per-provider selection gate (branch addition): ALL so the push loop
+        // pushes like it did before the gate (preserves this harness's intent).
+        // Pull allowlist empty (= import all); no channel override; dedup done;
+        // N-way off.
+        override suspend fun getPlaylistSelection(providerId: String) =
+            ProviderPlaylistSelection(PlaylistSyncMode.ALL)
+        override suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection) {}
+        override suspend fun getPullPlaylists(providerId: String): Set<String> = emptySet()
+        override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {}
+        override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? = null
+        override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {}
+        override suspend fun getTrackDedupV1Done(): Boolean = true
+        override suspend fun setTrackDedupV1Done() {}
+        override suspend fun isNwayEnabled(): Boolean = false
     }
 
     /**
