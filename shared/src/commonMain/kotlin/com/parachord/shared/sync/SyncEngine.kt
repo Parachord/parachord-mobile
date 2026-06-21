@@ -1969,6 +1969,18 @@ class SyncEngine constructor(
                     }
                 }
 
+                // Cheap unchanged short-circuit. An already-linked playlist with
+                // NO local edits has nothing to push — skip the hydrate + remote
+                // tracklist fetch + replace entirely (the link already exists and
+                // its content is current). This is what stops ListenBrainz from
+                // doing a per-playlist round-trip for ALL N playlists on every
+                // sync; the previous skip-unchanged still fetched each remote
+                // tracklist to compare. A `locallyModified` playlist (or one
+                // whose link is missing/stale) falls through to the full push.
+                if (matchSource == "id-link" && !playlist.locallyModified) {
+                    continue
+                }
+
                 // Layer 2: playlist.spotifyId (Spotify-only convenience
                 // cache; the candidate filter already excludes rows
                 // with this set when iterating Spotify, so this only
