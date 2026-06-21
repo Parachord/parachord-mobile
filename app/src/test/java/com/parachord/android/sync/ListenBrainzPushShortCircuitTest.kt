@@ -351,6 +351,39 @@ class ListenBrainzPushShortCircuitTest {
         )
     }
 
+    @Test
+    fun `N-way shadow mode runs the reconcile path without pushing or mutating state`() = runBlocking {
+        val h = Harness(nway = true)
+        h.seedLocalPlaylist("local-0", "Deep Focus")
+        h.engine.syncAll() // push + link
+        h.engine.syncAll() // migration seeds the baseline; shadow runs from here on
+
+        val pushesAfterMigrate = h.provider.replaceCalls.size
+        val baselineAfterMigrate = h.baselineDao.selectForLocal("local-0")!!.tracks
+        val tokenAfterMigrate = h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.changeToken
+
+        // Two more no-op syncs. Shadow detects the LB mirror as "changed" (LB has
+        // no snapshot token, so it always re-fetches), fetches its tracklist,
+        // finds it equals the baseline → no delta → logs nothing, pushes nothing,
+        // mutates nothing. THE echo-loop / sync×2 idempotency guard (design
+        // step 5). Divergence → merge → would-push correctness is covered by the
+        // pure NwayShadowTest.
+        h.engine.syncAll()
+        h.engine.syncAll()
+
+        assertEquals("shadow mode must never push", pushesAfterMigrate, h.provider.replaceCalls.size)
+        assertEquals(
+            "shadow must not mutate the baseline",
+            baselineAfterMigrate,
+            h.baselineDao.selectForLocal("local-0")!!.tracks,
+        )
+        assertEquals(
+            "shadow must not mutate the per-provider change token",
+            tokenAfterMigrate,
+            h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.changeToken,
+        )
+    }
+
     /**
      * A `locallyModified` playlist must always re-push, even when its
      * tracklist happens to still equal the remote (e.g. a metadata-only edit
