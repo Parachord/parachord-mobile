@@ -152,6 +152,10 @@ interface SyncSettingsProvider {
     suspend fun getTrackDedupV1Done(): Boolean
     suspend fun setTrackDedupV1Done()
 
+    /** N-way multimaster playlist sync opt-in (default OFF). Gates the entire
+     *  N-way path — migration bootstrap, shadow mode, propagation. */
+    suspend fun isNwayEnabled(): Boolean
+
     /** Persist the timestamp of the last successful sync (epoch millis). */
     suspend fun setLastSyncAt(timestamp: Long)
 

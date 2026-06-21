@@ -115,6 +115,10 @@ class SettingsStore(
         // run yet on a fresh-from-old install.
         const val TRACK_DEDUP_V1_DONE = "track_dedup_v1_done"
         const val ENABLED_SYNC_PROVIDERS = "enabled_sync_providers"
+        // N-way multimaster playlist sync (per-user opt-in, default OFF). Gates
+        // the WHOLE N-way path — migration bootstrap, shadow mode, propagation.
+        // Inert until flipped on, so Phases 2-3 ship dark.
+        const val NWAY_ENABLED = "nway_enabled"
 
         /** Per-provider opt-in for which collection axes to sync.
          *  Keyed as `sync_collections_<providerId>` ("tracks,albums,artists,playlists").
@@ -724,6 +728,16 @@ class SettingsStore(
 
     suspend fun setSyncEnabled(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(SYNC_ENABLED, enabled)
+    }
+
+    /** N-way multimaster playlist sync opt-in. Default OFF — gates the entire
+     *  N-way path (migration bootstrap, shadow mode, propagation). */
+    override suspend fun isNwayEnabled(): Boolean {
+        ensureMigrated(); return kv.getBoolean(NWAY_ENABLED, default = false)
+    }
+
+    suspend fun setNwayEnabled(enabled: Boolean) {
+        ensureMigrated(); kv.setBoolean(NWAY_ENABLED, enabled)
     }
 
     override suspend fun setLastSyncAt(timestamp: Long) {
