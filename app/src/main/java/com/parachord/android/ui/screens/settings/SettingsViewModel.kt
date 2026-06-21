@@ -46,9 +46,25 @@ class SettingsViewModel constructor(
         viewModelScope.launch { settingsStore.setNwayEnabled(enabled) }
     }
 
-    /** The latest sync cycle's N-way shadow plan — what propagation WOULD do. */
+    /** The latest shadow scan's plan — what propagation WOULD do. */
     val nwayShadowLog: StateFlow<List<com.parachord.shared.sync.NwayShadowEntry>> =
         syncEngine.nwayShadowLog
+
+    private val _shadowScanning = MutableStateFlow(false)
+    val shadowScanning: StateFlow<Boolean> = _shadowScanning.asStateFlow()
+
+    /** Run the on-demand N-way shadow scan (cheap: one list call per provider,
+     *  fetches a tracklist only for a changed mirror). Pushes nothing. */
+    fun runShadowScan() {
+        viewModelScope.launch {
+            _shadowScanning.value = true
+            try {
+                syncEngine.runNwayShadowScan()
+            } finally {
+                _shadowScanning.value = false
+            }
+        }
+    }
 
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
     val loadedPlugins: StateFlow<List<com.parachord.shared.plugin.PluginManager.PluginInfo>> =

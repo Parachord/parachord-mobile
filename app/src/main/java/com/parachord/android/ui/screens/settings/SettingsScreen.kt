@@ -2688,6 +2688,7 @@ private fun GeneralTab(
     val settingsViewModel: SettingsViewModel = koinViewModel()
     val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
     val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
+    val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
     var showSyncSetupSheet by remember { mutableStateOf(false) }
     /** Which provider the wizard is currently configuring. The same sheet
      *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
@@ -2987,11 +2988,21 @@ private fun GeneralTab(
                 )
             }
             if (nwayEnabled) {
+                item {
+                    Button(
+                        onClick = { settingsViewModel.runShadowScan() },
+                        enabled = !shadowScanning,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Text(if (shadowScanning) "Scanning…" else "Run shadow scan")
+                    }
+                }
                 if (nwayShadowLog.isEmpty()) {
                     item {
                         Text(
-                            "No pending changes — run Sync Now, then re-open. Shadow mode " +
-                                "only lists playlists where a copy diverged from the baseline.",
+                            "No pending changes. Run a shadow scan — it lists only playlists " +
+                                "where a copy diverged from the baseline (cheap: one list call " +
+                                "per provider, no pushes).",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),

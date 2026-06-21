@@ -362,14 +362,13 @@ class ListenBrainzPushShortCircuitTest {
         val baselineAfterMigrate = h.baselineDao.selectForLocal("local-0")!!.tracks
         val tokenAfterMigrate = h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.changeToken
 
-        // Two more no-op syncs. Shadow detects the LB mirror as "changed" (LB has
-        // no snapshot token, so it always re-fetches), fetches its tracklist,
-        // finds it equals the baseline → no delta → logs nothing, pushes nothing,
-        // mutates nothing. THE echo-loop / sync×2 idempotency guard (design
-        // step 5). Divergence → merge → would-push correctness is covered by the
-        // pure NwayShadowTest.
-        h.engine.syncAll()
-        h.engine.syncAll()
+        // Run the on-demand shadow scan twice. It detects the LB mirror via the
+        // cheap list signal (trackCount == baseline size → unchanged), so no
+        // tracklist fetch, no delta → pushes nothing, mutates nothing. THE
+        // echo-loop / sync×2 idempotency guard (design step 5). Divergence →
+        // merge → would-push correctness is covered by the pure NwayShadowTest.
+        h.engine.runNwayShadowScan()
+        h.engine.runNwayShadowScan()
 
         assertEquals("shadow mode must never push", pushesAfterMigrate, h.provider.replaceCalls.size)
         assertEquals(

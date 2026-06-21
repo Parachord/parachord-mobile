@@ -1120,25 +1120,50 @@ class SyncEngine constructor(
      * before propagation (Phase 4) is switched on. Gated on
      * [SyncSettingsProvider.isNwayEnabled]; inert (early return) while OFF.
      */
-    private suspend fun shadowReconcileNway() {
+    /**
+     * On-demand N-way SHADOW scan (Phase 3 dev validation). Detects divergence
+     * CHEAPLY — ONE paginated playlist-list call per enabled provider (each
+     * [SyncedPlaylist] already carries snapshot + trackCount), fetching a full
+     * tracklist ONLY for a mirror that actually changed. Runs the merge,
+     * populates [nwayShadowLog]. Pushes nothing, mutates nothing. Dev-triggered
+     * (NOT per-sync — see syncPlaylists), so routine syncs pay nothing. Gated on
+     * isNwayEnabled.
+     */
+    suspend fun runNwayShadowScan() {
         if (!settingsStore.isNwayEnabled()) return
+        val baselines = syncPlaylistBaselineDao.selectAll()
+        if (baselines.isEmpty()) {
+            _nwayShadowLog.value = emptyList()
+            return
+        }
+        // One list call per enabled provider → externalId -> SyncedPlaylist.
+        val enabled = settingsStore.getEnabledSyncProviders()
+        val remoteLists = mutableMapOf<String, Map<String, SyncedPlaylist>>()
+        for (provider in providers.filter { it.id in enabled }) {
+            remoteLists[provider.id] = runCatching {
+                provider.fetchPlaylists(null).associateBy { it.spotifyId }
+            }.getOrElse { emptyMap() }
+        }
         val entries = mutableListOf<NwayShadowEntry>()
-        for (baseline in syncPlaylistBaselineDao.selectAll()) {
+        for (baseline in baselines) {
             try {
-                shadowReconcilePlaylist(baseline)?.let { entries.add(it) }
+                shadowReconcilePlaylist(baseline, remoteLists)?.let { entries.add(it) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // Partial-fetch guard: a changed copy whose token-read or
-                // tracklist-fetch failed aborts THIS playlist for the cycle —
-                // never read a failed fetch as "removed everything".
+                // Partial-fetch guard: a changed copy whose tracklist-fetch
+                // failed aborts THIS playlist for the cycle — never read a
+                // failed fetch as "removed everything".
                 Log.d(TAG, "N-way SHADOW: skipped '${baseline.localPlaylistId}' (${e.message})")
             }
         }
         _nwayShadowLog.value = entries
     }
 
-    private suspend fun shadowReconcilePlaylist(baseline: SyncPlaylistBaselineDao.Baseline): NwayShadowEntry? {
+    private suspend fun shadowReconcilePlaylist(
+        baseline: SyncPlaylistBaselineDao.Baseline,
+        remoteLists: Map<String, Map<String, SyncedPlaylist>>,
+    ): NwayShadowEntry? {
         val localId = baseline.localPlaylistId
         val playlist = playlistDao.getById(localId) ?: return null
         val mirrors = getPlaylistMirrors(localId)
@@ -1152,15 +1177,20 @@ class SyncEngine constructor(
         val localChanged = playlist.locallyModified || playlist.lastModified > baseline.baselineSyncedAt
         copies.add(NwayCopyState("local", localKeys, playlist.lastModified, localChanged))
 
-        // Provider mirrors — detect via token, fetch ONLY changed copies.
+        // Provider mirrors — detect CHEAPLY from the pre-fetched list (snapshot
+        // if present, else trackCount), fetch the tracklist ONLY when changed.
         // editedAt = detection-time (now) for changed provider copies is a Phase
         // 4 refinement target (Spotify MAX(added_at) / AM·LB last_modified); it
         // only affects ORDER, so shadow validation of presence is unaffected.
         for ((providerId, externalId) in mirrors) {
             val provider = providers.firstOrNull { it.id == providerId } ?: continue
+            val listEntry = remoteLists[providerId]?.get(externalId)
             val storedToken = storedTokens[providerId]?.changeToken
-            val liveToken = provider.getPlaylistSnapshotId(externalId)
-            val changed = liveToken == null || liveToken != storedToken
+            val changed = when {
+                listEntry == null -> false // not in the owned list (deleted/unowned) — skip
+                listEntry.snapshotId != null -> listEntry.snapshotId != storedToken
+                else -> listEntry.trackCount != baseline.tracks.size
+            }
             if (!changed) {
                 copies.add(NwayCopyState(providerId, baseline.tracks, now, changed = false))
                 continue
@@ -1244,10 +1274,11 @@ class SyncEngine constructor(
         // (the normalize push is deferred to the propagation phase).
         migrateAllPlaylistsToNway()
 
-        // N-way SHADOW MODE (Phase 3) — gated on isNwayEnabled (OFF → inert).
-        // Detects changed copies, runs the merge, and LOGS what it would do.
-        // Pushes nothing, mutates nothing — validation before propagation.
-        shadowReconcileNway()
+        // N-way SHADOW MODE (Phase 3) is dev-triggered ON DEMAND via
+        // [runNwayShadowScan] — NOT run inline here. Per-sync shadow would add a
+        // playlist-list fetch (and, pre-fix, a per-playlist tracklist fetch) to
+        // every background sync; keeping it on-demand means routine syncs pay
+        // nothing for it. Phase 4 integrates real propagation into the sync.
 
         // One-shot cleanup for installs that pre-date the cross-provider
         // pull-path name-match (commit ef5a3c2). Walks all playlist
