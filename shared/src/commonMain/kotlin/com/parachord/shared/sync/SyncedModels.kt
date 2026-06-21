@@ -53,4 +53,7 @@ data class SyncedPlaylist(
     val snapshotId: String?,
     val trackCount: Int,
     val isOwned: Boolean,
+    /** Can the user write to this playlist on this provider (owned OR
+     *  collaborative)? Drives push/mirror candidacy (#269). Default true. */
+    val writable: Boolean = true,
 )

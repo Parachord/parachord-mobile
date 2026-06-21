@@ -638,6 +638,8 @@ class AppleMusicSyncProvider(
             sourceUrl = null,
             sourceContentHash = null,
             localOnly = false,
+            // AM has no collaborative concept; canEdit IS the writability signal.
+            writable = attributes.canEdit,
         )
         return SyncedPlaylist(
             entity = playlistEntity,
@@ -648,6 +650,7 @@ class AppleMusicSyncProvider(
             // is omitted; treat that as not-owned (we only push to
             // owned playlists anyway).
             isOwned = attributes.canEdit,
+            writable = attributes.canEdit,
         )
     }
 

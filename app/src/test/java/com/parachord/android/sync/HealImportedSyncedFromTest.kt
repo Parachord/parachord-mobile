@@ -46,6 +46,7 @@ class HealImportedSyncedFromTest {
             sourceUrl = null,
             sourceContentHash = null,
             localOnly = 0L,
+            writable = 1L,
         )
     }
 

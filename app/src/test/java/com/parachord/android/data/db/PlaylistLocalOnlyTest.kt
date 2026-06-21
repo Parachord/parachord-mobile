@@ -22,6 +22,7 @@ class PlaylistLocalOnlyTest {
                 sourceUrl = null,
                 sourceContentHash = null,
                 localOnly = localOnly,
+                writable = 1L,
             )
         }
 

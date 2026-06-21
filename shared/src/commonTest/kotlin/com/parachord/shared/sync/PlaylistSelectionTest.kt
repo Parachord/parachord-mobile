@@ -47,4 +47,31 @@ class PlaylistSelectionTest {
         assertFalse(sel.includes("local-3"))
         assertFalse(sel.includes("spotify-9"))
     }
+
+    // ── #269: writability gate on push candidacy ─────────────────────
+
+    @Test
+    fun writablePlaylist_isPushCandidate_acrossProviders() {
+        // A writable Spotify-imported playlist mirrors to AM + LB (its existing behavior).
+        val p = com.parachord.shared.model.Playlist(id = "spotify-1", name = "Mine", writable = true)
+        assertTrue(isPlaylistPushCandidate(p, "applemusic"))
+        assertTrue(isPlaylistPushCandidate(p, "listenbrainz"))
+    }
+
+    @Test
+    fun nonWritableFollowedPlaylist_isNeverPushCandidate() {
+        // A read-only FOLLOWED Spotify playlist must NOT mirror anywhere (#269) —
+        // that round-trip created owned Spotify duplicates.
+        val followed = com.parachord.shared.model.Playlist(id = "spotify-1", name = "Theirs", writable = false)
+        assertFalse(isPlaylistPushCandidate(followed, "applemusic"))
+        assertFalse(isPlaylistPushCandidate(followed, "listenbrainz"))
+        assertFalse(isPlaylistPushCandidate(followed, "spotify"))
+    }
+
+    @Test
+    fun collaborativePlaylist_isWritable_soStillMirrors() {
+        // Collaborative (not owned, but you can edit) → writable → still a candidate.
+        val collab = com.parachord.shared.model.Playlist(id = "spotify-1", name = "Shared", writable = true)
+        assertTrue(isPlaylistPushCandidate(collab, "listenbrainz"))
+    }
 }

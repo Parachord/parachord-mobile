@@ -536,7 +536,7 @@ fun List<SpImage>?.bestImageUrl(): String? =
 @Serializable data class SpFollowedArtistsResponse(val artists: SpCursorPaginated)
 @Serializable data class SpCursorPaginated(val items: List<SpArtist> = emptyList(), val total: Int = 0, val cursors: SpCursors? = null, val next: String? = null)
 @Serializable data class SpCursors(val after: String? = null)
-@Serializable data class SpPlaylistSimple(val id: String? = null, val name: String? = null, val description: String? = null, val images: List<SpImage>? = null, val owner: SpUser? = null, @SerialName("snapshot_id") val snapshotId: String? = null, val tracks: SpPlaylistTracksRef? = null)
+@Serializable data class SpPlaylistSimple(val id: String? = null, val name: String? = null, val description: String? = null, val images: List<SpImage>? = null, val owner: SpUser? = null, val collaborative: Boolean = false, @SerialName("snapshot_id") val snapshotId: String? = null, val tracks: SpPlaylistTracksRef? = null)
 @Serializable data class SpPlaylistTracksRef(val total: Int = 0)
 @Serializable data class SpPaginatedPlaylists(val items: List<SpPlaylistSimple> = emptyList(), val total: Int = 0, val offset: Int = 0, val limit: Int = 50, val next: String? = null)
 @Serializable data class SpPlaylistTrackItem(@SerialName("added_at") val addedAt: String? = null, val track: SpTrack? = null)

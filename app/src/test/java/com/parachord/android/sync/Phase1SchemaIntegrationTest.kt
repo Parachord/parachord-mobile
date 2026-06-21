@@ -44,6 +44,7 @@ class Phase1SchemaIntegrationTest {
             sourceUrl = null,
             sourceContentHash = null,
             localOnly = localOnly,
+            writable = 1L,
         )
     }
 

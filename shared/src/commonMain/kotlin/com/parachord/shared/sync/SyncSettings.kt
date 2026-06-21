@@ -34,6 +34,11 @@ data class SyncSettings(
  * consider. Mirrors `SyncEngine.isPushCandidate` (which delegates here).
  */
 fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, providerId: String): Boolean {
+    // #269: a read-only FOLLOWED playlist (not owned, not collaborative) must
+    // never be pushed/mirrored anywhere — that round-trip is what created owned
+    // Spotify duplicates of playlists you only follow. Owned + collaborative +
+    // local playlists are all writable=true.
+    if (!playlist.writable) return false
     val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
     return when (providerId) {
         "spotify" -> playlist.spotifyId == null && base

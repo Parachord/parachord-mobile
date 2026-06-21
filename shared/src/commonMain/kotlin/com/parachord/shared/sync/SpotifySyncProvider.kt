@@ -266,6 +266,11 @@ class SpotifySyncProvider(
             page.items.forEach { playlist ->
                 val playlistId = playlist.id ?: return@forEach
                 if (seen.add(playlistId)) {
+                    val owned = playlist.owner?.id == currentUser.id
+                    // Writable = you can edit the tracklist: owned OR collaborative.
+                    // A read-only followed playlist is writable=false → never a
+                    // push/mirror candidate (#269).
+                    val writable = owned || playlist.collaborative
                     all.add(SyncedPlaylist(
                         entity = Playlist(
                             id = "spotify-$playlistId",
@@ -276,11 +281,13 @@ class SpotifySyncProvider(
                             spotifyId = playlistId,
                             snapshotId = playlist.snapshotId,
                             ownerName = playlist.owner?.displayName,
+                            writable = writable,
                         ),
                         spotifyId = playlistId,
                         snapshotId = playlist.snapshotId,
                         trackCount = playlist.tracks?.total ?: 0,
-                        isOwned = playlist.owner?.id == currentUser.id,
+                        isOwned = owned,
+                        writable = writable,
                     ))
                 }
             }

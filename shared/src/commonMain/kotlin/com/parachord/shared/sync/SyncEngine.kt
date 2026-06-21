@@ -3173,6 +3173,11 @@ class SyncEngine constructor(
         val candidates = playlistDao.getAllSync().filter { local ->
             local.name.trim().lowercase() == key
                 && !local.id.startsWith("local-")
+                // #269: never absorb a provider mirror into a read-only FOLLOWED
+                // playlist. Name alone is ambiguous when two playlists share a
+                // name (a followed one + your own); cross-linking the mirror to
+                // the followed row is what tangled both into the same mirrors.
+                && local.writable
                 && syncPlaylistLinkDao.selectForLink(local.id, currentProviderId) == null
         }
         if (candidates.isEmpty()) return null
