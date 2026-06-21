@@ -110,6 +110,16 @@ class AchordionClient(
     }
 
     /**
+     * The Achordion share URL for a playlist, keyed on its ListenBrainz MBID
+     * (the cross-platform anchor Achordion's playlist-links cache uses). Tries
+     * the server-canonical entity-link first, falls back to the direct
+     * `achordion.xyz/playlist/<mbid>`. Mirrors desktop `app.js:14600`.
+     */
+    suspend fun playlistShareUrl(lbMbid: String): String =
+        fetchEntityLink(EntityType.Playlist, lbMbid)?.url
+            ?: "https://achordion.xyz/playlist/$lbMbid"
+
+    /**
      * Fetch the live announcements feed.
      *
      * Public endpoint — no auth header, no bearer token gate. Server returns
@@ -229,6 +239,7 @@ enum class EntityType(val wireValue: String) {
     Track("track"),
     ReleaseGroup("release-group"),
     Artist("artist"),
+    Playlist("playlist"),
 }
 
 @Serializable

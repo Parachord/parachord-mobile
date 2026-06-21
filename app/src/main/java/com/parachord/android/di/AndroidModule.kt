@@ -294,7 +294,7 @@ val androidModule = module {
     // `sharedModule`; per-platform `OkHttp`/`Darwin` Ktor engines + global
     // User-Agent + sanitized Authorization-stripping logging come for free
     // through the shared `HttpClientFactory`.
-    single { com.parachord.android.share.ShareManager(get(), get(), get(), get()) }
+    single { com.parachord.android.share.ShareManager(get(), get(), get(), get(), get()) }
 
     // Spotify Web API — migrated to shared Ktor client (SpotifyClient) in
     // Phase 9E.1.8. Binding lives in sharedModule; per-request auth via

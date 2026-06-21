@@ -2047,6 +2047,18 @@ class IosContainer private constructor() {
     suspend fun getPlaylistMirrorProviders(id: String): List<String> =
         libraryRepository.getPlaylistMirrors(id).keys.toList()
 
+    /**
+     * The Achordion share URL for a playlist (`achordion.xyz/playlist/<lbMbid>`),
+     * or null when the playlist isn't on ListenBrainz (the share anchor). Matches
+     * desktop — sync the playlist to ListenBrainz to enable sharing. Override-
+     * aware (a Sync-menu-disabled LB channel won't share).
+     */
+    suspend fun playlistShareUrl(localId: String): String? {
+        val lbMbid = libraryRepository.getPlaylistMirrors(localId)["listenbrainz"]
+            ?: localId.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
+        return lbMbid?.let { achordionClient.playlistShareUrl(it) }
+    }
+
     /** A playlist's mirrors as (providerId, externalId) pairs, for the detail
      *  page's "open on <service>" chips. */
     suspend fun getPlaylistMirrorLinks(id: String): List<IosPlaylistMirrorLink> =

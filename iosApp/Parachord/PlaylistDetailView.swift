@@ -367,6 +367,21 @@ final class PlaylistsListModel {
     }
 }
 
+/// Wrapper so a share URL can drive a `.sheet(item:)`.
+struct PCShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Minimal system share sheet (iOS has no other UIActivityViewController use yet).
+struct PCActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
 struct PlaylistsScreen: View {
     @State private var model = PlaylistsListModel()
     @State private var path: [String] = []
@@ -376,6 +391,8 @@ struct PlaylistsScreen: View {
     @State private var renameText = ""
     @State private var deleteTarget: Playlist?
     @State private var syncTarget: Playlist?
+    @State private var shareItem: PCShareItem?
+    @State private var shareNote: String?
     let onMenu: () -> Void
     init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
 
@@ -419,6 +436,7 @@ struct PlaylistsScreen: View {
                                 Button { path.append(p.id) } label: { row(p) }.buttonStyle(.plain)
                                     .contextMenu {
                                         Button { playPlaylist(p) } label: { Label("Play Playlist", systemImage: "play.fill") }
+                                        Button { sharePlaylist(p) } label: { Label("Share…", systemImage: "square.and.arrow.up") }
                                         Button { syncTarget = p } label: { Label("Sync…", systemImage: "arrow.triangle.2.circlepath") }
                                         Button { renameTarget = p; renameText = p.name } label: { Label("Rename", systemImage: "pencil") }
                                         Button(role: .destructive) { deleteTarget = p } label: { Label("Delete Playlist", systemImage: "trash") }
@@ -454,6 +472,21 @@ struct PlaylistsScreen: View {
                     }
                     .presentationDetents([.medium])
                 }
+            }
+            .sheet(item: $shareItem) { item in PCActivityView(items: [item.url]) }
+            .alert("Sharing", isPresented: Binding(get: { shareNote != nil }, set: { if !$0 { shareNote = nil } })) {
+                Button("OK") { shareNote = nil }
+            } message: { Text(shareNote ?? "") }
+        }
+    }
+
+    private func sharePlaylist(_ p: Playlist) {
+        Task {
+            let raw = (try? await container.playlistShareUrl(localId: p.id)) ?? nil
+            if let s = raw, let url = URL(string: s) {
+                shareItem = PCShareItem(url: url)
+            } else {
+                shareNote = "Sync “\(p.name)” to ListenBrainz first to share it via Achordion."
             }
         }
     }
