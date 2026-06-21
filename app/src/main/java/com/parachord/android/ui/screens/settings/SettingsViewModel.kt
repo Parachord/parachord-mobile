@@ -33,7 +33,22 @@ class SettingsViewModel constructor(
     private val pluginSyncService: com.parachord.shared.plugin.PluginSyncService,
     private val lovesPushService: LovesPushService,
     private val libraryRepository: LibraryRepository,
+    private val syncEngine: com.parachord.android.sync.SyncEngine,
 ) : ViewModel() {
+
+    // ── N-way multimaster (dev) ──────────────────────────────────────
+    /** Dev opt-in for the N-way playlist sync engine. Default OFF. While ON,
+     *  sync runs migration + SHADOW mode (logs + [nwayShadowLog], no pushes). */
+    val nwayEnabled: StateFlow<Boolean> = settingsStore.nwayEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setNwayEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setNwayEnabled(enabled) }
+    }
+
+    /** The latest sync cycle's N-way shadow plan — what propagation WOULD do. */
+    val nwayShadowLog: StateFlow<List<com.parachord.shared.sync.NwayShadowEntry>> =
+        syncEngine.nwayShadowLog
 
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
     val loadedPlugins: StateFlow<List<com.parachord.shared.plugin.PluginManager.PluginInfo>> =

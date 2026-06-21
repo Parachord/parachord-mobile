@@ -259,6 +259,13 @@ class SyncEngine constructor(
     private val _syncPhase = MutableStateFlow<String?>(null)
     val syncPhase: StateFlow<String?> = _syncPhase
 
+    // N-way SHADOW report (Phase 3 dev surface). Holds the LATEST cycle's
+    // would-do entries for every migrated playlist that has a pending delta.
+    // Populated only while isNwayEnabled; reviewed in Android Settings before
+    // propagation is switched on. Empty = shadow saw no pending changes.
+    private val _nwayShadowLog = MutableStateFlow<List<NwayShadowEntry>>(emptyList())
+    val nwayShadowLog: StateFlow<List<NwayShadowEntry>> = _nwayShadowLog
+
     data class TypeSyncResult(
         val added: Int = 0,
         val removed: Int = 0,
@@ -1115,9 +1122,10 @@ class SyncEngine constructor(
      */
     private suspend fun shadowReconcileNway() {
         if (!settingsStore.isNwayEnabled()) return
+        val entries = mutableListOf<NwayShadowEntry>()
         for (baseline in syncPlaylistBaselineDao.selectAll()) {
             try {
-                shadowReconcilePlaylist(baseline)
+                shadowReconcilePlaylist(baseline)?.let { entries.add(it) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1127,13 +1135,14 @@ class SyncEngine constructor(
                 Log.d(TAG, "N-way SHADOW: skipped '${baseline.localPlaylistId}' (${e.message})")
             }
         }
+        _nwayShadowLog.value = entries
     }
 
-    private suspend fun shadowReconcilePlaylist(baseline: SyncPlaylistBaselineDao.Baseline) {
+    private suspend fun shadowReconcilePlaylist(baseline: SyncPlaylistBaselineDao.Baseline): NwayShadowEntry? {
         val localId = baseline.localPlaylistId
-        val playlist = playlistDao.getById(localId) ?: return
+        val playlist = playlistDao.getById(localId) ?: return null
         val mirrors = getPlaylistMirrors(localId)
-        if (mirrors.isEmpty()) return
+        if (mirrors.isEmpty()) return null
         val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
         val now = currentTimeMillis()
 
@@ -1160,15 +1169,25 @@ class SyncEngine constructor(
             copies.add(NwayCopyState(providerId, keys, now, changed = true))
         }
 
-        val plan = computeNwayShadowPlan(baseline.tracks, copies) ?: return
+        val plan = computeNwayShadowPlan(baseline.tracks, copies) ?: return null
         val dropFraction = nwayBaselineDropFraction(baseline.tracks, plan.merged)
+        val dropPercent = (dropFraction * 100).toInt()
         val massChange = dropFraction > MASS_REMOVAL_THRESHOLD_PERCENT
         Log.d(
             TAG,
             "N-way SHADOW [${playlist.name}]: changed=${plan.changedCopyIds} → merged ${plan.merged.size} " +
-                "track(s), wouldPush=${plan.wouldPushTo}, drop=${(dropFraction * 100).toInt()}%" +
+                "track(s), wouldPush=${plan.wouldPushTo}, drop=$dropPercent%" +
                 (if (massChange) " — MASS-CHANGE, would abort" else "") +
                 " [no push — shadow mode]",
+        )
+        return NwayShadowEntry(
+            playlistName = playlist.name,
+            localPlaylistId = localId,
+            changedCopies = plan.changedCopyIds,
+            mergedCount = plan.merged.size,
+            wouldPushTo = plan.wouldPushTo,
+            dropPercent = dropPercent,
+            massChange = massChange,
         )
     }
 

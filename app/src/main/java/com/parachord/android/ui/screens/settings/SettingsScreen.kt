@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -2682,6 +2683,11 @@ private fun GeneralTab(
     val syncViewModel: SyncViewModel = koinViewModel()
     val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
     val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
+    // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
+    // screen (koinViewModel is nav-entry-scoped).
+    val settingsViewModel: SettingsViewModel = koinViewModel()
+    val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
+    val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
     var showSyncSetupSheet by remember { mutableStateOf(false) }
     /** Which provider the wizard is currently configuring. The same sheet
      *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
@@ -2953,6 +2959,62 @@ private fun GeneralTab(
                         )
                     },
                 )
+            }
+        }
+
+        // ── N-way multimaster (DEV ONLY) ─────────────────────────────
+        // Debug-build gate: flips the dormant nway_enabled flag so sync runs
+        // migration + SHADOW mode (logs + the report below; pushes nothing).
+        // For validating the merge against a real library before propagation.
+        if (BuildConfig.DEBUG) {
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { SectionHeader("Developer · N-way sync (shadow)") }
+            item {
+                ListItem(
+                    headlineContent = { Text("N-way shadow mode") },
+                    supportingContent = {
+                        Text(
+                            "Runs the multimaster merge in shadow on every sync — logs what " +
+                                "it WOULD push, but pushes nothing. Dev validation only.",
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = nwayEnabled,
+                            onCheckedChange = { settingsViewModel.setNwayEnabled(it) },
+                        )
+                    },
+                )
+            }
+            if (nwayEnabled) {
+                if (nwayShadowLog.isEmpty()) {
+                    item {
+                        Text(
+                            "No pending changes — run Sync Now, then re-open. Shadow mode " +
+                                "only lists playlists where a copy diverged from the baseline.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                } else {
+                    items(nwayShadowLog) { entry ->
+                        ListItem(
+                            headlineContent = {
+                                Text(if (entry.massChange) "⚠️ ${entry.playlistName}" else entry.playlistName)
+                            },
+                            supportingContent = {
+                                Text(
+                                    "changed: ${entry.changedCopies.joinToString().ifEmpty { "—" }}\n" +
+                                        "→ merged ${entry.mergedCount} track(s), " +
+                                        "would push to: ${entry.wouldPushTo.joinToString().ifEmpty { "none" }}" +
+                                        (if (entry.dropPercent > 0) " · drop ${entry.dropPercent}%" else "") +
+                                        (if (entry.massChange) " · MASS-CHANGE, would abort" else ""),
+                                )
+                            },
+                        )
+                    }
+                }
             }
         }
     }

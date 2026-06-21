@@ -30,6 +30,23 @@ data class NwayShadowPlan(
 )
 
 /**
+ * A human-reviewable shadow-mode entry — what the engine WOULD do for one
+ * playlist this cycle. Surfaced to a dev UI (Android Settings "N-way shadow
+ * report") so the merge can be validated against a real library before
+ * propagation is switched on. `name` (not `description` — Swift bridging) keeps
+ * it iOS-safe for later reuse.
+ */
+data class NwayShadowEntry(
+    val playlistName: String,
+    val localPlaylistId: String,
+    val changedCopies: List<String>,
+    val mergedCount: Int,
+    val wouldPushTo: List<String>,
+    val dropPercent: Int,
+    val massChange: Boolean,
+)
+
+/**
  * Pure shadow-mode reconciliation (Phase 3): `(baseline, copies) -> plan`.
  * No I/O, no provider knowledge, no mutation — the caller fetches the copies'
  * tokens/tracklists, calls this, and LOGS the plan (pushes nothing in shadow).

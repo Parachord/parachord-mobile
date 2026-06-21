@@ -189,6 +189,9 @@ class SettingsStore(
     val persistQueue: Flow<Boolean> = migratedFlow().flatMapConcat {
         kv.observeBoolean(PERSIST_QUEUE, default = true)
     }
+    val nwayEnabledFlow: Flow<Boolean> = migratedFlow().flatMapConcat {
+        kv.observeBoolean(NWAY_ENABLED, default = false)
+    }
 
     suspend fun setThemeMode(mode: String) {
         ensureMigrated()
