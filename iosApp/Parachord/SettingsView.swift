@@ -1444,7 +1444,7 @@ private struct ProviderSyncConfigSheet: View {
             Button("Keep local copy") { Task { await m.confirmPullKeep(); dismiss() } }
             Button("Cancel", role: .cancel) { m.pendingPullRemoval = nil }
         } message: {
-            Text("These \(target.name) playlists will stop syncing. Remove them from Parachord (they stay on \(target.name)), or keep a local copy that no longer updates?")
+            Text("These playlists will stop syncing from \(target.name). Remove them from Parachord (they stay on \(target.name)), or keep them in your library? (A playlist also synced from another service keeps syncing there.)")
         }
     }
 

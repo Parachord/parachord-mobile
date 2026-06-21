@@ -2549,6 +2549,26 @@ class SyncEngine constructor(
     }
 
     /**
+     * Detach a playlist from ONE provider's sync, leaving every OTHER provider's
+     * linkage intact. Used by the per-provider pull picker's "keep local copy"
+     * choice: deselecting a playlist in the Spotify picker must NOT strip its
+     * ListenBrainz link — doing so makes the LB pull's name-match
+     * ([findCrossProviderNameMatch] requires "no link for this provider") re-claim
+     * the row and re-import a DUPLICATE on the next sync. Removing only the
+     * deselected provider's source + link keeps the row recognized by its other
+     * mirrors, so nothing re-imports. Also clears the pull-source row only when
+     * it points at THIS provider.
+     */
+    suspend fun detachPlaylistFromProvider(localPlaylistId: String, providerId: String) {
+        syncPlaylistLinkDao.deleteForLink(localPlaylistId, providerId)
+        syncSourceDao.deleteByKey(localPlaylistId, "playlist", providerId)
+        val pullSource = syncPlaylistSourceDao.selectForLocal(localPlaylistId)
+        if (pullSource?.providerId == providerId) {
+            syncPlaylistSourceDao.deleteForLocal(localPlaylistId)
+        }
+    }
+
+    /**
      * All remote mirrors of a local playlist: providerId -> externalId. Union of
      * the id-prefix-derived source, the pull-source row, and every push link.
      * Each entry is a remote we can show a chip for / offer to delete from.

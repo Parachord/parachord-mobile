@@ -562,7 +562,9 @@ class IosContainer private constructor() {
             playlistTrackDao.deleteByPlaylistId(id)
         }
         for (id in keepLocalIds) {
-            syncEngine.detachPlaylistFromSync(id)
+            // Detach from THIS provider only — stripping all links would let
+            // another mirror's pull (e.g. ListenBrainz) re-import a duplicate.
+            syncEngine.detachPlaylistFromProvider(id, providerId)
         }
         settingsStore.setPullPlaylists(providerId, allowlist.toSet())
     }
