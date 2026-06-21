@@ -132,6 +132,9 @@ class SettingsStore(
         /** Per-provider PULL allowlist (which remote playlists to import). */
         fun pullPlaylistsKey(providerId: String) = "sync_pull_playlists_$providerId"
 
+        /** Per-playlist channel override (which providers ONE playlist syncs with). */
+        fun playlistChannelsKey(localPlaylistId: String) = "sync_playlist_channels_$localPlaylistId"
+
         /** Marker key — set to `true` once the one-shot DataStore→KvStore
          *  copy completes. Lives in KvStore so it survives across reboots
          *  without re-running the migration. */
@@ -829,6 +832,24 @@ class SettingsStore(
         // Keep the legacy global key in sync for Spotify so any code still
         // reading SyncSettings.selectedPlaylistIds stays consistent.
         if (providerId == "spotify") kv.setString(SYNC_SELECTED_PLAYLIST_IDS, csv)
+    }
+
+    override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(playlistChannelsKey(localPlaylistId)) ?: return null
+        return raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    }
+
+    override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {
+        ensureMigrated()
+        if (channels == null) {
+            kv.remove(playlistChannelsKey(localPlaylistId))
+        } else {
+            // Empty-but-present override = "syncs with nothing" (fully local) —
+            // distinct from null (= no override). Store a sentinel so an empty
+            // set round-trips as empty, not as absent.
+            kv.setString(playlistChannelsKey(localPlaylistId), if (channels.isEmpty()) " " else channels.joinToString(","))
+        }
     }
 
     override suspend fun clearSyncSettings() {

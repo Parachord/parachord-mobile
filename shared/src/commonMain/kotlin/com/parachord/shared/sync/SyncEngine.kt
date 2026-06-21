@@ -1149,10 +1149,14 @@ class SyncEngine constructor(
             }
         } else emptyList()
 
-        val selectedRemote = if (settings.selectedPlaylistIds.isEmpty()) {
-            remotePlaylists
-        } else {
-            remotePlaylists.filter { it.spotifyId in settings.selectedPlaylistIds }
+        // Pull allowlist (per-provider) + per-playlist channel override. The
+        // override is authoritative for a given playlist; otherwise the allowlist
+        // (empty = import all) applies.
+        val spotifyAllow = settingsStore.getPullPlaylists(SpotifySyncProvider.PROVIDER_ID)
+        val selectedRemote = remotePlaylists.filter {
+            val override = settingsStore.getPlaylistChannels("spotify-${it.spotifyId}")
+            if (override != null) SpotifySyncProvider.PROVIDER_ID in override
+            else spotifyAllow.isEmpty() || it.spotifyId in spotifyAllow
         }
 
         val localSources = syncSourceDao.getByProvider(providerId, "playlist")
@@ -1564,8 +1568,11 @@ class SyncEngine constructor(
         // playlist is NOT auto-deleted here — the picker's keep/remove prompt
         // handles deselection explicitly (detach to keep, delete to remove).
         val pullAllow = settingsStore.getPullPlaylists(providerId)
-        val importPlaylists = if (pullAllow.isEmpty()) remotePlaylists
-            else remotePlaylists.filter { it.spotifyId in pullAllow }
+        val importPlaylists = remotePlaylists.filter {
+            val override = settingsStore.getPlaylistChannels("$providerId-${it.spotifyId}")
+            if (override != null) providerId in override
+            else pullAllow.isEmpty() || it.spotifyId in pullAllow
+        }
 
         val localSources = syncSourceDao.getByProvider(providerId, "playlist")
         val localByExternalId = localSources.associateBy { it.externalId }
@@ -1886,11 +1893,13 @@ class SyncEngine constructor(
         // chosen local ids; ALL preserves mirror-everything.
         val selection = settingsStore.getPlaylistSelection(providerId)
         val allPlaylists = playlistDao.getAllSync()
-        val candidates = if (selection.mode == PlaylistSyncMode.NONE) {
-            emptyList()
-        } else {
-            allPlaylists.filter {
-                it.name.isNotBlank() && isPushCandidate(it, providerId) && selection.includes(it.id)
+        // A per-playlist channel override (from the playlist Sync menu) is
+        // AUTHORITATIVE — it overrides the provider's push mode for that one
+        // playlist. Otherwise fall back to the per-provider selection.
+        val candidates = allPlaylists.filter {
+            it.name.isNotBlank() && isPushCandidate(it, providerId) && run {
+                val override = settingsStore.getPlaylistChannels(it.id)
+                if (override != null) providerId in override else selection.includes(it.id)
             }
         }
 

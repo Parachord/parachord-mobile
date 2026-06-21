@@ -375,6 +375,7 @@ struct PlaylistsScreen: View {
     @State private var renameTarget: Playlist?
     @State private var renameText = ""
     @State private var deleteTarget: Playlist?
+    @State private var syncTarget: Playlist?
     let onMenu: () -> Void
     init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
 
@@ -418,6 +419,7 @@ struct PlaylistsScreen: View {
                                 Button { path.append(p.id) } label: { row(p) }.buttonStyle(.plain)
                                     .contextMenu {
                                         Button { playPlaylist(p) } label: { Label("Play Playlist", systemImage: "play.fill") }
+                                        Button { syncTarget = p } label: { Label("Sync…", systemImage: "arrow.triangle.2.circlepath") }
                                         Button { renameTarget = p; renameText = p.name } label: { Label("Rename", systemImage: "pencil") }
                                         Button(role: .destructive) { deleteTarget = p } label: { Label("Delete Playlist", systemImage: "trash") }
                                     }
@@ -441,6 +443,12 @@ struct PlaylistsScreen: View {
             .sheet(isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
                 if let p = deleteTarget {
                     DeletePlaylistSheet(playlist: p) { deleteTarget = nil }
+                        .presentationDetents([.medium])
+                }
+            }
+            .sheet(isPresented: Binding(get: { syncTarget != nil }, set: { if !$0 { syncTarget = nil } })) {
+                if let p = syncTarget {
+                    PlaylistSyncChannelsSheet(playlist: p) { syncTarget = nil }
                         .presentationDetents([.medium])
                 }
             }
@@ -604,6 +612,82 @@ private struct DeletePlaylistSheet: View {
         Text(t.uppercased()).font(.system(size: 11, weight: .bold)).tracking(1.4).foregroundStyle(PC.fg3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
+    }
+}
+
+/// Per-playlist Sync menu: toggle which services this playlist syncs with. The
+/// per-playlist channel override is authoritative — disabling detaches (no dup),
+/// enabling mirrors it to that service on the next sync.
+private struct PlaylistSyncChannelsSheet: View {
+    let playlist: Playlist
+    let onClose: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    private let container = IosContainer.companion.shared
+    @State private var channels: [IosSyncChannel] = []
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Choose which services “\(playlist.name)” syncs with.")
+                        .font(.system(size: 13)).foregroundStyle(PC.fg2)
+                        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 8)
+                    ForEach(channels, id: \.providerId) { ch in channelRow(ch) }
+                    Text("Turning a service off keeps the playlist in Parachord but stops syncing it there. Turning one on mirrors it to that service on the next sync.")
+                        .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 20).padding(.top, 10)
+                    Spacer(minLength: 24)
+                }
+            }
+            .background(PC.bgPrimary.ignoresSafeArea())
+            .navigationTitle("Sync").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss(); onClose() }.foregroundStyle(PC.accent)
+                }
+            }
+        }
+        .task { await reload() }
+    }
+
+    private func channelRow(_ ch: IosSyncChannel) -> some View {
+        // Toggleable when connected AND (can mirror here OR already on — so you
+        // can always turn an enabled channel off).
+        let interactive = ch.connected && (ch.available || ch.enabled)
+        return HStack(spacing: 12) {
+            Circle().fill(channelColor(ch.providerId)).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(ch.displayName).font(.system(size: 15)).foregroundStyle(interactive ? PC.fg1 : PC.fg3)
+                if !ch.connected {
+                    Text("Connect in Settings to sync here").font(.system(size: 11)).foregroundStyle(PC.fg3)
+                } else if !ch.available && !ch.enabled {
+                    Text("Can’t mirror this playlist here").font(.system(size: 11)).foregroundStyle(PC.fg3)
+                }
+            }
+            Spacer()
+            Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in Task { await set(ch.providerId, on) } }))
+                .labelsHidden().tint(PC.accent).disabled(!interactive)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+    }
+
+    private func set(_ pid: String, _ on: Bool) async {
+        try? await container.setPlaylistChannel(localId: playlist.id, providerId: pid, enabled: on)
+        await reload()
+    }
+
+    private func reload() async {
+        channels = (try? await container.getPlaylistSyncChannels(localId: playlist.id)) as? [IosSyncChannel] ?? []
+    }
+
+    private func channelColor(_ id: String) -> Color {
+        switch id {
+        case "spotify": return Color(uiColor: UIColor(hex: 0x1DB954))
+        case "applemusic": return Color(uiColor: UIColor(hex: 0xFA243C))
+        case "listenbrainz": return Color(uiColor: UIColor(hex: 0xEB743B))
+        default: return PC.fg3
+        }
     }
 }
 

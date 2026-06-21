@@ -126,6 +126,19 @@ interface SyncSettingsProvider {
     suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>)
 
     /**
+     * Per-playlist channel override: the exact set of providers a single
+     * playlist syncs with, set via the playlist's Sync menu. `null` = no
+     * override (fall back to the per-provider push selection / pull allowlist).
+     * When present it is AUTHORITATIVE for that playlist on both push and pull —
+     * so the user can sync one playlist to exactly the services they choose,
+     * independent of the global per-provider defaults.
+     */
+    suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>?
+
+    /** Persist (or clear, with `null`) a playlist's channel override. */
+    suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?)
+
+    /**
      * Sync data version — bumped to force a full re-fetch after schema/migration
      * changes. SyncEngine compares against its own `SYNC_DATA_VERSION` constant.
      */

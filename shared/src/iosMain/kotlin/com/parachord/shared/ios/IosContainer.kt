@@ -2053,6 +2053,53 @@ class IosContainer private constructor() {
             IosPlaylistMirrorLink(providerId = provider, externalId = externalId)
         }
 
+    // ── Per-playlist Sync menu ────────────────────────────────────────────────
+
+    private val syncChannelProviders = listOf("spotify", "applemusic", "listenbrainz")
+
+    private fun providerDisplay(id: String): String = when (id) {
+        "spotify" -> "Spotify"
+        "applemusic" -> "Apple Music"
+        "listenbrainz" -> "ListenBrainz"
+        else -> id.replaceFirstChar { it.uppercase() }
+    }
+
+    /** The sync channels for one playlist — each provider with connected /
+     *  enabled / available state, for the playlist Sync menu. */
+    suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> {
+        val enabledProviders = settingsStore.getEnabledSyncProviders()
+        val override = settingsStore.getPlaylistChannels(localId)
+        val mirrors = libraryRepository.getPlaylistMirrors(localId).keys
+        val effective = override ?: mirrors
+        val playlist = playlistDao.getById(localId)
+        return syncChannelProviders.map { pid ->
+            val isSource = localId.startsWith("$pid-")
+            val canPush = playlist != null && com.parachord.shared.sync.isPlaylistPushCandidate(playlist, pid)
+            IosSyncChannel(
+                providerId = pid,
+                displayName = providerDisplay(pid),
+                connected = pid in enabledProviders,
+                enabled = pid in effective,
+                available = isSource || canPush,
+            )
+        }
+    }
+
+    /** Toggle one channel for one playlist. Writes the per-playlist override
+     *  (authoritative). Disabling also detaches the existing linkage so the
+     *  state updates immediately and the next sync's override gate keeps it off.
+     *  Enabling sets the override; the next sync mirrors it (push) if it's a
+     *  valid target. */
+    suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) {
+        val override = settingsStore.getPlaylistChannels(localId)
+        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
+        val updated = if (enabled) current + providerId else current - providerId
+        settingsStore.setPlaylistChannels(localId, updated)
+        if (!enabled) {
+            syncEngine.detachPlaylistFromProvider(localId, providerId)
+        }
+    }
+
     /** Delete a playlist locally + remote-delete from [fromProviders] (provider
      *  ids). Returns the display names of providers that DON'T support API
      *  deletion (e.g. Apple Music) so the UI can tell the user to remove it
@@ -2376,6 +2423,19 @@ data class IosPlaylistMirrors(
 data class IosPlaylistMirrorLink(
     val providerId: String,
     val externalId: String,
+)
+
+/** A sync channel row in a playlist's Sync menu. [connected] = the provider is
+ *  enabled for sync (else dim + "connect in Settings"); [enabled] = this
+ *  playlist currently syncs with it; [available] = the playlist CAN sync with it
+ *  (it's the source, or a valid push target) — a non-available channel can't be
+ *  toggled on. */
+data class IosSyncChannel(
+    val providerId: String,
+    val displayName: String,
+    val connected: Boolean,
+    val enabled: Boolean,
+    val available: Boolean,
 )
 
 data class IosSearchResults(
