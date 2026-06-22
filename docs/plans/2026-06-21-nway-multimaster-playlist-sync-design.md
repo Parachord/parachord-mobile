@@ -155,14 +155,38 @@ Run once per playlist when the N-way engine first activates:
 3. **Shadow mode** — every sync, compute the merge and **log what it would do,
    push nothing**. Validate against real desktop libraries at zero risk.
 4. **Enable propagation** — behind a per-user flag; retire the canonical-source
-   model once validated.
+   model once validated. Built (Jun 22 2026) as `SyncEngine.runNwayPropagation` +
+   `propagateReconcilePlaylist` with the four correctness traps (key→track
+   resolution, hydration ordering, baseline re-derivation, post-push echo
+   suppression):
+   - **Executor + echo-loop gate green** — `runNwayPropagation(dryRun)` behind
+     `NWAY_PROPAGATE` (real writes need `NWAY_ENABLED` too; a dry-run needs only
+     `NWAY_ENABLED`). Echo-loop / mass-change / wired-into-`syncAll` regression
+     tests in `ListenBrainzPushShortCircuitTest`.
+   - **Dev dry-run** — Android Settings → "Developer · N-way propagation" runs a
+     dry-run (preview, no writes) into `nwayPropagationLog`; reviewed on a real
+     library (Jun 22 2026: a healthy 4-copy push and a correct 60% mass-change
+     abort).
+   - **Per-sync wiring** — `runNwayPropagation()` runs at the end of
+     `syncPlaylists` (after the normal pull/push + `clearLocallyModifiedFlags`),
+     gated + echo-suppressed; skipped on a provider-filtered partial sync.
+   - **Remaining before default-on:** validate REAL writes behind the flag on one
+     playlist end-to-end; then desktop parity (step 5).
 5. **Desktop ↔ mobile parity** — desktop adopts the same algorithm (port of the
    shared `commonMain` merge logic). Gate enablement on "all the user's clients
    support N-way" so a mixed fleet never oscillates.
 
 Plus a **sync×2 idempotency** integration harness: a no-op sync must change
 nothing (same tokens, same baseline, no pushes) — the regression guard for the
-echo loop.
+echo loop. Covered structurally by the echo-loop + wired-`syncAll` tests; the
+direct guard is `propagation pushes the merged list once then suppresses the echo`.
+
+**Known residual (unify):** a provider copy whose tracks carry blank
+title+artist hash to `norm="|"` and unify together (then mbid-bridge), collapsing
+distinct tracks to one representative. Pre-existing in shadow mode + documented in
+`NwayKeyUnify`; surfaced by an MBID-only test fake, not seen with real provider
+metadata. Out of scope here; guard the `norm` bridge on a blank norm if it ever
+bites real data.
 
 ## Out of scope
 

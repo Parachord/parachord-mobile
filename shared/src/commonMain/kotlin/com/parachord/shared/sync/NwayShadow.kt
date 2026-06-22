@@ -47,6 +47,25 @@ data class NwayShadowEntry(
 )
 
 /**
+ * A human-reviewable PROPAGATION outcome (Phase 4) — what [SyncEngine.runNwayPropagation]
+ * did (or, in dry-run, WOULD do) for one playlist this cycle. Surfaced to the
+ * Android Settings "N-way propagation" dev section so real-library behavior can
+ * be validated before/while real writes are enabled. `name` (not `description` —
+ * Swift bridging) keeps it iOS-safe for later reuse.
+ *
+ * [status] is one of: `"would-push"` (dry-run), `"pushed"` (real write),
+ * `"mass-change-abort"`, `"partial-abort"` (a merged key couldn't resolve to a
+ * track). Only playlists with a pending delta produce an entry.
+ */
+data class NwayPropagationEntry(
+    val playlistName: String,
+    val localPlaylistId: String,
+    val mergedCount: Int,
+    val pushTargets: List<String>,
+    val status: String,
+)
+
+/**
  * Pure shadow-mode reconciliation (Phase 3): `(baseline, copies) -> plan`.
  * No I/O, no provider knowledge, no mutation — the caller fetches the copies'
  * tokens/tracklists, calls this, and LOGS the plan (pushes nothing in shadow).

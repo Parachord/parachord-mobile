@@ -2689,6 +2689,9 @@ private fun GeneralTab(
     val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
     val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
     val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
+    val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
+    val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
+    val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
     var showSyncSetupSheet by remember { mutableStateOf(false) }
     /** Which provider the wizard is currently configuring. The same sheet
      *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
@@ -3021,6 +3024,77 @@ private fun GeneralTab(
                                         "would push to: ${entry.wouldPushTo.joinToString().ifEmpty { "none" }}" +
                                         (if (entry.dropPercent > 0) " · drop ${entry.dropPercent}%" else "") +
                                         (if (entry.massChange) " · MASS-CHANGE, would abort" else ""),
+                                )
+                            },
+                        )
+                    }
+                }
+
+                // ── Propagation (REAL writes, stricter opt-in) ──────────
+                item { Spacer(modifier = Modifier.height(8.dp)) }
+                item { SectionHeader("Developer · N-way propagation (writes)") }
+                item {
+                    ListItem(
+                        headlineContent = { Text("Enable real writes") },
+                        supportingContent = {
+                            Text(
+                                "Lets propagation PUSH the merged tracklist to your real " +
+                                    "Spotify / Apple Music / ListenBrainz playlists. Leave OFF to " +
+                                    "preview only. Dry-run works without this.",
+                            )
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = nwayPropagateEnabled,
+                                onCheckedChange = { settingsViewModel.setNwayPropagateEnabled(it) },
+                            )
+                        },
+                    )
+                }
+                item {
+                    Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Button(
+                            onClick = { settingsViewModel.runPropagation(dryRun = true) },
+                            enabled = !propagating,
+                        ) {
+                            Text(if (propagating) "Running…" else "Dry-run")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { settingsViewModel.runPropagation(dryRun = false) },
+                            enabled = !propagating && nwayPropagateEnabled,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                            ),
+                        ) {
+                            Text("Run writes")
+                        }
+                    }
+                }
+                if (nwayPropagationLog.isEmpty()) {
+                    item {
+                        Text(
+                            "No propagation outcome yet. Dry-run previews what WOULD be pushed " +
+                                "(no writes); review it on your real library before enabling writes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                } else {
+                    items(nwayPropagationLog) { entry ->
+                        val badge = when (entry.status) {
+                            "pushed" -> "✅"
+                            "would-push" -> "👁"
+                            "mass-change-abort", "partial-abort" -> "⚠️"
+                            else -> "•"
+                        }
+                        ListItem(
+                            headlineContent = { Text("$badge ${entry.playlistName}") },
+                            supportingContent = {
+                                Text(
+                                    "${entry.status} · merged ${entry.mergedCount} track(s) → " +
+                                        "targets: ${entry.pushTargets.joinToString().ifEmpty { "none" }}",
                                 )
                             },
                         )

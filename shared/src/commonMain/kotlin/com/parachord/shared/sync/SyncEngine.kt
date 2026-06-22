@@ -266,6 +266,13 @@ class SyncEngine constructor(
     private val _nwayShadowLog = MutableStateFlow<List<NwayShadowEntry>>(emptyList())
     val nwayShadowLog: StateFlow<List<NwayShadowEntry>> = _nwayShadowLog
 
+    // N-way PROPAGATION report (Phase 4 dev surface). Holds the LATEST
+    // [runNwayPropagation] cycle's per-playlist outcome — what was (or, in
+    // dry-run, WOULD be) pushed, or why it aborted. Reviewed in Android Settings
+    // to validate real-library behavior before/while real writes are enabled.
+    private val _nwayPropagationLog = MutableStateFlow<List<NwayPropagationEntry>>(emptyList())
+    val nwayPropagationLog: StateFlow<List<NwayPropagationEntry>> = _nwayPropagationLog
+
     data class TypeSyncResult(
         val added: Int = 0,
         val removed: Int = 0,
@@ -1246,6 +1253,191 @@ class SyncEngine constructor(
         )
     }
 
+    /** One copy's pre-unification TrackKeys + the actual [PlaylistTrack]s behind
+     *  them (needed to resolve merged representative keys back to tracks for the
+     *  push — Trap 1). For an unchanged copy [tracks] is empty (its keys reuse the
+     *  baseline; it can still be a push target, but its current tracks aren't
+     *  needed to build the merged list). */
+    private data class PropagationCopyInput(
+        val id: String,
+        val tracks: List<PlaylistTrack>,
+        val keys: List<TrackKeys>,
+        val editedAt: Long,
+        val changed: Boolean,
+    )
+
+    /**
+     * N-way PROPAGATION (Phase 4) — the REAL writes. For every migrated playlist,
+     * detect which copies changed, fetch only those, run the unify + 3-way merge,
+     * then push the merged tracklist to every WRITABLE copy that lags it, capture
+     * each provider's post-push token (echo suppression), and advance the
+     * baseline so the next cycle detects every copy as unchanged.
+     *
+     * Gated on BOTH [SyncSettingsProvider.isNwayEnabled] and
+     * [SyncSettingsProvider.isNwayPropagateEnabled] — inert (early return) unless
+     * both are on. [dryRun] computes + logs the plan (and resolves the merged
+     * tracks) but skips the actual provider writes — the on-device validation
+     * step before real writes are enabled.
+     *
+     * Mirrors [runNwayShadowScan]'s cheap-detection structure (one paginated
+     * list call per enabled provider; full-tracklist fetch only for a CHANGED
+     * mirror) with the same CancellationException-rethrow + partial-fetch guard.
+     */
+    suspend fun runNwayPropagation(dryRun: Boolean = false) {
+        // A DRY-RUN (preview only, no writes) needs just isNwayEnabled so the
+        // user can validate the readout on their real library BEFORE arming
+        // writes. REAL writes require the stricter isNwayPropagateEnabled too.
+        if (!settingsStore.isNwayEnabled()) return
+        if (!dryRun && !settingsStore.isNwayPropagateEnabled()) return
+        val baselines = syncPlaylistBaselineDao.selectAll()
+        if (baselines.isEmpty()) return
+        val enabled = settingsStore.getEnabledSyncProviders()
+        val remoteLists = mutableMapOf<String, Map<String, SyncedPlaylist>>()
+        for (provider in providers.filter { it.id in enabled }) {
+            remoteLists[provider.id] = runCatching {
+                provider.fetchPlaylists(null).associateBy { it.spotifyId }
+            }.getOrElse { emptyMap() }
+        }
+        val entries = mutableListOf<NwayPropagationEntry>()
+        for (baseline in baselines) {
+            try {
+                propagateReconcilePlaylist(baseline, remoteLists, dryRun)?.let { entries.add(it) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Partial-fetch guard: a changed copy whose tracklist-fetch failed
+                // aborts THIS playlist for the cycle — never push a partial/empty.
+                Log.d(TAG, "N-way PROPAGATE: skipped '${baseline.localPlaylistId}' (${e.message})")
+            }
+        }
+        _nwayPropagationLog.value = entries
+    }
+
+    private suspend fun propagateReconcilePlaylist(
+        baseline: SyncPlaylistBaselineDao.Baseline,
+        remoteLists: Map<String, Map<String, SyncedPlaylist>>,
+        dryRun: Boolean,
+    ): NwayPropagationEntry? {
+        val localId = baseline.localPlaylistId
+        val playlist = playlistDao.getById(localId) ?: return null
+        val mirrors = getPlaylistMirrors(localId)
+        if (mirrors.isEmpty()) return null
+        val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
+        val now = currentTimeMillis()
+
+        // Gather each copy WITH its tracks (local always; CHANGED providers fetched;
+        // unchanged providers reuse the baseline keys, no fetch, no tracks).
+        val inputs = mutableListOf<PropagationCopyInput>()
+        val localTracks = playlistTrackDao.getByPlaylistIdSync(localId).sortedBy { it.position }
+        val localKeys = localTracks.map {
+            trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+        }
+        val localChanged = playlist.locallyModified || playlist.lastModified > baseline.baselineSyncedAt
+        inputs.add(PropagationCopyInput("local", localTracks, localKeys, playlist.lastModified, localChanged))
+
+        for ((providerId, externalId) in mirrors) {
+            val provider = providers.firstOrNull { it.id == providerId } ?: continue
+            val listEntry = remoteLists[providerId]?.get(externalId)
+            val storedToken = storedTokens[providerId]?.changeToken
+            val changed = when {
+                listEntry == null -> false // not in the owned list (deleted/unowned) — skip
+                listEntry.snapshotId != null -> listEntry.snapshotId != storedToken
+                else -> listEntry.trackCount != baseline.tracks.size
+            }
+            if (!changed) {
+                inputs.add(PropagationCopyInput(providerId, emptyList(), baseline.tracks, now, changed = false))
+                continue
+            }
+            val tracks = provider.fetchPlaylistTracks(externalId)
+            val keys = tracks.map {
+                trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+            }
+            inputs.add(PropagationCopyInput(providerId, tracks, keys, now, changed = true))
+        }
+
+        // Cross-copy key unification (same as shadow) so the same song matches
+        // across services before the merge runs on the representative keys.
+        val unified = unifyTrackKeys(listOf(baseline.tracks) + inputs.map { it.keys })
+        val baselineRepr = unified[0]
+        val copies = inputs.mapIndexed { i, c -> NwayCopyState(c.id, unified[i + 1], c.editedAt, c.changed) }
+
+        // Per-copy writability: only the canonical SOURCE copy (the id-prefix
+        // provider) is gated on the playlist's `writable` flag — a followed
+        // (read-only) source must not receive merged changes back. `local` and
+        // every other (owned/collaborative) mirror stay writable. #269: this is
+        // exactly what keeps followed playlists mirroring OUT but never back IN.
+        val sourcePrefix = localId.substringBefore('-')
+        val writableById = inputs.associate { c ->
+            c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
+        }
+
+        val plan = computeNwayPropagationPlan(baselineRepr, copies, writableById, MASS_REMOVAL_THRESHOLD_PERCENT)
+            ?: return null
+        if (plan.massChangeAbort) {
+            val dropPercent = (nwayBaselineDropFraction(baselineRepr, plan.merged) * 100).toInt()
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: MASS-CHANGE drop=$dropPercent% — abort, no push")
+            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "mass-change-abort")
+        }
+
+        // Trap 1 — resolve representative keys → tracks. Build keyToTrack from the
+        // copies that carry real tracks (local FIRST so its richer metadata wins).
+        val keyToTrack = linkedMapOf<String, PlaylistTrack>()
+        inputs.forEachIndexed { i, c ->
+            val reprKeys = unified[i + 1]
+            c.tracks.forEachIndexed { j, t ->
+                val key = reprKeys[j]
+                if (key !in keyToTrack) keyToTrack[key] = t
+            }
+        }
+        val resolved = plan.merged.map { keyToTrack[it] }
+        if (resolved.any { it == null }) {
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${resolved.count { it == null }} merged " +
+                "key(s) unresolved to a track — abort (never push a partial list)")
+            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "partial-abort")
+        }
+        val mergedTracks = resolved.filterNotNull().mapIndexed { idx, t ->
+            t.copy(playlistId = localId, position = idx)
+        }
+
+        if (dryRun) {
+            Log.d(TAG, "N-way PROPAGATE (DRY-RUN) [${playlist.name}]: would push ${mergedTracks.size} " +
+                "track(s) to ${plan.pushTargets} [no write]")
+            return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, plan.pushTargets, "would-push")
+        }
+
+        // Trap 2 — hydration side-effects. Update the LOCAL rows to the merged list
+        // FIRST (if local is a target) so the per-provider hydrate-against-localId
+        // resolves IDs against the right tracks. Then thread the hydrated list
+        // across providers so each provider's replaceAll-persist accumulates the
+        // prior provider's freshly-resolved IDs instead of clobbering them.
+        if ("local" in plan.pushTargets) {
+            playlistTrackDao.replaceAll(localId, mergedTracks)
+        }
+        var current = mergedTracks
+        for (targetId in plan.pushTargets) {
+            if (targetId == "local") continue
+            val provider = providers.firstOrNull { it.id == targetId } ?: continue
+            val externalId = mirrors[targetId] ?: continue
+            val hydrated = hydrateMissingTrackIds(localId, current, provider)
+            current = hydrated
+            val ids = extractExternalTrackIds(hydrated, provider.id)
+            val token = provider.replacePlaylistTracks(externalId, ids)
+            // Trap 4 — capture the POST-PUSH token (echo suppression). null for
+            // snapshot-less providers (LB) → detection falls back to trackCount,
+            // which now equals the merged size → no re-detect next cycle.
+            syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
+        }
+
+        // Trap 3 — advance the baseline to the merged list's own TrackKeys. These
+        // must re-derive (via unifyTrackKeys) to plan.merged next cycle so
+        // detection sees no delta (the playlist path is isrc-free, so mbid/norm
+        // re-derivation is stable). Then clear locallyModified.
+        syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
+        playlistDao.clearLocallyModified(localId)
+        Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: pushed ${mergedTracks.size} track(s) to ${plan.pushTargets}")
+        return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, plan.pushTargets, "pushed")
+    }
+
     private suspend fun syncPlaylists(
         settings: SyncSettings,
         onProgress: (SyncProgress) -> Unit,
@@ -1746,6 +1938,21 @@ class SyncEngine constructor(
         // syncedAt would never advance and would strand the flag forever.
         // Phase 5 generalizes to all enabled providers (was Spotify-only).
         clearLocallyModifiedFlags(enabledProviderIds)
+
+        // N-way PROPAGATION (Phase 4) — runs AFTER the normal pull/push so it sees
+        // the freshest local + remote state and reconciles any remaining
+        // cross-provider divergence the single-source push loop can't (e.g. an
+        // edit pulled in via Spotify that must mirror OUT to Apple Music + LB).
+        // Internally gated on isNwayEnabled() && isNwayPropagateEnabled() — a no-op
+        // (early return) unless the user has armed real writes. Echo-suppressed
+        // (post-push token + advanced baseline) so it never re-pushes a converged
+        // playlist on the next cycle. Per-playlist pushes are sequential and go
+        // through the gated SpotifyClient (150ms inter-request gap + concurrency
+        // cap), so a many-playlist cycle is naturally staggered against the
+        // account-wide rate limit. Skipped on a provider-filtered partial sync.
+        if (providerFilter == null) {
+            runNwayPropagation()
+        }
 
         return TypeSyncResult(added = added, removed = removed, updated = updated, unchanged = unchanged)
     }

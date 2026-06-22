@@ -66,6 +66,38 @@ class SettingsViewModel constructor(
         }
     }
 
+    /** Stricter opt-in for N-way PROPAGATION — REAL provider writes. Requires
+     *  [nwayEnabled] too. Default OFF. A dry-run runs under [nwayEnabled] alone;
+     *  only real writes are gated on this. */
+    val nwayPropagateEnabled: StateFlow<Boolean> = settingsStore.nwayPropagateFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setNwayPropagateEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setNwayPropagateEnabled(enabled) }
+    }
+
+    /** The latest propagation run's per-playlist outcome (would-push / pushed /
+     *  abort) — the dev validation readout. */
+    val nwayPropagationLog: StateFlow<List<com.parachord.shared.sync.NwayPropagationEntry>> =
+        syncEngine.nwayPropagationLog
+
+    private val _propagating = MutableStateFlow(false)
+    val propagating: StateFlow<Boolean> = _propagating.asStateFlow()
+
+    /** Run the on-demand N-way propagation. [dryRun] = true previews + populates
+     *  [nwayPropagationLog] WITHOUT any provider write (needs only [nwayEnabled]);
+     *  [dryRun] = false performs REAL writes (needs [nwayPropagateEnabled] too). */
+    fun runPropagation(dryRun: Boolean) {
+        viewModelScope.launch {
+            _propagating.value = true
+            try {
+                syncEngine.runNwayPropagation(dryRun = dryRun)
+            } finally {
+                _propagating.value = false
+            }
+        }
+    }
+
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
     val loadedPlugins: StateFlow<List<com.parachord.shared.plugin.PluginManager.PluginInfo>> =
         pluginManager.plugins
