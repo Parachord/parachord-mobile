@@ -384,7 +384,7 @@ class AppleMusicSyncProvider(
      * Confidence-gated against [com.parachord.shared.resolver.ResolverScoring.MIN_CONFIDENCE_THRESHOLD]
      * (0.60) using [com.parachord.shared.resolver.scoreConfidence].
      */
-    override suspend fun searchForTrackId(title: String, artist: String, album: String?): String? {
+    override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
         // Session kill-switch: if we've already hit a 429 from iTunes Search,
         // don't bother asking again until the user restarts the app. Apple
         // doesn't publish the throttle window and stacked 429s just extend it.

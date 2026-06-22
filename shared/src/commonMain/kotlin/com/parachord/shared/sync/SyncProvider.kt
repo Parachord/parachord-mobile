@@ -128,6 +128,7 @@ interface SyncProvider {
         title: String,
         artist: String,
         album: String? = null,
+        isrc: String? = null,
     ): String? = null
 
     // ── Library surface (collection sync — Phase 6.5+) ───────────────

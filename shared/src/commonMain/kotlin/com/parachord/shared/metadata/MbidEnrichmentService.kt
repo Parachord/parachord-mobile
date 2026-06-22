@@ -202,6 +202,41 @@ class MbidEnrichmentService(
     }
 
     /**
+     * Fuzzy recording-MBID lookup via MusicBrainz `searchRecordings` (title +
+     * artist), confidence-gated. The LAST-RESORT fallback for playlist
+     * propagation when BOTH the LB mapper is down AND no ISRC is available
+     * (e.g. an Apple-Music- or local-sourced track during the mapper outage).
+     *
+     * Deliberately NOT part of [getRecordingMbid] (which stays mapper→ISRC, both
+     * exact) so the scrobble path keeps its no-wrong-variant guarantee — a fuzzy
+     * title/artist match can pick the wrong recording variant, which is lower-
+     * stakes for a playlist entry than for a scrobble. Gated on
+     * [scoreConfidence] ≥ [ResolverScoring.MIN_CONFIDENCE_THRESHOLD] (both title
+     * AND artist must match) and NOT cached (it's a best-effort variant guess;
+     * caching would block the richer mapper entry once it recovers).
+     */
+    suspend fun searchRecordingMbid(artist: String, title: String): String? {
+        val client = musicBrainzClient ?: return null
+        return try {
+            val query = "recording:\"$title\" AND artist:\"$artist\""
+            val response = client.searchRecordings(query, limit = 5)
+            val match = response.recordings.firstOrNull { rec ->
+                com.parachord.shared.resolver.scoreConfidence(
+                    targetTitle = title,
+                    targetArtist = artist,
+                    matchedTitle = rec.title,
+                    matchedArtist = rec.artistName,
+                ) >= com.parachord.shared.resolver.ResolverScoring.MIN_CONFIDENCE_THRESHOLD
+            }
+            match?.id
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Fuzzy MB recording search failed for '$artist' - '$title': ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Check if we have a cached artist MBID for any track by this artist.
      * Faster than a full mapper call — scans the disk cache for a match.
      */

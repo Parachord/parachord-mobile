@@ -564,26 +564,74 @@ class ListenBrainzPushShortCircuitTest {
     }
 
     /**
-     * Mass-change guard (design step 6) on the executor path: when the merge
-     * would drop more than the threshold of the baseline (a likely provider
-     * hiccup returning a near-empty list), propagation must ABORT the playlist —
-     * push nothing, leave the baseline + tokens untouched — never push a
-     * destructive near-empty tracklist to the user's real account.
+     * Coverage guard (the mapper-outage fix). When a writable mirror's merged
+     * tracks can't be hydrated to that provider's external IDs (e.g. the LB MBID
+     * mapper is down → 0 recording MBIDs resolved), propagation must NOT push a
+     * near-empty list that silently guts/no-fills the mirror, and must NOT advance
+     * the baseline / clear locallyModified (which would falsely mark success and
+     * strand the mirror). It ABORTS the playlist for the cycle so it retries when
+     * hydration recovers. Regression guard for the real-device incident where
+     * `pushed 6` was logged but the AM/LB mirrors stayed at 0.
      */
     @Test
-    fun `propagation aborts a mass-change drop without pushing or mutating state`() = runBlocking {
+    fun `propagation coverage-aborts when a writable mirror cannot be hydrated`() = runBlocking {
         val h = Harness(nway = true, propagate = true)
-        // 8-track baseline; dropping 3 (37.5%) exceeds the 25% threshold.
-        h.seedLocalPlaylist("local-0", "Big List", trackCount = 8)
+        h.seedLocalPlaylist("local-0", "Outage", trackCount = 2)
 
-        h.engine.syncAll() // push + link
-        h.engine.syncAll() // migrate baseline
+        h.engine.syncAll() // create + push (2 mbid tracks)
+        h.engine.syncAll() // migrate baseline = 2
 
         val replacesBefore = h.provider.replaceCalls.size
         val baselineBefore = h.baselineDao.selectForLocal("local-0")!!.tracks
-        val tokenBefore = h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.changeToken
 
-        // Local drops 3 tracks (keep the first 5) and is flagged modified.
+        // Diverge local: keep the 2 mbid tracks, add 2 tracks with NO recording
+        // MBID (the un-hydratable case — the fake provider's searchForTrackId
+        // returns null, like the mapper being down). Merge keeps all 4 (0% drop),
+        // but LB can only extract 2/4 external IDs → 50% coverage drop.
+        val diverged = listOf(
+            PlaylistTrack(playlistId = "local-0", position = 0, trackTitle = "Outage track 0", trackArtist = "Artist 0", trackRecordingMbid = "mbid-track-local-0-0"),
+            PlaylistTrack(playlistId = "local-0", position = 1, trackTitle = "Outage track 1", trackArtist = "Artist 1", trackRecordingMbid = "mbid-track-local-0-1"),
+            PlaylistTrack(playlistId = "local-0", position = 2, trackTitle = "No MBID A", trackArtist = "Artist 2", trackRecordingMbid = null),
+            PlaylistTrack(playlistId = "local-0", position = 3, trackTitle = "No MBID B", trackArtist = "Artist 3", trackRecordingMbid = null),
+        )
+        h.playlistTrackDao.replaceAll("local-0", diverged)
+        val cur = h.playlistDao.getById("local-0")!!
+        h.playlistDao.update(cur.copy(trackCount = 4, lastModified = 2_000L, locallyModified = true))
+
+        h.engine.runNwayPropagation()
+
+        assertEquals(
+            "COVERAGE GUARD: must NOT push a near-empty list to the un-hydratable mirror",
+            replacesBefore,
+            h.provider.replaceCalls.size,
+        )
+        assertEquals(
+            "COVERAGE GUARD: baseline must NOT advance past the unfilled mirror",
+            baselineBefore,
+            h.baselineDao.selectForLocal("local-0")!!.tracks,
+        )
+        assertTrue(
+            "COVERAGE GUARD: locallyModified stays set so the playlist retries",
+            h.playlistDao.getById("local-0")!!.locallyModified,
+        )
+    }
+
+    /**
+     * Product decision: propagate ALL non-empty changes. A large NON-EMPTY drop
+     * (a playlist that legitimately turns over most of its tracks daily) must
+     * propagate — the old >25%-drop abort is gone; only a total wipe aborts.
+     */
+    @Test
+    fun `propagation pushes a large non-empty drop`() = runBlocking {
+        val h = Harness(nway = true, propagate = true)
+        h.seedLocalPlaylist("local-0", "Big List", trackCount = 8)
+
+        h.engine.syncAll() // push + link
+        h.engine.syncAll() // migrate baseline = 8
+
+        val replacesBefore = h.provider.replaceCalls.size
+
+        // Local drops 3 of 8 (37.5%) — non-empty, so it must propagate.
         val remaining = (0 until 5).map { i ->
             PlaylistTrack(
                 playlistId = "local-0",
@@ -600,19 +648,81 @@ class ListenBrainzPushShortCircuitTest {
         h.engine.runNwayPropagation()
 
         assertEquals(
-            "MASS-CHANGE: a >25% drop must not push",
-            replacesBefore,
+            "a large non-empty drop must propagate (no >25% abort anymore)",
+            replacesBefore + 1,
             h.provider.replaceCalls.size,
         )
+        assertEquals("the push carries the 5 surviving tracks", 5, h.provider.replaceCalls.last().second.size)
+        assertEquals("baseline advanced to the 5-track merged list", 5, h.baselineDao.selectForLocal("local-0")!!.tracks.size)
+    }
+
+    /**
+     * Total-wipe floor: the ONLY drop that still aborts is a merge collapsing a
+     * non-empty playlist to ZERO tracks (the catastrophic-glitch signature) —
+     * never push a wipe to the user's real account.
+     */
+    @Test
+    fun `propagation aborts a total wipe`() = runBlocking {
+        val h = Harness(nway = true, propagate = true)
+        h.seedLocalPlaylist("local-0", "Wipe Me", trackCount = 4)
+
+        h.engine.syncAll() // push + link
+        h.engine.syncAll() // migrate baseline = 4
+
+        val replacesBefore = h.provider.replaceCalls.size
+        val baselineBefore = h.baselineDao.selectForLocal("local-0")!!.tracks
+
+        // Local emptied entirely → merge collapses to 0 → total wipe.
+        h.playlistTrackDao.replaceAll("local-0", emptyList())
+        val current = h.playlistDao.getById("local-0")!!
+        h.playlistDao.update(current.copy(trackCount = 0, lastModified = 2_000L, locallyModified = true))
+
+        h.engine.runNwayPropagation()
+
+        assertEquals("TOTAL-WIPE: must not push a wipe", replacesBefore, h.provider.replaceCalls.size)
+        assertEquals("TOTAL-WIPE: baseline left untouched", baselineBefore, h.baselineDao.selectForLocal("local-0")!!.tracks)
+    }
+
+    /**
+     * Empty-mirror rule (the real-device recovery). A mirror left EMPTY by an
+     * earlier failed push must be treated as a FILL TARGET, not as a deletion of
+     * every baseline track — otherwise its emptiness drags the merge to 0 and
+     * trips the total-wipe abort, stranding it forever. With a concurrent local
+     * edit, propagation must FILL the empty mirror with the merged list.
+     */
+    @Test
+    fun `propagation fills an empty mirror instead of treating it as a deletion`() = runBlocking {
+        val h = Harness(nway = true, propagate = true)
+        h.seedLocalPlaylist("local-0", "Refill", trackCount = 3)
+
+        h.engine.syncAll() // create + push (LB remote now has 3)
+        h.engine.syncAll() // migrate baseline = 3
+
+        val mbid = h.linkDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.externalId
+        // Simulate the LB mirror emptied by an earlier failed push.
+        h.provider.remote[mbid]!!.tracks.clear()
+
+        // Concurrent local edit adds a 4th track (all mbid → fully hydratable).
+        val edited = (0 until 4).map { i ->
+            PlaylistTrack(
+                playlistId = "local-0",
+                position = i,
+                trackTitle = "Refill track $i",
+                trackArtist = "Artist $i",
+                trackRecordingMbid = "mbid-track-local-0-$i",
+            )
+        }
+        h.playlistTrackDao.replaceAll("local-0", edited)
+        val current = h.playlistDao.getById("local-0")!!
+        h.playlistDao.update(current.copy(trackCount = 4, lastModified = 2_000L, locallyModified = true))
+
+        h.engine.runNwayPropagation()
+
         assertEquals(
-            "MASS-CHANGE: baseline left untouched",
-            baselineBefore,
-            h.baselineDao.selectForLocal("local-0")!!.tracks,
+            "empty mirror is FILLED (not aborted as a deletion) — merged 4 pushed",
+            4,
+            h.provider.remote[mbid]!!.tracks.size,
         )
-        assertEquals(
-            "MASS-CHANGE: per-provider token left untouched",
-            tokenBefore,
-            h.nwayDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.changeToken,
-        )
+        assertEquals("baseline advanced to the merged 4", 4, h.baselineDao.selectForLocal("local-0")!!.tracks.size)
     }
 }

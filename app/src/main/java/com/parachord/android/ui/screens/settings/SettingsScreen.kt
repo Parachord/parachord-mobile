@@ -3069,6 +3069,13 @@ private fun GeneralTab(
                         ) {
                             Text("Run writes")
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = { settingsViewModel.resetNwayState() },
+                            enabled = !propagating,
+                        ) {
+                            Text("Reset state")
+                        }
                     }
                 }
                 if (nwayPropagationLog.isEmpty()) {
@@ -3086,7 +3093,8 @@ private fun GeneralTab(
                         val badge = when (entry.status) {
                             "pushed" -> "✅"
                             "would-push" -> "👁"
-                            "mass-change-abort", "partial-abort" -> "⚠️"
+                            "partial" -> "◑"
+                            "total-wipe-abort", "partial-abort" -> "⚠️"
                             else -> "•"
                         }
                         ListItem(
@@ -3096,6 +3104,22 @@ private fun GeneralTab(
                                     "${entry.status} · merged ${entry.mergedCount} track(s) → " +
                                         "targets: ${entry.pushTargets.joinToString().ifEmpty { "none" }}",
                                 )
+                            },
+                            trailingContent = {
+                                // Scoped real-write: push THIS playlist only (needs
+                                // the writes toggle on) — validate one before the
+                                // full run.
+                                TextButton(
+                                    onClick = {
+                                        settingsViewModel.runPropagationForPlaylist(
+                                            entry.localPlaylistId,
+                                            dryRun = false,
+                                        )
+                                    },
+                                    enabled = !propagating && nwayPropagateEnabled,
+                                ) {
+                                    Text("Push this")
+                                }
                             },
                         )
                     }

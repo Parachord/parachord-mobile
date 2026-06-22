@@ -16,6 +16,12 @@ data class PlaylistTrack(
     val trackAppleMusicId: String? = null,
     val trackRecordingMbid: String? = null,
     val addedAt: Long = 0L,
+    // Transient (in-memory) ISRC carried from a provider fetch (e.g. Spotify
+    // external_ids.isrc) so cross-provider hydration can resolve a recording
+    // MBID via MusicBrainz `/isrc/` when the LB mapper is down. NOT a DB column —
+    // mirrors the resolver/scrobbler "ISRC lives only on the live track" rule;
+    // re-fetched each pass, dropped on any DB round-trip.
+    val trackIsrc: String? = null,
 ) {
     fun availableResolvers(resolverOrder: List<String> = emptyList()): List<String> {
         val available = buildList {

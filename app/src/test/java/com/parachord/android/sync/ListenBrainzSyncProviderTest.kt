@@ -522,59 +522,55 @@ class ListenBrainzSyncProviderTest {
     // ── searchForTrackId (Task 13) ─────────────────────────────────────
 
     @Test
-    fun `searchForTrackId returns recordingMbid from mapper on hit`() = runTest {
-        // mapperLookup signature is (artist, recording) — NOT (title, artist).
-        // The provider must pass them in the right order.
+    fun `searchForTrackId returns recordingMbid from getRecordingMbid on hit`() = runTest {
+        // searchForTrackId now routes through getRecordingMbid (mapper → ISRC),
+        // passing the args as (artist, title, isrc) — the canonical primary path.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { mapperLookup("Artist", "Title") } returns MbidMapperResult(
-                artistMbid = "artist-mbid",
-                artistCreditName = "Artist",
-                recordingName = "Title",
-                recordingMbid = "mbid-result",
-                releaseName = null,
-                releaseMbid = null,
-                confidence = 0.95,
-            )
+            coEvery { getRecordingMbid("Artist", "Title", null) } returns "mbid-result"
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
         assertEquals("mbid-result", provider.searchForTrackId("Title", "Artist"))
     }
 
     @Test
-    fun `searchForTrackId returns null on mapper miss`() = runTest {
+    fun `searchForTrackId passes the ISRC through to getRecordingMbid`() = runTest {
+        // The ISRC must reach getRecordingMbid so the MusicBrainz /isrc/ fallback
+        // can fire during a mapper outage.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { mapperLookup(any(), any()) } returns null
+            coEvery { getRecordingMbid("Artist", "Title", "US-ABC-12-34567") } returns "isrc-mbid"
+        }
+        val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
+        assertEquals("isrc-mbid", provider.searchForTrackId("Title", "Artist", isrc = "US-ABC-12-34567"))
+    }
+
+    @Test
+    fun `searchForTrackId falls back to fuzzy MB search when getRecordingMbid misses`() = runTest {
+        // Mapper down + no/failed ISRC → getRecordingMbid null → the last-resort
+        // fuzzy MusicBrainz recording search must run.
+        val enrichment: MbidEnrichmentService = mockk {
+            coEvery { getRecordingMbid(any(), any(), any()) } returns null
+            coEvery { searchRecordingMbid("Artist", "Title") } returns "fuzzy-mbid"
+        }
+        val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
+        assertEquals("fuzzy-mbid", provider.searchForTrackId("Title", "Artist"))
+    }
+
+    @Test
+    fun `searchForTrackId returns null when the whole fallback chain misses`() = runTest {
+        val enrichment: MbidEnrichmentService = mockk {
+            coEvery { getRecordingMbid(any(), any(), any()) } returns null
+            coEvery { searchRecordingMbid(any(), any()) } returns null
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
         assertNull(provider.searchForTrackId("Title", "Artist"))
     }
 
     @Test
-    fun `searchForTrackId returns null when mapper throws`() = runTest {
-        // Defensive — mapperLookup already swallows exceptions internally
-        // and returns null, but if it ever stops doing so, the provider
-        // must not propagate the failure (sync engine would abort the
-        // whole hydrate-loop on a single bad lookup).
+    fun `searchForTrackId returns null when the chain throws`() = runTest {
+        // The provider must never propagate a failure — the sync engine would
+        // abort the whole hydrate-loop on a single bad lookup.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { mapperLookup(any(), any()) } throws Exception("Network error")
-        }
-        val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
-        assertNull(provider.searchForTrackId("Title", "Artist"))
-    }
-
-    @Test
-    fun `searchForTrackId returns null when recordingMbid is null`() = runTest {
-        // Mapper sometimes returns a result with artist MBID resolved but
-        // no recording MBID — treat as miss.
-        val enrichment: MbidEnrichmentService = mockk {
-            coEvery { mapperLookup(any(), any()) } returns MbidMapperResult(
-                artistMbid = "artist-mbid",
-                artistCreditName = "Artist",
-                recordingName = null,
-                recordingMbid = null,
-                releaseName = null,
-                releaseMbid = null,
-            )
+            coEvery { getRecordingMbid(any(), any(), any()) } throws Exception("Network error")
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
         assertNull(provider.searchForTrackId("Title", "Artist"))

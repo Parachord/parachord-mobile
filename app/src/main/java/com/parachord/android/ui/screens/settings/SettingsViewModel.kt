@@ -98,6 +98,26 @@ class SettingsViewModel constructor(
         }
     }
 
+    /** Dev: run propagation for ONE playlist (scoped real-write validation) so a
+     *  single playlist can be filled without firing the whole baseline run. */
+    fun runPropagationForPlaylist(localPlaylistId: String, dryRun: Boolean) {
+        viewModelScope.launch {
+            _propagating.value = true
+            try {
+                syncEngine.runNwayPropagationForPlaylist(localPlaylistId, dryRun = dryRun)
+            } finally {
+                _propagating.value = false
+            }
+        }
+    }
+
+    /** Dev/recovery: wipe all N-way baselines + per-provider tokens so the next
+     *  sync re-seeds from scratch (recovers a playlist stuck by the pre-fix
+     *  executor). */
+    fun resetNwayState() {
+        viewModelScope.launch { syncEngine.resetNwayState() }
+    }
+
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
     val loadedPlugins: StateFlow<List<com.parachord.shared.plugin.PluginManager.PluginInfo>> =
         pluginManager.plugins

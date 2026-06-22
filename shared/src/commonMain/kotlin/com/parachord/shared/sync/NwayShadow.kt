@@ -98,9 +98,13 @@ fun computeNwayShadowPlan(baseline: List<String>, copies: List<NwayCopyState>): 
  *   filtered to copies the user can WRITE to. A read-only followed source
  *   (`writable=false`) is excluded: we never push merged changes BACK to a
  *   playlist you can't edit. `local` and owned/collaborative mirrors stay in.
- * - [massChangeAbort]: the merge would drop more than the mass-change threshold
- *   of the baseline — a likely provider hiccup; the caller must NOT propagate
- *   (skip this playlist entirely), never push a destructive near-empty.
+ * - [massChangeAbort]: TOTAL-WIPE floor only — the merge would collapse a
+ *   non-empty playlist to ZERO tracks (the catastrophic provider-glitch
+ *   signature). The caller must NOT propagate a total wipe. Large but non-empty
+ *   turnover is NOT blocked — many playlists legitimately change most of their
+ *   tracks daily (product decision: propagate all non-empty changes). An empty
+ *   mirror copy is excluded from deletion deltas by the executor, so a single
+ *   empty copy can't force a wipe.
  */
 data class NwayPropagationPlan(
     val merged: List<String>,
@@ -112,7 +116,7 @@ data class NwayPropagationPlan(
  * Pure propagation plan (Phase 4): `(baseline, copies, writability) -> plan`.
  * Reuses [computeNwayShadowPlan] for the merge, then layers the two
  * write-safety rules — per-copy writability (don't push back to a non-writable
- * source) and the mass-change guard. Returns `null` when no copy changed (the
+ * source) and the total-wipe floor. Returns `null` when no copy changed (the
  * perf short-circuit, same as shadow). No I/O.
  *
  * [writableById]: copy id -> can-write. A missing entry defaults to writable
@@ -123,15 +127,14 @@ fun computeNwayPropagationPlan(
     baseline: List<String>,
     copies: List<NwayCopyState>,
     writableById: Map<String, Boolean>,
-    massChangeThreshold: Double,
 ): NwayPropagationPlan? {
     val shadow = computeNwayShadowPlan(baseline, copies) ?: return null
     val pushTargets = shadow.wouldPushTo.filter { writableById[it] != false }
-    val dropFraction = nwayBaselineDropFraction(baseline, shadow.merged)
     return NwayPropagationPlan(
         merged = shadow.merged,
         pushTargets = pushTargets,
-        massChangeAbort = dropFraction > massChangeThreshold,
+        // Total-wipe floor only (see [NwayPropagationPlan.massChangeAbort]).
+        massChangeAbort = shadow.merged.isEmpty() && baseline.isNotEmpty(),
     )
 }
 

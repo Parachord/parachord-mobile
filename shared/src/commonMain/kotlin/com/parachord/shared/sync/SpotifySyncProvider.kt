@@ -327,6 +327,10 @@ class SpotifySyncProvider(
                     trackResolver = "spotify",
                     trackSpotifyUri = track.id?.let { "spotify:track:$it" },
                     trackSpotifyId = track.id,
+                    // Capture ISRC (free — it's already in the full track object)
+                    // so cross-provider hydration can resolve a recording MBID via
+                    // MusicBrainz /isrc/ when the LB mapper is down. Transient.
+                    trackIsrc = com.parachord.shared.resolver.validateIsrc(track.externalIds?.isrc),
                     addedAt = parseIsoTimestamp(item.addedAt),
                 ))
             }
@@ -450,7 +454,7 @@ class SpotifySyncProvider(
      * we return null and the caller skips the track rather than pushing a
      * wrong-song mirror.
      */
-    override suspend fun searchForTrackId(title: String, artist: String, album: String?): String? {
+    override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
         val q = buildString {
             append("track:\""); append(title); append('"')
             append(" artist:\""); append(artist); append('"')

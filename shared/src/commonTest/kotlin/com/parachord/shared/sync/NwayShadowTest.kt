@@ -88,7 +88,6 @@ class NwayShadowTest {
                 copy("spotify", listOf("a", "b", "x"), 9, changed = true),
             ),
             writableById = mapOf("spotify" to false, "local" to true),
-            massChangeThreshold = 0.5,
         )!!
         assertEquals(listOf("a", "b", "x"), plan.merged)
         assertEquals(listOf("local"), plan.pushTargets) // spotify excluded (non-writable source)
@@ -106,22 +105,37 @@ class NwayShadowTest {
                 copy("listenbrainz", base, 1, changed = false),          // lags
             ),
             writableById = emptyMap(), // all default writable
-            massChangeThreshold = 0.5,
         )!!
         assertEquals(listOf("applemusic", "listenbrainz"), plan.pushTargets)
     }
 
     @Test
-    fun propagation_massChangeAbortsWhenDropExceedsThreshold() {
-        // Spotify removed 2 of 3 baseline tracks → 66% drop > 25% threshold.
+    fun propagation_largeNonEmptyDropStillPropagates() {
+        // Spotify removed 2 of 3 baseline tracks → 66% drop, but the merge is
+        // NON-empty. Product decision: propagate all non-empty changes — only a
+        // total wipe aborts, so this must NOT abort.
         val base = listOf("a", "b", "c")
         val plan = computeNwayPropagationPlan(
             base,
             listOf(copy("spotify", listOf("a"), 9, changed = true)),
             writableById = emptyMap(),
-            massChangeThreshold = 0.25,
+        )!!
+        assertEquals(false, plan.massChangeAbort)
+        assertEquals(listOf("a"), plan.merged)
+    }
+
+    @Test
+    fun propagation_totalWipeAborts() {
+        // The merge collapses a non-empty playlist to ZERO (every baseline track
+        // removed) → the catastrophic-glitch floor → abort.
+        val base = listOf("a", "b", "c")
+        val plan = computeNwayPropagationPlan(
+            base,
+            listOf(copy("spotify", emptyList(), 9, changed = true)),
+            writableById = emptyMap(),
         )!!
         assertTrue(plan.massChangeAbort)
+        assertTrue(plan.merged.isEmpty())
     }
 
     @Test
@@ -132,7 +146,6 @@ class NwayShadowTest {
                 base,
                 listOf(copy("local", base, 1, changed = false)),
                 emptyMap(),
-                0.25,
             ),
         )
     }

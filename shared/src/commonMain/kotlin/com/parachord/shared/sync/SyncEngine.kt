@@ -1234,12 +1234,14 @@ class SyncEngine constructor(
         val plan = computeNwayShadowPlan(baselineRepr, copies) ?: return null
         val dropFraction = nwayBaselineDropFraction(baselineRepr, plan.merged)
         val dropPercent = (dropFraction * 100).toInt()
-        val massChange = dropFraction > MASS_REMOVAL_THRESHOLD_PERCENT
+        // Total-wipe floor only (matches propagation): "would abort" iff the merge
+        // collapses a non-empty playlist to ZERO. Large non-empty drops propagate.
+        val massChange = plan.merged.isEmpty() && baselineRepr.isNotEmpty()
         Log.d(
             TAG,
             "N-way SHADOW [${playlist.name}]: changed=${plan.changedCopyIds} → merged ${plan.merged.size} " +
                 "track(s), wouldPush=${plan.wouldPushTo}, drop=$dropPercent%" +
-                (if (massChange) " — MASS-CHANGE, would abort" else "") +
+                (if (massChange) " — TOTAL-WIPE, would abort" else "") +
                 " [no push — shadow mode]",
         )
         return NwayShadowEntry(
@@ -1283,21 +1285,54 @@ class SyncEngine constructor(
      * list call per enabled provider; full-tracklist fetch only for a CHANGED
      * mirror) with the same CancellationException-rethrow + partial-fetch guard.
      */
+    /**
+     * Dev/recovery: wipe all N-way tracking state — every playlist's baseline
+     * ancestor + per-provider change tokens — and clear the in-memory reports.
+     * The next sync re-runs the migration bootstrap (re-seeds each baseline from
+     * the current local tracklist) and re-detects from scratch. Used to recover a
+     * playlist left in a bad state by the pre-fix executor (baseline advanced past
+     * an unfilled mirror → stuck in mass-change-abort).
+     *
+     * NOTE: a clean re-seed re-fills an EMPTY mirror only when the merge sees it
+     * as "lagging" (first-fill, baseline empty), not as a deletion — the deeper
+     * "fill an empty mirror whose source already has content" case is part of the
+     * deferred reconciliation redesign. For a stuck content-bearing playlist whose
+     * mirrors are empty, deleting the empty mirror (or re-importing) is the
+     * reliable recovery; the fixed hydration then fills it via the normal push.
+     */
+    suspend fun resetNwayState() {
+        for (b in syncPlaylistBaselineDao.selectAll()) {
+            syncPlaylistBaselineDao.deleteForLocal(b.localPlaylistId)
+        }
+        for (s in syncPlaylistNwayDao.selectAll()) {
+            syncPlaylistNwayDao.deleteForLocal(s.localPlaylistId)
+        }
+        _nwayPropagationLog.value = emptyList()
+        _nwayShadowLog.value = emptyList()
+        Log.d(TAG, "N-way state reset — baselines + tokens cleared; next sync re-seeds")
+    }
+
     suspend fun runNwayPropagation(dryRun: Boolean = false) {
         // A DRY-RUN (preview only, no writes) needs just isNwayEnabled so the
         // user can validate the readout on their real library BEFORE arming
         // writes. REAL writes require the stricter isNwayPropagateEnabled too.
-        if (!settingsStore.isNwayEnabled()) return
-        if (!dryRun && !settingsStore.isNwayPropagateEnabled()) return
-        val baselines = syncPlaylistBaselineDao.selectAll()
-        if (baselines.isEmpty()) return
-        val enabled = settingsStore.getEnabledSyncProviders()
-        val remoteLists = mutableMapOf<String, Map<String, SyncedPlaylist>>()
-        for (provider in providers.filter { it.id in enabled }) {
-            remoteLists[provider.id] = runCatching {
-                provider.fetchPlaylists(null).associateBy { it.spotifyId }
-            }.getOrElse { emptyMap() }
+        Log.d(TAG, "N-way PROPAGATE: run requested (dryRun=$dryRun)")
+        if (!settingsStore.isNwayEnabled()) {
+            Log.d(TAG, "N-way PROPAGATE: skipped — N-way not enabled")
+            return
         }
+        if (!dryRun && !settingsStore.isNwayPropagateEnabled()) {
+            Log.d(TAG, "N-way PROPAGATE: skipped — real writes not enabled (enable the toggle, or use dry-run)")
+            return
+        }
+        val baselines = syncPlaylistBaselineDao.selectAll()
+        if (baselines.isEmpty()) {
+            Log.d(TAG, "N-way PROPAGATE: no baselines yet — run a SYNC first so migration seeds them " +
+                "(or you just tapped Reset state)")
+            return
+        }
+        Log.d(TAG, "N-way PROPAGATE: ${baselines.size} baseline(s) to reconcile")
+        val remoteLists = fetchEnabledProviderPlaylistLists()
         val entries = mutableListOf<NwayPropagationEntry>()
         for (baseline in baselines) {
             try {
@@ -1311,6 +1346,53 @@ class SyncEngine constructor(
             }
         }
         _nwayPropagationLog.value = entries
+    }
+
+    /** One paginated playlist-list call per enabled provider → externalId map. */
+    private suspend fun fetchEnabledProviderPlaylistLists(): Map<String, Map<String, SyncedPlaylist>> {
+        val enabled = settingsStore.getEnabledSyncProviders()
+        val out = mutableMapOf<String, Map<String, SyncedPlaylist>>()
+        for (provider in providers.filter { it.id in enabled }) {
+            out[provider.id] = runCatching {
+                provider.fetchPlaylists(null).associateBy { it.spotifyId }
+            }.getOrElse { emptyMap() }
+        }
+        return out
+    }
+
+    /**
+     * Run propagation for a SINGLE playlist (dev — scoped real-write validation
+     * so the user can fill one playlist without firing the whole 141-baseline
+     * run). Same gates as [runNwayPropagation]; updates that playlist's entry in
+     * [nwayPropagationLog] in place.
+     */
+    suspend fun runNwayPropagationForPlaylist(localPlaylistId: String, dryRun: Boolean = false) {
+        Log.d(TAG, "N-way PROPAGATE(single): run requested for $localPlaylistId (dryRun=$dryRun)")
+        if (!settingsStore.isNwayEnabled()) return
+        if (!dryRun && !settingsStore.isNwayPropagateEnabled()) {
+            Log.d(TAG, "N-way PROPAGATE(single): skipped — real writes not enabled")
+            return
+        }
+        val baseline = syncPlaylistBaselineDao.selectForLocal(localPlaylistId) ?: run {
+            Log.d(TAG, "N-way PROPAGATE(single): no baseline for $localPlaylistId")
+            return
+        }
+        val remoteLists = fetchEnabledProviderPlaylistLists()
+        val entry = try {
+            propagateReconcilePlaylist(baseline, remoteLists, dryRun)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d(TAG, "N-way PROPAGATE(single): skipped '$localPlaylistId' (${e.message})")
+            null
+        } ?: return
+        val cur = _nwayPropagationLog.value
+        _nwayPropagationLog.value =
+            if (cur.any { it.localPlaylistId == localPlaylistId }) {
+                cur.map { if (it.localPlaylistId == localPlaylistId) entry else it }
+            } else {
+                cur + entry
+            }
     }
 
     private suspend fun propagateReconcilePlaylist(
@@ -1349,6 +1431,22 @@ class SyncEngine constructor(
                 continue
             }
             val tracks = provider.fetchPlaylistTracks(externalId)
+            // EMPTY-MIRROR rule: a 0-track mirror against a non-empty baseline is
+            // treated as UNPOPULATED (a fill target), NOT as a deletion of every
+            // baseline track. Otherwise its emptiness drags the 3-way merge toward
+            // 0 and trips the mass-change guard — the phantom-deletion that strands
+            // a mirror an earlier failed/partial push left empty (the real-device
+            // incident). changed=false excludes it from deletion deltas; keys=[]
+            // (its true empty state) keeps it a push target so it gets filled. This
+            // is consistent with the mass-change guard (we never honor a near-total
+            // deletion anyway). A PARTIALLY-populated mirror still contributes its
+            // deltas normally — only the fully-empty case is special-cased.
+            if (tracks.isEmpty() && baseline.tracks.isNotEmpty()) {
+                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId mirror is empty — treating as " +
+                    "fill target, not a deletion")
+                inputs.add(PropagationCopyInput(providerId, emptyList(), emptyList(), now, changed = false))
+                continue
+            }
             val keys = tracks.map {
                 trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
             }
@@ -1371,22 +1469,32 @@ class SyncEngine constructor(
             c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
         }
 
-        val plan = computeNwayPropagationPlan(baselineRepr, copies, writableById, MASS_REMOVAL_THRESHOLD_PERCENT)
+        val plan = computeNwayPropagationPlan(baselineRepr, copies, writableById)
             ?: return null
         if (plan.massChangeAbort) {
-            val dropPercent = (nwayBaselineDropFraction(baselineRepr, plan.merged) * 100).toInt()
-            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: MASS-CHANGE drop=$dropPercent% — abort, no push")
-            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "mass-change-abort")
+            // Total-wipe floor only: the merge collapsed a non-empty playlist to
+            // ZERO. Large non-empty turnover is NOT blocked (propagate-all-changes).
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: TOTAL-WIPE (merge → 0 tracks) — abort, no push")
+            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "total-wipe-abort")
         }
 
         // Trap 1 — resolve representative keys → tracks. Build keyToTrack from the
         // copies that carry real tracks (local FIRST so its richer metadata wins).
         val keyToTrack = linkedMapOf<String, PlaylistTrack>()
+        // ISRC backfill map: the FIRST non-blank ISRC seen for a representative
+        // key across ANY copy. keyToTrack prefers local (richer metadata) but
+        // local DB rows carry no ISRC (it's transient), so without this the ISRC →
+        // MusicBrainz `/isrc/` fallback can't fire for a track that also exists
+        // locally. Spotify's freshly-fetched copy DOES carry external_ids.isrc, so
+        // harvest it here and graft it onto the merged track below.
+        val keyToIsrc = linkedMapOf<String, String>()
         inputs.forEachIndexed { i, c ->
             val reprKeys = unified[i + 1]
             c.tracks.forEachIndexed { j, t ->
                 val key = reprKeys[j]
                 if (key !in keyToTrack) keyToTrack[key] = t
+                val isrc = t.trackIsrc
+                if (!isrc.isNullOrBlank() && key !in keyToIsrc) keyToIsrc[key] = isrc
             }
         }
         val resolved = plan.merged.map { keyToTrack[it] }
@@ -1395,8 +1503,11 @@ class SyncEngine constructor(
                 "key(s) unresolved to a track — abort (never push a partial list)")
             return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "partial-abort")
         }
-        val mergedTracks = resolved.filterNotNull().mapIndexed { idx, t ->
-            t.copy(playlistId = localId, position = idx)
+        val mergedTracks = plan.merged.mapIndexed { idx, key ->
+            val t = keyToTrack.getValue(key)
+            // Graft the harvested ISRC (if the chosen track lacks one) so LB
+            // hydration's /isrc/ fallback works during a mapper outage.
+            t.copy(playlistId = localId, position = idx, trackIsrc = t.trackIsrc ?: keyToIsrc[key])
         }
 
         if (dryRun) {
@@ -1405,37 +1516,63 @@ class SyncEngine constructor(
             return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, plan.pushTargets, "would-push")
         }
 
-        // Trap 2 — hydration side-effects. Update the LOCAL rows to the merged list
-        // FIRST (if local is a target) so the per-provider hydrate-against-localId
-        // resolves IDs against the right tracks. Then thread the hydrated list
-        // across providers so each provider's replaceAll-persist accumulates the
-        // prior provider's freshly-resolved IDs instead of clobbering them.
-        if ("local" in plan.pushTargets) {
-            playlistTrackDao.replaceAll(localId, mergedTracks)
-        }
+        // ── PUSH (PER-PROVIDER coverage guard) ──────────────────────────
+        // Hydrate + push each target INDEPENDENTLY. A provider whose hydrated
+        // external-ID coverage drops more than the mass-change threshold (e.g.
+        // Apple Music's iTunes search rate-limited → 0 IDs) is SKIPPED — never
+        // receive a near-EMPTY push that silently guts/no-fills the mirror — but
+        // the OTHER providers still get filled (an AM failure must NOT block LB).
+        // Hydration is threaded so each provider's resolved IDs carry forward.
+        // The baseline only advances on FULL coverage (all writable targets
+        // pushed), so a skipped provider is re-detected as lagging and RETRIED
+        // next cycle (self-heals once its hydration recovers). NOTE: the deeper
+        // per-provider catalog-gap semantics (a track permanently absent from one
+        // provider shouldn't read as a deletion) remain deferred — this guard
+        // only protects against the destructive near-empty push.
         var current = mergedTracks
+        val pushedTo = mutableListOf<String>()
+        var allCovered = true
         for (targetId in plan.pushTargets) {
-            if (targetId == "local") continue
+            if (targetId == "local") { pushedTo.add("local"); continue }
             val provider = providers.firstOrNull { it.id == targetId } ?: continue
             val externalId = mirrors[targetId] ?: continue
-            val hydrated = hydrateMissingTrackIds(localId, current, provider)
-            current = hydrated
-            val ids = extractExternalTrackIds(hydrated, provider.id)
+            current = hydrateMissingTrackIds(localId, current, provider, persist = false)
+            val ids = extractExternalTrackIds(current, provider.id)
+            val dropFraction = if (mergedTracks.isEmpty()) 0.0
+                else (mergedTracks.size - ids.size).toDouble() / mergedTracks.size
+            if (dropFraction > MASS_REMOVAL_THRESHOLD_PERCENT) {
+                Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} hydration covered only " +
+                    "${ids.size}/${mergedTracks.size} track(s) (drop ${(dropFraction * 100).toInt()}%) — " +
+                    "SKIP this provider, retry next cycle")
+                allCovered = false
+                continue
+            }
             val token = provider.replacePlaylistTracks(externalId, ids)
             // Trap 4 — capture the POST-PUSH token (echo suppression). null for
             // snapshot-less providers (LB) → detection falls back to trackCount,
             // which now equals the merged size → no re-detect next cycle.
             syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
+            pushedTo.add(provider.id)
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: pushed ${ids.size}/${mergedTracks.size} track(s) to ${provider.id}")
         }
 
-        // Trap 3 — advance the baseline to the merged list's own TrackKeys. These
-        // must re-derive (via unifyTrackKeys) to plan.merged next cycle so
-        // detection sees no delta (the playlist path is isrc-free, so mbid/norm
-        // re-derivation is stable). Then clear locallyModified.
-        syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
-        playlistDao.clearLocallyModified(localId)
-        Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: pushed ${mergedTracks.size} track(s) to ${plan.pushTargets}")
-        return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, plan.pushTargets, "pushed")
+        // Persist the (in-memory hydrated) merged list to the LOCAL rows — also
+        // saves whatever provider IDs got resolved for future syncs (Trap 2).
+        playlistTrackDao.replaceAll(localId, current)
+
+        // Trap 3 — advance the baseline + clear locallyModified ONLY on FULL
+        // coverage, so a partial cycle never advances past a skipped/unfilled
+        // mirror (which would then read as a deletion). On a partial push the
+        // pushed providers are caught up (token captured → not re-pushed) while
+        // the skipped ones stay lagging and retry next cycle.
+        if (allCovered) {
+            syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
+            playlistDao.clearLocallyModified(localId)
+        }
+        return NwayPropagationEntry(
+            playlist.name, localId, mergedTracks.size, pushedTo,
+            if (allCovered) "pushed" else "partial",
+        )
     }
 
     private suspend fun syncPlaylists(
@@ -2684,6 +2821,7 @@ class SyncEngine constructor(
         playlistId: String,
         tracks: List<PlaylistTrack>,
         provider: com.parachord.shared.sync.SyncProvider,
+        persist: Boolean = true,
     ): List<PlaylistTrack> {
         val needsHydration = tracks.filter { missingProviderId(it, provider.id) }
         if (needsHydration.isEmpty()) return tracks
@@ -2706,6 +2844,7 @@ class SyncEngine constructor(
                                 title = track.trackTitle,
                                 artist = track.trackArtist,
                                 album = track.trackAlbum,
+                                isrc = track.trackIsrc,
                             )
                         } catch (e: Exception) {
                             Log.w(TAG, "hydrate: search threw for '${track.trackTitle}'", e)
@@ -2731,9 +2870,14 @@ class SyncEngine constructor(
             if (newId != null) applyResolvedId(track, provider.id, newId) else track
         }
 
-        playlistTrackDao.replaceAll(playlistId, updatedTracks)
-        Log.d(TAG, "Hydrated ${resolvedByPosition.size} ${provider.id} IDs into $playlistId " +
-            "(${tracks.size - resolvedByPosition.size - (tracks.size - needsHydration.size)} unresolved)")
+        // [persist] = false lets a caller hydrate purely in-memory (returns the
+        // resolved list without writing the rows) — used by the propagation
+        // coverage pre-check so an under-covered ABORT leaves no partial mutation.
+        if (persist) {
+            playlistTrackDao.replaceAll(playlistId, updatedTracks)
+            Log.d(TAG, "Hydrated ${resolvedByPosition.size} ${provider.id} IDs into $playlistId " +
+                "(${tracks.size - resolvedByPosition.size - (tracks.size - needsHydration.size)} unresolved)")
+        }
         return updatedTracks
     }
 

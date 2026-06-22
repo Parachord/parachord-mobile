@@ -282,22 +282,27 @@ class ListenBrainzSyncProvider(
         title: String,
         artist: String,
         album: String?,
+        isrc: String?,
     ): String? {
-        // Delegate to the existing MBID mapper. Returns the canonical
-        // recording MBID for the title+artist pair, or null if no high-
-        // confidence match was found (the LB mapper applies its own internal
-        // confidence floor — we don't need to apply MIN_CONFIDENCE_THRESHOLD
-        // here).
-        //
-        // Note arg order: mapperLookup is (artist, recording) — NOT (title, artist).
-        val result = try {
-            mbidEnrichmentService.mapperLookup(artist, title)
+        // Full fallback chain (the mapper-outage fix). LB's external ID is the
+        // recording MBID; resolve it with progressive fallback:
+        //   1. LB mapper (canonical, primary) — via getRecordingMbid, then
+        //   2. MusicBrainz /isrc/ (EXACT) when an ISRC is carried (Spotify-sourced
+        //      tracks carry external_ids.isrc) — also inside getRecordingMbid, then
+        //   3. fuzzy MusicBrainz recording search (title+artist, confidence-gated)
+        //      as the last resort for tracks with no ISRC.
+        // The week-long mapper outage made step 1 always-null; without 2/3 every
+        // LB playlist push hydrated to ZERO MBIDs and the coverage guard skipped
+        // the whole mirror. Steps 2/3 use MusicBrainz, a different service that
+        // stays up during the mapper outage.
+        return try {
+            mbidEnrichmentService.getRecordingMbid(artist, title, isrc)
+                ?: mbidEnrichmentService.searchRecordingMbid(artist, title)
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.w(TAG, "LB searchForTrackId mapper lookup failed for '$title' / '$artist'", e)
-            return null
+            Log.w(TAG, "LB searchForTrackId failed for '$title' / '$artist'", e)
+            null
         }
-        return result?.recordingMbid
     }
 
     // Library surface (saveTracks, saveAlbums, fetchArtists, etc.) intentionally
