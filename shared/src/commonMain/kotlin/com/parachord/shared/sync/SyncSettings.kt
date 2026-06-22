@@ -34,11 +34,12 @@ data class SyncSettings(
  * consider. Mirrors `SyncEngine.isPushCandidate` (which delegates here).
  */
 fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, providerId: String): Boolean {
-    // #269: a read-only FOLLOWED playlist (not owned, not collaborative) must
-    // never be pushed/mirrored anywhere — that round-trip is what created owned
-    // Spotify duplicates of playlists you only follow. Owned + collaborative +
-    // local playlists are all writable=true.
-    if (!playlist.writable) return false
+    // #269 note: a FOLLOWED (non-writable) playlist CAN still mirror OUT to other
+    // services — you own those mirror copies. What must never happen is writing
+    // BACK to the non-writable source; for Spotify that's already enforced by the
+    // `spotifyId == null` clause below (a followed `spotify-*` row has a spotifyId,
+    // so it's never a Spotify push candidate). The per-copy write-back guard for
+    // N-way propagation uses `playlist.writable`. So no blanket writable gate here.
     val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
     return when (providerId) {
         "spotify" -> playlist.spotifyId == null && base

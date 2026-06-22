@@ -48,30 +48,27 @@ class PlaylistSelectionTest {
         assertFalse(sel.includes("spotify-9"))
     }
 
-    // ── #269: writability gate on push candidacy ─────────────────────
+    // ── #269: a followed playlist mirrors OUT but never writes BACK ───
 
     @Test
-    fun writablePlaylist_isPushCandidate_acrossProviders() {
-        // A writable Spotify-imported playlist mirrors to AM + LB (its existing behavior).
+    fun spotifyImportedPlaylist_mirrorsOutToOtherProviders() {
         val p = com.parachord.shared.model.Playlist(id = "spotify-1", name = "Mine", writable = true)
         assertTrue(isPlaylistPushCandidate(p, "applemusic"))
         assertTrue(isPlaylistPushCandidate(p, "listenbrainz"))
     }
 
     @Test
-    fun nonWritableFollowedPlaylist_isNeverPushCandidate() {
-        // A read-only FOLLOWED Spotify playlist must NOT mirror anywhere (#269) —
-        // that round-trip created owned Spotify duplicates.
-        val followed = com.parachord.shared.model.Playlist(id = "spotify-1", name = "Theirs", writable = false)
-        assertFalse(isPlaylistPushCandidate(followed, "applemusic"))
-        assertFalse(isPlaylistPushCandidate(followed, "listenbrainz"))
-        assertFalse(isPlaylistPushCandidate(followed, "spotify"))
-    }
-
-    @Test
-    fun collaborativePlaylist_isWritable_soStillMirrors() {
-        // Collaborative (not owned, but you can edit) → writable → still a candidate.
-        val collab = com.parachord.shared.model.Playlist(id = "spotify-1", name = "Shared", writable = true)
-        assertTrue(isPlaylistPushCandidate(collab, "listenbrainz"))
+    fun followedPlaylist_STILL_mirrorsOut_butNeverBackToSpotify() {
+        // A read-only FOLLOWED Spotify playlist CAN mirror out to AM/LB (you own
+        // those copies). It must NOT push back to Spotify — but that's enforced by
+        // the spotifyId != null clause, NOT by a writable gate. Here spotifyId is
+        // set, id-prefix is spotify-, so Spotify push is already excluded while
+        // AM/LB mirroring stays allowed.
+        val followed = com.parachord.shared.model.Playlist(
+            id = "spotify-1", name = "Theirs", spotifyId = "1", writable = false,
+        )
+        assertTrue(isPlaylistPushCandidate(followed, "applemusic"), "followed playlists still mirror to AM")
+        assertTrue(isPlaylistPushCandidate(followed, "listenbrainz"), "followed playlists still mirror to LB")
+        assertFalse(isPlaylistPushCandidate(followed, "spotify"), "never writes back to the followed Spotify source")
     }
 }
