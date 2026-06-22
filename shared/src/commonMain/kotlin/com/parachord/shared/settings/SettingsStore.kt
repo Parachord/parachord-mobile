@@ -119,6 +119,11 @@ class SettingsStore(
         // the WHOLE N-way path — migration bootstrap, shadow mode, propagation.
         // Inert until flipped on, so Phases 2-3 ship dark.
         const val NWAY_ENABLED = "nway_enabled"
+        // Separate, stricter opt-in for N-way PROPAGATION (real pushes). Requires
+        // NWAY_ENABLED too. Default OFF — migration + shadow run under
+        // NWAY_ENABLED; only this flag lets the engine actually write to
+        // providers. Keeps validation (shadow) and writes (propagation) distinct.
+        const val NWAY_PROPAGATE = "nway_propagate"
 
         /** Per-provider opt-in for which collection axes to sync.
          *  Keyed as `sync_collections_<providerId>` ("tracks,albums,artists,playlists").
@@ -741,6 +746,19 @@ class SettingsStore(
 
     suspend fun setNwayEnabled(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(NWAY_ENABLED, enabled)
+    }
+
+    /** N-way PROPAGATION (real provider writes). Requires [isNwayEnabled] too. */
+    override suspend fun isNwayPropagateEnabled(): Boolean {
+        ensureMigrated(); return kv.getBoolean(NWAY_PROPAGATE, default = false)
+    }
+
+    suspend fun setNwayPropagateEnabled(enabled: Boolean) {
+        ensureMigrated(); kv.setBoolean(NWAY_PROPAGATE, enabled)
+    }
+
+    val nwayPropagateFlow: Flow<Boolean> = migratedFlow().flatMapConcat {
+        kv.observeBoolean(NWAY_PROPAGATE, default = false)
     }
 
     override suspend fun setLastSyncAt(timestamp: Long) {

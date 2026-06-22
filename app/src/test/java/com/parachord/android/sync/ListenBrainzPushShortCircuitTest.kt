@@ -236,6 +236,7 @@ class ListenBrainzPushShortCircuitTest {
         override suspend fun getTrackDedupV1Done(): Boolean = true
         override suspend fun setTrackDedupV1Done() {}
         override suspend fun isNwayEnabled(): Boolean = nway
+        override suspend fun isNwayPropagateEnabled(): Boolean = false
     }
 
     // ── Tests ───────────────────────────────────────────────────────

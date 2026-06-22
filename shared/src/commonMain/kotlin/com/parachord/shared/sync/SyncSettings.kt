@@ -162,6 +162,10 @@ interface SyncSettingsProvider {
      *  N-way path — migration bootstrap, shadow mode, propagation. */
     suspend fun isNwayEnabled(): Boolean
 
+    /** Stricter opt-in for N-way PROPAGATION — real provider writes. Requires
+     *  [isNwayEnabled] too. Default OFF. */
+    suspend fun isNwayPropagateEnabled(): Boolean
+
     /** Persist the timestamp of the last successful sync (epoch millis). */
     suspend fun setLastSyncAt(timestamp: Long)
 

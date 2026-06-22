@@ -254,6 +254,7 @@ class SyncEngineIdempotencyTest {
         override suspend fun getTrackDedupV1Done(): Boolean = true
         override suspend fun setTrackDedupV1Done() {}
         override suspend fun isNwayEnabled(): Boolean = false
+        override suspend fun isNwayPropagateEnabled(): Boolean = false
     }
 
     // ── Tests ───────────────────────────────────────────────────────
@@ -495,6 +496,7 @@ class SyncEngineIdempotencyTest {
         override suspend fun getTrackDedupV1Done(): Boolean = true
         override suspend fun setTrackDedupV1Done() {}
         override suspend fun isNwayEnabled(): Boolean = false
+        override suspend fun isNwayPropagateEnabled(): Boolean = false
     }
 
     /**
