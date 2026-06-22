@@ -5,9 +5,11 @@ import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * Thrown by [AppleMusicClient.search] when iTunes Search responds with
@@ -31,11 +33,20 @@ class AppleMusicClient(private val httpClient: HttpClient) {
         private const val BASE_URL = "https://itunes.apple.com"
     }
 
-    suspend fun lookup(id: String, entity: String? = null): AppleMusicLookupResponse =
-        httpClient.get("$BASE_URL/lookup") {
+    // iTunes Search/Lookup respond with `Content-Type: text/javascript`, NOT
+    // application/json — so Ktor's ContentNegotiation refuses to deserialize and
+    // `.body()` throws NoTransformationFoundException (every search silently
+    // returned null). Read the text and decode manually instead.
+    private val json = Json { ignoreUnknownKeys = true }
+
+    suspend fun lookup(id: String, entity: String? = null): AppleMusicLookupResponse {
+        val response = httpClient.get("$BASE_URL/lookup") {
             parameter("id", id)
             if (entity != null) parameter("entity", entity)
-        }.body()
+        }
+        if (!response.status.isSuccess()) return AppleMusicLookupResponse()
+        return json.decodeFromString(response.bodyAsText())
+    }
 
     suspend fun search(
         term: String,
@@ -52,7 +63,7 @@ class AppleMusicClient(private val httpClient: HttpClient) {
         // iTunes Search returns 429 with an HTML body when rate-limited.
         // Surface a typed exception so [AppleMusicSyncProvider] can flip
         // its session kill-switch instead of letting the body parser
-        // throw NoTransformationFoundException on every retry.
+        // throw on every retry.
         if (response.status.value == 429) {
             throw ItunesRateLimitedException()
         }
@@ -61,7 +72,7 @@ class AppleMusicClient(private val httpClient: HttpClient) {
         if (!response.status.isSuccess()) {
             return AppleMusicSearchResponse()
         }
-        return response.body()
+        return json.decodeFromString(response.bodyAsText())
     }
 
     /**

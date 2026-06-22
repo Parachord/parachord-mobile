@@ -34,6 +34,8 @@ import com.parachord.shared.sync.SyncedArtist
 import com.parachord.shared.sync.SyncedPlaylist
 import com.parachord.shared.sync.SyncedTrack
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
 
 /**
@@ -140,6 +142,25 @@ class AppleMusicSyncProvider(
      */
     @Volatile
     internal var iTunesSearchRateLimited: Boolean = false
+
+    // Cached storefront for catalog ISRC lookups (the catalog API is per-
+    // storefront). Fetched once per session under a mutex so concurrent
+    // hydration calls don't each hit /me/storefront. null = not-yet-fetched OR
+    // fetch failed (re-probed next time).
+    private var cachedStorefront: String? = null
+    private val storefrontMutex = Mutex()
+
+    private suspend fun ensureStorefront(): String? {
+        cachedStorefront?.let { return it }
+        return storefrontMutex.withLock {
+            cachedStorefront ?: try {
+                api.getStorefront().data.firstOrNull()?.id?.also { cachedStorefront = it }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "ensureStorefront: getStorefront failed", e); null
+            }
+        }
+    }
 
     // ── Read methods ─────────────────────────────────────────────────
 
@@ -375,16 +396,33 @@ class AppleMusicSyncProvider(
     /**
      * Catalog-search-based ID hydration (un-defers Decision D1).
      *
-     * Uses iTunes Search (`/search?media=music&entity=song`) — the
-     * catalog endpoint, NOT the library API. Returns the bare numeric
-     * `trackId` as a string; this matches the format MusicKit catalog
-     * IDs use, and AppleMusicLibraryClient.appendPlaylistTracks /
-     * replacePlaylistTracks accepts the same.
+     * PRIMARY: the Apple Music CATALOG API by ISRC
+     * (`/v1/catalog/{storefront}/songs?filter[isrc]=…`) — EXACT (no fuzzy
+     * wrong-variant risk), authed with the dev token we already hold, and the
+     * catalog id it returns is what the library add-to-playlist endpoint accepts.
+     * Mirrors the ISRC-keyed LB hydration. FALLBACK: iTunes Search (text, no
+     * auth) for tracks with no ISRC or a catalog miss.
      *
-     * Confidence-gated against [com.parachord.shared.resolver.ResolverScoring.MIN_CONFIDENCE_THRESHOLD]
+     * The iTunes fallback is confidence-gated against
+     * [com.parachord.shared.resolver.ResolverScoring.MIN_CONFIDENCE_THRESHOLD]
      * (0.60) using [com.parachord.shared.resolver.scoreConfidence].
      */
     override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
+        // PRIMARY — exact catalog lookup by ISRC.
+        if (!isrc.isNullOrBlank()) {
+            val storefront = ensureStorefront()
+            if (storefront != null) {
+                val catalogId = try {
+                    api.getCatalogSongIdByIsrc(storefront, isrc)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "catalog ISRC lookup failed for isrc=$isrc", e); null
+                }
+                if (catalogId != null) return catalogId
+            }
+        }
+
+        // FALLBACK — iTunes Search (no ISRC, or catalog miss).
         // Session kill-switch: if we've already hit a 429 from iTunes Search,
         // don't bother asking again until the user restarts the app. Apple
         // doesn't publish the throttle window and stacked 429s just extend it.
