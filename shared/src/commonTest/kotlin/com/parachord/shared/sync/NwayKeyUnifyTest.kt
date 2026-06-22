@@ -11,6 +11,49 @@ class NwayKeyUnifyTest {
 
     private fun k(isrc: String? = null, mbid: String? = null, norm: String) = TrackKeys(isrc, mbid, norm)
 
+    // ── Step 4: conservative remaster-strip in the norm tier ──────────
+    // The no-ISRC bridge for the LB axis (LB playlists carry no per-track ISRC),
+    // which is what the data-loss incident actually needed.
+
+    @Test
+    fun trackKeysOf_stripsRemasterAnnotations() {
+        val variants = listOf(
+            "Zombie",
+            "Zombie - 2025 Remastered",
+            "Zombie - Remastered",
+            "Zombie (Remastered)",
+            "Zombie (Remastered 2011)",
+            "Zombie (2011 Remaster)",
+        )
+        val norms = variants.map { trackKeysOf(isrc = null, recordingMbid = null, artist = "The Cranberries", title = it).norm }
+        // Every remaster variant collapses to the bare-title norm → they unify.
+        norms.forEach { assertEquals("the cranberries|zombie", it) }
+    }
+
+    @Test
+    fun trackKeysOf_preservesGenuinelyDifferentRecordings() {
+        // Conservative: Live / Acoustic / feat. are NOT stripped — different
+        // recordings the user may legitimately keep both of.
+        fun normOf(title: String) = trackKeysOf(null, null, "Oasis", title).norm
+        assertEquals("oasis|wonderwall - live", normOf("Wonderwall - Live"))
+        assertEquals("oasis|wonderwall (acoustic)", normOf("Wonderwall (Acoustic)"))
+        assertEquals("oasis|wonderwall (feat. someone)", normOf("Wonderwall (feat. Someone)"))
+    }
+
+    @Test
+    fun unify_bridgesRemasterDriftAcrossServices_viaNorm() {
+        // THE LB-axis incident: baseline has the original recording (mbid-A, plain
+        // title); the LB copy has a DIFFERENT recording-mbid + a remaster title and
+        // NO ISRC (LB playlists don't expose per-track ISRC). The remaster-strip
+        // makes both norms equal → they unify → the baseline track can't be
+        // union-removed as "deleted".
+        val baseline = listOf(trackKeysOf(null, "rec-a", "The Cranberries", "Zombie"))
+        val lbCopy = listOf(trackKeysOf(null, "rec-b", "The Cranberries", "Zombie - 2025 Remastered"))
+        val out = unifyTrackKeys(listOf(baseline, lbCopy))
+        // One equivalence class → same representative (min mbid).
+        assertEquals(out[0], out[1])
+    }
+
     @Test
     fun singleton_yieldsCanonicalKey() {
         // No bridging → same key canonicalTrackKey would produce.

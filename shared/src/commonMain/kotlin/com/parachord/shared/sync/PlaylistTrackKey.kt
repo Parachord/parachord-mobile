@@ -27,7 +27,9 @@ fun canonicalTrackKey(
     validateIsrc(isrc)?.let { return "isrc-$it" }
     recordingMbid?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { return "mbid-$it" }
     val a = artist?.trim()?.lowercase() ?: ""
-    val t = title?.trim()?.lowercase() ?: ""
+    // Same conservative remaster-strip as [trackKeysOf] so the string-key and
+    // TrackKeys paths agree (cross-engine: desktop must match).
+    val t = normalizeTitleForKey(title)
     return "norm-$a|$t"
 }
 

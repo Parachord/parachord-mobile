@@ -14,10 +14,31 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class TrackKeys(val isrc: String?, val mbid: String?, val norm: String)
 
+/**
+ * Trailing remaster annotation, e.g. " - 2025 Remastered", " (Remastered)",
+ * " (Remastered 2011)", " - Remaster". A remaster is the SAME song, so two
+ * services labeling it differently must still unify on the `norm` tier — this is
+ * the no-ISRC bridge for the LB axis (ListenBrainz playlists carry no per-track
+ * ISRC, so the isrc tier can't help there). CONSERVATIVE on purpose: we do NOT
+ * strip Live / Acoustic / Single Version / Radio Edit / `(feat. …)` — those are
+ * genuinely different recordings a user may legitimately keep both of. Anchored
+ * to the END so it never touches a mid-title word.
+ */
+private val REMASTER_SUFFIX =
+    Regex("""\s*[-(]\s*(\d{4}\s+)?remaster(ed)?(\s+\d{4})?\s*\)?\s*$""")
+
+/**
+ * Normalized title for the `norm` identity tier — lowercased, trimmed, with the
+ * trailing remaster annotation stripped. **Cross-engine:** the desktop JS port
+ * MUST apply the identical rule (it feeds the shared unify fixtures).
+ */
+fun normalizeTitleForKey(title: String?): String =
+    (title?.trim()?.lowercase() ?: "").replace(REMASTER_SUFFIX, "").trim()
+
 /** Build [TrackKeys] from raw track fields — same normalization as [canonicalTrackKey]. */
 fun trackKeysOf(isrc: String?, recordingMbid: String?, artist: String?, title: String?): TrackKeys {
     val a = artist?.trim()?.lowercase() ?: ""
-    val t = title?.trim()?.lowercase() ?: ""
+    val t = normalizeTitleForKey(title)
     return TrackKeys(
         isrc = validateIsrc(isrc),
         mbid = recordingMbid?.trim()?.lowercase()?.takeIf { it.isNotEmpty() },
