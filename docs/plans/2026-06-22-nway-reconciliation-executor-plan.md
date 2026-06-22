@@ -61,18 +61,25 @@ title drift — directly killing the incident.
 
 **Gate:** the identity-drift-no-drop test (Step 0) goes green for the same-ISRC case.
 
-## Step 2 — Confidence-gated union-remove (the invariant backstop)
-Even with ISRC, the no-ISRC tail can still drift. Add a reconciliation-layer guard
-(NOT in `PlaylistMerge`): after the merge, re-add any baseline track that is still
-present — by best-available identity (ISRC, else unified repr) — in ANY
-fully-fetched copy. A baseline track is only allowed to stay dropped if it's absent
-from EVERY copy that was fully fetched this cycle (genuine deliberate delete).
-- Lives in `propagateReconcilePlaylist` (and mirror into `computeNwayShadowPlan`'s
-  caller for the report) after `plan.merged` is computed.
-- A copy that was NOT fully fetched (unchanged-reused-baseline, or fetch failed, or
-  empty-mirror) does NOT count as evidence of deletion.
+## Step 2 — Confidence-gated union-remove — DEFERRED / FOLDED INTO STEP 3
+**Decision (Jun 22): removal policy = DELETE-ALWAYS-WINS** (preserve the
+desktop-pinned contract — a delete on any service propagates everywhere). Under
+that policy, with the identity fixes (Steps 1 + 4) in, a *separate* confidence
+gate adds little and is not cleanly implementable:
+- The false-drop root cause was *misidentified absence* (drift), which Steps 1+4
+  fix — the merge now recognizes the same song across services, so it only removes
+  when a fully-fetched copy genuinely lacks a confidently-matched track (= correct
+  delete-always-wins).
+- A norm-only baseline track that the merge drops **can't be re-added** anyway: we
+  hold only its `TrackKeys` (no full track data), and if any copy still had it
+  under a matching key it wouldn't have dropped. So "keep it" is impossible, and
+  the additive-bias reading was rejected (it would change the pinned policy).
+- The one piece worth keeping — *don't let a not-fully-fetched copy contribute a
+  removal* — is already true (unchanged/empty/failed copies are `changed=false`
+  and never feed the merge's removal set) and is reinforced by **Step 3**.
 
-**Gate:** partial-coverage-no-drop + real-removal-still-propagates tests go green.
+So Step 2 is **folded into Step 3** (pending-push markers) rather than built as its
+own gate. Revisit only if delete-always-wins is later changed to additive-bias.
 
 ## Step 3 — Pending-push markers (baseline stability under partial coverage)
 Generalize the empty-mirror rule: when a provider is skipped (coverage guard) or
