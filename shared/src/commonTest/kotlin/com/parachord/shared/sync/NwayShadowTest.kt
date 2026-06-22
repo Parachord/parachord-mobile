@@ -73,6 +73,70 @@ class NwayShadowTest {
         assertTrue("spotify" in plan.wouldPushTo)
     }
 
+    // ── propagation plan (Phase 4) ───────────────────────────────────
+
+    @Test
+    fun propagation_excludesNonWritableSourceFromPushTargets() {
+        // Spotify changed (added x); local + the followed-Spotify source lag.
+        // But Spotify is the read-only source (writable=false) → never pushed
+        // back to. local IS pushed (writable).
+        val base = listOf("a", "b")
+        val plan = computeNwayPropagationPlan(
+            base,
+            listOf(
+                copy("local", base, 1, changed = false),
+                copy("spotify", listOf("a", "b", "x"), 9, changed = true),
+            ),
+            writableById = mapOf("spotify" to false, "local" to true),
+            massChangeThreshold = 0.5,
+        )!!
+        assertEquals(listOf("a", "b", "x"), plan.merged)
+        assertEquals(listOf("local"), plan.pushTargets) // spotify excluded (non-writable source)
+        assertEquals(false, plan.massChangeAbort)
+    }
+
+    @Test
+    fun propagation_writableMirrorsArePushed() {
+        val base = listOf("a", "b")
+        val plan = computeNwayPropagationPlan(
+            base,
+            listOf(
+                copy("local", listOf("a", "b", "x"), 9, changed = true), // added x
+                copy("applemusic", base, 1, changed = false),            // lags
+                copy("listenbrainz", base, 1, changed = false),          // lags
+            ),
+            writableById = emptyMap(), // all default writable
+            massChangeThreshold = 0.5,
+        )!!
+        assertEquals(listOf("applemusic", "listenbrainz"), plan.pushTargets)
+    }
+
+    @Test
+    fun propagation_massChangeAbortsWhenDropExceedsThreshold() {
+        // Spotify removed 2 of 3 baseline tracks → 66% drop > 25% threshold.
+        val base = listOf("a", "b", "c")
+        val plan = computeNwayPropagationPlan(
+            base,
+            listOf(copy("spotify", listOf("a"), 9, changed = true)),
+            writableById = emptyMap(),
+            massChangeThreshold = 0.25,
+        )!!
+        assertTrue(plan.massChangeAbort)
+    }
+
+    @Test
+    fun propagation_nullWhenNothingChanged() {
+        val base = listOf("a", "b")
+        assertNull(
+            computeNwayPropagationPlan(
+                base,
+                listOf(copy("local", base, 1, changed = false)),
+                emptyMap(),
+                0.25,
+            ),
+        )
+    }
+
     @Test
     fun massChangeDropFraction_isComputed() {
         assertEquals(0.0, nwayBaselineDropFraction(emptyList(), emptyList()))

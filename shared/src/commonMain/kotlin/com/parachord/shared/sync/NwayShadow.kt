@@ -72,6 +72,51 @@ fun computeNwayShadowPlan(baseline: List<String>, copies: List<NwayCopyState>): 
 }
 
 /**
+ * What PROPAGATION would actually do (Phase 4) — the shadow plan refined for
+ * real writes:
+ * - [merged]: the merged tracklist (representative keys).
+ * - [pushTargets]: the copies that will receive a push — [NwayShadowPlan.wouldPushTo]
+ *   filtered to copies the user can WRITE to. A read-only followed source
+ *   (`writable=false`) is excluded: we never push merged changes BACK to a
+ *   playlist you can't edit. `local` and owned/collaborative mirrors stay in.
+ * - [massChangeAbort]: the merge would drop more than the mass-change threshold
+ *   of the baseline — a likely provider hiccup; the caller must NOT propagate
+ *   (skip this playlist entirely), never push a destructive near-empty.
+ */
+data class NwayPropagationPlan(
+    val merged: List<String>,
+    val pushTargets: List<String>,
+    val massChangeAbort: Boolean,
+)
+
+/**
+ * Pure propagation plan (Phase 4): `(baseline, copies, writability) -> plan`.
+ * Reuses [computeNwayShadowPlan] for the merge, then layers the two
+ * write-safety rules — per-copy writability (don't push back to a non-writable
+ * source) and the mass-change guard. Returns `null` when no copy changed (the
+ * perf short-circuit, same as shadow). No I/O.
+ *
+ * [writableById]: copy id -> can-write. A missing entry defaults to writable
+ * (the common case: `local` and owned mirrors). The propagation executor passes
+ * `false` only for a non-writable source copy.
+ */
+fun computeNwayPropagationPlan(
+    baseline: List<String>,
+    copies: List<NwayCopyState>,
+    writableById: Map<String, Boolean>,
+    massChangeThreshold: Double,
+): NwayPropagationPlan? {
+    val shadow = computeNwayShadowPlan(baseline, copies) ?: return null
+    val pushTargets = shadow.wouldPushTo.filter { writableById[it] != false }
+    val dropFraction = nwayBaselineDropFraction(baseline, shadow.merged)
+    return NwayPropagationPlan(
+        merged = shadow.merged,
+        pushTargets = pushTargets,
+        massChangeAbort = dropFraction > massChangeThreshold,
+    )
+}
+
+/**
  * Fraction of the baseline that [merged] would drop — the mass-change-guard
  * signal (design step 6). The propagation phase aborts a playlist whose merge
  * drops more than the threshold (a provider hiccup returning empty); shadow
