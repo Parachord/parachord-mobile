@@ -30,8 +30,10 @@ import com.parachord.shared.sync.TrackKeys
 import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -353,6 +355,31 @@ class ListenBrainzPushShortCircuitTest {
             baseline.tracks,
             h.baselineDao.selectForLocal("local-0")!!.tracks,
         )
+    }
+
+    @Test
+    fun `push never claims a remote already linked to another local playlist (269)`() = runBlocking {
+        val h = Harness()
+        // local-A mirrors to LB → creates + links its own remote.
+        h.seedLocalPlaylist("local-A", "Guitarmageddon")
+        h.engine.syncAll()
+        val mbidA = h.linkDao.selectForLink("local-A", ListenBrainzSyncProvider.PROVIDER_ID)!!.externalId
+        val createsAfterA = h.provider.createCount
+
+        // A SECOND same-name local playlist appears (e.g. a followed copy + your own).
+        h.seedLocalPlaylist("local-B", "Guitarmageddon")
+        h.engine.syncAll()
+
+        val linkB = h.linkDao.selectForLink("local-B", ListenBrainzSyncProvider.PROVIDER_ID)
+        assertNotNull("local-B got linked", linkB)
+        // THE GUARD: local-B must NOT claim local-A's remote (that's the tangle) —
+        // it gets its own.
+        assertNotEquals(
+            "same-name playlists must not share one remote mirror",
+            mbidA,
+            linkB!!.externalId,
+        )
+        assertTrue("local-B created its own remote", h.provider.createCount > createsAfterA)
     }
 
     @Test

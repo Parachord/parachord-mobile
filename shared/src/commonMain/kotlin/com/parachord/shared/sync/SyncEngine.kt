@@ -2231,6 +2231,27 @@ class SyncEngine constructor(
                     }
                 }
 
+                // #269 disambiguation guard: NEVER claim a remote that's already
+                // linked to a DIFFERENT local playlist. With two same-name local
+                // rows (e.g. a followed playlist + your own copy), the name-match
+                // above would otherwise link BOTH to the same remote mirror,
+                // tangling them. A remote (provider, externalId) belongs to at
+                // most one local row; if this candidate is taken, drop it and
+                // fall through to create a separate mirror. (Layer 1's own-link
+                // match is exempt — it IS this playlist's link.)
+                if (existing != null && matchSource != "id-link") {
+                    val owner = syncPlaylistLinkDao.selectByExternalId(providerId, existing.spotifyId)
+                    if (owner != null && owner.localPlaylistId != playlist.id) {
+                        Log.d(
+                            TAG,
+                            "#269: $providerId remote ${existing.spotifyId} already linked to " +
+                                "'${owner.localPlaylistId}' — not claiming it for '${playlist.name}'",
+                        )
+                        existing = null
+                        matchSource = ""
+                    }
+                }
+
                 // Resolve the pushable tracklist BEFORE deciding to create a
                 // remote. A playlist with no pushable tracks must NEVER create
                 // a fresh empty mirror (desktop's "don't create an empty
