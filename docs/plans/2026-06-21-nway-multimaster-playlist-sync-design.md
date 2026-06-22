@@ -170,8 +170,20 @@ Run once per playlist when the N-way engine first activates:
    - **Per-sync wiring** — `runNwayPropagation()` runs at the end of
      `syncPlaylists` (after the normal pull/push + `clearLocallyModifiedFlags`),
      gated + echo-suppressed; skipped on a provider-filtered partial sync.
-   - **Remaining before default-on:** validate REAL writes behind the flag on one
-     playlist end-to-end; then desktop parity (step 5).
+   - **Mapper-outage resilience (Jun 22)** — LB hydration falls back mapper →
+     MusicBrainz `/isrc/` → fuzzy MB search; AM hydration switched to the catalog
+     `filter[isrc]` endpoint (the iTunes path returned `text/javascript` and
+     never deserialized). Per-provider coverage guard + empty-mirror-as-fill-
+     target + total-wipe-only mass-change.
+   - **⛔ BLOCKED — real-writes OFF: propagation caused DATA LOSS (Jun 22).** A
+     track added on one service made the 3-way merge **drop tracks no copy
+     deleted** (stale baseline under partial coverage + cross-service key drift →
+     false union-removes). **Do NOT enable real-writes.** The fix is a
+     reconciliation correctness redesign — see
+     `docs/plans/2026-06-22-nway-reconciliation-redesign.md`. Re-enabling
+     real-writes is gated on that redesign + a no-false-drop test harness.
+   - **Remaining before default-on:** the reconciliation redesign; then desktop
+     parity (step 5).
 5. **Desktop ↔ mobile parity** — desktop adopts the same algorithm (port of the
    shared `commonMain` merge logic). Gate enablement on "all the user's clients
    support N-way" so a mixed fleet never oscillates.
