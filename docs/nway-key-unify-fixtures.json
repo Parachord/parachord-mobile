@@ -46,6 +46,15 @@
       "expected": [["isrc-GBAYE0601477"], ["isrc-GBAYE0601477"]]
     },
     {
+      "name": "isrc_bridges_when_mbid_and_norm_both_differ",
+      "_note": "Reconciliation-redesign incident case: same recording across services with a DIFFERENT recording-MBID AND a drifted normalized title (remaster suffix). Neither mbid nor norm matches; only the ISRC bridges them. Without the persisted isrc tier these were union-removed → data loss.",
+      "lists": [
+        [{ "isrc": "USABC1234567", "mbid": "rec-a", "norm": "the cranberries|zombie" }],
+        [{ "isrc": "USABC1234567", "mbid": "rec-b", "norm": "the cranberries|zombie - 2025 remastered" }]
+      ],
+      "expected": [["isrc-USABC1234567"], ["isrc-USABC1234567"]]
+    },
+    {
       "name": "distinct_tracks_stay_distinct",
       "lists": [
         [{ "mbid": "x", "norm": "artist|one" }],

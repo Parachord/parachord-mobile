@@ -45,12 +45,12 @@ class NwayKeyUnifyTest {
         // title (remaster suffix) — neither mbid nor norm matches, so only the
         // ISRC can bridge them. Without the now-persisted isrc tier these were
         // treated as different tracks → union-removed → DATA LOSS.
-        val baseline = listOf(k(isrc = "usabc1234567", mbid = "rec-a", norm = "the cranberries|zombie"))
-        val lbCopy = listOf(k(isrc = "usabc1234567", mbid = "rec-b", norm = "the cranberries|zombie - 2025 remastered"))
+        val baseline = listOf(k(isrc = "USABC1234567", mbid = "rec-a", norm = "the cranberries|zombie"))
+        val lbCopy = listOf(k(isrc = "USABC1234567", mbid = "rec-b", norm = "the cranberries|zombie - 2025 remastered"))
         val out = unifyTrackKeys(listOf(baseline, lbCopy))
         // Both collapse to the isrc- representative (strongest tier) → ONE track,
         // so the merge can never see the baseline track as "removed".
-        assertEquals(listOf(listOf("isrc-usabc1234567"), listOf("isrc-usabc1234567")), out)
+        assertEquals(listOf(listOf("isrc-USABC1234567"), listOf("isrc-USABC1234567")), out)
     }
 
     @Test
