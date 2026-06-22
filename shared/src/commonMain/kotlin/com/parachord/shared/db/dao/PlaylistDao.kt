@@ -136,6 +136,11 @@ class PlaylistDao(private val db: ParachordDb) {
         )
     }
 
+    /** #269: refresh the writable flag in place (the pull skips unchanged rows). */
+    suspend fun setWritable(id: String, writable: Boolean): Unit = withContext(Dispatchers.Default) {
+        queries.setWritable(if (writable) 1L else 0L, id)
+    }
+
     suspend fun getHosted(): List<Playlist> = withContext(Dispatchers.Default) {
         queries.getHosted().executeAsList().map { it.toPlaylist() }
     }

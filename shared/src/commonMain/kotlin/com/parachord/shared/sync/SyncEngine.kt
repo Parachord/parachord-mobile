@@ -1354,6 +1354,19 @@ class SyncEngine constructor(
             }
         } else emptyList()
 
+        // #269 self-heal: refresh writable for EVERY pulled Spotify playlist. The
+        // per-playlist reconcile below only sets writable on the create path and
+        // skips unchanged existing rows — so a followed playlist (writable=false)
+        // would otherwise keep its stale default writable=1 and keep mirroring.
+        // Cheap targeted update; runs even on a no-op sync.
+        for (remote in remotePlaylists) {
+            val existing = playlistDao.getBySpotifyId(remote.spotifyId)
+            if (existing != null && existing.writable != remote.entity.writable) {
+                playlistDao.setWritable(existing.id, remote.entity.writable)
+                Log.d(TAG, "#269: refreshed writable=${remote.entity.writable} for '${existing.name}'")
+            }
+        }
+
         // Pull allowlist (per-provider) + per-playlist channel override. The
         // override is authoritative for a given playlist; otherwise the allowlist
         // (empty = import all) applies.
