@@ -266,6 +266,14 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // N-way reconciliation redesign: persist ISRC on playlist tracks so the
+        // unify isrc-tier can bridge the same recording across services (different
+        // recording-MBID / drifted title, same ISRC) — the no-false-drop fix.
+        try {
+            driver.execute(null, "ALTER TABLE playlist_tracks ADD COLUMN trackIsrc TEXT", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // Slow-trickle cross-resolver enrichment (#150): tracks the last time
         // we tried to backfill streaming-service IDs for a localfiles-only
         // track. Same idempotent ALTER pattern as above.

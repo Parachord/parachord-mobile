@@ -26,11 +26,13 @@ fun trackKeysOf(isrc: String?, recordingMbid: String?, artist: String?, title: S
 }
 
 /** Ordered [TrackKeys] for a playlist's local tracks (position order) — the
- *  N-way baseline ancestor (Phase 4). PlaylistTrack carries no ISRC, so the isrc
- *  tier is null here; mbid + norm drive unification. */
+ *  N-way baseline ancestor (Phase 4). ISRC (now persisted on playlist_tracks) is
+ *  the strongest cross-service identity tier — it lets the same recording unify
+ *  across services even when recording-MBID or normalized title drift (the
+ *  reconciliation-redesign fix); mbid + norm remain as fallbacks. */
 fun nwayBaselineTrackKeys(tracks: List<PlaylistTrack>): List<TrackKeys> =
     tracks.sortedBy { it.position }
-        .map { trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle) }
+        .map { trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle) }
 
 /**
  * Cross-copy key unification — the N-way Phase 4 prerequisite that fixes the

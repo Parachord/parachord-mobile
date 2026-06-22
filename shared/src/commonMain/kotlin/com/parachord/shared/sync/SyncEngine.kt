@@ -1219,7 +1219,7 @@ class SyncEngine constructor(
                 continue
             }
             val keys = provider.fetchPlaylistTracks(externalId).map {
-                trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+                trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
             }
             inputs.add(ShadowCopyInput(providerId, keys, now, changed = true))
         }
@@ -1412,7 +1412,7 @@ class SyncEngine constructor(
         val inputs = mutableListOf<PropagationCopyInput>()
         val localTracks = playlistTrackDao.getByPlaylistIdSync(localId).sortedBy { it.position }
         val localKeys = localTracks.map {
-            trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+            trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
         }
         val localChanged = playlist.locallyModified || playlist.lastModified > baseline.baselineSyncedAt
         inputs.add(PropagationCopyInput("local", localTracks, localKeys, playlist.lastModified, localChanged))
@@ -1448,7 +1448,7 @@ class SyncEngine constructor(
                 continue
             }
             val keys = tracks.map {
-                trackKeysOf(isrc = null, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+                trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
             }
             inputs.add(PropagationCopyInput(providerId, tracks, keys, now, changed = true))
         }

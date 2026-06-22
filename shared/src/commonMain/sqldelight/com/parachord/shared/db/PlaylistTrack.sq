@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS playlist_tracks (
     trackSpotifyId TEXT,
     trackAppleMusicId TEXT,
     trackRecordingMbid TEXT,
+    trackIsrc TEXT,
     addedAt INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (playlistId, position),
     FOREIGN KEY (playlistId) REFERENCES playlists(id) ON DELETE CASCADE
@@ -27,8 +28,8 @@ getMaxPosition:
 SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE playlistId = ?;
 
 insert:
-INSERT OR REPLACE INTO playlist_tracks (playlistId, position, trackTitle, trackArtist, trackAlbum, trackDuration, trackArtworkUrl, trackSourceUrl, trackResolver, trackSpotifyUri, trackSoundcloudId, trackSpotifyId, trackAppleMusicId, trackRecordingMbid, addedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO playlist_tracks (playlistId, position, trackTitle, trackArtist, trackAlbum, trackDuration, trackArtworkUrl, trackSourceUrl, trackResolver, trackSpotifyUri, trackSoundcloudId, trackSpotifyId, trackAppleMusicId, trackRecordingMbid, trackIsrc, addedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteByPlaylistId:
 DELETE FROM playlist_tracks WHERE playlistId = ?;
@@ -52,6 +53,7 @@ SET trackSpotifyId       = COALESCE(trackSpotifyId, ?),
     trackSpotifyUri      = COALESCE(trackSpotifyUri, ?),
     trackAppleMusicId    = COALESCE(trackAppleMusicId, ?),
     trackSoundcloudId    = COALESCE(trackSoundcloudId, ?),
-    trackRecordingMbid   = COALESCE(trackRecordingMbid, ?)
+    trackRecordingMbid   = COALESCE(trackRecordingMbid, ?),
+    trackIsrc            = COALESCE(trackIsrc, ?)
 WHERE playlistId = ? AND position = ?;
 
