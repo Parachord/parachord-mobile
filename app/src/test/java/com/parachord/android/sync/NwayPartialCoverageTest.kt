@@ -241,4 +241,57 @@ class NwayPartialCoverageTest {
         assertTrue("no churn: LB not re-pushed on the no-op cycle", h.lb.replaceCalls.isEmpty())
         assertTrue("no churn: AM not re-pushed on the no-op cycle", h.am.replaceCalls.isEmpty())
     }
+
+    /**
+     * The invariant's OTHER half: pending-exclusion must not over-correct into
+     * never-removing. A GENUINE removal by a fully-covered copy must still
+     * propagate to the covered copies even while another provider is a pending
+     * fill target. (A pending provider is excluded from the removal computation —
+     * it can't be a deletion SOURCE — but it must not BLOCK a deletion another
+     * copy legitimately drives.)
+     */
+    @Test
+    fun `genuine removal still propagates while another provider is a pending fill target`() = runBlocking {
+        val h = Harness()
+        h.seed("local-0", "Mixed", 3)
+        h.engine.syncAll() // create + link LB + AM mirrors (AM coverable here)
+        h.engine.syncAll() // migrate baseline = 3
+
+        val lbMbid = h.linkDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.externalId
+        val amExt = h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID)!!.externalId
+
+        // AM can no longer hydrate the new track → catalog gap → pending fill target.
+        h.am.hydrateFn = { null }
+        h.playlistTrackDao.insertAll(listOf(
+            PlaylistTrack(playlistId = "local-0", position = 3, trackTitle = "Mixed 3", trackArtist = "Artist 3", trackRecordingMbid = "mbid-local-0-3"),
+        ))
+        h.playlistDao.update(h.playlistDao.getById("local-0")!!.copy(trackCount = 4, lastModified = 2_000L, locallyModified = true))
+        h.engine.runNwayPropagation()
+        assertEquals(
+            "precondition: AM is a pending fill target",
+            SyncEngine.NWAY_FILL_PENDING_ACTION,
+            h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID)!!.pendingAction,
+        )
+        assertEquals("precondition: LB holds all 4", 4, h.lb.remote[lbMbid]!!.tracks.size)
+
+        // Now the user GENUINELY removes an original track (position 0) locally.
+        val afterRemoval = h.playlistTrackDao.getByPlaylistIdSync("local-0")
+            .sortedBy { it.position }
+            .drop(1)
+            .mapIndexed { i, t -> t.copy(position = i) }
+        h.playlistTrackDao.replaceAll("local-0", afterRemoval)
+        h.playlistDao.update(h.playlistDao.getById("local-0")!!.copy(trackCount = 3, lastModified = 3_000L, locallyModified = true))
+
+        h.lb.replaceCalls.clear()
+        h.engine.runNwayPropagation()
+
+        // The genuine removal propagates to the fully-covered LB copy — AM being
+        // pending did NOT block it.
+        assertEquals("genuine removal propagates — LB drops to 3", 3, h.lb.remote[lbMbid]!!.tracks.size)
+        assertEquals("local reflects the removal", 3, h.playlistTrackDao.getByPlaylistIdSync("local-0").size)
+        assertTrue(
+            "the removed recording is gone from LB",
+            h.lb.remote[lbMbid]!!.tracks.none { it == "mbid-local-0-0" },
+        )
+    }
 }
