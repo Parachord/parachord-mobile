@@ -98,13 +98,33 @@ The only genuinely new client code is wiring Spotify's standard `DELETE /v1/play
   cycle, left pending** — the remote keeps everything else. A remove targets the track's
   *existing* remote ID, so it always works on providers that can remove.
 
-**What this kills outright:** the >25% coverage SKIP (`SyncEngine.kt:1571`), the
-catalog-gap pending markers (`NWAY_FILL_PENDING_ACTION`, Step 3), the "baseline advances
-only on full coverage" rule, and the `persist=false` propagation oddity. A track absent
-from a provider's catalog is just a no-op add, never a phantom delete. Partial hydration
-stops being destructive, so playlists **converge incrementally** over cycles as IDs
-backfill. This subsumes P1 (stale baseline) and P1b (catalog-gap deletion) structurally:
-they were artifacts of the coupling, not of the merge.
+**What this kills:** the >25% coverage SKIP (`SyncEngine.kt:1571`), the catalog-gap
+pending markers (`NWAY_FILL_PENDING_ACTION`, Step 3), the "baseline advances only on full
+coverage" rule, and the `persist=false` propagation oddity. A track absent from a
+provider's catalog is a no-op add at the WRITE layer, never a phantom delete there.
+Partial hydration stops being destructive, so playlists **converge incrementally** over
+cycles as IDs backfill.
+
+> **CORRECTION (Jun 23, after the `NwayMaterializeTest` gate caught a data-loss
+> regression in the swap).** An earlier draft of this section claimed the decoupling
+> "subsumes P1 and P1b structurally — they were artifacts of the coupling, not of the
+> merge." **That was wrong, and the gate proved it.** Making the *write* non-destructive
+> is necessary but NOT sufficient: the **merge (reconcile) layer runs UPSTREAM of the
+> write** and still consumes each provider's fetched tracklist, so a track a provider
+> couldn't *materialize* (pending) is indistinguishable, to the merge, from one the user
+> *deleted* — `PlaylistMerge` delete-always-wins drops it (P1b reborn at the merge layer).
+> So pending-awareness had to be **re-introduced at the merge layer** (a leaner,
+> cache-driven version of what `NWAY_FILL_PENDING_ACTION` did): a CHANGED provider's
+> merge view is augmented with the canonical keys it lacks *only where the hydration
+> cache says they are pending* (absent / null `resolvedId` = pending; non-null
+> `resolvedId` = confirmed-materialized, so its absence IS a genuine deletion). The
+> materialize target is then recomputed from the *un-augmented* keys so the pending
+> provider is still re-filled. The non-destructive executor and the merge augmentation
+> are **two independent layers** that BOTH must hold the invariant — the executor protects
+> the write, the augmentation protects the merge. See `SyncEngine.isProviderPendingForKey`
+> + the augmentation in `propagateReconcilePlaylist`, and `NwayMaterializeTest`
+> "incremental convergence" (the case that caught it). The lesson: the harness gate
+> earned its keep — it caught what the design premise and two review rounds missed.
 
 The identity work already done (ISRC persistence, norm strip — Steps 1/4) is **kept**:
 it minimizes diff churn/dupes when the *same song* appears under drifted keys across
