@@ -1547,6 +1547,19 @@ class SyncEngine constructor(
                 allCovered = false
                 continue
             }
+            // Skip-unchanged short-circuit (ports desktop canShortCircuitPlaylistUpdate;
+            // same guard the normal LB push uses). On a PARTIAL-coverage cycle the
+            // baseline can't advance, so a fully-covered provider whose remote is
+            // ALREADY the intended list would otherwise be re-detected as a push
+            // target every sync and re-pushed (delete-all + add-all) forever — the
+            // churn that bumps remote last_modified + burns rate limit. If the
+            // remote already equals `ids` (order-aware), treat it as covered and
+            // skip the destructive replace. (Order-aware: a reorder still re-pushes.)
+            if (remoteTracklistMatches(provider, externalId, ids)) {
+                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} remote already matches — skip re-push")
+                pushedTo.add(provider.id)
+                continue
+            }
             val token = provider.replacePlaylistTracks(externalId, ids)
             // Trap 4 — capture the POST-PUSH token (echo suppression). null for
             // snapshot-less providers (LB) → detection falls back to trackCount,
