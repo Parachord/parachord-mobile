@@ -3,6 +3,7 @@ package com.parachord.android.sync
 import com.parachord.shared.sync.ProviderFeatures
 import com.parachord.shared.sync.SnapshotKind
 import com.parachord.shared.sync.SyncProvider
+import com.parachord.shared.sync.TrackRemoveMode
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -42,6 +43,8 @@ class AppleMusicSyncProviderConformanceTest {
             supportsPlaylistDelete = false,
             supportsPlaylistRename = false,
             supportsTrackReplace = false,
+            // AM library playlists are add-only — no playlist-track remove endpoint.
+            trackRemoveMode = TrackRemoveMode.Unsupported,
         )
         assertEquals(expected, provider.features)
     }

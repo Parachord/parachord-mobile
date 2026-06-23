@@ -3,7 +3,9 @@ package com.parachord.shared.sync
 import com.parachord.shared.api.SpCreatePlaylistRequest
 import com.parachord.shared.api.SpIdsRequest
 import com.parachord.shared.api.SpSnapshotResponse
+import com.parachord.shared.api.SpTracksUriRefRequest
 import com.parachord.shared.api.SpUpdatePlaylistRequest
+import com.parachord.shared.api.SpUriRef
 import com.parachord.shared.api.SpUrisRequest
 import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.api.bestImageUrl
@@ -425,6 +427,51 @@ class SpotifySyncProvider(
             }
         }
 
+        return snapshotId
+    }
+
+    /**
+     * Append non-destructively: POST EVERY chunk (never the PUT replace, which
+     * would wipe). Mirrors the chunking shape of [replacePlaylistTracks] but
+     * uses `addPlaylistTracks` (POST) for chunk 0 too. Returns the last
+     * successful chunk's snapshot id. Empty list → no API call, return null.
+     */
+    override suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? {
+        if (externalTrackIds.isEmpty()) return null
+
+        var snapshotId: String? = null
+        externalTrackIds.chunked(PLAYLIST_TRACK_BATCH_SIZE).forEach { chunk ->
+            val response = withRetry { spotifyClient.addPlaylistTracks(externalPlaylistId, SpUrisRequest(chunk)) }
+            if (response.status.isSuccess()) {
+                snapshotId = response.body<SpSnapshotResponse>().snapshotId
+            }
+        }
+        return snapshotId
+    }
+
+    /**
+     * Targeted removal by track URI (Spotify caps DELETE at 100 URIs/req, so we
+     * chunk by [PLAYLIST_TRACK_BATCH_SIZE] like the add path). Only called for
+     * [TrackRemoveMode.ByNativeId]. Returns the last successful chunk's snapshot.
+     */
+    override suspend fun removePlaylistTracksByNativeId(
+        externalPlaylistId: String,
+        externalTrackIds: List<String>,
+    ): String? {
+        if (externalTrackIds.isEmpty()) return null
+
+        var snapshotId: String? = null
+        externalTrackIds.chunked(PLAYLIST_TRACK_BATCH_SIZE).forEach { chunk ->
+            val response = withRetry {
+                spotifyClient.removePlaylistTracks(
+                    externalPlaylistId,
+                    SpTracksUriRefRequest(chunk.map { SpUriRef(it) }),
+                )
+            }
+            if (response.status.isSuccess()) {
+                snapshotId = response.body<SpSnapshotResponse>().snapshotId
+            }
+        }
         return snapshotId
     }
 

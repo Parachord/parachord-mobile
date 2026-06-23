@@ -3,6 +3,7 @@ package com.parachord.android.sync
 import com.parachord.shared.sync.ProviderFeatures
 import com.parachord.shared.sync.SnapshotKind
 import com.parachord.shared.sync.SyncProvider
+import com.parachord.shared.sync.TrackRemoveMode
 import io.mockk.mockk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -41,6 +42,9 @@ class SpotifySyncProviderConformanceTest {
             supportsPlaylistDelete = true,
             supportsPlaylistRename = true,
             supportsTrackReplace = true,
+            // Spotify removes by track URI and preserves explicit order on push.
+            trackRemoveMode = TrackRemoveMode.ByNativeId,
+            canReorder = true,
         )
         assertEquals(expected, provider.features)
     }

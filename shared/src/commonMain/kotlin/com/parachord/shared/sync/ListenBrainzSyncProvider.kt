@@ -224,6 +224,66 @@ class ListenBrainzSyncProvider(
         }
     }
 
+    /**
+     * Append [externalTrackIds] (recording MBIDs) non-destructively via the LB
+     * item/add endpoint. Returns the new last_modified snapshot. Same 401
+     * kill-switch handling as [replacePlaylistTracks].
+     */
+    override suspend fun addPlaylistTracks(
+        externalPlaylistId: String,
+        externalTrackIds: List<String>,
+    ): String? {
+        val token = settingsStore.getListenBrainzToken()
+        if (token.isNullOrBlank()) {
+            throw IllegalStateException("ListenBrainz token not configured")
+        }
+        return try {
+            client.addPlaylistItems(
+                playlistMbid = externalPlaylistId,
+                recordingMbids = externalTrackIds,
+                token = token,
+            )
+            client.getPlaylistLastModified(externalPlaylistId)
+        } catch (e: ListenBrainzUnauthorizedException) {
+            Log.w(TAG, "LB addPlaylistTracks 401 — tripping kill-switch", e)
+            authFailedForSession = true
+            throw e
+        }
+    }
+
+    /**
+     * Remove tracks by 0-based remote position. LB deletes by (index, count); a
+     * single-item delete at an EARLIER index shifts every LATER index down by
+     * one, so we sort the positions DESCENDING and delete high-to-low so each
+     * delete still targets the position the caller intended. Returns the new
+     * last_modified snapshot. Same 401 kill-switch handling. Only called for
+     * [TrackRemoveMode.ByPosition].
+     */
+    override suspend fun removePlaylistTracksByPosition(
+        externalPlaylistId: String,
+        positions: List<Int>,
+    ): String? {
+        val token = settingsStore.getListenBrainzToken()
+        if (token.isNullOrBlank()) {
+            throw IllegalStateException("ListenBrainz token not configured")
+        }
+        return try {
+            positions.sortedDescending().forEach { pos ->
+                client.deletePlaylistItems(
+                    playlistMbid = externalPlaylistId,
+                    index = pos,
+                    count = 1,
+                    token = token,
+                )
+            }
+            client.getPlaylistLastModified(externalPlaylistId)
+        } catch (e: ListenBrainzUnauthorizedException) {
+            Log.w(TAG, "LB removePlaylistTracksByPosition 401 — tripping kill-switch", e)
+            authFailedForSession = true
+            throw e
+        }
+    }
+
     override suspend fun updatePlaylistDetails(
         externalPlaylistId: String,
         name: String?,

@@ -350,6 +350,32 @@ class AppleMusicSyncProvider(
         return getPlaylistSnapshotId(externalPlaylistId)
     }
 
+    /**
+     * Append [externalTrackIds] (catalog song IDs) non-destructively via the
+     * library POST-append endpoint — AM library playlists are add-only, so this
+     * IS the native primitive (no PUT-degradation dance needed). Maps 401 →
+     * [AppleMusicReauthRequiredException], honors [INTER_REQUEST_DELAY_MS].
+     * Returns the new last-modified snapshot.
+     *
+     * Both remove primitives stay the throwing interface default: AM's
+     * [TrackRemoveMode.Unsupported] means the executor never dispatches a remove
+     * here.
+     */
+    override suspend fun addPlaylistTracks(
+        externalPlaylistId: String,
+        externalTrackIds: List<String>,
+    ): String? {
+        if (externalTrackIds.isEmpty()) return getPlaylistSnapshotId(externalPlaylistId)
+        val body = AmTracksRequest(externalTrackIds.map { AmTrackReference(it, "songs") })
+        delay(INTER_REQUEST_DELAY_MS)
+        val resp = api.appendPlaylistTracks(externalPlaylistId, body)
+        if (!resp.status.isSuccess()) {
+            if (resp.status.value == 401) throw AppleMusicReauthRequiredException()
+            throw AmHttpException(resp.status.value)
+        }
+        return getPlaylistSnapshotId(externalPlaylistId)
+    }
+
     override suspend fun updatePlaylistDetails(
         externalPlaylistId: String,
         name: String?,

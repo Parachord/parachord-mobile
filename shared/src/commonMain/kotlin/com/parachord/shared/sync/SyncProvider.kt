@@ -74,6 +74,39 @@ interface SyncProvider {
         externalTrackIds: List<String>,
     ): String?
 
+    // ── Incremental add/remove primitives (incremental-materialization) ──
+    // The materialize executor (Task 5) calls these to apply a per-provider,
+    // non-destructive diff instead of a wholesale replace. Removal dispatch is
+    // driven by [ProviderFeatures.trackRemoveMode] — the executor NEVER branches
+    // on `id`, so the two remove variants default to THROWING. A mis-dispatch (or
+    // a provider that forgot to override the variant its mode declares) must be
+    // LOUD, never silently destructive.
+
+    /**
+     * Append [externalTrackIds] to the remote, non-destructively. Every provider
+     * supports an append; there is NO safe replace-based default (it would wipe),
+     * so each provider overrides this. Returns the new snapshot token (provider's
+     * snapshot semantics), or null when the provider has no snapshot.
+     */
+    suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? =
+        throw UnsupportedOperationException("addPlaylistTracks not implemented by $id")
+
+    /**
+     * Remove specific tracks by their native ID. Only called for
+     * [TrackRemoveMode.ByNativeId]. Throws by default so a mis-dispatched call to
+     * a provider whose mode is NOT ByNativeId fails loudly.
+     */
+    suspend fun removePlaylistTracksByNativeId(externalPlaylistId: String, externalTrackIds: List<String>): String? =
+        throw UnsupportedOperationException("removeByNativeId not supported by $id")
+
+    /**
+     * Remove tracks by 0-based remote position. Only called for
+     * [TrackRemoveMode.ByPosition]. Throws by default so a mis-dispatched call to
+     * a provider whose mode is NOT ByPosition fails loudly.
+     */
+    suspend fun removePlaylistTracksByPosition(externalPlaylistId: String, positions: List<Int>): String? =
+        throw UnsupportedOperationException("removeByPosition not supported by $id")
+
     /**
      * Update playlist metadata (rename, description). Best-effort.
      * Apple Music returns 401 here; providers must NOT throw on
