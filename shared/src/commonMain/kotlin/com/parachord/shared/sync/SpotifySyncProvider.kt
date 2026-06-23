@@ -50,6 +50,8 @@ class SpotifySyncProvider(
         supportsPlaylistDelete = true,
         supportsPlaylistRename = true,
         supportsTrackReplace = true,
+        trackRemoveMode = TrackRemoveMode.ByNativeId,
+        canReorder = true,
     )
 
     private var cachedMarket: String? = null

@@ -109,6 +109,8 @@ class AppleMusicSyncProvider(
         supportsPlaylistDelete = false,
         supportsPlaylistRename = false,
         supportsTrackReplace = false,
+        // No playlist-track remove endpoint — library playlists are add-only.
+        trackRemoveMode = TrackRemoveMode.Unsupported,
     )
 
     /**

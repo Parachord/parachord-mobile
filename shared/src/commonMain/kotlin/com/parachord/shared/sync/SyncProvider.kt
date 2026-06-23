@@ -200,7 +200,31 @@ data class ProviderFeatures(
     val supportsPlaylistRename: Boolean = false,
     /** Whether full-replace PUT on tracks is reliable; if false, push degrades to append-only after first failure. */
     val supportsTrackReplace: Boolean = false,
+    /**
+     * How this provider removes specific tracks from a remote playlist.
+     * Drives the materialize executor's removal dispatch. Defaults to the
+     * conservative [TrackRemoveMode.ReplaceOnly] so a provider that forgets
+     * to declare it is never incrementally destructive.
+     */
+    val trackRemoveMode: TrackRemoveMode = TrackRemoveMode.ReplaceOnly,
+    /** Whether the provider preserves explicit track order on push (Spotify = true). */
+    val canReorder: Boolean = false,
 )
+
+/**
+ * How a provider deletes specific tracks from a remote playlist. Drives the
+ * materialize executor's removal dispatch — the executor never branches on id.
+ */
+enum class TrackRemoveMode {
+    /** Spotify: DELETE by track URI. */
+    ByNativeId,
+    /** ListenBrainz: POST item/delete by index+count. */
+    ByPosition,
+    /** Apple Music: no playlist-track remove endpoint (add-only). */
+    Unsupported,
+    /** Fallback for a future provider with only wholesale replace. */
+    ReplaceOnly,
+}
 
 enum class SnapshotKind {
     /** Provider returns a stable opaque token (Spotify `snapshot_id`). String-equality compare. */

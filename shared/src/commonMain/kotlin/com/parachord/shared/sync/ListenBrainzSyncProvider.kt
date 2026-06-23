@@ -43,6 +43,7 @@ class ListenBrainzSyncProvider(
         supportsPlaylistDelete = true,                // POST /1/playlist/{mbid}/delete
         supportsPlaylistRename = true,                // POST /1/playlist/edit/{mbid}
         supportsTrackReplace = true,                  // delete-all + add-all
+        trackRemoveMode = TrackRemoveMode.ByPosition, // POST item/delete by index+count
     )
 
     /**
