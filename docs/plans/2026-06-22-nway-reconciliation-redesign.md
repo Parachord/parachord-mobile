@@ -41,6 +41,21 @@ baseline stayed pinned at the **original 6 tracks with their original keys** —
 while the live copies evolved (LB now holds ISRC-resolved recording MBIDs, etc.).
 The ancestor and the copies now describe the same songs with **different keys**.
 
+### P1b — CONFIRMED reachable: catalog-gap phantom deletion (Jun 22, 2-provider test)
+The 2-provider partial-coverage test (`NwayPartialCoverageTest`) confirmed a
+second, distinct data-loss vector. When a provider has a **catalog gap** on a
+track (the track genuinely isn't in that provider's catalog) AND the gap is
+*under* the mass-change threshold (so the provider is NOT skipped — it's pushed
+N-1), the baseline **advances** to the full N. Next cycle that provider (holding
+N-1) reads as having **deleted** the gap track vs the advanced baseline →
+delete-always-wins union-removes it → the track is dropped **everywhere**, even
+though other copies still have it. Distinct from the identity-drift incident
+(which Steps 1+4 fix); this is the **per-provider catalog-gap semantics** —
+"a track permanently absent from one provider must not read as a deletion."
+This is the load-bearing reason real-writes stays OFF and the reason **Step 3
+(pending-push markers / fill-target exclusion + catalog-gap-aware baseline) is
+REQUIRED, not optional**.
+
 ### P2 — Cross-service track identity is fragile
 `unifyTrackKeys` bridges copies by `isrc | mbid | norm` (any shared tier,
 transitively). It fails when the *same song* has BOTH:
