@@ -143,6 +143,11 @@ class ListenBrainzPushShortCircuitTest {
 
         class RemoteEntry(val mbid: String, val name: String) {
             val tracks = mutableListOf<String>()
+            // Optional richer tracklist (title/artist/mbid) so a test can model a
+            // remote whose recordings DRIFT from the local baseline (different
+            // recording-MBID + remaster-suffixed title) — what the LB axis does on
+            // round-trip. When set, fetchPlaylistTracks returns these verbatim.
+            var richTracks: MutableList<PlaylistTrack>? = null
         }
 
         val remote = linkedMapOf<String, RemoteEntry>()
@@ -185,8 +190,9 @@ class ListenBrainzPushShortCircuitTest {
             return null
         }
 
-        override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> =
-            remote[externalPlaylistId]?.tracks?.mapIndexed { index, mbid ->
+        override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> {
+            remote[externalPlaylistId]?.richTracks?.let { return it.toList() }
+            return remote[externalPlaylistId]?.tracks?.mapIndexed { index, mbid ->
                 PlaylistTrack(
                     playlistId = "${ListenBrainzSyncProvider.PROVIDER_ID}-$externalPlaylistId",
                     position = index,
@@ -195,6 +201,7 @@ class ListenBrainzPushShortCircuitTest {
                     trackRecordingMbid = mbid,
                 )
             } ?: emptyList()
+        }
 
         override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
         override suspend fun updatePlaylistDetails(externalPlaylistId: String, name: String?, description: String?) {}
@@ -724,5 +731,65 @@ class ListenBrainzPushShortCircuitTest {
             h.provider.remote[mbid]!!.tracks.size,
         )
         assertEquals("baseline advanced to the merged 4", 4, h.baselineDao.selectForLocal("local-0")!!.tracks.size)
+    }
+
+    /**
+     * THE data-loss incident, end-to-end (Step 0 regression guard). A copy holds
+     * the SAME recordings as the baseline but DRIFTED — different recording-MBID
+     * AND a remaster-suffixed title, no ISRC (exactly what ListenBrainz returns on
+     * round-trip) — plus one genuinely-new track. The merge must recognize the
+     * drifted recordings as the same songs (Step 4 norm-strip) and NOT drop them;
+     * the result is baseline ∪ {new} (add-only), never a destructive shrink.
+     * Before Steps 1+4 this dropped the drifted tracks → data loss.
+     */
+    @Test
+    fun `propagation does not drop tracks whose identity drifted across services`() = runBlocking {
+        val h = Harness(nway = true, propagate = true)
+        h.seedLocalPlaylist("local-0", "Drift", trackCount = 3)
+
+        h.engine.syncAll() // create + push
+        h.engine.syncAll() // migrate baseline = 3
+
+        val mbid = h.linkDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.externalId
+        val replacesBefore = h.provider.replaceCalls.size
+
+        // The LB copy: the SAME 3 songs but with DIFFERENT recording-MBIDs and
+        // remaster-suffixed titles + 1 brand-new track. (No ISRC — LB axis.)
+        val entry = h.provider.remote[mbid]!!
+        entry.richTracks = (0 until 3).map { i ->
+            PlaylistTrack(
+                playlistId = "${ListenBrainzSyncProvider.PROVIDER_ID}-$mbid",
+                position = i,
+                trackTitle = "Drift track $i - 2025 Remastered",
+                trackArtist = "Artist $i",
+                trackRecordingMbid = "lb-rec-$i", // different MBID than mbid-track-local-0-$i
+            )
+        }.toMutableList().apply {
+            add(PlaylistTrack(
+                playlistId = "${ListenBrainzSyncProvider.PROVIDER_ID}-$mbid",
+                position = 3,
+                trackTitle = "Brand New LB Song",
+                trackArtist = "New Artist",
+                trackRecordingMbid = "lb-rec-new",
+            ))
+        }
+        // Bump the count-based change signal (LB is snapshot-less) so detection
+        // sees LB changed → fetches it → reads richTracks.
+        entry.tracks.clear()
+        entry.tracks.addAll(listOf("lb-rec-0", "lb-rec-1", "lb-rec-2", "lb-rec-new"))
+
+        h.engine.runNwayPropagation()
+
+        // The merged list must keep all 3 originals (bridged via the remaster-strip
+        // norm) PLUS the new song = 4 — never a drop of the 3 "drifted" ones.
+        val baselineAfter = h.baselineDao.selectForLocal("local-0")!!.tracks
+        assertEquals("add-only: 3 originals (drift-bridged) + 1 new = 4, no false drop", 4, baselineAfter.size)
+        if (h.provider.replaceCalls.size > replacesBefore) {
+            assertEquals(
+                "any push carries the full 4-track merged list (no destructive shrink)",
+                4,
+                h.provider.replaceCalls.last().second.size,
+            )
+        }
     }
 }
