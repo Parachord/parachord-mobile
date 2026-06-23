@@ -3102,7 +3102,9 @@ private fun GeneralTab(
                             supportingContent = {
                                 Text(
                                     "${entry.status} · merged ${entry.mergedCount} track(s) → " +
-                                        "targets: ${entry.pushTargets.joinToString().ifEmpty { "none" }}",
+                                        "targets: ${entry.pushTargets.joinToString().ifEmpty { "none" }}" +
+                                        (if (entry.pendingAdds > 0) " · ${entry.pendingAdds} pending" else "") +
+                                        (if (entry.unsupportedRemoves > 0) " · ${entry.unsupportedRemoves} not-removable" else ""),
                                 )
                             },
                             trailingContent = {

@@ -1745,6 +1745,7 @@ class SyncEngine constructor(
         playlistDao.clearLocallyModified(localId)
         return NwayPropagationEntry(
             playlist.name, localId, mergedTracks.size, pushedTo, "pushed",
+            pendingAdds = pendingAdds, unsupportedRemoves = unsupportedRemoves,
         )
     }
 

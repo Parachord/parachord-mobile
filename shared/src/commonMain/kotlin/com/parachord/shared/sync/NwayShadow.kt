@@ -63,6 +63,10 @@ data class NwayPropagationEntry(
     val mergedCount: Int,
     val pushTargets: List<String>,
     val status: String,
+    /** Adds left for backfill — a track not yet present on a provider (coverage gap). */
+    val pendingAdds: Int = 0,
+    /** Removes a provider can't honor (e.g. Apple Music's append-only PUT degradation). */
+    val unsupportedRemoves: Int = 0,
 )
 
 /**
