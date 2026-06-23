@@ -435,6 +435,22 @@ class SpotifyClient(
             }
         }
 
+    /**
+     * Targeted removal of specific tracks from a playlist via
+     * `DELETE /v1/playlists/{id}/tracks` with a `{"tracks":[{"uri":...}]}`
+     * body. Used by incremental playlist materialization to remove only
+     * the tracks that changed, rather than replacing the whole tracklist.
+     * Mirrors the DELETE-with-body precedent of [removeTracks]; routed
+     * through [gatedSend] so a 429 arms the same rate-limit cooldown a
+     * read does (issue #176).
+     */
+    suspend fun removePlaylistTracks(playlistId: String, body: SpTracksUriRefRequest): HttpResponse =
+        gatedSend {
+            httpClient.delete("$BASE/v1/playlists/$playlistId/tracks") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
+        }
+
     suspend fun updatePlaylistDetails(playlistId: String, body: SpUpdatePlaylistRequest): HttpResponse =
         gatedSend {
             httpClient.put("$BASE/v1/playlists/$playlistId") {
@@ -545,6 +561,8 @@ fun List<SpImage>?.bestImageUrl(): String? =
 @Serializable data class SpUser(val id: String, @SerialName("display_name") val displayName: String? = null, val country: String? = null)
 @Serializable data class SpIdsRequest(val ids: List<String>)
 @Serializable data class SpUrisRequest(val uris: List<String>)
+@Serializable data class SpUriRef(val uri: String)
+@Serializable data class SpTracksUriRefRequest(val tracks: List<SpUriRef>)
 @Serializable data class SpCreatePlaylistRequest(val name: String, val description: String? = null, val public: Boolean = false)
 @Serializable data class SpUpdatePlaylistRequest(val name: String? = null, val description: String? = null)
 @Serializable data class SpSnapshotResponse(@SerialName("snapshot_id") val snapshotId: String)
