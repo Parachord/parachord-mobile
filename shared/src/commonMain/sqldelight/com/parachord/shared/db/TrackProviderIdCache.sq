@@ -1,0 +1,45 @@
+-- Negative cache for provider-id hydration (incremental-materialization Task 7).
+--
+-- Today hydration re-searches EVERY unresolved track on EVERY sync (no memory of
+-- failure) → rate-limit death spirals. This table is the persistent memory: per
+-- (identityKey, providerId) it records the LAST hydration attempt — the resolved
+-- native id (or NULL on miss), when we last tried, and how many consecutive
+-- attempts have failed (drives an escalating cooldown so an un-findable track is
+-- re-tried less and less often instead of every cycle).
+--
+--   identityKey   — the cross-service track identity (canonicalTrackKey: strongest
+--                   tier isrc>mbid>norm). The SAME song keys identically regardless
+--                   of which list it came from.
+--   providerId    — "spotify" / "applemusic" / future provider.
+--   resolvedId    — the provider's native id once found; NULL = still pending (a
+--                   negative-cache entry: "we looked, didn't find it, here's when").
+--   lastAttemptAt — epoch-ms of the most recent hydration attempt (cooldown clock).
+--   attempts      — consecutive failed attempts; resets implicitly on success
+--                   (resolvedId set). Grows the cooldown (7d → 30d cap).
+CREATE TABLE IF NOT EXISTS track_provider_id_cache (
+    identityKey   TEXT NOT NULL,
+    providerId    TEXT NOT NULL,
+    resolvedId    TEXT,
+    lastAttemptAt INTEGER NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (identityKey, providerId)
+);
+
+selectForKey:
+SELECT * FROM track_provider_id_cache WHERE identityKey = ? AND providerId = ?;
+
+upsert:
+INSERT OR REPLACE INTO track_provider_id_cache
+    (identityKey, providerId, resolvedId, lastAttemptAt, attempts)
+VALUES (?, ?, ?, ?, ?);
+
+-- Stale unresolved entries past the cooldown cutoff, fewest-failed first (so a
+-- never-/least-tried track is re-attempted before one that's repeatedly missed).
+selectStaleCandidates:
+SELECT * FROM track_provider_id_cache
+WHERE resolvedId IS NULL AND lastAttemptAt < ?
+ORDER BY attempts ASC, lastAttemptAt ASC
+LIMIT ?;
+
+deleteForProvider:
+DELETE FROM track_provider_id_cache WHERE providerId = ?;

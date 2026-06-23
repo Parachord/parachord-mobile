@@ -326,6 +326,22 @@ val androidModule = module {
             )""".trimIndent(),
             0,
         )
+        // Negative cache for provider-id hydration (incremental-materialization
+        // Task 7): per (identityKey, providerId) the last hydration attempt so the
+        // HydrationCoordinator can short-circuit known ids + cooldown repeated
+        // misses instead of re-searching every track every sync.
+        driver.execute(
+            null,
+            """CREATE TABLE IF NOT EXISTS track_provider_id_cache (
+                identityKey   TEXT NOT NULL,
+                providerId    TEXT NOT NULL,
+                resolvedId    TEXT,
+                lastAttemptAt INTEGER NOT NULL,
+                attempts      INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (identityKey, providerId)
+            )""".trimIndent(),
+            0,
+        )
         com.parachord.shared.db.ParachordDb(driver)
     }
 
@@ -363,6 +379,7 @@ val androidModule = module {
     single { SyncPlaylistSourceDao(get()) }
     single { com.parachord.shared.db.dao.SyncPlaylistBaselineDao(get()) }
     single { com.parachord.shared.db.dao.SyncPlaylistNwayDao(get()) }
+    single { com.parachord.shared.db.dao.TrackProviderIdCacheDao(get()) }
 
     // ── Settings & Auth ──────────────────────────────────────────────
 
