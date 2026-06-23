@@ -24,7 +24,7 @@ import kotlinx.coroutines.CancellationException
  *     song keys identically across services, so a hit found via Spotify on one
  *     cycle is reused for the same track on a later cycle.
  *  3. **Cache hit** — a stored non-blank `resolvedId` ⇒ return it, no search.
- *  4. **Cooldown** — a prior MISS within the (attempt-escalating) cooldown window
+ *  4. **Cooldown** — a prior MISS within the (2-step 7d→30d) cooldown window
  *     ⇒ return null WITHOUT re-searching. This is the death-spiral fix: an
  *     un-findable track is asked about less and less often, not every cycle.
  *  5. **Per-cycle budget** — at most [maxInlineLookups] live searches per
@@ -94,9 +94,9 @@ class HydrationCoordinator(
 
     companion object {
         /**
-         * Cooldown after a miss, growing with consecutive failures so an
-         * un-findable track is re-tried less often: 7 days on the first miss,
-         * 30 days (cap) thereafter.
+         * Cooldown after a miss, as a 2-step cliff so an un-findable track is
+         * re-tried less often: 7 days on the first miss (attempts ≤ 1), then 30
+         * days for every miss thereafter. Not a continuously-growing curve.
          */
         fun cooldownMs(attempts: Long): Long =
             if (attempts <= 1L) 7L * 24 * 3600_000 else 30L * 24 * 3600_000

@@ -12,6 +12,7 @@ import com.parachord.shared.db.dao.SyncPlaylistNwayDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.db.dao.TrackProviderIdCacheDao
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.sync.DeleteResult
@@ -111,6 +112,7 @@ class SyncEngineIdempotencyTest {
             syncPlaylistSourceDao = sourceDao,
             syncPlaylistBaselineDao = baselineDao,
             syncPlaylistNwayDao = nwayDao,
+            trackProviderIdCacheDao = TrackProviderIdCacheDao(db),
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
@@ -427,6 +429,7 @@ class SyncEngineIdempotencyTest {
             syncPlaylistSourceDao = sourceDao,
             syncPlaylistBaselineDao = baselineDao,
             syncPlaylistNwayDao = nwayDao,
+            trackProviderIdCacheDao = TrackProviderIdCacheDao(db),
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(tombstoneStore),

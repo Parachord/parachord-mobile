@@ -4,8 +4,8 @@
 -- failure) → rate-limit death spirals. This table is the persistent memory: per
 -- (identityKey, providerId) it records the LAST hydration attempt — the resolved
 -- native id (or NULL on miss), when we last tried, and how many consecutive
--- attempts have failed (drives an escalating cooldown so an un-findable track is
--- re-tried less and less often instead of every cycle).
+-- attempts have failed (drives a 2-step 7d→30d cooldown cliff so an un-findable
+-- track is re-tried less often instead of every cycle).
 --
 --   identityKey   — the cross-service track identity (canonicalTrackKey: strongest
 --                   tier isrc>mbid>norm). The SAME song keys identically regardless
@@ -14,8 +14,10 @@
 --   resolvedId    — the provider's native id once found; NULL = still pending (a
 --                   negative-cache entry: "we looked, didn't find it, here's when").
 --   lastAttemptAt — epoch-ms of the most recent hydration attempt (cooldown clock).
---   attempts      — consecutive failed attempts; resets implicitly on success
---                   (resolvedId set). Grows the cooldown (7d → 30d cap).
+--   attempts      — consecutive failed attempts. Ignored on success: once
+--                   resolvedId is set the coordinator short-circuits on the hit
+--                   before it ever reads attempts/the cooldown. Drives the 2-step
+--                   cooldown cliff (≤1 miss → 7d, then 30d).
 CREATE TABLE IF NOT EXISTS track_provider_id_cache (
     identityKey   TEXT NOT NULL,
     providerId    TEXT NOT NULL,

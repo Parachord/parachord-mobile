@@ -11,6 +11,7 @@ import com.parachord.shared.db.dao.SyncPlaylistNwayDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.db.dao.TrackProviderIdCacheDao
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
 import com.parachord.shared.model.Playlist
@@ -44,6 +45,10 @@ class SyncEngine constructor(
     // canonical-source link/source DAOs above.
     private val syncPlaylistBaselineDao: SyncPlaylistBaselineDao,
     private val syncPlaylistNwayDao: SyncPlaylistNwayDao,
+    // Negative cache for incremental provider-id hydration (incremental-
+    // materialization). Threaded into a per-CYCLE [HydrationCoordinator] inside
+    // [runNwayPropagation] so an un-findable ADD isn't re-searched every cycle.
+    private val trackProviderIdCacheDao: TrackProviderIdCacheDao,
     private val settingsStore: SyncSettingsProvider,
     /**
      * Multi-provider sync surface (Phase 2). Today only Spotify is
@@ -65,16 +70,6 @@ class SyncEngine constructor(
         private const val MASS_REMOVAL_THRESHOLD_PERCENT = 0.25
         private const val MASS_REMOVAL_THRESHOLD_COUNT = 50
 
-        /**
-         * `sync_playlist_link.pendingAction` marker meaning "this provider could
-         * not fully cover the merged tracklist last cycle (a catalog gap or a
-         * skipped under-coverage push) and therefore OWES a push." A provider
-         * carrying this marker is a FILL TARGET, never a deletion source — it is
-         * excluded from the merge's removal computation so its (legitimately
-         * absent) tracks can't read as deliberate deletions. Cleared the moment it
-         * fully covers the merged list. See [propagateReconcilePlaylist].
-         */
-        const val NWAY_FILL_PENDING_ACTION = "nway-fill"
         /**
          * Bump this to force a full re-fetch on next sync (bypasses quick-check).
          * The current version is stored in DataStore; when it's less than this,
@@ -1344,10 +1339,14 @@ class SyncEngine constructor(
         }
         Log.d(TAG, "N-way PROPAGATE: ${baselines.size} baseline(s) to reconcile")
         val remoteLists = fetchEnabledProviderPlaylistLists()
+        // ONE HydrationCoordinator per cycle — its per-cycle live-search budget +
+        // cooldown span the whole run, so an un-findable ADD isn't re-searched per
+        // playlist (see [newHydrationCoordinator]).
+        val coordinator = newHydrationCoordinator()
         val entries = mutableListOf<NwayPropagationEntry>()
         for (baseline in baselines) {
             try {
-                propagateReconcilePlaylist(baseline, remoteLists, dryRun)?.let { entries.add(it) }
+                propagateReconcilePlaylist(baseline, remoteLists, coordinator, dryRun)?.let { entries.add(it) }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1372,6 +1371,56 @@ class SyncEngine constructor(
     }
 
     /**
+     * One [HydrationCoordinator] per propagation cycle. The per-cycle live-search
+     * budget + the negative-cache cooldown span the WHOLE run, so an un-findable
+     * ADD is searched at most a few times across the whole library, never once per
+     * playlist per cycle (the death-spiral [hydrateMissingTrackIds] would cause).
+     *
+     * [HydrationCoordinator.persistRowId] additively backfills the freshly-resolved
+     * native id onto the LOCAL `playlist_track` row (null-only COALESCE — never
+     * overwrites a populated id), so subsequent cycles read the id off the row and
+     * skip the search entirely. The track carries its own `playlistId` + `position`,
+     * so no per-playlist closure rebind is needed — the per-cycle coordinator
+     * persists to the right row directly. Column mapping mirrors [applyResolvedId].
+     */
+    private fun newHydrationCoordinator(): HydrationCoordinator =
+        HydrationCoordinator(
+            cache = trackProviderIdCacheDao,
+            persistRowId = { track, providerId, nativeId ->
+                when (providerId) {
+                    SpotifySyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
+                        playlistId = track.playlistId,
+                        position = track.position,
+                        spotifyId = nativeId.removePrefix("spotify:track:").takeIf { it.isNotBlank() },
+                        spotifyUri = nativeId,
+                        appleMusicId = null,
+                        soundcloudId = null,
+                        recordingMbid = null,
+                    )
+                    AppleMusicSyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
+                        playlistId = track.playlistId,
+                        position = track.position,
+                        spotifyId = null,
+                        spotifyUri = null,
+                        appleMusicId = nativeId,
+                        soundcloudId = null,
+                        recordingMbid = null,
+                    )
+                    ListenBrainzSyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
+                        playlistId = track.playlistId,
+                        position = track.position,
+                        spotifyId = null,
+                        spotifyUri = null,
+                        appleMusicId = null,
+                        soundcloudId = null,
+                        recordingMbid = nativeId,
+                    )
+                    else -> { /* unknown provider — cache-only, no row column to backfill */ }
+                }
+            },
+        )
+
+    /**
      * Run propagation for a SINGLE playlist (dev — scoped real-write validation
      * so the user can fill one playlist without firing the whole 141-baseline
      * run). Same gates as [runNwayPropagation]; updates that playlist's entry in
@@ -1389,8 +1438,9 @@ class SyncEngine constructor(
             return
         }
         val remoteLists = fetchEnabledProviderPlaylistLists()
+        val coordinator = newHydrationCoordinator()
         val entry = try {
-            propagateReconcilePlaylist(baseline, remoteLists, dryRun)
+            propagateReconcilePlaylist(baseline, remoteLists, coordinator, dryRun)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1406,9 +1456,47 @@ class SyncEngine constructor(
             }
     }
 
+    /**
+     * Pending-detection bridge for the merge augmentation: is the track behind
+     * representative [representativeKey] PENDING (un-materialized) on [providerId]?
+     *
+     * The merge keyspace (representative keys) can be ISRC-tier, but the hydration
+     * cache is keyed by [canonicalTrackKey] of a [PlaylistTrack] — which IGNORES
+     * isrc (mbid→norm only) — so a representative key can't index the cache
+     * directly. Bridge: representativeKey → [keyToTrack] (the concrete track) →
+     * `canonicalTrackKey(track)` → `cache.select(thatKey, providerId)`.
+     *
+     * Cache-key collision residual (honest acknowledgement): because the cache key
+     * is `canonicalTrackKey(track)` (mbid→norm, ISRC-ignored), two DISTINCT merge
+     * representative keys that collapse to the same `norm-artist|title` (e.g. two
+     * no-MBID recordings with identical artist|title) index the SAME cache row —
+     * inheriting the accepted, fixture-pinned `norm`-tier collision residual that
+     * `unifyTrackKeys`/`canonicalTrackKey` already document. The harm is bounded
+     * (rare within a single playlist; never drops a present track via this path).
+     *
+     * PENDING (return true) = cache entry ABSENT or its `resolvedId` is null. This
+     * is the conservative SAFE default — without positive evidence the provider
+     * ever materialized this track (a non-null `resolvedId`), we must NOT let its
+     * absence drive a deletion. A confirmed-materialized track (resolvedId
+     * non-null) that's now absent is a GENUINE deletion → return false → delete-
+     * wins drops it. A key with no resolvable track (shouldn't happen for a
+     * baseline key, but defensive) is treated as pending so it's never deleted.
+     */
+    private suspend fun isProviderPendingForKey(
+        providerId: String,
+        representativeKey: String,
+        keyToTrack: Map<String, PlaylistTrack>,
+    ): Boolean {
+        val track = keyToTrack[representativeKey] ?: return true
+        val cacheKey = canonicalTrackKey(track)
+        val entry = trackProviderIdCacheDao.select(cacheKey, providerId)
+        return entry?.resolvedId.isNullOrBlank()
+    }
+
     private suspend fun propagateReconcilePlaylist(
         baseline: SyncPlaylistBaselineDao.Baseline,
         remoteLists: Map<String, Map<String, SyncedPlaylist>>,
+        coordinator: HydrationCoordinator,
         dryRun: Boolean,
     ): NwayPropagationEntry? {
         val localId = baseline.localPlaylistId
@@ -1416,7 +1504,6 @@ class SyncEngine constructor(
         val mirrors = getPlaylistMirrors(localId)
         if (mirrors.isEmpty()) return null
         val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
-        val links = syncPlaylistLinkDao.selectForLocal(localId).associateBy { it.providerId }
         val now = currentTimeMillis()
 
         // Gather each copy WITH its tracks (local always; CHANGED providers fetched;
@@ -1431,21 +1518,6 @@ class SyncEngine constructor(
 
         for ((providerId, externalId) in mirrors) {
             val provider = providers.firstOrNull { it.id == providerId } ?: continue
-            // FILL-TARGET (Step 3 — catalog-gap-aware reconciliation): a provider
-            // that under-covered the merged list last cycle (catalog gap or skipped
-            // under-coverage push) carries the NWAY_FILL_PENDING_ACTION marker. It
-            // OWES a push, so it is excluded from the removal computation
-            // (changed=false) — its legitimately-absent tracks must NEVER read as
-            // deliberate deletions — while staying a push target (empty keys ≠
-            // merged) so propagation keeps re-attempting the fill until it catches
-            // up. Generalizes the empty-mirror rule below; the load-bearing guard
-            // against the per-provider catalog-gap phantom deletion (P1b).
-            if (links[providerId]?.pendingAction == NWAY_FILL_PENDING_ACTION) {
-                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId owes a push " +
-                    "(fill target) — excluded from removal, will re-attempt fill")
-                inputs.add(PropagationCopyInput(providerId, emptyList(), emptyList(), now, changed = false))
-                continue
-            }
             val listEntry = remoteLists[providerId]?.get(externalId)
             val storedToken = storedTokens[providerId]?.changeToken
             val changed = when {
@@ -1496,17 +1568,12 @@ class SyncEngine constructor(
             c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
         }
 
-        val plan = computeNwayPropagationPlan(baselineRepr, copies, writableById)
-            ?: return null
-        if (plan.massChangeAbort) {
-            // Total-wipe floor only: the merge collapsed a non-empty playlist to
-            // ZERO. Large non-empty turnover is NOT blocked (propagate-all-changes).
-            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: TOTAL-WIPE (merge → 0 tracks) — abort, no push")
-            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "total-wipe-abort")
-        }
-
         // Trap 1 — resolve representative keys → tracks. Build keyToTrack from the
         // copies that carry real tracks (local FIRST so its richer metadata wins).
+        // Moved AHEAD of the merge so the pending-aware augmentation below can
+        // bridge a representative key → its concrete track → the hydration cache
+        // (the cache is keyed by canonicalTrackKey(track), which IGNORES isrc, so a
+        // representative key — possibly isrc-tier — can't be looked up directly).
         val keyToTrack = linkedMapOf<String, PlaylistTrack>()
         // ISRC backfill map: the FIRST non-blank ISRC seen for a representative
         // key across ANY copy. keyToTrack prefers local (richer metadata) but
@@ -1524,13 +1591,83 @@ class SyncEngine constructor(
                 if (!isrc.isNullOrBlank() && key !in keyToIsrc) keyToIsrc[key] = isrc
             }
         }
-        val resolved = plan.merged.map { keyToTrack[it] }
+
+        // ── PENDING-AWARE MERGE AUGMENTATION (catalog-gap phantom-deletion fix) ──
+        // The merge consumes each CHANGED provider's fetched tracklist. A track a
+        // provider couldn't MATERIALIZE (an un-hydratable ADD left PENDING) is, to
+        // the merge, indistinguishable from one the user DELETED there — delete-
+        // always-wins reads its absence as a deletion and drops it from canonical
+        // → removed everywhere (the P1b catalog-gap phantom deletion). The executor
+        // protects the WRITE (a pending add never drives a remove), but the MERGE
+        // runs UPSTREAM and would over-delete without this.
+        //
+        // SAFETY INVARIANT: a provider's absence of a track is a DELETION only if we
+        // have POSITIVE evidence the provider HAD it — the hydration cache's
+        // non-null resolvedId. So for each CHANGED provider copy, re-add the
+        // baseline representative keys it LACKS *only where that track is PENDING
+        // for it* (cache entry absent OR resolvedId null). A confirmed-materialized
+        // (resolvedId non-null) absence is a GENUINE deletion → NOT re-added → still
+        // dropped by delete-wins. The provider's OTHER genuine adds/removes still
+        // flow (it stays changed=true with its real keys), so this resolves the
+        // trilemma: suppress phantom deletes, honor real deletes, propagate adds.
+        val augmentedCopies = copies.mapIndexed { i, copy ->
+            val input = inputs[i]
+            if (input.id == "local" || !copy.changed) return@mapIndexed copy
+            val present = copy.keys.toSet()
+            val lacked = baselineRepr.filter { it !in present }
+            if (lacked.isEmpty()) return@mapIndexed copy
+            val pendingLacked = lacked.filter { key ->
+                isProviderPendingForKey(input.id, key, keyToTrack)
+            }
+            if (pendingLacked.isEmpty()) copy
+            else copy.copy(keys = copy.keys + pendingLacked)
+        }
+
+        // The merge runs on the AUGMENTED copies (phantom deletes suppressed); the
+        // resulting `merged` is canonical. A provider augmented to equal the
+        // baseline may now contribute no delta (filtered from the merge) — its
+        // genuine lag is recovered below from the UN-augmented copies, decoupling
+        // the materialize-target decision from the merge.
+        val plan = computeNwayPropagationPlan(baselineRepr, augmentedCopies, writableById)
+        if (plan?.massChangeAbort == true) {
+            // Total-wipe floor only: the merge collapsed a non-empty playlist to
+            // ZERO. Large non-empty turnover is NOT blocked (propagate-all-changes).
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: TOTAL-WIPE (merge → 0 tracks) — abort, no push")
+            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "total-wipe-abort")
+        }
+
+        // Canonical = the merge's output when there's a delta; otherwise the
+        // baseline (a pending-only fill re-attempt converged the merge to baseline).
+        val mergedRepr = plan?.merged ?: baselineRepr
+
+        // MATERIALIZE TARGETS — decoupled from the merge. A WRITABLE copy is a
+        // target iff its CURRENT (un-augmented) representative keys lag the
+        // canonical: i.e. it's missing a canonical track (a pending fill to
+        // re-attempt now the catalog may have recovered) OR it carries a track the
+        // canonical dropped (a delete to propagate). Augmentation hides a pending
+        // provider's lag from the merge's wouldPushTo; computing the lag from the
+        // un-augmented keys recovers it so the executor re-attempts the fill. The
+        // executor fetches each mirror's ACTUAL remote and diffs, so a converged
+        // mirror no-ops and an un-findable add stays pending (coordinator cooldown).
+        val mergedReprSet = mergedRepr.toSet()
+        val pushTargets = copies.filter { c ->
+            writableById[c.id] != false && (c.keys.toSet() != mergedReprSet || c.keys.size != mergedRepr.size)
+        }.map { c -> c.id }
+
+        // TRULY-CONVERGED SHORT-CIRCUIT — no merge delta AND no writable mirror
+        // lags ⇒ idempotent no-op: don't fetch, don't materialize, don't advance.
+        // (Keeps `idempotency ×2` green + avoids per-cycle fetches on a converged
+        // playlist.) When the plan IS non-null there's a real delta; when a mirror
+        // lags there's a pending fill / pending delete to apply — proceed in both.
+        if (plan == null && pushTargets.all { it == "local" }) return null
+
+        val resolved = mergedRepr.map { keyToTrack[it] }
         if (resolved.any { it == null }) {
             Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${resolved.count { it == null }} merged " +
                 "key(s) unresolved to a track — abort (never push a partial list)")
-            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "partial-abort")
+            return NwayPropagationEntry(playlist.name, localId, mergedRepr.size, pushTargets, "partial-abort")
         }
-        val mergedTracks = plan.merged.mapIndexed { idx, key ->
+        val mergedTracks = mergedRepr.mapIndexed { idx, key ->
             val t = keyToTrack.getValue(key)
             // Graft the harvested ISRC (if the chosen track lacks one) so LB
             // hydration's /isrc/ fallback works during a mapper outage.
@@ -1539,101 +1676,75 @@ class SyncEngine constructor(
 
         if (dryRun) {
             Log.d(TAG, "N-way PROPAGATE (DRY-RUN) [${playlist.name}]: would push ${mergedTracks.size} " +
-                "track(s) to ${plan.pushTargets} [no write]")
-            return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, plan.pushTargets, "would-push")
+                "track(s) to $pushTargets [no write]")
+            return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, pushTargets, "would-push")
         }
 
-        // ── PUSH (PER-PROVIDER coverage guard) ──────────────────────────
-        // Hydrate + push each target INDEPENDENTLY. A provider whose hydrated
-        // external-ID coverage drops more than the mass-change threshold (e.g.
-        // Apple Music's iTunes search rate-limited → 0 IDs) is SKIPPED — never
-        // receive a near-EMPTY push that silently guts/no-fills the mirror — but
-        // the OTHER providers still get filled (an AM failure must NOT block LB).
-        // Hydration is threaded so each provider's resolved IDs carry forward.
-        // A near-total miss (drop > threshold) keeps allCovered=false so the
-        // baseline stays pinned and the provider is RETRIED aggressively next cycle
-        // (self-heals once hydration recovers). Step 3 (catalog-gap-aware): a
-        // provider that under-covers BELOW the threshold (a genuine catalog gap —
-        // pushed N-1) no longer pins the baseline; instead it is marked a
-        // NWAY_FILL_PENDING_ACTION fill target, so next cycle its absence is
-        // EXCLUDED from the removal computation (above) and the N-1 it holds can't
-        // read as a deletion of the gap track once the baseline advances to N. A
-        // full-coverage push clears the marker.
-        var current = mergedTracks
+        // ── PUSH (NON-DESTRUCTIVE INCREMENTAL MATERIALIZE) ──────────────
+        // Apply the merged canonical to each WRITABLE target via the per-provider,
+        // capability-dispatched [materializeToProvider]. Each target is independent
+        // (an Apple-Music catalog miss never blocks ListenBrainz).
+        //
+        // Why this is whole-cycle-safe WITHOUT a coverage SKIP / fill-target marker
+        // / replace-all (all of which this swap deletes): the executor's removes come
+        // ONLY from a POSITIVE identity-diff (a REMOTE track absent from canonical),
+        // so a track the provider can't hydrate is left a PENDING ADD — the remote
+        // keeps everything else, never shrinks. A catalog gap is therefore inherently
+        // non-destructive every cycle; the baseline can advance unconditionally
+        // (materialization completeness is tracked PER-TRACK via the diff + the
+        // hydration cache, not via pinning the whole-playlist baseline). The
+        // coordinator's per-cycle budget + cooldown keep an un-findable ADD from
+        // re-searching every cycle.
+        var added = 0
+        var removed = 0
+        var pendingAdds = 0
+        var unsupportedRemoves = 0
         val pushedTo = mutableListOf<String>()
-        var allCovered = true
-        for (targetId in plan.pushTargets) {
+        for (targetId in pushTargets) {
             if (targetId == "local") { pushedTo.add("local"); continue }
             val provider = providers.firstOrNull { it.id == targetId } ?: continue
             val externalId = mirrors[targetId] ?: continue
-            current = hydrateMissingTrackIds(localId, current, provider, persist = false)
-            val ids = extractExternalTrackIds(current, provider.id)
-            val dropFraction = if (mergedTracks.isEmpty()) 0.0
-                else (mergedTracks.size - ids.size).toDouble() / mergedTracks.size
-            if (dropFraction > MASS_REMOVAL_THRESHOLD_PERCENT) {
-                Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} hydration covered only " +
-                    "${ids.size}/${mergedTracks.size} track(s) (drop ${(dropFraction * 100).toInt()}%) — " +
-                    "SKIP this provider, retry next cycle")
-                // Owes a push — mark a fill target so next cycle its absence isn't
-                // a deletion source. allCovered=false also keeps the baseline pinned
-                // (this is a near-total miss, likely transient — retry aggressively).
-                syncPlaylistLinkDao.setPendingAction(localId, provider.id, NWAY_FILL_PENDING_ACTION)
-                allCovered = false
-                continue
-            }
-            // CATALOG-GAP-AWARE coverage marker (Step 3): a provider that covers
-            // every merged track clears its fill-target marker; one that covers only
-            // a SUBSET (a catalog gap below the mass-change threshold, so it's still
-            // pushed N-1) is marked a fill target. The marker excludes it from NEXT
-            // cycle's removal computation, so the N-1 it holds can't read as a
-            // deletion of the gap track once the baseline advances to the covered N.
-            if (ids.size >= mergedTracks.size) {
-                syncPlaylistLinkDao.clearPendingAction(localId, provider.id)
-            } else {
-                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} covers " +
-                    "${ids.size}/${mergedTracks.size} (catalog gap) — mark fill target, never a deletion source")
-                syncPlaylistLinkDao.setPendingAction(localId, provider.id, NWAY_FILL_PENDING_ACTION)
-            }
-            // Skip-unchanged short-circuit (ports desktop canShortCircuitPlaylistUpdate;
-            // same guard the normal LB push uses). On a PARTIAL-coverage cycle the
-            // baseline can't advance, so a fully-covered provider whose remote is
-            // ALREADY the intended list would otherwise be re-detected as a push
-            // target every sync and re-pushed (delete-all + add-all) forever — the
-            // churn that bumps remote last_modified + burns rate limit. If the
-            // remote already equals `ids` (order-aware), treat it as covered and
-            // skip the destructive replace. (Order-aware: a reorder still re-pushes.)
-            if (remoteTracklistMatches(provider, externalId, ids)) {
-                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} remote already matches — skip re-push")
-                pushedTo.add(provider.id)
-                continue
-            }
-            val token = provider.replacePlaylistTracks(externalId, ids)
-            // Trap 4 — capture the POST-PUSH token (echo suppression). null for
-            // snapshot-less providers (LB) → detection falls back to trackCount,
-            // which now equals the merged size → no re-detect next cycle.
+            val remote = provider.fetchPlaylistTracks(externalId)
+            val res = materializeToProvider(
+                provider = provider,
+                externalId = externalId,
+                canonical = mergedTracks,
+                remote = remote,
+                resolveNativeId = { track -> coordinator.resolve(provider, track) },
+            )
+            added += res.added
+            removed += res.removed
+            pendingAdds += res.pendingAdds
+            unsupportedRemoves += res.unsupportedRemoves
+            // Refresh the per-provider change token for echo suppression. A snapshot
+            // provider (Spotify/AM) returns its fresh token; a snapshot-less provider
+            // (LB) returns null → next-cycle detection falls back to trackCount, which
+            // now equals the merged size → no re-detect. On a fetch failure here we
+            // leave the old token; the next cycle re-detects and re-materializes
+            // (idempotent — the diff yields no ops once converged).
+            val token = runCatching { provider.getPlaylistSnapshotId(externalId) }.getOrNull()
             syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
             pushedTo.add(provider.id)
-            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: pushed ${ids.size}/${mergedTracks.size} track(s) to ${provider.id}")
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialized " +
+                "+$added/-$removed (pending $pendingAdds, unsupported-remove $unsupportedRemoves)")
         }
 
-        // Persist the (in-memory hydrated) merged list to the LOCAL rows — also
-        // saves whatever provider IDs got resolved for future syncs (Trap 2).
-        playlistTrackDao.replaceAll(localId, current)
+        // Persist the merged list to the LOCAL rows. The coordinator already
+        // additively backfilled any freshly-resolved provider ids onto these rows
+        // (persistRowId), so the merged list reflects local identity + ordering; the
+        // ids carry forward for future cycles via the row + the hydration cache.
+        playlistTrackDao.replaceAll(localId, mergedTracks)
 
-        // Trap 3 — advance the baseline + clear locallyModified when no provider
-        // suffered a near-total miss (allCovered). A SKIPPED provider (drop >
-        // threshold) sets allCovered=false → baseline pinned → retried aggressively.
-        // A catalog-gap provider (Step 3, pushed N-1) does NOT pin the baseline: it
-        // carries a fill-target marker that excludes it from next cycle's removal,
-        // so the baseline safely advances to the covered merge (N) without
-        // stranding it as a future deleter of the gap track.
-        if (allCovered) {
-            syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
-            playlistDao.clearLocallyModified(localId)
-        }
+        // Advance the baseline + clear locallyModified EVERY cycle. Decoupled from
+        // any "all covered" gate (deleted): the executor is non-destructive, so a
+        // catalog gap leaves the provider holding a coverable subset with the missing
+        // track tracked as a PENDING ADD (re-attempted, budget-permitting, next cycle
+        // via the hydration cache) — never a phantom deletion when the baseline
+        // advances. Pinning the baseline is no longer how completeness is enforced.
+        syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
+        playlistDao.clearLocallyModified(localId)
         return NwayPropagationEntry(
-            playlist.name, localId, mergedTracks.size, pushedTo,
-            if (allCovered) "pushed" else "partial",
+            playlist.name, localId, mergedTracks.size, pushedTo, "pushed",
         )
     }
 
@@ -3383,6 +3494,9 @@ class SyncEngine constructor(
         }
         syncSourceDao.deleteAllForProvider(providerId)
         syncPlaylistLinkDao.deleteForProvider(providerId)
+        // Drop the hydration negative-cache rows for this provider too, so they
+        // don't orphan across a disconnect/reconnect cycle (Task-7 review #3).
+        trackProviderIdCacheDao.deleteForProvider(providerId)
     }
 
     /**

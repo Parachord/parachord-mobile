@@ -341,6 +341,9 @@ class IosContainer private constructor() {
     val syncPlaylistNwayDao: com.parachord.shared.db.dao.SyncPlaylistNwayDao by lazy {
         com.parachord.shared.db.dao.SyncPlaylistNwayDao(database)
     }
+    val trackProviderIdCacheDao: com.parachord.shared.db.dao.TrackProviderIdCacheDao by lazy {
+        com.parachord.shared.db.dao.TrackProviderIdCacheDao(database)
+    }
 
     // Track-remove tombstones (#172 parity) — local-per-device JSON blob so a
     // user-removed track isn't re-imported on the next pull. App-start prune is
@@ -382,6 +385,7 @@ class IosContainer private constructor() {
             syncPlaylistSourceDao = syncPlaylistSourceDao,
             syncPlaylistBaselineDao = syncPlaylistBaselineDao,
             syncPlaylistNwayDao = syncPlaylistNwayDao,
+            trackProviderIdCacheDao = trackProviderIdCacheDao,
             settingsStore = settingsStore,
             providers = listOf(spotifySyncProvider, listenBrainzSyncProvider, appleMusicSyncProvider),
             tombstones = tombstoneService,
