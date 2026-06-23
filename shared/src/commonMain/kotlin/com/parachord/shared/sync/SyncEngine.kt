@@ -64,6 +64,17 @@ class SyncEngine constructor(
         const val SYNC_IN_PROGRESS = "Sync already in progress"
         private const val MASS_REMOVAL_THRESHOLD_PERCENT = 0.25
         private const val MASS_REMOVAL_THRESHOLD_COUNT = 50
+
+        /**
+         * `sync_playlist_link.pendingAction` marker meaning "this provider could
+         * not fully cover the merged tracklist last cycle (a catalog gap or a
+         * skipped under-coverage push) and therefore OWES a push." A provider
+         * carrying this marker is a FILL TARGET, never a deletion source — it is
+         * excluded from the merge's removal computation so its (legitimately
+         * absent) tracks can't read as deliberate deletions. Cleared the moment it
+         * fully covers the merged list. See [propagateReconcilePlaylist].
+         */
+        const val NWAY_FILL_PENDING_ACTION = "nway-fill"
         /**
          * Bump this to force a full re-fetch on next sync (bypasses quick-check).
          * The current version is stored in DataStore; when it's less than this,
@@ -1405,6 +1416,7 @@ class SyncEngine constructor(
         val mirrors = getPlaylistMirrors(localId)
         if (mirrors.isEmpty()) return null
         val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
+        val links = syncPlaylistLinkDao.selectForLocal(localId).associateBy { it.providerId }
         val now = currentTimeMillis()
 
         // Gather each copy WITH its tracks (local always; CHANGED providers fetched;
@@ -1419,6 +1431,21 @@ class SyncEngine constructor(
 
         for ((providerId, externalId) in mirrors) {
             val provider = providers.firstOrNull { it.id == providerId } ?: continue
+            // FILL-TARGET (Step 3 — catalog-gap-aware reconciliation): a provider
+            // that under-covered the merged list last cycle (catalog gap or skipped
+            // under-coverage push) carries the NWAY_FILL_PENDING_ACTION marker. It
+            // OWES a push, so it is excluded from the removal computation
+            // (changed=false) — its legitimately-absent tracks must NEVER read as
+            // deliberate deletions — while staying a push target (empty keys ≠
+            // merged) so propagation keeps re-attempting the fill until it catches
+            // up. Generalizes the empty-mirror rule below; the load-bearing guard
+            // against the per-provider catalog-gap phantom deletion (P1b).
+            if (links[providerId]?.pendingAction == NWAY_FILL_PENDING_ACTION) {
+                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId owes a push " +
+                    "(fill target) — excluded from removal, will re-attempt fill")
+                inputs.add(PropagationCopyInput(providerId, emptyList(), emptyList(), now, changed = false))
+                continue
+            }
             val listEntry = remoteLists[providerId]?.get(externalId)
             val storedToken = storedTokens[providerId]?.changeToken
             val changed = when {
@@ -1523,12 +1550,15 @@ class SyncEngine constructor(
         // receive a near-EMPTY push that silently guts/no-fills the mirror — but
         // the OTHER providers still get filled (an AM failure must NOT block LB).
         // Hydration is threaded so each provider's resolved IDs carry forward.
-        // The baseline only advances on FULL coverage (all writable targets
-        // pushed), so a skipped provider is re-detected as lagging and RETRIED
-        // next cycle (self-heals once its hydration recovers). NOTE: the deeper
-        // per-provider catalog-gap semantics (a track permanently absent from one
-        // provider shouldn't read as a deletion) remain deferred — this guard
-        // only protects against the destructive near-empty push.
+        // A near-total miss (drop > threshold) keeps allCovered=false so the
+        // baseline stays pinned and the provider is RETRIED aggressively next cycle
+        // (self-heals once hydration recovers). Step 3 (catalog-gap-aware): a
+        // provider that under-covers BELOW the threshold (a genuine catalog gap —
+        // pushed N-1) no longer pins the baseline; instead it is marked a
+        // NWAY_FILL_PENDING_ACTION fill target, so next cycle its absence is
+        // EXCLUDED from the removal computation (above) and the N-1 it holds can't
+        // read as a deletion of the gap track once the baseline advances to N. A
+        // full-coverage push clears the marker.
         var current = mergedTracks
         val pushedTo = mutableListOf<String>()
         var allCovered = true
@@ -1544,8 +1574,25 @@ class SyncEngine constructor(
                 Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} hydration covered only " +
                     "${ids.size}/${mergedTracks.size} track(s) (drop ${(dropFraction * 100).toInt()}%) — " +
                     "SKIP this provider, retry next cycle")
+                // Owes a push — mark a fill target so next cycle its absence isn't
+                // a deletion source. allCovered=false also keeps the baseline pinned
+                // (this is a near-total miss, likely transient — retry aggressively).
+                syncPlaylistLinkDao.setPendingAction(localId, provider.id, NWAY_FILL_PENDING_ACTION)
                 allCovered = false
                 continue
+            }
+            // CATALOG-GAP-AWARE coverage marker (Step 3): a provider that covers
+            // every merged track clears its fill-target marker; one that covers only
+            // a SUBSET (a catalog gap below the mass-change threshold, so it's still
+            // pushed N-1) is marked a fill target. The marker excludes it from NEXT
+            // cycle's removal computation, so the N-1 it holds can't read as a
+            // deletion of the gap track once the baseline advances to the covered N.
+            if (ids.size >= mergedTracks.size) {
+                syncPlaylistLinkDao.clearPendingAction(localId, provider.id)
+            } else {
+                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} covers " +
+                    "${ids.size}/${mergedTracks.size} (catalog gap) — mark fill target, never a deletion source")
+                syncPlaylistLinkDao.setPendingAction(localId, provider.id, NWAY_FILL_PENDING_ACTION)
             }
             // Skip-unchanged short-circuit (ports desktop canShortCircuitPlaylistUpdate;
             // same guard the normal LB push uses). On a PARTIAL-coverage cycle the
@@ -1573,11 +1620,13 @@ class SyncEngine constructor(
         // saves whatever provider IDs got resolved for future syncs (Trap 2).
         playlistTrackDao.replaceAll(localId, current)
 
-        // Trap 3 — advance the baseline + clear locallyModified ONLY on FULL
-        // coverage, so a partial cycle never advances past a skipped/unfilled
-        // mirror (which would then read as a deletion). On a partial push the
-        // pushed providers are caught up (token captured → not re-pushed) while
-        // the skipped ones stay lagging and retry next cycle.
+        // Trap 3 — advance the baseline + clear locallyModified when no provider
+        // suffered a near-total miss (allCovered). A SKIPPED provider (drop >
+        // threshold) sets allCovered=false → baseline pinned → retried aggressively.
+        // A catalog-gap provider (Step 3, pushed N-1) does NOT pin the baseline: it
+        // carries a fill-target marker that excludes it from next cycle's removal,
+        // so the baseline safely advances to the covered merge (N) without
+        // stranding it as a future deleter of the gap track.
         if (allCovered) {
             syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
             playlistDao.clearLocallyModified(localId)

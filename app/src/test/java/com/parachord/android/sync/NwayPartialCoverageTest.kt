@@ -204,18 +204,41 @@ class NwayPartialCoverageTest {
             ?: error("AM mirror was not linked — test would be vacuous")
         assertEquals("AM holds its coverable subset (catalog gap on the new track)", 3, h.am.remote[amExt]!!.tracks.size)
 
-        // ⚠️ KNOWN-DEFERRED RESIDUAL (documented, NOT yet fixed — real-writes stays
-        // OFF because of it): the baseline ADVANCES to 4 here even though AM holds
-        // only 3. Next cycle AM (3 tracks) reads as having DELETED the 4th vs the
-        // advanced baseline → delete-always-wins union-removes it → data loss,
-        // despite local + LB still having it. This is the per-provider catalog-gap
-        // semantics the reconciliation redesign defers (Step 3 / pending-push +
-        // catalog-gap exclusion). Asserting current behavior so a future fix
-        // flips it deliberately:
+        // Step 3 (full) — CATALOG-GAP-AWARE BASELINE + PENDING-PUSH MARKER.
+        // AM under-covers (3/4 — the new track is a catalog gap), so it is marked
+        // an "owes a push" fill target: never a deletion source, always a push
+        // target until it catches up. Because AM is excluded from the removal
+        // computation, the baseline can safely advance to the COVERED merge (4)
+        // without stranding AM as a future deleter.
+        val amLink = h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID)!!
         assertEquals(
-            "TODAY: baseline advances past AM's catalog gap (the deferred catalog-gap bug)",
+            "AM (catalog gap) is marked an owes-push fill target",
+            SyncEngine.NWAY_FILL_PENDING_ACTION,
+            amLink.pendingAction,
+        )
+        assertEquals(
+            "baseline advances to the covered merge (4) — safe because AM is pending-excluded",
             4,
             h.baselineDao.selectForLocal("local-0")!!.tracks.size,
         )
+
+        // sync×2 SAFETY GATE: a SECOND propagation cycle (no new local changes)
+        // must NOT drop the gap track from any covered copy, must not churn, and
+        // the baseline must stay stable. This is the residual the redesign exists
+        // to kill: AM holding 3 vs a baseline of 4 must NOT read as a deletion.
+        h.lb.replaceCalls.clear()
+        h.am.replaceCalls.clear()
+        h.engine.runNwayPropagation()
+
+        assertEquals("LB still holds all 4 — gap track NOT dropped", 4, h.lb.remote[lbMbid]!!.tracks.size)
+        assertEquals("local still holds all 4", 4, h.playlistTrackDao.getByPlaylistIdSync("local-0").size)
+        assertEquals(
+            "AM still holds its coverable 3 (gap persists, but is never a deletion source)",
+            3,
+            h.am.remote[amExt]!!.tracks.size,
+        )
+        assertEquals("baseline stable at 4", 4, h.baselineDao.selectForLocal("local-0")!!.tracks.size)
+        assertTrue("no churn: LB not re-pushed on the no-op cycle", h.lb.replaceCalls.isEmpty())
+        assertTrue("no churn: AM not re-pushed on the no-op cycle", h.am.replaceCalls.isEmpty())
     }
 }
