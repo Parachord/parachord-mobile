@@ -229,6 +229,9 @@ class ListenBrainzSyncProvider(
      * item/add endpoint. Returns the new last_modified snapshot. Same 401
      * kill-switch handling as [replacePlaylistTracks].
      */
+    /** ListenBrainz keys its playlist tracks on the recording MBID. */
+    override fun nativeIdOf(track: PlaylistTrack): String? = track.trackRecordingMbid
+
     override suspend fun addPlaylistTracks(
         externalPlaylistId: String,
         externalTrackIds: List<String>,

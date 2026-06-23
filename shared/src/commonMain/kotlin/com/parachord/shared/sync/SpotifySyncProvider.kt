@@ -436,6 +436,9 @@ class SpotifySyncProvider(
      * uses `addPlaylistTracks` (POST) for chunk 0 too. Returns the last
      * successful chunk's snapshot id. Empty list → no API call, return null.
      */
+    /** Spotify keys its remote tracklist on the track URI (`spotify:track:<id>`). */
+    override fun nativeIdOf(track: PlaylistTrack): String? = track.trackSpotifyUri
+
     override suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? {
         if (externalTrackIds.isEmpty()) return null
 

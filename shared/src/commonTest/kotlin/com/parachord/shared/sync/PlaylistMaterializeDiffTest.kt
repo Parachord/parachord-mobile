@@ -26,6 +26,10 @@ class PlaylistMaterializeDiffTest {
         assertEquals(1, d.addKeys.size)
         assertEquals(reprOf("b"), d.addKeys.single())
         assertTrue(d.removeKeys.isEmpty())
+        // The unified representative lists are 1:1 with their input lists (order + length) —
+        // the executor zips them with the track lists, so this length contract is load-bearing.
+        assertEquals(2, d.canonicalKeys.size)
+        assertEquals(1, d.remoteKeys.size)
     }
 
     @Test

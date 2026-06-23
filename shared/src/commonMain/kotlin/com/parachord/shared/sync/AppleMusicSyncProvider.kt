@@ -361,6 +361,9 @@ class AppleMusicSyncProvider(
      * [TrackRemoveMode.Unsupported] means the executor never dispatches a remove
      * here.
      */
+    /** Apple Music keys its library tracklist on the catalog song id. */
+    override fun nativeIdOf(track: PlaylistTrack): String? = track.trackAppleMusicId
+
     override suspend fun addPlaylistTracks(
         externalPlaylistId: String,
         externalTrackIds: List<String>,

@@ -21,11 +21,20 @@ import com.parachord.shared.model.PlaylistTrack
  * @property reorderNeeded membership is identical but order differs (best-effort hint).
  *           Only meaningful when both add/remove lists are empty; an add or remove
  *           will itself rewrite order, so reorder isn't separately flagged then.
+ * @property canonicalKeys canonical's unified representative keys, SAME order/length as the
+ *           `canonical` input list (NOT de-duplicated). The executor zips this with the
+ *           `canonical` tracks to map each diff key back to its concrete track — the ONE
+ *           authoritative keyspace, so the executor never recomputes [unifyTrackKeys].
+ * @property remoteKeys   remote's unified representative keys, SAME order/length as the
+ *           `remote` input list (NOT de-duplicated). Zipped with `remote` for native-id /
+ *           position lookup of a remove.
  */
 data class MaterializeDiff(
     val addKeys: List<String>,
     val removeKeys: List<String>,
     val reorderNeeded: Boolean,
+    val canonicalKeys: List<String>,
+    val remoteKeys: List<String>,
 )
 
 /**
@@ -89,5 +98,7 @@ fun computeMaterializeDiff(
         addKeys = addKeys,
         removeKeys = removeKeys,
         reorderNeeded = reorderNeeded,
+        canonicalKeys = canKeys,
+        remoteKeys = remKeys,
     )
 }

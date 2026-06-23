@@ -83,10 +83,23 @@ interface SyncProvider {
     // LOUD, never silently destructive.
 
     /**
+     * The provider's native track id for this track (the column the provider keys
+     * its remote tracklist on), or null if absent. Replaces the central
+     * `extractExternalTrackIds` switch — the executor reads remote tracks' native
+     * ids through this. Throwing default so a new provider must declare it; the
+     * executor calls it for every provider it removes from.
+     */
+    fun nativeIdOf(track: com.parachord.shared.model.PlaylistTrack): String? =
+        throw UnsupportedOperationException("nativeIdOf not implemented by $id")
+
+    /**
      * Append [externalTrackIds] to the remote, non-destructively. Every provider
      * supports an append; there is NO safe replace-based default (it would wipe),
      * so each provider overrides this. Returns the new snapshot token (provider's
      * snapshot semantics), or null when the provider has no snapshot.
+     *
+     * Empty input is a no-op; the return value on empty input is provider-defined
+     * — callers should guard empty id lists. (Task-3 review note.)
      */
     suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? =
         throw UnsupportedOperationException("addPlaylistTracks not implemented by $id")
