@@ -41,6 +41,15 @@ baseline stayed pinned at the **original 6 tracks with their original keys** —
 while the live copies evolved (LB now holds ISRC-resolved recording MBIDs, etc.).
 The ancestor and the copies now describe the same songs with **different keys**.
 
+### P1b — FIXED (Step 3-full, Jun 23): catalog-gap phantom deletion
+> **Resolution:** the under-covering provider is now marked a pending fill target
+> (`SyncEngine.NWAY_FILL_PENDING_ACTION`) and EXCLUDED from the merge's removal
+> computation, so the baseline safely advances to the covered merge without
+> stranding it as a future deleter. `NwayPartialCoverageTest` flipped from
+> asserting the residual to asserting the fix (sync×2 no-drop, no churn) + a guard
+> that a genuine removal still propagates past a pending provider. Original finding
+> (now historical) below:
+
 ### P1b — CONFIRMED reachable: catalog-gap phantom deletion (Jun 22, 2-provider test)
 The 2-provider partial-coverage test (`NwayPartialCoverageTest`) confirmed a
 second, distinct data-loss vector. When a provider has a **catalog gap** on a

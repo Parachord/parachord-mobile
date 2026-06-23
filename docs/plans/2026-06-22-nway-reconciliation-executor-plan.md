@@ -81,7 +81,7 @@ gate adds little and is not cleanly implementable:
 So Step 2 is **folded into Step 3** (pending-push markers) rather than built as its
 own gate. Revisit only if delete-always-wins is later changed to additive-bias.
 
-## Step 3 — Pending-push markers (baseline stability under partial coverage)
+## Step 3 — Pending-push markers (baseline stability under partial coverage) ✅ DONE
 Generalize the empty-mirror rule: when a provider is skipped (coverage guard) or
 can't be fully covered, mark it "owes a push" (reuse `sync_playlist_link.pendingAction`
 or `sync_playlist_nway`) and EXCLUDE it from the merge's removal computation until
@@ -92,6 +92,33 @@ stale), while the pending provider retries each cycle without poisoning identity
 **Gate:** sync×2 idempotency with a permanently-uncoverable provider ⇒ no churn,
 no false drop, baseline stable.
 
+**Landed (`SyncEngine.propagateReconcilePlaylist`, commits Step 3-full + guard):**
+- New marker `SyncEngine.NWAY_FILL_PENDING_ACTION = "nway-fill"` on
+  `sync_playlist_link.pendingAction` (was dormant — no production writer — so the
+  reuse is collision-free; the legacy canonical-source push already skips a pending
+  link, which is correct for a fill target since propagation owns the fill).
+- **Push side:** after hydration, a provider that covers every merged track
+  CLEARS its marker; one that under-covers — a SKIP (drop > mass-change threshold)
+  or a genuine CATALOG GAP (pushed N-1, below threshold) — SETS the marker. A
+  catalog gap no longer pins the baseline (`allCovered` stays true); only a
+  near-total miss does.
+- **Gather side:** a provider carrying the marker is added to the merge as
+  `changed=false` with empty keys — EXCLUDED from the removal computation (its
+  absent tracks can't read as deletions) yet still a push target (empty ≠ merged)
+  so propagation keeps re-attempting the fill. Generalizes the empty-mirror rule.
+- **Baseline:** advances to the covered merge (N) on a catalog-gap cycle without
+  stranding the under-coverer as a future deleter — the residual `NwayPartialCoverageTest`
+  pinned. Decision: Option B from the redesign (advance-to-covered + pending
+  exclusion), NOT a held-back/intersection baseline — gives clean sync×2
+  idempotency (the next cycle has no changed copy → plan is null → no-op).
+- **Tests (`NwayPartialCoverageTest`, both green):**
+  - `partial coverage never drops a track no copy deleted` — flipped the old
+    "TODAY: baseline advances past AM's catalog gap" residual to: AM marked a
+    fill target + a sync×2 cycle that drops nothing, no churn, baseline stable.
+  - `genuine removal still propagates while another provider is a pending fill
+    target` — the invariant's second half (pending-exclusion must not suppress a
+    legit removal another copy drives).
+
 ## Step 4 — Stronger shared norm normalization (no-ISRC tail) — CROSS-ENGINE
 Pure, fixture-pinned helper: before computing `norm`, strip version/remaster
 parentheticals + ` - … Remaster(ed)` / ` - Single` / ` - Live` / `(feat. …)`
@@ -101,11 +128,50 @@ fixtures ONCE; port to desktop `app.js` in lockstep.
 
 **Gate:** identity-drift-no-drop test passes even WITHOUT an ISRC.
 
-## Step 5 — Re-enable real-writes + desktop parity
+## Step 5 — Re-enable real-writes + desktop parity — GATE MET, enablement pending
 Only after Steps 0–4 green: flip real-writes back on behind the flag, re-validate
 on-device (the LB Android test scenario: add 1 ⇒ 9 everywhere). Then desktop ports
 the redesigned reconciliation (#911) and enablement gates on "all clients support
 N-way."
+
+**Steps 0–4 are green** — the no-false-drop harness passes in full (38 N-way tests,
+0 failures, 0 skips): `NwayPartialCoverageTest` (2), `ListenBrainzPushShortCircuitTest`
+(13 — add-only/identity-drift incident regression, idempotency sync×2, empty-mirror
+fill, total-wipe abort, large-drop propagation, coverage-abort), `NwayShadowTest`
+(10), `NwayKeyUnifyTest` (13 — cross-engine fixtures). So the **code + harness gate
+for arming real-writes is met.**
+
+**There is NO code-level kill-switch.** Real-writes is purely the user toggle
+`isNwayPropagateEnabled()` (KvStore key `nway_propagate`, **default `false`**),
+surfaced as Settings → Developer → "Enable real writes". The engine path
+(`runNwayPropagation` → `propagateReconcilePlaylist`) is fully wired and gated only
+on that toggle. So "re-enable behind the flag" = the user flips the toggle on a
+device to validate; **nothing in code is flipped.** The default STAYS `false`.
+
+**Do NOT change the default to ON.** Fleet-wide enablement gates on "all clients
+support N-way" — desktop has NOT ported #911 yet, so a mixed fleet (Android writing,
+desktop on the old reconciliation) would oscillate playlists. Real-writes default-ON
+is a separate, deliberate, outward-facing flip made only after desktop parity lands.
+
+### Remaining (human / other-repo) — not codeable in `parachord-android`:
+1. **On-device re-validation.** On a debug build: Settings → Developer → enable
+   N-way, enable real writes; reproduce the incident scenario (a playlist mirrored
+   to Spotify + Apple Music + ListenBrainz; add 1 track on one service) and confirm
+   **add ⇒ N+1 everywhere, zero drops**, then sync×2 confirms no churn. Use the
+   per-playlist "Dry-run" first to preview the merge before arming the write.
+2. **Desktop port (#911).** Port the **reconciliation-layer** logic to desktop
+   `app.js` — this is NOT a key/norm/fixture change (Step 3 never touches
+   `unifyTrackKeys`/`trackKeysOf`/norm), so `docs/nway-key-unify-fixtures.json` is
+   unaffected. The desktop port = the catalog-gap-aware baseline + fill-marker:
+   - A per-(playlist, provider) "owes a push" marker (desktop's `sync_playlist_links`
+     entry / equivalent) set when a provider under-covers the merged list (skip OR
+     catalog gap = pushed N-1), cleared on full coverage.
+   - A marked provider is EXCLUDED from the merge's removal computation (fill
+     target, never a deletion source) but stays a push target.
+   - The baseline advances to the COVERED merge (not pinned) on a catalog-gap
+     cycle; only a near-total miss pins it.
+3. **Trackers.** Update Parachord/parachord#911 (desktop parity) and
+   parachord-mobile#268 with the Step 3 completion + this gate status.
 
 ## Guardrails
 - commonMain rules (no `System.currentTimeMillis`, etc. — see CLAUDE.md).
@@ -118,3 +184,11 @@ N-way."
 ## Done when
 Step 0 harness green; real-writes validated on-device (add ⇒ N+1 everywhere, no
 drops); desktop parity ported; trackers #911 / parachord-mobile#268 updated.
+
+**Status (Step 3-full landed):**
+- ✅ Step 0 harness green (38 N-way tests, 0 fail/0 skip; both platforms compile).
+- ✅ Steps 1, 4, 0, 3 (full) implemented — the catalog-gap phantom deletion (P1b)
+  is fixed in the reconciliation layer; real-writes default stays OFF.
+- ⏳ On-device re-validation — pending (human; debug toggle).
+- ⏳ Desktop #911 port — pending (other repo; reconciliation-layer logic above).
+- ⏳ Trackers #911 / parachord-mobile#268 — pending update.
