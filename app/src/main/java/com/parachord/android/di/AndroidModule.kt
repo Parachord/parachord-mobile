@@ -994,7 +994,12 @@ val androidModule = module {
     // accepts the resulting List<SyncProvider> with no per-provider Koin
     // changes required here.
     singleOf(::SpotifySyncProvider) bind com.parachord.shared.sync.SyncProvider::class
-    singleOf(::AppleMusicSyncProvider) bind com.parachord.shared.sync.SyncProvider::class
+    // Explicit binding (NOT singleOf): AppleMusicSyncProvider has an injectable
+    // `nowMs: () -> Long = { currentTimeMillis() }` (the iTunes breaker clock, #7d).
+    // singleOf would try to resolve that Function0 from the graph and ignore the
+    // Kotlin default → NoDefinitionFoundException(Function0) at startup. Construct
+    // it explicitly with just the two real deps so nowMs uses its production default.
+    single { AppleMusicSyncProvider(get(), get()) } bind com.parachord.shared.sync.SyncProvider::class
     singleOf(::ListenBrainzSyncProvider) bind com.parachord.shared.sync.SyncProvider::class
     single<List<com.parachord.shared.sync.SyncProvider>> { getAll() }
     singleOf(::SyncScheduler)
