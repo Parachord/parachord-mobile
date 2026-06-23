@@ -86,6 +86,12 @@ class AppleMusicSyncProvider(
      * `api.music.apple.com` needs the dev-token + MUT.
      */
     private val catalogClient: AppleMusicClient,
+    /**
+     * Clock source (epoch ms). Injectable so the iTunes rate-limit breaker
+     * cooldown ([iTunesRateLimitedUntilMs]) is unit-testable; production passes
+     * the real [currentTimeMillis]. Mirrors [com.parachord.shared.api.RateLimitGate]'s pattern.
+     */
+    private val nowMs: () -> Long = { currentTimeMillis() },
 ) : SyncProvider {
 
     companion object {
@@ -94,6 +100,8 @@ class AppleMusicSyncProvider(
         private const val PAGE_SIZE = 100
         /** Polite pacing — Apple Music rate-limits aggressive callers. */
         private const val INTER_REQUEST_DELAY_MS = 150L
+        /** How long one iTunes Search 429 pauses track-id hydration (Task 7d). */
+        private const val ITUNES_RATE_LIMIT_COOLDOWN_MS = 5L * 60L * 1000L
     }
 
     override val id: String = PROVIDER_ID
@@ -131,19 +139,21 @@ class AppleMusicSyncProvider(
     internal var amPatchUnsupportedForSession: Boolean = false
 
     /**
-     * iTunes Search rate-limit kill-switch. Flipped on the first HTTP 429
-     * response from `itunes.apple.com/search` and never reset within the
-     * process — Apple's throttle backoff is not documented, and continued
-     * hammering after a 429 just earns a longer cooldown. Subsequent
-     * [searchForTrackId] calls short-circuit to `null` so push paths
-     * silently skip un-hydrated tracks rather than turning every track
-     * into a wasted 429-throwing request.
+     * iTunes Search rate-limit breaker — a TIME-BOUND cooldown (epoch ms), not a
+     * session-permanent flag. Set to `nowMs() + 5min` on the first HTTP 429 from
+     * `itunes.apple.com/search`; while `nowMs() < iTunesRateLimitedUntilMs`,
+     * [searchForTrackId] short-circuits to `null` so push paths silently skip
+     * un-hydrated tracks rather than turning every track into a wasted
+     * 429-throwing request.
      *
-     * Reset on app restart so a long-lived session can re-probe iTunes
-     * Search after the user backgrounds the app.
+     * Was session-permanent (a `Boolean` reset only on app restart) — one
+     * transient throttle disabled AM iTunes hydration for the whole session even
+     * after Apple's window cleared. 5 minutes is a conservative cooldown: long
+     * enough to stop hammering an angry endpoint, short enough that a long-lived
+     * session recovers without a restart. (incremental-materialization Task 7d.)
      */
     @Volatile
-    internal var iTunesSearchRateLimited: Boolean = false
+    internal var iTunesRateLimitedUntilMs: Long = 0L
 
     // Cached storefront for catalog ISRC lookups (the catalog API is per-
     // storefront). Fetched once per session under a mutex so concurrent
@@ -454,10 +464,11 @@ class AppleMusicSyncProvider(
         }
 
         // FALLBACK — iTunes Search (no ISRC, or catalog miss).
-        // Session kill-switch: if we've already hit a 429 from iTunes Search,
-        // don't bother asking again until the user restarts the app. Apple
-        // doesn't publish the throttle window and stacked 429s just extend it.
-        if (iTunesSearchRateLimited) return null
+        // Time-bound breaker: if we hit a 429 from iTunes Search within the last
+        // 5 minutes, don't ask again yet. Apple doesn't publish the throttle
+        // window and stacked 429s just extend it — but the breaker self-clears so
+        // a long-lived session recovers without an app restart.
+        if (nowMs() < iTunesRateLimitedUntilMs) return null
         delay(INTER_REQUEST_DELAY_MS)
         // iTunes Search has no field qualifiers; just concat the metadata
         // and let its ranking find the best song match.
@@ -481,13 +492,14 @@ class AppleMusicSyncProvider(
             }
             candidate.trackId.toString()
         } catch (e: ItunesRateLimitedException) {
-            // First 429: flip the kill-switch and silently skip. Subsequent
-            // tracks in this sync session will short-circuit at the top of
-            // this method.
-            if (!iTunesSearchRateLimited) {
-                Log.w(TAG, "iTunes Search rate-limited (HTTP 429) — disabling " +
-                    "track-id hydration for the rest of this session")
-                iTunesSearchRateLimited = true
+            // 429: arm the 5-minute breaker and silently skip. Subsequent tracks
+            // in this window short-circuit at the top of this method; the breaker
+            // self-clears so hydration resumes without an app restart.
+            val wasArmed = nowMs() < iTunesRateLimitedUntilMs
+            iTunesRateLimitedUntilMs = nowMs() + ITUNES_RATE_LIMIT_COOLDOWN_MS
+            if (!wasArmed) {
+                Log.w(TAG, "iTunes Search rate-limited (HTTP 429) — pausing " +
+                    "track-id hydration for 5 min")
             }
             null
         } catch (e: Exception) {
