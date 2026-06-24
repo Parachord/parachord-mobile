@@ -3077,51 +3077,68 @@ class SyncEngine constructor(
         playlist: Playlist,
         provider: com.parachord.shared.sync.SyncProvider,
     ) {
-        val link = syncPlaylistLinkDao.selectForLink(playlist.id, provider.id)
-        // Resolve the external id: link table is authoritative; legacy
-        // playlist.spotifyId is a fallback for Spotify only (backward
-        // compat with installs that predate Phase 1's link table).
-        val externalIdNullable: String? = link?.externalId
-            ?: if (provider.id == SpotifySyncProvider.PROVIDER_ID) playlist.spotifyId else null
-        val externalId: String = externalIdNullable ?: run {
-            Log.w(TAG, "pushPlaylist: no link for ${playlist.id} on ${provider.id}; skip")
-            return
-        }
-        val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
-        // Hydrate provider-specific IDs for tracks lacking them — see
-        // [hydrateMissingTrackIds] for rationale. Same pattern as the
-        // first-push branch above.
-        val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
-        val externalTrackIds = extractExternalTrackIds(tracks, provider.id)
-        val snapshotId = provider.replacePlaylistTracks(externalId, externalTrackIds)
+        // Resilience: a single playlist's push failure (e.g. an Apple Music
+        // HTTP 400 from replacePlaylistTracks) must NOT abort the whole sync
+        // cycle. The import/pull call sites that invoke pushPlaylist are not
+        // wrapped per-playlist, so an uncaught throw bubbles to the top-level
+        // syncAll catch and kills every remaining provider/playlist. Match the
+        // sibling pushPlaylistsForProvider loop's per-playlist catch. PRESERVE
+        // two exceptions: CancellationException (KMP cancellation rule) and
+        // AppleMusicReauthRequiredException (a 401 reauth must surface to the
+        // higher-level handler — a transient 400 must not).
+        try {
+            val link = syncPlaylistLinkDao.selectForLink(playlist.id, provider.id)
+            // Resolve the external id: link table is authoritative; legacy
+            // playlist.spotifyId is a fallback for Spotify only (backward
+            // compat with installs that predate Phase 1's link table).
+            val externalIdNullable: String? = link?.externalId
+                ?: if (provider.id == SpotifySyncProvider.PROVIDER_ID) playlist.spotifyId else null
+            val externalId: String = externalIdNullable ?: run {
+                Log.w(TAG, "pushPlaylist: no link for ${playlist.id} on ${provider.id}; skip")
+                return
+            }
+            val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
+            // Hydrate provider-specific IDs for tracks lacking them — see
+            // [hydrateMissingTrackIds] for rationale. Same pattern as the
+            // first-push branch above.
+            val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
+            val externalTrackIds = extractExternalTrackIds(tracks, provider.id)
+            val snapshotId = provider.replacePlaylistTracks(externalId, externalTrackIds)
 
-        // Spotify-specific scalars stay write-through for backward compat
-        // (per Decision 5). For other providers, only the link's
-        // snapshot column is the source of truth.
-        if (provider.id == SpotifySyncProvider.PROVIDER_ID) {
-            playlistDao.update(playlist.copy(
-                snapshotId = snapshotId ?: playlist.snapshotId,
-                trackCount = tracks.size,
-                locallyModified = false,
-            ))
-        } else {
-            playlistDao.update(playlist.copy(
-                trackCount = tracks.size,
-                locallyModified = false,
-            ))
-        }
-        if (snapshotId != null) {
-            syncPlaylistLinkDao.upsertWithSnapshot(
-                localPlaylistId = playlist.id,
-                providerId = provider.id,
-                externalId = externalId,
-                snapshotId = snapshotId,
-            )
-        }
+            // Spotify-specific scalars stay write-through for backward compat
+            // (per Decision 5). For other providers, only the link's
+            // snapshot column is the source of truth.
+            if (provider.id == SpotifySyncProvider.PROVIDER_ID) {
+                playlistDao.update(playlist.copy(
+                    snapshotId = snapshotId ?: playlist.snapshotId,
+                    trackCount = tracks.size,
+                    locallyModified = false,
+                ))
+            } else {
+                playlistDao.update(playlist.copy(
+                    trackCount = tracks.size,
+                    locallyModified = false,
+                ))
+            }
+            if (snapshotId != null) {
+                syncPlaylistLinkDao.upsertWithSnapshot(
+                    localPlaylistId = playlist.id,
+                    providerId = provider.id,
+                    externalId = externalId,
+                    snapshotId = snapshotId,
+                )
+            }
 
-        val source = syncSourceDao.get(playlist.id, "playlist", provider.id)
-        if (source != null) {
-            syncSourceDao.insert(source.copy(syncedAt = currentTimeMillis()))
+            val source = syncSourceDao.get(playlist.id, "playlist", provider.id)
+            if (source != null) {
+                syncSourceDao.insert(source.copy(syncedAt = currentTimeMillis()))
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: AppleMusicReauthRequiredException) {
+            throw e // reauth must surface to the higher-level handler; do not swallow
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to push playlist ${playlist.name} to ${provider.id} — continuing sync", e)
         }
     }
 
