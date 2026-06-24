@@ -529,6 +529,44 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
     }
 
     /**
+     * GET /1/playlist/{playlistMbid} — existence probe for the dead-mirror
+     * self-heal (`ListenBrainzSyncProvider.remotePlaylistExists`). Returns
+     * `false` ONLY on a definitive `404` ("Cannot find playlist"); `true` on
+     * `2xx` AND on every other status/error.
+     *
+     * **The [token] is load-bearing, not optional.** Pushed LB playlists are
+     * created PRIVATE (`isPublic=false`, the interop contract). An UNAUTH GET of
+     * a private playlist returns `404` even though it EXISTS — so an unauth probe
+     * would report every private mirror as "gone", clear its link, and RECREATE
+     * it as a duplicate: the 6,397-dup flood class (May 2026). With the owner's
+     * `Token` header, a `404` means the playlist is genuinely deleted.
+     *
+     * Biased hard toward "exists": only a definitive authenticated `404` returns
+     * `false`. Any non-404 status, parse issue, or thrown exception returns
+     * `true` — a wrongly-cleared link is the corruption we are trying to undo.
+     */
+    suspend fun playlistExists(playlistMbid: String, token: String?): Boolean {
+        return try {
+            val response = httpClient.get("$BASE_URL/1/playlist/$playlistMbid") {
+                if (!token.isNullOrBlank()) header("Authorization", "Token $token")
+            }
+            if (response.status == HttpStatusCode.NotFound) {
+                Log.w(TAG, "playlistExists($playlistMbid): authenticated 404 — playlist is GONE")
+                false
+            } else {
+                // 2xx or any other status (401/403/429/5xx) is NOT proof of
+                // deletion. Conservative: keep the link.
+                true
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "playlistExists($playlistMbid) threw — assuming exists", e)
+            true
+        }
+    }
+
+    /**
      * GET /1/user/{userName}/playlists — owned playlists, not the system
      * `createdfor` playlists already exposed via [getCreatedForPlaylists].
      *

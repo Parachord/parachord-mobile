@@ -150,6 +150,27 @@ class ListenBrainzSyncProvider(
         externalPlaylistId: String,
     ): String? = client.getPlaylistLastModified(externalPlaylistId)
 
+    /**
+     * Dead-mirror self-heal probe. Without this override LB inherits the
+     * default `= true`, so a deleted-on-LB mirror's 404 (the SiriusXMU case)
+     * never clears its link → the playlist 404s on every sync forever and the
+     * LB mirror is permanently broken.
+     *
+     * MUST authenticate: our pushed playlists are PRIVATE, and an unauth GET of
+     * a private playlist 404s even though it exists — clearing on that would
+     * recreate every mirror as a duplicate (the flood class). With no token we
+     * cannot authenticate the probe, so we conservatively assume the playlist
+     * exists rather than risk a false-clear.
+     */
+    override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean {
+        val token = settingsStore.getListenBrainzToken()
+        if (token.isNullOrBlank()) {
+            Log.w(TAG, "remotePlaylistExists($externalPlaylistId): no LB token — assuming exists (no self-heal without auth)")
+            return true
+        }
+        return client.playlistExists(externalPlaylistId, token)
+    }
+
     override suspend fun createPlaylist(
         name: String,
         description: String?,
