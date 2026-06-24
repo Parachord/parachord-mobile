@@ -1768,6 +1768,14 @@ class SyncEngine constructor(
         // migrateSyncLinksFromPlaylists (main.js).
         migrateLinksFromPlaylists()
 
+        // One-time idempotent cleanup: the N-way swap deleted the
+        // NWAY_FILL_PENDING_ACTION="nway-fill" writer, but stale 'nway-fill'
+        // values linger in sync_playlist_link.pendingAction on real installs.
+        // The legacy push (`pushPlaylistsForProvider`) skips any non-null
+        // pendingAction, so a stale marker permanently strands the playlist
+        // (never syncs while N-way real-writes are default-OFF). Null them out.
+        syncPlaylistLinkDao.clearStaleNwayFillMarkers()
+
         // Sibling backfill for the per-playlist pull-source table. Any
         // `spotify-<externalId>` playlist row from a prior import that
         // predates Phase 1's `sync_playlist_source` table gets a
