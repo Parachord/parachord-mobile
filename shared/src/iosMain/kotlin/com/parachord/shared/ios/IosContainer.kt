@@ -2115,8 +2115,16 @@ class IosContainer private constructor() {
      *  state updates immediately and the next sync's override gate keeps it off.
      *  Enabling sets the override; the next sync mirrors it (push) if it's a
      *  valid target. */
-    suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) =
+    suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) {
         playlistSyncChannelManager.setChannel(localId, providerId, enabled)
+        // Parity with Android: enabling a mirror kicks off a sync NOW (off the
+        // main thread) so the new mirror materializes immediately instead of
+        // waiting for the scheduled cycle. The override is written first, so the
+        // sync honors it; no-op if a sync is already running (syncMutex tryLock).
+        if (enabled) {
+            appScope.launch(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
+        }
+    }
 
     /**
      * Turn a channel OFF for a playlist, with the "delete from this service too"
