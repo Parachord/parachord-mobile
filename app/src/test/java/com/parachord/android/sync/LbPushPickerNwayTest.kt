@@ -141,6 +141,10 @@ class LbPushPickerNwayTest {
     private class MutableFakeSyncSettings : SyncSettingsProvider {
         private var dataVersion = 5
         val channels = mutableMapOf<String, Set<String>>()
+        /** Mutable so tests can enable Spotify/AM alongside LB. */
+        var enabledProviders: Set<String> = setOf(ListenBrainzSyncProvider.PROVIDER_ID)
+        /** Per-provider push selection; defaults via [ProviderPlaylistSelection.defaultMode]. */
+        val selections = mutableMapOf<String, ProviderPlaylistSelection>()
 
         override suspend fun getSyncSettings() = SyncSettings(
             enabled = true,
@@ -151,15 +155,18 @@ class LbPushPickerNwayTest {
             pushLocalPlaylists = true,
         )
 
-        override suspend fun getEnabledSyncProviders() = setOf(ListenBrainzSyncProvider.PROVIDER_ID)
+        override suspend fun getEnabledSyncProviders() = enabledProviders
         override suspend fun getSyncCollectionsForProvider(providerId: String) = setOf("playlists")
         override suspend fun getSyncDataVersion() = dataVersion
         override suspend fun setSyncDataVersion(version: Int) { dataVersion = version }
         override suspend fun setLastSyncAt(timestamp: Long) {}
         override suspend fun clearSyncSettings() {}
         override suspend fun getPlaylistSelection(providerId: String) =
-            ProviderPlaylistSelection(PlaylistSyncMode.ALL)
-        override suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection) {}
+            selections[providerId]
+                ?: ProviderPlaylistSelection(ProviderPlaylistSelection.defaultMode(providerId))
+        override suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection) {
+            selections[providerId] = selection
+        }
         override suspend fun getPullPlaylists(providerId: String): Set<String> = emptySet()
         override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {}
         override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? =
@@ -309,6 +316,53 @@ class LbPushPickerNwayTest {
         assertNull(
             "no link row created — creation deferred to the next sync push",
             h.linkDao.selectForLink("local-C", LB),
+        )
+    }
+
+    @Test
+    fun `link preserves a mode-default Spotify mirror that has no link row yet`() = runBlocking {
+        val h = Harness()
+        // Spotify ENABLED + mode=ALL (default) so a local-* push candidate mirrors
+        // to Spotify via the mode-default with NO sync_playlist_link row yet.
+        h.settings.enabledProviders = setOf("spotify", LB)
+        h.seedPlaylist("local-X")
+        // No spotify link row — Spotify's mode=ALL is the only thing mirroring it.
+        assertNull(
+            "precondition: no spotify link yet",
+            h.linkDao.selectForLink("local-X", "spotify"),
+        )
+
+        h.engine.linkPlaylistToProviderLocally("local-X", LB)
+
+        val override = h.settings.getPlaylistChannels("local-X")!!
+        assertTrue("LB admitted", LB in override)
+        assertTrue(
+            "mode-default Spotify mirror preserved (not silently dropped)",
+            "spotify" in override,
+        )
+    }
+
+    @Test
+    fun `unlink preserves a mode-default Spotify mirror that has no link row yet`() = runBlocking {
+        val h = Harness()
+        // local-X is LB-linked (no channel override) AND Spotify-enabled mode=ALL
+        // with NO spotify link row — Spotify mirrors it via the mode default.
+        h.settings.enabledProviders = setOf("spotify", LB)
+        h.seedPlaylist("local-X")
+        h.linkDao.upsert("local-X", LB, "lb-X")
+        assertNull(
+            "precondition: no spotify link yet",
+            h.linkDao.selectForLink("local-X", "spotify"),
+        )
+
+        h.engine.unlinkPlaylistFromProviderLocally("local-X", LB)
+
+        val override = h.settings.getPlaylistChannels("local-X")
+        assertNotNull("override written", override)
+        assertFalse("LB excluded", LB in override!!)
+        assertTrue(
+            "mode-default Spotify mirror preserved (override NOT empty — no data loss)",
+            "spotify" in override,
         )
     }
 

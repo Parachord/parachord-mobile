@@ -3532,12 +3532,36 @@ class SyncEngine constructor(
         // 2. Clear per-(playlist,provider) N-way change-token / editedAt echo state.
         syncPlaylistNwayDao.deleteForLink(localPlaylistId, providerId)
         // 3. Authoritative channel override (allowlist) that survives the next
-        //    sync AND masks the id-prefix re-add. Seed from the live mirror set
-        //    so other providers (Spotify/AM) on the same row are preserved, then
-        //    drop only [providerId].
-        val current = settingsStore.getPlaylistChannels(localPlaylistId)
-            ?: getPlaylistMirrors(localPlaylistId).keys
+        //    sync AND masks the id-prefix re-add. Seed from the EFFECTIVE channel
+        //    set (mode-defaults folded in) so other providers (Spotify/AM) on the
+        //    same row — including mode-default mirrors with no link row yet — are
+        //    preserved, then drop only [providerId].
+        val current = effectivePlaylistChannels(localPlaylistId)
         settingsStore.setPlaylistChannels(localPlaylistId, current - providerId)
+    }
+
+    /**
+     * Providers a playlist EFFECTIVELY syncs with right now: the authoritative
+     * channel override if present, else the live mirror set (links + id-prefix +
+     * pull-source via getPlaylistMirrors) UNIONED with each ENABLED provider whose
+     * per-provider push mode currently admits this playlist (e.g. Spotify's default
+     * mode=ALL mirrors every push-candidate row with no link row yet). This is the
+     * SAFE seed for writing a channel-override allowlist — seeding from
+     * getPlaylistMirrors() alone silently DROPS a mode-default Spotify/AM mirror
+     * that has no link yet (data loss).
+     */
+    private suspend fun effectivePlaylistChannels(localPlaylistId: String): Set<String> {
+        settingsStore.getPlaylistChannels(localPlaylistId)?.let { return it }
+        val playlist = playlistDao.getById(localPlaylistId) ?: return emptySet()
+        val result = getPlaylistMirrors(localPlaylistId).keys.toMutableSet()
+        for (pid in settingsStore.getEnabledSyncProviders()) {
+            if (pid in result) continue
+            if (isPushCandidate(playlist, pid) &&
+                settingsStore.getPlaylistSelection(pid).includes(localPlaylistId)) {
+                result.add(pid)
+            }
+        }
+        return result
     }
 
     /**
@@ -3549,8 +3573,7 @@ class SyncEngine constructor(
      */
     suspend fun linkPlaylistToProviderLocally(localPlaylistId: String, providerId: String) {
         Log.d(TAG, "LBpush: link $localPlaylistId to $providerId")
-        val current = settingsStore.getPlaylistChannels(localPlaylistId)
-            ?: getPlaylistMirrors(localPlaylistId).keys
+        val current = effectivePlaylistChannels(localPlaylistId)
         settingsStore.setPlaylistChannels(localPlaylistId, current + providerId)
     }
 
