@@ -20,6 +20,7 @@ import com.parachord.shared.model.SyncSource
 import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
 
 class SyncEngine constructor(
     private val db: ParachordDb,
@@ -69,6 +71,21 @@ class SyncEngine constructor(
         const val SYNC_IN_PROGRESS = "Sync already in progress"
         private const val MASS_REMOVAL_THRESHOLD_PERCENT = 0.25
         private const val MASS_REMOVAL_THRESHOLD_COUNT = 50
+
+        /**
+         * Watchdog ceiling for a single [syncAll] body. If the sync coroutine
+         * ever hangs (observed on-device: a MusicBrainz 503 tight-retry loop),
+         * the `finally` that releases [syncMutex] + clears [_syncing] never
+         * runs and the app reports "already running" forever — no manual sync
+         * can ever start again. 10 min is a safety ceiling: a healthy sync
+         * finishes well under it, and on timeout the sync RESUMES idempotently
+         * next cycle, so a too-aggressive cancel doesn't lose progress.
+         *
+         * Plain `var` (not `const`) so tests in the `:app` module can shrink it
+         * to drive the timeout path deterministically (an `internal` var would
+         * be invisible across the module boundary).
+         */
+        var SYNC_WATCHDOG_TIMEOUT_MS = 10 * 60 * 1000L
 
         /**
          * Bump this to force a full re-fetch on next sync (bypasses quick-check).
@@ -336,6 +353,12 @@ class SyncEngine constructor(
         } else null
 
         return try {
+            // Watchdog: if the sync body hangs (e.g. a MusicBrainz 503
+            // tight-retry never returns), withTimeout cancels it so the
+            // `finally` below still runs and releases the mutex + clears the
+            // syncing indicator. The TimeoutCancellationException is caught
+            // SPECIFICALLY below, before the generic catch.
+            withTimeout(SYNC_WATCHDOG_TIMEOUT_MS) {
             var trackResult = TypeSyncResult()
             var albumResult = TypeSyncResult()
             var artistResult = TypeSyncResult()
@@ -384,6 +407,16 @@ class SyncEngine constructor(
             onProgress(SyncProgress(SyncPhase.COMPLETE, message = "Sync complete"))
             Log.d(TAG, "Sync complete: $result")
             result
+            }
+        } catch (e: TimeoutCancellationException) {
+            // Caught BEFORE the generic catch: a TimeoutCancellationException is
+            // a CancellationException, so swallowing it in the generic catch
+            // would both mislabel it ("Sync failed") and wrongly suppress a
+            // cancellation. The `finally` below still runs and releases the
+            // mutex + clears the syncing indicator. The aborted sync resumes
+            // idempotently next cycle.
+            Log.e(TAG, "Sync watchdog: timed out after ${SYNC_WATCHDOG_TIMEOUT_MS / 60000} min — aborting; will resume next cycle")
+            FullSyncResult(success = false, error = "Sync timed out")
         } catch (e: Exception) {
             Log.e(TAG, "Sync failed", e)
             FullSyncResult(success = false, error = e.message)
