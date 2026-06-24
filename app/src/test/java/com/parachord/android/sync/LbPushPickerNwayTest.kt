@@ -198,6 +198,24 @@ class LbPushPickerNwayTest {
     }
 
     @Test
+    fun `channel override including provider is checked even with no link yet`() = runBlocking {
+        // The Sync context menu enables LB for local-A → writes a channel override
+        // INCLUDING LB, but the LB link isn't created until the next sync's push.
+        // The picker must reflect that immediately (override-aware), or the two
+        // UIs disagree (the bug the user hit on Daily Brew).
+        val h = Harness()
+        h.seedPlaylist("local-A") // override includes LB, NO link
+        h.seedPlaylist("local-B") // override EXCLUDES LB
+        h.seedPlaylist("local-C") // LB link, no override (legacy)
+        h.settings.setPlaylistChannels("local-A", setOf("spotify", LB))
+        h.settings.setPlaylistChannels("local-B", setOf("spotify"))
+        h.linkDao.upsert("local-C", LB, "remote-C")
+
+        val checked = h.engine.linkedPlaylistIdsForProvider(LB)
+        assertEquals(setOf("local-A", "local-C"), checked) // A via override, C via link; B excluded
+    }
+
+    @Test
     fun `seed drops orphan links with no playlist row`() = runBlocking {
         val h = Harness()
         h.seedPlaylist("local-A")

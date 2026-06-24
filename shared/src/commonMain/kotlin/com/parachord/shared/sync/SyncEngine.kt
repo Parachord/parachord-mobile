@@ -3558,11 +3558,26 @@ class SyncEngine constructor(
      * are dropped here; their cleanup is a separate workstream.
      */
     suspend fun linkedPlaylistIdsForProvider(providerId: String): Set<String> {
-        val existingIds = playlistDao.getAllSync().map { it.id }.toSet()
-        return syncPlaylistLinkDao.selectForProvider(providerId)
+        // Override-AWARE: a playlist syncs to [providerId] if its per-playlist
+        // channel OVERRIDE includes it (authoritative — set by the Sync context
+        // menu OR this picker), OR — when there's no override — it has an actual
+        // mirror link. Without the override branch the picker reads only links, so
+        // a playlist just enabled via the Sync menu (override set, link not created
+        // until the next sync's push) shows UN-checked here — the two UIs disagree.
+        // Both UIs write the channel override, so both must READ it too.
+        val all = playlistDao.getAllSync()
+        val linkedIds = syncPlaylistLinkDao.selectForProvider(providerId)
             .map { it.localPlaylistId }
-            .filter { it in existingIds }
-            .filter { syncPlaylistSourceDao.selectForLocal(it)?.providerId != providerId }
+            .toSet()
+        return all
+            .filter { p ->
+                val override = settingsStore.getPlaylistChannels(p.id)
+                if (override != null) providerId in override else p.id in linkedIds
+            }
+            // Never surface a playlist whose PULL SOURCE is this provider (a
+            // `<provider>-*` import) — un-checking it would corrupt its pull sync.
+            .filter { syncPlaylistSourceDao.selectForLocal(it.id)?.providerId != providerId }
+            .map { it.id }
             .toSet()
     }
 
