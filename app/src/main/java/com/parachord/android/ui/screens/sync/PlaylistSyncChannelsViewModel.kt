@@ -4,10 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.shared.sync.PlaylistSyncChannel
 import com.parachord.shared.sync.PlaylistSyncChannelManager
+import com.parachord.shared.sync.SyncEngine
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Backs the per-playlist [com.parachord.android.ui.components.PlaylistSyncChannelsSheet]
@@ -18,6 +21,7 @@ import kotlinx.coroutines.launch
  */
 class PlaylistSyncChannelsViewModel(
     private val manager: PlaylistSyncChannelManager,
+    private val syncEngine: SyncEngine,
 ) : ViewModel() {
 
     private val _channels = MutableStateFlow<List<PlaylistSyncChannel>>(emptyList())
@@ -45,11 +49,16 @@ class PlaylistSyncChannelsViewModel(
         }
     }
 
-    /** Toggle a channel ON — applied directly (no confirmation). */
+    /** Toggle a channel ON — applied directly (no confirmation), then a sync is
+     *  kicked off so the new mirror materializes RIGHT AWAY instead of waiting for
+     *  the scheduled cycle. The override is written first, so the sync honors it.
+     *  Runs off the main thread (the watchdog can't fire on Main) and is a no-op
+     *  if a sync is already in progress (syncMutex tryLock). */
     fun enableChannel(providerId: String) {
         viewModelScope.launch {
             manager.setChannel(localId, providerId, enabled = true)
             reload()
+            withContext(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
         }
     }
 
