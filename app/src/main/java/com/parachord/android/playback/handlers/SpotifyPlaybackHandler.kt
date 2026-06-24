@@ -711,15 +711,33 @@ class SpotifyPlaybackHandler constructor(
             // for the downstream local-preference rule.
         }
 
-        // 3. Single real device (+ optional synthetic entry) → auto-select
-        val realDevices = withLocal.filter { !isLocalPlaceholder(it) }
-        if (realDevices.size == 1) {
-            Log.d(TAG, "Single real device, auto-selecting '${realDevices[0].name}'")
-            return realDevices[0]
-        }
-        if (withLocal.size == 1) {
+        // 3a. Only local placeholder available (no real devices) → auto-select local
+        if (withLocal.size == 1 && isLocalPlaceholder(withLocal[0])) {
             Log.d(TAG, "Only local placeholder available, auto-selecting")
             return withLocal[0]
+        }
+
+        val realDevices = withLocal.filter { !isLocalPlaceholder(it) }
+        val hasLocalSynthetic = withLocal.any { isLocalPlaceholder(it) }
+
+        // 3b. Single real device WITHOUT a local synthetic in the list → auto-select the real
+        //     (genuine single-device scenario: Spotify already registered the local phone
+        //     as the sole real device, OR the user has one non-local device with the local
+        //     option suppressed).
+        if (realDevices.size == 1 && !hasLocalSynthetic) {
+            Log.d(TAG, "Single real device (no local option), auto-selecting '${realDevices[0].name}'")
+            return realDevices[0]
+        }
+
+        // 3c. Single real device + local synthetic also present → prefer the local.
+        //     Common case: Spotify's devices endpoint returns one phantom remote (a TV
+        //     that's been off for days, etc.) and the synthetic local was injected. The
+        //     old "single real device" rule auto-routed audio to the phantom remote;
+        //     this rule keeps it on the phone where the user actually tapped play.
+        if (realDevices.size == 1 && hasLocalSynthetic) {
+            val local = withLocal.first { isLocalPlaceholder(it) }
+            Log.d(TAG, "Single real remote ('${realDevices[0].name}') but local also available — preferring local")
+            return local
         }
 
         // 4. No effective preference + local option exists → prefer local over
