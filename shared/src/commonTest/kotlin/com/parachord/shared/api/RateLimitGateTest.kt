@@ -46,9 +46,30 @@ class RateLimitGateTest {
         nowMs = now,
     )
 
+    /** Gate matching MusicBrainz's opt-in: a positive [minCooldown] floor and a
+     *  non-escalating, low default. */
+    private fun flooredGate(minCooldown: Long, now: () -> Long) = RateLimitGate(
+        tag = "test",
+        defaultCooldownSec = 30L,
+        minCooldownMs = minCooldown,
+        nowMs = now,
+    )
+
     private fun RateLimitGate.feed429(resp: HttpResponse) {
         assertFailsWith<TestRateLimited> {
             handleResponse(resp, exceptionFactory = { TestRateLimited(it) })
+        }
+    }
+
+    /** Feeds a response through the MusicBrainz-style 429-OR-503 predicate (the
+     *  floor tests exercise 503, which the default 429-only predicate ignores). */
+    private fun RateLimitGate.feed503(resp: HttpResponse) {
+        assertFailsWith<TestRateLimited> {
+            handleResponse(
+                resp,
+                isRateLimited = { it.status.value == 429 || it.status.value == 503 },
+                exceptionFactory = { TestRateLimited(it) },
+            )
         }
     }
 
@@ -139,6 +160,56 @@ class RateLimitGateTest {
 
         assertEquals(60_000L, c1)
         assertEquals(60_000L, c2) // unchanged — default behavior preserved
+    }
+
+    // ── Minimum backoff floor (#273) ──────────────────────────────────
+
+    @Test
+    fun floor_applies_when_503_has_no_retry_after() = runTest {
+        // MusicBrainz 503 with NO Retry-After header. Without the floor this
+        // computes defaultCooldownSec; with an explicit zero (next test) it
+        // would be 0. The floor guarantees at least 1s of short-circuit window.
+        var now = 0L
+        val g = flooredGate(minCooldown = 1_000L, now = { now })
+        g.feed503(response(HttpStatusCode.ServiceUnavailable, retryAfterSec = null))
+        assertTrue(
+            g.remainingCooldownMs() >= 1_000L,
+            "a no-Retry-After 503 must still arm a window (got ${g.remainingCooldownMs()}ms)",
+        )
+    }
+
+    @Test
+    fun floor_rescues_an_explicit_zero_retry_after() = runTest {
+        // The on-device bug (#273): `Retry-After: 0` → 0ms backoff → window
+        // defeated → tight-loop of `Backing off 0s`. The floor lifts it to 1s.
+        var now = 0L
+        val g = flooredGate(minCooldown = 1_000L, now = { now })
+        g.feed503(response(HttpStatusCode.ServiceUnavailable, retryAfterSec = 0L))
+        assertEquals(
+            1_000L,
+            g.remainingCooldownMs(),
+            "Retry-After: 0 must be floored to the 1s minimum, not 0",
+        )
+    }
+
+    @Test
+    fun zero_retry_after_without_floor_yields_zero_window() = runTest {
+        // Documents the pre-fix behavior the floor protects against: with NO
+        // floor (default), `Retry-After: 0` produces a 0ms window — calls hit
+        // the service immediately and re-trip the throttle.
+        var now = 0L
+        val g = flooredGate(minCooldown = 0L, now = { now })
+        g.feed503(response(HttpStatusCode.ServiceUnavailable, retryAfterSec = 0L))
+        assertEquals(0L, g.remainingCooldownMs())
+    }
+
+    @Test
+    fun larger_server_retry_after_still_wins_over_floor() = runTest {
+        // The floor is a MINIMUM, not a cap: a generous server window is honored.
+        var now = 0L
+        val g = flooredGate(minCooldown = 1_000L, now = { now })
+        g.feed503(response(HttpStatusCode.ServiceUnavailable, retryAfterSec = 45L))
+        assertEquals(45_000L, g.remainingCooldownMs())
     }
 
     @Test

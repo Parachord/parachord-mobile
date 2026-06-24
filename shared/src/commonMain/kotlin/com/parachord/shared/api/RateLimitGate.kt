@@ -4,6 +4,7 @@ import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import io.ktor.client.statement.HttpResponse
 import kotlin.concurrent.Volatile
+import kotlin.math.max
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -77,6 +78,19 @@ class RateLimitGate(
     private val interRequestDelayMs: Long = 150L,
     private val defaultCooldownSec: Long = 30L,
     private val maxCooldownMs: Long = 60L * 60L * 1000L,
+    /**
+     * Minimum backoff floor (#273). When the upstream returns a 429/503 with
+     * **no** `Retry-After` OR an explicit `Retry-After: 0`, the computed backoff
+     * is 0 — which makes the "subsequent calls short-circuit during the window"
+     * protection a no-op (window length 0). Calls then hit the service
+     * immediately and re-trip the throttle in a tight burst, keeping it
+     * throttled. Flooring the window at a positive value guarantees at least
+     * this much short-circuit breathing room. Default 0 → no floor (preserves
+     * the original behavior for clients that don't opt in); MusicBrainz opts in
+     * at 1s. A larger server-supplied `Retry-After` always wins (the floor is a
+     * MINIMUM, not a cap).
+     */
+    private val minCooldownMs: Long = 0L,
     loadCooldownEpochMs: (() -> Long)? = null,
     private val saveCooldownEpochMs: (suspend (Long) -> Unit)? = null,
     /**
@@ -225,12 +239,17 @@ class RateLimitGate(
         val baseMs = (retryAfterSec ?: defaultCooldownSec) * 1000L
         // Escalate: double per consecutive strike (base * 2^(strikes-1)), capped.
         // Shift is bounded so the Long can't overflow before the cap clamps it.
-        val backoffMs = if (escalateOnRepeat) {
+        val computedMs = if (escalateOnRepeat) {
             val shift = (consecutiveStrikes - 1).coerceIn(0, 32)
             (baseMs shl shift).coerceAtMost(maxCooldownMs)
         } else {
             baseMs.coerceAtMost(maxCooldownMs)
         }
+        // Floor the window (#273): a no-/zero-`Retry-After` 503 yields a 0ms
+        // backoff, defeating the short-circuit. A larger server value still
+        // wins (this is a MINIMUM, not a cap). Default 0 → no-op for clients
+        // that don't opt in.
+        val backoffMs = max(computedMs, minCooldownMs)
         val wasAlreadyLimited = nowMs() < cooldownUntilMs
         val newCooldown = nowMs() + backoffMs
         cooldownUntilMs = newCooldown
