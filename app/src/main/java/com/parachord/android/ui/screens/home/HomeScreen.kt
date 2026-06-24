@@ -176,6 +176,16 @@ fun HomeScreen(
     val sharePlaylistById = rememberSharePlaylistById()
     val context = LocalContext.current
 
+    // Per-playlist Sync sheet (long-press "Sync…" in Your Playlists).
+    var syncTarget by remember { mutableStateOf<PlaylistEntity?>(null) }
+    syncTarget?.let { pl ->
+        com.parachord.android.ui.components.PlaylistSyncChannelsSheet(
+            playlistId = pl.id,
+            playlistName = pl.name,
+            onDismiss = { syncTarget = null },
+        )
+    }
+
     // Surface playlist-action toasts (e.g. "Apple Music doesn't allow
     // deletion via the API…" from `deletePlaylistWithSync` returning
     // `DeleteResult.Unsupported`). Same pattern as PlaylistsScreen.
@@ -441,6 +451,7 @@ fun HomeScreen(
                                         viewModel.playPlaylist(playlist.id, playlist.name)
                                     },
                                     onSharePlaylist = { sharePlaylistById(playlist.id) },
+                                    onOpenSync = { syncTarget = playlist },
                                     onDeletePlaylist = { viewModel.deletePlaylist(playlist) },
                                 )
                             }
@@ -640,6 +651,7 @@ private fun PlaylistCard(
     onClick: () -> Unit,
     onPlayPlaylist: () -> Unit = {},
     onSharePlaylist: () -> Unit = {},
+    onOpenSync: () -> Unit = {},
     onDeletePlaylist: () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -681,6 +693,7 @@ private fun PlaylistCard(
             onDismiss = { showMenu = false },
             onPlayPlaylist = onPlayPlaylist,
             onShare = onSharePlaylist,
+            onOpenSync = onOpenSync,
             onDeletePlaylist = onDeletePlaylist,
         )
     }

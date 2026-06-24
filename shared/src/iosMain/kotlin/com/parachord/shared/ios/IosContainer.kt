@@ -402,6 +402,16 @@ class IosContainer private constructor() {
         )
     }
 
+    /** Per-playlist Sync menu backend — shared with Android (no drift). */
+    private val playlistSyncChannelManager by lazy {
+        com.parachord.shared.sync.PlaylistSyncChannelManager(
+            settingsStore = settingsStore,
+            libraryRepository = libraryRepository,
+            playlistDao = playlistDao,
+            syncEngine = syncEngine,
+        )
+    }
+
     /** Run a full sync (gated internally on Settings → sync enabled). Returns
      *  the empty string on success, else the error message (so "Sync now" can
      *  surface WHY it failed instead of a generic toast). Safe to call from the
@@ -2081,51 +2091,32 @@ class IosContainer private constructor() {
         }
 
     // ── Per-playlist Sync menu ────────────────────────────────────────────────
-
-    private val syncChannelProviders = listOf("spotify", "applemusic", "listenbrainz")
-
-    private fun providerDisplay(id: String): String = when (id) {
-        "spotify" -> "Spotify"
-        "applemusic" -> "Apple Music"
-        "listenbrainz" -> "ListenBrainz"
-        else -> id.replaceFirstChar { it.uppercase() }
-    }
+    //
+    // The channel logic lives in the shared PlaylistSyncChannelManager (no drift
+    // with Android). These three methods are thin delegates that map the shared
+    // PlaylistSyncChannel → IosSyncChannel and KEEP their exact signatures so the
+    // Swift PlaylistSyncChannelsSheet is unaffected.
 
     /** The sync channels for one playlist — each provider with connected /
      *  enabled / available state, for the playlist Sync menu. */
-    suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> {
-        val enabledProviders = settingsStore.getEnabledSyncProviders()
-        val override = settingsStore.getPlaylistChannels(localId)
-        val mirrors = libraryRepository.getPlaylistMirrors(localId).keys
-        val effective = override ?: mirrors
-        val playlist = playlistDao.getById(localId)
-        return syncChannelProviders.map { pid ->
-            val isSource = localId.startsWith("$pid-")
-            val canPush = playlist != null && com.parachord.shared.sync.isPlaylistPushCandidate(playlist, pid)
+    suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> =
+        playlistSyncChannelManager.getChannels(localId).map { ch ->
             IosSyncChannel(
-                providerId = pid,
-                displayName = providerDisplay(pid),
-                connected = pid in enabledProviders,
-                enabled = pid in effective,
-                available = isSource || canPush,
+                providerId = ch.providerId,
+                displayName = ch.displayName,
+                connected = ch.connected,
+                enabled = ch.enabled,
+                available = ch.available,
             )
         }
-    }
 
     /** Toggle one channel for one playlist. Writes the per-playlist override
      *  (authoritative). Disabling also detaches the existing linkage so the
      *  state updates immediately and the next sync's override gate keeps it off.
      *  Enabling sets the override; the next sync mirrors it (push) if it's a
      *  valid target. */
-    suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) {
-        val override = settingsStore.getPlaylistChannels(localId)
-        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
-        val updated = if (enabled) current + providerId else current - providerId
-        settingsStore.setPlaylistChannels(localId, updated)
-        if (!enabled) {
-            syncEngine.detachPlaylistFromProvider(localId, providerId)
-        }
-    }
+    suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) =
+        playlistSyncChannelManager.setChannel(localId, providerId, enabled)
 
     /**
      * Turn a channel OFF for a playlist, with the "delete from this service too"
@@ -2138,23 +2129,7 @@ class IosContainer private constructor() {
         localId: String,
         providerId: String,
         deleteRemote: Boolean,
-    ): String? {
-        // Capture the external id BEFORE we change the override (getPlaylistMirrors
-        // is override-aware, and the override still includes this provider here).
-        val externalId = libraryRepository.getPlaylistMirrors(localId)[providerId]
-        var unsupported: String? = null
-        if (deleteRemote && externalId != null) {
-            val result = syncEngine.deletePlaylistOnProvider(providerId, externalId)
-            if (result is com.parachord.shared.sync.DeleteResult.Unsupported) {
-                unsupported = providerDisplay(providerId)
-            }
-        }
-        val override = settingsStore.getPlaylistChannels(localId)
-        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
-        settingsStore.setPlaylistChannels(localId, current - providerId)
-        syncEngine.detachPlaylistFromProvider(localId, providerId)
-        return unsupported
-    }
+    ): String? = playlistSyncChannelManager.disableChannel(localId, providerId, deleteRemote)
 
     /** Delete a playlist locally + remote-delete from [fromProviders] (provider
      *  ids). Returns the display names of providers that DON'T support API

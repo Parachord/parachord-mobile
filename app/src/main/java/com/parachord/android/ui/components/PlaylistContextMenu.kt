@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
@@ -56,6 +57,7 @@ fun PlaylistContextMenu(
     onDismiss: () -> Unit,
     onPlayPlaylist: () -> Unit,
     onShare: (() -> Unit)? = null,
+    onOpenSync: (() -> Unit)? = null,
     onSavePlaylist: (() -> Unit)? = null,
     onDeletePlaylist: (() -> Unit)? = null,
 ) {
@@ -126,6 +128,15 @@ fun PlaylistContextMenu(
                     icon = Icons.Filled.Share,
                     label = "Share",
                     onClick = { onShare(); onDismiss() },
+                )
+            }
+
+            if (onOpenSync != null) {
+                HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
+                ContextMenuItem(
+                    icon = Icons.Filled.Sync,
+                    label = "Sync…",
+                    onClick = { onOpenSync(); onDismiss() },
                 )
             }
 

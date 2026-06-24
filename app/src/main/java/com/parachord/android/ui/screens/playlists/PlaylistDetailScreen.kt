@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -124,6 +125,7 @@ fun PlaylistDetailScreen(
     val sharePlaylist = com.parachord.android.share.rememberSharePlaylist()
     var showPlaylistMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showSyncSheet by remember { mutableStateOf(false) }
 
     // Context menu host with Remove from Playlist support
     TrackContextMenuHost(
@@ -432,6 +434,21 @@ fun PlaylistDetailScreen(
                     // → use the rich smart-link variant (per-track service URLs)
                     // rather than the lite deeplink fallback.
                     onShare = { sharePlaylist(pl, tracks) },
+                    onOpenSync = {
+                        showPlaylistMenu = false
+                        showSyncSheet = true
+                    },
+                )
+            }
+        }
+
+        if (showSyncSheet) {
+            val pl = playlist
+            if (pl != null) {
+                com.parachord.android.ui.components.PlaylistSyncChannelsSheet(
+                    playlistId = pl.id,
+                    playlistName = pl.name,
+                    onDismiss = { showSyncSheet = false },
                 )
             }
         }
@@ -518,6 +535,7 @@ private fun PlaylistOptionsSheet(
     onQueuePlaylist: () -> Unit,
     onDeletePlaylist: () -> Unit,
     onShare: (() -> Unit)? = null,
+    onOpenSync: (() -> Unit)? = null,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -594,6 +612,15 @@ private fun PlaylistOptionsSheet(
                     icon = Icons.Filled.Share,
                     label = "Share",
                     onClick = { onShare(); onDismiss() },
+                )
+            }
+
+            if (onOpenSync != null) {
+                HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
+                ContextMenuItem(
+                    icon = Icons.Filled.Sync,
+                    label = "Sync…",
+                    onClick = { onOpenSync(); onDismiss() },
                 )
             }
 

@@ -69,6 +69,7 @@ import com.parachord.android.ui.screens.nowplaying.NowPlayingViewModel
 import com.parachord.android.ui.screens.playlists.*
 import com.parachord.android.ui.screens.search.SearchViewModel
 import com.parachord.android.ui.screens.settings.SettingsViewModel
+import com.parachord.android.ui.screens.sync.PlaylistSyncChannelsViewModel
 import com.parachord.android.ui.screens.sync.SyncViewModel
 import com.parachord.android.widget.MiniPlayerWidgetUpdater
 import kotlinx.serialization.json.Json
@@ -989,6 +990,18 @@ val androidModule = module {
     // ── Sync ─────────────────────────────────────────────────────────
 
     singleOf(::SyncEngine)
+    // Per-playlist Sync context-menu backend (shared, parity with iOS). Takes
+    // the shared SettingsStore / LibraryRepository / PlaylistDao / SyncEngine —
+    // all resolve here (the Android SettingsStore / LibraryRepository / SyncEngine
+    // are typealias shims to the shared types).
+    single {
+        com.parachord.shared.sync.PlaylistSyncChannelManager(
+            settingsStore = get(),
+            libraryRepository = get(),
+            playlistDao = get(),
+            syncEngine = get(),
+        )
+    }
     // Bind as SyncProvider so getAll<SyncProvider>() picks it up. Future
     // providers (Apple Music, Tidal) register the same way; SyncEngine
     // accepts the resulting List<SyncProvider> with no per-provider Koin
@@ -1036,5 +1049,6 @@ val androidModule = module {
     viewModelOf(::PopOfTheTopsViewModel)
     viewModelOf(::ConcertsViewModel)
     viewModelOf(::SyncViewModel)
+    viewModelOf(::PlaylistSyncChannelsViewModel)
     viewModelOf(::DeepLinkViewModel)
 }
