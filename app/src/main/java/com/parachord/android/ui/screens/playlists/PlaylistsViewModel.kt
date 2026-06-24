@@ -36,10 +36,13 @@ class PlaylistsViewModel constructor(
     val playlists: StateFlow<List<PlaylistEntity>> = libraryRepository.getAllPlaylists()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** localPlaylistId -> push-mirror provider ids (sync_playlist_link), for the
-     *  source chips. Reloads whenever the playlist list changes (post-sync). */
+    /** localPlaylistId -> providers it EFFECTIVELY syncs with (override-aware),
+     *  for the source chips. Reads the per-playlist channel override (authoritative,
+     *  set by the Sync menu / picker) so a chip disappears the instant a service is
+     *  toggled off — NOT the raw sync_playlist_link rows, which can lag a stale or
+     *  manually-deleted mirror. Reloads whenever the playlist list changes. */
     val mirrors: StateFlow<Map<String, List<String>>> = playlists
-        .map { runCatching { libraryRepository.getAllPlaylistLinkProviders() }.getOrDefault(emptyMap()) }
+        .map { runCatching { libraryRepository.getAllEffectivePlaylistChannels() }.getOrDefault(emptyMap()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     /** All remotes a playlist mirrors to (source + links) — drives the per-mirror
