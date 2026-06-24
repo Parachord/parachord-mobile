@@ -86,6 +86,14 @@ class NwayMaterializeTest {
         override val id: String,
         private val removeMode: TrackRemoveMode,
         var hydrateFn: ((title: String) -> String?)? = { it },
+        /**
+         * When true, this provider's write path (`addPlaylistTracks`) THROWS — models
+         * the on-device incident where Apple Music returns HTTP 400 on a stale/404
+         * mirror. The per-target try/catch in [SyncEngine.propagateReconcilePlaylist]
+         * must isolate this so the OTHER providers still materialize. Mutable so a test
+         * can arm it only for the propagation cycle (not the setup fill).
+         */
+        var throwOnWrite: Boolean = false,
     ) : SyncProvider {
         override val displayName = "$id (materialize fake)"
         override val features = ProviderFeatures(
@@ -166,6 +174,11 @@ class NwayMaterializeTest {
         }
 
         override suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? {
+            if (throwOnWrite) {
+                // Models the on-device AmHttpException(400) on a stale/404 mirror — the
+                // write path explodes BEFORE recording the call.
+                throw RuntimeException("HTTP 400 — stale mirror (simulated provider failure)")
+            }
             addCalls.add(externalPlaylistId to externalTrackIds)
             remote[externalPlaylistId]?.tracks?.addAll(externalTrackIds)
             return null
@@ -463,6 +476,59 @@ class NwayMaterializeTest {
         // Each got its own capability-specific remove + add.
         assertEquals("LB removed by position", 1, lb.removeByPositionCalls.size)
         assertEquals("Spotify removed by native id", 1, sp.removeByNativeIdCalls.size)
+    }
+
+    // ── 4b. per-provider failure isolation (one throws, others still push) ───
+    @Test
+    fun `one provider throwing on write does not abort the playlist — others still materialize`() = runBlocking {
+        // The on-device incident: two writable mirrors (Apple Music + Spotify). Apple
+        // Music's mirror is stale/404 so its add throws HTTP 400. WITHOUT the per-target
+        // try/catch the exception propagates out of the push loop → out of
+        // propagateReconcilePlaylist → caught at runNwayPropagation as "skipped", so
+        // Spotify (which would have succeeded) NEVER materializes and the whole playlist
+        // is skipped. WITH the guard, AM is logged + skipped and Spotify still gets its add.
+        //
+        // RED without the fix: AM's RuntimeException unwinds the loop before Spotify's
+        // turn (or, if Spotify ran first, before the local replaceAll / baseline) — the
+        // assertions on Spotify's converged remote + add call fail.
+        val am = FakeProvider(AppleMusicSyncProvider.PROVIDER_ID, TrackRemoveMode.Unsupported, hydrateFn = { it })
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId, hydrateFn = { it })
+        // AM is listed FIRST so its throw happens before Spotify's turn — proves the
+        // loop continues past a mid-loop failure rather than aborting the rest.
+        val h = Harness(listOf(am, sp))
+        h.seed("local-0", "Isolate", 2)
+        h.linkMirrors("local-0")
+        val amExt = h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID)!!.externalId
+        val spExt = h.linkDao.selectForLink("local-0", SpotifySyncProvider.PROVIDER_ID)!!.externalId
+        assertEquals(2, am.remote[amExt]!!.tracks.size)
+        assertEquals(2, sp.remote[spExt]!!.tracks.size)
+
+        // Add a new track locally → both mirrors should receive it; arm AM to throw.
+        val edited = listOf(
+            pt("local-0", 0, "mbid-local-0-0"),
+            pt("local-0", 1, "mbid-local-0-1"),
+            pt("local-0", 2, "mbid-added"),
+        )
+        h.playlistTrackDao.replaceAll("local-0", edited)
+        h.markModified("local-0", 3, 2_000L)
+        am.throwOnWrite = true
+        am.addCalls.clear(); sp.addCalls.clear()
+
+        // Must NOT throw out of the engine — the per-target guard absorbs AM's failure.
+        h.engine.runNwayPropagation()
+
+        // Spotify (the healthy provider) still materialized the new track.
+        val want = setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-added")
+        assertEquals("Spotify still converged despite AM throwing", want,
+            sp.remote[spExt]!!.tracks.map { it.substringAfterLast(':') }.toSet())
+        assertEquals("Spotify still received its add", 1, sp.addCalls.size)
+        // AM threw before its add landed — its remote is untouched (still the 2 seeded).
+        assertEquals("AM remote untouched (its write threw)", 2, am.remote[amExt]!!.tracks.size)
+        assertTrue("AM recorded no successful add (it threw)", am.addCalls.isEmpty())
+        // Local rows + baseline still advanced — a one-provider failure doesn't strand
+        // the playlist; AM lags canonical and is retried next cycle.
+        assertEquals("local converged to the merged 3", 3, h.playlistTrackDao.getByPlaylistIdSync("local-0").size)
+        assertEquals("baseline advanced to the merged 3", 3, h.baselineDao.selectForLocal("local-0")!!.tracks.size)
     }
 
     // ── 5. real removal vs Unsupported (AM) ─────────────────────────────────

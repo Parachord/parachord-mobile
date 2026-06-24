@@ -1704,29 +1704,45 @@ class SyncEngine constructor(
             if (targetId == "local") { pushedTo.add("local"); continue }
             val provider = providers.firstOrNull { it.id == targetId } ?: continue
             val externalId = mirrors[targetId] ?: continue
-            val remote = provider.fetchPlaylistTracks(externalId)
-            val res = materializeToProvider(
-                provider = provider,
-                externalId = externalId,
-                canonical = mergedTracks,
-                remote = remote,
-                resolveNativeId = { track -> coordinator.resolve(provider, track) },
-            )
-            added += res.added
-            removed += res.removed
-            pendingAdds += res.pendingAdds
-            unsupportedRemoves += res.unsupportedRemoves
-            // Refresh the per-provider change token for echo suppression. A snapshot
-            // provider (Spotify/AM) returns its fresh token; a snapshot-less provider
-            // (LB) returns null → next-cycle detection falls back to trackCount, which
-            // now equals the merged size → no re-detect. On a fetch failure here we
-            // leave the old token; the next cycle re-detects and re-materializes
-            // (idempotent — the diff yields no ops once converged).
-            val token = runCatching { provider.getPlaylistSnapshotId(externalId) }.getOrNull()
-            syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
-            pushedTo.add(provider.id)
-            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialized " +
-                "+$added/-$removed (pending $pendingAdds, unsupported-remove $unsupportedRemoves)")
+            // Each target is materialized in its OWN try/catch so ONE provider's
+            // failure (e.g. Apple Music HTTP 400 when its mirror is stale/404) only
+            // skips THAT provider — the others (LB, Spotify) still materialize. The
+            // comment above ("an Apple-Music catalog miss never blocks ListenBrainz")
+            // is true for coverage MISSES via the non-destructive diff; this guard
+            // extends the same isolation to thrown EXCEPTIONS. A thrown provider is
+            // left un-materialized = it lags canonical next cycle (the hydration cache
+            // has no confirmed entry ⇒ its missing tracks read as PENDING, not a
+            // deletion), so it's safely retried and the baseline can still advance.
+            try {
+                val remote = provider.fetchPlaylistTracks(externalId)
+                val res = materializeToProvider(
+                    provider = provider,
+                    externalId = externalId,
+                    canonical = mergedTracks,
+                    remote = remote,
+                    resolveNativeId = { track -> coordinator.resolve(provider, track) },
+                )
+                added += res.added
+                removed += res.removed
+                pendingAdds += res.pendingAdds
+                unsupportedRemoves += res.unsupportedRemoves
+                // Refresh the per-provider change token for echo suppression. A snapshot
+                // provider (Spotify/AM) returns its fresh token; a snapshot-less provider
+                // (LB) returns null → next-cycle detection falls back to trackCount, which
+                // now equals the merged size → no re-detect. On a fetch failure here we
+                // leave the old token; the next cycle re-detects and re-materializes
+                // (idempotent — the diff yields no ops once converged).
+                val token = runCatching { provider.getPlaylistSnapshotId(externalId) }.getOrNull()
+                syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
+                pushedTo.add(provider.id)
+                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialized " +
+                    "+$added/-$removed (pending $pendingAdds, unsupported-remove $unsupportedRemoves)")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialize " +
+                    "failed — skipping this provider, others continue", e)
+            }
         }
 
         // Persist the merged list to the LOCAL rows. The coordinator already
