@@ -533,7 +533,13 @@ data class AmTracksRelationship(
 @Serializable
 data class AmTrackReference(
     val id: String,
-    val type: String = "songs",
+    // NO default value. The client's `Json` has `encodeDefaults = false`, so a
+    // default-valued `type` is DROPPED from the body — AM then receives
+    // {"data":[{"id":"…"}]} with no `type` and rejects it with HTTP 400
+    // "Unable to parse request body" (code 40007), which is why every Apple Music
+    // playlist track-add silently failed. A required (defaultless) property is
+    // always serialized regardless of `encodeDefaults`. Both call sites pass "songs".
+    val type: String,
 )
 
 @Serializable

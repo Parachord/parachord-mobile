@@ -17,6 +17,7 @@ import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.AppleMusicLibraryClient
 import com.parachord.shared.api.AppleMusicLibraryClient.AmHttpException
 import com.parachord.shared.api.ItunesRateLimitedException
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
@@ -346,6 +347,9 @@ class AppleMusicSyncProvider(
                 Log.w(TAG, "PUT replace returned ${resp.status.value} for $externalPlaylistId; flipping session kill-switch, falling back to POST-append")
                 amPutUnsupportedForSession = true
             } else {
+                val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
+                Log.w(TAG, "replacePlaylistTracks PUT($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
+                    "| sent ${externalTrackIds.size} id(s) type=songs, sample=${externalTrackIds.take(6)}")
                 throw AmHttpException(resp.status.value)
             }
         }
@@ -354,6 +358,9 @@ class AppleMusicSyncProvider(
         delay(INTER_REQUEST_DELAY_MS)
         val resp = api.appendPlaylistTracks(externalPlaylistId, body)
         if (!resp.status.isSuccess()) {
+            val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
+            Log.w(TAG, "replacePlaylistTracks POST-append($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
+                "| sent ${externalTrackIds.size} id(s) type=songs, sample=${externalTrackIds.take(6)}")
             if (resp.status.value == 401) throw AppleMusicReauthRequiredException()
             throw AmHttpException(resp.status.value)
         }
@@ -383,6 +390,11 @@ class AppleMusicSyncProvider(
         delay(INTER_REQUEST_DELAY_MS)
         val resp = api.appendPlaylistTracks(externalPlaylistId, body)
         if (!resp.status.isSuccess()) {
+            // #272 diagnostic: capture AM's actual error body + the request so we
+            // can see WHY the append 400s (ID space, storefront, batch size, …).
+            val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
+            Log.w(TAG, "addPlaylistTracks($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
+                "| sent ${externalTrackIds.size} id(s) type=songs, sample=${externalTrackIds.take(6)}")
             if (resp.status.value == 401) throw AppleMusicReauthRequiredException()
             throw AmHttpException(resp.status.value)
         }
