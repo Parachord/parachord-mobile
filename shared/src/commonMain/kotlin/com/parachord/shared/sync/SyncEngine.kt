@@ -1601,6 +1601,49 @@ class SyncEngine constructor(
             c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
         }
 
+        // ── PULL-SOURCE AUTHORITY (Daily Brew / SiriusXMU rotate-out fix) ───────────
+        // The authoritative PULL SOURCE has the authority to DROP a baseline track:
+        // when a churning source (Spotify Daily Brew rotates ~40/day; hosted-XSPF
+        // replaces daily) rotates a track OUT, that absence must read as a genuine
+        // deletion — NOT be re-added by the pending augmentation. Add-only mirrors
+        // (Apple Music) still keep genuine catalog-gap tracks because the augmentation
+        // stays ON for them.
+        //
+        //   • sync_playlist_source.providerId's copy is authoritative for an imported
+        //     playlist (use the source ROW, not the id-prefix — a cross-provider push
+        //     mirror's prefix can differ from the real pull source).
+        //   • the LOCAL copy is authoritative for a hosted-XSPF playlist (sourceUrl).
+        //   • NONE for a local-authored multimaster playlist → augment all (unchanged).
+        //
+        // Authority is granted ONLY when the source is REMOVAL-CAPABLE. An add-only
+        // source (TrackRemoveMode.Unsupported, e.g. an AM-imported playlist) cannot
+        // legitimately "drop" a track, and a transient PARTIAL fetch from it would
+        // otherwise read as deletions with no safety net (the empty-mirror rule and
+        // the total-wipe floor only catch collapse-to-zero) — so it falls back to
+        // augment-all.
+        val pullSource = syncPlaylistSourceDao.selectForLocal(localId)
+        val authoritativeCopyId: String? = when {
+            pullSource != null -> {
+                val sourceProvider = providers.firstOrNull { it.id == pullSource.providerId }
+                if (sourceProvider != null &&
+                    sourceProvider.features.trackRemoveMode != TrackRemoveMode.Unsupported
+                ) pullSource.providerId else null
+            }
+            playlist.sourceUrl != null -> "local"   // hosted XSPF — local copy is the truth
+            else -> null                            // local-authored multimaster — augment all
+        }
+
+        // The set of baseline keys the AUTHORITATIVE copy itself dropped this cycle.
+        // These must NEVER be re-augmented onto ANY copy (a source deletion is final).
+        // Computed only when the authoritative copy is CHANGED (an unchanged copy reuses
+        // baseline.tracks, so it dropped nothing). Keyed off the copy's actual keys, NOT
+        // the pending cache.
+        val authoritativeCopy = authoritativeCopyId?.let { aid ->
+            copies.firstOrNull { it.id == aid }?.takeIf { it.changed }
+        }
+        val authoritativeDropped: Set<String> =
+            authoritativeCopy?.let { ac -> baselineRepr.toSet() - ac.keys.toSet() } ?: emptySet()
+
         // Trap 1 — resolve representative keys → tracks. Build keyToTrack from the
         // copies that carry real tracks (local FIRST so its richer metadata wins).
         // Moved AHEAD of the merge so the pending-aware augmentation below can
@@ -1645,12 +1688,20 @@ class SyncEngine constructor(
         // trilemma: suppress phantom deletes, honor real deletes, propagate adds.
         val augmentedCopies = copies.mapIndexed { i, copy ->
             val input = inputs[i]
-            if (input.id == "local" || !copy.changed) return@mapIndexed copy
+            // Skip: local (always), unchanged copies, AND the authoritative source copy —
+            // the source's missing baseline keys are GENUINE deletions, not pending fills.
+            if (input.id == "local" || input.id == authoritativeCopyId || !copy.changed) {
+                return@mapIndexed copy
+            }
             val present = copy.keys.toSet()
             val lacked = baselineRepr.filter { it !in present }
             if (lacked.isEmpty()) return@mapIndexed copy
             val pendingLacked = lacked.filter { key ->
-                isProviderPendingForKey(input.id, key, keyToTrack)
+                // Never re-augment a key the authoritative source deleted — even onto a
+                // mirror that's pending on it. A source deletion wins over a mirror's
+                // pending-protection (the AM-residue closer).
+                key !in authoritativeDropped &&
+                    isProviderPendingForKey(input.id, key, keyToTrack)
             }
             if (pendingLacked.isEmpty()) copy
             else copy.copy(keys = copy.keys + pendingLacked)
