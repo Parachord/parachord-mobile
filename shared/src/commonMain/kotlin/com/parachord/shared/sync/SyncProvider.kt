@@ -143,6 +143,21 @@ interface SyncProvider {
     suspend fun deletePlaylist(externalPlaylistId: String): DeleteResult
 
     /**
+     * Does the remote playlist still exist? Used to self-heal a dead mirror link
+     * (clear it so the next sync recreates). Default true — only a provider that can
+     * cheaply + DEFINITIVELY confirm deletion (a 404 on the playlist itself) overrides.
+     *
+     * SAFETY: an implementation MUST return false ONLY when it has a definitive
+     * signal that the playlist RESOURCE is gone (a 404 on a GET of the playlist
+     * itself). It must return true — never false — on any transient error, any
+     * ambiguous signal (e.g. a 404 on the playlist's `/tracks` sub-resource, which
+     * Apple Music also returns for valid-but-empty playlists), or any thrown
+     * exception. A wrongly-cleared link recreates a still-live remote as a
+     * duplicate, so bias hard toward "exists".
+     */
+    suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean = true
+
+    /**
      * Catalog-search-based ID hydration (un-defers Decision D1).
      *
      * Search the provider's catalog for a track matching the given

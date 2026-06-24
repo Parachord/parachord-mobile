@@ -1742,6 +1742,31 @@ class SyncEngine constructor(
             } catch (e: Exception) {
                 Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialize " +
                     "failed — skipping this provider, others continue", e)
+                // SELF-HEAL: a materialize failure CAN mean the remote mirror was
+                // deleted on the provider's side (Apple Music returns HTTP 400/404
+                // on a stale/404 mirror, and the per-provider isolation above just
+                // skips it — so the dead link would persist forever and that
+                // provider stays permanently empty for this playlist). Probe the
+                // provider for a DEFINITIVE deletion signal (a 404 on the playlist
+                // RESOURCE). If — and ONLY if — it's definitively gone, clear the
+                // dead link + N-way token so the next sync's create-or-link path
+                // mints a fresh mirror. The probe is conservative by contract
+                // (returns true on any transient/ambiguous error); we additionally
+                // guard it here so a probe failure can never throw out of the loop
+                // or be mistaken for "gone".
+                val mirrorGone = try {
+                    !provider.remotePlaylistExists(externalId)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (probe: Exception) {
+                    false
+                }
+                if (mirrorGone) {
+                    Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} mirror " +
+                        "$externalId is GONE (404) — clearing dead link for recreation next sync")
+                    syncPlaylistLinkDao.deleteForLink(localId, provider.id)
+                    syncPlaylistNwayDao.deleteForLink(localId, provider.id)
+                }
             }
         }
 

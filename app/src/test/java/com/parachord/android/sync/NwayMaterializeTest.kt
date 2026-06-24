@@ -94,6 +94,14 @@ class NwayMaterializeTest {
          * can arm it only for the propagation cycle (not the setup fill).
          */
         var throwOnWrite: Boolean = false,
+        /**
+         * Models the provider's self-heal probe ([SyncProvider.remotePlaylistExists]).
+         * When false, the mirror is reported DEFINITIVELY GONE (a 404 on the playlist
+         * resource) so [SyncEngine.propagateReconcilePlaylist]'s per-target catch
+         * clears the dead link. Defaults true (the conservative "still exists"); a
+         * test sets it false only to model a deleted remote.
+         */
+        var remoteExists: Boolean = true,
     ) : SyncProvider {
         override val displayName = "$id (materialize fake)"
         override val features = ProviderFeatures(
@@ -254,6 +262,7 @@ class NwayMaterializeTest {
         override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
         override suspend fun updatePlaylistDetails(externalPlaylistId: String, name: String?, description: String?) {}
         override suspend fun deletePlaylist(externalPlaylistId: String): DeleteResult = DeleteResult.Success
+        override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean = remoteExists
     }
 
     private class FakeSyncSettings(private val enabled: Set<String>) : SyncSettingsProvider {
@@ -529,6 +538,85 @@ class NwayMaterializeTest {
         // the playlist; AM lags canonical and is retried next cycle.
         assertEquals("local converged to the merged 3", 3, h.playlistTrackDao.getByPlaylistIdSync("local-0").size)
         assertEquals("baseline advanced to the merged 3", 3, h.baselineDao.selectForLocal("local-0")!!.tracks.size)
+    }
+
+    // ── 4c. self-heal: a GONE mirror that fails materialize clears its dead link ─
+    @Test
+    fun `a materialize failure on a GONE mirror clears the dead link`() = runBlocking {
+        // The on-device incident's persistent half: Apple Music's mirror points at a
+        // DELETED AM playlist. Materialize throws (HTTP 400/404), the per-target catch
+        // skips AM (Spotify still pushes) — but WITHOUT self-heal the dead AM link
+        // survives forever, so AM stays permanently empty for this playlist. With
+        // self-heal, the catch probes `remotePlaylistExists` (false here ⇒ definitive
+        // 404) and CLEARS the dead link so the next sync's create-or-link mints a fresh
+        // AM mirror.
+        val am = FakeProvider(AppleMusicSyncProvider.PROVIDER_ID, TrackRemoveMode.Unsupported, hydrateFn = { it })
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId, hydrateFn = { it })
+        val h = Harness(listOf(am, sp))
+        h.seed("local-0", "Heal", 2)
+        h.linkMirrors("local-0")
+        val spExt = h.linkDao.selectForLink("local-0", SpotifySyncProvider.PROVIDER_ID)!!.externalId
+        // Sanity: the AM link exists before the heal.
+        assertTrue("AM link present before heal", h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID) != null)
+
+        val edited = listOf(
+            pt("local-0", 0, "mbid-local-0-0"),
+            pt("local-0", 1, "mbid-local-0-1"),
+            pt("local-0", 2, "mbid-added"),
+        )
+        h.playlistTrackDao.replaceAll("local-0", edited)
+        h.markModified("local-0", 3, 2_000L)
+        // AM's write throws AND its remote is definitively gone.
+        am.throwOnWrite = true
+        am.remoteExists = false
+        am.addCalls.clear(); sp.addCalls.clear()
+
+        h.engine.runNwayPropagation()
+
+        // The dead AM link (and its N-way token) are cleared so the next sync recreates.
+        assertEquals("dead AM link cleared", null, h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID))
+        assertEquals("dead AM n-way token cleared", null, h.nwayDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID))
+        // The OTHER provider still materialized despite AM's failure + heal.
+        val want = setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-added")
+        assertEquals("Spotify still converged", want, sp.remote[spExt]!!.tracks.map { it.substringAfterLast(':') }.toSet())
+        assertEquals("Spotify still received its add", 1, sp.addCalls.size)
+    }
+
+    // ── 4d. safety: a STILL-PRESENT mirror's transient failure keeps the link ─
+    @Test
+    fun `a materialize failure on a STILL-PRESENT mirror does NOT clear the link`() = runBlocking {
+        // The safety constraint: a materialize THROW alone must NOT clear the link —
+        // only a DEFINITIVE deletion (404 on the playlist resource) may. Here the write
+        // throws (transient, e.g. a 500 / network blip / append-400) but the playlist
+        // still EXISTS (remoteExists=true). The link must SURVIVE so AM is retried next
+        // cycle, never recreated as a duplicate. This pins "bias hard toward not-clearing".
+        val am = FakeProvider(AppleMusicSyncProvider.PROVIDER_ID, TrackRemoveMode.Unsupported, hydrateFn = { it })
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId, hydrateFn = { it })
+        val h = Harness(listOf(am, sp))
+        h.seed("local-0", "Keep", 2)
+        h.linkMirrors("local-0")
+        val spExt = h.linkDao.selectForLink("local-0", SpotifySyncProvider.PROVIDER_ID)!!.externalId
+
+        val edited = listOf(
+            pt("local-0", 0, "mbid-local-0-0"),
+            pt("local-0", 1, "mbid-local-0-1"),
+            pt("local-0", 2, "mbid-added"),
+        )
+        h.playlistTrackDao.replaceAll("local-0", edited)
+        h.markModified("local-0", 3, 2_000L)
+        // AM's write throws but the playlist STILL EXISTS — must NOT clear.
+        am.throwOnWrite = true
+        am.remoteExists = true
+        am.addCalls.clear(); sp.addCalls.clear()
+
+        h.engine.runNwayPropagation()
+
+        // The link MUST survive a transient failure (the whole safety constraint).
+        assertTrue("present AM link NOT cleared on a transient failure",
+            h.linkDao.selectForLink("local-0", AppleMusicSyncProvider.PROVIDER_ID) != null)
+        // Spotify still materialized as usual.
+        val want = setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-added")
+        assertEquals("Spotify still converged", want, sp.remote[spExt]!!.tracks.map { it.substringAfterLast(':') }.toSet())
     }
 
     // ── 5. real removal vs Unsupported (AM) ─────────────────────────────────

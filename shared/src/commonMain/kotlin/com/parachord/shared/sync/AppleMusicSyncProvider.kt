@@ -435,6 +435,53 @@ class AppleMusicSyncProvider(
     }
 
     /**
+     * Self-heal probe: does the library playlist RESOURCE still exist?
+     *
+     * GETs `/v1/me/library/playlists/{id}` (the playlist itself, via the same
+     * `getLibraryPlaylistWithTracks` call the track-fetch fallback already uses).
+     * [AppleMusicLibraryClient.getLibraryPlaylistWithTracks] throws
+     * [AmHttpException] with the HTTP status, so a 404 on the playlist resource
+     * is unambiguous — the playlist was deleted on Apple's side.
+     *
+     * Returns false ONLY on that definitive 404. Returns true on 200, and true
+     * (conservative) on EVERY other outcome:
+     * - any other HTTP status (401/403/429/5xx) — could be transient or auth,
+     *   never proof of deletion,
+     * - any thrown exception (network, reauth, decode) — wrapped here so this
+     *   never throws.
+     *
+     * NOT keyed on the `/tracks` 404 (Apple returns that for valid-but-empty and
+     * Music-app-only playlists too — clearing on it would recreate a live
+     * playlist as a duplicate). Bias hard toward "exists"; a wrongly-cleared link
+     * is the corruption we're trying to undo.
+     */
+    override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean {
+        delay(INTER_REQUEST_DELAY_MS)
+        return try {
+            // 200 ⇒ the playlist resource is present.
+            api.getLibraryPlaylistWithTracks(externalPlaylistId)
+            true
+        } catch (e: AmHttpException) {
+            if (e.status == 404) {
+                Log.w(TAG, "remotePlaylistExists: AM playlist $externalPlaylistId GET returned 404 — resource is GONE")
+                false
+            } else {
+                // Any non-404 status is NOT proof of deletion (could be transient,
+                // auth, or throttle). Conservative: keep the link.
+                Log.w(TAG, "remotePlaylistExists: AM playlist $externalPlaylistId GET HTTP ${e.status} (not 404) — assuming exists")
+                true
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Reauth, network, decode — anything other than a definitive 404.
+            // Never return false; never let this throw.
+            Log.w(TAG, "remotePlaylistExists: AM playlist $externalPlaylistId GET threw — assuming exists", e)
+            true
+        }
+    }
+
+    /**
      * Catalog-search-based ID hydration (un-defers Decision D1).
      *
      * PRIMARY: the Apple Music CATALOG API by ISRC
