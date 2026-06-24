@@ -20,7 +20,12 @@ class SyncScheduler constructor(
         private const val MIN_SYNC_GAP_MS = 10 * 60 * 1000L
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // Default, NOT Main: syncAll must not run on the main thread. On Main, the
+    // 10-min watchdog's TimeoutCancellationException is posted to the main looper
+    // and can't be delivered while the sync body is busy, so a hang can never
+    // self-recover (the WorkManager worker runs off-Main and never wedged — the
+    // dispatcher was the differentiator). The Toast below marshals to Main itself.
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var timerJob: Job? = null
 
     fun startInAppTimer() {
