@@ -20,6 +20,9 @@ SELECT * FROM sync_playlist_link WHERE localPlaylistId = ? AND providerId = ?;
 selectByExternalId:
 SELECT * FROM sync_playlist_link WHERE providerId = ? AND externalId = ?;
 
+selectForProvider:
+SELECT * FROM sync_playlist_link WHERE providerId = ?;
+
 upsert:
 INSERT OR REPLACE INTO sync_playlist_link (localPlaylistId, providerId, externalId, syncedAt)
 VALUES (?, ?, ?, ?);

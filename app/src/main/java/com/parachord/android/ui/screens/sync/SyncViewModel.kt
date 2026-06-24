@@ -12,8 +12,7 @@ import com.parachord.android.sync.SyncEngine
 import com.parachord.android.sync.SyncScheduler
 import com.parachord.android.sync.SyncedPlaylist
 import com.parachord.android.data.repository.LibraryRepository
-import com.parachord.shared.sync.PlaylistSyncMode
-import com.parachord.shared.sync.ProviderPlaylistSelection
+import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.SyncProvider
 import com.parachord.shared.sync.SyncSettings
 import com.parachord.shared.sync.isPlaylistPushCandidate
@@ -421,8 +420,13 @@ class SyncViewModel constructor(
     //     user's IMPORTED playlists (id-prefix `<provider>-`). Unchecking
     //     one + confirming raises a Keep/Remove prompt (see
     //     [pendingPullRemoval]).
-    //   - PUSH provider (ListenBrainz): All / Choose / None over the
-    //     local push-eligible playlists ([ProviderPlaylistSelection]).
+    //   - PUSH provider (ListenBrainz): a plain checklist of the local
+    //     push-eligible playlists, seeded from the ACTUAL live mirrors
+    //     (sync_playlist_link) rather than a selection pref. Unchecking one +
+    //     confirming raises a single-action "Stop syncing" prompt (see
+    //     [pendingPushRemoval]); the save path does a local-only unlink. Checking
+    //     a new one writes a channel override admitting the playlist; the next
+    //     sync creates + links it.
     // ─────────────────────────────────────────────────────────────────
 
     /** Lightweight row for the config-sheet pickers (local id + name + count). */
@@ -431,6 +435,10 @@ class SyncViewModel constructor(
     /** Keep/remove prompt raised when imported playlists are deselected in a
      *  pull provider's picker. [names] drives the dialog copy. */
     data class PullRemovalPrompt(val names: List<String>)
+
+    /** Single-action "Stop syncing" prompt raised when push-mirrored playlists
+     *  are deselected in a PUSH provider's picker. [names] drives the copy. */
+    data class PushRemovalPrompt(val names: List<String>)
 
     private val _configProviderId = MutableStateFlow<String?>(null)
     val configProviderId: StateFlow<String?> = _configProviderId
@@ -445,13 +453,20 @@ class SyncViewModel constructor(
     /** The axes as they were at load — used to detect drops on Done. */
     private var configOriginalAxes: Set<String> = emptySet()
 
-    // Push picker (ListenBrainz).
-    private val _configPlaylistMode = MutableStateFlow(PlaylistSyncMode.ALL)
-    val configPlaylistMode: StateFlow<PlaylistSyncMode> = _configPlaylistMode
-    private val _configSelectedPushIds = MutableStateFlow<Set<String>>(emptySet())
-    val configSelectedPushIds: StateFlow<Set<String>> = _configSelectedPushIds
+    // Push picker (ListenBrainz). A plain checklist, seeded from the live
+    // sync_playlist_link mirrors (NOT the vestigial selection pref). Mutations
+    // are buffered in [_configPushChecked] and persisted on Done so a deselect
+    // can raise a confirmation first.
     private val _configPushable = MutableStateFlow<List<ConfigPlaylist>>(emptyList())
     val configPushable: StateFlow<List<ConfigPlaylist>> = _configPushable
+    /** Local ids currently checked (mirrored) in the push picker. */
+    private val _configPushChecked = MutableStateFlow<Set<String>>(emptySet())
+    val configPushChecked: StateFlow<Set<String>> = _configPushChecked
+    /** Snapshot of the checked set at load — diffed against on Done. */
+    private var configOriginalPushChecked: Set<String> = emptySet()
+
+    private val _pendingPushRemoval = MutableStateFlow<PushRemovalPrompt?>(null)
+    val pendingPushRemoval: StateFlow<PushRemovalPrompt?> = _pendingPushRemoval
 
     // Pull picker (Spotify / Apple Music).
     private val _configImported = MutableStateFlow<List<ConfigPlaylist>>(emptyList())
@@ -473,6 +488,10 @@ class SyncViewModel constructor(
     fun isPullProvider(providerId: String): Boolean =
         providerId == SpotifySyncProvider.PROVIDER_ID || providerId == "applemusic"
 
+    /** ListenBrainz mirrors local playlists OUT (push). */
+    fun isPushProvider(providerId: String): Boolean =
+        providerId == ListenBrainzSyncProvider.PROVIDER_ID
+
     /** Axes a provider can sync. ListenBrainz is playlists-only. */
     fun supportedAxes(providerId: String): List<String> =
         if (providerId == com.parachord.shared.sync.ListenBrainzSyncProvider.PROVIDER_ID)
@@ -490,17 +509,26 @@ class SyncViewModel constructor(
         _configLoading.value = true
         _configPendingRemoval.value = null
         _pendingPullRemoval.value = null
+        _pendingPushRemoval.value = null
         viewModelScope.launch {
             val ax = settingsStore.getSyncCollectionsForProvider(providerId)
-            val selection = settingsStore.getPlaylistSelection(providerId)
-            val pushable = playlistDao.getAllSync()
-                .filter { it.name.isNotBlank() && isPlaylistPushCandidate(it, providerId) }
-                .map { ConfigPlaylist(it.id, it.name, it.trackCount) }
             _configAxes.value = ax
             configOriginalAxes = ax
-            _configPlaylistMode.value = selection.mode
-            _configSelectedPushIds.value = selection.localPlaylistIds
-            _configPushable.value = pushable
+            if (isPushProvider(providerId)) {
+                // Seed "checked" from the ACTUAL live mirrors (links ∩ existing
+                // playlists, pull-source rows excluded), NOT the corrupt/vestigial
+                // selection pref. The displayed list = push candidates ∪
+                // currently-linked rows, so a linked row that's no longer a
+                // candidate still appears and can be UNchecked.
+                val all = playlistDao.getAllSync().filter { it.name.isNotBlank() }
+                val linkedIds = syncEngine.linkedPlaylistIdsForProvider(providerId)
+                val pushable = all
+                    .filter { isPlaylistPushCandidate(it, providerId) || it.id in linkedIds }
+                    .map { ConfigPlaylist(it.id, it.name, it.trackCount) }
+                _configPushable.value = pushable
+                _configPushChecked.value = linkedIds
+                configOriginalPushChecked = linkedIds
+            }
             if (isPullProvider(providerId)) {
                 val imported = playlistDao.getAllSync()
                     .filter { it.id.startsWith("$providerId-") && it.name.isNotBlank() }
@@ -524,6 +552,7 @@ class SyncViewModel constructor(
         _configProviderId.value = null
         _configPendingRemoval.value = null
         _pendingPullRemoval.value = null
+        _pendingPushRemoval.value = null
     }
 
     /** Toggle an axis live; persists immediately (matches iOS). */
@@ -536,27 +565,11 @@ class SyncViewModel constructor(
         }
     }
 
-    fun setConfigPlaylistMode(mode: PlaylistSyncMode) {
-        _configPlaylistMode.value = mode
-        persistConfigSelection()
-    }
-
-    fun toggleConfigPushSelected(localId: String) {
-        _configSelectedPushIds.value = _configSelectedPushIds.value.let {
+    /** Toggle a push-picker row in memory only — persisted on Done (so a
+     *  deselect can raise a confirmation first). */
+    fun toggleConfigPushChecked(localId: String) {
+        _configPushChecked.value = _configPushChecked.value.let {
             if (localId in it) it - localId else it + localId
-        }
-        persistConfigSelection()
-    }
-
-    private fun persistConfigSelection() {
-        val providerId = _configProviderId.value ?: return
-        val mode = _configPlaylistMode.value
-        val ids = _configSelectedPushIds.value
-        viewModelScope.launch {
-            settingsStore.setPlaylistSelection(
-                providerId,
-                ProviderPlaylistSelection(mode, ids),
-            )
         }
     }
 
@@ -596,6 +609,18 @@ class SyncViewModel constructor(
             }
             // Nothing deselected — persist the (possibly empty) allowlist now.
             applyPullSelection(providerId, removeLocalIds = emptyList(), keepLocalIds = emptyList())
+        }
+        // 3) Push-deselect "Stop syncing" (ListenBrainz only).
+        if (isPushProvider(providerId)) {
+            val deselected = _configPushable.value.filter {
+                it.id in configOriginalPushChecked && it.id !in _configPushChecked.value
+            }
+            if (deselected.isNotEmpty()) {
+                _pendingPushRemoval.value = PushRemovalPrompt(deselected.map { it.name })
+                return true
+            }
+            // Nothing deselected (additions only / no change) — persist now.
+            applyPushSelection()
         }
         return false
     }
@@ -703,5 +728,42 @@ class SyncViewModel constructor(
         val allowlist = if (allChecked) emptySet()
         else imported.filter { it.id in checked }.map { remoteIdFor(providerId, it.id) }.toSet()
         settingsStore.setPullPlaylists(providerId, allowlist)
+    }
+
+    // ── Push-deselect "Stop syncing" (ListenBrainz) ──────────────────
+
+    /** Confirm the stop-syncing dialog → persist the push diff, then dismiss. */
+    fun configConfirmPushStop(onDone: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                applyPushSelection()
+            } catch (e: Exception) {
+                Log.e("SyncViewModel", "configConfirmPushStop failed", e)
+            } finally {
+                _pendingPushRemoval.value = null
+                onDone()
+            }
+        }
+    }
+
+    /** Cancel the stop-syncing dialog — leave the checked set as-is so the user
+     *  can re-check; sheet stays open. */
+    fun configCancelPushRemoval() { _pendingPushRemoval.value = null }
+
+    /**
+     * Persist the push picker's diff. DESELECTED rows (was linked, now unchecked)
+     * get a local-only unlink ([SyncEngine.unlinkPlaylistFromProviderLocally]:
+     * link + N-way state torn down, channel override excludes the provider, remote
+     * untouched). NEWLY-CHECKED rows get the channel override admitting them
+     * ([SyncEngine.linkPlaylistToProviderLocally]); the next sync creates + links.
+     * Only the diffed rows are mutated; idempotent (re-baselines on completion).
+     */
+    private suspend fun applyPushSelection() {
+        val providerId = _configProviderId.value ?: return
+        val deselected = configOriginalPushChecked - _configPushChecked.value
+        val newlyChecked = _configPushChecked.value - configOriginalPushChecked
+        for (id in deselected) syncEngine.unlinkPlaylistFromProviderLocally(id, providerId)
+        for (id in newlyChecked) syncEngine.linkPlaylistToProviderLocally(id, providerId)
+        configOriginalPushChecked = _configPushChecked.value
     }
 }

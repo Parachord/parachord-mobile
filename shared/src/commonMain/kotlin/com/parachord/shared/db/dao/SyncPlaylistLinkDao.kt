@@ -94,6 +94,17 @@ class SyncPlaylistLinkDao(private val db: ParachordDb) {
         }
 
     /**
+     * All link rows for a single provider, regardless of local playlist. Used by
+     * the per-provider PUSH config picker (#266) to seed the "checked" set from
+     * the ACTUAL live mirrors (sync_playlist_link) rather than the vestigial
+     * playlist-selection pref.
+     */
+    suspend fun selectForProvider(providerId: String): List<Link> =
+        withContext(Dispatchers.Default) {
+            queries.selectForProvider(providerId).executeAsList().map { it.toLink() }
+        }
+
+    /**
      * Reverse lookup: find the link row for a given provider's
      * external ID. Used by the per-provider import branch (Phase 5)
      * to detect when an incoming remote already has a local row

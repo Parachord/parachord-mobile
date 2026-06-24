@@ -20,7 +20,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.ui.theme.ParachordTheme
 import com.parachord.android.ui.theme.PurpleDark
 import com.parachord.android.ui.theme.PurpleLight
-import com.parachord.shared.sync.PlaylistSyncMode
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
@@ -36,8 +35,11 @@ import org.koin.androidx.compose.koinViewModel
  *  - PULL providers (Spotify / Apple Music): a checklist of the user's
  *    IMPORTED playlists. Unchecking one + Done → Keep (detach, row survives)
  *    or Remove (delete the local copy, stays on the service).
- *  - PUSH provider (ListenBrainz): All / Choose / None over the local
- *    push-eligible playlists.
+ *  - PUSH provider (ListenBrainz): a plain checklist of push-eligible
+ *    playlists, seeded from the live mirrors (sync_playlist_link).
+ *    Unchecking one + Done → a single-action "Stop syncing" prompt
+ *    (local-only unlink; remote untouched). Checking one admits it to the
+ *    next sync's push.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -55,6 +57,7 @@ fun ProviderSyncConfigSheet(
     val axes by viewModel.configAxes.collectAsStateWithLifecycle()
     val pendingAxisRemoval by viewModel.configPendingRemoval.collectAsStateWithLifecycle()
     val pendingPullRemoval by viewModel.pendingPullRemoval.collectAsStateWithLifecycle()
+    val pendingPushRemoval by viewModel.pendingPushRemoval.collectAsStateWithLifecycle()
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -191,6 +194,33 @@ fun ProviderSyncConfigSheet(
             },
         )
     }
+
+    // ── Push-deselect "Stop syncing" dialog (single-action) ──────────
+    pendingPushRemoval?.let { p ->
+        val n = p.names.size
+        AlertDialog(
+            onDismissRequest = { viewModel.configCancelPushRemoval() },
+            title = { Text("Stop syncing $n playlist${if (n == 1) "" else "s"} to $displayName?") },
+            text = {
+                Text(
+                    "These playlists will stop syncing to $displayName. They stay on " +
+                        "$displayName (nothing is deleted there) and remain in your " +
+                        "Parachord library — they're just removed from Parachord's sync " +
+                        "to $displayName.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.configConfirmPushStop { dismiss() } }) {
+                    Text("Stop syncing", color = accent)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.configCancelPushRemoval() }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -230,47 +260,28 @@ private fun PushPlaylistPicker(
     displayName: String,
     accent: Color,
 ) {
-    val mode by viewModel.configPlaylistMode.collectAsStateWithLifecycle()
     val pushable by viewModel.configPushable.collectAsStateWithLifecycle()
-    val selected by viewModel.configSelectedPushIds.collectAsStateWithLifecycle()
+    val checked by viewModel.configPushChecked.collectAsStateWithLifecycle()
 
-    ConfigSectionLabel("Playlists to mirror to $displayName")
-    // All / Choose / None segmented selector.
-    val modes = listOf(
-        PlaylistSyncMode.ALL to "All",
-        PlaylistSyncMode.SELECTED to "Choose",
-        PlaylistSyncMode.NONE to "None",
-    )
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        modes.forEachIndexed { index, (m, label) ->
-            SegmentedButton(
-                selected = mode == m,
-                onClick = { viewModel.setConfigPlaylistMode(m) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-                colors = SegmentedButtonDefaults.colors(activeContainerColor = accent.copy(alpha = 0.25f)),
-            ) { Text(label) }
-        }
-    }
-
-    if (mode == PlaylistSyncMode.SELECTED) {
-        Spacer(Modifier.height(8.dp))
-        if (pushable.isEmpty()) {
-            Text(
-                "No playlists eligible to mirror to $displayName yet.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
+    // Plain checklist, seeded from the live mirrors (sync_playlist_link). Each
+    // row is "mirrored to $displayName: yes/no". Symmetric with the pull picker.
+    ConfigSectionLabel("Playlists mirrored to $displayName")
+    if (pushable.isEmpty()) {
+        Text(
+            "No playlists eligible to mirror to $displayName yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(vertical = 8.dp),
+        )
+    } else {
+        for (pl in pushable) {
+            PlaylistCheckRow(
+                name = pl.name,
+                trackCount = pl.trackCount,
+                checked = pl.id in checked,
+                accent = accent,
+                onToggle = { viewModel.toggleConfigPushChecked(pl.id) },
             )
-        } else {
-            for (pl in pushable) {
-                PlaylistCheckRow(
-                    name = pl.name,
-                    trackCount = pl.trackCount,
-                    checked = pl.id in selected,
-                    accent = accent,
-                    onToggle = { viewModel.toggleConfigPushSelected(pl.id) },
-                )
-            }
         }
     }
 }

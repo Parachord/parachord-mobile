@@ -3498,6 +3498,63 @@ class SyncEngine constructor(
     }
 
     /**
+     * Local ids that currently mirror to [providerId] AND still exist in the
+     * `playlists` table, EXCLUDING any whose pull-source is [providerId] (so an
+     * LB-imported `listenbrainz-*` row — whose pull import wrote a
+     * `sync_playlist_link[listenbrainz]` row — is NOT surfaced as a push target
+     * the user could un-check and thereby corrupt its own pull sync). Seeds the
+     * #266 push-config picker's "checked" set. Orphan links (no playlist row)
+     * are dropped here; their cleanup is a separate workstream.
+     */
+    suspend fun linkedPlaylistIdsForProvider(providerId: String): Set<String> {
+        val existingIds = playlistDao.getAllSync().map { it.id }.toSet()
+        return syncPlaylistLinkDao.selectForProvider(providerId)
+            .map { it.localPlaylistId }
+            .filter { it in existingIds }
+            .filter { syncPlaylistSourceDao.selectForLocal(it)?.providerId != providerId }
+            .toSet()
+    }
+
+    /**
+     * Local-only "stop pushing this playlist to [providerId]" for a PUSH
+     * provider (#266). Removes the durable link + N-way echo-state, and writes
+     * an authoritative channel override that EXCLUDES [providerId] so neither the
+     * legacy push loop (candidates filter) nor N-way ([getPlaylistMirrors]
+     * filter) re-adds it next cycle — including masking the id-prefix re-add for
+     * `<provider>-*` rows. NEVER deletes the remote playlist. NEVER touches the
+     * baseline (the shared 3-way-merge ancestor for the row's OTHER providers).
+     */
+    suspend fun unlinkPlaylistFromProviderLocally(localPlaylistId: String, providerId: String) {
+        Log.d(TAG, "LBpush: unlink $localPlaylistId from $providerId")
+        // 1. Drop the durable push link → removed from getPlaylistMirrors' link
+        //    source AND from the legacy three-layer dedup's Layer-1 reuse.
+        syncPlaylistLinkDao.deleteForLink(localPlaylistId, providerId)
+        // 2. Clear per-(playlist,provider) N-way change-token / editedAt echo state.
+        syncPlaylistNwayDao.deleteForLink(localPlaylistId, providerId)
+        // 3. Authoritative channel override (allowlist) that survives the next
+        //    sync AND masks the id-prefix re-add. Seed from the live mirror set
+        //    so other providers (Spotify/AM) on the same row are preserved, then
+        //    drop only [providerId].
+        val current = settingsStore.getPlaylistChannels(localPlaylistId)
+            ?: getPlaylistMirrors(localPlaylistId).keys
+        settingsStore.setPlaylistChannels(localPlaylistId, current - providerId)
+    }
+
+    /**
+     * Local-only "start pushing this playlist to [providerId]" for a PUSH
+     * provider (#266). Writes the channel override (allowlist) ADDING
+     * [providerId] so the row is admitted into the push candidate set. Does NOT
+     * create the link or push — `pushPlaylistsForProvider` does that on the next
+     * sync (createPlaylist → upsertWithSnapshot link → track push).
+     */
+    suspend fun linkPlaylistToProviderLocally(localPlaylistId: String, providerId: String) {
+        Log.d(TAG, "LBpush: link $localPlaylistId to $providerId")
+        val current = settingsStore.getPlaylistChannels(localPlaylistId)
+            ?: getPlaylistMirrors(localPlaylistId).keys
+        settingsStore.setPlaylistChannels(localPlaylistId, current + providerId)
+    }
+
+    /**
      * All remote mirrors of a local playlist: providerId -> externalId. Union of
      * the id-prefix-derived source, the pull-source row, and every push link.
      * Each entry is a remote we can show a chip for / offer to delete from.
