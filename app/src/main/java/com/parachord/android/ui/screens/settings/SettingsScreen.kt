@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
@@ -108,6 +109,7 @@ import com.parachord.android.ui.components.ModalTextPrimary
 import com.parachord.android.ui.components.ModalScrim
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.SwipeableTabLayout
+import com.parachord.android.ui.screens.sync.ProviderSyncConfigSheet
 import com.parachord.android.ui.screens.sync.SyncSetupSheet
 import com.parachord.android.ui.screens.sync.SyncViewModel
 import com.parachord.android.ui.theme.ParachordTheme
@@ -2698,6 +2700,9 @@ private fun GeneralTab(
      *  row below writes `"applemusic"`. */
     var syncSetupProviderId by remember { mutableStateOf("spotify") }
     var showStopSyncDialog by remember { mutableStateOf(false) }
+    /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
+     *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
+    var configSyncProviderId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SectionHeader("Appearance") }
@@ -2828,6 +2833,18 @@ private fun GeneralTab(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
+                            // Configure what syncs — per-provider picker (#266).
+                            // Choose which of your Spotify playlists to import.
+                            OutlinedButton(
+                                onClick = { configSyncProviderId = "spotify" },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text("Configure what syncs")
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
                             // Stop syncing button
                             TextButton(
                                 onClick = { showStopSyncDialog = true },
@@ -2894,9 +2911,16 @@ private fun GeneralTab(
                         // when on it re-opens the wizard with current selection.
                         Button(
                             onClick = {
-                                syncSetupProviderId = "applemusic"
-                                syncViewModel.resetSetup()
-                                showSyncSetupSheet = true
+                                if (appleMusicSyncEnabled) {
+                                    // Already on — go straight to the per-provider
+                                    // picker (#266: axes + which AM playlists to
+                                    // import), not the all-or-nothing setup wizard.
+                                    configSyncProviderId = "applemusic"
+                                } else {
+                                    syncSetupProviderId = "applemusic"
+                                    syncViewModel.resetSetup()
+                                    showSyncSetupSheet = true
+                                }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
@@ -2963,6 +2987,24 @@ private fun GeneralTab(
                         )
                     },
                 )
+            }
+            // Configure what syncs — push picker (#266): All / Choose / None
+            // over the local playlists eligible to mirror to ListenBrainz.
+            if (listenBrainzSyncEnabled) {
+                item {
+                    TextButton(
+                        onClick = { configSyncProviderId = "listenbrainz" },
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    ) {
+                        Text("Configure what syncs")
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
             }
         }
 
@@ -3136,6 +3178,16 @@ private fun GeneralTab(
             onDismiss = { showSyncSetupSheet = false },
             viewModel = syncViewModel,
             providerId = syncSetupProviderId,
+        )
+    }
+
+    // Per-provider "Configure what syncs" sheet (#266) — pull picker for
+    // Spotify / Apple Music, push picker for ListenBrainz.
+    configSyncProviderId?.let { pid ->
+        ProviderSyncConfigSheet(
+            providerId = pid,
+            onDismiss = { configSyncProviderId = null },
+            viewModel = syncViewModel,
         )
     }
 
