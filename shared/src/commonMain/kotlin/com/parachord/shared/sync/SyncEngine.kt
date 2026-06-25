@@ -2861,6 +2861,32 @@ class SyncEngine constructor(
         val ownedRemoteByName = liveRemote.filter { it.isOwned }
             .groupBy { it.entity.name.trim().lowercase() }
 
+        // Pre-fetch each candidate's link once: reused by the mass-floor pre-pass
+        // below AND by the per-playlist dedup loop (so the link is read once, not
+        // twice).
+        val linksByPlaylistId = candidates.associate {
+            it.id to syncPlaylistLinkDao.selectForLink(it.id, providerId)
+        }
+
+        // Dead-mirror DETACH mass-floor (push-path companion to
+        // confirmedGoneMirrors' bail). On a partial/truncated provider fetch where
+        // many candidates are all mirrored to THIS provider, every link looks stale
+        // (absent from remoteById), and the stale-link branch below would probe
+        // `remotePlaylistExists` for each one sequentially through the rate-limit
+        // gate — a slow probe-storm. If an implausible number of links are absent
+        // at once, that's almost certainly a partial fetch: skip the dead-mirror
+        // probe/detach entirely for this push pass (keep all links, don't probe).
+        // The normal id-link / Layer-3 dedup still runs; only the dead-mirror branch
+        // is gated. Under-removing is always safer than detaching live mirrors.
+        val suspectedDeadLinks = candidates.count {
+            val link = linksByPlaylistId[it.id]
+            link != null && link.externalId !in remoteById
+        }
+        val skipDeadMirrorDetach = suspectedDeadLinks > DEAD_MIRROR_MASS_FLOOR
+        if (skipDeadMirrorDetach) {
+            Log.w(TAG, "dead-mirror push: $providerId — $suspectedDeadLinks candidate link(s) absent from fetch (> floor $DEAD_MIRROR_MASS_FLOOR); treating as a partial fetch, skipping detach-probe")
+        }
+
         for ((pIdx, playlist) in candidates.withIndex()) {
             _syncPhase.value = "playlists · $providerId push ${pIdx + 1}/${candidates.size}"
             try {
@@ -2869,7 +2895,7 @@ class SyncEngine constructor(
                 // detail banner will let the user re-push or unlink. Lift
                 // the link lookup here so the dedup-Layer-1 block below
                 // can reuse it without a second query.
-                val link = syncPlaylistLinkDao.selectForLink(playlist.id, providerId)
+                val link = linksByPlaylistId[playlist.id]
                 if (link?.pendingAction != null) {
                     Log.d(TAG, "Skipping push for ${playlist.id} on $providerId — pendingAction=${link.pendingAction}")
                     continue
@@ -2905,6 +2931,15 @@ class SyncEngine constructor(
                         // Absence is NOT proof of deletion (the fetch may have been
                         // partial), and blindly clearing the link here makes Layer 3
                         // re-create a DUPLICATE. Probe before acting (workstream A).
+                        //
+                        // Mass-floor gate: if too many candidate links were absent
+                        // at once (likely a partial fetch), skip the probe + detach
+                        // entirely — keep the link and this push cycle's no-op,
+                        // exactly as the probe-says-EXISTS path does below.
+                        if (skipDeadMirrorDetach) {
+                            Log.d(TAG, "Link $providerId:${link.externalId} for ${playlist.id} absent from fetch but mass-floor active — keeping link, skipping push")
+                            continue
+                        }
                         val stillExists = try {
                             provider.remotePlaylistExists(link.externalId)
                         } catch (ce: kotlinx.coroutines.CancellationException) {

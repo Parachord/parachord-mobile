@@ -212,6 +212,44 @@ class DeadMirrorReconcileIntegrationTest {
         assertNotNull("the local row survives", h.playlistDao.getById("local-w"))
     }
 
+    // ── A-mass — over-floor stale push links → no detach-probe, all links + overrides intact ──
+    @Test
+    fun `A mass-floor — over-floor stale links skip the detach-probe and keep every link`() = runBlocking {
+        val am = FakeProvider("applemusic")
+        val h = Harness(listOf(am))
+        // 31 user-created local playlists, each mirrored ONLY to Apple Music. The
+        // provider fetch came back EMPTY (truncated/partial), so every link looks
+        // stale (absent from remoteById). Even though each probe WOULD report a
+        // 404, the mass-floor (30) must treat this as a partial fetch and skip the
+        // dead-mirror detach-probe entirely — no probing, no detaching, no
+        // re-creation. (Companion to `B mass-floor` on the removal side.)
+        val ids = (0 until 31).map { "local-mass-$it" }
+        for ((i, id) in ids.withIndex()) {
+            h.seed(id, "Mass $i", sourceUrl = null)
+            h.linkMirror(id, "applemusic", "am-dead-$i")
+        }
+        am.remotePlaylistsList = emptyList()
+        am.goneExternalIds = ids.indices.map { "am-dead-$it" }.toSet() // every probe WOULD say GONE
+
+        h.engine.syncAll()
+
+        assertEquals(
+            "no stale link is dropped — the mass-floor refuses to detach on a likely-partial fetch",
+            31,
+            ids.count { h.linkDao.selectForLink(it, "applemusic") != null },
+        )
+        assertTrue(
+            "no channel override is written for any playlist (nothing was detached)",
+            ids.all { h.settings.getPlaylistChannels(it) == null },
+        )
+        assertEquals(
+            "the detach-probe never ran (no probe-storm through the rate-limit gate)",
+            0,
+            am.probeCount,
+        )
+        assertEquals("no mirror was re-created", 0, am.createCount)
+    }
+
     // ── A4 — a pre-existing override is respected: detach never re-enables a user-disabled provider ──
     @Test
     fun `A4 detach — respects a pre-existing override and never re-enables a disabled provider`() = runBlocking {
@@ -329,12 +367,16 @@ class DeadMirrorReconcileIntegrationTest {
         var goneExternalIds: Set<String> = emptySet()
         var createCount = 0
             private set
+        var probeCount = 0
+            private set
 
         override suspend fun fetchPlaylists(onProgress: ((current: Int, total: Int) -> Unit)?): List<SyncedPlaylist> =
             remotePlaylistsList
 
-        override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean =
-            externalPlaylistId !in goneExternalIds
+        override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean {
+            probeCount++
+            return externalPlaylistId !in goneExternalIds
+        }
 
         override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> = emptyList()
         override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
