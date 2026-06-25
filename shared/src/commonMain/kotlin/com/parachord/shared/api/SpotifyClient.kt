@@ -363,6 +363,28 @@ class SpotifyClient(
             applyAuth(this); if (fields != null) parameter("fields", fields)
         }
 
+    /**
+     * Targeted existence probe for the dead-mirror reconcile. GETs the playlist
+     * (minimal `fields=id`) and maps the HTTP status to exists/gone WITHOUT
+     * parsing the body or throwing. Routed through the rate-limit gate so it
+     * honors the account-wide cooldown. CONSERVATIVE by contract
+     * ([com.parachord.shared.sync.SyncProvider.remotePlaylistExists]): ONLY a
+     * definitive 404 returns `false`; a 429 / auth / transport error — or an
+     * active-cooldown short-circuit — returns `true`, so a wrongly-cleared link
+     * can never recreate a still-live remote as a duplicate.
+     */
+    suspend fun playlistExists(playlistId: String): Boolean = try {
+        gate.withPermit(exceptionFactory = { SpotifyRateLimitedException(it) }) {
+            val response: HttpResponse = httpClient.get("$BASE/v1/playlists/$playlistId") {
+                applyAuth(this); parameter("fields", "id")
+            }
+            gate.handleResponse(response) { SpotifyRateLimitedException(it) }
+            response.status.value != 404
+        }
+    } catch (e: Exception) {
+        true
+    }
+
     suspend fun getCurrentUser(): SpUser =
         gatedGet("$BASE/v1/me") { applyAuth(this) }
 

@@ -94,6 +94,11 @@ class SyncEngine constructor(
          */
         private const val SYNC_DATA_VERSION = 4
 
+        /** Dead-mirror reconcile (workstream B): if more than this many mirrors
+         *  look absent from one provider fetch, treat it as a partial/failed
+         *  fetch and skip the reconcile rather than probe-storm / mass-act. */
+        private const val DEAD_MIRROR_MASS_FLOOR = 30
+
         /** Sentinel for the cross-provider local-row dedup migration
          *  ([migrateMergeCrossProviderDuplicates]). Lives above
          *  [SYNC_DATA_VERSION] so it doesn't piggyback on the v3→v4
@@ -490,6 +495,49 @@ class SyncEngine constructor(
     /** Per-provider axis opt-in lookup. Defaults to all axes for back-compat. */
     private suspend fun providerHasAxis(providerId: String, axis: String): Boolean =
         axis in settingsStore.getSyncCollectionsForProvider(providerId)
+
+    /**
+     * Probe-confirm which of [candidateExternalIds] are DEFINITELY gone after a
+     * pull. A mirror absent from the provider's just-fetched [fullRemoteIds] is
+     * only a SUSPECT — the fetch may have been partial (a mid-pagination timeout,
+     * an API truncation), and treating absence as deletion would mass-delete live
+     * playlists. Each suspect is verified with a targeted
+     * [SyncProvider.remotePlaylistExists] 404 probe; a transient/partial fetch
+     * yields an EMPTY result (the safety gate). Only suspects are probed, so a
+     * clean sync costs zero extra requests. See [DeadMirrorReconcile].
+     */
+    private suspend fun confirmedGoneMirrors(
+        provider: SyncProvider,
+        candidateExternalIds: Set<String>,
+        fullRemoteIds: Set<String>,
+    ): Set<String> {
+        val suspected = DeadMirrorReconcile.suspectedGone(candidateExternalIds, fullRemoteIds)
+        if (suspected.isEmpty()) return emptySet()
+        // Mass-disappearance floor (workstream B): if an implausible number of
+        // mirrors vanished from a single fetch, that's almost certainly a
+        // partial/failed fetch — refuse to act AND skip the probe storm. A
+        // genuine bulk deletion stays a per-device manual action; under-removing
+        // is always safer than mass-deleting live playlists.
+        if (suspected.size > DEAD_MIRROR_MASS_FLOOR) {
+            Log.w(TAG, "dead-mirror: ${provider.id} — ${suspected.size} mirror(s) absent (> floor $DEAD_MIRROR_MASS_FLOOR); treating as a partial fetch, skipping reconcile")
+            return emptySet()
+        }
+        val probe = HashMap<String, Boolean>(suspected.size)
+        for (ext in suspected) {
+            probe[ext] = try {
+                provider.remotePlaylistExists(ext)
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                true // a failed probe is NOT proof of deletion — bias toward "exists"
+            }
+        }
+        val gone = DeadMirrorReconcile.confirmedGone(suspected, probe)
+        if (gone.isNotEmpty()) {
+            Log.w(TAG, "dead-mirror: ${provider.id} — ${gone.size}/${suspected.size} suspected mirror(s) confirmed GONE (404)")
+        }
+        return gone
+    }
 
     private suspend fun syncTracksForSpotify(
         onProgress: (SyncProgress) -> Unit,
@@ -2328,10 +2376,18 @@ class SyncEngine constructor(
         // `remotePlaylists`/`selectedRemote` are empty by design, and treating
         // that empty list as the source of truth would delete every Spotify
         // playlist row. Skip the cleanup entirely in that case.
-        val remoteIds = selectedRemote.map { it.spotifyId }.toSet()
-        val removedSources = if (spotifyPlaylistsEnabled) {
-            localSources.filter { it.externalId != null && it.externalId !in remoteIds }
-        } else emptyList()
+        // Probe-gated removal (workstream B): a source absent from the FULL
+        // fetched list is removed ONLY when remotePlaylistExists CONFIRMS a 404 —
+        // a partial/truncated fetch (which would otherwise look like every
+        // playlist vanished) removes nothing. Suspected against the full
+        // `remotePlaylists`, NOT `selectedRemote`: a merely-deselected-but-present
+        // playlist stays (deselection is handled by the picker's keep/remove
+        // prompt), matching the non-Spotify helper's documented behavior.
+        val fullRemoteIds = remotePlaylists.map { it.spotifyId }.toSet()
+        val goneIds = if (spotifyPlaylistsEnabled) {
+            confirmedGoneMirrors(spotifyProvider, localSources.mapNotNull { it.externalId }.toSet(), fullRemoteIds)
+        } else emptySet()
+        val removedSources = localSources.filter { it.externalId != null && it.externalId in goneIds }
         removedSources.forEach { source ->
             val localPlaylist = playlistDao.getById(source.itemId)
             // Locally-owned playlists (hosted XSPF — canonical via `sourceUrl`
@@ -2706,8 +2762,12 @@ class SyncEngine constructor(
         // Removed-source cleanup, mirroring the Spotify path. A locally-
         // owned playlist (hosted XSPF or local-*) is NEVER deleted by
         // sync cleanup — it's just deselected/deleted from the provider.
-        val remoteIds = remotePlaylists.map { it.spotifyId }.toSet()
-        val removedSources = localSources.filter { it.externalId != null && it.externalId !in remoteIds }
+        // Probe-gated (workstream B): a source absent from the fetched list is
+        // removed ONLY when remotePlaylistExists confirms a 404, so a partial
+        // fetch can't mass-delete live playlists.
+        val fullRemoteIds = remotePlaylists.map { it.spotifyId }.toSet()
+        val goneIds = confirmedGoneMirrors(provider, localSources.mapNotNull { it.externalId }.toSet(), fullRemoteIds)
+        val removedSources = localSources.filter { it.externalId != null && it.externalId in goneIds }
         removedSources.forEach { source ->
             val localPlaylist = playlistDao.getById(source.itemId)
             if (localPlaylist?.sourceUrl != null ||
@@ -2841,8 +2901,44 @@ class SyncEngine constructor(
                         existing = fromLink
                         matchSource = "id-link"
                     } else {
-                        Log.d(TAG, "Stored link $providerId:${link.externalId} for ${playlist.id} no longer exists remotely; clearing")
+                        // The stored mirror isn't in the just-fetched remote list.
+                        // Absence is NOT proof of deletion (the fetch may have been
+                        // partial), and blindly clearing the link here makes Layer 3
+                        // re-create a DUPLICATE. Probe before acting (workstream A).
+                        val stillExists = try {
+                            provider.remotePlaylistExists(link.externalId)
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            true
+                        }
+                        if (stillExists) {
+                            // Partial fetch / transient: keep the live link, skip
+                            // this push cycle (don't clear, don't re-create).
+                            Log.d(TAG, "Link $providerId:${link.externalId} for ${playlist.id} absent from fetch but probe says EXISTS — keeping link, skipping push")
+                            continue
+                        }
+                        // Confirmed gone (404): DETACH this dead mirror instead of
+                        // re-creating it, so the chip disappears (both platforms) and
+                        // this loop won't recreate it; the user re-enables via the
+                        // Sync menu if they want it back. Seed the new override from
+                        // the playlist's EFFECTIVE channels (override ?: links) —
+                        // override-aware ON PURPOSE: it preserves the user's existing
+                        // allowlist and never re-enables a provider they turned off
+                        // (it may legitimately go empty when the dead mirror was the
+                        // only enabled provider). Drop the link + N-way token FIRST,
+                        // then write the override: if the write throws, the next sync
+                        // still sees the dropped link rather than an override masking
+                        // an orphan.
+                        val effective = getPlaylistMirrors(playlist.id).keys.toSet()
                         syncPlaylistLinkDao.deleteForLink(playlist.id, providerId)
+                        syncPlaylistNwayDao.deleteForLink(playlist.id, providerId)
+                        settingsStore.setPlaylistChannels(
+                            playlist.id,
+                            DeadMirrorReconcile.overrideAfterDetach(effective, providerId),
+                        )
+                        Log.w(TAG, "dead-mirror detach: '${playlist.name}' $providerId mirror ${link.externalId} confirmed 404 — channel override excludes $providerId, link dropped")
+                        continue
                     }
                 }
 

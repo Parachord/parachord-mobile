@@ -356,6 +356,17 @@ class SpotifySyncProvider(
         }
     }
 
+    /**
+     * Targeted existence probe for the dead-mirror reconcile. Spotify otherwise
+     * inherits [SyncProvider.remotePlaylistExists]'s `= true` default, so a
+     * deleted Spotify mirror is never detected gone. [SpotifyClient.playlistExists]
+     * carries the conservative contract: ONLY a definitive 404 returns `false`;
+     * a 429 / auth / transport error (or an active rate-limit cooldown) returns
+     * `true`, so a wrongly-cleared link can't recreate a still-live remote.
+     */
+    override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean =
+        spotifyClient.playlistExists(externalPlaylistId)
+
     // ── Write operations ─────────────────────────────────────────
 
     override suspend fun saveTracks(externalIds: List<String>) {
