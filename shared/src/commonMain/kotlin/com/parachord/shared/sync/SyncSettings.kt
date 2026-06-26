@@ -42,14 +42,37 @@ fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, provi
     // N-way propagation uses `playlist.writable`. So no blanket writable gate here.
     val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
     return when (providerId) {
-        "spotify" -> playlist.spotifyId == null && base
-        "applemusic" -> base || playlist.id.startsWith("spotify-")
+        // `listenbrainz-*` is now eligible to RE-EXPORT to streaming services — a
+        // playlist created/edited on ListenBrainz (Achordion) can mirror to Spotify
+        // / Apple Music. It is OPT-IN ONLY ([autoMirrorsByDefault]) so a pulled LB
+        // library doesn't auto-flood them with the user's whole archive.
+        "spotify" -> playlist.spotifyId == null &&
+            (base || playlist.id.startsWith("listenbrainz-"))
+        "applemusic" -> base ||
+            playlist.id.startsWith("spotify-") ||
+            playlist.id.startsWith("listenbrainz-")
         "listenbrainz" -> base ||
             playlist.id.startsWith("spotify-") ||
             playlist.id.startsWith("applemusic-")
         else -> base
     }
 }
+
+/**
+ * Whether [playlist] AUTO-mirrors to push providers via a provider's default
+ * push selection (mode=ALL), vs. only when the user explicitly opts in with a
+ * per-playlist channel override.
+ *
+ * A ListenBrainz-IMPORTED playlist (`listenbrainz-*`) is OPT-IN ONLY: it's
+ * eligible to re-export ([isPlaylistPushCandidate]) but never auto-mirrors, so a
+ * pulled LB library doesn't flood Spotify / Apple Music with the user's whole
+ * archive (and risk duplicates). The user opts a specific LB playlist in by
+ * toggling the service on in its Sync menu — which writes the channel override,
+ * the authoritative path that bypasses this gate. Local / hosted / Spotify-imported
+ * rows auto-mirror by default, unchanged.
+ */
+fun autoMirrorsByDefault(playlist: com.parachord.shared.model.Playlist): Boolean =
+    !playlist.id.startsWith("listenbrainz-")
 
 enum class PlaylistSyncMode { ALL, NONE, SELECTED }
 

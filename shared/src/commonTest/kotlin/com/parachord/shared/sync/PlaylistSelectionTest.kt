@@ -71,4 +71,26 @@ class PlaylistSelectionTest {
         assertTrue(isPlaylistPushCandidate(followed, "listenbrainz"), "followed playlists still mirror to LB")
         assertFalse(isPlaylistPushCandidate(followed, "spotify"), "never writes back to the followed Spotify source")
     }
+
+    // ── LB-imported playlists re-export to streaming services (opt-in only) ───
+
+    @Test
+    fun listenbrainzPlaylist_isEligibleToReExportToSpotifyAndAppleMusic() {
+        // A playlist created/edited on ListenBrainz (Achordion) can now mirror to
+        // Spotify + Apple Music — previously it was a candidate for NOTHING.
+        val lb = com.parachord.shared.model.Playlist(id = "listenbrainz-abc", name = "Achordion Mix")
+        assertTrue(isPlaylistPushCandidate(lb, "spotify"), "LB playlist can re-export to Spotify")
+        assertTrue(isPlaylistPushCandidate(lb, "applemusic"), "LB playlist can re-export to Apple Music")
+    }
+
+    @Test
+    fun listenbrainzPlaylist_isOptInOnly_neverAutoMirrors() {
+        // Eligible, but NEVER auto-mirrored via a provider's default (mode=ALL):
+        // re-export is opt-in (an explicit channel override), so a pulled LB library
+        // can't flood Spotify/AM. Local / hosted / Spotify-imported rows auto-mirror.
+        val lb = com.parachord.shared.model.Playlist(id = "listenbrainz-abc", name = "Achordion Mix")
+        assertFalse(autoMirrorsByDefault(lb), "LB-imported playlist is opt-in only")
+        assertTrue(autoMirrorsByDefault(com.parachord.shared.model.Playlist(id = "local-1", name = "Mine")))
+        assertTrue(autoMirrorsByDefault(com.parachord.shared.model.Playlist(id = "spotify-1", name = "S")))
+    }
 }

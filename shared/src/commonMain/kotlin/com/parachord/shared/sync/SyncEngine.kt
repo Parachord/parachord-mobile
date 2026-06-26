@@ -2923,7 +2923,12 @@ class SyncEngine constructor(
         val candidates = allPlaylists.filter {
             it.name.isNotBlank() && isPushCandidate(it, providerId) && run {
                 val override = settingsStore.getPlaylistChannels(it.id)
-                if (override != null) providerId in override else selection.includes(it.id)
+                // Override is authoritative (explicit opt-in). Otherwise fall to the
+                // per-provider default — but a ListenBrainz-imported playlist NEVER
+                // auto-mirrors (autoMirrorsByDefault=false): re-exporting LB → Spotify/AM
+                // is opt-in only, so a pulled LB library can't flood them.
+                if (override != null) providerId in override
+                else autoMirrorsByDefault(it) && selection.includes(it.id)
             }
         }
 
@@ -3824,7 +3829,12 @@ class SyncEngine constructor(
         val result = getPlaylistMirrors(localPlaylistId).keys.toMutableSet()
         for (pid in settingsStore.getEnabledSyncProviders()) {
             if (pid in result) continue
+            // Mode-default mirror only for playlists that auto-mirror — a
+            // ListenBrainz-imported playlist is opt-in (it gains a provider only via
+            // an explicit override), so it must NOT seed a mode-default Spotify/AM
+            // channel here (keeps this seed consistent with the push gate above).
             if (isPushCandidate(playlist, pid) &&
+                autoMirrorsByDefault(playlist) &&
                 settingsStore.getPlaylistSelection(pid).includes(localPlaylistId)) {
                 result.add(pid)
             }
