@@ -52,6 +52,38 @@ class SyncPlaylistLinkDaoTest {
     }
 
     @Test
+    fun `clearStaleNwayFillMarkers nulls nway-fill rows and leaves others intact`() = runBlocking {
+        val db = TestDatabaseFactory.create()
+        val dao = SyncPlaylistLinkDao(db)
+        dao.upsertWithSnapshot("a", "applemusic", "x", null, 1L)
+        dao.upsertWithSnapshot("b", "applemusic", "y", null, 2L)
+        dao.upsertWithSnapshot("c", "spotify", "z", null, 3L)
+        // Stale leftover from the deleted N-way fill writer.
+        dao.setPendingAction("a", "applemusic", "nway-fill")
+        // A legitimate deferred action that must survive the sweep.
+        dao.setPendingAction("b", "applemusic", "remote-deleted")
+        // 'c' stays null.
+
+        dao.clearStaleNwayFillMarkers()
+
+        assertNull("nway-fill marker cleared", dao.selectForLink("a", "applemusic")?.pendingAction)
+        assertEquals(
+            "remote-deleted left intact",
+            "remote-deleted",
+            dao.selectForLink("b", "applemusic")?.pendingAction,
+        )
+        assertNull("untouched row stays null", dao.selectForLink("c", "spotify")?.pendingAction)
+
+        // Idempotent — a second run is a no-op (no rows match 'nway-fill').
+        dao.clearStaleNwayFillMarkers()
+        assertEquals(
+            "remote-deleted still intact after second run",
+            "remote-deleted",
+            dao.selectForLink("b", "applemusic")?.pendingAction,
+        )
+    }
+
+    @Test
     fun `upsertWithSnapshot twice on same key updates snapshotId`() = runBlocking {
         val db = TestDatabaseFactory.create()
         val dao = SyncPlaylistLinkDao(db)

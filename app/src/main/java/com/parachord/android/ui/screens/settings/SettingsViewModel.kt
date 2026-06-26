@@ -33,7 +33,90 @@ class SettingsViewModel constructor(
     private val pluginSyncService: com.parachord.shared.plugin.PluginSyncService,
     private val lovesPushService: LovesPushService,
     private val libraryRepository: LibraryRepository,
+    private val syncEngine: com.parachord.android.sync.SyncEngine,
 ) : ViewModel() {
+
+    // ── N-way multimaster (dev) ──────────────────────────────────────
+    /** Dev opt-in for the N-way playlist sync engine. Default OFF. While ON,
+     *  sync runs migration + SHADOW mode (logs + [nwayShadowLog], no pushes). */
+    val nwayEnabled: StateFlow<Boolean> = settingsStore.nwayEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setNwayEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setNwayEnabled(enabled) }
+    }
+
+    /** The latest shadow scan's plan — what propagation WOULD do. */
+    val nwayShadowLog: StateFlow<List<com.parachord.shared.sync.NwayShadowEntry>> =
+        syncEngine.nwayShadowLog
+
+    private val _shadowScanning = MutableStateFlow(false)
+    val shadowScanning: StateFlow<Boolean> = _shadowScanning.asStateFlow()
+
+    /** Run the on-demand N-way shadow scan (cheap: one list call per provider,
+     *  fetches a tracklist only for a changed mirror). Pushes nothing. */
+    fun runShadowScan() {
+        viewModelScope.launch {
+            _shadowScanning.value = true
+            try {
+                syncEngine.runNwayShadowScan()
+            } finally {
+                _shadowScanning.value = false
+            }
+        }
+    }
+
+    /** Stricter opt-in for N-way PROPAGATION — REAL provider writes. Requires
+     *  [nwayEnabled] too. Default OFF. A dry-run runs under [nwayEnabled] alone;
+     *  only real writes are gated on this. */
+    val nwayPropagateEnabled: StateFlow<Boolean> = settingsStore.nwayPropagateFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setNwayPropagateEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setNwayPropagateEnabled(enabled) }
+    }
+
+    /** The latest propagation run's per-playlist outcome (would-push / pushed /
+     *  abort) — the dev validation readout. */
+    val nwayPropagationLog: StateFlow<List<com.parachord.shared.sync.NwayPropagationEntry>> =
+        syncEngine.nwayPropagationLog
+
+    private val _propagating = MutableStateFlow(false)
+    val propagating: StateFlow<Boolean> = _propagating.asStateFlow()
+
+    /** Run the on-demand N-way propagation. [dryRun] = true previews + populates
+     *  [nwayPropagationLog] WITHOUT any provider write (needs only [nwayEnabled]);
+     *  [dryRun] = false performs REAL writes (needs [nwayPropagateEnabled] too). */
+    fun runPropagation(dryRun: Boolean) {
+        viewModelScope.launch {
+            _propagating.value = true
+            try {
+                syncEngine.runNwayPropagation(dryRun = dryRun)
+            } finally {
+                _propagating.value = false
+            }
+        }
+    }
+
+    /** Dev: run propagation for ONE playlist (scoped real-write validation) so a
+     *  single playlist can be filled without firing the whole baseline run. */
+    fun runPropagationForPlaylist(localPlaylistId: String, dryRun: Boolean) {
+        viewModelScope.launch {
+            _propagating.value = true
+            try {
+                syncEngine.runNwayPropagationForPlaylist(localPlaylistId, dryRun = dryRun)
+            } finally {
+                _propagating.value = false
+            }
+        }
+    }
+
+    /** Dev/recovery: wipe all N-way baselines + per-provider tokens so the next
+     *  sync re-seeds from scratch (recovers a playlist stuck by the pre-fix
+     *  executor). */
+    fun resetNwayState() {
+        viewModelScope.launch { syncEngine.resetNwayState() }
+    }
 
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
     val loadedPlugins: StateFlow<List<com.parachord.shared.plugin.PluginManager.PluginInfo>> =

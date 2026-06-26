@@ -155,21 +155,64 @@ class SpotifyPlaybackHandlerPickDeviceTest {
     }
 
     /**
-     * Single real device path still auto-selects (step 3 unchanged) — when only
-     * one real device exists alongside the synthetic local placeholder, take it.
-     * Note: when the only real device is a non-Smartphone, `withLocal` ends up
-     * with 2 entries (the real device + the synthetic local placeholder), so
-     * `realDevices.size == 1` matches and the real device is picked.
+     * Production bug repro: Spotify Connect returns exactly one (phantom) real
+     * remote, the synthetic local placeholder is injected, and the old
+     * `realDevices.size == 1` rule auto-routed audio to the phantom remote.
+     * Step 3c must now prefer the local synthetic over the lone phantom remote.
      */
     @Test
-    fun `single real device still auto-selected`() = runTest {
+    fun `single real remote with local synthetic prefers local (3c)`() = runTest {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns null
+
+        val tv = SpDevice(id = "tv-id", name = "Bedroom TV", isActive = false, type = "TV")
+
+        val picked = handler.pickDevice(listOf(tv))
+
+        assertEquals(SpotifyPlaybackHandler.LOCAL_DEVICE_ID, picked?.id)
+    }
+
+    /**
+     * Active state doesn't matter at this layer — same scenario as 3c with an
+     * already-active phantom remote still defers to the local synthetic.
+     */
+    @Test
+    fun `single active real remote with local synthetic still prefers local (3c)`() = runTest {
         coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns null
 
         val tv = SpDevice(id = "tv-id", name = "Bedroom TV", isActive = true, type = "TV")
 
         val picked = handler.pickDevice(listOf(tv))
 
-        assertEquals("tv-id", picked?.id)
+        assertEquals(SpotifyPlaybackHandler.LOCAL_DEVICE_ID, picked?.id)
+    }
+
+    /**
+     * 3b: single real device, no synthetic injected (Spotify saw a smartphone
+     * matching Build.MODEL — recognised as the local real device). Auto-select.
+     */
+    @Test
+    fun `single real local smartphone auto-selected (3b)`() = runTest {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns null
+
+        val phone = SpDevice(id = "phone-id", name = "Pixel 9a", isActive = false, type = "Smartphone")
+
+        val picked = handler.pickDevice(listOf(phone))
+
+        assertEquals("phone-id", picked?.id)
+    }
+
+    /**
+     * 3a: only the synthetic local placeholder is in the list (zero real
+     * devices reported by Spotify Connect). Auto-select the local.
+     */
+    @Test
+    fun `only local synthetic auto-selected (3a)`() = runTest {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns null
+
+        // Empty device list → synthetic local injected → withLocal.size == 1, isLocalPlaceholder
+        val picked = handler.pickDevice(emptyList())
+
+        assertEquals(SpotifyPlaybackHandler.LOCAL_DEVICE_ID, picked?.id)
     }
 
     /**

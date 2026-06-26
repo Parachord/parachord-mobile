@@ -6,15 +6,20 @@ import com.parachord.shared.db.dao.AlbumDao
 import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
+import com.parachord.shared.db.dao.SyncPlaylistBaselineDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
+import com.parachord.shared.db.dao.SyncPlaylistNwayDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.db.dao.TrackProviderIdCacheDao
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.sync.DeleteResult
 import com.parachord.shared.sync.ListenBrainzSyncProvider
+import com.parachord.shared.sync.PlaylistSyncMode
 import com.parachord.shared.sync.ProviderFeatures
+import com.parachord.shared.sync.ProviderPlaylistSelection
 import com.parachord.shared.sync.RemoteCreated
 import com.parachord.shared.sync.SnapshotKind
 import com.parachord.shared.sync.SyncEngine
@@ -80,6 +85,8 @@ class SyncEngineIdempotencyTest {
         val syncSourceDao = SyncSourceDao(db)
         val linkDao = SyncPlaylistLinkDao(db)
         val sourceDao = SyncPlaylistSourceDao(db)
+        val baselineDao = SyncPlaylistBaselineDao(db)
+        val nwayDao = SyncPlaylistNwayDao(db)
 
         val provider = FakeSyncProvider()
         val settings = FakeSyncSettings(
@@ -103,6 +110,9 @@ class SyncEngineIdempotencyTest {
             syncSourceDao = syncSourceDao,
             syncPlaylistLinkDao = linkDao,
             syncPlaylistSourceDao = sourceDao,
+            syncPlaylistBaselineDao = baselineDao,
+            syncPlaylistNwayDao = nwayDao,
+            trackProviderIdCacheDao = TrackProviderIdCacheDao(db),
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
@@ -232,6 +242,21 @@ class SyncEngineIdempotencyTest {
         override suspend fun setSyncDataVersion(version: Int) { dataVersion = version }
         override suspend fun setLastSyncAt(timestamp: Long) {}
         override suspend fun clearSyncSettings() {}
+        // Per-provider selection gate (branch addition): ALL so the push loop
+        // pushes like it did before the gate (preserves this harness's intent).
+        // Pull allowlist empty (= import all); no channel override; dedup done;
+        // N-way off.
+        override suspend fun getPlaylistSelection(providerId: String) =
+            ProviderPlaylistSelection(PlaylistSyncMode.ALL)
+        override suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection) {}
+        override suspend fun getPullPlaylists(providerId: String): Set<String> = emptySet()
+        override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {}
+        override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? = null
+        override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {}
+        override suspend fun getTrackDedupV1Done(): Boolean = true
+        override suspend fun setTrackDedupV1Done() {}
+        override suspend fun isNwayEnabled(): Boolean = false
+        override suspend fun isNwayPropagateEnabled(): Boolean = false
     }
 
     // ── Tests ───────────────────────────────────────────────────────
@@ -379,6 +404,8 @@ class SyncEngineIdempotencyTest {
         val syncSourceDao = SyncSourceDao(db)
         val linkDao = SyncPlaylistLinkDao(db)
         val sourceDao = SyncPlaylistSourceDao(db)
+        val baselineDao = SyncPlaylistBaselineDao(db)
+        val nwayDao = SyncPlaylistNwayDao(db)
 
         // Seed the tombstone into the SAME store instance the service wraps,
         // BEFORE the sync, so applyTrackDiff's filterRemote sees it.
@@ -400,6 +427,9 @@ class SyncEngineIdempotencyTest {
             syncSourceDao = syncSourceDao,
             syncPlaylistLinkDao = linkDao,
             syncPlaylistSourceDao = sourceDao,
+            syncPlaylistBaselineDao = baselineDao,
+            syncPlaylistNwayDao = nwayDao,
+            trackProviderIdCacheDao = TrackProviderIdCacheDao(db),
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(tombstoneStore),
@@ -455,6 +485,21 @@ class SyncEngineIdempotencyTest {
         override suspend fun setSyncDataVersion(version: Int) { dataVersion = version }
         override suspend fun setLastSyncAt(timestamp: Long) {}
         override suspend fun clearSyncSettings() {}
+        // Per-provider selection gate (branch addition): ALL so the push loop
+        // pushes like it did before the gate (preserves this harness's intent).
+        // Pull allowlist empty (= import all); no channel override; dedup done;
+        // N-way off.
+        override suspend fun getPlaylistSelection(providerId: String) =
+            ProviderPlaylistSelection(PlaylistSyncMode.ALL)
+        override suspend fun setPlaylistSelection(providerId: String, selection: ProviderPlaylistSelection) {}
+        override suspend fun getPullPlaylists(providerId: String): Set<String> = emptySet()
+        override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {}
+        override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? = null
+        override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {}
+        override suspend fun getTrackDedupV1Done(): Boolean = true
+        override suspend fun setTrackDedupV1Done() {}
+        override suspend fun isNwayEnabled(): Boolean = false
+        override suspend fun isNwayPropagateEnabled(): Boolean = false
     }
 
     /**

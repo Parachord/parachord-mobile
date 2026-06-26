@@ -52,12 +52,22 @@ class MusicBrainzClient(private val httpClient: HttpClient) {
 
     companion object {
         private const val BASE_URL = "https://musicbrainz.org/ws/2"
+
+        /** Minimum backoff floor for a 503/429 (#273). MusicBrainz 503s with
+         *  no (or a zero) `Retry-After` were yielding a 0ms cooldown, so the
+         *  gate's "short-circuit during the window" protection was defeated and
+         *  calls tight-looped against an already-throttled MB (observed
+         *  on-device: repeated `Backing off 0s` ~120ms apart). 1s buys a real
+         *  window; a larger server `Retry-After` still wins (this is a floor). */
+        const val MB_MIN_BACKOFF_MS = 1_000L
     }
 
     /** Permissive gate — defaults: Semaphore(2), 150ms inter-request delay.
      *  Matches desktop's policy of "let calls fly, react only to actual
-     *  throttle responses". The 503-aware predicate is configured per-call. */
-    private val gate = RateLimitGate(tag = "MusicBrainzClient")
+     *  throttle responses". The 503-aware predicate is configured per-call.
+     *  Floors the 503/429 backoff at [MB_MIN_BACKOFF_MS] so a no-`Retry-After`
+     *  response can't produce a 0s window (#273). */
+    private val gate = RateLimitGate(tag = "MusicBrainzClient", minCooldownMs = MB_MIN_BACKOFF_MS)
 
     /** Predicate matching MusicBrainz's 503-with-Retry-After throttling
      *  (in addition to plain 429 in case they ever switch). */

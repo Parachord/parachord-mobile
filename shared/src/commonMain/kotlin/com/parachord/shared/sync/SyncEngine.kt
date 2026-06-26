@@ -6,9 +6,12 @@ import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
+import com.parachord.shared.db.dao.SyncPlaylistBaselineDao
+import com.parachord.shared.db.dao.SyncPlaylistNwayDao
 import com.parachord.shared.db.dao.SyncPlaylistSourceDao
 import com.parachord.shared.db.dao.SyncSourceDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.db.dao.TrackProviderIdCacheDao
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
 import com.parachord.shared.model.Playlist
@@ -17,6 +20,7 @@ import com.parachord.shared.model.SyncSource
 import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -25,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
 
 class SyncEngine constructor(
     private val db: ParachordDb,
@@ -37,6 +42,15 @@ class SyncEngine constructor(
     private val syncSourceDao: SyncSourceDao,
     private val syncPlaylistLinkDao: SyncPlaylistLinkDao,
     private val syncPlaylistSourceDao: SyncPlaylistSourceDao,
+    // N-way multimaster state (Phase 1 tables). Written by the Phase 2 migration
+    // bootstrap; not yet read by live reconciliation. Isolated from the
+    // canonical-source link/source DAOs above.
+    private val syncPlaylistBaselineDao: SyncPlaylistBaselineDao,
+    private val syncPlaylistNwayDao: SyncPlaylistNwayDao,
+    // Negative cache for incremental provider-id hydration (incremental-
+    // materialization). Threaded into a per-CYCLE [HydrationCoordinator] inside
+    // [runNwayPropagation] so an un-findable ADD isn't re-searched every cycle.
+    private val trackProviderIdCacheDao: TrackProviderIdCacheDao,
     private val settingsStore: SyncSettingsProvider,
     /**
      * Multi-provider sync surface (Phase 2). Today only Spotify is
@@ -57,12 +71,38 @@ class SyncEngine constructor(
         const val SYNC_IN_PROGRESS = "Sync already in progress"
         private const val MASS_REMOVAL_THRESHOLD_PERCENT = 0.25
         private const val MASS_REMOVAL_THRESHOLD_COUNT = 50
+
+        /**
+         * Watchdog ceiling for a single [syncAll] body. If the sync coroutine
+         * ever hangs (observed on-device: a MusicBrainz 503 tight-retry loop),
+         * the `finally` that releases [syncMutex] + clears [_syncing] never
+         * runs and the app reports "already running" forever — no manual sync
+         * can ever start again. 10 min is a safety ceiling: a healthy sync
+         * finishes well under it, and on timeout the sync RESUMES idempotently
+         * next cycle, so a too-aggressive cancel doesn't lose progress.
+         *
+         * Plain `var` (not `const`) so tests in the `:app` module can shrink it
+         * to drive the timeout path deterministically (an `internal` var would
+         * be invisible across the module boundary).
+         */
+        var SYNC_WATCHDOG_TIMEOUT_MS = 10 * 60 * 1000L
+
         /**
          * Bump this to force a full re-fetch on next sync (bypasses quick-check).
          * The current version is stored in DataStore; when it's less than this,
          * localCount is passed as 0 to force a full diff.
          */
         private const val SYNC_DATA_VERSION = 4
+
+        /** Dead-mirror reconcile (workstream B): if more than this many mirrors
+         *  look absent from one provider fetch, treat it as a partial/failed
+         *  fetch and skip the reconcile rather than probe-storm / mass-act. */
+        private const val DEAD_MIRROR_MASS_FLOOR = 30
+
+        /** missingStreak gate (parachord/parachord#911): a materialized track's
+         *  absence escalates to a real deletion only after this many CONSECUTIVE
+         *  complete-fetch omissions — a single transient omission stays protected. */
+        private const val MISSING_STREAK_THRESHOLD = 2
 
         /** Sentinel for the cross-provider local-row dedup migration
          *  ([migrateMergeCrossProviderDuplicates]). Lives above
@@ -252,6 +292,20 @@ class SyncEngine constructor(
     private val _syncPhase = MutableStateFlow<String?>(null)
     val syncPhase: StateFlow<String?> = _syncPhase
 
+    // N-way SHADOW report (Phase 3 dev surface). Holds the LATEST cycle's
+    // would-do entries for every migrated playlist that has a pending delta.
+    // Populated only while isNwayEnabled; reviewed in Android Settings before
+    // propagation is switched on. Empty = shadow saw no pending changes.
+    private val _nwayShadowLog = MutableStateFlow<List<NwayShadowEntry>>(emptyList())
+    val nwayShadowLog: StateFlow<List<NwayShadowEntry>> = _nwayShadowLog
+
+    // N-way PROPAGATION report (Phase 4 dev surface). Holds the LATEST
+    // [runNwayPropagation] cycle's per-playlist outcome — what was (or, in
+    // dry-run, WOULD be) pushed, or why it aborted. Reviewed in Android Settings
+    // to validate real-library behavior before/while real writes are enabled.
+    private val _nwayPropagationLog = MutableStateFlow<List<NwayPropagationEntry>>(emptyList())
+    val nwayPropagationLog: StateFlow<List<NwayPropagationEntry>> = _nwayPropagationLog
+
     data class TypeSyncResult(
         val added: Int = 0,
         val removed: Int = 0,
@@ -309,6 +363,12 @@ class SyncEngine constructor(
         } else null
 
         return try {
+            // Watchdog: if the sync body hangs (e.g. a MusicBrainz 503
+            // tight-retry never returns), withTimeout cancels it so the
+            // `finally` below still runs and releases the mutex + clears the
+            // syncing indicator. The TimeoutCancellationException is caught
+            // SPECIFICALLY below, before the generic catch.
+            withTimeout(SYNC_WATCHDOG_TIMEOUT_MS) {
             var trackResult = TypeSyncResult()
             var albumResult = TypeSyncResult()
             var artistResult = TypeSyncResult()
@@ -357,6 +417,16 @@ class SyncEngine constructor(
             onProgress(SyncProgress(SyncPhase.COMPLETE, message = "Sync complete"))
             Log.d(TAG, "Sync complete: $result")
             result
+            }
+        } catch (e: TimeoutCancellationException) {
+            // Caught BEFORE the generic catch: a TimeoutCancellationException is
+            // a CancellationException, so swallowing it in the generic catch
+            // would both mislabel it ("Sync failed") and wrongly suppress a
+            // cancellation. The `finally` below still runs and releases the
+            // mutex + clears the syncing indicator. The aborted sync resumes
+            // idempotently next cycle.
+            Log.e(TAG, "Sync watchdog: timed out after ${SYNC_WATCHDOG_TIMEOUT_MS / 60000} min — aborting; will resume next cycle")
+            FullSyncResult(success = false, error = "Sync timed out")
         } catch (e: Exception) {
             Log.e(TAG, "Sync failed", e)
             FullSyncResult(success = false, error = e.message)
@@ -430,6 +500,49 @@ class SyncEngine constructor(
     /** Per-provider axis opt-in lookup. Defaults to all axes for back-compat. */
     private suspend fun providerHasAxis(providerId: String, axis: String): Boolean =
         axis in settingsStore.getSyncCollectionsForProvider(providerId)
+
+    /**
+     * Probe-confirm which of [candidateExternalIds] are DEFINITELY gone after a
+     * pull. A mirror absent from the provider's just-fetched [fullRemoteIds] is
+     * only a SUSPECT — the fetch may have been partial (a mid-pagination timeout,
+     * an API truncation), and treating absence as deletion would mass-delete live
+     * playlists. Each suspect is verified with a targeted
+     * [SyncProvider.remotePlaylistExists] 404 probe; a transient/partial fetch
+     * yields an EMPTY result (the safety gate). Only suspects are probed, so a
+     * clean sync costs zero extra requests. See [DeadMirrorReconcile].
+     */
+    private suspend fun confirmedGoneMirrors(
+        provider: SyncProvider,
+        candidateExternalIds: Set<String>,
+        fullRemoteIds: Set<String>,
+    ): Set<String> {
+        val suspected = DeadMirrorReconcile.suspectedGone(candidateExternalIds, fullRemoteIds)
+        if (suspected.isEmpty()) return emptySet()
+        // Mass-disappearance floor (workstream B): if an implausible number of
+        // mirrors vanished from a single fetch, that's almost certainly a
+        // partial/failed fetch — refuse to act AND skip the probe storm. A
+        // genuine bulk deletion stays a per-device manual action; under-removing
+        // is always safer than mass-deleting live playlists.
+        if (suspected.size > DEAD_MIRROR_MASS_FLOOR) {
+            Log.w(TAG, "dead-mirror: ${provider.id} — ${suspected.size} mirror(s) absent (> floor $DEAD_MIRROR_MASS_FLOOR); treating as a partial fetch, skipping reconcile")
+            return emptySet()
+        }
+        val probe = HashMap<String, Boolean>(suspected.size)
+        for (ext in suspected) {
+            probe[ext] = try {
+                provider.remotePlaylistExists(ext)
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                true // a failed probe is NOT proof of deletion — bias toward "exists"
+            }
+        }
+        val gone = DeadMirrorReconcile.confirmedGone(suspected, probe)
+        if (gone.isNotEmpty()) {
+            Log.w(TAG, "dead-mirror: ${provider.id} — ${gone.size}/${suspected.size} suspected mirror(s) confirmed GONE (404)")
+        }
+        return gone
+    }
 
     private suspend fun syncTracksForSpotify(
         onProgress: (SyncProgress) -> Unit,
@@ -1054,6 +1167,832 @@ class SyncEngine constructor(
 
     // ── Playlist sync ────────────────────────────────────────────
 
+    /**
+     * N-way migration bootstrap (Phase 2). Run once per synced playlist the
+     * first time N-way is enabled: seed the 3-way-merge baseline from the
+     * current LOCAL tracklist and seed each mirror's N-way state from the token
+     * we already have stored. Idempotent (skips a playlist that already has a
+     * baseline row) and READ-ONLY against providers — the "normalize mirrors"
+     * push from the design is DEFERRED to the propagation phase so the merge
+     * logic is validated (shadow mode) before we ever push. Gated entirely on
+     * [SyncSettingsProvider.isNwayEnabled]; inert (early return) while OFF.
+     */
+    private suspend fun migrateAllPlaylistsToNway() {
+        if (!settingsStore.isNwayEnabled()) return
+        val channels = getAllEffectivePlaylistChannels()
+        if (channels.isEmpty()) return
+        var migrated = 0
+        for ((localId, providers) in channels) {
+            if (providers.isEmpty()) continue
+            val playlist = playlistDao.getById(localId) ?: continue
+            if (migratePlaylistToNway(playlist)) migrated++
+        }
+        if (migrated > 0) Log.d(TAG, "N-way migration: seeded baseline for $migrated playlist(s)")
+    }
+
+    /**
+     * Seed one playlist's baseline + per-provider N-way state. Returns true if
+     * it migrated, false if already migrated (idempotent). No provider writes —
+     * each mirror's `changeToken` is seeded from the canonical-source snapshot
+     * we already hold; `editedAt = now` is a bootstrap floor (the true
+     * per-provider edit time is captured the next time that token changes).
+     */
+    private suspend fun migratePlaylistToNway(playlist: Playlist): Boolean {
+        val existing = syncPlaylistBaselineDao.selectForLocal(playlist.id)
+        val localTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
+        // Skip if already migrated in the current (TrackKeys) format. An existing
+        // row that decodes EMPTY while the playlist has tracks is the old Phase
+        // 1/2 single-key-string format → re-seed it as TrackKeys.
+        if (existing != null && (existing.tracks.isNotEmpty() || localTracks.isEmpty())) return false
+        val now = currentTimeMillis()
+        syncPlaylistBaselineDao.upsert(playlist.id, nwayBaselineTrackKeys(localTracks), now)
+        val source = syncPlaylistSourceDao.selectForLocal(playlist.id)
+        for ((providerId, _) in getPlaylistMirrors(playlist.id)) {
+            val token = syncPlaylistLinkDao.selectForLink(playlist.id, providerId)?.snapshotId
+                ?: source?.takeIf { it.providerId == providerId }?.snapshotId
+            syncPlaylistNwayDao.upsert(playlist.id, providerId, token, now, now)
+        }
+        return true
+    }
+
+    /** One copy's pre-unification TrackKeys + detection result, gathered before
+     *  [unifyTrackKeys] rewrites them to representative keys. */
+    private data class ShadowCopyInput(
+        val id: String,
+        val keys: List<TrackKeys>,
+        val editedAt: Long,
+        val changed: Boolean,
+    )
+
+    /**
+     * N-way SHADOW MODE (Phase 3). For every migrated playlist, detect which
+     * copies changed, fetch only those, run the 3-way merge, and **LOG what it
+     * would do — push nothing, mutate nothing** (not the baseline, not the
+     * tokens). Lets us validate the merge against real libraries at zero risk
+     * before propagation (Phase 4) is switched on. Gated on
+     * [SyncSettingsProvider.isNwayEnabled]; inert (early return) while OFF.
+     */
+    /**
+     * On-demand N-way SHADOW scan (Phase 3 dev validation). Detects divergence
+     * CHEAPLY — ONE paginated playlist-list call per enabled provider (each
+     * [SyncedPlaylist] already carries snapshot + trackCount), fetching a full
+     * tracklist ONLY for a mirror that actually changed. Runs the merge,
+     * populates [nwayShadowLog]. Pushes nothing, mutates nothing. Dev-triggered
+     * (NOT per-sync — see syncPlaylists), so routine syncs pay nothing. Gated on
+     * isNwayEnabled.
+     */
+    suspend fun runNwayShadowScan() {
+        if (!settingsStore.isNwayEnabled()) return
+        val baselines = syncPlaylistBaselineDao.selectAll()
+        if (baselines.isEmpty()) {
+            _nwayShadowLog.value = emptyList()
+            return
+        }
+        // One list call per enabled provider → externalId -> SyncedPlaylist.
+        val enabled = settingsStore.getEnabledSyncProviders()
+        val remoteLists = mutableMapOf<String, Map<String, SyncedPlaylist>>()
+        for (provider in providers.filter { it.id in enabled }) {
+            remoteLists[provider.id] = runCatching {
+                provider.fetchPlaylists(null).associateBy { it.spotifyId }
+            }.getOrElse { emptyMap() }
+        }
+        val entries = mutableListOf<NwayShadowEntry>()
+        for (baseline in baselines) {
+            try {
+                shadowReconcilePlaylist(baseline, remoteLists)?.let { entries.add(it) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Partial-fetch guard: a changed copy whose tracklist-fetch
+                // failed aborts THIS playlist for the cycle — never read a
+                // failed fetch as "removed everything".
+                Log.d(TAG, "N-way SHADOW: skipped '${baseline.localPlaylistId}' (${e.message})")
+            }
+        }
+        _nwayShadowLog.value = entries
+    }
+
+    private suspend fun shadowReconcilePlaylist(
+        baseline: SyncPlaylistBaselineDao.Baseline,
+        remoteLists: Map<String, Map<String, SyncedPlaylist>>,
+    ): NwayShadowEntry? {
+        val localId = baseline.localPlaylistId
+        val playlist = playlistDao.getById(localId) ?: return null
+        val mirrors = getPlaylistMirrors(localId)
+        if (mirrors.isEmpty()) return null
+        val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
+        val now = currentTimeMillis()
+
+        // Gather each copy's TrackKeys (NOT yet unified). An unchanged copy reuses
+        // the baseline's TrackKeys (no fetch). editedAt = detection-time (now) for
+        // changed provider copies is a Phase 4 refinement (Spotify MAX(added_at) /
+        // AM·LB last_modified); it only affects ORDER, not presence.
+        val inputs = mutableListOf<ShadowCopyInput>()
+        val localChanged = playlist.locallyModified || playlist.lastModified > baseline.baselineSyncedAt
+        inputs.add(
+            ShadowCopyInput(
+                "local",
+                nwayBaselineTrackKeys(playlistTrackDao.getByPlaylistIdSync(localId)),
+                playlist.lastModified,
+                localChanged,
+            ),
+        )
+        for ((providerId, externalId) in mirrors) {
+            val provider = providers.firstOrNull { it.id == providerId } ?: continue
+            val listEntry = remoteLists[providerId]?.get(externalId)
+            val storedToken = storedTokens[providerId]?.changeToken
+            val changed = when {
+                listEntry == null -> false // not in the owned list (deleted/unowned) — skip
+                listEntry.snapshotId != null -> listEntry.snapshotId != storedToken
+                else -> listEntry.trackCount != baseline.tracks.size
+            }
+            if (!changed) {
+                inputs.add(ShadowCopyInput(providerId, baseline.tracks, now, changed = false))
+                continue
+            }
+            val keys = provider.fetchPlaylistTracks(externalId).map {
+                trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+            }
+            inputs.add(ShadowCopyInput(providerId, keys, now, changed = true))
+        }
+
+        // Cross-copy key unification (Phase 4): unify baseline + all copies so the
+        // same song matches across services BEFORE the merge runs on the resulting
+        // representative keys. This is what collapses the norm-/mbid- false-drops.
+        val unified = unifyTrackKeys(listOf(baseline.tracks) + inputs.map { it.keys })
+        val baselineRepr = unified[0]
+        val copies = inputs.mapIndexed { i, c -> NwayCopyState(c.id, unified[i + 1], c.editedAt, c.changed) }
+
+        val plan = computeNwayShadowPlan(baselineRepr, copies) ?: return null
+        val dropFraction = nwayBaselineDropFraction(baselineRepr, plan.merged)
+        val dropPercent = (dropFraction * 100).toInt()
+        // Total-wipe floor only (matches propagation): "would abort" iff the merge
+        // collapses a non-empty playlist to ZERO. Large non-empty drops propagate.
+        val massChange = plan.merged.isEmpty() && baselineRepr.isNotEmpty()
+        Log.d(
+            TAG,
+            "N-way SHADOW [${playlist.name}]: changed=${plan.changedCopyIds} → merged ${plan.merged.size} " +
+                "track(s), wouldPush=${plan.wouldPushTo}, drop=$dropPercent%" +
+                (if (massChange) " — TOTAL-WIPE, would abort" else "") +
+                " [no push — shadow mode]",
+        )
+        return NwayShadowEntry(
+            playlistName = playlist.name,
+            localPlaylistId = localId,
+            changedCopies = plan.changedCopyIds,
+            mergedCount = plan.merged.size,
+            wouldPushTo = plan.wouldPushTo,
+            dropPercent = dropPercent,
+            massChange = massChange,
+        )
+    }
+
+    /** One copy's pre-unification TrackKeys + the actual [PlaylistTrack]s behind
+     *  them (needed to resolve merged representative keys back to tracks for the
+     *  push — Trap 1). For an unchanged copy [tracks] is empty (its keys reuse the
+     *  baseline; it can still be a push target, but its current tracks aren't
+     *  needed to build the merged list). */
+    private data class PropagationCopyInput(
+        val id: String,
+        val tracks: List<PlaylistTrack>,
+        val keys: List<TrackKeys>,
+        val editedAt: Long,
+        val changed: Boolean,
+    )
+
+    /**
+     * N-way PROPAGATION (Phase 4) — the REAL writes. For every migrated playlist,
+     * detect which copies changed, fetch only those, run the unify + 3-way merge,
+     * then push the merged tracklist to every WRITABLE copy that lags it, capture
+     * each provider's post-push token (echo suppression), and advance the
+     * baseline so the next cycle detects every copy as unchanged.
+     *
+     * Gated on BOTH [SyncSettingsProvider.isNwayEnabled] and
+     * [SyncSettingsProvider.isNwayPropagateEnabled] — inert (early return) unless
+     * both are on. [dryRun] computes + logs the plan (and resolves the merged
+     * tracks) but skips the actual provider writes — the on-device validation
+     * step before real writes are enabled.
+     *
+     * Mirrors [runNwayShadowScan]'s cheap-detection structure (one paginated
+     * list call per enabled provider; full-tracklist fetch only for a CHANGED
+     * mirror) with the same CancellationException-rethrow + partial-fetch guard.
+     */
+    /**
+     * Dev/recovery: wipe all N-way tracking state — every playlist's baseline
+     * ancestor + per-provider change tokens — and clear the in-memory reports.
+     * The next sync re-runs the migration bootstrap (re-seeds each baseline from
+     * the current local tracklist) and re-detects from scratch. Used to recover a
+     * playlist left in a bad state by the pre-fix executor (baseline advanced past
+     * an unfilled mirror → stuck in mass-change-abort).
+     *
+     * NOTE: a clean re-seed re-fills an EMPTY mirror only when the merge sees it
+     * as "lagging" (first-fill, baseline empty), not as a deletion — the deeper
+     * "fill an empty mirror whose source already has content" case is part of the
+     * deferred reconciliation redesign. For a stuck content-bearing playlist whose
+     * mirrors are empty, deleting the empty mirror (or re-importing) is the
+     * reliable recovery; the fixed hydration then fills it via the normal push.
+     */
+    suspend fun resetNwayState() {
+        for (b in syncPlaylistBaselineDao.selectAll()) {
+            syncPlaylistBaselineDao.deleteForLocal(b.localPlaylistId)
+        }
+        for (s in syncPlaylistNwayDao.selectAll()) {
+            syncPlaylistNwayDao.deleteForLocal(s.localPlaylistId)
+        }
+        _nwayPropagationLog.value = emptyList()
+        _nwayShadowLog.value = emptyList()
+        Log.d(TAG, "N-way state reset — baselines + tokens cleared; next sync re-seeds")
+    }
+
+    suspend fun runNwayPropagation(dryRun: Boolean = false) {
+        // A DRY-RUN (preview only, no writes) needs just isNwayEnabled so the
+        // user can validate the readout on their real library BEFORE arming
+        // writes. REAL writes require the stricter isNwayPropagateEnabled too.
+        Log.d(TAG, "N-way PROPAGATE: run requested (dryRun=$dryRun)")
+        if (!settingsStore.isNwayEnabled()) {
+            Log.d(TAG, "N-way PROPAGATE: skipped — N-way not enabled")
+            return
+        }
+        if (!dryRun && !settingsStore.isNwayPropagateEnabled()) {
+            Log.d(TAG, "N-way PROPAGATE: skipped — real writes not enabled (enable the toggle, or use dry-run)")
+            return
+        }
+        val baselines = syncPlaylistBaselineDao.selectAll()
+        if (baselines.isEmpty()) {
+            Log.d(TAG, "N-way PROPAGATE: no baselines yet — run a SYNC first so migration seeds them " +
+                "(or you just tapped Reset state)")
+            return
+        }
+        Log.d(TAG, "N-way PROPAGATE: ${baselines.size} baseline(s) to reconcile")
+        val remoteLists = fetchEnabledProviderPlaylistLists()
+        // ONE HydrationCoordinator per cycle — its per-cycle live-search budget +
+        // cooldown span the whole run, so an un-findable ADD isn't re-searched per
+        // playlist (see [newHydrationCoordinator]).
+        val coordinator = newHydrationCoordinator()
+        val entries = mutableListOf<NwayPropagationEntry>()
+        for (baseline in baselines) {
+            try {
+                propagateReconcilePlaylist(baseline, remoteLists, coordinator, dryRun)?.let { entries.add(it) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Partial-fetch guard: a changed copy whose tracklist-fetch failed
+                // aborts THIS playlist for the cycle — never push a partial/empty.
+                Log.d(TAG, "N-way PROPAGATE: skipped '${baseline.localPlaylistId}' (${e.message})")
+            }
+        }
+        _nwayPropagationLog.value = entries
+    }
+
+    /** One paginated playlist-list call per enabled provider → externalId map. */
+    private suspend fun fetchEnabledProviderPlaylistLists(): Map<String, Map<String, SyncedPlaylist>> {
+        val enabled = settingsStore.getEnabledSyncProviders()
+        val out = mutableMapOf<String, Map<String, SyncedPlaylist>>()
+        for (provider in providers.filter { it.id in enabled }) {
+            out[provider.id] = runCatching {
+                provider.fetchPlaylists(null).associateBy { it.spotifyId }
+            }.getOrElse { emptyMap() }
+        }
+        return out
+    }
+
+    /**
+     * One [HydrationCoordinator] per propagation cycle. The per-cycle live-search
+     * budget + the negative-cache cooldown span the WHOLE run, so an un-findable
+     * ADD is searched at most a few times across the whole library, never once per
+     * playlist per cycle (the death-spiral [hydrateMissingTrackIds] would cause).
+     *
+     * [HydrationCoordinator.persistRowId] additively backfills the freshly-resolved
+     * native id onto the LOCAL `playlist_track` row (null-only COALESCE — never
+     * overwrites a populated id), so subsequent cycles read the id off the row and
+     * skip the search entirely. The track carries its own `playlistId` + `position`,
+     * so no per-playlist closure rebind is needed — the per-cycle coordinator
+     * persists to the right row directly. Column mapping mirrors [applyResolvedId].
+     */
+    private fun newHydrationCoordinator(): HydrationCoordinator =
+        HydrationCoordinator(
+            cache = trackProviderIdCacheDao,
+            persistRowId = { track, providerId, nativeId ->
+                when (providerId) {
+                    SpotifySyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
+                        playlistId = track.playlistId,
+                        position = track.position,
+                        spotifyId = nativeId.removePrefix("spotify:track:").takeIf { it.isNotBlank() },
+                        spotifyUri = nativeId,
+                        appleMusicId = null,
+                        soundcloudId = null,
+                        recordingMbid = null,
+                    )
+                    AppleMusicSyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
+                        playlistId = track.playlistId,
+                        position = track.position,
+                        spotifyId = null,
+                        spotifyUri = null,
+                        appleMusicId = nativeId,
+                        soundcloudId = null,
+                        recordingMbid = null,
+                    )
+                    ListenBrainzSyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
+                        playlistId = track.playlistId,
+                        position = track.position,
+                        spotifyId = null,
+                        spotifyUri = null,
+                        appleMusicId = null,
+                        soundcloudId = null,
+                        recordingMbid = nativeId,
+                    )
+                    else -> { /* unknown provider — cache-only, no row column to backfill */ }
+                }
+            },
+        )
+
+    /**
+     * Run propagation for a SINGLE playlist (dev — scoped real-write validation
+     * so the user can fill one playlist without firing the whole 141-baseline
+     * run). Same gates as [runNwayPropagation]; updates that playlist's entry in
+     * [nwayPropagationLog] in place.
+     */
+    suspend fun runNwayPropagationForPlaylist(localPlaylistId: String, dryRun: Boolean = false) {
+        Log.d(TAG, "N-way PROPAGATE(single): run requested for $localPlaylistId (dryRun=$dryRun)")
+        if (!settingsStore.isNwayEnabled()) return
+        if (!dryRun && !settingsStore.isNwayPropagateEnabled()) {
+            Log.d(TAG, "N-way PROPAGATE(single): skipped — real writes not enabled")
+            return
+        }
+        val baseline = syncPlaylistBaselineDao.selectForLocal(localPlaylistId) ?: run {
+            Log.d(TAG, "N-way PROPAGATE(single): no baseline for $localPlaylistId")
+            return
+        }
+        val remoteLists = fetchEnabledProviderPlaylistLists()
+        val coordinator = newHydrationCoordinator()
+        val entry = try {
+            propagateReconcilePlaylist(baseline, remoteLists, coordinator, dryRun)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d(TAG, "N-way PROPAGATE(single): skipped '$localPlaylistId' (${e.message})")
+            null
+        } ?: return
+        val cur = _nwayPropagationLog.value
+        _nwayPropagationLog.value =
+            if (cur.any { it.localPlaylistId == localPlaylistId }) {
+                cur.map { if (it.localPlaylistId == localPlaylistId) entry else it }
+            } else {
+                cur + entry
+            }
+    }
+
+    /**
+     * Pending-detection bridge for the merge augmentation: is the track behind
+     * representative [representativeKey] PENDING (un-materialized) on [providerId]?
+     *
+     * The merge keyspace (representative keys) can be ISRC-tier, but the hydration
+     * cache is keyed by [canonicalTrackKey] of a [PlaylistTrack] — which IGNORES
+     * isrc (mbid→norm only) — so a representative key can't index the cache
+     * directly. Bridge: representativeKey → [keyToTrack] (the concrete track) →
+     * `canonicalTrackKey(track)` → `cache.select(thatKey, providerId)`.
+     *
+     * Cache-key collision residual (honest acknowledgement): because the cache key
+     * is `canonicalTrackKey(track)` (mbid→norm, ISRC-ignored), two DISTINCT merge
+     * representative keys that collapse to the same `norm-artist|title` (e.g. two
+     * no-MBID recordings with identical artist|title) index the SAME cache row —
+     * inheriting the accepted, fixture-pinned `norm`-tier collision residual that
+     * `unifyTrackKeys`/`canonicalTrackKey` already document. The harm is bounded
+     * (rare within a single playlist; never drops a present track via this path).
+     *
+     * PENDING (return true) = cache entry ABSENT, its `resolvedId` is null, OR it
+     * is materialized but its absence has NOT yet streak-escalated. The conservative
+     * SAFE default: without positive evidence the provider ever materialized this
+     * track (a non-null `resolvedId`) we must NOT let its absence drive a deletion —
+     * AND even a materialized track stays protected until it has been omitted from
+     * the provider's COMPLETE fetch for [MISSING_STREAK_THRESHOLD] consecutive cycles
+     * (the missingStreak gate). A single transient complete-fetch omission (a region-
+     * filtered, or silently-short-but-count-matching fetch) is NOT a deletion; only a
+     * sustained absence is genuine deletion evidence → return false → delete-wins
+     * drops it. A key with no resolvable track is treated as pending (never deleted).
+     */
+    private suspend fun isProviderPendingForKey(
+        providerId: String,
+        representativeKey: String,
+        keyToTrack: Map<String, PlaylistTrack>,
+    ): Boolean {
+        val track = keyToTrack[representativeKey] ?: return true
+        val cacheKey = canonicalTrackKey(track)
+        val entry = trackProviderIdCacheDao.select(cacheKey, providerId) ?: return true
+        if (entry.resolvedId.isNullOrBlank()) return true // never materialized → pending
+        // Materialized: still PENDING (protected) until its absence streak-escalates.
+        return entry.missingStreak < MISSING_STREAK_THRESHOLD
+    }
+
+    /**
+     * True when a materialized track's absence has cleared the missingStreak gate
+     * (>= [MISSING_STREAK_THRESHOLD] consecutive complete-fetch omissions) — its
+     * absence is now genuine deletion evidence. Used by the authoritative-source
+     * path (a churning pull-source's rotate-out only escalates past the gate).
+     */
+    private suspend fun streakEscalated(
+        providerId: String,
+        representativeKey: String,
+        keyToTrack: Map<String, PlaylistTrack>,
+    ): Boolean {
+        val track = keyToTrack[representativeKey] ?: return false
+        val cacheKey = canonicalTrackKey(track)
+        val entry = trackProviderIdCacheDao.select(cacheKey, providerId) ?: return false
+        if (entry.resolvedId.isNullOrBlank()) return false // never materialized → never a deletion
+        return entry.missingStreak >= MISSING_STREAK_THRESHOLD
+    }
+
+    private suspend fun propagateReconcilePlaylist(
+        baseline: SyncPlaylistBaselineDao.Baseline,
+        remoteLists: Map<String, Map<String, SyncedPlaylist>>,
+        coordinator: HydrationCoordinator,
+        dryRun: Boolean,
+    ): NwayPropagationEntry? {
+        val localId = baseline.localPlaylistId
+        val playlist = playlistDao.getById(localId) ?: return null
+        val mirrors = getPlaylistMirrors(localId)
+        if (mirrors.isEmpty()) return null
+        val storedTokens = syncPlaylistNwayDao.selectForLocal(localId).associateBy { it.providerId }
+        val now = currentTimeMillis()
+
+        // Gather each copy WITH its tracks (local always; CHANGED providers fetched;
+        // unchanged providers reuse the baseline keys, no fetch, no tracks).
+        val inputs = mutableListOf<PropagationCopyInput>()
+        val localTracks = playlistTrackDao.getByPlaylistIdSync(localId).sortedBy { it.position }
+        val localKeys = localTracks.map {
+            trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+        }
+        val localChanged = playlist.locallyModified || playlist.lastModified > baseline.baselineSyncedAt
+        inputs.add(PropagationCopyInput("local", localTracks, localKeys, playlist.lastModified, localChanged))
+
+        for ((providerId, externalId) in mirrors) {
+            val provider = providers.firstOrNull { it.id == providerId } ?: continue
+            val listEntry = remoteLists[providerId]?.get(externalId)
+            val storedToken = storedTokens[providerId]?.changeToken
+            val changed = when {
+                listEntry == null -> false // not in the owned list (deleted/unowned) — skip
+                listEntry.snapshotId != null -> listEntry.snapshotId != storedToken
+                else -> listEntry.trackCount != baseline.tracks.size
+            }
+            if (!changed) {
+                inputs.add(PropagationCopyInput(providerId, emptyList(), baseline.tracks, now, changed = false))
+                continue
+            }
+            val tracks = provider.fetchPlaylistTracks(externalId)
+            // PARTIAL-FETCH FLOOR — the no-false-drop guard the empty-mirror rule is
+            // only the collapse-to-zero SUBSET of. A CHANGED mirror whose fetch
+            // returned FEWER rows than the provider's HONEST trackCount was TRUNCATED
+            // (pagination cut-off, a throttled later page, a short 200) — NOT a
+            // deletion. A truncated copy diffed as truth would union-remove the
+            // missing tracks from the HEALTHY mirrors (a 3-of-5 Spotify fetch actively
+            // removing 2 from the LB mirror). So a SHORT fetch (empty, OR length < the
+            // honest trackCount) degrades to changed=false + keys=[] (no delete delta;
+            // A9 still re-pushes the merge to it so it gets filled). Strict < so a
+            // legit ADD that GROWS past baseline still flows through as a real change.
+            // Applies to EVERY changed mirror including the authoritative source — a
+            // truncated source can't manufacture an authoritative deletion. The
+            // trackCount must be an authoritative count (Spotify tracks.total, LB/AM
+            // full-list length), NOT one derived from the truncated page body.
+            // (Mirrors desktop playlist-reconcile.js partial-fetch floor.)
+            val expectedCount = listEntry?.trackCount
+            val incomplete = tracks.isEmpty() || (expectedCount != null && tracks.size < expectedCount)
+            if (incomplete && baseline.tracks.isNotEmpty()) {
+                if (tracks.isNotEmpty()) {
+                    Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId PARTIAL fetch " +
+                        "(${tracks.size}/$expectedCount) — fill target, NOT a deletion")
+                } else {
+                    Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId mirror empty — fill target, not a deletion")
+                }
+                inputs.add(PropagationCopyInput(providerId, emptyList(), emptyList(), now, changed = false))
+                continue
+            }
+            val keys = tracks.map {
+                trackKeysOf(isrc = it.trackIsrc, recordingMbid = it.trackRecordingMbid, artist = it.trackArtist, title = it.trackTitle)
+            }
+            inputs.add(PropagationCopyInput(providerId, tracks, keys, now, changed = true))
+        }
+
+        // Cross-copy key unification (same as shadow) so the same song matches
+        // across services before the merge runs on the representative keys.
+        val unified = unifyTrackKeys(listOf(baseline.tracks) + inputs.map { it.keys })
+        val baselineRepr = unified[0]
+        val copies = inputs.mapIndexed { i, c -> NwayCopyState(c.id, unified[i + 1], c.editedAt, c.changed) }
+
+        // Per-copy writability: only the canonical SOURCE copy (the id-prefix
+        // provider) is gated on the playlist's `writable` flag — a followed
+        // (read-only) source must not receive merged changes back. `local` and
+        // every other (owned/collaborative) mirror stay writable. #269: this is
+        // exactly what keeps followed playlists mirroring OUT but never back IN.
+        val sourcePrefix = localId.substringBefore('-')
+        val writableById = inputs.associate { c ->
+            c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
+        }
+
+        // Trap 1 — resolve representative keys → tracks. Build keyToTrack from the
+        // copies that carry real tracks (local FIRST so its richer metadata wins).
+        // Built AHEAD of the presence vote + authority + augmentation so each can
+        // bridge a representative key → its concrete track → the hydration cache
+        // (the cache is keyed by canonicalTrackKey(track), which IGNORES isrc, so a
+        // representative key — possibly isrc-tier — can't be looked up directly).
+        val keyToTrack = linkedMapOf<String, PlaylistTrack>()
+        // ISRC backfill map: the FIRST non-blank ISRC seen for a representative
+        // key across ANY copy. keyToTrack prefers local (richer metadata) but
+        // local DB rows carry no ISRC (it's transient), so without this the ISRC →
+        // MusicBrainz `/isrc/` fallback can't fire for a track that also exists
+        // locally. Spotify's freshly-fetched copy DOES carry external_ids.isrc, so
+        // harvest it here and graft it onto the merged track below.
+        val keyToIsrc = linkedMapOf<String, String>()
+        inputs.forEachIndexed { i, c ->
+            val reprKeys = unified[i + 1]
+            c.tracks.forEachIndexed { j, t ->
+                val key = reprKeys[j]
+                if (key !in keyToTrack) keyToTrack[key] = t
+                val isrc = t.trackIsrc
+                if (!isrc.isNullOrBlank() && key !in keyToIsrc) keyToIsrc[key] = isrc
+            }
+        }
+
+        // ── PRESENCE VOTE (missingStreak gate) ──────────────────────────────────
+        // Every CHANGED (⇒ COMPLETE, post partial-fetch floor) provider copy is
+        // fresh evidence of what that provider currently holds: reset the streak for
+        // each baseline key it shows, step it for each it omits. Only complete
+        // fetches vote, so a truncated/unchanged copy never moves a streak. This is
+        // the persisted memory that lets a SINGLE transient complete-fetch omission
+        // stay protected while a genuine deletion (omitted ≥ MISSING_STREAK_THRESHOLD
+        // consecutive cycles) escalates. GATED OFF in shadow/dryRun: streak escalation
+        // is a REAL-propagation mechanism and shadow must stay side-effect-free, so
+        // while dryRun streaks never advance and a transiently-absent materialized
+        // track is always protected. (Mirrors desktop A5.5.)
+        // CRITICAL: never remove the !dryRun guard — shadow must not mutate the
+        // production cache, or a preview run would falsely escalate streaks and
+        // surface phantom deletes the next REAL cycle.
+        if (!dryRun) {
+            for (copy in copies) {
+                if (copy.id == "local" || !copy.changed) continue
+                val present = copy.keys.toSet()
+                for (k in baselineRepr) {
+                    val track = keyToTrack[k] ?: continue
+                    val cacheKey = canonicalTrackKey(track)
+                    if (k in present) trackProviderIdCacheDao.recordSeen(cacheKey, copy.id, now)
+                    else trackProviderIdCacheDao.recordMissing(cacheKey, copy.id)
+                }
+            }
+        }
+
+        // ── PULL-SOURCE AUTHORITY (Daily Brew / SiriusXMU rotate-out fix) ───────────
+        // The authoritative PULL SOURCE has the authority to DROP a baseline track:
+        // when a churning source (Spotify Daily Brew rotates ~40/day; hosted-XSPF
+        // replaces daily) rotates a track OUT, that absence reads as a genuine
+        // deletion — NOT re-added by the pending augmentation. Add-only mirrors
+        // (Apple Music) still keep genuine catalog-gap tracks (augmentation stays ON).
+        //
+        //   • sync_playlist_source.providerId's copy is authoritative for an imported
+        //     playlist (the source ROW, not the id-prefix — a cross-provider push
+        //     mirror's prefix can differ from the real pull source).
+        //   • the LOCAL copy is authoritative for a hosted-XSPF playlist (sourceUrl).
+        //   • NONE for a local-authored multimaster playlist → augment all.
+        //
+        // Authority is granted ONLY when the source is REMOVAL-CAPABLE. An add-only
+        // source (TrackRemoveMode.Unsupported) cannot legitimately "drop" a track.
+        val pullSource = syncPlaylistSourceDao.selectForLocal(localId)
+        val authoritativeCopyId: String? = when {
+            pullSource != null -> {
+                val sourceProvider = providers.firstOrNull { it.id == pullSource.providerId }
+                if (sourceProvider != null &&
+                    sourceProvider.features.trackRemoveMode != TrackRemoveMode.Unsupported
+                ) pullSource.providerId else null
+            }
+            playlist.sourceUrl != null -> "local"   // hosted XSPF — local copy is the truth
+            else -> null                            // local-authored multimaster — augment all
+        }
+
+        // The baseline keys the AUTHORITATIVE copy itself dropped this cycle — these
+        // must NEVER be re-augmented onto ANY copy (a source deletion is final).
+        // Computed only when the authoritative copy is CHANGED (an unchanged copy
+        // reuses baseline.tracks, so it dropped nothing).
+        //
+        // SINGLE-AUTHORITY (one-way mirror) → drops are IMMEDIATELY authoritative,
+        // no streak gate. Three cases collapse here:
+        //   • 'local'    — a hosted-XSPF source (in-process, never a truncated fetch);
+        //   • !writable  — a FOLLOWED (read-only) provider source. A wrong drop
+        //     SELF-HEALS next cycle (the source re-asserts the track), so the gate
+        //     buys nothing but would lag/break a daily-rotating ALGORITHMIC playlist
+        //     (a followed Daily Brew rotating ~40/day → the d81305c accumulation);
+        //   • mirrorOnly — the user flagged an OWNED-but-dynamic playlist (e.g. a
+        //     SmarterPlaylists-managed Daily Brew that Spotify reports as user-owned)
+        //     as a one-way mirror in its Sync menu — the writability split alone can't
+        //     tell it apart from a hand-curated owned playlist.
+        // The streak gate (#277) therefore applies ONLY to an OWNED, non-mirror
+        // provider source, where a single transient complete-fetch omission could lose
+        // a user edit: it stays protected until the omission is sustained
+        // ≥ MISSING_STREAK_THRESHOLD consecutive cycles.
+        val authoritativeCopy = authoritativeCopyId?.let { aid ->
+            copies.firstOrNull { it.id == aid }?.takeIf { it.changed }
+        }
+        val mirrorOnly = settingsStore.getPlaylistMirrorOnly(localId)
+        val immediateAuthority = authoritativeCopyId == "local" || mirrorOnly || !playlist.writable
+        val authoritativeDropped: Set<String> = if (authoritativeCopy == null) emptySet() else {
+            val present = authoritativeCopy.keys.toSet()
+            baselineRepr.filter { k ->
+                k !in present &&
+                    (immediateAuthority || streakEscalated(authoritativeCopyId!!, k, keyToTrack))
+            }.toSet()
+        }
+
+        // ── PENDING-AWARE MERGE AUGMENTATION (catalog-gap phantom-deletion fix) ──
+        // A track a provider couldn't MATERIALIZE (an un-hydratable ADD left PENDING)
+        // is, to the merge, indistinguishable from one the user DELETED there —
+        // delete-always-wins reads its absence as a deletion and drops it everywhere
+        // (the P1b catalog-gap phantom deletion). The executor protects the WRITE, but
+        // the MERGE runs UPSTREAM and would over-delete without this. So a CHANGED copy
+        // that LACKS a baseline key gets it re-added unless the absence is GENUINE
+        // deletion evidence:
+        //   • AUTHORITATIVE source copy: re-add every lacked key EXCEPT those whose
+        //     absence streak-escalated (authoritativeDropped) — a single transient
+        //     omission doesn't drop, a sustained one finally does.
+        //   • other mirrors: re-add a lacked key only if the source didn't drop it AND
+        //     it's pending for this provider (never-materialized, OR materialized but
+        //     not yet missing ≥ MISSING_STREAK_THRESHOLD consecutive complete fetches).
+        val augmentedCopies = copies.map { copy ->
+            if (copy.id == "local" || !copy.changed) return@map copy
+            val present = copy.keys.toSet()
+            val lacked = baselineRepr.filter { it !in present }
+            if (lacked.isEmpty()) return@map copy
+            val toReadd = if (copy.id == authoritativeCopyId) {
+                lacked.filter { it !in authoritativeDropped }
+            } else {
+                lacked.filter { it !in authoritativeDropped && isProviderPendingForKey(copy.id, it, keyToTrack) }
+            }
+            if (toReadd.isEmpty()) copy else copy.copy(keys = copy.keys + toReadd)
+        }
+
+        // The merge runs on the AUGMENTED copies (phantom deletes suppressed); the
+        // resulting `merged` is canonical. A provider augmented to equal the
+        // baseline may now contribute no delta (filtered from the merge) — its
+        // genuine lag is recovered below from the UN-augmented copies, decoupling
+        // the materialize-target decision from the merge.
+        val plan = computeNwayPropagationPlan(baselineRepr, augmentedCopies, writableById)
+        if (plan?.massChangeAbort == true) {
+            // Total-wipe floor only: the merge collapsed a non-empty playlist to
+            // ZERO. Large non-empty turnover is NOT blocked (propagate-all-changes).
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: TOTAL-WIPE (merge → 0 tracks) — abort, no push")
+            return NwayPropagationEntry(playlist.name, localId, plan.merged.size, plan.pushTargets, "total-wipe-abort")
+        }
+
+        // Canonical = the merge's output when there's a delta; otherwise the
+        // baseline (a pending-only fill re-attempt converged the merge to baseline).
+        val mergedRepr = plan?.merged ?: baselineRepr
+
+        // MATERIALIZE TARGETS — decoupled from the merge. A WRITABLE copy is a
+        // target iff its CURRENT (un-augmented) representative keys lag the
+        // canonical: i.e. it's missing a canonical track (a pending fill to
+        // re-attempt now the catalog may have recovered) OR it carries a track the
+        // canonical dropped (a delete to propagate). Augmentation hides a pending
+        // provider's lag from the merge's wouldPushTo; computing the lag from the
+        // un-augmented keys recovers it so the executor re-attempts the fill. The
+        // executor fetches each mirror's ACTUAL remote and diffs, so a converged
+        // mirror no-ops and an un-findable add stays pending (coordinator cooldown).
+        val mergedReprSet = mergedRepr.toSet()
+        val pushTargets = copies.filter { c ->
+            writableById[c.id] != false && (c.keys.toSet() != mergedReprSet || c.keys.size != mergedRepr.size)
+        }.map { c -> c.id }
+
+        // TRULY-CONVERGED SHORT-CIRCUIT — no merge delta AND no writable mirror
+        // lags ⇒ idempotent no-op: don't fetch, don't materialize, don't advance.
+        // (Keeps `idempotency ×2` green + avoids per-cycle fetches on a converged
+        // playlist.) When the plan IS non-null there's a real delta; when a mirror
+        // lags there's a pending fill / pending delete to apply — proceed in both.
+        if (plan == null && pushTargets.all { it == "local" }) return null
+
+        val resolved = mergedRepr.map { keyToTrack[it] }
+        if (resolved.any { it == null }) {
+            Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${resolved.count { it == null }} merged " +
+                "key(s) unresolved to a track — abort (never push a partial list)")
+            return NwayPropagationEntry(playlist.name, localId, mergedRepr.size, pushTargets, "partial-abort")
+        }
+        val mergedTracks = mergedRepr.mapIndexed { idx, key ->
+            val t = keyToTrack.getValue(key)
+            // Graft the harvested ISRC (if the chosen track lacks one) so LB
+            // hydration's /isrc/ fallback works during a mapper outage.
+            t.copy(playlistId = localId, position = idx, trackIsrc = t.trackIsrc ?: keyToIsrc[key])
+        }
+
+        if (dryRun) {
+            Log.d(TAG, "N-way PROPAGATE (DRY-RUN) [${playlist.name}]: would push ${mergedTracks.size} " +
+                "track(s) to $pushTargets [no write]")
+            return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, pushTargets, "would-push")
+        }
+
+        // ── PUSH (NON-DESTRUCTIVE INCREMENTAL MATERIALIZE) ──────────────
+        // Apply the merged canonical to each WRITABLE target via the per-provider,
+        // capability-dispatched [materializeToProvider]. Each target is independent
+        // (an Apple-Music catalog miss never blocks ListenBrainz).
+        //
+        // Why this is whole-cycle-safe WITHOUT a coverage SKIP / fill-target marker
+        // / replace-all (all of which this swap deletes): the executor's removes come
+        // ONLY from a POSITIVE identity-diff (a REMOTE track absent from canonical),
+        // so a track the provider can't hydrate is left a PENDING ADD — the remote
+        // keeps everything else, never shrinks. A catalog gap is therefore inherently
+        // non-destructive every cycle; the baseline can advance unconditionally
+        // (materialization completeness is tracked PER-TRACK via the diff + the
+        // hydration cache, not via pinning the whole-playlist baseline). The
+        // coordinator's per-cycle budget + cooldown keep an un-findable ADD from
+        // re-searching every cycle.
+        var added = 0
+        var removed = 0
+        var pendingAdds = 0
+        var unsupportedRemoves = 0
+        val pushedTo = mutableListOf<String>()
+        for (targetId in pushTargets) {
+            if (targetId == "local") { pushedTo.add("local"); continue }
+            val provider = providers.firstOrNull { it.id == targetId } ?: continue
+            val externalId = mirrors[targetId] ?: continue
+            // Each target is materialized in its OWN try/catch so ONE provider's
+            // failure (e.g. Apple Music HTTP 400 when its mirror is stale/404) only
+            // skips THAT provider — the others (LB, Spotify) still materialize. The
+            // comment above ("an Apple-Music catalog miss never blocks ListenBrainz")
+            // is true for coverage MISSES via the non-destructive diff; this guard
+            // extends the same isolation to thrown EXCEPTIONS. A thrown provider is
+            // left un-materialized = it lags canonical next cycle (the hydration cache
+            // has no confirmed entry ⇒ its missing tracks read as PENDING, not a
+            // deletion), so it's safely retried and the baseline can still advance.
+            try {
+                val remote = provider.fetchPlaylistTracks(externalId)
+                val res = materializeToProvider(
+                    provider = provider,
+                    externalId = externalId,
+                    canonical = mergedTracks,
+                    remote = remote,
+                    resolveNativeId = { track -> coordinator.resolve(provider, track) },
+                )
+                added += res.added
+                removed += res.removed
+                pendingAdds += res.pendingAdds
+                unsupportedRemoves += res.unsupportedRemoves
+                // Refresh the per-provider change token for echo suppression. A snapshot
+                // provider (Spotify/AM) returns its fresh token; a snapshot-less provider
+                // (LB) returns null → next-cycle detection falls back to trackCount, which
+                // now equals the merged size → no re-detect. On a fetch failure here we
+                // leave the old token; the next cycle re-detects and re-materializes
+                // (idempotent — the diff yields no ops once converged).
+                val token = runCatching { provider.getPlaylistSnapshotId(externalId) }.getOrNull()
+                syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
+                pushedTo.add(provider.id)
+                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialized " +
+                    "+$added/-$removed (pending $pendingAdds, unsupported-remove $unsupportedRemoves)")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialize " +
+                    "failed — skipping this provider, others continue", e)
+                // SELF-HEAL: a materialize failure CAN mean the remote mirror was
+                // deleted on the provider's side (Apple Music returns HTTP 400/404
+                // on a stale/404 mirror, and the per-provider isolation above just
+                // skips it — so the dead link would persist forever and that
+                // provider stays permanently empty for this playlist). Probe the
+                // provider for a DEFINITIVE deletion signal (a 404 on the playlist
+                // RESOURCE). If — and ONLY if — it's definitively gone, clear the
+                // dead link + N-way token so the next sync's create-or-link path
+                // mints a fresh mirror. The probe is conservative by contract
+                // (returns true on any transient/ambiguous error); we additionally
+                // guard it here so a probe failure can never throw out of the loop
+                // or be mistaken for "gone".
+                val mirrorGone = try {
+                    !provider.remotePlaylistExists(externalId)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (probe: Exception) {
+                    false
+                }
+                if (mirrorGone) {
+                    Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} mirror " +
+                        "$externalId is GONE (404) — clearing dead link for recreation next sync")
+                    syncPlaylistLinkDao.deleteForLink(localId, provider.id)
+                    syncPlaylistNwayDao.deleteForLink(localId, provider.id)
+                }
+            }
+        }
+
+        // Persist the merged list to the LOCAL rows. The coordinator already
+        // additively backfilled any freshly-resolved provider ids onto these rows
+        // (persistRowId), so the merged list reflects local identity + ordering; the
+        // ids carry forward for future cycles via the row + the hydration cache.
+        playlistTrackDao.replaceAll(localId, mergedTracks)
+
+        // Advance the baseline + clear locallyModified EVERY cycle. Decoupled from
+        // any "all covered" gate (deleted): the executor is non-destructive, so a
+        // catalog gap leaves the provider holding a coverable subset with the missing
+        // track tracked as a PENDING ADD (re-attempted, budget-permitting, next cycle
+        // via the hydration cache) — never a phantom deletion when the baseline
+        // advances. Pinning the baseline is no longer how completeness is enforced.
+        syncPlaylistBaselineDao.upsert(localId, nwayBaselineTrackKeys(mergedTracks), now)
+        playlistDao.clearLocallyModified(localId)
+        return NwayPropagationEntry(
+            playlist.name, localId, mergedTracks.size, pushedTo, "pushed",
+            pendingAdds = pendingAdds, unsupportedRemoves = unsupportedRemoves,
+        )
+    }
+
     private suspend fun syncPlaylists(
         settings: SyncSettings,
         onProgress: (SyncProgress) -> Unit,
@@ -1072,6 +2011,14 @@ class SyncEngine constructor(
         // without writing a link. Mirrors desktop's
         // migrateSyncLinksFromPlaylists (main.js).
         migrateLinksFromPlaylists()
+
+        // One-time idempotent cleanup: the N-way swap deleted the
+        // NWAY_FILL_PENDING_ACTION="nway-fill" writer, but stale 'nway-fill'
+        // values linger in sync_playlist_link.pendingAction on real installs.
+        // The legacy push (`pushPlaylistsForProvider`) skips any non-null
+        // pendingAction, so a stale marker permanently strands the playlist
+        // (never syncs while N-way real-writes are default-OFF). Null them out.
+        syncPlaylistLinkDao.clearStaleNwayFillMarkers()
 
         // Sibling backfill for the per-playlist pull-source table. Any
         // `spotify-<externalId>` playlist row from a prior import that
@@ -1099,6 +2046,19 @@ class SyncEngine constructor(
             syncPlaylistSourceDao,
             syncPlaylistLinkDao,
         )
+
+        // N-way migration bootstrap (Phase 2) — gated on isNwayEnabled (OFF by
+        // default → inert). Seeds the baseline + per-provider state for every
+        // synced playlist the first time N-way activates. Runs AFTER the
+        // link/source migrations so mirrors are resolved; read-only vs providers
+        // (the normalize push is deferred to the propagation phase).
+        migrateAllPlaylistsToNway()
+
+        // N-way SHADOW MODE (Phase 3) is dev-triggered ON DEMAND via
+        // [runNwayShadowScan] — NOT run inline here. Per-sync shadow would add a
+        // playlist-list fetch (and, pre-fix, a per-playlist tracklist fetch) to
+        // every background sync; keeping it on-demand means routine syncs pay
+        // nothing for it. Phase 4 integrates real propagation into the sync.
 
         // One-shot cleanup for installs that pre-date the cross-provider
         // pull-path name-match (commit ef5a3c2). Walks all playlist
@@ -1148,6 +2108,19 @@ class SyncEngine constructor(
                 onProgress(SyncProgress(SyncPhase.PLAYLISTS, current, total, "Fetching playlists..."))
             }
         } else emptyList()
+
+        // #269 self-heal: refresh writable for EVERY pulled Spotify playlist. The
+        // per-playlist reconcile below only sets writable on the create path and
+        // skips unchanged existing rows — so a followed playlist (writable=false)
+        // would otherwise keep its stale default writable=1 and keep mirroring.
+        // Cheap targeted update; runs even on a no-op sync.
+        for (remote in remotePlaylists) {
+            val existing = playlistDao.getBySpotifyId(remote.spotifyId)
+            if (existing != null && existing.writable != remote.entity.writable) {
+                playlistDao.setWritable(existing.id, remote.entity.writable)
+                Log.d(TAG, "#269: refreshed writable=${remote.entity.writable} for '${existing.name}'")
+            }
+        }
 
         // Pull allowlist (per-provider) + per-playlist channel override. The
         // override is authoritative for a given playlist; otherwise the allowlist
@@ -1474,10 +2447,18 @@ class SyncEngine constructor(
         // `remotePlaylists`/`selectedRemote` are empty by design, and treating
         // that empty list as the source of truth would delete every Spotify
         // playlist row. Skip the cleanup entirely in that case.
-        val remoteIds = selectedRemote.map { it.spotifyId }.toSet()
-        val removedSources = if (spotifyPlaylistsEnabled) {
-            localSources.filter { it.externalId != null && it.externalId !in remoteIds }
-        } else emptyList()
+        // Probe-gated removal (workstream B): a source absent from the FULL
+        // fetched list is removed ONLY when remotePlaylistExists CONFIRMS a 404 —
+        // a partial/truncated fetch (which would otherwise look like every
+        // playlist vanished) removes nothing. Suspected against the full
+        // `remotePlaylists`, NOT `selectedRemote`: a merely-deselected-but-present
+        // playlist stays (deselection is handled by the picker's keep/remove
+        // prompt), matching the non-Spotify helper's documented behavior.
+        val fullRemoteIds = remotePlaylists.map { it.spotifyId }.toSet()
+        val goneIds = if (spotifyPlaylistsEnabled) {
+            confirmedGoneMirrors(spotifyProvider, localSources.mapNotNull { it.externalId }.toSet(), fullRemoteIds)
+        } else emptySet()
+        val removedSources = localSources.filter { it.externalId != null && it.externalId in goneIds }
         removedSources.forEach { source ->
             val localPlaylist = playlistDao.getById(source.itemId)
             // Locally-owned playlists (hosted XSPF — canonical via `sourceUrl`
@@ -1528,6 +2509,21 @@ class SyncEngine constructor(
         // syncedAt would never advance and would strand the flag forever.
         // Phase 5 generalizes to all enabled providers (was Spotify-only).
         clearLocallyModifiedFlags(enabledProviderIds)
+
+        // N-way PROPAGATION (Phase 4) — runs AFTER the normal pull/push so it sees
+        // the freshest local + remote state and reconciles any remaining
+        // cross-provider divergence the single-source push loop can't (e.g. an
+        // edit pulled in via Spotify that must mirror OUT to Apple Music + LB).
+        // Internally gated on isNwayEnabled() && isNwayPropagateEnabled() — a no-op
+        // (early return) unless the user has armed real writes. Echo-suppressed
+        // (post-push token + advanced baseline) so it never re-pushes a converged
+        // playlist on the next cycle. Per-playlist pushes are sequential and go
+        // through the gated SpotifyClient (150ms inter-request gap + concurrency
+        // cap), so a many-playlist cycle is naturally staggered against the
+        // account-wide rate limit. Skipped on a provider-filtered partial sync.
+        if (providerFilter == null) {
+            runNwayPropagation()
+        }
 
         return TypeSyncResult(added = added, removed = removed, updated = updated, unchanged = unchanged)
     }
@@ -1837,8 +2833,12 @@ class SyncEngine constructor(
         // Removed-source cleanup, mirroring the Spotify path. A locally-
         // owned playlist (hosted XSPF or local-*) is NEVER deleted by
         // sync cleanup — it's just deselected/deleted from the provider.
-        val remoteIds = remotePlaylists.map { it.spotifyId }.toSet()
-        val removedSources = localSources.filter { it.externalId != null && it.externalId !in remoteIds }
+        // Probe-gated (workstream B): a source absent from the fetched list is
+        // removed ONLY when remotePlaylistExists confirms a 404, so a partial
+        // fetch can't mass-delete live playlists.
+        val fullRemoteIds = remotePlaylists.map { it.spotifyId }.toSet()
+        val goneIds = confirmedGoneMirrors(provider, localSources.mapNotNull { it.externalId }.toSet(), fullRemoteIds)
+        val removedSources = localSources.filter { it.externalId != null && it.externalId in goneIds }
         removedSources.forEach { source ->
             val localPlaylist = playlistDao.getById(source.itemId)
             if (localPlaylist?.sourceUrl != null ||
@@ -1923,7 +2923,12 @@ class SyncEngine constructor(
         val candidates = allPlaylists.filter {
             it.name.isNotBlank() && isPushCandidate(it, providerId) && run {
                 val override = settingsStore.getPlaylistChannels(it.id)
-                if (override != null) providerId in override else selection.includes(it.id)
+                // Override is authoritative (explicit opt-in). Otherwise fall to the
+                // per-provider default — but a ListenBrainz-imported playlist NEVER
+                // auto-mirrors (autoMirrorsByDefault=false): re-exporting LB → Spotify/AM
+                // is opt-in only, so a pulled LB library can't flood them.
+                if (override != null) providerId in override
+                else autoMirrorsByDefault(it) && selection.includes(it.id)
             }
         }
 
@@ -1931,6 +2936,32 @@ class SyncEngine constructor(
         val remoteById = liveRemote.associateBy { it.spotifyId }
         val ownedRemoteByName = liveRemote.filter { it.isOwned }
             .groupBy { it.entity.name.trim().lowercase() }
+
+        // Pre-fetch each candidate's link once: reused by the mass-floor pre-pass
+        // below AND by the per-playlist dedup loop (so the link is read once, not
+        // twice).
+        val linksByPlaylistId = candidates.associate {
+            it.id to syncPlaylistLinkDao.selectForLink(it.id, providerId)
+        }
+
+        // Dead-mirror DETACH mass-floor (push-path companion to
+        // confirmedGoneMirrors' bail). On a partial/truncated provider fetch where
+        // many candidates are all mirrored to THIS provider, every link looks stale
+        // (absent from remoteById), and the stale-link branch below would probe
+        // `remotePlaylistExists` for each one sequentially through the rate-limit
+        // gate — a slow probe-storm. If an implausible number of links are absent
+        // at once, that's almost certainly a partial fetch: skip the dead-mirror
+        // probe/detach entirely for this push pass (keep all links, don't probe).
+        // The normal id-link / Layer-3 dedup still runs; only the dead-mirror branch
+        // is gated. Under-removing is always safer than detaching live mirrors.
+        val suspectedDeadLinks = candidates.count {
+            val link = linksByPlaylistId[it.id]
+            link != null && link.externalId !in remoteById
+        }
+        val skipDeadMirrorDetach = suspectedDeadLinks > DEAD_MIRROR_MASS_FLOOR
+        if (skipDeadMirrorDetach) {
+            Log.w(TAG, "dead-mirror push: $providerId — $suspectedDeadLinks candidate link(s) absent from fetch (> floor $DEAD_MIRROR_MASS_FLOOR); treating as a partial fetch, skipping detach-probe")
+        }
 
         for ((pIdx, playlist) in candidates.withIndex()) {
             _syncPhase.value = "playlists · $providerId push ${pIdx + 1}/${candidates.size}"
@@ -1940,7 +2971,7 @@ class SyncEngine constructor(
                 // detail banner will let the user re-push or unlink. Lift
                 // the link lookup here so the dedup-Layer-1 block below
                 // can reuse it without a second query.
-                val link = syncPlaylistLinkDao.selectForLink(playlist.id, providerId)
+                val link = linksByPlaylistId[playlist.id]
                 if (link?.pendingAction != null) {
                     Log.d(TAG, "Skipping push for ${playlist.id} on $providerId — pendingAction=${link.pendingAction}")
                     continue
@@ -1972,8 +3003,53 @@ class SyncEngine constructor(
                         existing = fromLink
                         matchSource = "id-link"
                     } else {
-                        Log.d(TAG, "Stored link $providerId:${link.externalId} for ${playlist.id} no longer exists remotely; clearing")
+                        // The stored mirror isn't in the just-fetched remote list.
+                        // Absence is NOT proof of deletion (the fetch may have been
+                        // partial), and blindly clearing the link here makes Layer 3
+                        // re-create a DUPLICATE. Probe before acting (workstream A).
+                        //
+                        // Mass-floor gate: if too many candidate links were absent
+                        // at once (likely a partial fetch), skip the probe + detach
+                        // entirely — keep the link and this push cycle's no-op,
+                        // exactly as the probe-says-EXISTS path does below.
+                        if (skipDeadMirrorDetach) {
+                            Log.d(TAG, "Link $providerId:${link.externalId} for ${playlist.id} absent from fetch but mass-floor active — keeping link, skipping push")
+                            continue
+                        }
+                        val stillExists = try {
+                            provider.remotePlaylistExists(link.externalId)
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            true
+                        }
+                        if (stillExists) {
+                            // Partial fetch / transient: keep the live link, skip
+                            // this push cycle (don't clear, don't re-create).
+                            Log.d(TAG, "Link $providerId:${link.externalId} for ${playlist.id} absent from fetch but probe says EXISTS — keeping link, skipping push")
+                            continue
+                        }
+                        // Confirmed gone (404): DETACH this dead mirror instead of
+                        // re-creating it, so the chip disappears (both platforms) and
+                        // this loop won't recreate it; the user re-enables via the
+                        // Sync menu if they want it back. Seed the new override from
+                        // the playlist's EFFECTIVE channels (override ?: links) —
+                        // override-aware ON PURPOSE: it preserves the user's existing
+                        // allowlist and never re-enables a provider they turned off
+                        // (it may legitimately go empty when the dead mirror was the
+                        // only enabled provider). Drop the link + N-way token FIRST,
+                        // then write the override: if the write throws, the next sync
+                        // still sees the dropped link rather than an override masking
+                        // an orphan.
+                        val effective = getPlaylistMirrors(playlist.id).keys.toSet()
                         syncPlaylistLinkDao.deleteForLink(playlist.id, providerId)
+                        syncPlaylistNwayDao.deleteForLink(playlist.id, providerId)
+                        settingsStore.setPlaylistChannels(
+                            playlist.id,
+                            DeadMirrorReconcile.overrideAfterDetach(effective, providerId),
+                        )
+                        Log.w(TAG, "dead-mirror detach: '${playlist.name}' $providerId mirror ${link.externalId} confirmed 404 — channel override excludes $providerId, link dropped")
+                        continue
                     }
                 }
 
@@ -2010,6 +3086,27 @@ class SyncEngine constructor(
                         matchSource = if ((nameCandidates.size) > 1)
                             "name-match (${nameCandidates.size} candidates)"
                         else "name-match"
+                    }
+                }
+
+                // #269 disambiguation guard: NEVER claim a remote that's already
+                // linked to a DIFFERENT local playlist. With two same-name local
+                // rows (e.g. a followed playlist + your own copy), the name-match
+                // above would otherwise link BOTH to the same remote mirror,
+                // tangling them. A remote (provider, externalId) belongs to at
+                // most one local row; if this candidate is taken, drop it and
+                // fall through to create a separate mirror. (Layer 1's own-link
+                // match is exempt — it IS this playlist's link.)
+                if (existing != null && matchSource != "id-link") {
+                    val owner = syncPlaylistLinkDao.selectByExternalId(providerId, existing.spotifyId)
+                    if (owner != null && owner.localPlaylistId != playlist.id) {
+                        Log.d(
+                            TAG,
+                            "#269: $providerId remote ${existing.spotifyId} already linked to " +
+                                "'${owner.localPlaylistId}' — not claiming it for '${playlist.name}'",
+                        )
+                        existing = null
+                        matchSource = ""
                     }
                 }
 
@@ -2238,6 +3335,7 @@ class SyncEngine constructor(
         playlistId: String,
         tracks: List<PlaylistTrack>,
         provider: com.parachord.shared.sync.SyncProvider,
+        persist: Boolean = true,
     ): List<PlaylistTrack> {
         val needsHydration = tracks.filter { missingProviderId(it, provider.id) }
         if (needsHydration.isEmpty()) return tracks
@@ -2260,6 +3358,7 @@ class SyncEngine constructor(
                                 title = track.trackTitle,
                                 artist = track.trackArtist,
                                 album = track.trackAlbum,
+                                isrc = track.trackIsrc,
                             )
                         } catch (e: Exception) {
                             Log.w(TAG, "hydrate: search threw for '${track.trackTitle}'", e)
@@ -2285,9 +3384,14 @@ class SyncEngine constructor(
             if (newId != null) applyResolvedId(track, provider.id, newId) else track
         }
 
-        playlistTrackDao.replaceAll(playlistId, updatedTracks)
-        Log.d(TAG, "Hydrated ${resolvedByPosition.size} ${provider.id} IDs into $playlistId " +
-            "(${tracks.size - resolvedByPosition.size - (tracks.size - needsHydration.size)} unresolved)")
+        // [persist] = false lets a caller hydrate purely in-memory (returns the
+        // resolved list without writing the rows) — used by the propagation
+        // coverage pre-check so an under-covered ABORT leaves no partial mutation.
+        if (persist) {
+            playlistTrackDao.replaceAll(playlistId, updatedTracks)
+            Log.d(TAG, "Hydrated ${resolvedByPosition.size} ${provider.id} IDs into $playlistId " +
+                "(${tracks.size - resolvedByPosition.size - (tracks.size - needsHydration.size)} unresolved)")
+        }
         return updatedTracks
     }
 
@@ -2305,51 +3409,68 @@ class SyncEngine constructor(
         playlist: Playlist,
         provider: com.parachord.shared.sync.SyncProvider,
     ) {
-        val link = syncPlaylistLinkDao.selectForLink(playlist.id, provider.id)
-        // Resolve the external id: link table is authoritative; legacy
-        // playlist.spotifyId is a fallback for Spotify only (backward
-        // compat with installs that predate Phase 1's link table).
-        val externalIdNullable: String? = link?.externalId
-            ?: if (provider.id == SpotifySyncProvider.PROVIDER_ID) playlist.spotifyId else null
-        val externalId: String = externalIdNullable ?: run {
-            Log.w(TAG, "pushPlaylist: no link for ${playlist.id} on ${provider.id}; skip")
-            return
-        }
-        val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
-        // Hydrate provider-specific IDs for tracks lacking them — see
-        // [hydrateMissingTrackIds] for rationale. Same pattern as the
-        // first-push branch above.
-        val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
-        val externalTrackIds = extractExternalTrackIds(tracks, provider.id)
-        val snapshotId = provider.replacePlaylistTracks(externalId, externalTrackIds)
+        // Resilience: a single playlist's push failure (e.g. an Apple Music
+        // HTTP 400 from replacePlaylistTracks) must NOT abort the whole sync
+        // cycle. The import/pull call sites that invoke pushPlaylist are not
+        // wrapped per-playlist, so an uncaught throw bubbles to the top-level
+        // syncAll catch and kills every remaining provider/playlist. Match the
+        // sibling pushPlaylistsForProvider loop's per-playlist catch. PRESERVE
+        // two exceptions: CancellationException (KMP cancellation rule) and
+        // AppleMusicReauthRequiredException (a 401 reauth must surface to the
+        // higher-level handler — a transient 400 must not).
+        try {
+            val link = syncPlaylistLinkDao.selectForLink(playlist.id, provider.id)
+            // Resolve the external id: link table is authoritative; legacy
+            // playlist.spotifyId is a fallback for Spotify only (backward
+            // compat with installs that predate Phase 1's link table).
+            val externalIdNullable: String? = link?.externalId
+                ?: if (provider.id == SpotifySyncProvider.PROVIDER_ID) playlist.spotifyId else null
+            val externalId: String = externalIdNullable ?: run {
+                Log.w(TAG, "pushPlaylist: no link for ${playlist.id} on ${provider.id}; skip")
+                return
+            }
+            val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
+            // Hydrate provider-specific IDs for tracks lacking them — see
+            // [hydrateMissingTrackIds] for rationale. Same pattern as the
+            // first-push branch above.
+            val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
+            val externalTrackIds = extractExternalTrackIds(tracks, provider.id)
+            val snapshotId = provider.replacePlaylistTracks(externalId, externalTrackIds)
 
-        // Spotify-specific scalars stay write-through for backward compat
-        // (per Decision 5). For other providers, only the link's
-        // snapshot column is the source of truth.
-        if (provider.id == SpotifySyncProvider.PROVIDER_ID) {
-            playlistDao.update(playlist.copy(
-                snapshotId = snapshotId ?: playlist.snapshotId,
-                trackCount = tracks.size,
-                locallyModified = false,
-            ))
-        } else {
-            playlistDao.update(playlist.copy(
-                trackCount = tracks.size,
-                locallyModified = false,
-            ))
-        }
-        if (snapshotId != null) {
-            syncPlaylistLinkDao.upsertWithSnapshot(
-                localPlaylistId = playlist.id,
-                providerId = provider.id,
-                externalId = externalId,
-                snapshotId = snapshotId,
-            )
-        }
+            // Spotify-specific scalars stay write-through for backward compat
+            // (per Decision 5). For other providers, only the link's
+            // snapshot column is the source of truth.
+            if (provider.id == SpotifySyncProvider.PROVIDER_ID) {
+                playlistDao.update(playlist.copy(
+                    snapshotId = snapshotId ?: playlist.snapshotId,
+                    trackCount = tracks.size,
+                    locallyModified = false,
+                ))
+            } else {
+                playlistDao.update(playlist.copy(
+                    trackCount = tracks.size,
+                    locallyModified = false,
+                ))
+            }
+            if (snapshotId != null) {
+                syncPlaylistLinkDao.upsertWithSnapshot(
+                    localPlaylistId = playlist.id,
+                    providerId = provider.id,
+                    externalId = externalId,
+                    snapshotId = snapshotId,
+                )
+            }
 
-        val source = syncSourceDao.get(playlist.id, "playlist", provider.id)
-        if (source != null) {
-            syncSourceDao.insert(source.copy(syncedAt = currentTimeMillis()))
+            val source = syncSourceDao.get(playlist.id, "playlist", provider.id)
+            if (source != null) {
+                syncSourceDao.insert(source.copy(syncedAt = currentTimeMillis()))
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: AppleMusicReauthRequiredException) {
+            throw e // reauth must surface to the higher-level handler; do not swallow
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to push playlist ${playlist.name} to ${provider.id} — continuing sync", e)
         }
     }
 
@@ -2635,6 +3756,106 @@ class SyncEngine constructor(
     }
 
     /**
+     * Local ids that currently mirror to [providerId] AND still exist in the
+     * `playlists` table, EXCLUDING any whose pull-source is [providerId] (so an
+     * LB-imported `listenbrainz-*` row — whose pull import wrote a
+     * `sync_playlist_link[listenbrainz]` row — is NOT surfaced as a push target
+     * the user could un-check and thereby corrupt its own pull sync). Seeds the
+     * #266 push-config picker's "checked" set. Orphan links (no playlist row)
+     * are dropped here; their cleanup is a separate workstream.
+     */
+    suspend fun linkedPlaylistIdsForProvider(providerId: String): Set<String> {
+        // Override-AWARE: a playlist syncs to [providerId] if its per-playlist
+        // channel OVERRIDE includes it (authoritative — set by the Sync context
+        // menu OR this picker), OR — when there's no override — it has an actual
+        // mirror link. Without the override branch the picker reads only links, so
+        // a playlist just enabled via the Sync menu (override set, link not created
+        // until the next sync's push) shows UN-checked here — the two UIs disagree.
+        // Both UIs write the channel override, so both must READ it too.
+        val all = playlistDao.getAllSync()
+        val linkedIds = syncPlaylistLinkDao.selectForProvider(providerId)
+            .map { it.localPlaylistId }
+            .toSet()
+        return all
+            .filter { p ->
+                val override = settingsStore.getPlaylistChannels(p.id)
+                if (override != null) providerId in override else p.id in linkedIds
+            }
+            // Never surface a playlist whose PULL SOURCE is this provider (a
+            // `<provider>-*` import) — un-checking it would corrupt its pull sync.
+            .filter { syncPlaylistSourceDao.selectForLocal(it.id)?.providerId != providerId }
+            .map { it.id }
+            .toSet()
+    }
+
+    /**
+     * Local-only "stop pushing this playlist to [providerId]" for a PUSH
+     * provider (#266). Removes the durable link + N-way echo-state, and writes
+     * an authoritative channel override that EXCLUDES [providerId] so neither the
+     * legacy push loop (candidates filter) nor N-way ([getPlaylistMirrors]
+     * filter) re-adds it next cycle — including masking the id-prefix re-add for
+     * `<provider>-*` rows. NEVER deletes the remote playlist. NEVER touches the
+     * baseline (the shared 3-way-merge ancestor for the row's OTHER providers).
+     */
+    suspend fun unlinkPlaylistFromProviderLocally(localPlaylistId: String, providerId: String) {
+        Log.d(TAG, "LBpush: unlink $localPlaylistId from $providerId")
+        // 1. Drop the durable push link → removed from getPlaylistMirrors' link
+        //    source AND from the legacy three-layer dedup's Layer-1 reuse.
+        syncPlaylistLinkDao.deleteForLink(localPlaylistId, providerId)
+        // 2. Clear per-(playlist,provider) N-way change-token / editedAt echo state.
+        syncPlaylistNwayDao.deleteForLink(localPlaylistId, providerId)
+        // 3. Authoritative channel override (allowlist) that survives the next
+        //    sync AND masks the id-prefix re-add. Seed from the EFFECTIVE channel
+        //    set (mode-defaults folded in) so other providers (Spotify/AM) on the
+        //    same row — including mode-default mirrors with no link row yet — are
+        //    preserved, then drop only [providerId].
+        val current = effectivePlaylistChannels(localPlaylistId)
+        settingsStore.setPlaylistChannels(localPlaylistId, current - providerId)
+    }
+
+    /**
+     * Providers a playlist EFFECTIVELY syncs with right now: the authoritative
+     * channel override if present, else the live mirror set (links + id-prefix +
+     * pull-source via getPlaylistMirrors) UNIONED with each ENABLED provider whose
+     * per-provider push mode currently admits this playlist (e.g. Spotify's default
+     * mode=ALL mirrors every push-candidate row with no link row yet). This is the
+     * SAFE seed for writing a channel-override allowlist — seeding from
+     * getPlaylistMirrors() alone silently DROPS a mode-default Spotify/AM mirror
+     * that has no link yet (data loss).
+     */
+    private suspend fun effectivePlaylistChannels(localPlaylistId: String): Set<String> {
+        settingsStore.getPlaylistChannels(localPlaylistId)?.let { return it }
+        val playlist = playlistDao.getById(localPlaylistId) ?: return emptySet()
+        val result = getPlaylistMirrors(localPlaylistId).keys.toMutableSet()
+        for (pid in settingsStore.getEnabledSyncProviders()) {
+            if (pid in result) continue
+            // Mode-default mirror only for playlists that auto-mirror — a
+            // ListenBrainz-imported playlist is opt-in (it gains a provider only via
+            // an explicit override), so it must NOT seed a mode-default Spotify/AM
+            // channel here (keeps this seed consistent with the push gate above).
+            if (isPushCandidate(playlist, pid) &&
+                autoMirrorsByDefault(playlist) &&
+                settingsStore.getPlaylistSelection(pid).includes(localPlaylistId)) {
+                result.add(pid)
+            }
+        }
+        return result
+    }
+
+    /**
+     * Local-only "start pushing this playlist to [providerId]" for a PUSH
+     * provider (#266). Writes the channel override (allowlist) ADDING
+     * [providerId] so the row is admitted into the push candidate set. Does NOT
+     * create the link or push — `pushPlaylistsForProvider` does that on the next
+     * sync (createPlaylist → upsertWithSnapshot link → track push).
+     */
+    suspend fun linkPlaylistToProviderLocally(localPlaylistId: String, providerId: String) {
+        Log.d(TAG, "LBpush: link $localPlaylistId to $providerId")
+        val current = effectivePlaylistChannels(localPlaylistId)
+        settingsStore.setPlaylistChannels(localPlaylistId, current + providerId)
+    }
+
+    /**
      * All remote mirrors of a local playlist: providerId -> externalId. Union of
      * the id-prefix-derived source, the pull-source row, and every push link.
      * Each entry is a remote we can show a chip for / offer to delete from.
@@ -2731,6 +3952,9 @@ class SyncEngine constructor(
         }
         syncSourceDao.deleteAllForProvider(providerId)
         syncPlaylistLinkDao.deleteForProvider(providerId)
+        // Drop the hydration negative-cache rows for this provider too, so they
+        // don't orphan across a disconnect/reconnect cycle (Task-7 review #3).
+        trackProviderIdCacheDao.deleteForProvider(providerId)
     }
 
     /**

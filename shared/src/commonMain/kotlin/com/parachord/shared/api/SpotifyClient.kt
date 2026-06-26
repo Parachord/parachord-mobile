@@ -363,6 +363,28 @@ class SpotifyClient(
             applyAuth(this); if (fields != null) parameter("fields", fields)
         }
 
+    /**
+     * Targeted existence probe for the dead-mirror reconcile. GETs the playlist
+     * (minimal `fields=id`) and maps the HTTP status to exists/gone WITHOUT
+     * parsing the body or throwing. Routed through the rate-limit gate so it
+     * honors the account-wide cooldown. CONSERVATIVE by contract
+     * ([com.parachord.shared.sync.SyncProvider.remotePlaylistExists]): ONLY a
+     * definitive 404 returns `false`; a 429 / auth / transport error — or an
+     * active-cooldown short-circuit — returns `true`, so a wrongly-cleared link
+     * can never recreate a still-live remote as a duplicate.
+     */
+    suspend fun playlistExists(playlistId: String): Boolean = try {
+        gate.withPermit(exceptionFactory = { SpotifyRateLimitedException(it) }) {
+            val response: HttpResponse = httpClient.get("$BASE/v1/playlists/$playlistId") {
+                applyAuth(this); parameter("fields", "id")
+            }
+            gate.handleResponse(response) { SpotifyRateLimitedException(it) }
+            response.status.value != 404
+        }
+    } catch (e: Exception) {
+        true
+    }
+
     suspend fun getCurrentUser(): SpUser =
         gatedGet("$BASE/v1/me") { applyAuth(this) }
 
@@ -431,6 +453,22 @@ class SpotifyClient(
     suspend fun addPlaylistTracks(playlistId: String, body: SpUrisRequest): HttpResponse =
         gatedSend {
             httpClient.post("$BASE/v1/playlists/$playlistId/tracks") {
+                applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
+            }
+        }
+
+    /**
+     * Targeted removal of specific tracks from a playlist via
+     * `DELETE /v1/playlists/{id}/tracks` with a `{"tracks":[{"uri":...}]}`
+     * body. Used by incremental playlist materialization to remove only
+     * the tracks that changed, rather than replacing the whole tracklist.
+     * Mirrors the DELETE-with-body precedent of [removeTracks]; routed
+     * through [gatedSend] so a 429 arms the same rate-limit cooldown a
+     * read does (issue #176).
+     */
+    suspend fun removePlaylistTracks(playlistId: String, body: SpTracksUriRefRequest): HttpResponse =
+        gatedSend {
+            httpClient.delete("$BASE/v1/playlists/$playlistId/tracks") {
                 applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
             }
         }
@@ -536,7 +574,7 @@ fun List<SpImage>?.bestImageUrl(): String? =
 @Serializable data class SpFollowedArtistsResponse(val artists: SpCursorPaginated)
 @Serializable data class SpCursorPaginated(val items: List<SpArtist> = emptyList(), val total: Int = 0, val cursors: SpCursors? = null, val next: String? = null)
 @Serializable data class SpCursors(val after: String? = null)
-@Serializable data class SpPlaylistSimple(val id: String? = null, val name: String? = null, val description: String? = null, val images: List<SpImage>? = null, val owner: SpUser? = null, @SerialName("snapshot_id") val snapshotId: String? = null, val tracks: SpPlaylistTracksRef? = null)
+@Serializable data class SpPlaylistSimple(val id: String? = null, val name: String? = null, val description: String? = null, val images: List<SpImage>? = null, val owner: SpUser? = null, val collaborative: Boolean = false, @SerialName("snapshot_id") val snapshotId: String? = null, val tracks: SpPlaylistTracksRef? = null)
 @Serializable data class SpPlaylistTracksRef(val total: Int = 0)
 @Serializable data class SpPaginatedPlaylists(val items: List<SpPlaylistSimple> = emptyList(), val total: Int = 0, val offset: Int = 0, val limit: Int = 50, val next: String? = null)
 @Serializable data class SpPlaylistTrackItem(@SerialName("added_at") val addedAt: String? = null, val track: SpTrack? = null)
@@ -545,6 +583,8 @@ fun List<SpImage>?.bestImageUrl(): String? =
 @Serializable data class SpUser(val id: String, @SerialName("display_name") val displayName: String? = null, val country: String? = null)
 @Serializable data class SpIdsRequest(val ids: List<String>)
 @Serializable data class SpUrisRequest(val uris: List<String>)
+@Serializable data class SpUriRef(val uri: String)
+@Serializable data class SpTracksUriRefRequest(val tracks: List<SpUriRef>)
 @Serializable data class SpCreatePlaylistRequest(val name: String, val description: String? = null, val public: Boolean = false)
 @Serializable data class SpUpdatePlaylistRequest(val name: String? = null, val description: String? = null)
 @Serializable data class SpSnapshotResponse(@SerialName("snapshot_id") val snapshotId: String)

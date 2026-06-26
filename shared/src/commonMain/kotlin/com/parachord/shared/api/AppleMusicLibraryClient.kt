@@ -299,6 +299,32 @@ class AppleMusicLibraryClient(
         }
         return out
     }
+
+    /**
+     * Resolve a catalog song id from an ISRC via the CATALOG API
+     * (`GET /v1/catalog/{storefront}/songs?filter[isrc]=…`). EXACT — an ISRC
+     * identifies the recording — so no fuzzy text-search wrong-variant risk
+     * (unlike the iTunes Search fallback). The returned catalog id is what the
+     * library add-to-playlist endpoint accepts. Returns null on miss / no
+     * storefront / error (caller falls back to iTunes search).
+     */
+    suspend fun getCatalogSongIdByIsrc(storefront: String, isrc: String): String? {
+        if (storefront.isBlank() || isrc.isBlank()) return null
+        return try {
+            val response = httpClient.get("$BASE_URL/v1/catalog/$storefront/songs") {
+                applyAuth(this)
+                parameter("filter[isrc]", isrc)
+                parameter("limit", 1)
+            }
+            if (!response.status.isSuccess()) return null
+            val parsed = json.decodeFromString<AmCatalogSongsResponse>(response.bodyAsText())
+            parsed.data.firstOrNull()?.id
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
 }
 
 @Serializable
@@ -507,7 +533,13 @@ data class AmTracksRelationship(
 @Serializable
 data class AmTrackReference(
     val id: String,
-    val type: String = "songs",
+    // NO default value. The client's `Json` has `encodeDefaults = false`, so a
+    // default-valued `type` is DROPPED from the body — AM then receives
+    // {"data":[{"id":"…"}]} with no `type` and rejects it with HTTP 400
+    // "Unable to parse request body" (code 40007), which is why every Apple Music
+    // playlist track-add silently failed. A required (defaultless) property is
+    // always serialized regardless of `encodeDefaults`. Both call sites pass "songs".
+    val type: String,
 )
 
 @Serializable

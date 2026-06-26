@@ -1,5 +1,6 @@
 package com.parachord.shared.sync
 
+import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.resolver.validateIsrc
 
 /**
@@ -26,6 +27,30 @@ fun canonicalTrackKey(
     validateIsrc(isrc)?.let { return "isrc-$it" }
     recordingMbid?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { return "mbid-$it" }
     val a = artist?.trim()?.lowercase() ?: ""
-    val t = title?.trim()?.lowercase() ?: ""
+    // Same conservative remaster-strip as [trackKeysOf] so the string-key and
+    // TrackKeys paths agree (cross-engine: desktop must match).
+    val t = normalizeTitleForKey(title)
     return "norm-$a|$t"
 }
+
+/**
+ * Canonical key for a LOCAL playlist track. [PlaylistTrack] carries no ISRC —
+ * ISRC lives on the `Track` row, not the playlist-track join — so a local
+ * baseline keys off `recordingMbid` → `norm-artist|title`. `MbidEnrichmentService`
+ * backfills the MBID over time. (When a PROVIDER tracklist is keyed in Phase 4
+ * it CAN supply ISRC, hence the residual cross-service mismatch the design
+ * accepts + enrichment minimizes.)
+ */
+fun canonicalTrackKey(track: PlaylistTrack): String = canonicalTrackKey(
+    isrc = null,
+    recordingMbid = track.trackRecordingMbid,
+    artist = track.trackArtist,
+    title = track.trackTitle,
+)
+
+/**
+ * The ordered baseline key list for a playlist's local tracks — the 3-way-merge
+ * ancestor seeded at N-way migration (Phase 2). Position-ordered; pure.
+ */
+fun nwayBaselineKeys(tracks: List<PlaylistTrack>): List<String> =
+    tracks.sortedBy { it.position }.map { canonicalTrackKey(it) }

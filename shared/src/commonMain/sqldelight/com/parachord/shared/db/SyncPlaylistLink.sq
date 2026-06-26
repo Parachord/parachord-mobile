@@ -20,6 +20,9 @@ SELECT * FROM sync_playlist_link WHERE localPlaylistId = ? AND providerId = ?;
 selectByExternalId:
 SELECT * FROM sync_playlist_link WHERE providerId = ? AND externalId = ?;
 
+selectForProvider:
+SELECT * FROM sync_playlist_link WHERE providerId = ?;
+
 upsert:
 INSERT OR REPLACE INTO sync_playlist_link (localPlaylistId, providerId, externalId, syncedAt)
 VALUES (?, ?, ?, ?);
@@ -47,6 +50,12 @@ WHERE localPlaylistId = :localPlaylistId AND providerId = :providerId;
 
 clearPendingAction:
 UPDATE sync_playlist_link SET pendingAction = NULL WHERE localPlaylistId = ? AND providerId = ?;
+
+-- One-time cleanup: the N-way swap deleted the NWAY_FILL_PENDING_ACTION="nway-fill"
+-- writer, but stale 'nway-fill' values linger on real installs and the legacy push
+-- skips any non-null pendingAction. Idempotent (0 rows after the first run).
+clearNwayFillPendingActions:
+UPDATE sync_playlist_link SET pendingAction = NULL WHERE pendingAction = 'nway-fill';
 
 selectPendingForProvider:
 SELECT * FROM sync_playlist_link WHERE providerId = ? AND pendingAction IS NOT NULL;

@@ -69,6 +69,7 @@ import com.parachord.android.ui.screens.nowplaying.NowPlayingViewModel
 import com.parachord.android.ui.screens.playlists.*
 import com.parachord.android.ui.screens.search.SearchViewModel
 import com.parachord.android.ui.screens.settings.SettingsViewModel
+import com.parachord.android.ui.screens.sync.PlaylistSyncChannelsViewModel
 import com.parachord.android.ui.screens.sync.SyncViewModel
 import com.parachord.android.widget.MiniPlayerWidgetUpdater
 import kotlinx.serialization.json.Json
@@ -259,6 +260,21 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // #269: writable (owned OR collaborative on the source). Read-only
+        // followed playlists are 0 and never become push/mirror candidates.
+        try {
+            driver.execute(null, "ALTER TABLE playlists ADD COLUMN writable INTEGER NOT NULL DEFAULT 1", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
+        // N-way reconciliation redesign: persist ISRC on playlist tracks so the
+        // unify isrc-tier can bridge the same recording across services (different
+        // recording-MBID / drifted title, same ISRC) — the no-false-drop fix.
+        try {
+            driver.execute(null, "ALTER TABLE playlist_tracks ADD COLUMN trackIsrc TEXT", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // Slow-trickle cross-resolver enrichment (#150): tracks the last time
         // we tried to backfill streaming-service IDs for a localfiles-only
         // track. Same idempotent ALTER pattern as above.
@@ -285,6 +301,20 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // N-way missingStreak gate (parachord/parachord#911): presence-tracking on
+        // the hydration cache so a single transient complete-fetch omission of a
+        // materialized track isn't read as a deletion. New installs get these from
+        // TrackProviderIdCache.sq's CREATE; existing installs need these ALTERs.
+        try {
+            driver.execute(null, "ALTER TABLE track_provider_id_cache ADD COLUMN missingStreak INTEGER NOT NULL DEFAULT 0", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
+        try {
+            driver.execute(null, "ALTER TABLE track_provider_id_cache ADD COLUMN lastSeenAt INTEGER", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // N-way multimaster sync (Phase 1): the 3-way-merge baseline (ancestor)
         // per playlist + per-(playlist, provider) change-token/edit-time state.
         // New tables, isolated from the live canonical-source engine. New
@@ -308,6 +338,24 @@ val androidModule = module {
                 editedAt        INTEGER,
                 lastSyncedAt    INTEGER NOT NULL,
                 PRIMARY KEY (localPlaylistId, providerId)
+            )""".trimIndent(),
+            0,
+        )
+        // Negative cache for provider-id hydration (incremental-materialization
+        // Task 7): per (identityKey, providerId) the last hydration attempt so the
+        // HydrationCoordinator can short-circuit known ids + cooldown repeated
+        // misses instead of re-searching every track every sync.
+        driver.execute(
+            null,
+            """CREATE TABLE IF NOT EXISTS track_provider_id_cache (
+                identityKey   TEXT NOT NULL,
+                providerId    TEXT NOT NULL,
+                resolvedId    TEXT,
+                lastAttemptAt INTEGER NOT NULL,
+                attempts      INTEGER NOT NULL DEFAULT 0,
+                missingStreak INTEGER NOT NULL DEFAULT 0,
+                lastSeenAt    INTEGER,
+                PRIMARY KEY (identityKey, providerId)
             )""".trimIndent(),
             0,
         )
@@ -348,6 +396,7 @@ val androidModule = module {
     single { SyncPlaylistSourceDao(get()) }
     single { com.parachord.shared.db.dao.SyncPlaylistBaselineDao(get()) }
     single { com.parachord.shared.db.dao.SyncPlaylistNwayDao(get()) }
+    single { com.parachord.shared.db.dao.TrackProviderIdCacheDao(get()) }
 
     // ── Settings & Auth ──────────────────────────────────────────────
 
@@ -957,12 +1006,29 @@ val androidModule = module {
     // ── Sync ─────────────────────────────────────────────────────────
 
     singleOf(::SyncEngine)
+    // Per-playlist Sync context-menu backend (shared, parity with iOS). Takes
+    // the shared SettingsStore / LibraryRepository / PlaylistDao / SyncEngine —
+    // all resolve here (the Android SettingsStore / LibraryRepository / SyncEngine
+    // are typealias shims to the shared types).
+    single {
+        com.parachord.shared.sync.PlaylistSyncChannelManager(
+            settingsStore = get(),
+            libraryRepository = get(),
+            playlistDao = get(),
+            syncEngine = get(),
+        )
+    }
     // Bind as SyncProvider so getAll<SyncProvider>() picks it up. Future
     // providers (Apple Music, Tidal) register the same way; SyncEngine
     // accepts the resulting List<SyncProvider> with no per-provider Koin
     // changes required here.
     singleOf(::SpotifySyncProvider) bind com.parachord.shared.sync.SyncProvider::class
-    singleOf(::AppleMusicSyncProvider) bind com.parachord.shared.sync.SyncProvider::class
+    // Explicit binding (NOT singleOf): AppleMusicSyncProvider has an injectable
+    // `nowMs: () -> Long = { currentTimeMillis() }` (the iTunes breaker clock, #7d).
+    // singleOf would try to resolve that Function0 from the graph and ignore the
+    // Kotlin default → NoDefinitionFoundException(Function0) at startup. Construct
+    // it explicitly with just the two real deps so nowMs uses its production default.
+    single { AppleMusicSyncProvider(get(), get()) } bind com.parachord.shared.sync.SyncProvider::class
     singleOf(::ListenBrainzSyncProvider) bind com.parachord.shared.sync.SyncProvider::class
     single<List<com.parachord.shared.sync.SyncProvider>> { getAll() }
     singleOf(::SyncScheduler)
@@ -999,5 +1065,6 @@ val androidModule = module {
     viewModelOf(::PopOfTheTopsViewModel)
     viewModelOf(::ConcertsViewModel)
     viewModelOf(::SyncViewModel)
+    viewModelOf(::PlaylistSyncChannelsViewModel)
     viewModelOf(::DeepLinkViewModel)
 }

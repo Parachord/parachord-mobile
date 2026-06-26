@@ -1,5 +1,6 @@
 package com.parachord.shared.sync
 
+import com.parachord.shared.model.PlaylistTrack
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -37,6 +38,23 @@ class PlaylistTrackKeyTest {
         assertEquals("norm-|creep", canonicalTrackKey(null, null, null, "Creep"))
         assertEquals("norm-radiohead|", canonicalTrackKey(null, null, "Radiohead", null))
         assertEquals("norm-|", canonicalTrackKey(null, null, null, null))
+    }
+
+    @Test
+    fun nwayBaselineKeys_ordersByPositionAndDerivesKeys() {
+        val tracks = listOf(
+            PlaylistTrack(playlistId = "p", position = 2, trackTitle = "Creep", trackArtist = "Radiohead"),
+            PlaylistTrack(
+                playlistId = "p", position = 0, trackTitle = "Idioteque", trackArtist = "Radiohead",
+                trackRecordingMbid = "ABC-MBID",
+            ),
+            PlaylistTrack(playlistId = "p", position = 1, trackTitle = "No Surprises", trackArtist = "Radiohead"),
+        )
+        // Position order (0,1,2); track with MBID → mbid- key, others → norm-.
+        assertEquals(
+            listOf("mbid-abc-mbid", "norm-radiohead|no surprises", "norm-radiohead|creep"),
+            nwayBaselineKeys(tracks),
+        )
     }
 
     @Test

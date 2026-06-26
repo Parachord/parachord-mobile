@@ -13,7 +13,12 @@ CREATE TABLE IF NOT EXISTS playlists (
     ownerName TEXT,
     sourceUrl TEXT,
     sourceContentHash TEXT,
-    localOnly INTEGER NOT NULL DEFAULT 0
+    localOnly INTEGER NOT NULL DEFAULT 0,
+    -- Whether the user can WRITE to this playlist on its source provider
+    -- (owned OR collaborative). Read-only followed playlists are writable=0 and
+    -- must never be push/mirror candidates (#269). Default 1 — local-created and
+    -- owned playlists are writable; only a non-writable pull marks it 0.
+    writable INTEGER NOT NULL DEFAULT 1
 );
 
 getAll:
@@ -36,8 +41,8 @@ getHosted:
 SELECT * FROM playlists WHERE sourceUrl IS NOT NULL;
 
 insert:
-INSERT OR REPLACE INTO playlists (id, name, description, artworkUrl, trackCount, createdAt, updatedAt, spotifyId, snapshotId, lastModified, locallyModified, ownerName, sourceUrl, sourceContentHash, localOnly)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO playlists (id, name, description, artworkUrl, trackCount, createdAt, updatedAt, spotifyId, snapshotId, lastModified, locallyModified, ownerName, sourceUrl, sourceContentHash, localOnly, writable)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateArtworkById:
 UPDATE playlists SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artworkUrl = '');
@@ -61,6 +66,12 @@ WHERE id = ?;
 
 setLocalOnly:
 UPDATE playlists SET localOnly = ? WHERE id = ?;
+
+-- #269: refresh writability independently of the track reconcile (the pull
+-- skips unchanged rows, so an existing followed playlist would otherwise keep
+-- its stale writable=1 forever).
+setWritable:
+UPDATE playlists SET writable = ? WHERE id = ?;
 
 -- Phase 3 — Fix 4 helpers for the post-push `relevantMirrors` clear.
 -- `getLocallyModified` returns every row whose flag is set (the

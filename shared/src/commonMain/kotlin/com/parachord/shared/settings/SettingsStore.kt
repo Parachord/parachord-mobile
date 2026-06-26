@@ -115,6 +115,15 @@ class SettingsStore(
         // run yet on a fresh-from-old install.
         const val TRACK_DEDUP_V1_DONE = "track_dedup_v1_done"
         const val ENABLED_SYNC_PROVIDERS = "enabled_sync_providers"
+        // N-way multimaster playlist sync (per-user opt-in, default OFF). Gates
+        // the WHOLE N-way path — migration bootstrap, shadow mode, propagation.
+        // Inert until flipped on, so Phases 2-3 ship dark.
+        const val NWAY_ENABLED = "nway_enabled"
+        // Separate, stricter opt-in for N-way PROPAGATION (real pushes). Requires
+        // NWAY_ENABLED too. Default OFF — migration + shadow run under
+        // NWAY_ENABLED; only this flag lets the engine actually write to
+        // providers. Keeps validation (shadow) and writes (propagation) distinct.
+        const val NWAY_PROPAGATE = "nway_propagate"
 
         /** Per-provider opt-in for which collection axes to sync.
          *  Keyed as `sync_collections_<providerId>` ("tracks,albums,artists,playlists").
@@ -134,6 +143,9 @@ class SettingsStore(
 
         /** Per-playlist channel override (which providers ONE playlist syncs with). */
         fun playlistChannelsKey(localPlaylistId: String) = "sync_playlist_channels_$localPlaylistId"
+
+        /** Per-playlist MIRROR-ONLY flag (one-way mirror FROM the source). */
+        fun playlistMirrorOnlyKey(localPlaylistId: String) = "sync_playlist_mirror_only_$localPlaylistId"
 
         /** Marker key — set to `true` once the one-shot DataStore→KvStore
          *  copy completes. Lives in KvStore so it survives across reboots
@@ -184,6 +196,9 @@ class SettingsStore(
     }
     val persistQueue: Flow<Boolean> = migratedFlow().flatMapConcat {
         kv.observeBoolean(PERSIST_QUEUE, default = true)
+    }
+    val nwayEnabledFlow: Flow<Boolean> = migratedFlow().flatMapConcat {
+        kv.observeBoolean(NWAY_ENABLED, default = false)
     }
 
     suspend fun setThemeMode(mode: String) {
@@ -726,6 +741,29 @@ class SettingsStore(
         ensureMigrated(); kv.setBoolean(SYNC_ENABLED, enabled)
     }
 
+    /** N-way multimaster playlist sync opt-in. Default OFF — gates the entire
+     *  N-way path (migration bootstrap, shadow mode, propagation). */
+    override suspend fun isNwayEnabled(): Boolean {
+        ensureMigrated(); return kv.getBoolean(NWAY_ENABLED, default = false)
+    }
+
+    suspend fun setNwayEnabled(enabled: Boolean) {
+        ensureMigrated(); kv.setBoolean(NWAY_ENABLED, enabled)
+    }
+
+    /** N-way PROPAGATION (real provider writes). Requires [isNwayEnabled] too. */
+    override suspend fun isNwayPropagateEnabled(): Boolean {
+        ensureMigrated(); return kv.getBoolean(NWAY_PROPAGATE, default = false)
+    }
+
+    suspend fun setNwayPropagateEnabled(enabled: Boolean) {
+        ensureMigrated(); kv.setBoolean(NWAY_PROPAGATE, enabled)
+    }
+
+    val nwayPropagateFlow: Flow<Boolean> = migratedFlow().flatMapConcat {
+        kv.observeBoolean(NWAY_PROPAGATE, default = false)
+    }
+
     override suspend fun setLastSyncAt(timestamp: Long) {
         ensureMigrated(); kv.setString(SYNC_LAST_COMPLETED_AT, timestamp.toString())
     }
@@ -850,6 +888,17 @@ class SettingsStore(
             // set round-trips as empty, not as absent.
             kv.setString(playlistChannelsKey(localPlaylistId), if (channels.isEmpty()) " " else channels.joinToString(","))
         }
+    }
+
+    override suspend fun getPlaylistMirrorOnly(localPlaylistId: String): Boolean {
+        ensureMigrated()
+        return kv.getStringOrNull(playlistMirrorOnlyKey(localPlaylistId)) == "true"
+    }
+
+    override suspend fun setPlaylistMirrorOnly(localPlaylistId: String, mirrorOnly: Boolean) {
+        ensureMigrated()
+        if (mirrorOnly) kv.setString(playlistMirrorOnlyKey(localPlaylistId), "true")
+        else kv.remove(playlistMirrorOnlyKey(localPlaylistId))
     }
 
     override suspend fun clearSyncSettings() {

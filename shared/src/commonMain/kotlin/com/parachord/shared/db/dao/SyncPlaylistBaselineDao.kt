@@ -2,28 +2,33 @@ package com.parachord.shared.db.dao
 
 import com.parachord.shared.db.ParachordDb
 import com.parachord.shared.platform.currentTimeMillis
+import com.parachord.shared.sync.TrackKeys
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.builtins.serializer
 
 /**
  * Concrete DAO wrapping SQLDelight SyncPlaylistBaselineQueries.
  *
- * The N-way 3-way-merge ancestor per playlist (Phase 1). [Baseline.tracks] is
- * the ordered list of canonical track keys; persisted as a JSON string array.
- * Keyed by localPlaylistId alone (one baseline per playlist).
+ * The N-way 3-way-merge ancestor per playlist. [Baseline.tracks] is the ordered
+ * list of per-track [TrackKeys] (isrc/mbid/norm) — richer than a single key
+ * string so the ancestor retains all tiers for cross-copy unification (Phase 4).
+ * Persisted as a JSON array of TrackKeys objects. Keyed by localPlaylistId.
+ *
+ * Format note: the Phase-1/2 format stored a JSON array of single key STRINGS;
+ * those decode to empty here and the migration re-seeds them (see
+ * SyncEngine.migratePlaylistToNway).
  */
 class SyncPlaylistBaselineDao(private val db: ParachordDb) {
 
     private val queries get() = db.syncPlaylistBaselineQueries
     private val json = Json { ignoreUnknownKeys = true }
-    private val keyListSerializer = ListSerializer(String.serializer())
+    private val keyListSerializer = ListSerializer(TrackKeys.serializer())
 
     data class Baseline(
         val localPlaylistId: String,
-        val tracks: List<String>,
+        val tracks: List<TrackKeys>,
         val baselineSyncedAt: Long,
     )
 
@@ -38,7 +43,7 @@ class SyncPlaylistBaselineDao(private val db: ParachordDb) {
 
     suspend fun upsert(
         localPlaylistId: String,
-        tracks: List<String>,
+        tracks: List<TrackKeys>,
         baselineSyncedAt: Long = currentTimeMillis(),
     ): Unit = withContext(Dispatchers.Default) {
         queries.upsert(localPlaylistId, json.encodeToString(keyListSerializer, tracks), baselineSyncedAt)

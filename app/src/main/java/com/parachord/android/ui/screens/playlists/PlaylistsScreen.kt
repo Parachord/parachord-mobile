@@ -161,6 +161,15 @@ fun PlaylistsScreen(
             var pendingDeletePlaylist by remember { mutableStateOf<PlaylistEntity?>(null) }
             var deleteMirrors by remember { mutableStateOf<List<String>>(emptyList()) }
             var deleteSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
+            var syncTarget by remember { mutableStateOf<PlaylistEntity?>(null) }
+
+            syncTarget?.let { pl ->
+                com.parachord.android.ui.components.PlaylistSyncChannelsSheet(
+                    playlistId = pl.id,
+                    playlistName = pl.name,
+                    onDismiss = { syncTarget = null },
+                )
+            }
 
             LaunchedEffect(pendingDeletePlaylist) {
                 val pl = pendingDeletePlaylist
@@ -378,6 +387,10 @@ fun PlaylistsScreen(
                                     pendingDeletePlaylist = playlist
                                 },
                                 onShare = { sharePlaylistById(playlist.id) },
+                                onOpenSync = {
+                                    showMenu = false
+                                    syncTarget = playlist
+                                },
                             )
                         }
                     }

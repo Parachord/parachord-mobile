@@ -4,9 +4,12 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Behavior vectors for the pure N-way 3-way merge (Phase 0). These ARE the
- * cross-engine fixtures — the desktop JS merge must produce identical output
- * for the same inputs. Keep them simple + literal so they translate to JSON.
+ * Behavior vectors for the pure N-way 3-way merge (Phase 0). These are a 1:1
+ * transcription of the canonical cross-engine fixture file
+ * `docs/nway-playlist-merge-fixtures.json` — the desktop JS merge transcribes
+ * the SAME cases and must produce identical output. Presence = union-adds ∪
+ * (baseline − union-removes), DELETE ALWAYS WINS, `editedAt` orders only. When
+ * editing a vector, edit the JSON too (it's the contract both engines diff).
  */
 class PlaylistMergeTest {
 

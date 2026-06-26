@@ -27,11 +27,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
@@ -107,6 +109,7 @@ import com.parachord.android.ui.components.ModalTextPrimary
 import com.parachord.android.ui.components.ModalScrim
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.SwipeableTabLayout
+import com.parachord.android.ui.screens.sync.ProviderSyncConfigSheet
 import com.parachord.android.ui.screens.sync.SyncSetupSheet
 import com.parachord.android.ui.screens.sync.SyncViewModel
 import com.parachord.android.ui.theme.ParachordTheme
@@ -2682,12 +2685,24 @@ private fun GeneralTab(
     val syncViewModel: SyncViewModel = koinViewModel()
     val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
     val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
+    // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
+    // screen (koinViewModel is nav-entry-scoped).
+    val settingsViewModel: SettingsViewModel = koinViewModel()
+    val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
+    val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
+    val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
+    val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
+    val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
+    val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
     var showSyncSetupSheet by remember { mutableStateOf(false) }
     /** Which provider the wizard is currently configuring. The same sheet
      *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
      *  row below writes `"applemusic"`. */
     var syncSetupProviderId by remember { mutableStateOf("spotify") }
     var showStopSyncDialog by remember { mutableStateOf(false) }
+    /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
+     *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
+    var configSyncProviderId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SectionHeader("Appearance") }
@@ -2818,6 +2833,18 @@ private fun GeneralTab(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
+                            // Configure what syncs — per-provider picker (#266).
+                            // Choose which of your Spotify playlists to import.
+                            OutlinedButton(
+                                onClick = { configSyncProviderId = "spotify" },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text("Configure what syncs")
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
                             // Stop syncing button
                             TextButton(
                                 onClick = { showStopSyncDialog = true },
@@ -2884,9 +2911,16 @@ private fun GeneralTab(
                         // when on it re-opens the wizard with current selection.
                         Button(
                             onClick = {
-                                syncSetupProviderId = "applemusic"
-                                syncViewModel.resetSetup()
-                                showSyncSetupSheet = true
+                                if (appleMusicSyncEnabled) {
+                                    // Already on — go straight to the per-provider
+                                    // picker (#266: axes + which AM playlists to
+                                    // import), not the all-or-nothing setup wizard.
+                                    configSyncProviderId = "applemusic"
+                                } else {
+                                    syncSetupProviderId = "applemusic"
+                                    syncViewModel.resetSetup()
+                                    showSyncSetupSheet = true
+                                }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
@@ -2954,6 +2988,187 @@ private fun GeneralTab(
                     },
                 )
             }
+            // Configure what syncs — push picker (#266): All / Choose / None
+            // over the local playlists eligible to mirror to ListenBrainz.
+            if (listenBrainzSyncEnabled) {
+                item {
+                    TextButton(
+                        onClick = { configSyncProviderId = "listenbrainz" },
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    ) {
+                        Text("Configure what syncs")
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.ChevronRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        // ── N-way multimaster (DEV ONLY) ─────────────────────────────
+        // Debug-build gate: flips the dormant nway_enabled flag so sync runs
+        // migration + SHADOW mode (logs + the report below; pushes nothing).
+        // For validating the merge against a real library before propagation.
+        if (BuildConfig.DEBUG) {
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { SectionHeader("Developer · N-way sync (shadow)") }
+            item {
+                ListItem(
+                    headlineContent = { Text("N-way shadow mode") },
+                    supportingContent = {
+                        Text(
+                            "Runs the multimaster merge in shadow on every sync — logs what " +
+                                "it WOULD push, but pushes nothing. Dev validation only.",
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = nwayEnabled,
+                            onCheckedChange = { settingsViewModel.setNwayEnabled(it) },
+                        )
+                    },
+                )
+            }
+            if (nwayEnabled) {
+                item {
+                    Button(
+                        onClick = { settingsViewModel.runShadowScan() },
+                        enabled = !shadowScanning,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Text(if (shadowScanning) "Scanning…" else "Run shadow scan")
+                    }
+                }
+                if (nwayShadowLog.isEmpty()) {
+                    item {
+                        Text(
+                            "No pending changes. Run a shadow scan — it lists only playlists " +
+                                "where a copy diverged from the baseline (cheap: one list call " +
+                                "per provider, no pushes).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                } else {
+                    items(nwayShadowLog) { entry ->
+                        ListItem(
+                            headlineContent = {
+                                Text(if (entry.massChange) "⚠️ ${entry.playlistName}" else entry.playlistName)
+                            },
+                            supportingContent = {
+                                Text(
+                                    "changed: ${entry.changedCopies.joinToString().ifEmpty { "—" }}\n" +
+                                        "→ merged ${entry.mergedCount} track(s), " +
+                                        "would push to: ${entry.wouldPushTo.joinToString().ifEmpty { "none" }}" +
+                                        (if (entry.dropPercent > 0) " · drop ${entry.dropPercent}%" else "") +
+                                        (if (entry.massChange) " · MASS-CHANGE, would abort" else ""),
+                                )
+                            },
+                        )
+                    }
+                }
+
+                // ── Propagation (REAL writes, stricter opt-in) ──────────
+                item { Spacer(modifier = Modifier.height(8.dp)) }
+                item { SectionHeader("Developer · N-way propagation (writes)") }
+                item {
+                    ListItem(
+                        headlineContent = { Text("Enable real writes") },
+                        supportingContent = {
+                            Text(
+                                "Lets propagation PUSH the merged tracklist to your real " +
+                                    "Spotify / Apple Music / ListenBrainz playlists. Leave OFF to " +
+                                    "preview only. Dry-run works without this.",
+                            )
+                        },
+                        trailingContent = {
+                            Switch(
+                                checked = nwayPropagateEnabled,
+                                onCheckedChange = { settingsViewModel.setNwayPropagateEnabled(it) },
+                            )
+                        },
+                    )
+                }
+                item {
+                    Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        Button(
+                            onClick = { settingsViewModel.runPropagation(dryRun = true) },
+                            enabled = !propagating,
+                        ) {
+                            Text(if (propagating) "Running…" else "Dry-run")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { settingsViewModel.runPropagation(dryRun = false) },
+                            enabled = !propagating && nwayPropagateEnabled,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                            ),
+                        ) {
+                            Text("Run writes")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = { settingsViewModel.resetNwayState() },
+                            enabled = !propagating,
+                        ) {
+                            Text("Reset state")
+                        }
+                    }
+                }
+                if (nwayPropagationLog.isEmpty()) {
+                    item {
+                        Text(
+                            "No propagation outcome yet. Dry-run previews what WOULD be pushed " +
+                                "(no writes); review it on your real library before enabling writes.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                } else {
+                    items(nwayPropagationLog) { entry ->
+                        val badge = when (entry.status) {
+                            "pushed" -> "✅"
+                            "would-push" -> "👁"
+                            "partial" -> "◑"
+                            "total-wipe-abort", "partial-abort" -> "⚠️"
+                            else -> "•"
+                        }
+                        ListItem(
+                            headlineContent = { Text("$badge ${entry.playlistName}") },
+                            supportingContent = {
+                                Text(
+                                    "${entry.status} · merged ${entry.mergedCount} track(s) → " +
+                                        "targets: ${entry.pushTargets.joinToString().ifEmpty { "none" }}" +
+                                        (if (entry.pendingAdds > 0) " · ${entry.pendingAdds} pending" else "") +
+                                        (if (entry.unsupportedRemoves > 0) " · ${entry.unsupportedRemoves} not-removable" else ""),
+                                )
+                            },
+                            trailingContent = {
+                                // Scoped real-write: push THIS playlist only (needs
+                                // the writes toggle on) — validate one before the
+                                // full run.
+                                TextButton(
+                                    onClick = {
+                                        settingsViewModel.runPropagationForPlaylist(
+                                            entry.localPlaylistId,
+                                            dryRun = false,
+                                        )
+                                    },
+                                    enabled = !propagating && nwayPropagateEnabled,
+                                ) {
+                                    Text("Push this")
+                                }
+                            },
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -2963,6 +3178,16 @@ private fun GeneralTab(
             onDismiss = { showSyncSetupSheet = false },
             viewModel = syncViewModel,
             providerId = syncSetupProviderId,
+        )
+    }
+
+    // Per-provider "Configure what syncs" sheet (#266) — pull picker for
+    // Spotify / Apple Music, push picker for ListenBrainz.
+    configSyncProviderId?.let { pid ->
+        ProviderSyncConfigSheet(
+            providerId = pid,
+            onDismiss = { configSyncProviderId = null },
+            viewModel = syncViewModel,
         )
     }
 

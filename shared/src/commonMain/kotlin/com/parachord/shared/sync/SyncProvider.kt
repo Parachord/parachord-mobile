@@ -74,6 +74,52 @@ interface SyncProvider {
         externalTrackIds: List<String>,
     ): String?
 
+    // ── Incremental add/remove primitives (incremental-materialization) ──
+    // The materialize executor (Task 5) calls these to apply a per-provider,
+    // non-destructive diff instead of a wholesale replace. Removal dispatch is
+    // driven by [ProviderFeatures.trackRemoveMode] — the executor NEVER branches
+    // on `id`, so the two remove variants default to THROWING. A mis-dispatch (or
+    // a provider that forgot to override the variant its mode declares) must be
+    // LOUD, never silently destructive.
+
+    /**
+     * The provider's native track id for this track (the column the provider keys
+     * its remote tracklist on), or null if absent. Replaces the central
+     * `extractExternalTrackIds` switch — the executor reads remote tracks' native
+     * ids through this. Throwing default so a new provider must declare it; the
+     * executor calls it for every provider it removes from.
+     */
+    fun nativeIdOf(track: com.parachord.shared.model.PlaylistTrack): String? =
+        throw UnsupportedOperationException("nativeIdOf not implemented by $id")
+
+    /**
+     * Append [externalTrackIds] to the remote, non-destructively. Every provider
+     * supports an append; there is NO safe replace-based default (it would wipe),
+     * so each provider overrides this. Returns the new snapshot token (provider's
+     * snapshot semantics), or null when the provider has no snapshot.
+     *
+     * Empty input is a no-op; the return value on empty input is provider-defined
+     * — callers should guard empty id lists. (Task-3 review note.)
+     */
+    suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? =
+        throw UnsupportedOperationException("addPlaylistTracks not implemented by $id")
+
+    /**
+     * Remove specific tracks by their native ID. Only called for
+     * [TrackRemoveMode.ByNativeId]. Throws by default so a mis-dispatched call to
+     * a provider whose mode is NOT ByNativeId fails loudly.
+     */
+    suspend fun removePlaylistTracksByNativeId(externalPlaylistId: String, externalTrackIds: List<String>): String? =
+        throw UnsupportedOperationException("removeByNativeId not supported by $id")
+
+    /**
+     * Remove tracks by 0-based remote position. Only called for
+     * [TrackRemoveMode.ByPosition]. Throws by default so a mis-dispatched call to
+     * a provider whose mode is NOT ByPosition fails loudly.
+     */
+    suspend fun removePlaylistTracksByPosition(externalPlaylistId: String, positions: List<Int>): String? =
+        throw UnsupportedOperationException("removeByPosition not supported by $id")
+
     /**
      * Update playlist metadata (rename, description). Best-effort.
      * Apple Music returns 401 here; providers must NOT throw on
@@ -95,6 +141,21 @@ interface SyncProvider {
      * Music app" UX.
      */
     suspend fun deletePlaylist(externalPlaylistId: String): DeleteResult
+
+    /**
+     * Does the remote playlist still exist? Used to self-heal a dead mirror link
+     * (clear it so the next sync recreates). Default true — only a provider that can
+     * cheaply + DEFINITIVELY confirm deletion (a 404 on the playlist itself) overrides.
+     *
+     * SAFETY: an implementation MUST return false ONLY when it has a definitive
+     * signal that the playlist RESOURCE is gone (a 404 on a GET of the playlist
+     * itself). It must return true — never false — on any transient error, any
+     * ambiguous signal (e.g. a 404 on the playlist's `/tracks` sub-resource, which
+     * Apple Music also returns for valid-but-empty playlists), or any thrown
+     * exception. A wrongly-cleared link recreates a still-live remote as a
+     * duplicate, so bias hard toward "exists".
+     */
+    suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean = true
 
     /**
      * Catalog-search-based ID hydration (un-defers Decision D1).
@@ -128,6 +189,7 @@ interface SyncProvider {
         title: String,
         artist: String,
         album: String? = null,
+        isrc: String? = null,
     ): String? = null
 
     // ── Library surface (collection sync — Phase 6.5+) ───────────────
@@ -199,7 +261,31 @@ data class ProviderFeatures(
     val supportsPlaylistRename: Boolean = false,
     /** Whether full-replace PUT on tracks is reliable; if false, push degrades to append-only after first failure. */
     val supportsTrackReplace: Boolean = false,
+    /**
+     * How this provider removes specific tracks from a remote playlist.
+     * Drives the materialize executor's removal dispatch. Defaults to the
+     * conservative [TrackRemoveMode.ReplaceOnly] so a provider that forgets
+     * to declare it is never incrementally destructive.
+     */
+    val trackRemoveMode: TrackRemoveMode = TrackRemoveMode.ReplaceOnly,
+    /** Whether the provider preserves explicit track order on push (Spotify = true). */
+    val canReorder: Boolean = false,
 )
+
+/**
+ * How a provider deletes specific tracks from a remote playlist. Drives the
+ * materialize executor's removal dispatch — the executor never branches on id.
+ */
+enum class TrackRemoveMode {
+    /** Spotify: DELETE by track URI. */
+    ByNativeId,
+    /** ListenBrainz: POST item/delete by index+count. */
+    ByPosition,
+    /** Apple Music: no playlist-track remove endpoint (add-only). */
+    Unsupported,
+    /** Fallback for a future provider with only wholesale replace. */
+    ReplaceOnly,
+}
 
 enum class SnapshotKind {
     /** Provider returns a stable opaque token (Spotify `snapshot_id`). String-equality compare. */

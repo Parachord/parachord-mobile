@@ -3,7 +3,9 @@ package com.parachord.shared.sync
 import com.parachord.shared.api.SpCreatePlaylistRequest
 import com.parachord.shared.api.SpIdsRequest
 import com.parachord.shared.api.SpSnapshotResponse
+import com.parachord.shared.api.SpTracksUriRefRequest
 import com.parachord.shared.api.SpUpdatePlaylistRequest
+import com.parachord.shared.api.SpUriRef
 import com.parachord.shared.api.SpUrisRequest
 import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.api.bestImageUrl
@@ -50,6 +52,8 @@ class SpotifySyncProvider(
         supportsPlaylistDelete = true,
         supportsPlaylistRename = true,
         supportsTrackReplace = true,
+        trackRemoveMode = TrackRemoveMode.ByNativeId,
+        canReorder = true,
     )
 
     private var cachedMarket: String? = null
@@ -266,6 +270,11 @@ class SpotifySyncProvider(
             page.items.forEach { playlist ->
                 val playlistId = playlist.id ?: return@forEach
                 if (seen.add(playlistId)) {
+                    val owned = playlist.owner?.id == currentUser.id
+                    // Writable = you can edit the tracklist: owned OR collaborative.
+                    // A read-only followed playlist is writable=false → never a
+                    // push/mirror candidate (#269).
+                    val writable = owned || playlist.collaborative
                     all.add(SyncedPlaylist(
                         entity = Playlist(
                             id = "spotify-$playlistId",
@@ -276,11 +285,13 @@ class SpotifySyncProvider(
                             spotifyId = playlistId,
                             snapshotId = playlist.snapshotId,
                             ownerName = playlist.owner?.displayName,
+                            writable = writable,
                         ),
                         spotifyId = playlistId,
                         snapshotId = playlist.snapshotId,
                         trackCount = playlist.tracks?.total ?: 0,
-                        isOwned = playlist.owner?.id == currentUser.id,
+                        isOwned = owned,
+                        writable = writable,
                     ))
                 }
             }
@@ -320,6 +331,10 @@ class SpotifySyncProvider(
                     trackResolver = "spotify",
                     trackSpotifyUri = track.id?.let { "spotify:track:$it" },
                     trackSpotifyId = track.id,
+                    // Capture ISRC (free — it's already in the full track object)
+                    // so cross-provider hydration can resolve a recording MBID via
+                    // MusicBrainz /isrc/ when the LB mapper is down. Transient.
+                    trackIsrc = com.parachord.shared.resolver.validateIsrc(track.externalIds?.isrc),
                     addedAt = parseIsoTimestamp(item.addedAt),
                 ))
             }
@@ -340,6 +355,17 @@ class SpotifySyncProvider(
             null
         }
     }
+
+    /**
+     * Targeted existence probe for the dead-mirror reconcile. Spotify otherwise
+     * inherits [SyncProvider.remotePlaylistExists]'s `= true` default, so a
+     * deleted Spotify mirror is never detected gone. [SpotifyClient.playlistExists]
+     * carries the conservative contract: ONLY a definitive 404 returns `false`;
+     * a 429 / auth / transport error (or an active rate-limit cooldown) returns
+     * `true`, so a wrongly-cleared link can't recreate a still-live remote.
+     */
+    override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean =
+        spotifyClient.playlistExists(externalPlaylistId)
 
     // ── Write operations ─────────────────────────────────────────
 
@@ -415,6 +441,54 @@ class SpotifySyncProvider(
         return snapshotId
     }
 
+    /**
+     * Append non-destructively: POST EVERY chunk (never the PUT replace, which
+     * would wipe). Mirrors the chunking shape of [replacePlaylistTracks] but
+     * uses `addPlaylistTracks` (POST) for chunk 0 too. Returns the last
+     * successful chunk's snapshot id. Empty list → no API call, return null.
+     */
+    /** Spotify keys its remote tracklist on the track URI (`spotify:track:<id>`). */
+    override fun nativeIdOf(track: PlaylistTrack): String? = track.trackSpotifyUri
+
+    override suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? {
+        if (externalTrackIds.isEmpty()) return null
+
+        var snapshotId: String? = null
+        externalTrackIds.chunked(PLAYLIST_TRACK_BATCH_SIZE).forEach { chunk ->
+            val response = withRetry { spotifyClient.addPlaylistTracks(externalPlaylistId, SpUrisRequest(chunk)) }
+            if (response.status.isSuccess()) {
+                snapshotId = response.body<SpSnapshotResponse>().snapshotId
+            }
+        }
+        return snapshotId
+    }
+
+    /**
+     * Targeted removal by track URI (Spotify caps DELETE at 100 URIs/req, so we
+     * chunk by [PLAYLIST_TRACK_BATCH_SIZE] like the add path). Only called for
+     * [TrackRemoveMode.ByNativeId]. Returns the last successful chunk's snapshot.
+     */
+    override suspend fun removePlaylistTracksByNativeId(
+        externalPlaylistId: String,
+        externalTrackIds: List<String>,
+    ): String? {
+        if (externalTrackIds.isEmpty()) return null
+
+        var snapshotId: String? = null
+        externalTrackIds.chunked(PLAYLIST_TRACK_BATCH_SIZE).forEach { chunk ->
+            val response = withRetry {
+                spotifyClient.removePlaylistTracks(
+                    externalPlaylistId,
+                    SpTracksUriRefRequest(chunk.map { SpUriRef(it) }),
+                )
+            }
+            if (response.status.isSuccess()) {
+                snapshotId = response.body<SpSnapshotResponse>().snapshotId
+            }
+        }
+        return snapshotId
+    }
+
     override suspend fun updatePlaylistDetails(externalPlaylistId: String, name: String?, description: String?) {
         withRetry {
             spotifyClient.updatePlaylistDetails(externalPlaylistId, SpUpdatePlaylistRequest(name, description))
@@ -443,7 +517,7 @@ class SpotifySyncProvider(
      * we return null and the caller skips the track rather than pushing a
      * wrong-song mirror.
      */
-    override suspend fun searchForTrackId(title: String, artist: String, album: String?): String? {
+    override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
         val q = buildString {
             append("track:\""); append(title); append('"')
             append(" artist:\""); append(artist); append('"')

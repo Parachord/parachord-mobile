@@ -73,6 +73,16 @@ class SyncPlaylistLinkDao(private val db: ParachordDb) {
             queries.clearPendingAction(localPlaylistId, providerId)
         }
 
+    /**
+     * One-time cleanup: the N-way swap deleted the NWAY_FILL_PENDING_ACTION="nway-fill"
+     * writer, but stale values linger and the legacy push skips any non-null pendingAction
+     * (`if (link?.pendingAction != null) continue`), permanently stranding the playlist.
+     * Idempotent (0 rows after the first run).
+     */
+    suspend fun clearStaleNwayFillMarkers(): Unit = withContext(Dispatchers.Default) {
+        queries.clearNwayFillPendingActions()
+    }
+
     suspend fun selectPendingForProvider(providerId: String): List<Link> =
         withContext(Dispatchers.Default) {
             queries.selectPendingForProvider(providerId).executeAsList().map { it.toLink() }
@@ -81,6 +91,17 @@ class SyncPlaylistLinkDao(private val db: ParachordDb) {
     suspend fun selectForLocal(localPlaylistId: String): List<Link> =
         withContext(Dispatchers.Default) {
             queries.selectForLocal(localPlaylistId).executeAsList().map { it.toLink() }
+        }
+
+    /**
+     * All link rows for a single provider, regardless of local playlist. Used by
+     * the per-provider PUSH config picker (#266) to seed the "checked" set from
+     * the ACTUAL live mirrors (sync_playlist_link) rather than the vestigial
+     * playlist-selection pref.
+     */
+    suspend fun selectForProvider(providerId: String): List<Link> =
+        withContext(Dispatchers.Default) {
+            queries.selectForProvider(providerId).executeAsList().map { it.toLink() }
         }
 
     /**

@@ -36,6 +36,7 @@ import com.parachord.shared.repository.LibraryRepository
 import com.parachord.shared.sync.AppleMusicSyncProvider
 import com.parachord.shared.sync.KvTombstoneStore
 import com.parachord.shared.sync.ListenBrainzSyncProvider
+import com.parachord.shared.sync.MirrorOnlyState
 import com.parachord.shared.sync.SpotifySyncProvider
 import com.parachord.shared.sync.SyncEngine
 import com.parachord.shared.sync.TrackTombstoneService
@@ -341,6 +342,9 @@ class IosContainer private constructor() {
     val syncPlaylistNwayDao: com.parachord.shared.db.dao.SyncPlaylistNwayDao by lazy {
         com.parachord.shared.db.dao.SyncPlaylistNwayDao(database)
     }
+    val trackProviderIdCacheDao: com.parachord.shared.db.dao.TrackProviderIdCacheDao by lazy {
+        com.parachord.shared.db.dao.TrackProviderIdCacheDao(database)
+    }
 
     // Track-remove tombstones (#172 parity) — local-per-device JSON blob so a
     // user-removed track isn't re-imported on the next pull. App-start prune is
@@ -380,6 +384,9 @@ class IosContainer private constructor() {
             playlistDao = playlistDao, playlistTrackDao = playlistTrackDao,
             syncSourceDao = syncSourceDao, syncPlaylistLinkDao = syncPlaylistLinkDao,
             syncPlaylistSourceDao = syncPlaylistSourceDao,
+            syncPlaylistBaselineDao = syncPlaylistBaselineDao,
+            syncPlaylistNwayDao = syncPlaylistNwayDao,
+            trackProviderIdCacheDao = trackProviderIdCacheDao,
             settingsStore = settingsStore,
             providers = listOf(spotifySyncProvider, listenBrainzSyncProvider, appleMusicSyncProvider),
             tombstones = tombstoneService,
@@ -393,6 +400,16 @@ class IosContainer private constructor() {
             mbidEnrichTrack = { trackId, artist, title -> mbidEnrichmentService.enrichInBackground(trackId, artist, title) },
             mbidEnrichBatch = { tracks -> tracks.forEach { mbidEnrichmentService.enrichInBackground(it.id, it.artist, it.title) } },
             tombstones = tombstoneService,
+        )
+    }
+
+    /** Per-playlist Sync menu backend — shared with Android (no drift). */
+    private val playlistSyncChannelManager by lazy {
+        com.parachord.shared.sync.PlaylistSyncChannelManager(
+            settingsStore = settingsStore,
+            libraryRepository = libraryRepository,
+            playlistDao = playlistDao,
+            syncEngine = syncEngine,
         )
     }
 
@@ -2075,36 +2092,24 @@ class IosContainer private constructor() {
         }
 
     // ── Per-playlist Sync menu ────────────────────────────────────────────────
-
-    private val syncChannelProviders = listOf("spotify", "applemusic", "listenbrainz")
-
-    private fun providerDisplay(id: String): String = when (id) {
-        "spotify" -> "Spotify"
-        "applemusic" -> "Apple Music"
-        "listenbrainz" -> "ListenBrainz"
-        else -> id.replaceFirstChar { it.uppercase() }
-    }
+    //
+    // The channel logic lives in the shared PlaylistSyncChannelManager (no drift
+    // with Android). These three methods are thin delegates that map the shared
+    // PlaylistSyncChannel → IosSyncChannel and KEEP their exact signatures so the
+    // Swift PlaylistSyncChannelsSheet is unaffected.
 
     /** The sync channels for one playlist — each provider with connected /
      *  enabled / available state, for the playlist Sync menu. */
-    suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> {
-        val enabledProviders = settingsStore.getEnabledSyncProviders()
-        val override = settingsStore.getPlaylistChannels(localId)
-        val mirrors = libraryRepository.getPlaylistMirrors(localId).keys
-        val effective = override ?: mirrors
-        val playlist = playlistDao.getById(localId)
-        return syncChannelProviders.map { pid ->
-            val isSource = localId.startsWith("$pid-")
-            val canPush = playlist != null && com.parachord.shared.sync.isPlaylistPushCandidate(playlist, pid)
+    suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> =
+        playlistSyncChannelManager.getChannels(localId).map { ch ->
             IosSyncChannel(
-                providerId = pid,
-                displayName = providerDisplay(pid),
-                connected = pid in enabledProviders,
-                enabled = pid in effective,
-                available = isSource || canPush,
+                providerId = ch.providerId,
+                displayName = ch.displayName,
+                connected = ch.connected,
+                enabled = ch.enabled,
+                available = ch.available,
             )
         }
-    }
 
     /** Toggle one channel for one playlist. Writes the per-playlist override
      *  (authoritative). Disabling also detaches the existing linkage so the
@@ -2112,13 +2117,27 @@ class IosContainer private constructor() {
      *  Enabling sets the override; the next sync mirrors it (push) if it's a
      *  valid target. */
     suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) {
-        val override = settingsStore.getPlaylistChannels(localId)
-        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
-        val updated = if (enabled) current + providerId else current - providerId
-        settingsStore.setPlaylistChannels(localId, updated)
-        if (!enabled) {
-            syncEngine.detachPlaylistFromProvider(localId, providerId)
+        playlistSyncChannelManager.setChannel(localId, providerId, enabled)
+        // Parity with Android: enabling a mirror kicks off a sync NOW (off the
+        // main thread) so the new mirror materializes immediately instead of
+        // waiting for the scheduled cycle. The override is written first, so the
+        // sync honors it; no-op if a sync is already running (syncMutex tryLock).
+        if (enabled) {
+            appScope.launch(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
         }
+    }
+
+    /** Effective + forced one-way-mirror state for a playlist (dynamic /
+     *  algorithmic playlists). Drives the "Mirror only" toggle in the Sync sheet:
+     *  `effective` = checked, `forced` = locked ON (a followed/hosted playlist). */
+    suspend fun getPlaylistMirrorOnlyState(localId: String): MirrorOnlyState =
+        playlistSyncChannelManager.getMirrorOnlyState(localId)
+
+    /** Flag (or clear) this playlist as a one-way mirror, then kick a sync so the
+     *  new reconcile mode takes effect immediately (parity with Android). */
+    suspend fun setPlaylistMirrorOnly(localId: String, mirrorOnly: Boolean) {
+        playlistSyncChannelManager.setMirrorOnly(localId, mirrorOnly)
+        appScope.launch(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
     }
 
     /**
@@ -2132,23 +2151,7 @@ class IosContainer private constructor() {
         localId: String,
         providerId: String,
         deleteRemote: Boolean,
-    ): String? {
-        // Capture the external id BEFORE we change the override (getPlaylistMirrors
-        // is override-aware, and the override still includes this provider here).
-        val externalId = libraryRepository.getPlaylistMirrors(localId)[providerId]
-        var unsupported: String? = null
-        if (deleteRemote && externalId != null) {
-            val result = syncEngine.deletePlaylistOnProvider(providerId, externalId)
-            if (result is com.parachord.shared.sync.DeleteResult.Unsupported) {
-                unsupported = providerDisplay(providerId)
-            }
-        }
-        val override = settingsStore.getPlaylistChannels(localId)
-        val current = override ?: libraryRepository.getPlaylistMirrors(localId).keys
-        settingsStore.setPlaylistChannels(localId, current - providerId)
-        syncEngine.detachPlaylistFromProvider(localId, providerId)
-        return unsupported
-    }
+    ): String? = playlistSyncChannelManager.disableChannel(localId, providerId, deleteRemote)
 
     /** Delete a playlist locally + remote-delete from [fromProviders] (provider
      *  ids). Returns the display names of providers that DON'T support API

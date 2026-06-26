@@ -15,16 +15,34 @@ actual class DriverFactory {
             schema = ParachordDb.Schema,
             name = "parachord.db",
         )
-        // Idempotent column migrations for EXISTING installs (mirrors Android's
-        // AndroidModule ALTER-TABLE bootstrap; the schema CREATE covers fresh
-        // installs). We CHECK the column first via PRAGMA rather than
-        // ALTER-and-catch: the catch worked, but SQLiter logs the thrown
-        // "duplicate column" SQLiteException to the console on EVERY launch
-        // (a scary stack trace for a non-error).
-        //   #238: local-files ISRC. iOS has no local-file scanner yet, so the
-        //   column stays null here — but the shared DAO reads it, so it must
-        //   exist or `toTrack()` would crash on an upgraded DB.
+        // Idempotent bootstrap migrations for EXISTING installs — MIRRORS Android's
+        // AndroidModule ALTER/CREATE bootstrap exactly. Fresh installs get all of
+        // this from ParachordDb.Schema's CREATEs; existing iOS installs were created
+        // before the N-way tables + columns were added and need explicit re-runs
+        // (SQLite has no ADD COLUMN IF NOT EXISTS). Without it, the playlist `getAll`
+        // SELECT references playlists.writable (etc.) on a DB that lacks it →
+        // "no such column" → SIGABRT on the playlists screen. (iOS previously only
+        // migrated tracks.isrc, so the rest were missing.)
+        //
+        // Tables — CREATE TABLE IF NOT EXISTS is inherently idempotent.
+        driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_link (localPlaylistId TEXT NOT NULL, providerId TEXT NOT NULL, externalId TEXT NOT NULL, syncedAt INTEGER NOT NULL, PRIMARY KEY (localPlaylistId, providerId))", 0)
+        driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_source (localPlaylistId TEXT NOT NULL PRIMARY KEY, providerId TEXT NOT NULL, externalId TEXT NOT NULL, snapshotId TEXT, ownerId TEXT, syncedAt INTEGER NOT NULL)", 0)
+        driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_baseline (localPlaylistId TEXT NOT NULL PRIMARY KEY, baseline TEXT NOT NULL, baselineSyncedAt INTEGER NOT NULL)", 0)
+        driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_nway (localPlaylistId TEXT NOT NULL, providerId TEXT NOT NULL, changeToken TEXT, editedAt INTEGER, lastSyncedAt INTEGER NOT NULL, PRIMARY KEY (localPlaylistId, providerId))", 0)
+        driver.execute(null, "CREATE TABLE IF NOT EXISTS track_provider_id_cache (identityKey TEXT NOT NULL, providerId TEXT NOT NULL, resolvedId TEXT, lastAttemptAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, missingStreak INTEGER NOT NULL DEFAULT 0, lastSeenAt INTEGER, PRIMARY KEY (identityKey, providerId))", 0)
+        // Columns — PRAGMA-checked, so nothing is logged on the already-migrated path.
+        addColumnIfMissing(driver, table = "playlists", column = "sourceUrl", type = "TEXT")
+        addColumnIfMissing(driver, table = "playlists", column = "sourceContentHash", type = "TEXT")
+        addColumnIfMissing(driver, table = "playlists", column = "localOnly", type = "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(driver, table = "playlists", column = "writable", type = "INTEGER NOT NULL DEFAULT 1")
+        addColumnIfMissing(driver, table = "sync_playlist_link", column = "snapshotId", type = "TEXT")
+        addColumnIfMissing(driver, table = "sync_playlist_link", column = "pendingAction", type = "TEXT")
+        addColumnIfMissing(driver, table = "playlist_tracks", column = "trackIsrc", type = "TEXT")
+        addColumnIfMissing(driver, table = "playlist_tracks", column = "trackRecordingMbid", type = "TEXT")
+        addColumnIfMissing(driver, table = "tracks", column = "crossResolverEnrichedAt", type = "INTEGER")
         addColumnIfMissing(driver, table = "tracks", column = "isrc", type = "TEXT")
+        addColumnIfMissing(driver, table = "track_provider_id_cache", column = "missingStreak", type = "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(driver, table = "track_provider_id_cache", column = "lastSeenAt", type = "INTEGER")
         return driver
     }
 

@@ -34,16 +34,45 @@ data class SyncSettings(
  * consider. Mirrors `SyncEngine.isPushCandidate` (which delegates here).
  */
 fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, providerId: String): Boolean {
+    // #269 note: a FOLLOWED (non-writable) playlist CAN still mirror OUT to other
+    // services — you own those mirror copies. What must never happen is writing
+    // BACK to the non-writable source; for Spotify that's already enforced by the
+    // `spotifyId == null` clause below (a followed `spotify-*` row has a spotifyId,
+    // so it's never a Spotify push candidate). The per-copy write-back guard for
+    // N-way propagation uses `playlist.writable`. So no blanket writable gate here.
     val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
     return when (providerId) {
-        "spotify" -> playlist.spotifyId == null && base
-        "applemusic" -> base || playlist.id.startsWith("spotify-")
+        // `listenbrainz-*` is now eligible to RE-EXPORT to streaming services — a
+        // playlist created/edited on ListenBrainz (Achordion) can mirror to Spotify
+        // / Apple Music. It is OPT-IN ONLY ([autoMirrorsByDefault]) so a pulled LB
+        // library doesn't auto-flood them with the user's whole archive.
+        "spotify" -> playlist.spotifyId == null &&
+            (base || playlist.id.startsWith("listenbrainz-"))
+        "applemusic" -> base ||
+            playlist.id.startsWith("spotify-") ||
+            playlist.id.startsWith("listenbrainz-")
         "listenbrainz" -> base ||
             playlist.id.startsWith("spotify-") ||
             playlist.id.startsWith("applemusic-")
         else -> base
     }
 }
+
+/**
+ * Whether [playlist] AUTO-mirrors to push providers via a provider's default
+ * push selection (mode=ALL), vs. only when the user explicitly opts in with a
+ * per-playlist channel override.
+ *
+ * A ListenBrainz-IMPORTED playlist (`listenbrainz-*`) is OPT-IN ONLY: it's
+ * eligible to re-export ([isPlaylistPushCandidate]) but never auto-mirrors, so a
+ * pulled LB library doesn't flood Spotify / Apple Music with the user's whole
+ * archive (and risk duplicates). The user opts a specific LB playlist in by
+ * toggling the service on in its Sync menu — which writes the channel override,
+ * the authoritative path that bypasses this gate. Local / hosted / Spotify-imported
+ * rows auto-mirror by default, unchanged.
+ */
+fun autoMirrorsByDefault(playlist: com.parachord.shared.model.Playlist): Boolean =
+    !playlist.id.startsWith("listenbrainz-")
 
 enum class PlaylistSyncMode { ALL, NONE, SELECTED }
 
@@ -139,6 +168,25 @@ interface SyncSettingsProvider {
     suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?)
 
     /**
+     * Per-playlist MIRROR-ONLY flag. When true the playlist is reconciled as a
+     * one-way mirror FROM its source: the source is single-authority and its
+     * rotate-out drops IMMEDIATELY (no streak gate), exactly like a followed
+     * playlist — for OWNED-but-dynamic playlists the source-writability split
+     * can't catch (e.g. a SmarterPlaylists-managed Daily Brew that Spotify reports
+     * as user-owned). Default false. User-set in the playlist's Sync menu; a pull
+     * must NEVER clobber it, which is why it lives here (KvStore) and NOT as a
+     * `playlists` column (`writable` is refreshed on every pull, #269).
+     *
+     * Defaulted so test doubles and any non-persisting provider safely report
+     * "not mirror-only"; the real [com.parachord.shared.settings.SettingsStore]
+     * overrides both.
+     */
+    suspend fun getPlaylistMirrorOnly(localPlaylistId: String): Boolean = false
+
+    /** Persist a playlist's mirror-only flag (see [getPlaylistMirrorOnly]). */
+    suspend fun setPlaylistMirrorOnly(localPlaylistId: String, mirrorOnly: Boolean) {}
+
+    /**
      * Sync data version — bumped to force a full re-fetch after schema/migration
      * changes. SyncEngine compares against its own `SYNC_DATA_VERSION` constant.
      */
@@ -151,6 +199,14 @@ interface SyncSettingsProvider {
      *  SYNC_DATA_VERSION counter). */
     suspend fun getTrackDedupV1Done(): Boolean
     suspend fun setTrackDedupV1Done()
+
+    /** N-way multimaster playlist sync opt-in (default OFF). Gates the entire
+     *  N-way path — migration bootstrap, shadow mode, propagation. */
+    suspend fun isNwayEnabled(): Boolean
+
+    /** Stricter opt-in for N-way PROPAGATION — real provider writes. Requires
+     *  [isNwayEnabled] too. Default OFF. */
+    suspend fun isNwayPropagateEnabled(): Boolean
 
     /** Persist the timestamp of the last successful sync (epoch millis). */
     suspend fun setLastSyncAt(timestamp: Long)

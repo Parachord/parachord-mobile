@@ -16,4 +16,8 @@ data class Playlist(
     val sourceUrl: String? = null,
     val sourceContentHash: String? = null,
     val localOnly: Boolean = false,
+    /** Can the user write to this playlist on its source provider (owned OR
+     *  collaborative)? Read-only followed playlists are `false` and are never
+     *  push/mirror candidates (#269). Defaults true (local/owned). */
+    val writable: Boolean = true,
 )

@@ -17,6 +17,7 @@ import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.AppleMusicLibraryClient
 import com.parachord.shared.api.AppleMusicLibraryClient.AmHttpException
 import com.parachord.shared.api.ItunesRateLimitedException
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Artist
@@ -34,6 +35,8 @@ import com.parachord.shared.sync.SyncedArtist
 import com.parachord.shared.sync.SyncedPlaylist
 import com.parachord.shared.sync.SyncedTrack
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
 
 /**
@@ -84,6 +87,12 @@ class AppleMusicSyncProvider(
      * `api.music.apple.com` needs the dev-token + MUT.
      */
     private val catalogClient: AppleMusicClient,
+    /**
+     * Clock source (epoch ms). Injectable so the iTunes rate-limit breaker
+     * cooldown ([iTunesRateLimitedUntilMs]) is unit-testable; production passes
+     * the real [currentTimeMillis]. Mirrors [com.parachord.shared.api.RateLimitGate]'s pattern.
+     */
+    private val nowMs: () -> Long = { currentTimeMillis() },
 ) : SyncProvider {
 
     companion object {
@@ -92,6 +101,8 @@ class AppleMusicSyncProvider(
         private const val PAGE_SIZE = 100
         /** Polite pacing — Apple Music rate-limits aggressive callers. */
         private const val INTER_REQUEST_DELAY_MS = 150L
+        /** How long one iTunes Search 429 pauses track-id hydration (Task 7d). */
+        private const val ITUNES_RATE_LIMIT_COOLDOWN_MS = 5L * 60L * 1000L
     }
 
     override val id: String = PROVIDER_ID
@@ -107,6 +118,8 @@ class AppleMusicSyncProvider(
         supportsPlaylistDelete = false,
         supportsPlaylistRename = false,
         supportsTrackReplace = false,
+        // No playlist-track remove endpoint — library playlists are add-only.
+        trackRemoveMode = TrackRemoveMode.Unsupported,
     )
 
     /**
@@ -127,19 +140,40 @@ class AppleMusicSyncProvider(
     internal var amPatchUnsupportedForSession: Boolean = false
 
     /**
-     * iTunes Search rate-limit kill-switch. Flipped on the first HTTP 429
-     * response from `itunes.apple.com/search` and never reset within the
-     * process — Apple's throttle backoff is not documented, and continued
-     * hammering after a 429 just earns a longer cooldown. Subsequent
-     * [searchForTrackId] calls short-circuit to `null` so push paths
-     * silently skip un-hydrated tracks rather than turning every track
-     * into a wasted 429-throwing request.
+     * iTunes Search rate-limit breaker — a TIME-BOUND cooldown (epoch ms), not a
+     * session-permanent flag. Set to `nowMs() + 5min` on the first HTTP 429 from
+     * `itunes.apple.com/search`; while `nowMs() < iTunesRateLimitedUntilMs`,
+     * [searchForTrackId] short-circuits to `null` so push paths silently skip
+     * un-hydrated tracks rather than turning every track into a wasted
+     * 429-throwing request.
      *
-     * Reset on app restart so a long-lived session can re-probe iTunes
-     * Search after the user backgrounds the app.
+     * Was session-permanent (a `Boolean` reset only on app restart) — one
+     * transient throttle disabled AM iTunes hydration for the whole session even
+     * after Apple's window cleared. 5 minutes is a conservative cooldown: long
+     * enough to stop hammering an angry endpoint, short enough that a long-lived
+     * session recovers without a restart. (incremental-materialization Task 7d.)
      */
     @Volatile
-    internal var iTunesSearchRateLimited: Boolean = false
+    internal var iTunesRateLimitedUntilMs: Long = 0L
+
+    // Cached storefront for catalog ISRC lookups (the catalog API is per-
+    // storefront). Fetched once per session under a mutex so concurrent
+    // hydration calls don't each hit /me/storefront. null = not-yet-fetched OR
+    // fetch failed (re-probed next time).
+    private var cachedStorefront: String? = null
+    private val storefrontMutex = Mutex()
+
+    private suspend fun ensureStorefront(): String? {
+        cachedStorefront?.let { return it }
+        return storefrontMutex.withLock {
+            cachedStorefront ?: try {
+                api.getStorefront().data.firstOrNull()?.id?.also { cachedStorefront = it }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "ensureStorefront: getStorefront failed", e); null
+            }
+        }
+    }
 
     // ── Read methods ─────────────────────────────────────────────────
 
@@ -313,6 +347,9 @@ class AppleMusicSyncProvider(
                 Log.w(TAG, "PUT replace returned ${resp.status.value} for $externalPlaylistId; flipping session kill-switch, falling back to POST-append")
                 amPutUnsupportedForSession = true
             } else {
+                val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
+                Log.w(TAG, "replacePlaylistTracks PUT($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
+                    "| sent ${externalTrackIds.size} id(s) type=songs, sample=${externalTrackIds.take(6)}")
                 throw AmHttpException(resp.status.value)
             }
         }
@@ -321,6 +358,43 @@ class AppleMusicSyncProvider(
         delay(INTER_REQUEST_DELAY_MS)
         val resp = api.appendPlaylistTracks(externalPlaylistId, body)
         if (!resp.status.isSuccess()) {
+            val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
+            Log.w(TAG, "replacePlaylistTracks POST-append($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
+                "| sent ${externalTrackIds.size} id(s) type=songs, sample=${externalTrackIds.take(6)}")
+            if (resp.status.value == 401) throw AppleMusicReauthRequiredException()
+            throw AmHttpException(resp.status.value)
+        }
+        return getPlaylistSnapshotId(externalPlaylistId)
+    }
+
+    /**
+     * Append [externalTrackIds] (catalog song IDs) non-destructively via the
+     * library POST-append endpoint — AM library playlists are add-only, so this
+     * IS the native primitive (no PUT-degradation dance needed). Maps 401 →
+     * [AppleMusicReauthRequiredException], honors [INTER_REQUEST_DELAY_MS].
+     * Returns the new last-modified snapshot.
+     *
+     * Both remove primitives stay the throwing interface default: AM's
+     * [TrackRemoveMode.Unsupported] means the executor never dispatches a remove
+     * here.
+     */
+    /** Apple Music keys its library tracklist on the catalog song id. */
+    override fun nativeIdOf(track: PlaylistTrack): String? = track.trackAppleMusicId
+
+    override suspend fun addPlaylistTracks(
+        externalPlaylistId: String,
+        externalTrackIds: List<String>,
+    ): String? {
+        if (externalTrackIds.isEmpty()) return getPlaylistSnapshotId(externalPlaylistId)
+        val body = AmTracksRequest(externalTrackIds.map { AmTrackReference(it, "songs") })
+        delay(INTER_REQUEST_DELAY_MS)
+        val resp = api.appendPlaylistTracks(externalPlaylistId, body)
+        if (!resp.status.isSuccess()) {
+            // #272 diagnostic: capture AM's actual error body + the request so we
+            // can see WHY the append 400s (ID space, storefront, batch size, …).
+            val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
+            Log.w(TAG, "addPlaylistTracks($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
+                "| sent ${externalTrackIds.size} id(s) type=songs, sample=${externalTrackIds.take(6)}")
             if (resp.status.value == 401) throw AppleMusicReauthRequiredException()
             throw AmHttpException(resp.status.value)
         }
@@ -373,22 +447,87 @@ class AppleMusicSyncProvider(
     }
 
     /**
+     * Self-heal probe: does the library playlist RESOURCE still exist?
+     *
+     * GETs `/v1/me/library/playlists/{id}` (the playlist itself, via the same
+     * `getLibraryPlaylistWithTracks` call the track-fetch fallback already uses).
+     * [AppleMusicLibraryClient.getLibraryPlaylistWithTracks] throws
+     * [AmHttpException] with the HTTP status, so a 404 on the playlist resource
+     * is unambiguous — the playlist was deleted on Apple's side.
+     *
+     * Returns false ONLY on that definitive 404. Returns true on 200, and true
+     * (conservative) on EVERY other outcome:
+     * - any other HTTP status (401/403/429/5xx) — could be transient or auth,
+     *   never proof of deletion,
+     * - any thrown exception (network, reauth, decode) — wrapped here so this
+     *   never throws.
+     *
+     * NOT keyed on the `/tracks` 404 (Apple returns that for valid-but-empty and
+     * Music-app-only playlists too — clearing on it would recreate a live
+     * playlist as a duplicate). Bias hard toward "exists"; a wrongly-cleared link
+     * is the corruption we're trying to undo.
+     */
+    override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean {
+        delay(INTER_REQUEST_DELAY_MS)
+        return try {
+            // 200 ⇒ the playlist resource is present.
+            api.getLibraryPlaylistWithTracks(externalPlaylistId)
+            true
+        } catch (e: AmHttpException) {
+            if (e.status == 404) {
+                Log.w(TAG, "remotePlaylistExists: AM playlist $externalPlaylistId GET returned 404 — resource is GONE")
+                false
+            } else {
+                // Any non-404 status is NOT proof of deletion (could be transient,
+                // auth, or throttle). Conservative: keep the link.
+                Log.w(TAG, "remotePlaylistExists: AM playlist $externalPlaylistId GET HTTP ${e.status} (not 404) — assuming exists")
+                true
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Reauth, network, decode — anything other than a definitive 404.
+            // Never return false; never let this throw.
+            Log.w(TAG, "remotePlaylistExists: AM playlist $externalPlaylistId GET threw — assuming exists", e)
+            true
+        }
+    }
+
+    /**
      * Catalog-search-based ID hydration (un-defers Decision D1).
      *
-     * Uses iTunes Search (`/search?media=music&entity=song`) — the
-     * catalog endpoint, NOT the library API. Returns the bare numeric
-     * `trackId` as a string; this matches the format MusicKit catalog
-     * IDs use, and AppleMusicLibraryClient.appendPlaylistTracks /
-     * replacePlaylistTracks accepts the same.
+     * PRIMARY: the Apple Music CATALOG API by ISRC
+     * (`/v1/catalog/{storefront}/songs?filter[isrc]=…`) — EXACT (no fuzzy
+     * wrong-variant risk), authed with the dev token we already hold, and the
+     * catalog id it returns is what the library add-to-playlist endpoint accepts.
+     * Mirrors the ISRC-keyed LB hydration. FALLBACK: iTunes Search (text, no
+     * auth) for tracks with no ISRC or a catalog miss.
      *
-     * Confidence-gated against [com.parachord.shared.resolver.ResolverScoring.MIN_CONFIDENCE_THRESHOLD]
+     * The iTunes fallback is confidence-gated against
+     * [com.parachord.shared.resolver.ResolverScoring.MIN_CONFIDENCE_THRESHOLD]
      * (0.60) using [com.parachord.shared.resolver.scoreConfidence].
      */
-    override suspend fun searchForTrackId(title: String, artist: String, album: String?): String? {
-        // Session kill-switch: if we've already hit a 429 from iTunes Search,
-        // don't bother asking again until the user restarts the app. Apple
-        // doesn't publish the throttle window and stacked 429s just extend it.
-        if (iTunesSearchRateLimited) return null
+    override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
+        // PRIMARY — exact catalog lookup by ISRC.
+        if (!isrc.isNullOrBlank()) {
+            val storefront = ensureStorefront()
+            if (storefront != null) {
+                val catalogId = try {
+                    api.getCatalogSongIdByIsrc(storefront, isrc)
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "catalog ISRC lookup failed for isrc=$isrc", e); null
+                }
+                if (catalogId != null) return catalogId
+            }
+        }
+
+        // FALLBACK — iTunes Search (no ISRC, or catalog miss).
+        // Time-bound breaker: if we hit a 429 from iTunes Search within the last
+        // 5 minutes, don't ask again yet. Apple doesn't publish the throttle
+        // window and stacked 429s just extend it — but the breaker self-clears so
+        // a long-lived session recovers without an app restart.
+        if (nowMs() < iTunesRateLimitedUntilMs) return null
         delay(INTER_REQUEST_DELAY_MS)
         // iTunes Search has no field qualifiers; just concat the metadata
         // and let its ranking find the best song match.
@@ -412,13 +551,14 @@ class AppleMusicSyncProvider(
             }
             candidate.trackId.toString()
         } catch (e: ItunesRateLimitedException) {
-            // First 429: flip the kill-switch and silently skip. Subsequent
-            // tracks in this sync session will short-circuit at the top of
-            // this method.
-            if (!iTunesSearchRateLimited) {
-                Log.w(TAG, "iTunes Search rate-limited (HTTP 429) — disabling " +
-                    "track-id hydration for the rest of this session")
-                iTunesSearchRateLimited = true
+            // 429: arm the 5-minute breaker and silently skip. Subsequent tracks
+            // in this window short-circuit at the top of this method; the breaker
+            // self-clears so hydration resumes without an app restart.
+            val wasArmed = nowMs() < iTunesRateLimitedUntilMs
+            iTunesRateLimitedUntilMs = nowMs() + ITUNES_RATE_LIMIT_COOLDOWN_MS
+            if (!wasArmed) {
+                Log.w(TAG, "iTunes Search rate-limited (HTTP 429) — pausing " +
+                    "track-id hydration for 5 min")
             }
             null
         } catch (e: Exception) {
@@ -638,6 +778,8 @@ class AppleMusicSyncProvider(
             sourceUrl = null,
             sourceContentHash = null,
             localOnly = false,
+            // AM has no collaborative concept; canEdit IS the writability signal.
+            writable = attributes.canEdit,
         )
         return SyncedPlaylist(
             entity = playlistEntity,
@@ -648,6 +790,7 @@ class AppleMusicSyncProvider(
             // is omitted; treat that as not-owned (we only push to
             // owned playlists anyway).
             isOwned = attributes.canEdit,
+            writable = attributes.canEdit,
         )
     }
 
