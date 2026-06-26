@@ -25,6 +25,8 @@ class TrackProviderIdCacheDao(private val db: ParachordDb) {
         val resolvedId: String?,
         val lastAttemptAt: Long,
         val attempts: Long,
+        val missingStreak: Long = 0,
+        val lastSeenAt: Long? = null,
     )
 
     suspend fun select(identityKey: String, providerId: String): Entry? =
@@ -32,6 +34,12 @@ class TrackProviderIdCacheDao(private val db: ParachordDb) {
             queries.selectForKey(identityKey, providerId).executeAsOneOrNull()?.toEntry()
         }
 
+    /**
+     * Write/refresh the resolved-id + cooldown fields. PRESERVES the presence
+     * fields (missingStreak / lastSeenAt) by reading the prior entry and carrying
+     * them forward — INSERT OR REPLACE rewrites the whole row, and a hydration
+     * re-stamp must never reset a streak. (Matches desktop's upsert-preserve.)
+     */
     suspend fun upsert(
         identityKey: String,
         providerId: String,
@@ -39,7 +47,17 @@ class TrackProviderIdCacheDao(private val db: ParachordDb) {
         lastAttemptAt: Long = currentTimeMillis(),
         attempts: Long,
     ): Unit = withContext(Dispatchers.Default) {
-        queries.upsert(identityKey, providerId, resolvedId, lastAttemptAt, attempts)
+        // read-prev + write in ONE transaction so the carry-forward of the presence
+        // fields can't lose a concurrent recordMissing increment (INSERT OR REPLACE
+        // rewrites the whole row; the read must be atomic with the write).
+        db.transaction {
+            val prev = queries.selectForKey(identityKey, providerId).executeAsOneOrNull()
+            queries.upsert(
+                identityKey, providerId, resolvedId, lastAttemptAt, attempts,
+                prev?.missingStreak ?: 0L,
+                prev?.lastSeenAt,
+            )
+        }
     }
 
     /**
@@ -56,11 +74,32 @@ class TrackProviderIdCacheDao(private val db: ParachordDb) {
         queries.deleteForProvider(providerId)
     }
 
+    /**
+     * Presence vote (missingStreak gate). A COMPLETE provider fetch HELD this
+     * track → reset the streak + stamp [now]. No-op when there's no entry (a
+     * never-materialized key is already protected by the resolvedId-null check).
+     */
+    suspend fun recordSeen(identityKey: String, providerId: String, now: Long = currentTimeMillis()): Unit =
+        withContext(Dispatchers.Default) {
+            queries.recordSeen(now, identityKey, providerId)
+        }
+
+    /**
+     * Presence vote. A COMPLETE provider fetch OMITTED this track → step the
+     * streak. No-op when there's no entry.
+     */
+    suspend fun recordMissing(identityKey: String, providerId: String): Unit =
+        withContext(Dispatchers.Default) {
+            queries.recordMissing(identityKey, providerId)
+        }
+
     private fun com.parachord.shared.db.Track_provider_id_cache.toEntry() = Entry(
         identityKey = identityKey,
         providerId = providerId,
         resolvedId = resolvedId,
         lastAttemptAt = lastAttemptAt,
         attempts = attempts,
+        missingStreak = missingStreak,
+        lastSeenAt = lastSeenAt,
     )
 }

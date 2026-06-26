@@ -301,6 +301,20 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // N-way missingStreak gate (parachord/parachord#911): presence-tracking on
+        // the hydration cache so a single transient complete-fetch omission of a
+        // materialized track isn't read as a deletion. New installs get these from
+        // TrackProviderIdCache.sq's CREATE; existing installs need these ALTERs.
+        try {
+            driver.execute(null, "ALTER TABLE track_provider_id_cache ADD COLUMN missingStreak INTEGER NOT NULL DEFAULT 0", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
+        try {
+            driver.execute(null, "ALTER TABLE track_provider_id_cache ADD COLUMN lastSeenAt INTEGER", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // N-way multimaster sync (Phase 1): the 3-way-merge baseline (ancestor)
         // per playlist + per-(playlist, provider) change-token/edit-time state.
         // New tables, isolated from the live canonical-source engine. New
@@ -339,6 +353,8 @@ val androidModule = module {
                 resolvedId    TEXT,
                 lastAttemptAt INTEGER NOT NULL,
                 attempts      INTEGER NOT NULL DEFAULT 0,
+                missingStreak INTEGER NOT NULL DEFAULT 0,
+                lastSeenAt    INTEGER,
                 PRIMARY KEY (identityKey, providerId)
             )""".trimIndent(),
             0,

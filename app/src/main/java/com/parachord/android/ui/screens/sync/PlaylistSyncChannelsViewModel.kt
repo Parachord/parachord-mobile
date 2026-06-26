@@ -38,6 +38,16 @@ class PlaylistSyncChannelsViewModel(
     private val _headsUp = MutableStateFlow<String?>(null)
     val headsUp: StateFlow<String?> = _headsUp.asStateFlow()
 
+    /** One-way MIRROR mode — for dynamic/algorithmic playlists (a followed Daily
+     *  Brew, or a SmarterPlaylists-managed one Spotify reports as yours).
+     *  [mirrorOnly] = effective (checked); [mirrorOnlyForced] = locked ON because
+     *  the playlist is followed/hosted (inherently one-way, can't be made two-way). */
+    private val _mirrorOnly = MutableStateFlow(false)
+    val mirrorOnly: StateFlow<Boolean> = _mirrorOnly.asStateFlow()
+
+    private val _mirrorOnlyForced = MutableStateFlow(false)
+    val mirrorOnlyForced: StateFlow<Boolean> = _mirrorOnlyForced.asStateFlow()
+
     private var localId: String = ""
 
     fun load(localId: String) {
@@ -45,7 +55,23 @@ class PlaylistSyncChannelsViewModel(
         viewModelScope.launch {
             _loading.value = true
             _channels.value = manager.getChannels(localId)
+            val st = manager.getMirrorOnlyState(localId)
+            _mirrorOnly.value = st.effective
+            _mirrorOnlyForced.value = st.forced
             _loading.value = false
+        }
+    }
+
+    /** Toggle MIRROR-ONLY (one-way from the source), then kick a sync so the new
+     *  reconcile mode takes effect right away (off the main thread; no-op if a sync
+     *  is already running — syncMutex tryLock). Ignored when forced (the UI locks
+     *  the toggle, but guard here too). */
+    fun setMirrorOnly(value: Boolean) {
+        if (_mirrorOnlyForced.value) return
+        viewModelScope.launch {
+            manager.setMirrorOnly(localId, value)
+            _mirrorOnly.value = value
+            withContext(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
         }
     }
 

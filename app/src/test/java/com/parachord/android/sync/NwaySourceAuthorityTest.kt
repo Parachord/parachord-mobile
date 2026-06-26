@@ -16,6 +16,7 @@ import com.parachord.shared.db.dao.TrackProviderIdCacheDao
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.sync.AppleMusicSyncProvider
+import com.parachord.shared.sync.canonicalTrackKey
 import com.parachord.shared.sync.DeleteResult
 import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.PlaylistSyncMode
@@ -88,6 +89,11 @@ class NwaySourceAuthorityTest {
         }
 
         val remote = linkedMapOf<String, Entry>()
+
+        /** When set, fetchPlaylistTracks returns only the first N rows while
+         *  fetchPlaylists still reports the FULL count — models a TRUNCATED fetch
+         *  (pagination cut-off / throttled later page) for the partial-fetch floor. */
+        var truncateFetchTo: Int? = null
 
         var createCount = 0
             private set
@@ -173,7 +179,7 @@ class NwaySourceAuthorityTest {
             }
 
         override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> =
-            remote[externalPlaylistId]?.tracks?.mapIndexed { i, nid ->
+            remote[externalPlaylistId]?.tracks?.let { t -> truncateFetchTo?.let { t.take(it) } ?: t }?.mapIndexed { i, nid ->
                 val mbid = mbidOf(nid)
                 val base = PlaylistTrack(
                     playlistId = "$id-$externalPlaylistId",
@@ -197,6 +203,7 @@ class NwaySourceAuthorityTest {
 
     private class FakeSyncSettings(private val enabled: Set<String>) : SyncSettingsProvider {
         private var dataVersion = 5
+        private val mirrorOnly = mutableMapOf<String, Boolean>()
         override suspend fun getSyncSettings() = SyncSettings(
             enabled = true, syncTracks = false, syncAlbums = false, syncArtists = false,
             syncPlaylists = true, pushLocalPlaylists = true,
@@ -213,6 +220,8 @@ class NwaySourceAuthorityTest {
         override suspend fun setPullPlaylists(providerId: String, externalIds: Set<String>) {}
         override suspend fun getPlaylistChannels(localPlaylistId: String): Set<String>? = null
         override suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?) {}
+        override suspend fun getPlaylistMirrorOnly(localPlaylistId: String): Boolean = mirrorOnly[localPlaylistId] ?: false
+        override suspend fun setPlaylistMirrorOnly(localPlaylistId: String, mirrorOnly: Boolean) { this.mirrorOnly[localPlaylistId] = mirrorOnly }
         override suspend fun getTrackDedupV1Done(): Boolean = true
         override suspend fun setTrackDedupV1Done() {}
         override suspend fun isNwayEnabled(): Boolean = true
@@ -230,6 +239,7 @@ class NwaySourceAuthorityTest {
         val baselineDao = SyncPlaylistBaselineDao(db)
         val nwayDao = SyncPlaylistNwayDao(db)
         val cacheDao = TrackProviderIdCacheDao(db)
+        val settings = FakeSyncSettings(providers.map { it.id }.toSet())
 
         val engine = SyncEngine(
             db = db, driver = driver, trackDao = trackDao, albumDao = AlbumDao(db), artistDao = ArtistDao(db),
@@ -237,10 +247,13 @@ class NwaySourceAuthorityTest {
             syncPlaylistLinkDao = linkDao, syncPlaylistSourceDao = sourceDao,
             syncPlaylistBaselineDao = baselineDao, syncPlaylistNwayDao = nwayDao,
             trackProviderIdCacheDao = cacheDao,
-            settingsStore = FakeSyncSettings(providers.map { it.id }.toSet()),
+            settingsStore = settings,
             providers = providers,
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
         )
+
+        /** Flag a playlist MIRROR-ONLY (one-way from its source) for the reconcile. */
+        suspend fun setMirrorOnly(localId: String, value: Boolean) = settings.setPlaylistMirrorOnly(localId, value)
 
         suspend fun linkMirrors(localId: String) {
             val now = 1_000L
@@ -261,10 +274,36 @@ class NwaySourceAuthorityTest {
         suspend fun linkPullSource(localId: String, providerId: String, externalId: String) =
             sourceDao.upsert(localId, providerId, externalId, snapshotId = null, ownerId = null, syncedAt = 1_000L)
 
-        /** Seed a local playlist; `sourceUrl` non-null marks it a hosted-XSPF (local-authoritative). */
-        suspend fun seed(id: String, name: String, count: Int, sourceUrl: String? = null) {
-            playlistDao.insert(Playlist(id = id, name = name, trackCount = count, createdAt = 1_000L, updatedAt = 1_000L, lastModified = 1_000L, locallyModified = false, sourceUrl = sourceUrl))
+        /** Seed a local playlist; `sourceUrl` non-null marks it a hosted-XSPF
+         *  (local-authoritative). `writable=false` marks a FOLLOWED (read-only)
+         *  imported source — SINGLE-AUTHORITY: its rotate-out drops IMMEDIATELY (a
+         *  one-way mirror), bypassing the streak gate. `writable=true` (default) is an
+         *  OWNED source, where the gate still protects a transient omission. */
+        suspend fun seed(id: String, name: String, count: Int, sourceUrl: String? = null, writable: Boolean = true) {
+            playlistDao.insert(Playlist(id = id, name = name, trackCount = count, createdAt = 1_000L, updatedAt = 1_000L, lastModified = 1_000L, locallyModified = false, sourceUrl = sourceUrl, writable = writable))
             playlistTrackDao.insertAll((0 until count).map { i -> pt(id, i, "mbid-$id-$i") })
+        }
+
+        /** Mark a baseline track (by its mbid) MATERIALIZED on [providerId] in the
+         *  hydration cache with [missingStreak] consecutive complete-fetch omissions
+         *  already recorded — so the missingStreak gate can escalate its drop. A
+         *  source/native-id track is NOT auto-cached (HydrationCoordinator.resolve
+         *  short-circuits a known id), so a test must warm it to make it droppable.
+         *  Mirrors desktop's Harness.warmCache. */
+        suspend fun warmCache(providerId: String, mbid: String, missingStreak: Int = 0) {
+            // mbid in all key positions mirrors the seed fixture (pt() sets
+            // title=artist=recordingMbid=mbid), so this matches canonicalTrackKey(track)
+            // the reconcile computes. A test that seeds custom title/artist must warm
+            // with matching values.
+            val key = canonicalTrackKey(isrc = null, recordingMbid = mbid, artist = mbid, title = mbid)
+            cacheDao.upsert(key, providerId, resolvedId = "nid:$mbid", lastAttemptAt = 1_000L, attempts = 1)
+            repeat(missingStreak) { cacheDao.recordMissing(key, providerId) }
+        }
+
+        /** The current missingStreak for a track on a provider (-1 = no cache entry). */
+        fun cacheStreak(providerId: String, mbid: String): Long = runBlocking {
+            val key = canonicalTrackKey(isrc = null, recordingMbid = mbid, artist = mbid, title = mbid)
+            cacheDao.select(key, providerId)?.missingStreak ?: -1L
         }
 
         suspend fun addLocalTrack(id: String, pos: Int, mbid: String?, title: String, artist: String) {
@@ -305,6 +344,14 @@ class NwaySourceAuthorityTest {
         val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
         val amExt = ext(h, "local-0", AppleMusicSyncProvider.PROVIDER_ID)
         h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        // The 3 rotated-out keys were MATERIALIZED on the source and have already been
+        // omitted for ≥ the missingStreak threshold (streak=2) → escalated, so the
+        // source's rotate-out drops them. (With the missingStreak gate an UN-cached
+        // source drop is now PROTECTED — the new no-false-drop behavior — but a real,
+        // sustained materialized rotate-out still propagates.)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2", missingStreak = 2)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-3", missingStreak = 2)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-4", missingStreak = 2)
 
         // Spotify rotated to the 2 live keys; AM keeps all 5 (add-only residue).
         sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
@@ -342,6 +389,10 @@ class NwaySourceAuthorityTest {
         val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
         val amExt = ext(h, "local-0", AppleMusicSyncProvider.PROVIDER_ID)
         h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        // K2 was MATERIALIZED on the source and sustained-omitted (streak=2) → its
+        // source rotate-out escalates and drops. Kgap (K3) is NOT warmed and stays
+        // pending on AM, so it's protected (catalog-gap survives).
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2", missingStreak = 2)
 
         // Spotify source: drop K2, keep the catalog-gap key K3. (changed=true, size 3.)
         sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-3"))
@@ -354,6 +405,176 @@ class NwaySourceAuthorityTest {
         assertEquals("canonical = {K0,K1,Kgap} — K2 (source-dropped) gone, catalog-gap Kgap survives",
             setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-3"), h.localMbids("local-0").toSet())
         assertEquals("canonical size 3", 3, h.localMbids("local-0").size)
+    }
+
+    // ── V8 — followed (read-only) source = one-way mirror: rotate-out drops IMMEDIATELY ──
+    @Test
+    fun `V8 followed read-only source rotates out — drops immediately (one-way mirror, no gate)`() = runBlocking {
+        // A FOLLOWED (writable=false) Spotify source mirrored to ListenBrainz is
+        // SINGLE-AUTHORITY (a one-way mirror): its complete-fetch rotate-out is
+        // IMMEDIATELY authoritative — NO streak gate. A wrong drop SELF-HEALS next
+        // cycle (the source re-asserts the track), so the gate buys nothing here but
+        // would lag/break a daily-rotating algorithmic playlist (a followed Daily
+        // Brew). The streak gate now applies ONLY to an OWNED source (see the
+        // owned-single-omission + V1/V2 tests). parachord/parachord#911 shared-root.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Brew", 3, writable = false) // followed / read-only source
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        // NO warmCache: a followed source needs no materialized streak to drop — the
+        // immediate-authority path bypasses the hydration cache entirely.
+
+        // ONE complete fetch rotates m2 OUT (2 of its 3) — it drops this cycle.
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        sp.resetCallRecorders(); lb.resetCallRecorders()
+        h.engine.runNwayPropagation()
+
+        assertEquals("followed source drops m2 in ONE cycle (exact one-way mirror)",
+            setOf("mbid-local-0-0", "mbid-local-0-1"), h.localMbids("local-0").toSet())
+        assertEquals("baseline advanced to 2 immediately", 2, h.baselineSize("local-0"))
+        assertEquals("the drop propagated to the LB mirror (now 2)", 2, lb.remote[lbExt]!!.tracks.size)
+        assertTrue("LB removal was issued for the rotated-out track", lb.removeByPositionCalls.isNotEmpty())
+    }
+
+    // ── V8b — a TRUNCATED followed-source fetch must NOT drop (floor before immediate authority) ──
+    @Test
+    fun `V8b followed source truncated fetch does not drop (partial-fetch floor)`() = runBlocking {
+        // The immediate-authority path must NOT manufacture a mass deletion from a
+        // SHORT fetch. A followed (writable=false) source's remote DECLARES a new
+        // count (changed) but the fetch comes back truncated (pagination cut-off /
+        // throttled later page). The partial-fetch floor degrades it to changed=false
+        // BEFORE the authoritative-copy/immediate-drop logic, so nothing drops.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Brew", 3, writable = false) // followed / read-only source
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+
+        // Remote DECLARES 2 (changed vs baseline 3) but the FETCH returns only 1 (truncated).
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        sp.truncateFetchTo = 1
+        sp.resetCallRecorders(); lb.resetCallRecorders()
+        h.engine.runNwayPropagation()
+
+        assertEquals("truncated followed source did NOT drop — all 3 retained", 3, h.localMbids("local-0").size)
+        assertEquals("baseline unchanged at 3", 3, h.baselineSize("local-0"))
+        assertEquals("LB mirror untouched (3)", 3, lb.remote[lbExt]!!.tracks.size)
+        assertTrue("no LB removal on a truncated source fetch", lb.removeByPositionCalls.isEmpty())
+    }
+
+    // ── owned source: a single transient omission stays GATE-PROTECTED ────────
+    @Test
+    fun `owned source single transient omission is gate-protected (not dropped)`() = runBlocking {
+        // An OWNED (writable=true) Spotify source. The streak gate STILL applies to
+        // owned sources: a single transient complete-fetch omission of a MATERIALIZED
+        // track is protected (re-added), NOT dropped — guards against an API hiccup
+        // losing a user edit. Only a sustained ≥ threshold omission escalates (V1/V2).
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Mixtape", 3) // owned (writable=true default)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2") // materialized, streak 0
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1")) // omits m2 ONCE
+        sp.resetCallRecorders(); lb.resetCallRecorders()
+        h.engine.runNwayPropagation()
+
+        assertEquals("owned source single omission PROTECTED — m2 retained", 3, h.localMbids("local-0").size)
+        assertEquals("m2's streak stepped to 1 (not yet escalated)", 1L,
+            h.cacheStreak(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2"))
+    }
+
+    // ── V9 — mirrorOnly flag forces immediate one-way drop on an OWNED source ──
+    @Test
+    fun `V9 mirrorOnly flag forces immediate one-way drop on an owned source`() = runBlocking {
+        // An OWNED (writable=true) Spotify source — e.g. a SmarterPlaylists-managed
+        // Daily Brew that Spotify reports as user-owned — that the user flagged
+        // MIRROR-ONLY in its Sync menu. The flag makes it SINGLE-AUTHORITY: the
+        // source's rotate-out drops IMMEDIATELY (no streak gate), exactly like a
+        // followed source, even though it's writable AND the dropped track is
+        // materialized at streak 0 (which would be PROTECTED without the flag — see
+        // the owned-single-omission test seeded identically minus setMirrorOnly).
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Daily Brew", 3) // owned (writable=true)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        h.setMirrorOnly("local-0", true)                               // user flags it one-way
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2") // materialized, streak 0 — protected WITHOUT the flag
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1")) // omits m2 ONCE
+        sp.resetCallRecorders(); lb.resetCallRecorders()
+        h.engine.runNwayPropagation()
+
+        assertEquals("mirrorOnly owned source drops m2 in ONE cycle despite streak 0",
+            setOf("mbid-local-0-0", "mbid-local-0-1"), h.localMbids("local-0").toSet())
+        assertEquals("baseline advanced to 2 immediately", 2, h.baselineSize("local-0"))
+        assertEquals("the drop propagated to the LB mirror (now 2)", 2, lb.remote[lbExt]!!.tracks.size)
+    }
+
+    // ── DAO — presence-vote primitives + upsert-preserve (parachord/parachord#911) ──
+    @Test
+    fun `hydration cache — recordSeen resets, recordMissing steps, upsert preserves the streak`() = runBlocking {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { ParachordDb.Schema.create(it) }
+        val cache = TrackProviderIdCacheDao(ParachordDb(driver))
+
+        // No entry → recordMissing is a no-op (a never-materialized key stays absent,
+        // already protected by the resolvedId-null check; it needs no streak).
+        cache.recordMissing("mbid-ghost", "spotify")
+        assertTrue("recordMissing without an entry creates nothing", cache.select("mbid-ghost", "spotify") == null)
+
+        cache.upsert("mbid-x", "spotify", resolvedId = "nid:x", lastAttemptAt = 0L, attempts = 1)
+        assertEquals("fresh entry starts at streak 0", 0L, cache.select("mbid-x", "spotify")!!.missingStreak)
+
+        cache.recordMissing("mbid-x", "spotify")
+        cache.recordMissing("mbid-x", "spotify")
+        assertEquals("recordMissing steps the streak", 2L, cache.select("mbid-x", "spotify")!!.missingStreak)
+
+        // A hydration re-stamp must PRESERVE the streak (not reset it) while still
+        // refreshing the resolved-id + cooldown fields.
+        cache.upsert("mbid-x", "spotify", resolvedId = "nid:x", lastAttemptAt = 5L, attempts = 2)
+        assertEquals("upsert preserves missingStreak", 2L, cache.select("mbid-x", "spotify")!!.missingStreak)
+        assertEquals("upsert refreshes lastAttemptAt", 5L, cache.select("mbid-x", "spotify")!!.lastAttemptAt)
+
+        cache.recordSeen("mbid-x", "spotify", now = 9L)
+        assertEquals("recordSeen resets the streak", 0L, cache.select("mbid-x", "spotify")!!.missingStreak)
+        assertEquals("recordSeen stamps lastSeenAt", 9L, cache.select("mbid-x", "spotify")!!.lastSeenAt)
+    }
+
+    // ── dryRun shadow — the presence vote never advances a streak (side-effect-free) ──
+    @Test
+    fun `dryRun shadow — streak does not advance, transient omission stays protected`() = runBlocking {
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Brew", 3, writable = false)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        // m2 is materialized and ALREADY at streak 1. A REAL cycle would tip it to 2
+        // and drop it; a dryRun must touch NOTHING — no streak advance, no write.
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2", missingStreak = 1)
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+
+        repeat(3) { h.engine.runNwayPropagation(dryRun = true) }
+
+        assertEquals("dryRun never escalates — m2 still present after 3 shadow cycles", 3, h.localMbids("local-0").size)
+        assertEquals("baseline untouched in shadow", 3, h.baselineSize("local-0"))
+        assertEquals("streak NOT advanced by dryRun (stays at the seeded 1)",
+            1L, h.cacheStreak(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2"))
     }
 
     // ── V3 — multimaster local-authored (no source row) — UNCHANGED ──────────

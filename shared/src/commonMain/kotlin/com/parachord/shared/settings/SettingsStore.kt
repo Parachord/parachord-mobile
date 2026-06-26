@@ -144,6 +144,9 @@ class SettingsStore(
         /** Per-playlist channel override (which providers ONE playlist syncs with). */
         fun playlistChannelsKey(localPlaylistId: String) = "sync_playlist_channels_$localPlaylistId"
 
+        /** Per-playlist MIRROR-ONLY flag (one-way mirror FROM the source). */
+        fun playlistMirrorOnlyKey(localPlaylistId: String) = "sync_playlist_mirror_only_$localPlaylistId"
+
         /** Marker key — set to `true` once the one-shot DataStore→KvStore
          *  copy completes. Lives in KvStore so it survives across reboots
          *  without re-running the migration. */
@@ -885,6 +888,17 @@ class SettingsStore(
             // set round-trips as empty, not as absent.
             kv.setString(playlistChannelsKey(localPlaylistId), if (channels.isEmpty()) " " else channels.joinToString(","))
         }
+    }
+
+    override suspend fun getPlaylistMirrorOnly(localPlaylistId: String): Boolean {
+        ensureMigrated()
+        return kv.getStringOrNull(playlistMirrorOnlyKey(localPlaylistId)) == "true"
+    }
+
+    override suspend fun setPlaylistMirrorOnly(localPlaylistId: String, mirrorOnly: Boolean) {
+        ensureMigrated()
+        if (mirrorOnly) kv.setString(playlistMirrorOnlyKey(localPlaylistId), "true")
+        else kv.remove(playlistMirrorOnlyKey(localPlaylistId))
     }
 
     override suspend fun clearSyncSettings() {

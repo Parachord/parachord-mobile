@@ -70,6 +70,8 @@ fun PlaylistSyncChannelsSheet(
     val loading by viewModel.loading.collectAsStateWithLifecycle()
     val pendingOff by viewModel.pendingOff.collectAsStateWithLifecycle()
     val headsUp by viewModel.headsUp.collectAsStateWithLifecycle()
+    val mirrorOnly by viewModel.mirrorOnly.collectAsStateWithLifecycle()
+    val mirrorOnlyForced by viewModel.mirrorOnlyForced.collectAsStateWithLifecycle()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -134,6 +136,12 @@ fun PlaylistSyncChannelsSheet(
                     fontSize = 11.sp,
                     color = ModalTextSecondary,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                )
+                MirrorOnlyRow(
+                    checked = mirrorOnly,
+                    forced = mirrorOnlyForced,
+                    accent = accent,
+                    onCheckedChange = { on -> viewModel.setMirrorOnly(on) },
                 )
             }
         }
@@ -229,6 +237,59 @@ private fun ChannelRow(
             checked = channel.enabled,
             onCheckedChange = { on -> if (on) onEnable() else onRequestDisable() },
             enabled = interactive,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = accent,
+                checkedThumbColor = Color.White,
+            ),
+        )
+    }
+}
+
+/**
+ * One-way MIRROR toggle — for dynamic / algorithmic playlists that rebuild
+ * themselves (a followed Daily Brew, or a SmarterPlaylists-managed one Spotify
+ * reports as yours). When on, the source replaces the other services each sync
+ * (exact rotation) instead of two-way merging. Parity with iOS's `mirrorOnlyRow`.
+ */
+@Composable
+private fun MirrorOnlyRow(
+    checked: Boolean,
+    forced: Boolean,
+    accent: Color,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Mirror only (one-way)",
+                fontSize = 15.sp,
+                color = ModalTextActive,
+            )
+            Text(
+                // Forced playlists (followed / hosted) are inherently one-way and
+                // can't be turned off — explain why the toggle is locked on.
+                text = if (forced) {
+                    "This playlist is followed or hosted, so it always mirrors " +
+                        "one-way from its source — you can't make it two-way."
+                } else {
+                    "For dynamic playlists that rebuild themselves — a followed " +
+                        "Daily Brew, or one an app manages for you. The source replaces " +
+                        "the other services each sync, with no two-way merge."
+                },
+                fontSize = 11.sp,
+                color = ModalTextSecondary,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = !forced,
             colors = SwitchDefaults.colors(
                 checkedTrackColor = accent,
                 checkedThumbColor = Color.White,

@@ -18,22 +18,50 @@
 --                   resolvedId is set the coordinator short-circuits on the hit
 --                   before it ever reads attempts/the cooldown. Drives the 2-step
 --                   cooldown cliff (≤1 miss → 7d, then 30d).
+--   missingStreak — consecutive COMPLETE-fetch omissions of an already-materialized
+--                   track (resolvedId set). The missingStreak gate: a single
+--                   transient omission (region-filtered, or silently-short-but-
+--                   count-matching) is NOT a deletion; absence only escalates to a
+--                   real delete at MISSING_STREAK_THRESHOLD (2) consecutive complete-
+--                   fetch misses. recordSeen resets it; recordMissing steps it.
+--                   (parachord/parachord#911 shared-root; mirrors desktop.)
+--   lastSeenAt    — epoch-ms a complete fetch last HELD this track (debug/telemetry).
 CREATE TABLE IF NOT EXISTS track_provider_id_cache (
     identityKey   TEXT NOT NULL,
     providerId    TEXT NOT NULL,
     resolvedId    TEXT,
     lastAttemptAt INTEGER NOT NULL,
     attempts      INTEGER NOT NULL DEFAULT 0,
+    missingStreak INTEGER NOT NULL DEFAULT 0,
+    lastSeenAt    INTEGER,
     PRIMARY KEY (identityKey, providerId)
 );
 
 selectForKey:
 SELECT * FROM track_provider_id_cache WHERE identityKey = ? AND providerId = ?;
 
+-- Hydration upsert. INSERT OR REPLACE rewrites the whole row, so the presence
+-- fields (missingStreak / lastSeenAt) MUST be passed through — the DAO reads the
+-- prior entry and carries them forward (sqlite_3_18 has no ON CONFLICT upsert).
+-- A hydration re-stamp therefore never resets a streak; first insert passes
+-- missingStreak=0, lastSeenAt=NULL. (Matches desktop nway-hydration-cache.upsert.)
 upsert:
 INSERT OR REPLACE INTO track_provider_id_cache
-    (identityKey, providerId, resolvedId, lastAttemptAt, attempts)
-VALUES (?, ?, ?, ?, ?);
+    (identityKey, providerId, resolvedId, lastAttemptAt, attempts, missingStreak, lastSeenAt)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+-- Presence vote (missingStreak gate). recordSeen: a COMPLETE fetch HELD this
+-- track → reset the streak + stamp lastSeenAt. recordMissing: a COMPLETE fetch
+-- OMITTED it → step the streak. Both are UPDATE-only ⇒ no-op when there's no
+-- entry (a never-materialized key is already protected by the resolvedId IS NULL
+-- check and needs no streak).
+recordSeen:
+UPDATE track_provider_id_cache SET missingStreak = 0, lastSeenAt = ?
+WHERE identityKey = ? AND providerId = ?;
+
+recordMissing:
+UPDATE track_provider_id_cache SET missingStreak = missingStreak + 1
+WHERE identityKey = ? AND providerId = ?;
 
 -- Stale unresolved entries past the cooldown cutoff, fewest-failed first (so a
 -- never-/least-tried track is re-attempted before one that's repeatedly missed).

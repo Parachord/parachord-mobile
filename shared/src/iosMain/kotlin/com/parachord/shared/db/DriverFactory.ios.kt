@@ -29,7 +29,7 @@ actual class DriverFactory {
         driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_source (localPlaylistId TEXT NOT NULL PRIMARY KEY, providerId TEXT NOT NULL, externalId TEXT NOT NULL, snapshotId TEXT, ownerId TEXT, syncedAt INTEGER NOT NULL)", 0)
         driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_baseline (localPlaylistId TEXT NOT NULL PRIMARY KEY, baseline TEXT NOT NULL, baselineSyncedAt INTEGER NOT NULL)", 0)
         driver.execute(null, "CREATE TABLE IF NOT EXISTS sync_playlist_nway (localPlaylistId TEXT NOT NULL, providerId TEXT NOT NULL, changeToken TEXT, editedAt INTEGER, lastSyncedAt INTEGER NOT NULL, PRIMARY KEY (localPlaylistId, providerId))", 0)
-        driver.execute(null, "CREATE TABLE IF NOT EXISTS track_provider_id_cache (identityKey TEXT NOT NULL, providerId TEXT NOT NULL, resolvedId TEXT, lastAttemptAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (identityKey, providerId))", 0)
+        driver.execute(null, "CREATE TABLE IF NOT EXISTS track_provider_id_cache (identityKey TEXT NOT NULL, providerId TEXT NOT NULL, resolvedId TEXT, lastAttemptAt INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, missingStreak INTEGER NOT NULL DEFAULT 0, lastSeenAt INTEGER, PRIMARY KEY (identityKey, providerId))", 0)
         // Columns — PRAGMA-checked, so nothing is logged on the already-migrated path.
         addColumnIfMissing(driver, table = "playlists", column = "sourceUrl", type = "TEXT")
         addColumnIfMissing(driver, table = "playlists", column = "sourceContentHash", type = "TEXT")
@@ -41,6 +41,8 @@ actual class DriverFactory {
         addColumnIfMissing(driver, table = "playlist_tracks", column = "trackRecordingMbid", type = "TEXT")
         addColumnIfMissing(driver, table = "tracks", column = "crossResolverEnrichedAt", type = "INTEGER")
         addColumnIfMissing(driver, table = "tracks", column = "isrc", type = "TEXT")
+        addColumnIfMissing(driver, table = "track_provider_id_cache", column = "missingStreak", type = "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(driver, table = "track_provider_id_cache", column = "lastSeenAt", type = "INTEGER")
         return driver
     }
 

@@ -99,6 +99,11 @@ class SyncEngine constructor(
          *  fetch and skip the reconcile rather than probe-storm / mass-act. */
         private const val DEAD_MIRROR_MASS_FLOOR = 30
 
+        /** missingStreak gate (parachord/parachord#911): a materialized track's
+         *  absence escalates to a real deletion only after this many CONSECUTIVE
+         *  complete-fetch omissions — a single transient omission stays protected. */
+        private const val MISSING_STREAK_THRESHOLD = 2
+
         /** Sentinel for the cross-provider local-row dedup migration
          *  ([migrateMergeCrossProviderDuplicates]). Lives above
          *  [SYNC_DATA_VERSION] so it doesn't piggyback on the v3→v4
@@ -1555,13 +1560,16 @@ class SyncEngine constructor(
      * `unifyTrackKeys`/`canonicalTrackKey` already document. The harm is bounded
      * (rare within a single playlist; never drops a present track via this path).
      *
-     * PENDING (return true) = cache entry ABSENT or its `resolvedId` is null. This
-     * is the conservative SAFE default — without positive evidence the provider
-     * ever materialized this track (a non-null `resolvedId`), we must NOT let its
-     * absence drive a deletion. A confirmed-materialized track (resolvedId
-     * non-null) that's now absent is a GENUINE deletion → return false → delete-
-     * wins drops it. A key with no resolvable track (shouldn't happen for a
-     * baseline key, but defensive) is treated as pending so it's never deleted.
+     * PENDING (return true) = cache entry ABSENT, its `resolvedId` is null, OR it
+     * is materialized but its absence has NOT yet streak-escalated. The conservative
+     * SAFE default: without positive evidence the provider ever materialized this
+     * track (a non-null `resolvedId`) we must NOT let its absence drive a deletion —
+     * AND even a materialized track stays protected until it has been omitted from
+     * the provider's COMPLETE fetch for [MISSING_STREAK_THRESHOLD] consecutive cycles
+     * (the missingStreak gate). A single transient complete-fetch omission (a region-
+     * filtered, or silently-short-but-count-matching fetch) is NOT a deletion; only a
+     * sustained absence is genuine deletion evidence → return false → delete-wins
+     * drops it. A key with no resolvable track is treated as pending (never deleted).
      */
     private suspend fun isProviderPendingForKey(
         providerId: String,
@@ -1570,8 +1578,28 @@ class SyncEngine constructor(
     ): Boolean {
         val track = keyToTrack[representativeKey] ?: return true
         val cacheKey = canonicalTrackKey(track)
-        val entry = trackProviderIdCacheDao.select(cacheKey, providerId)
-        return entry?.resolvedId.isNullOrBlank()
+        val entry = trackProviderIdCacheDao.select(cacheKey, providerId) ?: return true
+        if (entry.resolvedId.isNullOrBlank()) return true // never materialized → pending
+        // Materialized: still PENDING (protected) until its absence streak-escalates.
+        return entry.missingStreak < MISSING_STREAK_THRESHOLD
+    }
+
+    /**
+     * True when a materialized track's absence has cleared the missingStreak gate
+     * (>= [MISSING_STREAK_THRESHOLD] consecutive complete-fetch omissions) — its
+     * absence is now genuine deletion evidence. Used by the authoritative-source
+     * path (a churning pull-source's rotate-out only escalates past the gate).
+     */
+    private suspend fun streakEscalated(
+        providerId: String,
+        representativeKey: String,
+        keyToTrack: Map<String, PlaylistTrack>,
+    ): Boolean {
+        val track = keyToTrack[representativeKey] ?: return false
+        val cacheKey = canonicalTrackKey(track)
+        val entry = trackProviderIdCacheDao.select(cacheKey, providerId) ?: return false
+        if (entry.resolvedId.isNullOrBlank()) return false // never materialized → never a deletion
+        return entry.missingStreak >= MISSING_STREAK_THRESHOLD
     }
 
     private suspend fun propagateReconcilePlaylist(
@@ -1611,19 +1639,30 @@ class SyncEngine constructor(
                 continue
             }
             val tracks = provider.fetchPlaylistTracks(externalId)
-            // EMPTY-MIRROR rule: a 0-track mirror against a non-empty baseline is
-            // treated as UNPOPULATED (a fill target), NOT as a deletion of every
-            // baseline track. Otherwise its emptiness drags the 3-way merge toward
-            // 0 and trips the mass-change guard — the phantom-deletion that strands
-            // a mirror an earlier failed/partial push left empty (the real-device
-            // incident). changed=false excludes it from deletion deltas; keys=[]
-            // (its true empty state) keeps it a push target so it gets filled. This
-            // is consistent with the mass-change guard (we never honor a near-total
-            // deletion anyway). A PARTIALLY-populated mirror still contributes its
-            // deltas normally — only the fully-empty case is special-cased.
-            if (tracks.isEmpty() && baseline.tracks.isNotEmpty()) {
-                Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId mirror is empty — treating as " +
-                    "fill target, not a deletion")
+            // PARTIAL-FETCH FLOOR — the no-false-drop guard the empty-mirror rule is
+            // only the collapse-to-zero SUBSET of. A CHANGED mirror whose fetch
+            // returned FEWER rows than the provider's HONEST trackCount was TRUNCATED
+            // (pagination cut-off, a throttled later page, a short 200) — NOT a
+            // deletion. A truncated copy diffed as truth would union-remove the
+            // missing tracks from the HEALTHY mirrors (a 3-of-5 Spotify fetch actively
+            // removing 2 from the LB mirror). So a SHORT fetch (empty, OR length < the
+            // honest trackCount) degrades to changed=false + keys=[] (no delete delta;
+            // A9 still re-pushes the merge to it so it gets filled). Strict < so a
+            // legit ADD that GROWS past baseline still flows through as a real change.
+            // Applies to EVERY changed mirror including the authoritative source — a
+            // truncated source can't manufacture an authoritative deletion. The
+            // trackCount must be an authoritative count (Spotify tracks.total, LB/AM
+            // full-list length), NOT one derived from the truncated page body.
+            // (Mirrors desktop playlist-reconcile.js partial-fetch floor.)
+            val expectedCount = listEntry?.trackCount
+            val incomplete = tracks.isEmpty() || (expectedCount != null && tracks.size < expectedCount)
+            if (incomplete && baseline.tracks.isNotEmpty()) {
+                if (tracks.isNotEmpty()) {
+                    Log.w(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId PARTIAL fetch " +
+                        "(${tracks.size}/$expectedCount) — fill target, NOT a deletion")
+                } else {
+                    Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: $providerId mirror empty — fill target, not a deletion")
+                }
                 inputs.add(PropagationCopyInput(providerId, emptyList(), emptyList(), now, changed = false))
                 continue
             }
@@ -1649,52 +1688,9 @@ class SyncEngine constructor(
             c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
         }
 
-        // ── PULL-SOURCE AUTHORITY (Daily Brew / SiriusXMU rotate-out fix) ───────────
-        // The authoritative PULL SOURCE has the authority to DROP a baseline track:
-        // when a churning source (Spotify Daily Brew rotates ~40/day; hosted-XSPF
-        // replaces daily) rotates a track OUT, that absence must read as a genuine
-        // deletion — NOT be re-added by the pending augmentation. Add-only mirrors
-        // (Apple Music) still keep genuine catalog-gap tracks because the augmentation
-        // stays ON for them.
-        //
-        //   • sync_playlist_source.providerId's copy is authoritative for an imported
-        //     playlist (use the source ROW, not the id-prefix — a cross-provider push
-        //     mirror's prefix can differ from the real pull source).
-        //   • the LOCAL copy is authoritative for a hosted-XSPF playlist (sourceUrl).
-        //   • NONE for a local-authored multimaster playlist → augment all (unchanged).
-        //
-        // Authority is granted ONLY when the source is REMOVAL-CAPABLE. An add-only
-        // source (TrackRemoveMode.Unsupported, e.g. an AM-imported playlist) cannot
-        // legitimately "drop" a track, and a transient PARTIAL fetch from it would
-        // otherwise read as deletions with no safety net (the empty-mirror rule and
-        // the total-wipe floor only catch collapse-to-zero) — so it falls back to
-        // augment-all.
-        val pullSource = syncPlaylistSourceDao.selectForLocal(localId)
-        val authoritativeCopyId: String? = when {
-            pullSource != null -> {
-                val sourceProvider = providers.firstOrNull { it.id == pullSource.providerId }
-                if (sourceProvider != null &&
-                    sourceProvider.features.trackRemoveMode != TrackRemoveMode.Unsupported
-                ) pullSource.providerId else null
-            }
-            playlist.sourceUrl != null -> "local"   // hosted XSPF — local copy is the truth
-            else -> null                            // local-authored multimaster — augment all
-        }
-
-        // The set of baseline keys the AUTHORITATIVE copy itself dropped this cycle.
-        // These must NEVER be re-augmented onto ANY copy (a source deletion is final).
-        // Computed only when the authoritative copy is CHANGED (an unchanged copy reuses
-        // baseline.tracks, so it dropped nothing). Keyed off the copy's actual keys, NOT
-        // the pending cache.
-        val authoritativeCopy = authoritativeCopyId?.let { aid ->
-            copies.firstOrNull { it.id == aid }?.takeIf { it.changed }
-        }
-        val authoritativeDropped: Set<String> =
-            authoritativeCopy?.let { ac -> baselineRepr.toSet() - ac.keys.toSet() } ?: emptySet()
-
         // Trap 1 — resolve representative keys → tracks. Build keyToTrack from the
         // copies that carry real tracks (local FIRST so its richer metadata wins).
-        // Moved AHEAD of the merge so the pending-aware augmentation below can
+        // Built AHEAD of the presence vote + authority + augmentation so each can
         // bridge a representative key → its concrete track → the hydration cache
         // (the cache is keyed by canonicalTrackKey(track), which IGNORES isrc, so a
         // representative key — possibly isrc-tier — can't be looked up directly).
@@ -1716,43 +1712,118 @@ class SyncEngine constructor(
             }
         }
 
-        // ── PENDING-AWARE MERGE AUGMENTATION (catalog-gap phantom-deletion fix) ──
-        // The merge consumes each CHANGED provider's fetched tracklist. A track a
-        // provider couldn't MATERIALIZE (an un-hydratable ADD left PENDING) is, to
-        // the merge, indistinguishable from one the user DELETED there — delete-
-        // always-wins reads its absence as a deletion and drops it from canonical
-        // → removed everywhere (the P1b catalog-gap phantom deletion). The executor
-        // protects the WRITE (a pending add never drives a remove), but the MERGE
-        // runs UPSTREAM and would over-delete without this.
-        //
-        // SAFETY INVARIANT: a provider's absence of a track is a DELETION only if we
-        // have POSITIVE evidence the provider HAD it — the hydration cache's
-        // non-null resolvedId. So for each CHANGED provider copy, re-add the
-        // baseline representative keys it LACKS *only where that track is PENDING
-        // for it* (cache entry absent OR resolvedId null). A confirmed-materialized
-        // (resolvedId non-null) absence is a GENUINE deletion → NOT re-added → still
-        // dropped by delete-wins. The provider's OTHER genuine adds/removes still
-        // flow (it stays changed=true with its real keys), so this resolves the
-        // trilemma: suppress phantom deletes, honor real deletes, propagate adds.
-        val augmentedCopies = copies.mapIndexed { i, copy ->
-            val input = inputs[i]
-            // Skip: local (always), unchanged copies, AND the authoritative source copy —
-            // the source's missing baseline keys are GENUINE deletions, not pending fills.
-            if (input.id == "local" || input.id == authoritativeCopyId || !copy.changed) {
-                return@mapIndexed copy
+        // ── PRESENCE VOTE (missingStreak gate) ──────────────────────────────────
+        // Every CHANGED (⇒ COMPLETE, post partial-fetch floor) provider copy is
+        // fresh evidence of what that provider currently holds: reset the streak for
+        // each baseline key it shows, step it for each it omits. Only complete
+        // fetches vote, so a truncated/unchanged copy never moves a streak. This is
+        // the persisted memory that lets a SINGLE transient complete-fetch omission
+        // stay protected while a genuine deletion (omitted ≥ MISSING_STREAK_THRESHOLD
+        // consecutive cycles) escalates. GATED OFF in shadow/dryRun: streak escalation
+        // is a REAL-propagation mechanism and shadow must stay side-effect-free, so
+        // while dryRun streaks never advance and a transiently-absent materialized
+        // track is always protected. (Mirrors desktop A5.5.)
+        // CRITICAL: never remove the !dryRun guard — shadow must not mutate the
+        // production cache, or a preview run would falsely escalate streaks and
+        // surface phantom deletes the next REAL cycle.
+        if (!dryRun) {
+            for (copy in copies) {
+                if (copy.id == "local" || !copy.changed) continue
+                val present = copy.keys.toSet()
+                for (k in baselineRepr) {
+                    val track = keyToTrack[k] ?: continue
+                    val cacheKey = canonicalTrackKey(track)
+                    if (k in present) trackProviderIdCacheDao.recordSeen(cacheKey, copy.id, now)
+                    else trackProviderIdCacheDao.recordMissing(cacheKey, copy.id)
+                }
             }
+        }
+
+        // ── PULL-SOURCE AUTHORITY (Daily Brew / SiriusXMU rotate-out fix) ───────────
+        // The authoritative PULL SOURCE has the authority to DROP a baseline track:
+        // when a churning source (Spotify Daily Brew rotates ~40/day; hosted-XSPF
+        // replaces daily) rotates a track OUT, that absence reads as a genuine
+        // deletion — NOT re-added by the pending augmentation. Add-only mirrors
+        // (Apple Music) still keep genuine catalog-gap tracks (augmentation stays ON).
+        //
+        //   • sync_playlist_source.providerId's copy is authoritative for an imported
+        //     playlist (the source ROW, not the id-prefix — a cross-provider push
+        //     mirror's prefix can differ from the real pull source).
+        //   • the LOCAL copy is authoritative for a hosted-XSPF playlist (sourceUrl).
+        //   • NONE for a local-authored multimaster playlist → augment all.
+        //
+        // Authority is granted ONLY when the source is REMOVAL-CAPABLE. An add-only
+        // source (TrackRemoveMode.Unsupported) cannot legitimately "drop" a track.
+        val pullSource = syncPlaylistSourceDao.selectForLocal(localId)
+        val authoritativeCopyId: String? = when {
+            pullSource != null -> {
+                val sourceProvider = providers.firstOrNull { it.id == pullSource.providerId }
+                if (sourceProvider != null &&
+                    sourceProvider.features.trackRemoveMode != TrackRemoveMode.Unsupported
+                ) pullSource.providerId else null
+            }
+            playlist.sourceUrl != null -> "local"   // hosted XSPF — local copy is the truth
+            else -> null                            // local-authored multimaster — augment all
+        }
+
+        // The baseline keys the AUTHORITATIVE copy itself dropped this cycle — these
+        // must NEVER be re-augmented onto ANY copy (a source deletion is final).
+        // Computed only when the authoritative copy is CHANGED (an unchanged copy
+        // reuses baseline.tracks, so it dropped nothing).
+        //
+        // SINGLE-AUTHORITY (one-way mirror) → drops are IMMEDIATELY authoritative,
+        // no streak gate. Three cases collapse here:
+        //   • 'local'    — a hosted-XSPF source (in-process, never a truncated fetch);
+        //   • !writable  — a FOLLOWED (read-only) provider source. A wrong drop
+        //     SELF-HEALS next cycle (the source re-asserts the track), so the gate
+        //     buys nothing but would lag/break a daily-rotating ALGORITHMIC playlist
+        //     (a followed Daily Brew rotating ~40/day → the d81305c accumulation);
+        //   • mirrorOnly — the user flagged an OWNED-but-dynamic playlist (e.g. a
+        //     SmarterPlaylists-managed Daily Brew that Spotify reports as user-owned)
+        //     as a one-way mirror in its Sync menu — the writability split alone can't
+        //     tell it apart from a hand-curated owned playlist.
+        // The streak gate (#277) therefore applies ONLY to an OWNED, non-mirror
+        // provider source, where a single transient complete-fetch omission could lose
+        // a user edit: it stays protected until the omission is sustained
+        // ≥ MISSING_STREAK_THRESHOLD consecutive cycles.
+        val authoritativeCopy = authoritativeCopyId?.let { aid ->
+            copies.firstOrNull { it.id == aid }?.takeIf { it.changed }
+        }
+        val mirrorOnly = settingsStore.getPlaylistMirrorOnly(localId)
+        val immediateAuthority = authoritativeCopyId == "local" || mirrorOnly || !playlist.writable
+        val authoritativeDropped: Set<String> = if (authoritativeCopy == null) emptySet() else {
+            val present = authoritativeCopy.keys.toSet()
+            baselineRepr.filter { k ->
+                k !in present &&
+                    (immediateAuthority || streakEscalated(authoritativeCopyId!!, k, keyToTrack))
+            }.toSet()
+        }
+
+        // ── PENDING-AWARE MERGE AUGMENTATION (catalog-gap phantom-deletion fix) ──
+        // A track a provider couldn't MATERIALIZE (an un-hydratable ADD left PENDING)
+        // is, to the merge, indistinguishable from one the user DELETED there —
+        // delete-always-wins reads its absence as a deletion and drops it everywhere
+        // (the P1b catalog-gap phantom deletion). The executor protects the WRITE, but
+        // the MERGE runs UPSTREAM and would over-delete without this. So a CHANGED copy
+        // that LACKS a baseline key gets it re-added unless the absence is GENUINE
+        // deletion evidence:
+        //   • AUTHORITATIVE source copy: re-add every lacked key EXCEPT those whose
+        //     absence streak-escalated (authoritativeDropped) — a single transient
+        //     omission doesn't drop, a sustained one finally does.
+        //   • other mirrors: re-add a lacked key only if the source didn't drop it AND
+        //     it's pending for this provider (never-materialized, OR materialized but
+        //     not yet missing ≥ MISSING_STREAK_THRESHOLD consecutive complete fetches).
+        val augmentedCopies = copies.map { copy ->
+            if (copy.id == "local" || !copy.changed) return@map copy
             val present = copy.keys.toSet()
             val lacked = baselineRepr.filter { it !in present }
-            if (lacked.isEmpty()) return@mapIndexed copy
-            val pendingLacked = lacked.filter { key ->
-                // Never re-augment a key the authoritative source deleted — even onto a
-                // mirror that's pending on it. A source deletion wins over a mirror's
-                // pending-protection (the AM-residue closer).
-                key !in authoritativeDropped &&
-                    isProviderPendingForKey(input.id, key, keyToTrack)
+            if (lacked.isEmpty()) return@map copy
+            val toReadd = if (copy.id == authoritativeCopyId) {
+                lacked.filter { it !in authoritativeDropped }
+            } else {
+                lacked.filter { it !in authoritativeDropped && isProviderPendingForKey(copy.id, it, keyToTrack) }
             }
-            if (pendingLacked.isEmpty()) copy
-            else copy.copy(keys = copy.keys + pendingLacked)
+            if (toReadd.isEmpty()) copy else copy.copy(keys = copy.keys + toReadd)
         }
 
         // The merge runs on the AUGMENTED copies (phantom deletes suppressed); the

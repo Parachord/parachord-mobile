@@ -145,6 +145,25 @@ interface SyncSettingsProvider {
     suspend fun setPlaylistChannels(localPlaylistId: String, channels: Set<String>?)
 
     /**
+     * Per-playlist MIRROR-ONLY flag. When true the playlist is reconciled as a
+     * one-way mirror FROM its source: the source is single-authority and its
+     * rotate-out drops IMMEDIATELY (no streak gate), exactly like a followed
+     * playlist — for OWNED-but-dynamic playlists the source-writability split
+     * can't catch (e.g. a SmarterPlaylists-managed Daily Brew that Spotify reports
+     * as user-owned). Default false. User-set in the playlist's Sync menu; a pull
+     * must NEVER clobber it, which is why it lives here (KvStore) and NOT as a
+     * `playlists` column (`writable` is refreshed on every pull, #269).
+     *
+     * Defaulted so test doubles and any non-persisting provider safely report
+     * "not mirror-only"; the real [com.parachord.shared.settings.SettingsStore]
+     * overrides both.
+     */
+    suspend fun getPlaylistMirrorOnly(localPlaylistId: String): Boolean = false
+
+    /** Persist a playlist's mirror-only flag (see [getPlaylistMirrorOnly]). */
+    suspend fun setPlaylistMirrorOnly(localPlaylistId: String, mirrorOnly: Boolean) {}
+
+    /**
      * Sync data version — bumped to force a full re-fetch after schema/migration
      * changes. SyncEngine compares against its own `SYNC_DATA_VERSION` constant.
      */

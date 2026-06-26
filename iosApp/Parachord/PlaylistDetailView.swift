@@ -657,6 +657,8 @@ private struct PlaylistSyncChannelsSheet: View {
     @State private var channels: [IosSyncChannel] = []
     @State private var pendingOff: IosSyncChannel?   // channel awaiting keep/delete choice
     @State private var note: String?                 // e.g. AM-can't-delete message
+    @State private var mirrorOnly = false            // one-way mirror — effective (checked)
+    @State private var mirrorOnlyForced = false      // locked ON (followed / hosted playlist)
 
     var body: some View {
         NavigationStack {
@@ -670,6 +672,7 @@ private struct PlaylistSyncChannelsSheet: View {
                         .font(.system(size: 11)).foregroundStyle(PC.fg3)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 20).padding(.top, 10)
+                    mirrorOnlyRow
                     Spacer(minLength: 24)
                 }
             }
@@ -727,9 +730,39 @@ private struct PlaylistSyncChannelsSheet: View {
         .padding(.horizontal, 20).padding(.vertical, 10)
     }
 
+    // One-way MIRROR toggle — for dynamic / algorithmic playlists that rebuild
+    // themselves (a followed Daily Brew, or a SmarterPlaylists-managed one Spotify
+    // reports as yours). When on, the source replaces the other services each sync
+    // (exact rotation) instead of two-way merging. Parity with Android's MirrorOnlyRow.
+    private var mirrorOnlyRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Mirror only (one-way)").font(.system(size: 15)).foregroundStyle(PC.fg1)
+                // Forced playlists (followed / hosted) are inherently one-way and the
+                // toggle is locked on — explain why.
+                Text(mirrorOnlyForced
+                    ? "This playlist is followed or hosted, so it always mirrors one-way from its source — you can’t make it two-way."
+                    : "For dynamic playlists that rebuild themselves — a followed Daily Brew, or one an app manages for you. The source replaces the other services each sync, with no two-way merge.")
+                    .font(.system(size: 11)).foregroundStyle(PC.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(get: { mirrorOnly }, set: { on in
+                mirrorOnly = on
+                Task { await setMirror(on) }
+            }))
+                .labelsHidden().tint(PC.accent).disabled(mirrorOnlyForced)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+    }
+
     private func set(_ pid: String, _ on: Bool) async {
         try? await container.setPlaylistChannel(localId: playlist.id, providerId: pid, enabled: on)
         await reload()
+    }
+
+    private func setMirror(_ on: Bool) async {
+        try? await container.setPlaylistMirrorOnly(localId: playlist.id, mirrorOnly: on)
     }
 
     private func applyOff(_ pid: String, deleteRemote: Bool) async {
@@ -743,6 +776,9 @@ private struct PlaylistSyncChannelsSheet: View {
 
     private func reload() async {
         channels = (try? await container.getPlaylistSyncChannels(localId: playlist.id)) as? [IosSyncChannel] ?? []
+        let st = try? await container.getPlaylistMirrorOnlyState(localId: playlist.id)
+        mirrorOnly = st?.effective ?? false
+        mirrorOnlyForced = st?.forced ?? false
     }
 
     private func channelColor(_ id: String) -> Color {

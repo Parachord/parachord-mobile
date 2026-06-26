@@ -36,6 +36,7 @@ import com.parachord.shared.repository.LibraryRepository
 import com.parachord.shared.sync.AppleMusicSyncProvider
 import com.parachord.shared.sync.KvTombstoneStore
 import com.parachord.shared.sync.ListenBrainzSyncProvider
+import com.parachord.shared.sync.MirrorOnlyState
 import com.parachord.shared.sync.SpotifySyncProvider
 import com.parachord.shared.sync.SyncEngine
 import com.parachord.shared.sync.TrackTombstoneService
@@ -2124,6 +2125,19 @@ class IosContainer private constructor() {
         if (enabled) {
             appScope.launch(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
         }
+    }
+
+    /** Effective + forced one-way-mirror state for a playlist (dynamic /
+     *  algorithmic playlists). Drives the "Mirror only" toggle in the Sync sheet:
+     *  `effective` = checked, `forced` = locked ON (a followed/hosted playlist). */
+    suspend fun getPlaylistMirrorOnlyState(localId: String): MirrorOnlyState =
+        playlistSyncChannelManager.getMirrorOnlyState(localId)
+
+    /** Flag (or clear) this playlist as a one-way mirror, then kick a sync so the
+     *  new reconcile mode takes effect immediately (parity with Android). */
+    suspend fun setPlaylistMirrorOnly(localId: String, mirrorOnly: Boolean) {
+        playlistSyncChannelManager.setMirrorOnly(localId, mirrorOnly)
+        appScope.launch(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
     }
 
     /**

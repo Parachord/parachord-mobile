@@ -19,6 +19,18 @@ data class PlaylistSyncChannel(
 )
 
 /**
+ * One-way-mirror state for a playlist's Sync menu toggle.
+ *  - [effective] drives the toggle's CHECKED state — is the playlist reconciled
+ *    as a one-way mirror this cycle? (forced OR the user flag).
+ *  - [forced] = the playlist is INHERENTLY one-way and can't be made two-way: a
+ *    FOLLOWED (read-only, `writable=false`) provider source — you don't own it, so
+ *    it can only mirror OUT — or a hosted-XSPF (`sourceUrl != null`). When forced
+ *    the toggle is shown ON but LOCKED (disabled). Only an owned playlist's flag is
+ *    user-toggleable.
+ */
+data class MirrorOnlyState(val effective: Boolean, val forced: Boolean)
+
+/**
  * Per-playlist Sync menu backend (shared, both platforms). The per-playlist
  * channel override is AUTHORITATIVE — disabling detaches (no dup), enabling
  * mirrors it to that service on the next sync.
@@ -76,6 +88,29 @@ class PlaylistSyncChannelManager(
         if (!enabled) {
             syncEngine.detachPlaylistFromProvider(localId, providerId)
         }
+    }
+
+    /** Effective + forced one-way-mirror state for this playlist's Sync toggle.
+     *  A FOLLOWED (read-only) source or a hosted-XSPF is INHERENTLY one-way
+     *  (`forced` → toggle ON + locked); an owned playlist reflects the user flag
+     *  and stays toggleable. See [MirrorOnlyState]. */
+    suspend fun getMirrorOnlyState(localId: String): MirrorOnlyState {
+        val playlist = playlistDao.getById(localId)
+        val forced = playlist != null && (!playlist.writable || playlist.sourceUrl != null)
+        val flag = settingsStore.getPlaylistMirrorOnly(localId)
+        return MirrorOnlyState(effective = forced || flag, forced = forced)
+    }
+
+    /** Flag (or clear) this playlist as a one-way mirror. No-op semantics when the
+     *  playlist is already FORCED one-way (the UI locks the toggle there). The NEXT
+     *  sync reconciles it as single-authority: the source replaces the mirrors each
+     *  cycle (exact rotation) instead of being streak-gate-protected. For
+     *  OWNED-but-dynamic playlists (a SmarterPlaylists-managed Daily Brew that
+     *  Spotify reports as yours) this is the only way to get exact rotation — the
+     *  writability split alone can't tell it apart from a hand-curated owned
+     *  playlist. */
+    suspend fun setMirrorOnly(localId: String, mirrorOnly: Boolean) {
+        settingsStore.setPlaylistMirrorOnly(localId, mirrorOnly)
     }
 
     /**
