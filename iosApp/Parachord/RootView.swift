@@ -194,8 +194,17 @@ struct ContentView: View {
         // #235 Listen Along: bind the engine to the shared coordinator, and accept
         // parachord://listen-along?service=&user= deep links.
         .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator); bindChatPlayback() }
-        .onOpenURL { handleDeepLink($0) }
-        // Universal Links (#124/#138) — https://parachord.com/… and go.parachord.com/<id>.
+        // SwiftUI's App lifecycle delivers BOTH custom-scheme URLs AND Universal
+        // Links through .onOpenURL (the UL arrives as the raw https:// URL), so
+        // route by scheme here. Previously handleDeepLink's `scheme == "parachord"`
+        // guard silently dropped the https UL, and .onContinueUserActivity (below)
+        // doesn't fire in this lifecycle — so HTTPS playlist links did nothing
+        // while parachord:// worked (parachord-mobile#280).
+        .onOpenURL { url in
+            if url.scheme == "parachord" { handleDeepLink(url) } else { handleUniversalLink(url) }
+        }
+        // Belt-and-suspenders for any iOS/SwiftUI version that DOES route Universal
+        // Links here instead of through .onOpenURL (#124/#138).
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             if let url = activity.webpageURL { handleUniversalLink(url) }
         }
