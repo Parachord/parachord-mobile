@@ -894,7 +894,7 @@ private struct PluginConfigSheet: View {
 
     @ViewBuilder private var spotifySection: some View {
         Section {
-            TextField("Client ID", text: $spotifyIdDraft)
+            SecureField("Client ID", text: $spotifyIdDraft)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .font(.system(.body, design: .monospaced))
             Button("Save Client ID") { model.setSpotifyClientId(spotifyIdDraft) }
