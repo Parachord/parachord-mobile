@@ -360,6 +360,51 @@ never from a persisted blob, so this is an iOS-only discipline.
   Developer Mode on, then the profile generates.
 ---
 
+## Deep links & Universal Links (`parachord://` + `https://parachord.com`)
+
+The dispatch chain: `RootView.handleDeepLink` (parachord://) and
+`handleUniversalLink` (https) → `IosContainer.parseDeepLink` /
+`resolveUniversalLink` (shared `DeepLinkParser`) → `resolveComplexDeepLink` for
+protocol play/playlist/radio. `parachord://` is registered as a custom scheme;
+`https://parachord.com` + `go.parachord.com` work via Associated Domains (#124).
+
+- **SwiftUI's App lifecycle delivers Universal Links through `.onOpenURL` — NOT
+  `.onContinueUserActivity`.** The tapped `https://…` arrives at `.onOpenURL` as
+  the raw https URL. So `.onOpenURL` MUST dispatch by scheme:
+  ```swift
+  .onOpenURL { url in
+      if url.scheme == "parachord" { handleDeepLink(url) } else { handleUniversalLink(url) }
+  }
+  ```
+  This bit us (parachord-mobile#280, fix `e062292`): `handleDeepLink` led with
+  `guard url.scheme == "parachord" else { return }`, so the https UL was silently
+  dropped — every HTTPS playlist link was a no-op while `parachord://` worked.
+  `.onContinueUserActivity(NSUserActivityTypeBrowsingWeb)` is kept as
+  belt-and-suspenders but does NOT fire in this lifecycle. **Symptom of regressing
+  this: app foregrounds from an `https://parachord.com/...` tap but nothing happens,
+  no toast.** That is a handler-wiring bug, NOT an AASA/entitlement failure — if the
+  app foregrounds, association already worked.
+
+- **Universal Links can only be tested on a REAL device** (the sim is unreliable),
+  and only from a tapped link in Notes/Messages — **NOT** Safari's address bar
+  (Safari ignores UL from the bar), and there's no programmatic open
+  (`devicectl` has no open-url; `simctl openurl` is sim + custom-scheme only).
+- **`devicectl install` OVER an existing app does NOT re-fetch the AASA** — iOS
+  keeps the prior association state. **Delete + reinstall** to force a fresh AASA
+  fetch before testing UL (matches the MusicKit "delete to clear cache" rule).
+- **Device logs without root:** `log collect --device` needs root (won't work);
+  use `idevicesyslog` (Homebrew, no root). Run it as a *managed* background
+  command (no inner `&` — that detaches and dies); filter with `-m <string>` or
+  grep the captured file. The app's own `NSLog`/`Log` lines show as
+  `Parachord[pid]`; the playback handoff shows as SpringBoard
+  `FBSystemService … open "com.spotify.client"` (Spotify Connect) when a track plays.
+- **`play/playlist?url=<provider>` routing** lives in the shared
+  `classifyPlaylistUrl` + `ProviderPlaylistResolver` (parachord#930 / #932 port);
+  Achordion/Spotify/Apple work, SoundCloud is unsupported (#281). Spotify
+  *editorial* (`37i9…`) playlists return empty from the API for third-party apps —
+  not a bug, a Spotify restriction.
+---
+
 ## MusicKit / Apple Music playback (the full saga — verified on-device)
 
 Apple Music *resolution* needs nothing (the `.axe` uses no-auth iTunes
