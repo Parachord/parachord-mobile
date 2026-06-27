@@ -2452,7 +2452,7 @@ class IosContainer private constructor() {
     }
     private val shareLinkResolver: com.parachord.shared.share.ShareLinkResolver by lazy {
         com.parachord.shared.share.ShareLinkResolver(
-            achordionClient, smartLinksClient, playlistDao, playlistTrackDao, syncPlaylistLinkDao,
+            achordionClient, playlistDao, syncPlaylistLinkDao,
         )
     }
 

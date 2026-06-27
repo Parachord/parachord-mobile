@@ -2,16 +2,11 @@ package com.parachord.shared.share
 
 import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.EntityType
-import com.parachord.shared.api.SmartLinkCreateRequest
-import com.parachord.shared.api.SmartLinkTrack
-import com.parachord.shared.api.SmartLinksClient
 import com.parachord.shared.api.SubmitTrackLinksRequest
 import com.parachord.shared.api.TrackLink
 import com.parachord.shared.db.dao.PlaylistDao
-import com.parachord.shared.db.dao.PlaylistTrackDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
 import com.parachord.shared.model.Playlist
-import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
 import kotlinx.coroutines.TimeoutCancellationException
@@ -21,32 +16,30 @@ import kotlinx.coroutines.withTimeout
 
 /**
  * KMP-shared share-URL builder — the commonMain port of Android's `ShareManager`
- * (outbound sharing, #222), reusing the already-shared [AchordionClient] /
- * [SmartLinksClient] + DAOs so iOS shares route through the SAME Achordion entity
- * links + cache pre-warm + smart-link / lookup-fallback path as Android, instead
- * of a plain text `ShareLink`.
+ * (outbound sharing, #222), reusing the already-shared [AchordionClient] + DAOs so
+ * iOS shares route through the SAME Achordion entity links + cache pre-warm +
+ * lookup-fallback path as Android, instead of a plain text `ShareLink`.
  *
  * - Track / album / artist → Achordion entity page (`achordion.xyz/{recording,
  *   release-group,artist}/…`); tracks also `POST /track-links/submit` to pre-warm
  *   the recipient's per-service links. MBID-miss / API-fail → `…/lookup?…` URL.
- * - Playlist → Achordion playlist page when on ListenBrainz, else a
- *   `go.parachord.com` smart-link, else the `parachord.com/go?uri=` deeplink.
+ * - Playlist → Achordion playlist page when on ListenBrainz; **null when there's
+ *   no LB anchor** (caller shows a "sync to ListenBrainz" hint). No
+ *   `go.parachord.com` smart-link minting — the inbound round-trip (#138) can't
+ *   resolve a device-local playlist id on the recipient. Matches desktop's
+ *   `publishCollectionSmartLink` (and Android's `ShareManager`).
  *
  * Network calls are bounded by a 4 s timeout so a slow API can't hold the share
- * sheet. Android keeps its own `ShareManager` for now (converging it onto this is
- * a tracked follow-up); this changes no Android behavior.
+ * sheet.
  */
 class ShareLinkResolver(
     private val achordionClient: AchordionClient,
-    private val smartLinksClient: SmartLinksClient,
     private val playlistDao: PlaylistDao,
-    private val playlistTrackDao: PlaylistTrackDao,
     private val syncPlaylistLinkDao: SyncPlaylistLinkDao,
 ) {
     companion object {
         private const val TAG = "ShareLinkResolver"
         private const val TIMEOUT_MS = 4_000L
-        private const val GO_REDIRECT = "https://parachord.com/go?uri="
     }
 
     data class ShareResult(val url: String, val subject: String, val isSmartLink: Boolean)
@@ -77,37 +70,26 @@ class ShareLinkResolver(
         return ShareResult(url, name, isSmartLink = entityUrl != null)
     }
 
-    /** Share by playlist id — fetches the row + tracks + LB link from the DB. */
+    /** Share by playlist id — fetches the row + LB link from the DB. Null when the
+     *  row is gone OR there's no LB anchor (Achordion-only, see below). */
     suspend fun sharePlaylist(playlistId: String): ShareResult? {
         val playlist = playlistDao.getById(playlistId) ?: return null
-        val tracks = playlistTrackDao.getByPlaylistIdSync(playlistId)
-        return sharePlaylist(playlist, tracks)
+        return sharePlaylist(playlist)
     }
 
-    suspend fun sharePlaylist(playlist: Playlist, tracks: List<PlaylistTrack>): ShareResult {
-        val subject = playlist.name
-        // Prefer the Achordion playlist page, keyed on the LB MBID (cross-platform
-        // anchor): the LB push-link, or the id-prefix when LB is the source.
+    /**
+     * Achordion-only (matches desktop + Android `ShareManager`): a playlist shares
+     * via its ListenBrainz MBID anchor — the LB push-link, or the id-prefix when LB
+     * is the source. **Returns null when there's no LB anchor** (caller shows a
+     * "sync to ListenBrainz" hint). No `go.parachord.com` smart-link minting — the
+     * inbound round-trip (#138) can't resolve a device-local playlist id on the
+     * recipient.
+     */
+    suspend fun sharePlaylist(playlist: Playlist): ShareResult? {
         val lbMbid = syncPlaylistLinkDao.selectForLink(playlist.id, "listenbrainz")?.externalId
             ?: playlist.id.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
-        if (lbMbid != null) {
-            return ShareResult(achordionClient.playlistShareUrl(lbMbid), subject, true)
-        }
-        val playlistUrls = buildMap {
-            playlist.spotifyId?.let { put("spotify", "https://open.spotify.com/playlist/$it") }
-        }
-        val smart = tryCreateSmartLink(
-            SmartLinkCreateRequest(
-                title = playlist.name,
-                creator = playlist.ownerName,
-                albumArt = playlist.artworkUrl,
-                type = "playlist",
-                urls = playlistUrls.takeIf { it.isNotEmpty() },
-                tracks = tracks.map { it.toSmartLinkTrack() }.ifEmpty { null },
-            ),
-        )
-        val url = smart ?: (GO_REDIRECT + enc("parachord://playlist/${enc(playlist.id)}"))
-        return ShareResult(url, subject, smart != null)
+            ?: return null
+        return ShareResult(achordionClient.playlistShareUrl(lbMbid), playlist.name, isSmartLink = true)
     }
 
     private suspend fun tryFetchEntityLink(type: EntityType, mbid: String?): String? {
@@ -155,28 +137,8 @@ class ShareLinkResolver(
         }
     }
 
-    private suspend fun tryCreateSmartLink(request: SmartLinkCreateRequest): String? = try {
-        withTimeout(TIMEOUT_MS) { smartLinksClient.create(request).url }
-    } catch (e: TimeoutCancellationException) {
-        Log.w(TAG, "smart-link create timed out for '${request.title}'"); null
-    } catch (e: Exception) {
-        Log.w(TAG, "smart-link create failed (${e.message}) for '${request.title}'"); null
-    }
-
     private fun lookupUrl(type: String, artist: String, title: String): String =
         "https://achordion.xyz/$type/lookup?artist=${enc(artist)}&title=${enc(title)}"
-
-    private fun PlaylistTrack.toSmartLinkTrack(): SmartLinkTrack = SmartLinkTrack(
-        title = trackTitle,
-        artist = trackArtist,
-        duration = trackDuration,
-        urls = buildMap {
-            trackSpotifyId?.let { put("spotify", "https://open.spotify.com/track/$it") }
-            trackAppleMusicId?.let { put("applemusic", "https://music.apple.com/song/$it") }
-            trackSoundcloudId?.let { put("soundcloud", "https://soundcloud.com/$it") }
-        },
-        albumArt = trackArtworkUrl,
-    )
 
     private fun enc(value: String): String = buildString {
         for (c in value) {

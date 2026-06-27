@@ -362,13 +362,11 @@ val androidModule = module {
         com.parachord.shared.db.ParachordDb(driver)
     }
 
-    // ShareManager binds the shared `SmartLinksClient` (Ktor) — the Retrofit
-    // `SmartLinkApi` was the last Retrofit footprint and went away in the
-    // Smart Links cutover. `SmartLinksClient` itself is registered in
-    // `sharedModule`; per-platform `OkHttp`/`Darwin` Ktor engines + global
-    // User-Agent + sanitized Authorization-stripping logging come for free
-    // through the shared `HttpClientFactory`.
-    single { com.parachord.android.share.ShareManager(get(), get(), get(), get(), get()) }
+    // ShareManager builds Achordion entity-page share URLs (tracks/albums/
+    // artists/playlists). Playlists are Achordion-only via their LB MBID anchor
+    // (no go.parachord.com smart-link minting — see ShareManager kdoc / #138), so
+    // it no longer needs SmartLinksClient.
+    single { com.parachord.android.share.ShareManager(get(), get(), get(), get()) }
 
     // Spotify Web API — migrated to shared Ktor client (SpotifyClient) in
     // Phase 9E.1.8. Binding lives in sharedModule; per-request auth via

@@ -13,6 +13,11 @@ import com.parachord.android.data.db.entity.TrackEntity
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
+/** Shown when a playlist can't be shared yet — it has no ListenBrainz MBID anchor
+ *  (the cross-platform key Achordion's playlist page uses). Matches desktop. */
+private const val LB_SHARE_HINT =
+    "Sync this playlist to ListenBrainz first to enable sharing via Achordion."
+
 /**
  * Open the system share sheet (`Intent.ACTION_SEND` wrapped in
  * `Intent.createChooser`) with the given URL and a human-readable subject.
@@ -105,7 +110,10 @@ fun rememberSharePlaylist(): (PlaylistEntity, List<PlaylistTrackEntity>) -> Unit
     return remember(context) {
         { playlist, tracks ->
             scope.launch {
-                val result = shareManager.sharePlaylist(playlist, tracks)
+                val result = shareManager.sharePlaylist(playlist, tracks) ?: run {
+                    Toast.makeText(context, LB_SHARE_HINT, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
                 openShareSheet(context, result.url, result.subject)
             }
             Unit
@@ -125,7 +133,10 @@ fun rememberSharePlaylistById(): (String) -> Unit {
     return remember(context) {
         { id ->
             scope.launch {
-                val result = shareManager.sharePlaylist(id) ?: return@launch
+                val result = shareManager.sharePlaylist(id) ?: run {
+                    Toast.makeText(context, LB_SHARE_HINT, Toast.LENGTH_LONG).show()
+                    return@launch
+                }
                 openShareSheet(context, result.url, result.subject)
             }
             Unit
