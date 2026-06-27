@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var creator = PlaylistCreator.shared
     @State private var importer = PlaylistImporter.shared
     @State private var friendAdder = FriendAdder.shared
+    @State private var sharer = ShareCoordinator.shared
     @State private var metaEditor = TrackMetadataEditor.shared
     @State private var listenAlong = ListenAlongController.shared
     @State private var spinoff = SpinoffController.shared
@@ -285,6 +286,11 @@ struct ContentView: View {
         // the FAB and the Playlists screen share one flow. Bundled into a single
         // ViewModifier — inlining all six modifiers blew the type-checker budget.
         .modifier(PCAddActionModals(importer: importer, friendAdder: friendAdder))
+        // Outbound share sheet (#222) — ShareCoordinator builds the Achordion /
+        // smart-link URL via the shared resolver, then presents it here.
+        .sheet(item: Binding(get: { sharer.shareItem }, set: { sharer.shareItem = $0 })) { item in
+            PCActivityView(items: [item.url])
+        }
         // In-app track metadata editor (#248), hosted once at the root so the
         // track context menu's "Edit Metadata" can present it (a contextMenu
         // can't host its own sheet).

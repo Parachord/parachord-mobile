@@ -369,6 +369,39 @@ final class FriendAdder {
     }
 }
 
+/// Global outbound-share coordinator (#222). Hosted once at the RootView root so
+/// any track/album/artist menu can build an Achordion / smart-link share URL via
+/// the shared ShareLinkResolver and present the system share sheet — replacing the
+/// old plain-text ShareLink. Mirrors PlaylistImporter's global pattern.
+@MainActor
+@Observable
+final class ShareCoordinator {
+    static let shared = ShareCoordinator()
+    private init() {}
+    var shareItem: PCShareItem?
+    var sharing = false
+
+    func shareTrack(_ track: Track) {
+        run { try await IosContainer.companion.shared.shareTrack(track: track) }
+    }
+    func shareAlbum(title: String, artist: String, releaseGroupMbid: String?) {
+        run { try await IosContainer.companion.shared.shareAlbum(title: title, artist: artist, releaseGroupMbid: releaseGroupMbid) }
+    }
+    func shareArtist(name: String, artistMbid: String?) {
+        run { try await IosContainer.companion.shared.shareArtist(name: name, artistMbid: artistMbid) }
+    }
+
+    private func run(_ block: @escaping () async throws -> IosShareResult?) {
+        guard !sharing else { return }
+        sharing = true
+        Task {
+            let r = try? await block()
+            sharing = false
+            if let r, let url = URL(string: r.url) { shareItem = PCShareItem(url: url) }
+        }
+    }
+}
+
 /// PlaylistTrack → playable Track (19-param init in a helper to spare Swift's
 /// inline type-checker). Shared by the playlist detail + the "Play Playlist" menu.
 func pcTrack(from t: PlaylistTrack) -> Track {

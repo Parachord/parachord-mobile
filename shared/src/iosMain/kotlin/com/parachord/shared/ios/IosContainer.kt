@@ -200,6 +200,13 @@ data class IosComplexLink(
     val message: String? = null,
 )
 
+/** Flat share-URL result for the iOS share sheet (#222). */
+data class IosShareResult(
+    val url: String,
+    val subject: String,
+    val isSmartLink: Boolean,
+)
+
 // Concert artist seed: top artists across EVERY time window, both services.
 private val CONCERT_LASTFM_PERIODS = listOf("7day", "1month", "3month", "6month", "12month", "overall")
 private val CONCERT_LB_RANGES = listOf("week", "month", "quarter", "half_yearly", "year", "all_time")
@@ -2407,6 +2414,29 @@ class IosContainer private constructor() {
             ?: localId.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
         return lbMbid?.let { achordionClient.playlistShareUrl(it) }
     }
+
+    // ── Outbound sharing via the shared ShareLinkResolver (#222) ──────────────
+    val smartLinksClient: com.parachord.shared.api.SmartLinksClient by lazy {
+        com.parachord.shared.api.SmartLinksClient(httpClient)
+    }
+    private val shareLinkResolver: com.parachord.shared.share.ShareLinkResolver by lazy {
+        com.parachord.shared.share.ShareLinkResolver(
+            achordionClient, smartLinksClient, playlistDao, playlistTrackDao, syncPlaylistLinkDao,
+        )
+    }
+
+    /** Achordion/smart-link share URL for a track/album/artist/playlist (#222) —
+     *  the same path Android shares through, exposed flat for the iOS share sheet. */
+    suspend fun shareTrack(track: Track): IosShareResult = shareLinkResolver.shareTrack(track).toIos()
+    suspend fun shareAlbum(title: String, artist: String, releaseGroupMbid: String?): IosShareResult =
+        shareLinkResolver.shareAlbum(title, artist, releaseGroupMbid).toIos()
+    suspend fun shareArtist(name: String, artistMbid: String?): IosShareResult =
+        shareLinkResolver.shareArtist(name, artistMbid).toIos()
+    suspend fun sharePlaylistLink(playlistId: String): IosShareResult? =
+        shareLinkResolver.sharePlaylist(playlistId)?.toIos()
+
+    private fun com.parachord.shared.share.ShareLinkResolver.ShareResult.toIos(): IosShareResult =
+        IosShareResult(url = url, subject = subject, isSmartLink = isSmartLink)
 
     /** A playlist's mirrors as (providerId, externalId) pairs, for the detail
      *  page's "open on <service>" chips. */

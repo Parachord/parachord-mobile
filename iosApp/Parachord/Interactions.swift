@@ -48,7 +48,7 @@ extension View {
                 Button { onGoToAlbum() } label: { Label("Go to Album", systemImage: "square.stack") }
             }
             Divider()
-            ShareLink(item: "\(track.title) — \(track.artist)") {
+            Button { ShareCoordinator.shared.shareTrack(track) } label: {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
             // Always-on collection toggle (Android parity) — self-managed: observes

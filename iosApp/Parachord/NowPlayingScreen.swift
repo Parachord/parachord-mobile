@@ -329,7 +329,7 @@ struct PCNowPlaying: View {
                     }
                 }
                 Divider()
-                ShareLink(item: "\(t.title) — \(t.artist)") { Label("Share", systemImage: "square.and.arrow.up") }
+                Button { ShareCoordinator.shared.shareTrack(t) } label: { Label("Share", systemImage: "square.and.arrow.up") }
                 PCCollectionToggleButton(target: .track(t))
             }
         } label: {
