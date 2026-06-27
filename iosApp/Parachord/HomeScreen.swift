@@ -295,23 +295,36 @@ struct HomeScreen: View {
         .shadow(color: .black.opacity(0.10), radius: 9, y: 6)
     }
 
+    /// Section header shared by the Weekly skeleton + the real Weekly section, so
+    /// the title + "ListenBrainz" badge are byte-identical and the header doesn't
+    /// jump (badge pop-in) when content arrives (#249).
+    private func weeklyHeader(_ title: String) -> some View {
+        HStack(spacing: 10) {
+            Text(title).pcSectionHeader()
+            Text("ListenBrainz").font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color(uiColor: UIColor(hex: 0xb45309)))
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(Color(uiColor: UIColor(hex: 0xf59e0b)).opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
+            Spacer()
+        }
+        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+    }
+
     /// Placeholder carousel shown while the first Weekly load is in flight —
-    /// matches the 2x2-mosaic card shape so it doesn't jump on arrival.
+    /// matches the 2x2-mosaic card shape (cover radius 12 + 150-wide card) and the
+    /// header (incl. ListenBrainz badge) so nothing jumps on arrival (#249).
     private func weeklySkeleton(_ title: String) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Text(title).pcSectionHeader()
-                Spacer()
-            }
-            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+            weeklyHeader(title)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     ForEach(0..<4, id: \.self) { _ in
                         VStack(alignment: .leading, spacing: 8) {
-                            PCSkeletonBox(width: 150, height: 150, radius: 10)
+                            PCSkeletonBox(width: 150, height: 150, radius: 12)
                             PCSkeletonBox(width: 120, height: 13, radius: 4)
                             PCSkeletonBox(width: 80, height: 11, radius: 4)
                         }
+                        .frame(width: 150, alignment: .leading)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -322,15 +335,7 @@ struct HomeScreen: View {
     @ViewBuilder
     private func weeklySection(_ title: String, _ entries: [IosWeeklyEntry]) -> some View {
         if !entries.isEmpty {
-            HStack(spacing: 10) {
-                Text(title).pcSectionHeader()
-                Text("ListenBrainz").font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(uiColor: UIColor(hex: 0xb45309)))
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Color(uiColor: UIColor(hex: 0xf59e0b)).opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
-                Spacer()
-            }
-            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+            weeklyHeader(title)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
