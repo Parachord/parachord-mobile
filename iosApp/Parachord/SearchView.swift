@@ -120,8 +120,13 @@ struct SearchView: View {
     /// Observed so badge rows re-render as background resolution lands.
     private var resolverCache = IosTrackResolverCache.shared
     let onMenu: () -> Void
+    /// Deep-link prefill (#256): when set, seed the query + run the search, then clear.
+    private var pendingQuery: Binding<String?>
 
-    init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
+    init(onMenu: @escaping () -> Void = {}, pendingQuery: Binding<String?> = .constant(nil)) {
+        self.onMenu = onMenu
+        self.pendingQuery = pendingQuery
+    }
 
     private var ctx: PlaybackContext {
         PlaybackContext(type: "search", name: model.query, id: "search")
@@ -141,7 +146,13 @@ struct SearchView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
             .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
-            .task { model.start() }
+            .task {
+                model.start()
+                if let q = pendingQuery.wrappedValue, !q.isEmpty {
+                    model.onQueryChange(q)
+                    pendingQuery.wrappedValue = nil
+                }
+            }
         }
     }
 

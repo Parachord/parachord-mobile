@@ -24,6 +24,9 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var showChat = false
     @State private var pendingChat = false
+    // Deep-link prefills (#256): seed the Search query / Shuffleupagus prompt.
+    @State private var pendingSearchQuery: String?
+    @State private var pendingChatPrompt: String?
     @State private var chatDragX: CGFloat = 0
     /// Bumped when the active tab is re-tapped; folded into the tab content's
     /// `.id` so re-tapping pops that tab's NavigationStack to root (and thus
@@ -50,7 +53,7 @@ struct ContentView: View {
             Group {
                 switch tab {
                 case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { showSettings = true })
-                case .search:     SearchView(onMenu: { showSidebar = true })
+                case .search:     SearchView(onMenu: { showSidebar = true }, pendingQuery: $pendingSearchQuery)
                 case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab)
                 case .playlists:  PlaylistsScreen(onMenu: { showSidebar = true })
                 }
@@ -150,7 +153,7 @@ struct ContentView: View {
 
             // ── DJ Chat / Shuffleupagus (slides in from the RIGHT, Android parity) ──
             if showChat {
-                ChatScreen(onClose: { closeChat() })
+                ChatScreen(onClose: { closeChat() }, seedPrompt: pendingChatPrompt)
                     .environment(coordinator)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(PC.Player.bg)
@@ -321,7 +324,7 @@ struct ContentView: View {
         )
     }
 
-    private func closeChat() { withAnimation(.easeInOut(duration: 0.28)) { showChat = false; chatDragX = 0 } }
+    private func closeChat() { pendingChatPrompt = nil; withAnimation(.easeInOut(duration: 0.28)) { showChat = false; chatDragX = 0 } }
 
     private func closeSidebar() { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
 
@@ -335,9 +338,43 @@ struct ContentView: View {
         let segs = comps.path.split(separator: "/").map(String.init)
         var query: [String: String] = [:]
         for item in comps.queryItems ?? [] { if let v = item.value { query[item.name] = v } }
-        guard let cmd = IosContainer.companion.shared.parseDeepLink(
+        let container = IosContainer.companion.shared
+        guard let cmd = container.parseDeepLink(
             scheme: url.scheme, host: comps.host, path: segs, query: query) else { return }
+        // Protocol play / radio need async resolution (#256) — the sync parse
+        // flags them "unsupported"; resolve + dispatch off the main thread.
+        if cmd.kind == "unsupported" {
+            Task { await resolveComplexDeepLink(scheme: url.scheme, host: comps.host, path: segs, query: query) }
+            return
+        }
         dispatchDeepLink(cmd)
+    }
+
+    /// Resolve + dispatch the complex `parachord://play/album|playlist|radio`
+    /// links (#256): a queue play or a radio station, or a "not supported" ack.
+    private func resolveComplexDeepLink(scheme: String?, host: String?, path: [String], query: [String: String]) async {
+        let container = IosContainer.companion.shared
+        guard let r = try? await container.resolveComplexDeepLink(
+            scheme: scheme, host: host, path: path, query: query) else {
+            dlAck("That link type isn't supported yet"); return
+        }
+        switch r.kind {
+        case "play":
+            listenAlong.stop()
+            coordinator.exitSpinoff()
+            coordinator.setQueue(r.tracks, startIndex: 0,
+                                 context: PlaybackContext(type: "playlist", name: r.name, id: nil))
+            dlAck("Playing \(r.name)")
+        case "radioPool":
+            listenAlong.stop()
+            coordinator.beginRadio(pool: r.tracks, displayName: r.name, refillUrl: r.refillUrl,
+                                   refill: { u in (try? await container.resolveTrackList(url: u)) ?? [] })
+            dlAck("Starting \(r.name)")
+        case "failed":
+            dlAck(r.message ?? "Couldn't open that link")
+        default:
+            dlAck("That link type isn't supported yet")
+        }
     }
 
     private func dispatchDeepLink(_ cmd: IosDeepLinkCommand) {
@@ -386,8 +423,17 @@ struct ContentView: View {
         case "navPlaylists": tab = .playlists
         case "navPlaylist": if let id = cmd.id { tab = .home; homePendingRoute = .playlist(id: id, title: "") }
         case "navSettings": showSettings = true
-        case "navSearch": tab = .search   // query pre-fill: follow-up
-        case "navChat": withAnimation(.easeInOut(duration: 0.3)) { showChat = true }   // prompt injection: follow-up
+        case "navSearch": tab = .search; pendingSearchQuery = cmd.query   // #256 prefill
+        case "navChat":
+            pendingChatPrompt = cmd.prompt   // #256 prompt injection
+            withAnimation(.easeInOut(duration: 0.3)) { showChat = true }
+        // parachord://import?url= — dispatch to the shared importer (#256, reuses
+        // the #18/#254 import: Spotify / Apple Music / hosted XSPF URLs).
+        case "import":
+            if let u = cmd.url, !u.isEmpty {
+                PlaylistImporter.shared.url = u
+                PlaylistImporter.shared.importFromUrl()
+            }
         case "unsupported": dlAck("That link type isn't supported yet")
         default: break
         }

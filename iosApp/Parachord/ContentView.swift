@@ -1434,6 +1434,12 @@ final class QueuePlaybackCoordinator {
     // kickStartFirstTrack=false in-app path). Mutually exclusive with Listen Along.
     @ObservationIgnored private var spinoffPool: [Track] = []
     @ObservationIgnored private var preSpinoffContext: PlaybackContext?
+    // Radio (#256): a refill source for deep-link stations (Mode B artist-only /
+    // Mode C with refill). When the pool runs low, top it up from this URL via the
+    // shared resolver. nil for the in-app ✨ spinoff (finite similar-track pool).
+    @ObservationIgnored private var spinoffRefillUrl: String?
+    @ObservationIgnored private var spinoffRefill: ((String) async -> [Track])?
+    @ObservationIgnored private var spinoffRefilling = false
     /// True while a spinoff station is active — observed; gates the ✨ button, the
     /// "YOUR QUEUE" suspended queue display, and the "Spinoff from X" peek.
     var spinoffMode = false
@@ -1455,11 +1461,28 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
+    /// Start a deep-link RADIO station (#256): kick the first track immediately
+    /// ("start fresh radio now"), suspend the user queue like spinoff, and top up
+    /// from [refill]/[refillUrl] as the pool drains. Distinct from beginSpinoff,
+    /// which keeps the current song playing and has a finite pool.
+    func beginRadio(pool: [Track], displayName: String, refillUrl: String?, refill: ((String) async -> [Track])?) {
+        guard !pool.isEmpty else { return }
+        preSpinoffContext = playbackContext
+        spinoffPool = Array(pool.dropFirst())
+        spinoffRefillUrl = refillUrl
+        spinoffRefill = refill
+        spinoffMode = true
+        queueManager.setContext(context: PlaybackContext(type: "spinoff", name: displayName, id: nil))
+        playTrack(pool[0])
+        syncSnapshot()
+    }
+
     /// Pull the next pool track if a spinoff is active. Returns true when it handled
     /// the advance (caller returns). On pool-exhaustion it exits spinoff and returns
     /// false so the caller falls through to the normal queue ("return to queue").
     private func advanceSpinoff() -> Bool {
         guard spinoffMode else { return false }
+        if spinoffPool.count <= 1 { refillSpinoffIfNeeded() }   // top up a draining radio
         if !spinoffPool.isEmpty {
             playTrack(spinoffPool.removeFirst())
             return true
@@ -1468,11 +1491,25 @@ final class QueuePlaybackCoordinator {
         return false
     }
 
+    /// Async top-up for a deep-link radio station whose pool is draining (#256).
+    /// Fire-and-forget; appends to the pool so the next advance has tracks.
+    private func refillSpinoffIfNeeded() {
+        guard spinoffMode, !spinoffRefilling, let url = spinoffRefillUrl, let refill = spinoffRefill else { return }
+        spinoffRefilling = true
+        Task { @MainActor in
+            let more = await refill(url)
+            spinoffRefilling = false
+            if spinoffMode { spinoffPool.append(contentsOf: more) }
+        }
+    }
+
     /// Exit spinoff: drop the pool, restore the saved context. The queue was never
     /// modified, so the next skipNext resumes it. Also the ✨ button's toggle-off.
     func exitSpinoff() {
         guard spinoffMode else { return }
         spinoffPool.removeAll()
+        spinoffRefillUrl = nil
+        spinoffRefill = nil
         spinoffMode = false
         queueManager.setContext(context: preSpinoffContext)
         preSpinoffContext = nil

@@ -78,6 +78,9 @@ final class ChatViewModel {
 
 struct ChatScreen: View {
     var onClose: () -> Void = {}
+    /// Deep-link prefill (#256): pre-fills the input bar (not auto-sent) so the
+    /// user can review/edit the seeded Shuffleupagus prompt before sending.
+    var seedPrompt: String? = nil
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @State private var model = ChatViewModel()
     @FocusState private var inputFocused: Bool
@@ -101,7 +104,10 @@ struct ChatScreen: View {
         }
         .background(PC.Player.bg.ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .task { await model.start() }
+        .task {
+            await model.start()
+            if let p = seedPrompt, !p.isEmpty, model.input.isEmpty { model.input = p }
+        }
     }
 
     // Top bar: close, title + provider picker, clear.

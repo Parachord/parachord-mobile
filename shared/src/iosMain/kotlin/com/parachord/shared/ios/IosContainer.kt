@@ -175,6 +175,7 @@ data class IosDeepLinkCommand(
     val name: String? = null,
     val id: String? = null,
     val query: String? = null,
+    val url: String? = null,
     val service: String? = null,
     val user: String? = null,
     val tab: String? = null,
@@ -183,6 +184,20 @@ data class IosDeepLinkCommand(
     val action: String? = null,
     val level: Int = -1,
     val shuffleOn: Boolean = false,
+)
+
+/**
+ * Flat result for the async complex deep-link resolution (#256) — protocol
+ * play/radio. `kind`: "play" (queue [tracks] under [name]), "radioPool" (start a
+ * spinoff station from [tracks], topping up from [refillUrl]), or "failed"
+ * (show [message]).
+ */
+data class IosComplexLink(
+    val kind: String,
+    val name: String = "",
+    val tracks: List<Track> = emptyList(),
+    val refillUrl: String? = null,
+    val message: String? = null,
 )
 
 // Concert artist seed: top artists across EVERY time window, both services.
@@ -901,7 +916,129 @@ class IosContainer private constructor() {
             is DeepLinkAction.NavigateSettings -> IosDeepLinkCommand("navSettings", tab = action.tab)
             is DeepLinkAction.NavigateSearch -> IosDeepLinkCommand("navSearch", query = action.query)
             is DeepLinkAction.NavigateChat -> IosDeepLinkCommand("navChat", prompt = action.prompt)
-            else -> IosDeepLinkCommand("unsupported") // protocol-play / radio / import / external — follow-up
+            is DeepLinkAction.ImportPlaylist -> IosDeepLinkCommand("import", url = action.url)
+            else -> IosDeepLinkCommand("unsupported") // protocol-play / radio / external — follow-up
+
+        }
+    }
+
+    // ── Protocol play / radio deep-link resolution (#256) ─────────────────────
+    private val protocolInputResolver: com.parachord.shared.deeplink.ProtocolInputResolver by lazy {
+        com.parachord.shared.deeplink.DefaultProtocolInputResolver(
+            musicBrainzClient, spotifyClient, appleMusicClient, metadataService, httpClient,
+        )
+    }
+
+    /**
+     * Resolve the COMPLEX `parachord://play/album|playlist|radio` links the sync
+     * [parseDeepLink] flags as "unsupported" — these need async resolution (#256).
+     * Returns a flat result Swift acts on (play a queue / start a radio pool), or
+     * null when the link isn't one of these (Swift then falls back to the sync
+     * command / ack).
+     */
+    suspend fun resolveComplexDeepLink(
+        scheme: String?, host: String?, path: List<String>, query: Map<String, String>,
+    ): IosComplexLink? {
+        if (scheme != "parachord") return null
+        val action = DeepLinkParser.parse(SimpleDeepLinkUri(scheme, host, path, query))
+        val albumOpts = com.parachord.shared.deeplink.ProtocolResolveOptions(
+            allowMbid = true, allowProviderId = true, allowUrl = false,
+            allowTracks = false, allowArtistTitleAlbum = true,
+        )
+        val poolOpts = com.parachord.shared.deeplink.ProtocolResolveOptions(
+            allowMbid = false, allowProviderId = false, allowUrl = true,
+            allowTracks = true, allowArtistTitleAlbum = false,
+        )
+        return when (action) {
+            is DeepLinkAction.PlayAlbum -> resolvePlay(action.input, albumOpts, "album")
+            is DeepLinkAction.PlayPlaylist -> resolvePlay(action.input, poolOpts, "playlist")
+            is DeepLinkAction.PlayRadio -> resolveRadio(action, poolOpts)
+            else -> null
+        }
+    }
+
+    private suspend fun resolvePlay(
+        input: com.parachord.shared.deeplink.ProtocolPlayInput,
+        opts: com.parachord.shared.deeplink.ProtocolResolveOptions,
+        cmd: String,
+    ): IosComplexLink {
+        val r = try {
+            com.parachord.shared.deeplink.resolveProtocolPlayInput(input, opts, protocolInputResolver)
+        } catch (e: Exception) {
+            return IosComplexLink("failed", message = e.message ?: "Resolve failed")
+        }
+        if (r == null || r.tracks.isEmpty()) return IosComplexLink("failed", message = "Couldn't resolve $cmd from the link")
+        return IosComplexLink("play", name = r.displayName, tracks = protocolTracksToTracks(r.tracks, r.albumArt))
+    }
+
+    private suspend fun resolveRadio(
+        action: DeepLinkAction.PlayRadio,
+        poolOpts: com.parachord.shared.deeplink.ProtocolResolveOptions,
+    ): IosComplexLink {
+        return when (val mode = action.mode) {
+            is com.parachord.shared.deeplink.RadioMode.ArtistSeed -> {
+                val title = mode.title
+                if (title != null) {
+                    // Mode B title-bearing: Last.fm similar-track pool (same as in-app spinoff).
+                    val pool = spinoffPool(mode.artist, title)
+                    if (pool.isEmpty()) IosComplexLink("failed", message = "No similar tracks for ${mode.artist}")
+                    else IosComplexLink("radioPool", name = action.name ?: "Radio: ${mode.artist} – $title", tracks = pool)
+                } else {
+                    // Mode B artist-only: synthesize an LB-radio URL; reuse it as the refill URL.
+                    val lbUrl = buildLbRadioUrl(mode.artist)
+                    resolveRadioPool(com.parachord.shared.deeplink.ProtocolPlayInput(url = lbUrl), poolOpts, action.name ?: "Radio: ${mode.artist}", lbUrl)
+                }
+            }
+            is com.parachord.shared.deeplink.RadioMode.PoolBased -> {
+                val input = action.input ?: return IosComplexLink("failed", message = "Radio missing input")
+                resolveRadioPool(input, poolOpts, action.name ?: "Radio", action.refillUrl)
+            }
+        }
+    }
+
+    private suspend fun resolveRadioPool(
+        input: com.parachord.shared.deeplink.ProtocolPlayInput,
+        opts: com.parachord.shared.deeplink.ProtocolResolveOptions,
+        name: String,
+        refillUrl: String?,
+    ): IosComplexLink {
+        val r = try {
+            com.parachord.shared.deeplink.resolveProtocolPlayInput(input, opts, protocolInputResolver)
+        } catch (e: Exception) {
+            return IosComplexLink("failed", message = e.message ?: "Radio fetch failed")
+        }
+        if (r == null || r.tracks.isEmpty()) return IosComplexLink("failed", message = "Radio: empty pool")
+        val display = name.takeIf { it.isNotBlank() } ?: r.displayName.takeIf { it.isNotBlank() } ?: "Radio"
+        return IosComplexLink("radioPool", name = display, tracks = protocolTracksToTracks(r.tracks, r.albumArt), refillUrl = refillUrl)
+    }
+
+    /** Resolve a hosted tracklist URL → metadata-only Tracks (radio pool refill). */
+    suspend fun resolveTrackList(url: String): List<Track> =
+        protocolInputResolver.resolveByUrl(url)?.tracks?.let { protocolTracksToTracks(it, null) } ?: emptyList()
+
+    private fun protocolTracksToTracks(
+        tracks: List<com.parachord.shared.deeplink.ProtocolTrack>, art: String?,
+    ): List<Track> {
+        val ts = com.parachord.shared.platform.currentTimeMillis()
+        return tracks.mapIndexed { i, t ->
+            Track(
+                id = "protocol-$ts-$i", title = t.title, artist = t.artist, album = t.album,
+                artworkUrl = art, recordingMbid = t.mbid, isrc = t.isrc,
+            )
+        }
+    }
+
+    private fun buildLbRadioUrl(artist: String): String {
+        val prompt = percentEncode("artist:($artist)")
+        return "https://api.listenbrainz.org/1/explore/lb-radio?prompt=$prompt&mode=easy"
+    }
+
+    private fun percentEncode(s: String): String = buildString {
+        for (c in s) {
+            if (c.isLetterOrDigit() || c == '-' || c == '_' || c == '.' || c == '~') append(c)
+            else for (b in c.toString().encodeToByteArray()) {
+                append('%').append(((b.toInt() and 0xFF) or 0x100).toString(16).substring(1).uppercase())
+            }
         }
     }
 
