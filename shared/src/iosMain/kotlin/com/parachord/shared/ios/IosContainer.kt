@@ -1065,8 +1065,11 @@ class IosContainer private constructor() {
         val ts = com.parachord.shared.platform.currentTimeMillis()
         return tracks.mapIndexed { i, t ->
             Track(
+                // spotifyId carried as a resolver HINT (Spotify editorial embed, #286)
+                // so a Spotify source is verified without a title/artist search;
+                // resolver left null so priority still decides + fallback works.
                 id = "protocol-$ts-$i", title = t.title, artist = t.artist, album = t.album,
-                artworkUrl = art, recordingMbid = t.mbid, isrc = t.isrc,
+                artworkUrl = art, recordingMbid = t.mbid, isrc = t.isrc, spotifyId = t.spotifyId,
             )
         }
     }

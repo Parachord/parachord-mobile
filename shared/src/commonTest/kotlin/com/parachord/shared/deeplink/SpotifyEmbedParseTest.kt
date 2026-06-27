@@ -32,6 +32,21 @@ class SpotifyEmbedParseTest {
         assertEquals("Song A", r.tracks[0].title)
         assertEquals("Artist A", r.tracks[0].artist)
         assertEquals("Artist B, Artist C", r.tracks[1].artist)
+        // The spotify:track:<id> from `uri` is carried as a resolver hint (#286).
+        assertEquals("1", r.tracks[0].spotifyId)
+        assertEquals("2", r.tracks[1].spotifyId)
+    }
+
+    @Test fun nonTrackUriYieldsNullSpotifyId() {
+        val nd = """{"props":{"pageProps":{"state":{"data":{"entity":{
+            "name":"Mixed","trackList":[
+              {"uri":"spotify:episode:abc","title":"Pod","subtitle":"Host"},
+              {"title":"NoUri","subtitle":"Artist"}
+            ]}}}}}}"""
+        val r = parseSpotifyEmbed(page(nd))
+        assertNotNull(r)
+        assertNull(r.tracks[0].spotifyId) // episode uri → not a track id
+        assertNull(r.tracks[1].spotifyId) // no uri at all
     }
 
     @Test fun fallsBackToTitleFieldForName() {

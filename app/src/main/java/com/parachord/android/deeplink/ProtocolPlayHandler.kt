@@ -241,8 +241,12 @@ class ProtocolPlayHandler constructor(
             artist = artist,
             album = album,
             artworkUrl = fallbackArt,
-            // resolver / spotifyUri / appleMusicId left null — the resolver
-            // pipeline (TrackResolverCache.resolveInBackground) backfills
-            // these via the standard cascading lookup.
+            // spotifyId carried as a HINT (e.g. Spotify editorial embed, #286) so
+            // resolveWithHints verifies it → a Spotify source without a search.
+            // resolver is left null so the pipeline still picks by user priority
+            // (and falls back to other resolvers if Spotify is unavailable).
+            spotifyId = spotifyId,
+            // remaining IDs/resolver left null — the resolver pipeline
+            // (TrackResolverCache.resolveInBackground) backfills via the cascade.
         )
 }

@@ -53,6 +53,10 @@ data class ProtocolTrack(
     val album: String? = null,
     val mbid: String? = null,
     val isrc: String? = null,
+    /** Spotify track id when the source carries one (e.g. the embed-page fallback
+     *  for editorial playlists, #286) — threaded onto the built track as a resolver
+     *  hint so a Spotify source is available without a title/artist search. */
+    val spotifyId: String? = null,
 )
 
 /**

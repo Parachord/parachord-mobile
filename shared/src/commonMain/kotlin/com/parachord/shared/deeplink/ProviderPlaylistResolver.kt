@@ -204,7 +204,12 @@ internal fun parseSpotifyEmbed(html: String): ResolvedProtocolPlay? {
         val o = el.jsonObject
         val title = o["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
         val artist = o["subtitle"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        ProtocolTrack(artist = artist, title = title)
+        // The embed carries the real Spotify id in `uri` (spotify:track:<id>) —
+        // keep it as a resolver hint so the track gets a Spotify source directly
+        // instead of a title/artist search (#286).
+        val spotifyId = o["uri"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { it.startsWith("spotify:track:") }?.removePrefix("spotify:track:")?.takeIf { it.isNotBlank() }
+        ProtocolTrack(artist = artist, title = title, spotifyId = spotifyId)
     }
     return if (tracks.isEmpty()) null else ResolvedProtocolPlay(displayName = name, tracks = tracks)
 }
