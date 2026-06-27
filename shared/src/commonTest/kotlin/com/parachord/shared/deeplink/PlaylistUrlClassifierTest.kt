@@ -52,6 +52,16 @@ class PlaylistUrlClassifierTest {
         )
     }
 
+    @Test fun achordionXspfApiUrlIsStandard() {
+        // The /api/playlist/<mbid>/xspf endpoint IS a real XSPF document (vs the
+        // /playlist/<mbid> web page) → Standard → fetched + XSPF-parsed via
+        // resolveByUrl, NOT re-mapped to the XSPF API. Both Achordion forms work.
+        assertEquals(
+            PlaylistUrlKind.Standard,
+            classifyPlaylistUrl("https://achordion.xyz/api/playlist/e4171574-a77b-44df-aa32-3b42c0c2ca8a/xspf"),
+        )
+    }
+
     @Test fun soundcloudShortLinkFlagged() {
         assertEquals(PlaylistUrlKind.SoundCloudShort, classifyPlaylistUrl("https://on.soundcloud.com/Drk2sCLhCHVNugYtAP"))
     }
