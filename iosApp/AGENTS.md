@@ -129,6 +129,18 @@ the loop). A new `Foo.swift` needs **FOUR** entries, all using the stable
 
 Then add the screen as a tab in `RootView.swift` with a `.tag(n)`.
 
+**Adding a whole TARGET (extension / app), not just a file → use the `xcodeproj`
+Ruby gem, NOT hand-edits.** A new target means target + buildConfigList + container
+proxy + dependency + an embed copy-files phase — far too error-prone to hand-wire.
+`gem install --user-install xcodeproj` (no sudo), then a small Ruby script:
+`Xcodeproj::Project.open('Parachord.xcodeproj')` → `proj.new_target(:app_extension,
+'ShareExtension', :ios, '17.0', proj.products_group, :swift)` → set build settings →
+`app.add_dependency(ext)` → a copy-files phase with `symbol_dst_subfolder_spec =
+:plug_ins` embedding `ext.product_reference` → `proj.save`. The save **regenerates
+the whole pbxproj in canonical format** (existing `AA00…` ids preserved, new objects
+get real UUIDs) — a big but functionally-identical diff that builds fine. This is how
+the Share Extension (#17) was added.
+
 **Build settings already wired** (don't re-add): `OTHER_LDFLAGS` has
 `-framework Shared` + `-lsqlite3` (SQLDelight's native driver needs
 libsqlite3); `FRAMEWORK_SEARCH_PATHS` has `$(BUILT_PRODUCTS_DIR)`;
@@ -401,8 +413,37 @@ protocol play/playlist/radio. `parachord://` is registered as a custom scheme;
 - **`play/playlist?url=<provider>` routing** lives in the shared
   `classifyPlaylistUrl` + `ProviderPlaylistResolver` (parachord#930 / #932 port);
   Achordion/Spotify/Apple work, SoundCloud is unsupported (#281). Spotify
-  *editorial* (`37i9…`) playlists return empty from the API for third-party apps —
-  not a bug, a Spotify restriction.
+  *editorial* (`37i9…`) playlists return empty from the Web API for third-party apps,
+  so `ProviderPlaylistResolver` falls back to the **auth-free embed page**
+  (`open.spotify.com/embed/playlist/<id>` → `__NEXT_DATA__` JSON, #286). The Web-API
+  path is gated on a Spotify connection but the embed fallback is NOT — public/editorial
+  playlists open even with Spotify disconnected. The embed `uri` (`spotify:track:<id>`)
+  is carried onto each track as a `spotifyId` hint so a Spotify source is verified
+  without a search.
+
+### Share Extension — handling Spotify/Apple links shared INTO the app (#17)
+
+iOS can't intercept `open.spotify.com`/`music.apple.com` link TAPS (you can't
+out-verify another domain's Universal Links; the `spotify:` scheme collides with
+Spotify). The only mechanism is a **Share Extension** (`iosApp/ShareExtension/`, bundle
+id `com.parachord.ios.share`). It's a **headless pass-through**: extracts the shared URL
+(a `public.url` attachment, or a URL inside shared `public.plain-text`), filters to
+Spotify/Apple hosts, and opens the host app via `parachord://external?url=<encoded>`
+by walking the responder chain to `UIApplication.open` (extensions have no
+`UIApplication.shared`). It does NOT link `Shared.framework` (stays light).
+
+- Host side: `RootView.handleDeepLink` special-cases `host == "external"` →
+  `IosContainer.resolveExternalLink`, which classifies via the shared `ExternalUrlParser`
+  and reuses existing resolvers (playlist → `resolveProviderPlaylist`; album →
+  `resolveBy{Spotify,AppleMusic}`; track → `getTrack`/`lookup` with the id as a hint;
+  artist → nav). Returns an `IosComplexLink` the view dispatches (`play` / `navArtist`).
+- **Device signing:** the extension needs its own App ID (`com.parachord.ios.share`)
+  provisioned — automatic signing + `-allowProvisioningUpdates` should auto-register it
+  on the first device build (same flavor as the associated-domains capability, #124).
+  Simulator unaffected (extensions run in the sim share sheet — test from Safari/Notes,
+  or simulate the hand-off directly: `simctl openurl booted "parachord://external?url=…"`).
+- Activation rule is broad (any single web URL) + host-filtered in `ShareViewController`;
+  narrowing via an `NSExtensionActivationRule` predicate is a follow-up.
 ---
 
 ## MusicKit / Apple Music playback (the full saga — verified on-device)
