@@ -583,6 +583,29 @@ class IosContainer private constructor() {
     suspend fun getFriendsSort(): String? = settingsStore.getSortFriends()
     suspend fun setFriendsSort(sort: String) { settingsStore.setSortFriends(sort) }
 
+    // ── XSPF import + hosted polling (#254) ───────────────────────────────────
+    val hostedXspfService: com.parachord.shared.playlist.HostedXspfService by lazy {
+        com.parachord.shared.playlist.HostedXspfService(
+            httpClient = httpClient,
+            libraryRepository = libraryRepository,
+            playlistDao = playlistDao,
+            playlistTrackDao = playlistTrackDao,
+            imageEnrichmentService = imageEnrichmentService,
+        )
+    }
+
+    /** Import a local `.xspf` file's contents (Files-app picker → string). */
+    suspend fun importLocalXspf(content: String): com.parachord.shared.playlist.XspfImportResult =
+        hostedXspfService.importLocalXspf(content)
+
+    /** Import an XSPF playlist from an HTTPS URL → a hosted (polled) playlist. */
+    suspend fun importHostedXspf(url: String): com.parachord.shared.playlist.XspfImportResult =
+        hostedXspfService.importHostedXspf(url)
+
+    /** Re-fetch every hosted XSPF playlist; replace tracks on content change.
+     *  Driven from a foreground timer + launch poll in the SwiftUI shell. */
+    suspend fun pollHostedPlaylists() = hostedXspfService.pollAll()
+
     /** Local playlists eligible to push to [providerId] (the picker's rows). */
     suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =
         playlistDao.getAllSync()

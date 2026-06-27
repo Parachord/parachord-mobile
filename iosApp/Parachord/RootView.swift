@@ -237,6 +237,17 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 900_000_000_000)   // 15 min
             }
         }
+        // Hosted XSPF polling (#254): re-fetch hosted playlists on launch + every
+        // 5 min while foregrounded (mirrors desktop cadence + Android's foreground
+        // timer). pollHostedPlaylists() no-ops when there are no hosted rows.
+        // Background BGTaskScheduler is a follow-up, same as collection sync.
+        .task {
+            let container = IosContainer.companion.shared
+            while !Task.isCancelled {
+                _ = try? await container.pollHostedPlaylists()
+                try? await Task.sleep(nanoseconds: 300_000_000_000)   // 5 min
+            }
+        }
         // Restore the persisted queue on launch (paused — never auto-plays). #220
         .task { await coordinator.restoreQueue() }
         // Resolve the current track as soon as it changes (incl. natural
