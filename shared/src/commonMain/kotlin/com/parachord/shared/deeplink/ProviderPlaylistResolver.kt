@@ -8,9 +8,21 @@ import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 private const val TAG = "ProviderPlaylistResolver"
 private const val MAX_BODY = 100 * 1024
+
+// Spotify embed-page fallback (parachord-mobile#286): editorial/algorithmic
+// playlists (37i9…) return empty/404 from the Web API for third-party apps, but
+// the public embed page server-renders the tracklist as a __NEXT_DATA__ JSON blob.
+private const val SPOTIFY_EMBED_MAX_BODY = 4 * 1024 * 1024 // full HTML page, not a tracklist doc
+private val NEXT_DATA_RE = Regex("<script id=\"__NEXT_DATA__\"[^>]*>(.*?)</script>", RegexOption.DOT_MATCHES_ALL)
+private val embedJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 /**
  * Resolve a `parachord://play/playlist?url=<provider-url>` target into tracks
@@ -79,27 +91,68 @@ class ProviderPlaylistResolver(
         )
     }
 
-    // ── Spotify playlist page → native getPlaylist + getPlaylistTracks ──
+    // ── Spotify playlist page → Web API (rich), else embed fallback (editorial) ──
     private suspend fun fetchSpotifyPlaylist(playlistId: String): ResolvedProtocolPlay {
         if (spotifyAccessToken().isNullOrBlank()) {
             throw IllegalStateException("Connect Spotify in Settings to play Spotify playlists.")
         }
-        val full = spotifyClient.getPlaylist(playlistId)
-        val tracks = mutableListOf<ProtocolTrack>()
-        var offset = 0
-        while (true) {
-            val page = spotifyClient.getPlaylistTracks(playlistId, limit = 100, offset = offset)
-            if (page.items.isEmpty()) break
-            page.items.forEach { item ->
-                val t = item.track ?: return@forEach
-                if (t.name.isNullOrBlank()) return@forEach
-                tracks.add(ProtocolTrack(artist = t.artistName, title = t.name.orEmpty(), album = t.album?.name))
+        // Prefer the Web API (real track IDs / album). Editorial & algorithmic
+        // playlists (37i9…) return empty or 404 for third-party apps — fall through
+        // to the embed page below (parachord-mobile#286).
+        val fromApi = try {
+            val full = spotifyClient.getPlaylist(playlistId)
+            val tracks = mutableListOf<ProtocolTrack>()
+            var offset = 0
+            while (true) {
+                val page = spotifyClient.getPlaylistTracks(playlistId, limit = 100, offset = offset)
+                if (page.items.isEmpty()) break
+                page.items.forEach { item ->
+                    val t = item.track ?: return@forEach
+                    if (t.name.isNullOrBlank()) return@forEach
+                    tracks.add(ProtocolTrack(artist = t.artistName, title = t.name.orEmpty(), album = t.album?.name))
+                }
+                offset += page.items.size
+                if (page.next == null) break
             }
-            offset += page.items.size
-            if (page.next == null) break
+            if (tracks.isNotEmpty()) ResolvedProtocolPlay(displayName = full.name ?: "Spotify Playlist", tracks = tracks)
+            else null
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Spotify Web API playlist fetch failed for $playlistId (${e.message}); trying embed fallback")
+            null
         }
-        if (tracks.isEmpty()) throw IllegalStateException("Couldn't load that Spotify playlist — it may be private or empty.")
-        return ResolvedProtocolPlay(displayName = full.name ?: "Spotify Playlist", tracks = tracks)
+        if (fromApi != null) return fromApi
+
+        fetchSpotifyEmbedPlaylist(playlistId)?.let { return it }
+        throw IllegalStateException("Couldn't load that Spotify playlist — it may be private, empty, or region-locked.")
+    }
+
+    /**
+     * Editorial/algorithmic fallback (#286): the public embed page
+     * (`open.spotify.com/embed/playlist/<id>`) server-renders the tracklist as a
+     * `__NEXT_DATA__` JSON blob — no API, no auth, no browser. Tracks carry only
+     * title + artist (`subtitle`), which is enough for on-the-fly resolution. The
+     * undocumented shape can change, so any failure returns null (caller surfaces
+     * the normal "couldn't load" message). NOT how the browser extension does it
+     * (that scrapes the rendered DOM, which needs a real browser).
+     */
+    private suspend fun fetchSpotifyEmbedPlaylist(playlistId: String): ResolvedProtocolPlay? {
+        return try {
+            val resp = httpClient.get("https://open.spotify.com/embed/playlist/$playlistId")
+            if (!resp.status.isSuccess()) {
+                Log.w(TAG, "Spotify embed HTTP ${resp.status.value} for $playlistId"); return null
+            }
+            val html = resp.bodyAsText()
+            if (html.length > SPOTIFY_EMBED_MAX_BODY) {
+                Log.w(TAG, "Spotify embed page too large for $playlistId"); return null
+            }
+            parseSpotifyEmbed(html)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Spotify embed fetch failed for $playlistId: ${e.message}"); null
+        }
     }
 
     // ── Apple Music playlist page → shared catalog (getCatalogPlaylist) ──
@@ -126,4 +179,32 @@ class ProviderPlaylistResolver(
 
     private fun isSoundCloudSet(url: String): Boolean =
         Regex("(?:^|//)(?:[a-z0-9-]+\\.)?soundcloud\\.com/[^/]+/sets/").containsMatchIn(url.lowercase())
+}
+
+/**
+ * Parse a Spotify embed page's `__NEXT_DATA__` JSON →
+ * `props.pageProps.state.data.entity.{name,trackList[]}` (parachord-mobile#286).
+ * Each track exposes `title` + `subtitle` (artist). Top-level + internal so it's
+ * unit-testable against a captured fixture without standing up the resolver.
+ * Returns null on any shape mismatch (the blob is undocumented and may change).
+ */
+internal fun parseSpotifyEmbed(html: String): ResolvedProtocolPlay? {
+    val jsonText = NEXT_DATA_RE.find(html)?.groupValues?.get(1) ?: return null
+    val entity = try {
+        embedJson.parseToJsonElement(jsonText).jsonObject["props"]?.jsonObject
+            ?.get("pageProps")?.jsonObject?.get("state")?.jsonObject
+            ?.get("data")?.jsonObject?.get("entity")?.jsonObject
+    } catch (e: Exception) {
+        Log.w(TAG, "Spotify embed __NEXT_DATA__ parse failed: ${e.message}"); return null
+    } ?: return null
+    val name = entity["name"]?.jsonPrimitive?.contentOrNull
+        ?: entity["title"]?.jsonPrimitive?.contentOrNull ?: "Spotify Playlist"
+    val list = entity["trackList"]?.jsonArray ?: return null
+    val tracks = list.mapNotNull { el ->
+        val o = el.jsonObject
+        val title = o["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val artist = o["subtitle"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        ProtocolTrack(artist = artist, title = title)
+    }
+    return if (tracks.isEmpty()) null else ResolvedProtocolPlay(displayName = name, tracks = tracks)
 }
