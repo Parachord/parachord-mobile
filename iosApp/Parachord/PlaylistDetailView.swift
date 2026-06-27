@@ -815,6 +815,12 @@ final class SavedPlaylistModel {
                 self?.entities = ts.map { Self.makeTrack($0) }
             }
         }
+        loadMirrors()
+    }
+
+    /// Refresh the source/mirror chips — called on start and after the Sync
+    /// channels sheet edits which providers this playlist mirrors to.
+    func loadMirrors() {
         Task { mirrors = (try? await container.getPlaylistMirrorLinks(id: playlistId)) as? [IosPlaylistMirrorLink] ?? [] }
     }
 
@@ -838,8 +844,14 @@ struct SavedPlaylistDetailView: View {
     @State private var showDelete = false
     @State private var navArtist: String?
     @State private var navAlbum: PCAlbumRef?
+    // Overflow (⋯) menu + its actions — Share via Achordion, Sync channels (#274).
+    @State private var showMenu = false
+    @State private var showSync = false
+    @State private var shareItem: PCShareItem?
+    @State private var shareNote: String?
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
+    private let container = IosContainer.companion.shared
     private var resolverCache = IosTrackResolverCache.shared
 
     init(playlistId: String) { _model = State(initialValue: SavedPlaylistModel(playlistId: playlistId)) }
@@ -848,14 +860,38 @@ struct SavedPlaylistDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // ⋯ overflow in view mode; ✓ to finish in edit mode. Mirrors the
+            // playlist-row context menu (Share via Achordion, Sync, Rename,
+            // Delete) so the detail page has parity with the list (#274).
             PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
-                     trailingIcon: editing ? "checkmark" : "pencil", onTrailing: { editing.toggle() })
+                     trailingIcon: editing ? "checkmark" : "ellipsis",
+                     onTrailing: { if editing { editing = false } else { showMenu = true } })
             if editing { editList } else { viewList }
         }
         .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { model.start() }
+        .confirmationDialog(model.name, isPresented: $showMenu, titleVisibility: .visible) {
+            Button("Share…") { sharePlaylist() }
+            Button("Sync…") { showSync = true }
+            Button("Edit Playlist") { editing = true }
+            Button("Rename") { renameText = model.name; showRename = true }
+            Button("Delete Playlist", role: .destructive) { showDelete = true }
+        }
+        .sheet(item: $shareItem) { item in PCActivityView(items: [item.url]) }
+        .sheet(isPresented: $showSync) {
+            if let p = model.playlist {
+                PlaylistSyncChannelsSheet(playlist: p) {
+                    showSync = false
+                    model.loadMirrors()   // refresh chips after channel edits
+                }
+                .presentationDetents([.medium])
+            }
+        }
+        .alert("Sharing", isPresented: Binding(get: { shareNote != nil }, set: { if !$0 { shareNote = nil } })) {
+            Button("OK") { shareNote = nil }
+        } message: { Text(shareNote ?? "") }
         .alert("Rename Playlist", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -864,6 +900,20 @@ struct SavedPlaylistDetailView: View {
         .confirmationDialog("Delete “\(model.name)”?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete Playlist", role: .destructive) { model.delete(); dismiss() }
             Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Build the Achordion/smart-link share URL for this playlist and present the
+    /// system share sheet. Mirrors `PlaylistsScreen.sharePlaylist` — falls back to
+    /// a note when the playlist isn't yet syncable (no LB mbid to key Achordion on).
+    private func sharePlaylist() {
+        Task {
+            let raw = (try? await container.playlistShareUrl(localId: model.playlistId)) ?? nil
+            if let s = raw, let url = URL(string: s) {
+                shareItem = PCShareItem(url: url)
+            } else {
+                shareNote = "Sync “\(model.name)” to ListenBrainz first to share it via Achordion."
+            }
         }
     }
 
