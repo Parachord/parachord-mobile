@@ -108,6 +108,7 @@ import com.parachord.shared.resolver.ResolverScoring
 import com.parachord.shared.repository.WeeklyPlaylistEntry
 import com.parachord.shared.repository.WeeklyPlaylistsRepository
 import com.parachord.shared.api.SpotifyClient
+import com.parachord.shared.api.bestImageUrl
 import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.store.IosSecureTokenStore
 import com.parachord.shared.store.KvStoreFactory
@@ -605,6 +606,104 @@ class IosContainer private constructor() {
     /** Re-fetch every hosted XSPF playlist; replace tracks on content change.
      *  Driven from a foreground timer + launch poll in the SwiftUI shell. */
     suspend fun pollHostedPlaylists() = hostedXspfService.pollAll()
+
+    /** Import a playlist from any supported URL (#18): Spotify, Apple Music
+     *  catalog, or hosted XSPF — dispatched by URL shape (XSPF is the fallback). */
+    suspend fun importPlaylistFromUrl(url: String): com.parachord.shared.playlist.XspfImportResult {
+        val u = url.trim()
+        return when {
+            isSpotifyPlaylistUrl(u) -> importSpotifyPlaylist(u)
+            isAppleMusicPlaylistUrl(u) -> importAppleMusicPlaylist(u)
+            else -> hostedXspfService.importHostedXspf(u)
+        }
+    }
+
+    private fun isSpotifyPlaylistUrl(url: String): Boolean =
+        (url.contains("open.spotify.com/") && url.contains("/playlist/")) || url.startsWith("spotify:playlist:")
+
+    private fun isAppleMusicPlaylistUrl(url: String): Boolean =
+        url.contains("music.apple.com") && url.contains("/playlist/")
+
+    private fun extractSpotifyPlaylistId(url: String): String? {
+        if (url.startsWith("spotify:playlist:")) return url.removePrefix("spotify:playlist:").substringBefore("?")
+        return Regex("open\\.spotify\\.com/(?:intl-[a-z]+/)?playlist/([a-zA-Z0-9]+)").find(url)?.groupValues?.get(1)
+    }
+
+    private suspend fun importSpotifyPlaylist(url: String): com.parachord.shared.playlist.XspfImportResult {
+        if (settingsStore.getSpotifyAccessToken().isNullOrBlank()) {
+            throw IllegalStateException("Connect Spotify in Settings to import Spotify playlists.")
+        }
+        val playlistId = extractSpotifyPlaylistId(url)
+            ?: throw IllegalArgumentException("Couldn't read the Spotify playlist ID from that URL.")
+        val full = spotifyClient.getPlaylist(playlistId)
+        val name = full.name ?: "Spotify Playlist"
+        val tracks = mutableListOf<Track>()
+        var offset = 0
+        while (true) {
+            val page = spotifyClient.getPlaylistTracks(playlistId, limit = 100, offset = offset)
+            if (page.items.isEmpty()) break
+            page.items.forEach { item ->
+                val t = item.track ?: return@forEach
+                val id = t.id ?: return@forEach
+                tracks.add(
+                    Track(
+                        id = "spotify:$id", title = t.name ?: "Unknown", artist = t.artistName,
+                        album = t.album?.name, albumId = t.album?.id, duration = t.durationMs,
+                        artworkUrl = t.album?.images.bestImageUrl(), resolver = "spotify",
+                        spotifyId = id, spotifyUri = "spotify:track:$id",
+                    ),
+                )
+            }
+            offset += page.items.size
+            if (page.next == null) break
+        }
+        return saveImportedPlaylist(name, "spotify-import", tracks, full.images.bestImageUrl())
+    }
+
+    private fun extractAppleMusicPlaylist(url: String): Pair<String, String>? {
+        val m = Regex("music\\.apple\\.com/([a-z]{2})/playlist/(?:[^/]+/)?(pl\\.[a-zA-Z0-9-]+)").find(url)
+            ?: return null
+        return m.groupValues[1] to m.groupValues[2]
+    }
+
+    private suspend fun importAppleMusicPlaylist(url: String): com.parachord.shared.playlist.XspfImportResult {
+        val (storefront, plId) = extractAppleMusicPlaylist(url)
+            ?: throw IllegalArgumentException("Couldn't read the Apple Music playlist ID from that URL.")
+        val devToken = appConfig.appleMusicDeveloperToken
+        if (devToken.isBlank()) throw IllegalStateException("Apple Music isn't configured for catalog access.")
+        val result = appleMusicClient.getCatalogPlaylist(storefront, plId, devToken)
+            ?: throw IllegalStateException("Couldn't load that Apple Music playlist — it may be private or unavailable in your region.")
+        val tracks = result.tracks.map { s ->
+            Track(
+                id = "applemusic:${s.id}", title = s.title, artist = s.artist, album = s.album,
+                duration = s.durationMs, artworkUrl = s.artworkUrl, resolver = "applemusic", appleMusicId = s.id,
+            )
+        }
+        return saveImportedPlaylist(result.name, "applemusic-import", tracks, result.artworkUrl)
+    }
+
+    private suspend fun saveImportedPlaylist(
+        name: String, source: String, tracks: List<Track>, artworkUrl: String?,
+    ): com.parachord.shared.playlist.XspfImportResult {
+        val id = "$source-${com.parachord.shared.platform.randomUUID()}"
+        libraryRepository.createPlaylistWithTracks(
+            com.parachord.shared.model.Playlist(
+                id = id, name = name,
+                artworkUrl = artworkUrl ?: tracks.firstOrNull()?.artworkUrl, trackCount = tracks.size,
+            ),
+            tracks,
+        )
+        return com.parachord.shared.playlist.XspfImportResult(id, name, tracks.size)
+    }
+
+    /** Add/follow a friend by username or "service:username" / profile URL (#198,
+     *  FAB "Add Friend"). Returns null on success, else a user-facing error. */
+    suspend fun addFriend(input: String): String? =
+        when (val r = friendsRepository.addFriend(input)) {
+            is com.parachord.shared.model.Resource.Success<*> -> null
+            is com.parachord.shared.model.Resource.Error -> r.message
+            else -> "Could not add friend"
+        }
 
     /** Local playlists eligible to push to [providerId] (the picker's rows). */
     suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =

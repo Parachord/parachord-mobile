@@ -3,6 +3,7 @@ package com.parachord.shared.api
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -87,7 +88,141 @@ class AppleMusicClient(private val httpClient: HttpClient) {
 
     suspend fun mostPlayedSongs(country: String = "us", limit: Int = 50): AppleChartsFeedResponse =
         httpClient.get("https://rss.marketingtools.apple.com/api/v2/$country/music/most-played/$limit/songs.json").body()
+
+    /**
+     * Fetch a PUBLIC Apple Music **catalog** playlist (a `pl.…` id from a
+     * `music.apple.com/{storefront}/playlist/…` URL) + its tracks, for playlist
+     * URL import (#18). Uses the developer (ES256 JWT) token only — no Music User
+     * Token — since catalog playlists are public. Returns null if [developerToken]
+     * is blank or the playlist can't be loaded. Paginates the tracks relationship
+     * (bounded) so playlists over one page import fully.
+     */
+    suspend fun getCatalogPlaylist(
+        storefront: String,
+        playlistId: String,
+        developerToken: String,
+    ): AmCatalogPlaylistResult? {
+        if (developerToken.isBlank()) return null
+        val catalogBase = "https://api.music.apple.com"
+        val first = try {
+            val resp = httpClient.get("$catalogBase/v1/catalog/$storefront/playlists/$playlistId") {
+                header("Authorization", "Bearer $developerToken")
+                parameter("include", "tracks")
+                parameter("limit[tracks]", "100")
+            }
+            if (!resp.status.isSuccess()) return null
+            json.decodeFromString<AmCatalogPlaylistResponse>(resp.bodyAsText())
+        } catch (e: Exception) {
+            return null
+        }
+        val pl = first.data.firstOrNull() ?: return null
+        val name = pl.attributes?.name?.takeIf { it.isNotBlank() } ?: "Apple Music Playlist"
+        val tracks = mutableListOf<AmCatalogTrack>()
+        var rel = pl.relationships?.tracks
+        var pages = 0
+        while (rel != null) {
+            rel.data.forEach { song ->
+                val a = song.attributes ?: return@forEach
+                tracks.add(
+                    AmCatalogTrack(
+                        id = song.id,
+                        title = a.name,
+                        artist = a.artistName,
+                        album = a.albumName,
+                        durationMs = a.durationInMillis,
+                        artworkUrl = a.artwork?.url?.let { amArtworkUrl(it) },
+                    ),
+                )
+            }
+            val next = rel.next
+            if (next == null || pages++ >= 20) break
+            rel = try {
+                val resp = httpClient.get("$catalogBase$next") {
+                    header("Authorization", "Bearer $developerToken")
+                }
+                if (!resp.status.isSuccess()) break
+                json.decodeFromString<AmCatalogTracksResponse>(resp.bodyAsText())
+                    .let { AmCatalogTracks(data = it.data, next = it.next) }
+            } catch (e: Exception) {
+                break
+            }
+        }
+        val artworkUrl = pl.attributes?.artwork?.url?.let { amArtworkUrl(it) } ?: tracks.firstOrNull()?.artworkUrl
+        return AmCatalogPlaylistResult(name = name, artworkUrl = artworkUrl, tracks = tracks)
+    }
+
+    /** Substitute Apple's `{w}x{h}` artwork-URL template with a 300x300 size. */
+    private fun amArtworkUrl(template: String): String =
+        template.replace("{w}", "300").replace("{h}", "300")
 }
+
+// ── Apple Music catalog-playlist DTOs (#18 URL import) ──────────────────────
+
+/** Flattened catalog-playlist result for the importer. */
+data class AmCatalogPlaylistResult(
+    val name: String,
+    val artworkUrl: String?,
+    val tracks: List<AmCatalogTrack>,
+)
+
+data class AmCatalogTrack(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val album: String?,
+    val durationMs: Long?,
+    val artworkUrl: String?,
+)
+
+@Serializable
+data class AmCatalogPlaylistResponse(val data: List<AmCatalogPlaylistData> = emptyList())
+
+@Serializable
+data class AmCatalogPlaylistData(
+    val id: String = "",
+    val attributes: AmCatalogPlaylistAttributes? = null,
+    val relationships: AmCatalogPlaylistRelationships? = null,
+)
+
+@Serializable
+data class AmCatalogPlaylistAttributes(
+    val name: String = "",
+    val artwork: AmCatalogArtwork? = null,
+)
+
+@Serializable
+data class AmCatalogPlaylistRelationships(val tracks: AmCatalogTracks? = null)
+
+@Serializable
+data class AmCatalogTracks(
+    val data: List<AmCatPlSong> = emptyList(),
+    val next: String? = null,
+)
+
+/** The tracks-relationship pagination response (`{ data:[…], next:"…" }`). */
+@Serializable
+data class AmCatalogTracksResponse(
+    val data: List<AmCatPlSong> = emptyList(),
+    val next: String? = null,
+)
+
+@Serializable
+data class AmCatPlSong(
+    val id: String = "",
+    val attributes: AmCatPlSongAttributes? = null,
+)
+
+@Serializable
+data class AmCatPlSongAttributes(
+    val name: String = "",
+    val artistName: String = "",
+    val albumName: String? = null,
+    val durationInMillis: Long? = null,
+    val artwork: AmCatalogArtwork? = null,
+)
+
+@Serializable
+data class AmCatalogArtwork(val url: String = "")
 
 // ── Response Models ──────────────────────────────────────────────────
 

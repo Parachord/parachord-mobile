@@ -1,6 +1,5 @@
 import SwiftUI
 import Shared
-import UniformTypeIdentifiers
 
 // MARK: - Playlist detail (phase 5.4)
 //
@@ -293,6 +292,83 @@ final class PlaylistCreator {
     }
 }
 
+/// Global XSPF importer (#254 / #198). Hosted once at the RootView root so BOTH
+/// the FAB's "Import Playlist" and the Playlists-screen import button route
+/// through one set of file-picker + URL-prompt modifiers (mirrors PlaylistCreator).
+@MainActor
+@Observable
+final class PlaylistImporter {
+    static let shared = PlaylistImporter()
+    private init() {}
+    var showOptions = false
+    var showFileImporter = false
+    var showUrlPrompt = false
+    var url = ""
+    var importing = false
+    var message: String?
+
+    /// Open the "file or URL?" chooser (called from the FAB + Playlists button).
+    func start() { url = ""; showOptions = true }
+
+    /// Read a picked `.xspf` file (security-scoped) off-main, import as local.
+    func importLocalFile(_ fileUrl: URL) {
+        importing = true
+        Task {
+            defer { importing = false }
+            let scoped = fileUrl.startAccessingSecurityScopedResource()
+            defer { if scoped { fileUrl.stopAccessingSecurityScopedResource() } }
+            do {
+                let content = try String(contentsOf: fileUrl, encoding: .utf8)
+                let r = try await IosContainer.companion.shared.importLocalXspf(content: content)
+                message = "Imported “\(r.playlistName)” — \(r.trackCount) track\(r.trackCount == 1 ? "" : "s")."
+            } catch {
+                message = "Couldn't import that file: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Import a playlist from the pasted URL (#18): Spotify / Apple Music catalog
+    /// / hosted XSPF — the container dispatches by URL shape.
+    func importFromUrl() {
+        let u = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !u.isEmpty else { return }
+        importing = true
+        Task {
+            defer { importing = false }
+            do {
+                let r = try await IosContainer.companion.shared.importPlaylistFromUrl(url: u)
+                message = "Imported “\(r.playlistName)” — \(r.trackCount) track\(r.trackCount == 1 ? "" : "s")."
+            } catch {
+                message = "Couldn't import from that URL: \(error.localizedDescription)"
+            }
+        }
+    }
+}
+
+/// Global "add friend" prompt (#198, FAB "Add Friend"). Hosted at the RootView
+/// root so the FAB can present it (a sheet's button can't host its own alert).
+@MainActor
+@Observable
+final class FriendAdder {
+    static let shared = FriendAdder()
+    private init() {}
+    var showing = false
+    var input = ""
+    var message: String?
+
+    func start() { input = ""; showing = true }
+
+    func add() {
+        let v = input.trimmingCharacters(in: .whitespaces)
+        guard !v.isEmpty else { return }
+        Task {
+            // addFriend returns nil on success, else a user-facing error string.
+            let err: String? = (try? await IosContainer.companion.shared.addFriend(input: v)) ?? nil
+            message = err ?? "Now following \(v)."
+        }
+    }
+}
+
 /// PlaylistTrack → playable Track (19-param init in a helper to spare Swift's
 /// inline type-checker). Shared by the playlist detail + the "Play Playlist" menu.
 func pcTrack(from t: PlaylistTrack) -> Track {
@@ -394,13 +470,8 @@ struct PlaylistsScreen: View {
     @State private var syncTarget: Playlist?
     @State private var shareItem: PCShareItem?
     @State private var shareNote: String?
-    // XSPF import (#254): ⋯-style import button → file picker or URL prompt.
-    @State private var showImportOptions = false
-    @State private var showFileImporter = false
-    @State private var showUrlPrompt = false
-    @State private var importUrl = ""
-    @State private var importing = false
-    @State private var importMessage: String?
+    // XSPF import (#254/#198) — hosted globally so the FAB shares the same flow.
+    @State private var importer = PlaylistImporter.shared
     let onMenu: () -> Void
     init(onMenu: @escaping () -> Void = {}) { self.onMenu = onMenu }
 
@@ -408,8 +479,8 @@ struct PlaylistsScreen: View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 PCTopBar(title: "Playlists", leading: .menu, onLeading: onMenu,
-                         trailingIcon: importing ? "arrow.triangle.2.circlepath" : "square.and.arrow.down",
-                         onTrailing: { if !importing { showImportOptions = true } })
+                         trailingIcon: importer.importing ? "arrow.triangle.2.circlepath" : "square.and.arrow.down",
+                         onTrailing: { if !importer.importing { importer.start() } })
                 if !model.playlists.isEmpty {
                     HStack {
                         Menu {
@@ -487,66 +558,6 @@ struct PlaylistsScreen: View {
             .alert("Sharing", isPresented: Binding(get: { shareNote != nil }, set: { if !$0 { shareNote = nil } })) {
                 Button("OK") { shareNote = nil }
             } message: { Text(shareNote ?? "") }
-            // ── XSPF import (#254) ──
-            .confirmationDialog("Import Playlist", isPresented: $showImportOptions, titleVisibility: .visible) {
-                Button("Import .xspf File") { showFileImporter = true }
-                Button("Import from URL") { importUrl = ""; showUrlPrompt = true }
-            }
-            .fileImporter(
-                isPresented: $showFileImporter,
-                allowedContentTypes: [UTType(filenameExtension: "xspf") ?? .xml, .xml],
-                allowsMultipleSelection: false,
-            ) { result in
-                switch result {
-                case .success(let urls): if let u = urls.first { importLocalFile(u) }
-                case .failure(let e): importMessage = e.localizedDescription
-                }
-            }
-            .alert("Import from URL", isPresented: $showUrlPrompt) {
-                TextField("https://…/playlist.xspf", text: $importUrl)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                Button("Cancel", role: .cancel) {}
-                Button("Import") { importFromUrl(importUrl) }
-            } message: {
-                Text("Paste an XSPF playlist URL. Hosted playlists are kept in sync — Parachord re-checks the URL for changes.")
-            }
-            .alert("Import", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
-                Button("OK") { importMessage = nil }
-            } message: { Text(importMessage ?? "") }
-        }
-    }
-
-    /// Read a picked `.xspf` file (security-scoped) off the main actor and import
-    /// its contents as a local playlist (#254).
-    private func importLocalFile(_ url: URL) {
-        importing = true
-        Task {
-            defer { importing = false }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                let r = try await container.importLocalXspf(content: content)
-                importMessage = "Imported “\(r.playlistName)” — \(r.trackCount) track\(r.trackCount == 1 ? "" : "s")."
-            } catch {
-                importMessage = "Couldn't import that file: \(error.localizedDescription)"
-            }
-        }
-    }
-
-    /// Import an XSPF playlist from a pasted URL → a hosted (polled) playlist (#254).
-    private func importFromUrl(_ raw: String) {
-        let url = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else { return }
-        importing = true
-        Task {
-            defer { importing = false }
-            do {
-                let r = try await container.importHostedXspf(url: url)
-                importMessage = "Imported “\(r.playlistName)” — \(r.trackCount) track\(r.trackCount == 1 ? "" : "s"). It'll stay in sync with the URL."
-            } catch {
-                importMessage = "Couldn't import from that URL: \(error.localizedDescription)"
-            }
         }
     }
 

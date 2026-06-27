@@ -224,8 +224,8 @@ struct PCAddSheet: View {
         let actions: [Action] = [
             .init(icon: "sparkles", label: "Ask Shuffleupagus", sub: "Let the AI DJ build a queue", go: onShuffleupagus),
             .init(icon: "music.note.list", label: "New Playlist", sub: "Start an empty playlist", go: { PlaylistCreator.shared.start() }),
-            .init(icon: "globe", label: "Import Playlist", sub: "Mirror an XSPF / remote feed", go: nil),
-            .init(icon: "person.badge.plus", label: "Add Friend", sub: "Follow a ListenBrainz / Last.fm user", go: nil),
+            .init(icon: "globe", label: "Import Playlist", sub: "Mirror an XSPF / remote feed", go: { PlaylistImporter.shared.start() }),
+            .init(icon: "person.badge.plus", label: "Add Friend", sub: "Follow a ListenBrainz / Last.fm user", go: { FriendAdder.shared.start() }),
         ]
         return NavigationStack {
             // A plain VStack (NOT a List): the content is only 4 fixed rows, so it

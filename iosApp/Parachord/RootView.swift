@@ -1,5 +1,6 @@
 import SwiftUI
 import Shared
+import UniformTypeIdentifiers
 
 /// App shell (Phase 1 redesign — docs/design/parachord-ios).
 ///
@@ -11,6 +12,8 @@ struct ContentView: View {
     @State private var playback = AppPlayback()
     @State private var theme = ThemeObserver()
     @State private var creator = PlaylistCreator.shared
+    @State private var importer = PlaylistImporter.shared
+    @State private var friendAdder = FriendAdder.shared
     @State private var metaEditor = TrackMetadataEditor.shared
     @State private var listenAlong = ListenAlongController.shared
     @State private var spinoff = SpinoffController.shared
@@ -275,6 +278,10 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { creator.showing = false }
             Button("Create") { creator.create() }
         }
+        // XSPF import + Add Friend modals (#254/#198), hosted once at the root so
+        // the FAB and the Playlists screen share one flow. Bundled into a single
+        // ViewModifier — inlining all six modifiers blew the type-checker budget.
+        .modifier(PCAddActionModals(importer: importer, friendAdder: friendAdder))
         // In-app track metadata editor (#248), hosted once at the root so the
         // track context menu's "Edit Metadata" can present it (a contextMenu
         // can't host its own sheet).
@@ -478,6 +485,54 @@ struct PCPlaceholder: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PC.bgPrimary)
+    }
+}
+
+/// Root-level modals for the FAB's "Import Playlist" + "Add Friend" actions
+/// (#254/#198). Bundled as a ViewModifier so ContentView's body stays within
+/// the Swift type-checker's budget.
+private struct PCAddActionModals: ViewModifier {
+    @Bindable var importer: PlaylistImporter
+    @Bindable var friendAdder: FriendAdder
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog("Import Playlist", isPresented: $importer.showOptions, titleVisibility: .visible) {
+                Button("Import .xspf File") { importer.showFileImporter = true }
+                Button("Import from URL") { importer.url = ""; importer.showUrlPrompt = true }
+            }
+            .fileImporter(
+                isPresented: $importer.showFileImporter,
+                allowedContentTypes: [UTType(filenameExtension: "xspf") ?? .xml, .xml],
+                allowsMultipleSelection: false,
+            ) { result in
+                switch result {
+                case .success(let urls): if let u = urls.first { importer.importLocalFile(u) }
+                case .failure(let e): importer.message = e.localizedDescription
+                }
+            }
+            .alert("Import from URL", isPresented: $importer.showUrlPrompt) {
+                TextField("https://…/playlist.xspf", text: $importer.url)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Import") { importer.importFromUrl() }
+            } message: {
+                Text("Paste a Spotify, Apple Music, or hosted XSPF playlist URL. Hosted XSPF playlists also stay in sync as the source changes.")
+            }
+            .alert("Import", isPresented: Binding(get: { importer.message != nil }, set: { if !$0 { importer.message = nil } })) {
+                Button("OK") { importer.message = nil }
+            } message: { Text(importer.message ?? "") }
+            .alert("Add Friend", isPresented: $friendAdder.showing) {
+                TextField("Username or profile URL", text: $friendAdder.input)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button("Cancel", role: .cancel) {}
+                Button("Add") { friendAdder.add() }
+            } message: {
+                Text("Follow a ListenBrainz or Last.fm user by username, or paste their profile URL.")
+            }
+            .alert("Add Friend", isPresented: Binding(get: { friendAdder.message != nil }, set: { if !$0 { friendAdder.message = nil } })) {
+                Button("OK") { friendAdder.message = nil }
+            } message: { Text(friendAdder.message ?? "") }
     }
 }
 
