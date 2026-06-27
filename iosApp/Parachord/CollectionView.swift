@@ -16,8 +16,11 @@ import Shared
 // See docs/plans/2026-06-17-ios-collection-195.md.
 
 // ── Sort options (mirror Android CollectionSort.kt) ───────────────────
-enum CollectionTrackSort: CaseIterable {
-    case titleAsc, titleDesc, artist, album, duration, recent
+enum CollectionTrackSort: String, CaseIterable {
+    // rawValue = Android TrackSort.name → the persisted choice (#250) is
+    // consistent across platforms.
+    case titleAsc = "TITLE_ASC", titleDesc = "TITLE_DESC", artist = "ARTIST",
+         album = "ALBUM", duration = "DURATION", recent = "RECENT"
     var label: String {
         switch self {
         case .titleAsc: return "Title A–Z"
@@ -30,8 +33,8 @@ enum CollectionTrackSort: CaseIterable {
     }
 }
 
-enum CollectionAlbumSort: CaseIterable {
-    case alphaAsc, alphaDesc, artist, recent
+enum CollectionAlbumSort: String, CaseIterable {
+    case alphaAsc = "ALPHA_ASC", alphaDesc = "ALPHA_DESC", artist = "ARTIST", recent = "RECENT"
     var label: String {
         switch self {
         case .alphaAsc: return "A–Z"
@@ -42,8 +45,8 @@ enum CollectionAlbumSort: CaseIterable {
     }
 }
 
-enum CollectionArtistSort: CaseIterable {
-    case alphaAsc, alphaDesc, recent
+enum CollectionArtistSort: String, CaseIterable {
+    case alphaAsc = "ALPHA_ASC", alphaDesc = "ALPHA_DESC", recent = "RECENT"
     var label: String {
         switch self {
         case .alphaAsc: return "A–Z"
@@ -53,8 +56,9 @@ enum CollectionArtistSort: CaseIterable {
     }
 }
 
-enum CollectionFriendSort: CaseIterable {
-    case alphaAsc, alphaDesc, recent, active, onAir
+enum CollectionFriendSort: String, CaseIterable {
+    case alphaAsc = "ALPHA_ASC", alphaDesc = "ALPHA_DESC", recent = "RECENT",
+         active = "ACTIVE", onAir = "ON_AIR"
     var label: String {
         switch self {
         case .alphaAsc: return "A–Z"
@@ -79,12 +83,23 @@ final class CollectionModel {
     var artists: [Artist] = []
     var friends: [Friend] = []
 
-    // Per-tab sort state. In-memory on the singleton (survives screen
-    // recreation), mirroring Android's per-tab sort defaults.
-    var trackSort: CollectionTrackSort = .recent
-    var albumSort: CollectionAlbumSort = .recent
-    var artistSort: CollectionArtistSort = .alphaAsc
-    var friendSort: CollectionFriendSort = .alphaAsc
+    // Per-tab sort — persisted across launches via the shared SettingsStore (#250),
+    // so it survives app restart (not just screen recreation). The rawValue is the
+    // Android enum .name, kept consistent across platforms. `loadingSorts`
+    // suppresses the echo-write while loadSorts() applies the stored value.
+    private var loadingSorts = false
+    var trackSort: CollectionTrackSort = .recent {
+        didSet { if !loadingSorts { Task { try? await container.setTracksSort(sort: trackSort.rawValue) } } }
+    }
+    var albumSort: CollectionAlbumSort = .recent {
+        didSet { if !loadingSorts { Task { try? await container.setAlbumsSort(sort: albumSort.rawValue) } } }
+    }
+    var artistSort: CollectionArtistSort = .alphaAsc {
+        didSet { if !loadingSorts { Task { try? await container.setArtistsSort(sort: artistSort.rawValue) } } }
+    }
+    var friendSort: CollectionFriendSort = .alphaAsc {
+        didSet { if !loadingSorts { Task { try? await container.setFriendsSort(sort: friendSort.rawValue) } } }
+    }
 
     // Free-text filter shared across tabs (mirrors LibraryViewModel._searchQuery).
     var searchQuery: String = ""
@@ -98,10 +113,24 @@ final class CollectionModel {
     func start() {
         guard !started else { return }
         started = true
+        loadSorts()
         trackSub = container.watchCollectionTracks { [weak self] list in self?.tracks = list }
         albumSub = container.watchCollectionAlbums { [weak self] list in self?.albums = list }
         artistSub = container.watchCollectionArtists { [weak self] list in self?.artists = list }
         friendSub = container.watchCollectionFriends { [weak self] list in self?.friends = list }
+    }
+
+    /// Restore the persisted per-tab sorts (#250). Guarded so applying the stored
+    /// value doesn't immediately echo-write it back.
+    private func loadSorts() {
+        Task { @MainActor in
+            loadingSorts = true
+            if let s = (try? await container.getTracksSort()) ?? nil, let v = CollectionTrackSort(rawValue: s) { trackSort = v }
+            if let s = (try? await container.getAlbumsSort()) ?? nil, let v = CollectionAlbumSort(rawValue: s) { albumSort = v }
+            if let s = (try? await container.getArtistsSort()) ?? nil, let v = CollectionArtistSort(rawValue: s) { artistSort = v }
+            if let s = (try? await container.getFriendsSort()) ?? nil, let v = CollectionFriendSort(rawValue: s) { friendSort = v }
+            loadingSorts = false
+        }
     }
 
     /// Refresh each friend's cached now-playing (fire-and-forget in the repo).

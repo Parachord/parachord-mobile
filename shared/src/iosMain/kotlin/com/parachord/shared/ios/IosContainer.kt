@@ -572,6 +572,17 @@ class IosContainer private constructor() {
     suspend fun getPlaylistsSort(): String? = settingsStore.getSortPlaylists()
     suspend fun setPlaylistsSort(sort: String) { settingsStore.setSortPlaylists(sort) }
 
+    /** Persisted Collection per-tab sort keys (match Android's
+     *  {Track,Album,Artist,Friend}Sort.name) — restored across launches (#250). */
+    suspend fun getTracksSort(): String? = settingsStore.getSortTracks()
+    suspend fun setTracksSort(sort: String) { settingsStore.setSortTracks(sort) }
+    suspend fun getAlbumsSort(): String? = settingsStore.getSortAlbums()
+    suspend fun setAlbumsSort(sort: String) { settingsStore.setSortAlbums(sort) }
+    suspend fun getArtistsSort(): String? = settingsStore.getSortArtists()
+    suspend fun setArtistsSort(sort: String) { settingsStore.setSortArtists(sort) }
+    suspend fun getFriendsSort(): String? = settingsStore.getSortFriends()
+    suspend fun setFriendsSort(sort: String) { settingsStore.setSortFriends(sort) }
+
     /** Local playlists eligible to push to [providerId] (the picker's rows). */
     suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =
         playlistDao.getAllSync()
