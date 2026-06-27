@@ -6,9 +6,11 @@ import com.parachord.shared.api.TrackLink
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Track
+import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.settings.SettingsStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -64,12 +66,32 @@ class ScrobbleManager(
     private val mbidEnrichment: MbidEnrichmentService,
     private val dispatchToPlugins: (eventName: String, track: Track) -> Unit = { _, _ -> },
     private val achordionClient: AchordionClient? = null,
+    /**
+     * All resolved sources for a played track, from the platform resolver cache.
+     * Lets the native Achordion submit send EVERY high-confidence per-service link
+     * (Spotify / Apple Music / SoundCloud / Bandcamp …), not just the flat-field
+     * trio carried on the [Track] (#276). Returns empty on a cache miss, in which
+     * case [submitToAchordion] falls back to the flat fields. Synchronous: both
+     * platforms back it with an in-memory cache (and iOS bridges a Swift closure).
+     */
+    private val resolvedSourcesFor: (Track) -> List<ResolvedSource> = { emptyList() },
 ) {
     companion object {
         private const val TAG = "ScrobbleManager"
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // The observe loop below is a long-lived fire-and-forget launch running the
+    // full processPlaybackState → refreshTrackMbids → dispatch chain. An uncaught
+    // exception there (e.g. a network throw from the MBID/canonical-name lookup)
+    // would otherwise abort the process on a handler-less scope — SIGABRT on
+    // Kotlin/Native, default-handler crash on Android. Scrobbling is best-effort;
+    // log and keep the app alive.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e ->
+                Log.e(TAG, "Scrobble coroutine failed (ignored): ${e.message}", e)
+            },
+    )
     private var observeJob: Job? = null
 
     // Track state for scrobble threshold logic.
@@ -143,6 +165,19 @@ class ScrobbleManager(
         if (dbTrack.isrc.isNullOrBlank() && !track.isrc.isNullOrBlank()) {
             dbTrack = dbTrack.copy(isrc = track.isrc)
         }
+        // Same rationale as ISRC: the PLAYED-source attribution lives on the live,
+        // resolver-merged track, not the DB row. The DB re-read above carries the
+        // PERSISTED resolver/streaming IDs, which can be a different (top-ranked)
+        // source than the one that actually streamed this session — so re-attach
+        // the live values. Without this, a DB-backed Apple-Music play with a
+        // Spotify cross-match scrobbles with origin_url/music_service = Spotify
+        // (#260) and never carries the real Apple Music origin (#276). Prefer the
+        // live value, fall back to the DB's when the live track lacks it; MBIDs +
+        // canonical names still come from the DB/mapper below.
+        track.resolver?.takeIf { it.isNotBlank() }?.let { dbTrack = dbTrack.copy(resolver = it) }
+        if (!track.spotifyId.isNullOrBlank()) dbTrack = dbTrack.copy(spotifyId = track.spotifyId)
+        if (!track.appleMusicId.isNullOrBlank()) dbTrack = dbTrack.copy(appleMusicId = track.appleMusicId)
+        if (!track.soundcloudId.isNullOrBlank()) dbTrack = dbTrack.copy(soundcloudId = track.soundcloudId)
         // Still no recording MBID — resolve it now via the mapper. Android enriches
         // at playback start (PlaybackController.enrichInBackground) so the MBID is
         // usually cached by scrobble time; iOS has no such hook, and ephemeral
@@ -221,15 +256,24 @@ class ScrobbleManager(
         }
         val mbid = track.recordingMbid?.takeIf { it.isNotBlank() }
         val isrc = track.isrc?.takeIf { it.isNotBlank() }
-        val links = buildList {
-            track.spotifyId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
-            }
-            track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://music.apple.com/song/$it", host = "music.apple.com", label = "Apple Music"))
-            }
-            track.soundcloudId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
+        // Prefer the FULL resolved-source set so the submit carries every
+        // high-confidence per-service link (incl. Bandcamp), matching desktop's
+        // buildLinks (#276). The flat single-id fields are only a cache-miss
+        // fallback — they can't represent Bandcamp/YouTube or per-source confidence.
+        val sources = resolvedSourcesFor(track)
+        val links = if (sources.isNotEmpty()) {
+            buildAchordionLinks(sources)
+        } else {
+            buildList {
+                track.spotifyId?.takeIf { it.isNotBlank() }?.let {
+                    add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
+                }
+                track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
+                    add(TrackLink(url = "https://music.apple.com/us/song/$it", host = "music.apple.com", label = "Apple Music"))
+                }
+                track.soundcloudId?.takeIf { it.isNotBlank() }?.let {
+                    add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
+                }
             }
         }
         // Boundary instrumentation (#215): one line per scrobble shows the native

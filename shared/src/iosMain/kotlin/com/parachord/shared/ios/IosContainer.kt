@@ -102,6 +102,7 @@ import com.parachord.shared.ai.providers.ClaudeProvider
 import com.parachord.shared.ai.providers.GeminiProvider
 import com.parachord.shared.db.dao.ChatMessageDao
 import com.parachord.shared.resolver.ResolvedSource
+import kotlin.concurrent.Volatile
 import com.parachord.shared.resolver.ResolverCoordinator
 import com.parachord.shared.resolver.ResolverScoring
 import com.parachord.shared.repository.WeeklyPlaylistEntry
@@ -116,6 +117,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -208,7 +210,18 @@ class IosContainer private constructor() {
     }
 
     /** App-wide coroutine scope for fire-and-forget settings writes. */
-    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // CoroutineExceptionHandler is load-bearing on Kotlin/Native: a fire-and-forget
+    // `appScope.launch { }` whose body throws an UNCAUGHT exception aborts the whole
+    // process (the default handler calls terminate → SIGABRT). With SupervisorJob
+    // but no handler, every unguarded launch was a latent crash. This logs and
+    // swallows instead, so a stray network/parse failure in a background task can
+    // never take the app down.
+    val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main +
+            CoroutineExceptionHandler { _, e ->
+                Log.e("IosAppScope", "Uncaught exception in appScope coroutine: ${e.message}", e)
+            },
+    )
 
     /** Shared KvStore (NSUserDefaults) — used by SettingsStore AND the
      *  Spotify rate-limit cooldown persistence (so the cooldown survives a
@@ -418,14 +431,29 @@ class IosContainer private constructor() {
      *  surface WHY it failed instead of a generic toast). Safe to call from the
      *  foreground timer (which ignores the result). */
     suspend fun syncNow(): String {
-        ensureListenBrainzUsername()
-        val r = syncEngine.syncAll()
-        return if (r.success) {
-            Log.i("IosSync", "Sync OK")
-            ""
-        } else {
-            Log.w("IosSync", "Sync failed: ${r.error}")
-            r.error ?: "Sync failed"
+        // CRITICAL (Kotlin/Native): this is a Swift-bridged `suspend` — an
+        // exception that escapes it does NOT reach Swift's `try?`; Kotlin/Native
+        // aborts the process at the ObjC bridge (Kotlin_ObjCExport_ExceptionAsNSError
+        // → terminateWithUnhandledException → SIGABRT). syncAll() returns a result
+        // rather than throwing, but a late Ktor SocketTimeoutException from a
+        // cancelled child of its parallel id-hydration fan-out can still surface on
+        // the NSURLSession thread and ride out through here. So swallow everything
+        // (except cancellation) into the error string the caller already ignores.
+        return try {
+            ensureListenBrainzUsername()
+            val r = syncEngine.syncAll()
+            if (r.success) {
+                Log.i("IosSync", "Sync OK")
+                ""
+            } else {
+                Log.w("IosSync", "Sync failed: ${r.error}")
+                r.error ?: "Sync failed"
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e   // never swallow cooperative cancellation
+        } catch (e: Exception) {
+            Log.w("IosSync", "Sync threw (swallowed at bridge): ${e.message}")
+            e.message ?: "Sync error"
         }
     }
 
@@ -1563,6 +1591,24 @@ class IosContainer private constructor() {
         ScrobbleState(currentTrack = null, isPlaying = false, position = 0L, duration = 0L),
     )
 
+    /**
+     * Snapshot of the just-played track's resolved sources, pushed from Swift at
+     * play start via [updateScrobbleSources]. The iOS resolver cache
+     * (`IosTrackResolverCache`) is `@MainActor`, but the native Achordion submit
+     * runs off the main actor (Dispatchers.Default), so it can't read the cache
+     * directly — Swift hands the sources over on the main actor instead. Keyed by
+     * track id so a stale snapshot from a previous track can't mis-attribute.
+     * Feeds the submit ALL high-confidence per-service links (#276). `@Volatile`:
+     * written on main, read on Default.
+     */
+    @Volatile
+    private var scrobbleSourcesSnapshot: Pair<String, List<ResolvedSource>>? = null
+
+    /** Swift pushes the played track's resolved sources here at play start (#276). */
+    fun updateScrobbleSources(trackId: String, sources: List<ResolvedSource>) {
+        scrobbleSourcesSnapshot = trackId to sources
+    }
+
     val scrobbleManager: ScrobbleManager by lazy {
         ScrobbleManager(
             settingsStore = settingsStore,
@@ -1570,6 +1616,9 @@ class IosContainer private constructor() {
             scrobblers = scrobblers,
             trackDao = trackDao,
             mbidEnrichment = mbidEnrichmentService,
+            resolvedSourcesFor = { track ->
+                scrobbleSourcesSnapshot?.takeIf { it.first == track.id }?.second ?: emptyList()
+            },
             // .axe playback-telemetry dispatch (achordion) into the JSC
             // `window.scrobbleManager` registry — parity with Android's WebView
             // path. Fire-and-forget; evaluateJs initializes the runtime if cold.
@@ -1814,12 +1863,17 @@ class IosContainer private constructor() {
      * preserved (copy), so it doesn't re-trigger now-playing detection. Mirrors
      * Android, whose `PlaybackController` scrobbles the resolved `routedTrack`.
      */
-    fun trackWithResolvedSources(track: Track, sources: List<ResolvedSource>): Track {
+    fun trackWithResolvedSources(track: Track, sources: List<ResolvedSource>, playedResolver: String? = null): Track {
         if (sources.isEmpty()) return track
         fun pick(get: (ResolvedSource) -> String?): String? =
             sources.firstNotNullOfOrNull { get(it)?.takeIf { s -> s.isNotBlank() } }
         return track.copy(
-            resolver = track.resolver ?: sources.first().resolver,
+            // The PLAYED resolver is the scrobble origin — it's authoritative over
+            // both the row's persisted resolver and the top-ranked source. A
+            // higher-ranked Spotify match that fell through to Apple Music must NOT
+            // tag the scrobble as Spotify; the Spotify id still rides along as the
+            // cross-match anchor below (spotifyId via pick) (#260 / #276).
+            resolver = playedResolver ?: track.resolver ?: sources.first().resolver,
             spotifyId = track.spotifyId ?: pick { it.spotifyId },
             spotifyUri = track.spotifyUri ?: pick { it.spotifyUri },
             appleMusicId = track.appleMusicId ?: pick { it.appleMusicId },

@@ -478,6 +478,11 @@ val androidModule = module {
             // Native Achordion track-links submit on scrobble (#215) — reliable
             // link-cache pre-warm independent of the achordion .axe JS plugin.
             achordionClient = get(),
+            // Full resolved-source set so the submit carries every high-confidence
+            // per-service link, not just the flat trio (#276).
+            resolvedSourcesFor = { track ->
+                get<TrackResolverCache>().getSources(track.title, track.artist) ?: emptyList()
+            },
         )
     }
     singleOf(::SpotifyPlaybackHandler)

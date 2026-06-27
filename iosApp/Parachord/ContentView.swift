@@ -1610,8 +1610,13 @@ final class QueuePlaybackCoordinator {
         else { return }
         Task { @MainActor in
             let result = await router.play(ranked: [chosen], title: t.title, artist: t.artist)
-            if case .played(let kind) = result {
+            if case .played(let kind, let playedResolver) = result {
                 activeEngine = kind
+                // Restamp the now-playing track's origin to the resolver the user
+                // switched to, so the scrobble reflects the service actually
+                // streaming after a manual deck tap (#260 / #276).
+                currentTrack = container.trackWithResolvedSources(track: t, sources: srcs, playedResolver: playedResolver)
+                container.updateScrobbleSources(trackId: t.id, sources: srcs)
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
                     spotifyPlaying = spotify.isPlaying
@@ -1909,7 +1914,7 @@ final class QueuePlaybackCoordinator {
             // state updates (the newer start owns activeEngine now).
             if Task.isCancelled { return }
             switch result {
-            case .played(let kind):
+            case .played(let kind, let playedResolver):
                 activeEngine = kind
                 // Enrich the now-playing track with the resolved streaming IDs so
                 // the scrobble path carries them: achordion's played-source
@@ -1918,7 +1923,11 @@ final class QueuePlaybackCoordinator {
                 // Track. Without this, an Apple-Music-streamed track reaches scrobble
                 // with all IDs null → achordion confidence 0.00, zero submit links.
                 // Same `id` (additive copy) so it doesn't re-fire now-playing.
-                currentTrack = container.trackWithResolvedSources(track: track, sources: ranked ?? [])
+                currentTrack = container.trackWithResolvedSources(track: track, sources: ranked ?? [], playedResolver: playedResolver)
+                // Hand the full resolved-source set to the scrobbler (off-main) so the
+                // native Achordion submit sends EVERY high-confidence per-service link
+                // (incl. Bandcamp), not just the flat-field trio (#276).
+                container.updateScrobbleSources(trackId: track.id, sources: ranked ?? [])
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
                     spotifyPlaying = spotify.isPlaying

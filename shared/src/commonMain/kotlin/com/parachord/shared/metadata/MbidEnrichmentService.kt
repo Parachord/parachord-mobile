@@ -6,6 +6,7 @@ import com.parachord.shared.api.MusicBrainzClient
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,7 +64,18 @@ class MbidEnrichmentService(
         private const val CACHE_TTL = 90L * 24 * 60 * 60 * 1000 // 90 days
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Background enrichment is best-effort — a mapper network failure (e.g. Ktor
+    // SocketTimeoutException from `enrichTrack`) must NEVER crash the app. On a
+    // handler-less scope an uncaught exception aborts the process: SIGABRT on
+    // Kotlin/Native (iOS, via the ObjC bridge), default-uncaught-handler crash on
+    // Android. The launch bodies below use try/finally without a catch, so this
+    // handler is the backstop that keeps a timeout from taking the app down.
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e ->
+                Log.w(TAG, "Enrichment coroutine failed (ignored): ${e.message}")
+            },
+    )
     private val diskJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /** In-flight deduplication: don't enrich the same track concurrently. */
@@ -114,6 +126,12 @@ class MbidEnrichmentService(
                 if (!tryClaim(req.trackId)) continue
                 try {
                     enrichTrack(req.trackId, req.artist, req.title)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e   // batch cancelled — stop, don't swallow
+                } catch (e: Exception) {
+                    // One track's mapper failure (timeout, parse) must not abort the
+                    // whole batch or skip the disk-cache save below.
+                    Log.w(TAG, "enrich failed for '${req.title}': ${e.message}")
                 } finally {
                     release(req.trackId)
                 }

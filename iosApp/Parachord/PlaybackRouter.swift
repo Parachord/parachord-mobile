@@ -22,9 +22,14 @@ enum PlaybackEngineKind: String {
 }
 
 enum RouteResult: Equatable {
-    /// Playback started on this engine. For `.avPlayer` the caller still
-    /// drives the ready-poll-then-play (the item loads asynchronously).
-    case played(PlaybackEngineKind)
+    /// Playback started on this engine. The second value is the resolver id of
+    /// the source that ACTUALLY played — which is NOT necessarily the top-ranked
+    /// source (a higher-ranked Spotify match can fall through to Apple Music when
+    /// Spotify isn't connected). The caller stamps this onto the now-playing
+    /// track so the scrobble origin reflects what truly streamed, not the
+    /// cross-match (#260 / #276). For `.avPlayer` the caller still drives the
+    /// ready-poll-then-play (the item loads asynchronously).
+    case played(PlaybackEngineKind, resolver: String)
     /// A non-streaming resolver (stream:false, e.g. Bandcamp) — the caller opens
     /// this URL in the browser and shows the track without managing audio.
     case openBrowser(String)
@@ -53,7 +58,7 @@ struct PlaybackRouter {
             case "soundcloud", "localfiles", "direct":
                 guard !source.url.isEmpty else { continue }
                 avPlayer.load(url: source.url, title: title, artist: artist)
-                return .played(.avPlayer)
+                return .played(.avPlayer, resolver: source.resolver)
 
             case "applemusic":
                 guard let id = source.appleMusicId, !id.isEmpty else { continue }
@@ -64,12 +69,12 @@ struct PlaybackRouter {
                 var status = MusicAuthorization.currentStatus
                 if status == .notDetermined { status = await MusicAuthorization.request() }
                 guard status == .authorized else { continue }
-                if await musicKit.play(appleMusicId: id) { return .played(.musicKit) }
+                if await musicKit.play(appleMusicId: id) { return .played(.musicKit, resolver: source.resolver) }
                 // started false (no subscription / transient) → next source
 
             case "spotify":
                 guard spotify.canPlay, let uri = source.spotifyUri, !uri.isEmpty else { continue }
-                if await spotify.play(uri: uri) { return .played(.spotify) }
+                if await spotify.play(uri: uri) { return .played(.spotify, resolver: source.resolver) }
 
             default:
                 continue
