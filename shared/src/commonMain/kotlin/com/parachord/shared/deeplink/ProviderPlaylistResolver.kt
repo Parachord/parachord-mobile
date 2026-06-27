@@ -93,13 +93,12 @@ class ProviderPlaylistResolver(
 
     // ── Spotify playlist page → Web API (rich), else embed fallback (editorial) ──
     private suspend fun fetchSpotifyPlaylist(playlistId: String): ResolvedProtocolPlay {
-        if (spotifyAccessToken().isNullOrBlank()) {
-            throw IllegalStateException("Connect Spotify in Settings to play Spotify playlists.")
-        }
-        // Prefer the Web API (real track IDs / album). Editorial & algorithmic
-        // playlists (37i9…) return empty or 404 for third-party apps — fall through
-        // to the embed page below (parachord-mobile#286).
-        val fromApi = try {
+        // The Web API path (rich — real track IDs/album) runs ONLY when Spotify is
+        // connected. We do NOT hard-require a connection: the embed fallback below
+        // needs no auth and covers any PUBLIC playlist (incl. editorial 37i9…), so a
+        // user who hasn't connected Spotify can still open shared Spotify links (#286).
+        val connected = !spotifyAccessToken().isNullOrBlank()
+        val fromApi = if (!connected) null else try {
             val full = spotifyClient.getPlaylist(playlistId)
             val tracks = mutableListOf<ProtocolTrack>()
             var offset = 0

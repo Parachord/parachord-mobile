@@ -354,6 +354,14 @@ struct ContentView: View {
     private func handleDeepLink(_ url: URL) {
         guard url.scheme == "parachord",
               let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        // parachord://external?url=<spotify/apple url> — from the Share Extension (#17).
+        // Resolve the external provider URL → play/navigate off the main thread.
+        if comps.host == "external" {
+            if let ext = comps.queryItems?.first(where: { $0.name == "url" })?.value, !ext.isEmpty {
+                Task { await resolveAndDispatchExternal(ext) }
+            }
+            return
+        }
         let segs = comps.path.split(separator: "/").map(String.init)
         var query: [String: String] = [:]
         for item in comps.queryItems ?? [] { if let v = item.value { query[item.name] = v } }
@@ -387,6 +395,28 @@ struct ContentView: View {
                 dlAck("Couldn't open that link"); return
             }
             handleDeepLink(parachordUrl)
+        }
+    }
+
+    /// Resolve a Spotify/Apple Music URL shared INTO the app via the Share
+    /// Extension (#17) → play (playlist/album/track) or navigate (artist).
+    private func resolveAndDispatchExternal(_ ext: String) async {
+        guard let r = try? await IosContainer.companion.shared.resolveExternalLink(rawUrl: ext) else {
+            dlAck("Couldn't open that link"); return
+        }
+        switch r.kind {
+        case "play":
+            listenAlong.stop()
+            coordinator.exitSpinoff()
+            coordinator.setQueue(r.tracks, startIndex: 0,
+                                 context: PlaybackContext(type: "playlist", name: r.name, id: nil))
+            dlAck("Playing \(r.name)")
+        case "navArtist":
+            tab = .home
+            homePendingRoute = .artist(r.name)
+            dlAck("Opening \(r.name)")
+        default:
+            dlAck(r.message ?? "Couldn't open that link")
         }
     }
 

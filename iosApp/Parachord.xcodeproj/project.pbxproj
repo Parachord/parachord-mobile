@@ -7,78 +7,117 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		39B321B04AF2EDF8C56F1DAF /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2E936BFC5826AA7B9EA5035E /* Foundation.framework */; };
+		48F05C31EC85A9A45A71E6D5 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B2118EE0889B3F7F9B26B3E9 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000020 /* ParachordApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* ParachordApp.swift */; };
 		AA0000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* ContentView.swift */; };
 		AA0000000000000000000022 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* Assets.xcassets */; };
 		AA0000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* SettingsView.swift */; };
-		AA0000000000000000000090 /* IosLocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000091 /* IosLocationManager.swift */; };
 		AA0000000000000000000024 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000014 /* RootView.swift */; };
 		AA0000000000000000000025 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000015 /* SearchView.swift */; };
 		AA0000000000000000000026 /* NowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000016 /* NowPlayingView.swift */; };
 		AA0000000000000000000027 /* DiscoverView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000017 /* DiscoverView.swift */; };
-		AA00000000000000000000E1 /* SpotifyReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E0 /* SpotifyReauthBanner.swift */; };
-		AA00000000000000000000E3 /* ListenAlongController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E2 /* ListenAlongController.swift */; };
-		AA00000000000000000000E9 /* SpinoffController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E8 /* SpinoffController.swift */; };
-		AA00000000000000000000EB /* ChatScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000EA /* ChatScreen.swift */; };
-		AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E4 /* FriendProfileScreen.swift */; };
-		AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E6 /* MediaLibraryScanner.swift */; };
 		AA0000000000000000000028 /* PlaylistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000018 /* PlaylistDetailView.swift */; };
-		AA0000000000000000000029 /* Resources/resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* Resources/resolver-loader.js */; };
-		AA000000000000000000002A /* Resources/plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* Resources/plugins */; };
+		AA0000000000000000000029 /* resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* resolver-loader.js */; };
+		AA000000000000000000002A /* plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* plugins */; };
 		AA000000000000000000002B /* IosTrackResolverCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001B /* IosTrackResolverCache.swift */; };
 		AA000000000000000000002C /* PlaybackRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001C /* PlaybackRouter.swift */; };
 		AA000000000000000000002D /* ResolverBadgeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001D /* ResolverBadgeRow.swift */; };
-		AA000000000000000000002F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001F /* Theme.swift */; };
 		AA000000000000000000002E /* Shell.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001E /* Shell.swift */; };
+		AA000000000000000000002F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001F /* Theme.swift */; };
 		AA0000000000000000000063 /* NowPlayingScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000062 /* NowPlayingScreen.swift */; };
 		AA0000000000000000000065 /* Interactions.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000064 /* Interactions.swift */; };
 		AA0000000000000000000067 /* HomeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000066 /* HomeScreen.swift */; };
 		AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000068 /* PopOfTheTopsScreen.swift */; };
 		AA000000000000000000006B /* DetailScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006A /* DetailScreens.swift */; };
 		AA000000000000000000006D /* RecommendationsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006C /* RecommendationsScreen.swift */; };
-		AA0000000000000000000071 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000070 /* HistoryScreen.swift */; };
-		AA00000000000000000000D1 /* CollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000D0 /* CollectionView.swift */; };
 		AA000000000000000000006F /* CuratedAlbumScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006E /* CuratedAlbumScreens.swift */; };
+		AA0000000000000000000071 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000070 /* HistoryScreen.swift */; };
+		AA0000000000000000000090 /* IosLocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000091 /* IosLocationManager.swift */; };
+		AA00000000000000000000D1 /* CollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000D0 /* CollectionView.swift */; };
+		AA00000000000000000000E1 /* SpotifyReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E0 /* SpotifyReauthBanner.swift */; };
+		AA00000000000000000000E3 /* ListenAlongController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E2 /* ListenAlongController.swift */; };
+		AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E4 /* FriendProfileScreen.swift */; };
+		AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E6 /* MediaLibraryScanner.swift */; };
+		AA00000000000000000000E9 /* SpinoffController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E8 /* SpinoffController.swift */; };
+		AA00000000000000000000EB /* ChatScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000EA /* ChatScreen.swift */; };
+		D15217E9E8816973635D7FB5 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C24958C1C47BFB3FDAA151C /* ShareViewController.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		FBA9A43B4127CC3FBB984F44 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F0B5063C21E15FB417379055;
+			remoteInfo = ShareExtension;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		354680D14A40E6BD63419C6B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				48F05C31EC85A9A45A71E6D5 /* ShareExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		2E936BFC5826AA7B9EA5035E /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		5C24958C1C47BFB3FDAA151C /* ShareViewController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		73D2D97B72CBEC8FE0E197CF /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000000000000000000005 /* Parachord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Parachord.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AA00000000000000000000C1 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Parachord/Config.xcconfig; sourceTree = SOURCE_ROOT; };
 		AA0000000000000000000010 /* ParachordApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParachordApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000011 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000000013 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		AA0000000000000000000091 /* IosLocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosLocationManager.swift; sourceTree = "<group>"; };
 		AA0000000000000000000014 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000015 /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000016 /* NowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000017 /* DiscoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoverView.swift; sourceTree = "<group>"; };
-		AA00000000000000000000E0 /* SpotifyReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotifyReauthBanner.swift; sourceTree = "<group>"; };
-		AA00000000000000000000E2 /* ListenAlongController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenAlongController.swift; sourceTree = "<group>"; };
-		AA00000000000000000000E8 /* SpinoffController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpinoffController.swift; sourceTree = "<group>"; };
-		AA00000000000000000000EA /* ChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScreen.swift; sourceTree = "<group>"; };
-		AA00000000000000000000E4 /* FriendProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendProfileScreen.swift; sourceTree = "<group>"; };
-		AA00000000000000000000E6 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
 		AA0000000000000000000018 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
-		AA0000000000000000000019 /* Resources/resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
-		AA000000000000000000001A /* Resources/plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
+		AA0000000000000000000019 /* resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
+		AA000000000000000000001A /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
 		AA000000000000000000001B /* IosTrackResolverCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosTrackResolverCache.swift; sourceTree = "<group>"; };
 		AA000000000000000000001C /* PlaybackRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRouter.swift; sourceTree = "<group>"; };
 		AA000000000000000000001D /* ResolverBadgeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolverBadgeRow.swift; sourceTree = "<group>"; };
-		AA000000000000000000001F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		AA000000000000000000001E /* Shell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shell.swift; sourceTree = "<group>"; };
+		AA000000000000000000001F /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		AA0000000000000000000062 /* NowPlayingScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingScreen.swift; sourceTree = "<group>"; };
 		AA0000000000000000000064 /* Interactions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Interactions.swift; sourceTree = "<group>"; };
 		AA0000000000000000000066 /* HomeScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreen.swift; sourceTree = "<group>"; };
 		AA0000000000000000000068 /* PopOfTheTopsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopOfTheTopsScreen.swift; sourceTree = "<group>"; };
 		AA000000000000000000006A /* DetailScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailScreens.swift; sourceTree = "<group>"; };
 		AA000000000000000000006C /* RecommendationsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendationsScreen.swift; sourceTree = "<group>"; };
-		AA0000000000000000000070 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
-		AA00000000000000000000D0 /* CollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionView.swift; sourceTree = "<group>"; };
 		AA000000000000000000006E /* CuratedAlbumScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratedAlbumScreens.swift; sourceTree = "<group>"; };
+		AA0000000000000000000070 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
+		AA0000000000000000000091 /* IosLocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosLocationManager.swift; sourceTree = "<group>"; };
+		AA00000000000000000000C1 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Parachord/Config.xcconfig; sourceTree = SOURCE_ROOT; };
+		AA00000000000000000000D0 /* CollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionView.swift; sourceTree = "<group>"; };
+		AA00000000000000000000E0 /* SpotifyReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotifyReauthBanner.swift; sourceTree = "<group>"; };
+		AA00000000000000000000E2 /* ListenAlongController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenAlongController.swift; sourceTree = "<group>"; };
+		AA00000000000000000000E4 /* FriendProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendProfileScreen.swift; sourceTree = "<group>"; };
+		AA00000000000000000000E6 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
+		AA00000000000000000000E8 /* SpinoffController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpinoffController.swift; sourceTree = "<group>"; };
+		AA00000000000000000000EA /* ChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScreen.swift; sourceTree = "<group>"; };
+		B2118EE0889B3F7F9B26B3E9 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		5946B27222CA0C43A1728477 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				39B321B04AF2EDF8C56F1DAF /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA0000000000000000000032 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -89,11 +128,39 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		05EAEF512D4719890F61B00A /* ShareExtension */ = {
+			isa = PBXGroup;
+			children = (
+				5C24958C1C47BFB3FDAA151C /* ShareViewController.swift */,
+				73D2D97B72CBEC8FE0E197CF /* Info.plist */,
+			);
+			name = ShareExtension;
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		292D9CDECE71FAC74887E4A6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				80B61A6A215063B2DC0F193A /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		80B61A6A215063B2DC0F193A /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				2E936BFC5826AA7B9EA5035E /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
 		AA0000000000000000000002 = {
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000004 /* Parachord */,
 				AA0000000000000000000003 /* Products */,
+				292D9CDECE71FAC74887E4A6 /* Frameworks */,
+				05EAEF512D4719890F61B00A /* ShareExtension */,
 			);
 			sourceTree = "<group>";
 		};
@@ -101,6 +168,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000005 /* Parachord.app */,
+				B2118EE0889B3F7F9B26B3E9 /* ShareExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -137,8 +205,8 @@
 				AA0000000000000000000070 /* HistoryScreen.swift */,
 				AA00000000000000000000D0 /* CollectionView.swift */,
 				AA000000000000000000006E /* CuratedAlbumScreens.swift */,
-				AA0000000000000000000019 /* Resources/resolver-loader.js */,
-				AA000000000000000000001A /* Resources/plugins */,
+				AA0000000000000000000019 /* resolver-loader.js */,
+				AA000000000000000000001A /* plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
 			);
 			path = Parachord;
@@ -155,15 +223,34 @@
 				AA0000000000000000000030 /* Sources */,
 				AA0000000000000000000031 /* Resources */,
 				AA0000000000000000000032 /* Frameworks */,
+				354680D14A40E6BD63419C6B /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				D57F459A45F249A821C5F2DA /* PBXTargetDependency */,
 			);
 			name = Parachord;
 			productName = Parachord;
 			productReference = AA0000000000000000000005 /* Parachord.app */;
 			productType = "com.apple.product-type.application";
+		};
+		F0B5063C21E15FB417379055 /* ShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 19602502492C707A7030845D /* Build configuration list for PBXNativeTarget "ShareExtension" */;
+			buildPhases = (
+				1A747050F45C88BA49C0CA9D /* Sources */,
+				5946B27222CA0C43A1728477 /* Frameworks */,
+				04CAC5DFD63FE2C76618041F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ShareExtension;
+			productName = ShareExtension;
+			productReference = B2118EE0889B3F7F9B26B3E9 /* ShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -194,18 +281,26 @@
 			projectRoot = "";
 			targets = (
 				AA1111111111111111111111 /* Parachord */,
+				F0B5063C21E15FB417379055 /* ShareExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		04CAC5DFD63FE2C76618041F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA0000000000000000000031 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000022 /* Assets.xcassets in Resources */,
-				AA0000000000000000000029 /* Resources/resolver-loader.js in Resources */,
-				AA000000000000000000002A /* Resources/plugins in Resources */,
+				AA0000000000000000000029 /* resolver-loader.js in Resources */,
+				AA000000000000000000002A /* plugins in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -234,6 +329,14 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		1A747050F45C88BA49C0CA9D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D15217E9E8816973635D7FB5 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA0000000000000000000030 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -272,7 +375,63 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		D57F459A45F249A821C5F2DA /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = ShareExtension;
+			target = F0B5063C21E15FB417379055 /* ShareExtension */;
+			targetProxy = FBA9A43B4127CC3FBB984F44 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		774D92824EE402B3E00283CA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = YR3XETE537;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8B778C36F897404283A331C3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = YR3XETE537;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ShareExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		AA0000000000000000000050 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -396,6 +555,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Parachord/Parachord.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -418,7 +578,6 @@
 					Shared,
 					"-lsqlite3",
 				);
-				CODE_SIGN_ENTITLEMENTS = Parachord/Parachord.entitlements;
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -434,6 +593,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Parachord/Parachord.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -456,7 +616,6 @@
 					Shared,
 					"-lsqlite3",
 				);
-				CODE_SIGN_ENTITLEMENTS = Parachord/Parachord.entitlements;
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -469,6 +628,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		19602502492C707A7030845D /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8B778C36F897404283A331C3 /* Release */,
+				774D92824EE402B3E00283CA /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		AA0000000000000000000040 /* Build configuration list for PBXProject "Parachord" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

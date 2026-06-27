@@ -1059,6 +1059,71 @@ class IosContainer private constructor() {
         }
     }
 
+    /**
+     * Resolve an EXTERNAL Spotify/Apple Music URL shared INTO the app (the iOS
+     * Share Extension, #17) into a playable/navigable result. Classifies via the
+     * shared [ExternalUrlParser] and reuses the existing resolvers/clients —
+     * playlists via [ProtocolInputResolver.resolveProviderPlaylist] (#280/#286),
+     * albums via resolveBy{Spotify,AppleMusic}, single tracks via getTrack/lookup
+     * (with the provider id as a hint), artists → a nav command.
+     */
+    suspend fun resolveExternalLink(rawUrl: String): IosComplexLink {
+        val u = try { io.ktor.http.Url(rawUrl) } catch (e: Exception) {
+            return IosComplexLink("failed", message = "Couldn't read that link")
+        }
+        val host = u.host.lowercase()
+        val segs = u.encodedPath.split("/").filter { it.isNotBlank() }
+        val action: DeepLinkAction = when (host) {
+            "open.spotify.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseSpotifyUrl(host, segs)
+            "music.apple.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseAppleMusicUrl(segs, u.parameters["i"])
+            else -> return IosComplexLink("failed", message = "That isn't a Spotify or Apple Music link")
+        }
+        return try {
+            dispatchExternalAction(action, rawUrl)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            com.parachord.shared.platform.Log.w("ExternalLink", "dispatch failed: ${e.message}")
+            IosComplexLink("failed", message = "Couldn't open that link")
+        }
+    }
+
+    private suspend fun dispatchExternalAction(action: DeepLinkAction, rawUrl: String): IosComplexLink = when (action) {
+        is DeepLinkAction.SpotifyPlaylist, is DeepLinkAction.AppleMusicPlaylist ->
+            protocolInputResolver.resolveProviderPlaylist(rawUrl)?.toExternalPlay() ?: failedLink("playlist")
+        is DeepLinkAction.SpotifyAlbum -> protocolInputResolver.resolveBySpotify(action.albumId)?.toExternalPlay() ?: failedLink("album")
+        is DeepLinkAction.AppleMusicAlbum -> protocolInputResolver.resolveByAppleMusic(action.albumId)?.toExternalPlay() ?: failedLink("album")
+        is DeepLinkAction.SpotifyTrack -> {
+            val t = spotifyClient.getTrack(action.trackId)
+            val title = t.name
+            if (title.isNullOrBlank()) failedLink("track")
+            else IosComplexLink(
+                "play", name = "$title — ${t.artistName}",
+                tracks = listOf(Track(id = "external-spotify-${action.trackId}", title = title, artist = t.artistName, album = t.album?.name, spotifyId = action.trackId)),
+            )
+        }
+        is DeepLinkAction.AppleMusicSong -> {
+            val r = appleMusicClient.lookup(action.songId, entity = "song").results.firstOrNull { !it.trackName.isNullOrBlank() }
+            val title = r?.trackName
+            if (title.isNullOrBlank()) failedLink("track")
+            else IosComplexLink(
+                "play", name = "$title — ${r.artistName.orEmpty()}",
+                tracks = listOf(Track(id = "external-am-${action.songId}", title = title, artist = r.artistName.orEmpty(), album = r.collectionName, appleMusicId = action.songId)),
+            )
+        }
+        is DeepLinkAction.SpotifyArtist -> {
+            val n = spotifyClient.getArtist(action.artistId).name
+            if (n.isNullOrBlank()) failedLink("artist") else IosComplexLink("navArtist", name = n)
+        }
+        is DeepLinkAction.NavigateArtist -> IosComplexLink("navArtist", name = action.name)
+        else -> failedLink("link")
+    }
+
+    private fun com.parachord.shared.deeplink.ResolvedProtocolPlay.toExternalPlay(): IosComplexLink =
+        IosComplexLink("play", name = displayName, tracks = protocolTracksToTracks(tracks, albumArt))
+
+    private fun failedLink(kind: String) = IosComplexLink("failed", message = "Couldn't open that $kind link")
+
     private fun protocolTracksToTracks(
         tracks: List<com.parachord.shared.deeplink.ProtocolTrack>, art: String?,
     ): List<Track> {
