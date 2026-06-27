@@ -181,7 +181,10 @@ class DeepLinkHandler constructor() {
      * permissive and forwards everything the URI carries.
      */
     private fun parsePlayHost(uri: Uri, pathSegments: List<String>): DeepLinkAction {
-        return when (pathSegments.firstOrNull()) {
+        // Sub-action is the path segment, or ?type= as a fallback so the query form
+        // (parachord://play?type=playlist&url=…) routes the same as the path form —
+        // the website's HTTPS bounce may emit either shape (parachord#930).
+        return when (pathSegments.firstOrNull() ?: uri.clampedParam("type")) {
             null -> {
                 // Existing single-track shape: requires both fields.
                 val artist = uri.clampedParam("artist") ?: return DeepLinkAction.Unknown(uri.toString())

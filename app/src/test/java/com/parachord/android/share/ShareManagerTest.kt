@@ -6,7 +6,6 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.EntityLink
 import com.parachord.shared.api.EntityType
-import com.parachord.shared.api.SmartLinksClient
 import com.parachord.shared.api.SubmitResult
 import com.parachord.shared.api.SubmitTrackLinksRequest
 import io.mockk.coEvery
@@ -29,13 +28,11 @@ class ShareManagerTest {
 
     private fun buildManager(
         achordion: AchordionClient = mockk(relaxed = true),
-        smartLinks: SmartLinksClient = mockk(relaxed = true),
     ): ShareManager = ShareManager(
-        smartLinksClient = smartLinks,
         achordionClient = achordion,
         playlistDao = mockk(relaxed = true),
         playlistTrackDao = mockk(relaxed = true),
-        // No LB link by default → playlist shares fall through to smart-links.
+        // No LB link by default → playlist not shareable (Achordion-only, #138).
         syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
     )
 
@@ -215,36 +212,48 @@ class ShareManagerTest {
     }
 
     @Test
-    fun sharePlaylist_unchanged_stillUsesSmartLinksClient_notAchordion() = runTest {
+    fun sharePlaylist_noLbLink_returnsNull_achordionOnly() = runTest {
+        // Achordion-only (#138): a playlist with no ListenBrainz anchor isn't
+        // shareable — returns null (the caller shows a "sync to LB" toast). No
+        // go.parachord.com smart-link minting.
         val achordion = mockk<AchordionClient>(relaxed = true)
-        val smartLinks = mockk<SmartLinksClient>(relaxed = true)
-        coEvery { smartLinks.create(any()) } returns com.parachord.shared.api.SmartLinkCreateResponse(
-            id = "abc123",
-            url = "https://go.parachord.com/abc123",
-        )
-
         val playlistDao = mockk<PlaylistDao>()
-        val playlistTrackDao = mockk<PlaylistTrackDao>()
         coEvery { playlistDao.getById("p1") } returns com.parachord.android.data.db.entity.PlaylistEntity(
-            id = "p1",
-            name = "My Playlist",
-            ownerName = "me",
+            id = "p1", name = "My Playlist", ownerName = "me",
         )
-        coEvery { playlistTrackDao.getByPlaylistIdSync("p1") } returns emptyList()
-
         val mgr = ShareManager(
-            smartLinksClient = smartLinks,
             achordionClient = achordion,
             playlistDao = playlistDao,
-            playlistTrackDao = playlistTrackDao,
-            // No LB link → this unchanged playlist must use smart-links, not Achordion.
+            playlistTrackDao = mockk(relaxed = true) { coEvery { getByPlaylistIdSync(any()) } returns emptyList() },
             syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
         )
 
         val result = mgr.sharePlaylist("p1")
-        assertEquals("https://go.parachord.com/abc123", result?.url)
-        coVerify(exactly = 0) { achordion.fetchEntityLink(any(), any(), any()) }
-        coVerify(exactly = 0) { achordion.submitTrackLinks(any()) }
-        coVerify(exactly = 1) { smartLinks.create(any()) }
+        assertEquals(null, result)
+    }
+
+    @Test
+    fun sharePlaylist_withLbLink_usesAchordionPlaylistPage() = runTest {
+        val achordion = mockk<AchordionClient>(relaxed = true)
+        coEvery { achordion.playlistShareUrl("lb-mbid-1") } returns "https://achordion.xyz/playlist/lb-mbid-1"
+        val playlistDao = mockk<PlaylistDao>()
+        coEvery { playlistDao.getById("p1") } returns com.parachord.android.data.db.entity.PlaylistEntity(
+            id = "p1", name = "My Playlist", ownerName = "me",
+        )
+        val mgr = ShareManager(
+            achordionClient = achordion,
+            playlistDao = playlistDao,
+            playlistTrackDao = mockk(relaxed = true) { coEvery { getByPlaylistIdSync(any()) } returns emptyList() },
+            syncPlaylistLinkDao = mockk(relaxed = true) {
+                coEvery { selectForLink("p1", "listenbrainz") } returns
+                    com.parachord.shared.db.dao.SyncPlaylistLinkDao.Link(
+                        localPlaylistId = "p1", providerId = "listenbrainz", externalId = "lb-mbid-1", syncedAt = 0L,
+                    )
+            },
+        )
+
+        val result = mgr.sharePlaylist("p1")
+        assertEquals("https://achordion.xyz/playlist/lb-mbid-1", result?.url)
+        assertTrue(result?.isSmartLink == true)
     }
 }

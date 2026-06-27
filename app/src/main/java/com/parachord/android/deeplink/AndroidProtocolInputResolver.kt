@@ -47,11 +47,21 @@ class AndroidProtocolInputResolver constructor(
     private val appleMusicClient: AppleMusicClient,
     private val metadataService: MetadataService,
     private val httpClient: HttpClient,
+    appleMusicDeveloperToken: String = "",
+    spotifyAccessToken: suspend () -> String? = { null },
 ) : ProtocolInputResolver {
 
     /** Body cap on URL-fetched tracklists — guards against very large
      *  publisher errors. 100KB matches desktop's per-payload limit. */
     private val maxTracklistBytes: Int = 100 * 1024
+
+    // play/playlist provider-page resolution (parachord#930) — shared with iOS.
+    private val providerPlaylistResolver = com.parachord.shared.deeplink.ProviderPlaylistResolver(
+        spotifyClient, appleMusicClient, httpClient, appleMusicDeveloperToken, spotifyAccessToken,
+    )
+
+    override suspend fun resolveProviderPlaylist(url: String): ResolvedProtocolPlay? =
+        providerPlaylistResolver.resolve(url)
 
     override suspend fun resolveByMbid(mbid: String): ResolvedProtocolPlay? {
         // Try /release/{mbid} first (cheap, common path). If it 404s — typical

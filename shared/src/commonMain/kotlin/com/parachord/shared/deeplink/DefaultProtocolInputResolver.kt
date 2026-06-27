@@ -33,9 +33,19 @@ class DefaultProtocolInputResolver(
     private val appleMusicClient: AppleMusicClient,
     private val metadataService: MetadataService,
     private val httpClient: HttpClient,
+    appleMusicDeveloperToken: String = "",
+    spotifyAccessToken: suspend () -> String? = { null },
 ) : ProtocolInputResolver {
 
     private val maxTracklistBytes: Int = 100 * 1024  // 100KB body cap
+
+    // play/playlist provider-page resolution (parachord#930).
+    private val providerPlaylistResolver = ProviderPlaylistResolver(
+        spotifyClient, appleMusicClient, httpClient, appleMusicDeveloperToken, spotifyAccessToken,
+    )
+
+    override suspend fun resolveProviderPlaylist(url: String): ResolvedProtocolPlay? =
+        providerPlaylistResolver.resolve(url)
 
     override suspend fun resolveByMbid(mbid: String): ResolvedProtocolPlay? {
         val direct: MbReleaseDetail? = try {

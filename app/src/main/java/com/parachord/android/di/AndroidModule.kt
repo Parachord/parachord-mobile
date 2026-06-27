@@ -980,6 +980,8 @@ val androidModule = module {
             appleMusicClient = get(),
             metadataService = get(),
             httpClient = get(),
+            appleMusicDeveloperToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
+            spotifyAccessToken = { get<com.parachord.shared.settings.SettingsStore>().getSpotifyAccessToken() },
         )
     }
     single { com.parachord.android.deeplink.AndroidProtocolPlayTeardown(playbackController = get()) }

@@ -69,10 +69,18 @@ class DeepLinkParserTest {
     }
 
     @Test
-    fun deferred_patterns_are_unknown() {
-        // Protocol play + wrong scheme → Unknown (dispatcher acks "not supported yet").
-        assertIs<DeepLinkAction.Unknown>(DeepLinkParser.parse(uri("play", path = listOf("album"), params = mapOf("mbid" to "x"))))
-        assertIs<DeepLinkAction.Unknown>(DeepLinkParser.parse(uri("play", path = listOf("radio"), params = mapOf("artist" to "x"))))
+    fun protocol_play_is_parsed() {
+        // play/album|playlist|radio now parse to their actions (parachord#256/#930).
+        assertIs<DeepLinkAction.PlayAlbum>(DeepLinkParser.parse(uri("play", path = listOf("album"), params = mapOf("mbid" to "x"))))
+        assertIs<DeepLinkAction.PlayPlaylist>(DeepLinkParser.parse(uri("play", path = listOf("playlist"), params = mapOf("url" to "https://open.spotify.com/playlist/abc"))))
+        assertIs<DeepLinkAction.PlayRadio>(DeepLinkParser.parse(uri("play", path = listOf("radio"), params = mapOf("artist" to "x"))))
+        // ?type= fallback (query form) routes the same as the path form.
+        assertIs<DeepLinkAction.PlayPlaylist>(DeepLinkParser.parse(uri("play", params = mapOf("type" to "playlist", "url" to "https://open.spotify.com/playlist/abc"))))
+    }
+
+    @Test
+    fun wrong_scheme_is_unknown() {
+        // Non-parachord scheme → Unknown (external URL parsing is Android-only).
         assertIs<DeepLinkAction.Unknown>(DeepLinkParser.parse(uri("track", scheme = "spotify")))
     }
 

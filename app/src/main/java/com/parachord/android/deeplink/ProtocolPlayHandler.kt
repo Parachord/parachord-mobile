@@ -67,6 +67,9 @@ class ProtocolPlayHandler constructor(
     private val playlistOpts = ProtocolResolveOptions(
         allowMbid = false, allowProviderId = false, allowUrl = true,
         allowTracks = true, allowArtistTitleAlbum = false,
+        // url= may be a provider playlist *page* (Spotify/Apple/Achordion) → resolve
+        // via the provider path before the hosted-tracklist-document fetch (#930).
+        allowProviderPlaylist = true,
     )
     /** Mode C accepts only `url=` (hosted tracklist) or `tracks=` (inline). */
     private val radioPoolOpts = ProtocolResolveOptions(

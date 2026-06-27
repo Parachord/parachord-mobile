@@ -41,6 +41,13 @@ data class ProtocolResolveOptions(
     val allowUrl: Boolean = true,
     val allowTracks: Boolean = true,
     val allowArtistTitleAlbum: Boolean = true,
+    /**
+     * `play/playlist` only (parachord#930): when the `url` slot is a provider
+     * playlist *page* (Spotify / Apple Music / SoundCloud / Achordion), resolve
+     * it via [ProtocolInputResolver.resolveProviderPlaylist] BEFORE the hosted-
+     * tracklist-document fetch. Off for album/radio (they keep XSPF/JSON behavior).
+     */
+    val allowProviderPlaylist: Boolean = false,
 )
 
 /**
@@ -62,6 +69,15 @@ interface ProtocolInputResolver {
     suspend fun resolveByAppleMusic(appleMusicId: String): ResolvedProtocolPlay?
     suspend fun resolveByUrl(url: String): ResolvedProtocolPlay?
     suspend fun resolveByArtistTitle(artist: String, title: String?, album: String? = null): ResolvedProtocolPlay?
+
+    /**
+     * `play/playlist` only (parachord#930): resolve a provider playlist *page*
+     * URL (Spotify / Apple Music / SoundCloud / Achordion) into tracks via the
+     * provider path. Returns null when [url] isn't a recognized provider playlist
+     * page, so [resolveProtocolPlayInput] falls back to [resolveByUrl] (a hosted
+     * XSPF/JSPF/JSON tracklist document). Default null = not supported.
+     */
+    suspend fun resolveProviderPlaylist(url: String): ResolvedProtocolPlay? = null
 }
 
 /**
@@ -95,6 +111,11 @@ suspend fun resolveProtocolPlayInput(
         resolver.resolveByAppleMusic(input.applemusic)?.let { return it }
     }
     if (opts.allowUrl && !input.url.isNullOrBlank()) {
+        // play/playlist: a provider playlist *page* resolves via the provider path
+        // first (parachord#930); null falls through to the tracklist-document fetch.
+        if (opts.allowProviderPlaylist) {
+            resolver.resolveProviderPlaylist(input.url)?.let { return it }
+        }
         resolver.resolveByUrl(input.url)?.let { return it }
     }
     if (opts.allowTracks && !input.tracks.isNullOrEmpty()) {

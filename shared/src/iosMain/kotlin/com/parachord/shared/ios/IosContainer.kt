@@ -933,6 +933,8 @@ class IosContainer private constructor() {
     private val protocolInputResolver: com.parachord.shared.deeplink.ProtocolInputResolver by lazy {
         com.parachord.shared.deeplink.DefaultProtocolInputResolver(
             musicBrainzClient, spotifyClient, appleMusicClient, metadataService, httpClient,
+            appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
+            spotifyAccessToken = { settingsStore.getSpotifyAccessToken() },
         )
     }
 
@@ -956,9 +958,12 @@ class IosContainer private constructor() {
             allowMbid = false, allowProviderId = false, allowUrl = true,
             allowTracks = true, allowArtistTitleAlbum = false,
         )
+        // play/playlist additionally resolves provider playlist *pages* (#930);
+        // radio keeps the plain tracklist-document behavior (poolOpts).
+        val playlistOpts = poolOpts.copy(allowProviderPlaylist = true)
         return when (action) {
             is DeepLinkAction.PlayAlbum -> resolvePlay(action.input, albumOpts, "album")
-            is DeepLinkAction.PlayPlaylist -> resolvePlay(action.input, poolOpts, "playlist")
+            is DeepLinkAction.PlayPlaylist -> resolvePlay(action.input, playlistOpts, "playlist")
             is DeepLinkAction.PlayRadio -> resolveRadio(action, poolOpts)
             else -> null
         }

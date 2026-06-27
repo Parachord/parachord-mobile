@@ -179,6 +179,8 @@ class ProtocolPlayHandlerTest {
             coEvery { resolveByMbid(any()) } returns null
             coEvery { resolveBySpotify(any()) } returns null
             coEvery { resolveByAppleMusic(any()) } returns null
+            // An .xspf URL is not a provider playlist page → null, falls through to resolveByUrl (#930).
+            coEvery { resolveProviderPlaylist(any()) } returns null
             coEvery { resolveByUrl(any()) } returns ResolvedProtocolPlay("From URL", sampleTracks)
             coEvery { resolveByArtistTitle(any(), any(), any()) } returns null
         }
