@@ -418,6 +418,7 @@
 					Shared,
 					"-lsqlite3",
 				);
+				CODE_SIGN_ENTITLEMENTS = Parachord/Parachord.entitlements;
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -455,6 +456,7 @@
 					Shared,
 					"-lsqlite3",
 				);
+				CODE_SIGN_ENTITLEMENTS = Parachord/Parachord.entitlements;
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

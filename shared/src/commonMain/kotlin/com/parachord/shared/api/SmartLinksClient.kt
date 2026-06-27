@@ -1,13 +1,19 @@
 package com.parachord.shared.api
 
+import com.parachord.shared.platform.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.request.get
+import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * Wrapper for the public Smart Links Cloudflare Workers backend that powers
@@ -55,7 +61,35 @@ class SmartLinksClient(private val httpClient: HttpClient) {
         }
         return response.body()
     }
+
+    /**
+     * Inbound resolution for a `go.parachord.com/<id>` short link (#138) — the
+     * reverse of [create]. Returns the stored payload so an opened smart link can
+     * be dispatched in-app: prefer [SmartLinkLookupResult.deeplinkOrNull] (the
+     * wrapped `parachord://` action) and fall back to the per-service [urls].
+     *
+     * Tolerant by design: the `/api/lookup` endpoint is an open seam (the backend
+     * may not expose it yet) — any non-2xx / transport error / unparseable body
+     * yields null so the caller can fall through to opening the page in a browser.
+     * Lenient JSON (`ignoreUnknownKeys`) so server-side field additions don't break
+     * the client.
+     */
+    suspend fun lookup(id: String): SmartLinkLookupResult? = try {
+        val response = httpClient.get("${BASE_URL}api/lookup") { parameter("id", id) }
+        if (!response.status.isSuccess()) {
+            Log.w(TAG, "smart-link lookup HTTP ${response.status.value} for id=$id"); null
+        } else {
+            lenientJson.decodeFromString<SmartLinkLookupResult>(response.bodyAsText())
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(TAG, "smart-link lookup failed for id=$id: ${e.message}"); null
+    }
 }
+
+private const val TAG = "SmartLinksClient"
+private val lenientJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 @Serializable
 data class SmartLinkCreateRequest(
@@ -86,3 +120,26 @@ data class SmartLinkCreateResponse(
     val id: String,
     val url: String,
 )
+
+/**
+ * The stored payload behind a `go.parachord.com/<id>` short link (#138). Fields
+ * mirror what [create] persists; all optional since the lookup endpoint's exact
+ * shape is server-owned. [deeplinkOrNull] is the wrapped `parachord://` action
+ * (preferred for in-app dispatch).
+ */
+@Serializable
+data class SmartLinkLookupResult(
+    val id: String? = null,
+    val type: String? = null,
+    val title: String? = null,
+    val artist: String? = null,
+    /** The `parachord://` deeplink this short link wraps, if the server stored one. */
+    val deeplink: String? = null,
+    val uri: String? = null,
+    val urls: Map<String, String>? = null,
+    val tracks: List<SmartLinkTrack>? = null,
+) {
+    val deeplinkOrNull: String?
+        get() = deeplink?.takeIf { it.startsWith("parachord://") }
+            ?: uri?.takeIf { it.startsWith("parachord://") }
+}

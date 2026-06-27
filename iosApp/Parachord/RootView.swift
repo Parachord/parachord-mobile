@@ -195,6 +195,10 @@ struct ContentView: View {
         // parachord://listen-along?service=&user= deep links.
         .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator); bindChatPlayback() }
         .onOpenURL { handleDeepLink($0) }
+        // Universal Links (#124/#138) — https://parachord.com/… and go.parachord.com/<id>.
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+            if let url = activity.webpageURL { handleUniversalLink(url) }
+        }
         // Deep-link queue-mutation confirmation (#228 — parity with Android's
         // QueueAdd/QueueClear confirm dialogs).
         .alert("Deep link", isPresented: Binding(get: { dlConfirm != nil }, set: { if !$0 { dlConfirm = nil } })) {
@@ -354,6 +358,27 @@ struct ContentView: View {
             return
         }
         dispatchDeepLink(cmd)
+    }
+
+    /// Inbound Universal Link (#124/#138) on a domain we own (parachord.com /
+    /// go.parachord.com). Resolve it to its `parachord://` equivalent off the main
+    /// thread (go.parachord.com → smart-link lookup), then reuse the normal
+    /// deep-link dispatch. Only fires once associated-domains + the site AASA are
+    /// live; external Spotify/Apple links can't arrive this way (their AASA isn't
+    /// ours).
+    private func handleUniversalLink(_ url: URL) {
+        guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        let segs = comps.path.split(separator: "/").map(String.init)
+        var query: [String: String] = [:]
+        for item in comps.queryItems ?? [] { if let v = item.value { query[item.name] = v } }
+        Task {
+            guard let resolved = try? await IosContainer.companion.shared.resolveUniversalLink(
+                host: comps.host, path: segs, query: query),
+                let parachordUrl = URL(string: resolved) else {
+                dlAck("Couldn't open that link"); return
+            }
+            handleDeepLink(parachordUrl)
+        }
     }
 
     /// Resolve + dispatch the complex `parachord://play/album|playlist|radio`

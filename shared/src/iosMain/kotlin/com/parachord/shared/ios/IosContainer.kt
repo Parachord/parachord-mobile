@@ -1023,6 +1023,37 @@ class IosContainer private constructor() {
     suspend fun resolveTrackList(url: String): List<Track> =
         protocolInputResolver.resolveByUrl(url)?.tracks?.let { protocolTracksToTracks(it, null) } ?: emptyList()
 
+    /**
+     * Map an inbound Universal Link (#124) on a domain WE OWN to its `parachord://`
+     * equivalent, which Swift then dispatches through the normal deep-link path.
+     * Only `parachord.com` (+ the `go.parachord.com` short-link host, #138) can
+     * reach us as universal links — we don't control spotify.com / apple.com AASA
+     * — so this never needs to resolve external-service URLs.
+     *
+     * - `parachord.com/go?uri=<parachord://…>` → the unwrapped uri
+     * - `parachord.com/<path>?<query>`         → `parachord://<path>?<query>`
+     * - `go.parachord.com/<id>`                → lookup(id) → its wrapped parachord:// (#138)
+     *
+     * Returns null when the host isn't ours or the short link can't be resolved.
+     */
+    suspend fun resolveUniversalLink(host: String?, path: List<String>, query: Map<String, String>): String? {
+        return when (host?.lowercase()) {
+            "parachord.com", "www.parachord.com" -> {
+                if (path.firstOrNull() == "go") {
+                    query["uri"]?.takeIf { it.startsWith("parachord://") }
+                } else if (path.isNotEmpty()) {
+                    val q = if (query.isEmpty()) "" else "?" + query.entries.joinToString("&") { (k, v) -> "$k=${percentEncode(v)}" }
+                    "parachord://${path.joinToString("/")}$q"
+                } else null
+            }
+            "go.parachord.com", "parachord-links.pages.dev" -> {
+                val id = path.firstOrNull()?.takeIf { it.isNotBlank() } ?: return null
+                smartLinksClient.lookup(id)?.deeplinkOrNull
+            }
+            else -> null
+        }
+    }
+
     private fun protocolTracksToTracks(
         tracks: List<com.parachord.shared.deeplink.ProtocolTrack>, art: String?,
     ): List<Track> {
