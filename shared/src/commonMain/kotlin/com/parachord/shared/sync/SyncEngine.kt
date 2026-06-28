@@ -1226,8 +1226,8 @@ class SyncEngine constructor(
      * logic is validated (shadow mode) before we ever push. Gated entirely on
      * [SyncSettingsProvider.isNwayEnabled]; inert (early return) while OFF.
      */
-    private suspend fun migrateAllPlaylistsToNway() {
-        if (!settingsStore.isNwayEnabled()) return
+    private suspend fun migrateAllPlaylistsToNway(force: Boolean = false) {
+        if (!force && !settingsStore.isNwayEnabled()) return
         val channels = getAllEffectivePlaylistChannels()
         if (channels.isEmpty()) return
         var migrated = 0
@@ -1453,12 +1453,15 @@ class SyncEngine constructor(
         Log.d(TAG, "N-way state reset — baselines + tokens cleared; next sync re-seeds")
     }
 
-    suspend fun runNwayPropagation(dryRun: Boolean = false) {
+    suspend fun runNwayPropagation(dryRun: Boolean = false, force: Boolean = false) {
         // A DRY-RUN (preview only, no writes) needs just isNwayEnabled so the
         // user can validate the readout on their real library BEFORE arming
         // writes. REAL writes require the stricter isNwayPropagateEnabled too.
-        Log.d(TAG, "N-way PROPAGATE: run requested (dryRun=$dryRun)")
-        if (!settingsStore.isNwayEnabled()) {
+        // [force] bypasses the isNwayEnabled gate for the migration PREVIEW
+        // ([previewMigration]) — the user is previewing what `new` would do while
+        // still in `legacy`/`shadow`. Still dryRun ⇒ no writes.
+        Log.d(TAG, "N-way PROPAGATE: run requested (dryRun=$dryRun, force=$force)")
+        if (!force && !settingsStore.isNwayEnabled()) {
             Log.d(TAG, "N-way PROPAGATE: skipped — N-way not enabled")
             return
         }
@@ -1491,6 +1494,34 @@ class SyncEngine constructor(
             }
         }
         _nwayPropagationLog.value = entries
+    }
+
+    /**
+     * Dry-run reconcile for the legacy → N-way migration PREVIEW (#289 brick #5).
+     * FORCES the reconcile even in `legacy`/`shadow` (the user is previewing what
+     * `new` would do before flipping `sync_engine_mode`), seeds the N-way baselines
+     * on-demand if needed, writes NOTHING, and shapes the result into a
+     * [MigrationShadowOutput] for [summarizeMigrationPlan]. Each `would-push` entry
+     * carries its per-target named add/remove tracks.
+     */
+    suspend fun previewMigration(): MigrationShadowOutput {
+        // Phase-0 baseline seed (no-network, idempotent) so the preview has
+        // baselines to reconcile even when the user is still on `legacy`.
+        migrateAllPlaylistsToNway(force = true)
+        runNwayPropagation(dryRun = true, force = true)
+        val entries = _nwayPropagationLog.value
+        return MigrationShadowOutput(
+            results = entries.map {
+                MigrationReconcileResult(
+                    status = it.status,
+                    localId = it.localPlaylistId,
+                    displayName = it.playlistName,
+                    perTarget = it.perTarget,
+                )
+            },
+            cycles = syncPlaylistBaselineDao.selectAll().size,
+            errors = emptyList(),
+        )
     }
 
     /** One paginated playlist-list call per enabled provider → externalId map. */
@@ -1927,9 +1958,29 @@ class SyncEngine constructor(
         }
 
         if (dryRun) {
+            // Per-target named diff for the migration preview (#289 brick #5). For
+            // each writable REMOTE target, diff the canonical against the target's
+            // CURRENT remote: a changed copy's tracks are already fetched; an
+            // unchanged-but-lagging mirror is fetched FRESH so a removed track still
+            // has a name. Drops "local" (not a provider mirror) + targets whose
+            // effective diff is empty (so summarizeMigrationPlan counts them noop).
+            val previewTargets = pushTargets.filter { it != "local" }.mapNotNull { tid ->
+                val ext = mirrors[tid] ?: return@mapNotNull null
+                val input = inputs.firstOrNull { it.id == tid }
+                val remoteTracks = if (input != null && input.changed) {
+                    input.tracks
+                } else {
+                    providers.firstOrNull { it.id == tid }
+                        ?.let { p -> runCatching { p.fetchPlaylistTracks(ext) }.getOrNull() } ?: emptyList()
+                }
+                buildMigrationPerTarget(tid, mergedTracks, remoteTracks)
+            }.filter { it.addTracks.isNotEmpty() || it.removeTracks.isNotEmpty() }
             Log.d(TAG, "N-way PROPAGATE (DRY-RUN) [${playlist.name}]: would push ${mergedTracks.size} " +
                 "track(s) to $pushTargets [no write]")
-            return NwayPropagationEntry(playlist.name, localId, mergedTracks.size, pushTargets, "would-push")
+            return NwayPropagationEntry(
+                playlist.name, localId, mergedTracks.size, pushTargets, "would-push",
+                perTarget = previewTargets,
+            )
         }
 
         // ── PUSH (NON-DESTRUCTIVE INCREMENTAL MATERIALIZE) ──────────────

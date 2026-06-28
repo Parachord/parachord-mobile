@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import android.util.Log
 import com.parachord.android.auth.OAuthManager
 import com.parachord.shared.api.ListenBrainzClient
+import com.parachord.shared.sync.MigrationReport
+import com.parachord.shared.sync.buildMigrationReport
+import com.parachord.shared.sync.summarizeMigrationPlan
 import com.parachord.android.data.scanner.MediaScanner
 import com.parachord.android.data.scanner.ScanProgress
 import com.parachord.android.data.store.SettingsStore
@@ -97,6 +100,63 @@ class SettingsViewModel constructor(
             }
         }
     }
+
+    // ── Legacy → N-way migration preview (#289 brick #5) ─────────────
+    private val _migrationPreview = MutableStateFlow<MigrationPreviewState>(MigrationPreviewState.Hidden)
+    val migrationPreview: StateFlow<MigrationPreviewState> = _migrationPreview.asStateFlow()
+
+    private val _migrationReport = MutableStateFlow<MigrationReport?>(null)
+    val migrationReport: StateFlow<MigrationReport?> = _migrationReport.asStateFlow()
+
+    /** Open the "Use new sync" preview — a FORCED, no-write dry-run reconcile
+     *  shaped into the render model (runs even on `legacy`). */
+    fun openMigrationPreview() {
+        viewModelScope.launch {
+            _migrationPreview.value = MigrationPreviewState.Loading
+            try {
+                _migrationPreview.value =
+                    MigrationPreviewState.Loaded(summarizeMigrationPlan(syncEngine.previewMigration()))
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _migrationPreview.value = MigrationPreviewState.Error(e.message ?: "preview failed")
+            }
+        }
+    }
+
+    /** Accept the cutover — RECOMPUTE the dry-run first (the remote may have drifted
+     *  since the user looked); flip `sync_engine_mode='new'` only if the plan is
+     *  unchanged, else re-render the fresh plan so the user accepts what they see. */
+    fun acceptMigration() {
+        val prev = (_migrationPreview.value as? MigrationPreviewState.Loaded)?.summary ?: return
+        viewModelScope.launch {
+            _migrationPreview.value = MigrationPreviewState.Loading
+            try {
+                val fresh = summarizeMigrationPlan(syncEngine.previewMigration())
+                val drifted = fresh.totalAdds != prev.totalAdds || fresh.totalRemoves != prev.totalRemoves ||
+                    fresh.changed.size != prev.changed.size || fresh.protectedList.size != prev.protectedList.size
+                if (drifted) {
+                    _migrationPreview.value = MigrationPreviewState.Loaded(fresh, recomputed = true)
+                } else {
+                    settingsStore.setSyncEngineMode("new")
+                    _migrationPreview.value = MigrationPreviewState.Hidden
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _migrationPreview.value = MigrationPreviewState.Error(e.message ?: "accept failed")
+            }
+        }
+    }
+
+    /** Build the prefilled GitHub-issue report for the current preview; the screen
+     *  copies the body + opens the URL, then clears via [clearMigrationReport]. */
+    fun reportMigrationProblem() {
+        val summary = (_migrationPreview.value as? MigrationPreviewState.Loaded)?.summary ?: return
+        _migrationReport.value = buildMigrationReport(summary, com.parachord.android.BuildConfig.VERSION_NAME)
+    }
+
+    fun clearMigrationReport() { _migrationReport.value = null }
+
+    fun cancelMigration() { _migrationPreview.value = MigrationPreviewState.Hidden }
 
     /** Dev: run propagation for ONE playlist (scoped real-write validation) so a
      *  single playlist can be filled without firing the whole baseline run. */

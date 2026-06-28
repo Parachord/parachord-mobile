@@ -2694,6 +2694,8 @@ private fun GeneralTab(
     val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
     val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
     val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
+    val migrationPreview by settingsViewModel.migrationPreview.collectAsStateWithLifecycle()
+    val migrationReport by settingsViewModel.migrationReport.collectAsStateWithLifecycle()
     var showSyncSetupSheet by remember { mutableStateOf(false) }
     /** Which provider the wizard is currently configuring. The same sheet
      *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
@@ -3017,6 +3019,20 @@ private fun GeneralTab(
             item { SectionHeader("Developer · N-way sync (shadow)") }
             item {
                 ListItem(
+                    headlineContent = { Text("Use new sync (preview)") },
+                    supportingContent = {
+                        Text(
+                            "Preview exactly what switching to the new sync engine would change " +
+                                "— then accept, report a problem, or cancel. Nothing is armed until you accept.",
+                        )
+                    },
+                    trailingContent = {
+                        Button(onClick = { settingsViewModel.openMigrationPreview() }) { Text("Preview") }
+                    },
+                )
+            }
+            item {
+                ListItem(
                     headlineContent = { Text("N-way shadow mode") },
                     supportingContent = {
                         Text(
@@ -3192,6 +3208,23 @@ private fun GeneralTab(
     }
 
     // Stop syncing confirmation dialog
+    // Migration preview (#289 brick #5) — the dialog + the "Report a problem"
+    // effect (copy the body to the clipboard, then open the prefilled issue).
+    MigrationPreviewDialog(
+        state = migrationPreview,
+        onAccept = { settingsViewModel.acceptMigration() },
+        onReport = { settingsViewModel.reportMigrationProblem() },
+        onCancel = { settingsViewModel.cancelMigration() },
+    )
+    val migrationClipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val migrationUriHandler = LocalUriHandler.current
+    LaunchedEffect(migrationReport) {
+        val report = migrationReport ?: return@LaunchedEffect
+        migrationClipboard.setText(androidx.compose.ui.text.AnnotatedString(report.body))
+        runCatching { migrationUriHandler.openUri(report.githubUrl) }
+        settingsViewModel.clearMigrationReport()
+    }
+
     if (showStopSyncDialog) {
         AlertDialog(
             onDismissRequest = { showStopSyncDialog = false },
