@@ -60,6 +60,8 @@ kotlin {
             implementation(libs.ktor.client.mock)
             // For runTest in suspend-function tests (e.g. ProtocolInputResolverTest).
             implementation(libs.kotlinx.coroutines.test)
+            // In-memory MapSettings-backed KvStore for SettingsStore tests (#289).
+            implementation(libs.multiplatform.settings.test)
         }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)

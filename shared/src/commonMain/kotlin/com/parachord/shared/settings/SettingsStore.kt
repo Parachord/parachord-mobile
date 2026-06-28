@@ -3,6 +3,7 @@ package com.parachord.shared.settings
 import com.parachord.shared.store.KvStore
 import com.parachord.shared.store.SecureTokenStore
 import com.parachord.shared.store.SettingsMigration
+import com.parachord.shared.sync.SyncEngineMode
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -125,6 +126,13 @@ class SettingsStore(
         // providers. Keeps validation (shadow) and writes (propagation) distinct.
         const val NWAY_PROPAGATE = "nway_propagate"
 
+        // Single source of truth for the per-client sync-engine selection
+        // (`legacy` | `shadow` | `new` — parachord#911 / mobile#289). Supersedes
+        // the two booleans above, which are now derived + write-through (downgrade
+        // safety). Lazily consolidated from NWAY_ENABLED/NWAY_PROPAGATE on the
+        // first ensureMigrated(). Same key name as desktop's electron-store value.
+        const val SYNC_ENGINE_MODE = "sync_engine_mode"
+
         /** Per-provider opt-in for which collection axes to sync.
          *  Keyed as `sync_collections_<providerId>` ("tracks,albums,artists,playlists").
          *  Absent ⇒ default to ALL axes (preserves the global-toggle behavior
@@ -170,12 +178,23 @@ class SettingsStore(
         if (migrated) return
         migrationMutex.withLock {
             if (migrated) return
-            if (kv.getBoolean(MIGRATION_DONE_V1)) {
-                migrated = true
-                return
+            if (!kv.getBoolean(MIGRATION_DONE_V1)) {
+                migration.migrate(kv)
+                kv.setBoolean(MIGRATION_DONE_V1, true)
             }
-            migration.migrate(kv)
-            kv.setBoolean(MIGRATION_DONE_V1, true)
+            // One-time consolidation of the two legacy N-way booleans into the
+            // single sync_engine_mode key (parachord#911 / #289). Idempotent —
+            // only writes when the mode key is still absent, so it runs once per
+            // install (existing or fresh) and is behavior-neutral.
+            if (kv.getStringOrNull(SYNC_ENGINE_MODE) == null) {
+                kv.setString(
+                    SYNC_ENGINE_MODE,
+                    SyncEngineMode.fromLegacyBooleans(
+                        kv.getBoolean(NWAY_ENABLED, default = false),
+                        kv.getBoolean(NWAY_PROPAGATE, default = false),
+                    ),
+                )
+            }
             migrated = true
         }
     }
@@ -197,9 +216,13 @@ class SettingsStore(
     val persistQueue: Flow<Boolean> = migratedFlow().flatMapConcat {
         kv.observeBoolean(PERSIST_QUEUE, default = true)
     }
-    val nwayEnabledFlow: Flow<Boolean> = migratedFlow().flatMapConcat {
-        kv.observeBoolean(NWAY_ENABLED, default = false)
+    /** Single source of truth for sync-engine selection (parachord#911 / #289). */
+    val syncEngineModeFlow: Flow<String> = migratedFlow().flatMapConcat {
+        kv.observeString(SYNC_ENGINE_MODE, default = SyncEngineMode.DEFAULT_MODE)
     }
+    /** Legacy view — N-way active (shadow|new). Derived from [syncEngineModeFlow]. */
+    val nwayEnabledFlow: Flow<Boolean> =
+        syncEngineModeFlow.map { SyncEngineMode.nwayActive(it) }
 
     suspend fun setThemeMode(mode: String) {
         ensureMigrated()
@@ -741,28 +764,61 @@ class SettingsStore(
         ensureMigrated(); kv.setBoolean(SYNC_ENABLED, enabled)
     }
 
-    /** N-way multimaster playlist sync opt-in. Default OFF — gates the entire
-     *  N-way path (migration bootstrap, shadow mode, propagation). */
-    override suspend fun isNwayEnabled(): Boolean {
-        ensureMigrated(); return kv.getBoolean(NWAY_ENABLED, default = false)
+    /** The single source of truth for sync-engine selection (parachord#911 / #289):
+     *  `legacy` | `shadow` | `new`. Consolidated once from the two legacy N-way
+     *  booleans in [ensureMigrated], then read straight from [SYNC_ENGINE_MODE]. */
+    override suspend fun getSyncEngineMode(): String {
+        ensureMigrated()
+        return SyncEngineMode.normalize(kv.getStringOrNull(SYNC_ENGINE_MODE))
     }
 
+    suspend fun setSyncEngineMode(mode: String) {
+        ensureMigrated()
+        val m = SyncEngineMode.normalize(mode)
+        kv.setString(SYNC_ENGINE_MODE, m)
+        // Keep the legacy booleans coherent for downgrade safety + any direct reader.
+        kv.setBoolean(NWAY_ENABLED, SyncEngineMode.nwayActive(m))
+        kv.setBoolean(NWAY_PROPAGATE, SyncEngineMode.nwayWritesEnabled(m))
+    }
+
+    /** N-way active (shadow|new) — gates migration bootstrap + shadow. Derived
+     *  from [getSyncEngineMode]. */
+    override suspend fun isNwayEnabled(): Boolean =
+        SyncEngineMode.nwayActive(getSyncEngineMode())
+
+    /** N-way PROPAGATION (real provider writes) — only `new`. Derived from
+     *  [getSyncEngineMode]. */
+    override suspend fun isNwayPropagateEnabled(): Boolean =
+        SyncEngineMode.nwayWritesEnabled(getSyncEngineMode())
+
+    /** Legacy two-toggle setters, mapped onto [setSyncEngineMode] so the existing
+     *  debug UI keeps working against the consolidated mode (and so toggling them
+     *  can never produce the incoherent propagate-without-enabled state). */
     suspend fun setNwayEnabled(enabled: Boolean) {
-        ensureMigrated(); kv.setBoolean(NWAY_ENABLED, enabled)
-    }
-
-    /** N-way PROPAGATION (real provider writes). Requires [isNwayEnabled] too. */
-    override suspend fun isNwayPropagateEnabled(): Boolean {
-        ensureMigrated(); return kv.getBoolean(NWAY_PROPAGATE, default = false)
+        val cur = getSyncEngineMode()
+        setSyncEngineMode(
+            when {
+                !enabled -> SyncEngineMode.LEGACY
+                cur == SyncEngineMode.LEGACY -> SyncEngineMode.SHADOW
+                else -> cur // already shadow or new
+            }
+        )
     }
 
     suspend fun setNwayPropagateEnabled(enabled: Boolean) {
-        ensureMigrated(); kv.setBoolean(NWAY_PROPAGATE, enabled)
+        val cur = getSyncEngineMode()
+        setSyncEngineMode(
+            when {
+                enabled -> SyncEngineMode.NEW
+                cur == SyncEngineMode.NEW -> SyncEngineMode.SHADOW
+                else -> cur
+            }
+        )
     }
 
-    val nwayPropagateFlow: Flow<Boolean> = migratedFlow().flatMapConcat {
-        kv.observeBoolean(NWAY_PROPAGATE, default = false)
-    }
+    /** Legacy view — N-way writes enabled (new). Derived from [syncEngineModeFlow]. */
+    val nwayPropagateFlow: Flow<Boolean> =
+        syncEngineModeFlow.map { SyncEngineMode.nwayWritesEnabled(it) }
 
     override suspend fun setLastSyncAt(timestamp: Long) {
         ensureMigrated(); kv.setString(SYNC_LAST_COMPLETED_AT, timestamp.toString())
