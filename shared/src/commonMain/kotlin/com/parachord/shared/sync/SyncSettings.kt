@@ -208,6 +208,13 @@ interface SyncSettingsProvider {
      *  [isNwayEnabled] too. Default OFF. */
     suspend fun isNwayPropagateEnabled(): Boolean
 
+    /** Per-client sync-engine selection: `legacy` | `shadow` | `new`
+     *  (parachord#911 / mobile#289). The concrete store persists this as the
+     *  single source of truth; the default derives it from the two booleans
+     *  above so existing [SyncSettings] fakes keep working unchanged. */
+    suspend fun getSyncEngineMode(): String =
+        SyncEngineMode.fromLegacyBooleans(isNwayEnabled(), isNwayPropagateEnabled())
+
     /** Persist the timestamp of the last successful sync (epoch millis). */
     suspend fun setLastSyncAt(timestamp: Long)
 
