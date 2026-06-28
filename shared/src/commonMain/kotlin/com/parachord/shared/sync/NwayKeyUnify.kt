@@ -78,11 +78,18 @@ fun nwayBaselineTrackKeys(tracks: List<PlaylistTrack>): List<TrackKeys> =
  * parity with the desktop JS port). A singleton class yields exactly the key
  * [canonicalTrackKey] would — backward compatible when nothing bridges.
  *
- * Residual (accepted, documented, pinned by fixtures): two genuinely different
- * recordings that share an identical normalized `artist|title` (two "Intro"s, a
- * single-vs-album cut, a cover) unify via `norm`. Rare and low-harm in a
- * playlist; the same residual the single-key `norm-` fallback already carried.
- * Guarding the `norm` bridge on disagreeing ISRCs is a tracked refinement.
+ * Norm-bridge guard (parachord#911 P3 — docs/plans/2026-06-28-nway-norm-bridge-guard.md):
+ * the `norm` tier bridges tracks in a group only when they carry NO disagreeing
+ * ISRCs. ISRC is the hard per-recording discriminator — ≥2 distinct ISRC
+ * identities in a norm group are genuinely different recordings (two "Intro"s,
+ * album-cut vs single, original vs remaster) and are never collapsed via norm.
+ * A shared MBID may still span two ISRCs (same recording, reissue/market
+ * re-registration — the strong phase unions those first). **MBID *disagreement*
+ * does NOT block the norm bridge:** recording-MBID legitimately varies for the
+ * same song across services/enrichment, and blocking it would re-introduce the
+ * false-REMOVE data-loss class (2026-06-22) the MBID-variance bridge fixed.
+ * Residual (accepted): two genuinely-different ISRC-less recordings sharing a
+ * norm still unify — rare + low-harm (a duplicate, never a false-remove).
  *
  * Pure + deterministic — part of the cross-engine fixture contract
  * (`docs/nway-key-unify-fixtures.json`).
@@ -105,15 +112,42 @@ fun unifyTrackKeys(lists: List<List<TrackKeys>>): List<List<String>> {
         if (ra != rb) parent[maxOf(ra, rb)] = minOf(ra, rb) // smaller index is root → deterministic
     }
 
-    // Union any two tracks sharing a tier value (first-seen anchors the group).
+    // PHASE 1 — strong unions (unconditional): equal ISRC, then equal MBID.
+    // These establish "same recording"; a shared MBID may legitimately span two
+    // ISRCs (reissue), which is why the per-component ISRC presence is what the
+    // norm guard counts (NOT distinct ISRC values).
     val byIsrc = HashMap<String, Int>()
     val byMbid = HashMap<String, Int>()
-    val byNorm = HashMap<String, Int>()
     for (i in 0 until n) {
         val tk = nodes[i]
         tk.isrc?.let { k -> byIsrc[k]?.let { union(it, i) } ?: run { byIsrc[k] = i } }
         tk.mbid?.let { k -> byMbid[k]?.let { union(it, i) } ?: run { byMbid[k] = i } }
-        byNorm[tk.norm]?.let { union(it, i) } ?: run { byNorm[tk.norm] = i }
+    }
+
+    // Snapshot the post-phase-1 components + per-component ISRC presence (ISRC is
+    // the only hard discriminator the norm bridge must not cross). Decisions below
+    // read this stable snapshot, so the result is independent of group iteration
+    // order; the unions are applied afterward.
+    val root1 = IntArray(n) { find(it) }
+    val rootHasIsrc = HashMap<Int, Boolean>()
+    for (i in 0 until n) if (nodes[i].isrc != null) rootHasIsrc[root1[i]] = true
+
+    // PHASE 2 — guarded norm bridge, per norm group.
+    val byNorm = LinkedHashMap<String, MutableList<Int>>()
+    for (i in 0 until n) byNorm.getOrPut(nodes[i].norm) { ArrayList() }.add(i)
+    for ((_, group) in byNorm) {
+        val isrcComps = group.asSequence().map { root1[it] }.filter { rootHasIsrc[it] == true }.toSet()
+        if (isrcComps.size <= 1) {
+            // ≤1 confident ISRC identity (absent or agree) → norm bridges the whole
+            // group (closes norm↔mbid / norm↔isrc cross-service dedup + MBID variance).
+            for (k in 1 until group.size) union(group[0], group[k])
+        } else {
+            // ≥2 disagreeing ISRCs → never collapse them via norm. Bridge only the
+            // ISRC-free nodes (mbid-only + pure-norm) among themselves; a missed
+            // dedup is a duplicate, never a false-remove.
+            val free = group.filter { rootHasIsrc[root1[it]] != true }
+            for (k in 1 until free.size) union(free[0], free[k])
+        }
     }
 
     // Per-component strongest tier values (min for determinism).

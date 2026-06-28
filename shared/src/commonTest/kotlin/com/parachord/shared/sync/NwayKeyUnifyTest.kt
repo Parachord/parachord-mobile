@@ -174,4 +174,93 @@ class NwayKeyUnifyTest {
         // a|t survives (bridged, not dropped); c|t added. Nothing falsely removed.
         assertEquals(setOf("mbid-m-a", "mbid-x", "mbid-y"), merged.toSet())
     }
+
+    // ── P3: norm-bridge guard (parachord#911) — disagreeing ISRCs never collapse
+    //    via norm; MBID disagreement still bridges (the variance fix above). 1:1
+    //    with the guard_* cases in docs/nway-key-unify-fixtures.json. ────────────
+
+    @Test
+    fun guard_disagreeingIsrc_sameNorm_staySeparate() {
+        // D-Nway-4: two "Intro" by The xx — album cut vs single edit, different ISRCs.
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "GBBKS0700116", norm = "the xx|intro"),
+            k(isrc = "GBBKS1300999", norm = "the xx|intro"),
+        )))
+        assertEquals(listOf(listOf("isrc-GBBKS0700116", "isrc-GBBKS1300999")), out)
+    }
+
+    @Test
+    fun guard_originalVsRemaster_disagreeingIsrc_staySeparate() {
+        // D-Nway-5: same norm after remaster strip, different ISRCs → distinct.
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "GBN9Y1100123", norm = "pink floyd|wish you were here"),
+            k(isrc = "GBN9Y1100777", norm = "pink floyd|wish you were here"),
+        )))
+        assertEquals(listOf(listOf("isrc-GBN9Y1100123", "isrc-GBN9Y1100777")), out)
+    }
+
+    @Test
+    fun guard_normOnly_bridgesToIsrcTwin() {
+        val out = unifyTrackKeys(listOf(
+            listOf(k(isrc = "USUM71900764", norm = "billie eilish|bad guy")),
+            listOf(k(norm = "billie eilish|bad guy")),
+        ))
+        assertEquals(listOf(listOf("isrc-USUM71900764"), listOf("isrc-USUM71900764")), out)
+    }
+
+    @Test
+    fun guard_twoIsrcsPlusWeak_weakDoesNotBridgeThem() {
+        // Transitivity: the norm-only node must not merge the two ISRC components.
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "XXAAA0000001", norm = "a|b"),
+            k(isrc = "XXBBB0000002", norm = "a|b"),
+            k(norm = "a|b"),
+        )))
+        assertEquals(listOf(listOf("isrc-XXAAA0000001", "isrc-XXBBB0000002", "norm-a|b")), out)
+    }
+
+    @Test
+    fun guard_pureWeakGroup_unions() {
+        val out = unifyTrackKeys(listOf(listOf(k(norm = "a|b"), k(norm = "a|b"))))
+        assertEquals(listOf(listOf("norm-a|b", "norm-a|b")), out)
+    }
+
+    @Test
+    fun guard_twoIsrcsPlusTwoWeak_weakUnite_isrcsSeparate() {
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "XXAAA0000001", norm = "a|b"),
+            k(isrc = "XXBBB0000002", norm = "a|b"),
+            k(norm = "a|b"),
+            k(norm = "a|b"),
+        )))
+        assertEquals(
+            listOf(listOf("isrc-XXAAA0000001", "isrc-XXBBB0000002", "norm-a|b", "norm-a|b")),
+            out,
+        )
+    }
+
+    @Test
+    fun guard_mbidBridgedTwoIsrcs_countComponentsNotValues_unions() {
+        // Maintainer's V10: a shared MBID merges two ISRCs into ONE component →
+        // cIsrc=1 → the whole group (incl the norm-only node) unions. A
+        // distinct-ISRC-value count would get 2 and wrongly separate.
+        val m = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "XXAAA0000001", mbid = m, norm = "a|b"),
+            k(isrc = "XXBBB0000002", mbid = m, norm = "a|b"),
+            k(norm = "a|b"),
+        )))
+        assertEquals(listOf(listOf("isrc-XXAAA0000001", "isrc-XXAAA0000001", "isrc-XXAAA0000001")), out)
+    }
+
+    @Test
+    fun guard_mbidBridgedPairPlusUnrelatedIsrc_separate() {
+        val m = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "XXAAA0000001", mbid = m, norm = "a|b"),
+            k(isrc = "XXBBB0000002", mbid = m, norm = "a|b"),
+            k(isrc = "XXCCC0000003", norm = "a|b"),
+        )))
+        assertEquals(listOf(listOf("isrc-XXAAA0000001", "isrc-XXAAA0000001", "isrc-XXCCC0000003")), out)
+    }
 }

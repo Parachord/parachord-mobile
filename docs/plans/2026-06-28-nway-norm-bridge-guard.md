@@ -22,15 +22,16 @@ Split unification into two phases (the strong unions stay unconditional; only th
 
 1. **Strong phase (unconditional).** Union by equal ISRC, then by equal MBID. These are confident identity matches — never blocked.
 2. **Norm phase (guarded), per norm group** (all tracks sharing the normalized `artist|title`), evaluated on the components that exist *after* the strong phase:
-   - `cIsrc` = number of distinct components in the group that carry an ISRC;
-   - `cMbid` = number of distinct components in the group that carry an MBID.
-   - **If `cIsrc ≤ 1` AND `cMbid ≤ 1`** → at most one confident ISRC identity and at most one confident MBID identity are present (the stronger tiers are *absent or agree*) → **union the whole group** (the norm-only and complementary-tier tracks collapse into the one identity).
-   - **Else (`cIsrc ≥ 2` OR `cMbid ≥ 2`)** → the group holds **≥2 disagreeing same-type strong identities** → **do not bridge across them**. Union only the strong-tier-free (norm-only) nodes among themselves; leave each strong component intact.
+   - `cIsrc` = number of distinct components in the group that carry an ISRC.
+   - **If `cIsrc ≤ 1`** → at most one confident ISRC identity is present (absent or agree) → **union the whole group** (norm-only + mbid-only + the one ISRC identity collapse together).
+   - **Else (`cIsrc ≥ 2`)** → the group holds **≥2 disagreeing ISRC identities** → **do not bridge across them**. Union only the ISRC-free (mbid-only + pure-norm) nodes among themselves; leave each ISRC component intact.
 
-Because two *distinct* components inside one norm group can never share a strong value (the strong phase already merged equal ISRCs/MBIDs), "two components both carry an ISRC" ⟹ "different ISRCs" ⟹ a confident disagreement. So `cIsrc ≥ 2` (or `cMbid ≥ 2`) **is** the "confident id-disagreement" the `2026-06-21` doc says must block the norm bridge.
+> **CORRECTION (asymmetric, not symmetric — caught implementing against the existing incident fixtures).** An earlier draft of this rule also blocked on `cMbid ≥ 2`. That is **wrong**: it reverses the **MBID-variance bridge** (`norm_bridges_recording_mbid_variance` / `unify_bridgesRemasterDriftAcrossServices_viaNorm`) — two *different recording-MBIDs of the same song* with no ISRC MUST still unify, or the merge false-**removes** the baseline track (the exact 2026-06-22 data-loss class). **MBID disagreement is therefore NOT a conflict; `cMbid` is not counted.** Only ISRC is a hard discriminator. (Recording-MBID legitimately varies for the same song across services/enrichment; ISRC does not.)
+
+Because two *distinct* components inside one norm group can never share a strong value (the strong phase already merged equal ISRCs/MBIDs), "two components both carry an ISRC" ⟹ "different ISRCs" ⟹ a confident disagreement. So `cIsrc ≥ 2` **is** the "confident id-disagreement" the `2026-06-21` doc says must block the norm bridge — while a shared MBID may legitimately span two ISRCs into **one** component (V10), so the count is over **components**, never distinct ISRC values.
 
 ### Why complementary tiers still bridge
-A component with only an ISRC and a component with only an MBID (`cIsrc = 1, cMbid = 1`) do **not** disagree — each is *absent* on the other's axis — so they union (repr = the stronger tier, ISRC). This is the "absent or agree" case and preserves the norm↔strong cross-service dedup. The residual: two genuinely-different same-titled recordings, one ISRC-identified and one MBID-identified, would falsely bridge — rare, and the *same* same-title residual the norm tier already documents. (Open sub-question Q1 below if we want to tighten it.)
+A component with only an ISRC and a component with only an MBID (`cIsrc = 1`) do **not** disagree on ISRC — they union (repr = the stronger tier, ISRC). This preserves the norm↔strong cross-service dedup. The residual: two genuinely-different same-titled *ISRC-less* recordings still unify via norm — rare, low-harm (a duplicate, never a false-remove), and the same residual the norm tier already documents.
 
 ### Determinism & transitivity-safety
 The decision (`union-all` vs `weak-only`) depends only on the **set** of components in the norm group and which tiers they carry — not on iteration order. It resolves the transitivity trap (a norm-only node `C` sitting between two conflicting strong components `A`,`B`): under `cIsrc ≥ 2`, `C` is **not** attached to either `A` or `B` (it stays in the norm-only union), so `A` and `B` never merge through `C`. Representative selection is unchanged (strongest tier present, lexicographically-min value).
@@ -42,26 +43,30 @@ Add to `docs/nway-key-unify-fixtures.json`; both Kotlin and desktop JS must prod
 | # | Input tracks (one or two copies) | Expected reprs | Rule branch |
 |---|---|---|---|
 | V1 | `[{isrc:GBBKS0700116, norm:"the xx\|intro"}, {isrc:GBBKS1300999, norm:"the xx\|intro"}]` | `[isrc-GBBKS0700116, isrc-GBBKS1300999]` | `cIsrc=2` → **separate** (fixes D-Nway-4) |
-| V2 | `[{mbid:aaa…, norm:"x\|y"}, {mbid:bbb…, norm:"x\|y"}]` | `[mbid-aaa…, mbid-bbb…]` | `cMbid=2` → separate |
+| **V2** | `[{mbid:aaa…, norm:"x\|y"}, {mbid:bbb…, norm:"x\|y"}]` | both → `mbid-aaa…` | `cIsrc=0` → **UNION** (corrected — MBID disagreement never blocks; this IS the MBID-variance bridge) |
 | V3 | `[{isrc:GBN9Y1100123, norm:"pink floyd\|wish you were here"}, {isrc:GBN9Y1100777, norm:"…"}]` | `[isrc-GBN9Y1100123, isrc-GBN9Y1100777]` | `cIsrc=2` → separate (fixes D-Nway-5; titles differ pre-strip) |
-| V4 | copyA `[{isrc:USUM71900764, norm:"billie eilish\|bad guy"}]`, copyB `[{norm:"billie eilish\|bad guy"}]` | both → `isrc-USUM71900764` | `cIsrc=1,cMbid=0` → **union** (keeps norm↔isrc cross-service dedup) |
-| V5 | copyA `[{mbid:1a2b…, norm:"a\|b"}]`, copyB `[{norm:"a\|b"}]` | both → `mbid-1a2b…` | `cIsrc=0,cMbid=1` → union (keeps norm↔mbid) |
-| V6 | copyA `[{isrc:XXAAA0000001, norm:"a\|b"}]`, copyB `[{mbid:1a2b…, norm:"a\|b"}]` | both → `isrc-XXAAA0000001` | `cIsrc=1,cMbid=1` → union (complementary) |
+| V4 | copyA `[{isrc:USUM71900764, norm:"billie eilish\|bad guy"}]`, copyB `[{norm:"billie eilish\|bad guy"}]` | both → `isrc-USUM71900764` | `cIsrc=1` → **union** (keeps norm↔isrc cross-service dedup) |
+| V5 | copyA `[{mbid:1a2b…, norm:"a\|b"}]`, copyB `[{norm:"a\|b"}]` | both → `mbid-1a2b…` | `cIsrc=0` → union (keeps norm↔mbid) |
+| V6 | copyA `[{isrc:XXAAA0000001, norm:"a\|b"}]`, copyB `[{mbid:1a2b…, norm:"a\|b"}]` | both → `isrc-XXAAA0000001` | `cIsrc=1` → union (complementary; repr=isrc) |
 | V7 | `[{isrc:XXAAA0000001, norm:"a\|b"}, {isrc:XXBBB0000002, norm:"a\|b"}, {norm:"a\|b"}]` | `[isrc-XXAAA0000001, isrc-XXBBB0000002, norm-a\|b]` | `cIsrc=2` → A,B separate; weak C stays its own norm component (transitivity) |
-| V8 | `[{norm:"a\|b"}, {norm:"a\|b"}]` | both → `norm-a\|b` | `cIsrc=0,cMbid=0` → union (pure-weak dedup) |
+| V8 | `[{norm:"a\|b"}, {norm:"a\|b"}]` | both → `norm-a\|b` | `cIsrc=0` → union (pure-weak dedup) |
 | V9 | `[{isrc:XXAAA0000001, norm:"a\|b"}, {isrc:XXBBB0000002, norm:"a\|b"}, {norm:"a\|b"}, {norm:"a\|b"}]` | `[isrc-XXAAA0000001, isrc-XXBBB0000002, norm-a\|b, norm-a\|b]` | `cIsrc=2` → A,B separate; the two weak nodes union together |
+| **V10** | `[{isrc:XXAAA0000001,mbid:M, norm:"a\|b"}, {isrc:XXBBB0000002,mbid:M, norm:"a\|b"}, {norm:"a\|b"}]` | all three → `isrc-XXAAA0000001` | shared `mbid:M` → **one** component carrying {AAA,BBB} → `cIsrc=1` → union (count COMPONENTS, not values) |
+| V11 | `[{isrc:XXAAA0000001,mbid:M, norm:"a\|b"}, {isrc:XXBBB0000002,mbid:M, norm:"a\|b"}, {isrc:XXCCC0000003, norm:"a\|b"}]` | `[isrc-XXAAA0000001, isrc-XXAAA0000001, isrc-XXCCC0000003]` | MBID-merged pair = one comp; unrelated CCC = second → `cIsrc=2` → separate |
+| V12 | copyA `[{mbid:aaa…, norm:"the cranberries\|zombie"}]`, copyB `[{mbid:bbb…, norm:"…"}]` | both → `mbid-aaa…` | `cIsrc=0` → union — **pins the MBID-variance bridge** (no false-remove) |
 
-V1–V3 are the regression-defining vectors (today's engine collapses each to a single repr). V4–V6 + V8 are the *must-not-break* cases. V7/V9 pin the transitivity behavior.
+V1/V3/V7/V9/V11 are the regression-defining (disagreeing-ISRC) vectors — today's un-guarded engine collapses them. V2/V4–V6/V8/V12 are the *must-not-break* cross-service/variance bridges. V10 is the components-not-values discriminator. (`M` = any valid recording MBID.)
 
-## Open sub-questions for the maintainer (co-design)
+## Sub-questions — RESOLVED (maintainer-agreed)
 
-1. **Complementary-tier bridge (V6).** I propose `isrc-only ⊕ mbid-only ⇒ union` (matches "absent or agree" and avoids re-introducing the norm/mbid duplicate gap). The alternative — treat any two strong-bearing components as non-bridgeable even when complementary — is safer against same-title false-merge but reintroduces duplicates for half-enriched cross-service tracks. **Your call; I lean union (V6 as written).**
-2. **Weak-union under conflict (V9).** I propose the norm-only nodes still union *with each other* when the group has conflicting strong components (they share norm, no strong conflict among themselves). Alternative: keep them singletons. I lean union (V9 as written) — it's the existing no-ISRC dedup, just scoped away from the conflicting strong identities.
+1. **Complementary-tier bridge (V6):** `isrc-only ⊕ mbid-only ⇒ union`. Agreed (matches "absent or agree"; avoids re-opening the norm↔strong half-enriched duplicate).
+2. **Weak-union under conflict (V9):** norm-only nodes union with each other. Agreed (the existing no-ISRC dedup, scoped away from the conflicting ISRCs).
+3. **MBID symmetry (added during implementation):** MBID disagreement does **not** block — only ISRC. Corrected from the original symmetric draft after the existing MBID-variance fixtures showed the symmetric rule re-introduces the data-loss class. See the CORRECTION callout above + V2/V12.
 
 ## Rollout (both engines, byte-identical — mirrors the merge-fixture contract)
 
-1. Agree on the rule + V1–V9 here (this doc).
-2. Author the vectors into `docs/nway-key-unify-fixtures.json` **once**; both engines run them.
+1. Agree on the rule + V1–V12 here (this doc). ✅ rule + fixtures landed in `docs/nway-key-unify-fixtures.json` + Kotlin `NwayKeyUnify.unifyTrackKeys` (all pass, existing incident fixtures included).
+2. Author the vectors into `docs/nway-key-unify-fixtures.json` **once**; both engines run them. ✅ (this commit)
 3. Implement the guarded norm phase in `NwayKeyUnify.unifyTrackKeys` (Kotlin) and `playlist-key-unify.js` (desktop) against the shared fixtures — neither side merges until both pass identically.
 4. Re-validate in shadow on a real library (the Guitarmageddon-class false-removes should not regress).
 5. Real writes stay gated OFF until this + the no-false-drop harness land. P3 does not by itself arm anything.
