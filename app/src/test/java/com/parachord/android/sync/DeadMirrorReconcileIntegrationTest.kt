@@ -275,6 +275,68 @@ class DeadMirrorReconcileIntegrationTest {
         assertNotNull("the live (but user-disabled) LB link is left intact", h.linkDao.selectForLink("local-z", "listenbrainz"))
     }
 
+    // ── C1 — stale CHIP on a surviving multi-mirror row: drop the chip, keep the playlist + other mirror ──
+    @Test
+    fun `C1 stale-chip — prefix-derived LB chip on a surviving row is dropped, other mirror kept`() = runBlocking {
+        val lb = FakeProvider("listenbrainz")
+        val h = Harness(listOf(lb))
+        // A `listenbrainz-*` row (its LB chip is PREFIX-derived — no sync_source) that
+        // ALSO mirrors to Spotify. The user deleted it on ListenBrainz; the row survives
+        // (it has the Spotify mirror). It's not a push candidate for LB and has no LB
+        // push-link, so neither the push detach nor the source-row removal touches it —
+        // only the stale-chip reconcile can drop the dead chip.
+        h.seed("listenbrainz-deadmbid", "Shared Mix", sourceUrl = null)
+        h.linkMirror("listenbrainz-deadmbid", "spotify", "sp-live")
+        lb.remotePlaylistsList = emptyList()
+        lb.goneExternalIds = setOf("deadmbid") // probe → 404
+
+        h.engine.syncAll()
+
+        assertNotNull("the playlist is kept (chip drop is non-destructive)", h.playlistDao.getById("listenbrainz-deadmbid"))
+        assertEquals(
+            "the dead ListenBrainz chip is dropped; the Spotify mirror stays",
+            setOf("spotify"),
+            h.settings.getPlaylistChannels("listenbrainz-deadmbid"),
+        )
+        assertNotNull("the Spotify link is untouched", h.linkDao.selectForLink("listenbrainz-deadmbid", "spotify"))
+    }
+
+    // ── C2 — stale CHIP on an LB-only survivor: chip dropped (empty override), playlist KEPT (never deleted) ──
+    @Test
+    fun `C2 stale-chip — LB-only prefix chip is dropped to an empty override, playlist kept`() = runBlocking {
+        val lb = FakeProvider("listenbrainz")
+        val h = Harness(listOf(lb))
+        h.seed("listenbrainz-solo", "Solo", sourceUrl = null) // prefix LB chip, no sync_source, no other mirror
+        lb.remotePlaylistsList = emptyList()
+        lb.goneExternalIds = setOf("solo")
+
+        h.engine.syncAll()
+
+        assertNotNull("never deletes the playlist — the chip just goes away", h.playlistDao.getById("listenbrainz-solo"))
+        assertEquals(
+            "the only chip is dropped → empty override (syncs with nothing), not null",
+            emptySet<String>(),
+            h.settings.getPlaylistChannels("listenbrainz-solo"),
+        )
+    }
+
+    // ── C3 — probe says the chip's remote EXISTS (partial fetch): chip kept, no override ──
+    @Test
+    fun `C3 stale-chip — a probe-exists chip is kept (partial-fetch safety)`() = runBlocking {
+        val lb = FakeProvider("listenbrainz")
+        val h = Harness(listOf(lb))
+        h.seed("listenbrainz-live", "Live", sourceUrl = null)
+        lb.remotePlaylistsList = emptyList() // absent from the (partial) fetch…
+        lb.goneExternalIds = emptySet()       // …but the probe says it still EXISTS
+
+        h.engine.syncAll()
+
+        assertNull(
+            "a still-live chip is NOT detached on a partial fetch (no override written)",
+            h.settings.getPlaylistChannels("listenbrainz-live"),
+        )
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Harness
     // ──────────────────────────────────────────────────────────────────────

@@ -544,6 +544,55 @@ class SyncEngine constructor(
         return gone
     }
 
+    /**
+     * STALE-MIRROR-CHIP reconcile — the companion to the push-link detach
+     * ([pushPlaylistsForProvider]) and the source-row removal. For a SURVIVING
+     * playlist that still SHOWS a chip for [provider] whose remote is CONFIRMED
+     * gone (404), drop JUST that chip: write the channel override excluding the
+     * provider (the authoritative chip-hider — it filters [getPlaylistMirrors]) and
+     * clear any dead push-link + N-way echo token. NEVER deletes the playlist or its
+     * other mirrors.
+     *
+     * Covers the gap the other two cleanups miss: a chip derived from the id-prefix
+     * (a `listenbrainz-*` row) or the N-way source row, where the user deleted the
+     * mirror on the service but the local row persists because it has OTHER mirrors.
+     * The push detach only sees `sync_playlist_link` mirrors on push-CANDIDATE rows;
+     * the source-row removal only DELETES whole rows (and only `local sync_source`
+     * rows). Reuses [confirmedGoneMirrors] (same 404 probe + mass-floor) and the
+     * caller's [fullRemoteIds] from the pull (no extra fetch); [alreadyGone] are
+     * externalIds the caller already probe-confirmed gone, so we never re-probe them.
+     * A token-less provider's probe assumes-exists, so this is inert without auth.
+     */
+    private suspend fun reconcileStaleMirrorChips(
+        provider: SyncProvider,
+        fullRemoteIds: Set<String>,
+        alreadyGone: Set<String>,
+    ) {
+        val pid = provider.id
+        // Every playlist currently SHOWING a chip for this provider, with its
+        // externalId (override-aware — only chips actually displayed; a survivor
+        // keeps its prefix/source chip until detached here).
+        val shown = playlistDao.getAllSync().mapNotNull { p ->
+            getPlaylistMirrors(p.id)[pid]?.let { ext -> Triple(p.id, p.name, ext) }
+        }
+        if (shown.isEmpty()) return
+        val chipExts = shown.map { it.third }.toSet()
+        val gone = (alreadyGone intersect chipExts) +
+            confirmedGoneMirrors(provider, chipExts - alreadyGone, fullRemoteIds)
+        if (gone.isEmpty()) return
+        for ((plId, plName, ext) in shown) {
+            if (ext !in gone) continue
+            // Drop the chip only — keep the playlist + its other mirrors. effective is
+            // captured BEFORE the link delete (matches the push-detach order); the
+            // override (= effective − provider) is the authoritative hider.
+            val effective = getPlaylistMirrors(plId).keys.toSet()
+            syncPlaylistLinkDao.deleteForLink(plId, pid)
+            syncPlaylistNwayDao.deleteForLink(plId, pid)
+            settingsStore.setPlaylistChannels(plId, DeadMirrorReconcile.overrideAfterDetach(effective, pid))
+            Log.w(TAG, "stale-chip reconcile: '$plName' $pid mirror $ext confirmed 404 — chip dropped, playlist kept")
+        }
+    }
+
     private suspend fun syncTracksForSpotify(
         onProgress: (SyncProgress) -> Unit,
     ): TypeSyncResult {
@@ -2854,6 +2903,14 @@ class SyncEngine constructor(
             }
             removed++
         }
+
+        // Stale-mirror-CHIP cleanup (companion to the row removal above + the push
+        // detach): a SURVIVING playlist that still shows a chip for this provider
+        // whose remote is confirmed-gone (404) gets just the chip dropped (channel
+        // override), NOT the playlist. Covers id-prefix-derived (`listenbrainz-*`) /
+        // N-way-source chips the row removal never reaches. Reuses fullRemoteIds +
+        // the goneIds already probed above (no extra fetch, no re-probe).
+        reconcileStaleMirrorChips(provider, fullRemoteIds, goneIds)
 
         return TypeSyncResult(added = added, removed = removed, updated = updated, unchanged = unchanged)
     }
