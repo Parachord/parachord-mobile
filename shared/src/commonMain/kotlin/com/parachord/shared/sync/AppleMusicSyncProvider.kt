@@ -163,14 +163,21 @@ class AppleMusicSyncProvider(
     private var cachedStorefront: String? = null
     private val storefrontMutex = Mutex()
 
-    private suspend fun ensureStorefront(): String? {
+    private suspend fun ensureStorefront(): String {
         cachedStorefront?.let { return it }
         return storefrontMutex.withLock {
-            cachedStorefront ?: try {
-                api.getStorefront().data.firstOrNull()?.id?.also { cachedStorefront = it }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "ensureStorefront: getStorefront failed", e); null
+            cachedStorefront ?: run {
+                val real = try {
+                    api.getStorefront().data.firstOrNull()?.id
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "ensureStorefront: getStorefront failed; using 'us'", e); null
+                }
+                // Parity with desktop #943: the real user storefront, else "us".
+                // The "us" fallback is NOT cached, so a recovered /me/storefront
+                // re-probes next call — and both engines now hit the same
+                // /v1/catalog/{storefront}/songs?filter[isrc] for a given ISRC.
+                real?.also { cachedStorefront = it } ?: "us"
             }
         }
     }
@@ -511,15 +518,13 @@ class AppleMusicSyncProvider(
         // PRIMARY — exact catalog lookup by ISRC.
         if (!isrc.isNullOrBlank()) {
             val storefront = ensureStorefront()
-            if (storefront != null) {
-                val catalogId = try {
-                    api.getCatalogSongIdByIsrc(storefront, isrc)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w(TAG, "catalog ISRC lookup failed for isrc=$isrc", e); null
-                }
-                if (catalogId != null) return catalogId
+            val catalogId = try {
+                api.getCatalogSongIdByIsrc(storefront, isrc)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "catalog ISRC lookup failed for isrc=$isrc", e); null
             }
+            if (catalogId != null) return catalogId
         }
 
         // FALLBACK — iTunes Search (no ISRC, or catalog miss).
