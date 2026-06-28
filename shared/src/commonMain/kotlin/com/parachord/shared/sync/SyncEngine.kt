@@ -2135,6 +2135,22 @@ class SyncEngine constructor(
         // raw placeholders. Fix them in place — cheap and idempotent.
         repairAppleMusicArtworkPlaceholders()
 
+        // `new`-mode mutual-exclusion guard (parachord#911 / mobile#289 brick #3).
+        // In `new` the N-way reconcile is the SOLE playlist authority, so the
+        // LEGACY playlist push / create / import below MUST stand down — otherwise
+        // both engines write the shared remotes AND the local playlist state at
+        // once. Scoped to PLAYLIST sync only: library/collection sync (tracks /
+        // albums / artists) runs elsewhere and is unaffected. The idempotent
+        // heals / migrations + the N-way baseline seed above run in EVERY mode
+        // (shared local-state maintenance N-way also relies on). INERT in
+        // `legacy` / `shadow`: legacyPlaylistSyncEnabled is true there, so we fall
+        // through to the full legacy block below UNCHANGED — the existing
+        // SyncEngine integration tests (which run in legacy mode) prove it.
+        if (!SyncEngineMode.legacyPlaylistSyncEnabled(settingsStore.getSyncEngineMode())) {
+            if (providerFilter == null) runNwayPropagation()
+            return TypeSyncResult(added, removed, updated, unchanged)
+        }
+
         // ── Spotify pull (existing block; preserves dedup-cleanup migration) ──
         // The dedup-cleanup migration block below is Spotify-only by design
         // (one-time fix for playlists created by old Spotify sync bugs); it
