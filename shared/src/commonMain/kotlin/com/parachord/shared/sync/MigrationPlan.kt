@@ -166,6 +166,27 @@ fun buildMigrationReport(summary: MigrationPlanSummary, appVersion: String): Mig
 }
 
 /**
+ * Resolve the remote tracklist for a preview per-target diff. Returns null when the
+ * remote state is UNKNOWN — there's no provider for the target, OR the fresh fetch
+ * FAILED (a 429 / network error). The caller MUST skip the target on null rather than
+ * diff against an empty list: treating a failed fetch as a confirmed-empty remote
+ * turns every canonical track into a phantom "add" (#298 — a ListenBrainz rate-limit
+ * burst during the preview fabricated 649 spurious adds). Tracks already loaded for a
+ * CHANGED copy are returned as-is (no fetch); a genuinely-empty remote that fetched
+ * successfully is an empty (non-null) list, which legitimately diffs as all-adds.
+ */
+internal suspend fun resolvePreviewRemoteTracks(
+    changedTracks: List<PlaylistTrack>?,
+    externalId: String,
+    fetch: (suspend (String) -> List<PlaylistTrack>)?,
+): List<PlaylistTrack>? {
+    if (changedTracks != null) return changedTracks
+    val doFetch = fetch ?: return null
+    val result = runCatching { doFetch(externalId) }
+    return if (result.isFailure) null else result.getOrThrow()
+}
+
+/**
  * Build one push target's named diff for the preview. Runs the SAME identity
  * [computeMaterializeDiff] the executor uses, then maps the diff's OWN keyspace
  * back to tracks 1:1 with the inputs — adds resolve from the canonical (merged)

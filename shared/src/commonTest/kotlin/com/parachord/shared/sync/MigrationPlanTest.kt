@@ -1,9 +1,11 @@
 package com.parachord.shared.sync
 
 import com.parachord.shared.model.PlaylistTrack
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -150,5 +152,52 @@ class MigrationPlanTest {
         val d = buildMigrationPerTarget("spotify", merged, remote)
         assertTrue(d.addTracks.isEmpty())
         assertTrue(d.removeTracks.isEmpty())
+    }
+
+    // ── resolvePreviewRemoteTracks (#298): a failed fetch is NOT an empty remote ──
+
+    @Test
+    fun preview_remote_skips_target_on_failed_fetch() = runTest {
+        // A 429 / network throw must surface as null (caller skips the target), NOT an
+        // empty list — else every canonical track becomes a phantom "add" (the #298
+        // 649-spurious-adds bug).
+        val r = resolvePreviewRemoteTracks(
+            changedTracks = null,
+            externalId = "mbid",
+            fetch = { throw RuntimeException("429 Too Many Requests") },
+        )
+        assertNull(r)
+    }
+
+    @Test
+    fun preview_remote_returns_fetched_tracks_on_success() = runTest {
+        val tracks = listOf(pt("Song A", "Artist A"))
+        val r = resolvePreviewRemoteTracks(changedTracks = null, externalId = "mbid", fetch = { tracks })
+        assertEquals(tracks, r)
+    }
+
+    @Test
+    fun preview_remote_empty_successful_fetch_is_a_real_empty_list() = runTest {
+        // A genuinely-empty remote fetched successfully is empty (non-null) — distinct
+        // from a failed fetch; it legitimately diffs as all-adds.
+        val r = resolvePreviewRemoteTracks(changedTracks = null, externalId = "mbid", fetch = { emptyList() })
+        assertEquals(emptyList<PlaylistTrack>(), r)
+    }
+
+    @Test
+    fun preview_remote_uses_changed_tracks_without_fetching() = runTest {
+        val changed = listOf(pt("Song B", "Artist B"))
+        val r = resolvePreviewRemoteTracks(
+            changedTracks = changed,
+            externalId = "mbid",
+            fetch = { throw IllegalStateException("must not fetch when changed tracks are present") },
+        )
+        assertEquals(changed, r)
+    }
+
+    @Test
+    fun preview_remote_null_when_no_provider() = runTest {
+        val r = resolvePreviewRemoteTracks(changedTracks = null, externalId = "mbid", fetch = null)
+        assertNull(r)
     }
 }

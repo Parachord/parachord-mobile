@@ -1967,12 +1967,18 @@ class SyncEngine constructor(
             val previewTargets = pushTargets.filter { it != "local" }.mapNotNull { tid ->
                 val ext = mirrors[tid] ?: return@mapNotNull null
                 val input = inputs.firstOrNull { it.id == tid }
-                val remoteTracks = if (input != null && input.changed) {
-                    input.tracks
-                } else {
-                    providers.firstOrNull { it.id == tid }
-                        ?.let { p -> runCatching { p.fetchPlaylistTracks(ext) }.getOrNull() } ?: emptyList()
-                }
+                val provider = providers.firstOrNull { it.id == tid }
+                // A FAILED fresh-fetch (429 / network) must NOT be read as an empty
+                // remote — that fabricates a phantom "add" for EVERY canonical track
+                // (#298: an LB rate-limit burst showed 649 spurious adds). On an
+                // unknown remote, skip the target instead of diffing against [].
+                val fetchRemote: (suspend (String) -> List<PlaylistTrack>)? =
+                    provider?.let { p -> { e -> p.fetchPlaylistTracks(e) } }
+                val remoteTracks = resolvePreviewRemoteTracks(
+                    changedTracks = if (input != null && input.changed) input.tracks else null,
+                    externalId = ext,
+                    fetch = fetchRemote,
+                ) ?: return@mapNotNull null
                 buildMigrationPerTarget(tid, mergedTracks, remoteTracks)
             }.filter { it.addTracks.isNotEmpty() || it.removeTracks.isNotEmpty() }
             Log.d(TAG, "N-way PROPAGATE (DRY-RUN) [${playlist.name}]: would push ${mergedTracks.size} " +
