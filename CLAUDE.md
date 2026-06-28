@@ -137,6 +137,42 @@ The Android app runs the **same .axe plugin system as desktop**. 19 plugins load
 
 **Key files:** `plugin/JsRuntime.kt`, `plugin/PluginManager.kt`, `plugin/PluginSyncService.kt`, `bridge/JsBridge.kt`, `bridge/NativeBridge.kt`, `ai/providers/AxeAiProvider.kt`, `playback/scrobbler/AxeScrobbler.kt`
 
+### Extensibility principle — abstract over the plugin registry, don't hardwire services
+
+**Default to the plugin/resolver capabilities as the abstraction; never hardwire a
+specific service's hosts or logic into a feature.** When a feature needs "given a
+provider URL/entity, do X" (resolve a track, fetch a playlist, list models, scrobble),
+route it through the resolver-loader's capability surface — `findResolverForUrl(url)`,
+`getUrlType(url)`, `resolve`, `lookupUrl`/`lookupAlbum`/`lookupPlaylist`, `listModels`
+— so **whichever `.axe` declares matching `urlPatterns` + implements that capability
+handles it. Adding a new streaming service should be a plugin drop-in (one `.axe` with
+`urlPatterns` + the capability), needing ZERO feature code.** A hardcoded
+`when (host) { "open.spotify.com" -> … ; "music.apple.com" -> … }` is the anti-pattern:
+it forks per service, goes stale, and blocks new providers. (This is the same spirit as
+Common Mistakes #6 — don't reimplement plugin logic natively — applied to *dispatch*.)
+
+- **Native fast-paths are an optimization, not the gate.** It's fine to keep a native
+  Spotify/Apple path for speed, but the *fallback* must be registry-driven so unlisted
+  providers still work. Example: `ProviderPlaylistResolver` (playlist URL → tracks) does
+  native Spotify/Apple first, then `lookupPlaylist` via the registry — so SoundCloud
+  (#281) and any future resolver work with no per-service branch.
+- **Reaching the `.axe` from an arbitrary URL needs the unique-key POLL on BOTH runtimes.**
+  A bare `(async () => …)()` does NOT return the resolved value once it awaits a real
+  `fetch` — iOS JSC yields `[object Promise]`, and Android WebView yields the unresolved
+  Promise serialized as `{}` (the `Plugin resolve(bandcamp) raw result: {}` artifact).
+  Use the proven pattern: a setup `evaluate` writes `window.__resolveResults['<key>'] =
+  JSON.stringify(result)` from a fire-and-forget async IIFE, then poll
+  `evaluate("window.__resolveResults['<key>']")`. iOS returns the JS string raw; Android
+  double-encodes → `.unquote()`. See `IosResolverRuntime.resolveOne`/`lookupPlaylist`
+  and `PluginManager.lookupPlaylist`.
+- **Audit the plugin layer before assuming a capability exists.** A resolver "just
+  works" only if its `.axe` implements the capability — e.g. only spotify/apple/youtube
+  `.axe` had `lookupPlaylist`; SoundCloud needed it added (v1.1.0, #281). Many resolvers
+  also need credentials (SoundCloud OAuth `config.token`) and return null without them.
+
+**Key files:** `shared/.../deeplink/ProviderPlaylistResolver.kt` (registry fallback),
+`shared/.../plugin/PluginManager.kt#lookupPlaylist` (Android poll), `shared/iosMain/.../IosResolverRuntime.kt#lookupPlaylist` (iOS poll), `parachord-plugins/<service>.axe` (the per-service capability source of truth).
+
 ### On-the-fly Track Resolution
 
 Tracks from external sources (ListenBrainz weekly playlists, AI recommendations, DJ chat) arrive as metadata-only `TrackEntity` objects — they have title/artist/album but no `resolver`, `sourceUrl`, `spotifyUri`, or streaming IDs. These tracks must be resolved through the resolver pipeline before playback.
@@ -1116,7 +1152,7 @@ Both are iOS ports of Android's `PlaybackController`; **read desktop + Android F
 3. **Don't skip the resolver pipeline.** Even if you have a direct URL, route through `ResolverManager` → `ResolverScoring` → `PlaybackRouter` to maintain consistent behavior.
 4. **Don't use blue as the accent color.** The brand accent is purple (`#7c3aed` light / `#a78bfa` dark).
 5. **Don't return or select sources below the confidence floor.** `ResolverScoring.selectBest()` filters out sources with confidence < `MIN_CONFIDENCE_THRESHOLD` (0.60). `scoreConfidence()` returns 0.95 ONLY when BOTH title AND artist substring-match — single-axis matches (wrong artist, or wrong title) collapse to 0.50 so the floor filters them. This mirrors desktop's `validateResolvedTrack` two-stage gate exactly: validation pass + priority sort. A title-only match (e.g., a different artist's "Mariana") must NOT win against a correct local file just because applemusic has higher priority. If porting to iOS, replicate this gate.
-6. **Don't natively reimplement `.axe` plugin functionality — ASK FIRST.** The `.axe`/marketplace plugin is the cross-platform source of truth: portability, marketplace updates, "one place for everyone." If a plugin already provides something — `resolve`, `listModels`, the model `options`/`fallbackOptions`/`default`, scrobble, AI chat — **call the plugin, don't write a native Kotlin/Swift equivalent.** A native reimplementation forks behavior and goes stale (we shipped a native per-provider `listModels` when `chatgpt.axe`/`gemini.axe` already had one — #223; it was reverted). **Before writing any native reimplementation of `.axe` logic, STOP and check with the user, with a concrete reason** (e.g. the `.axe` genuinely can't do it on this platform). The ONE legitimate native layer is the host GLUE that *runs* the `.axe` (e.g. iOS's JavaScriptCore unique-key polling for async `.axe` calls, the `NativeBridge` fetch polyfill) — never a reimplementation of the plugin's own logic.
+6. **Don't natively reimplement `.axe` plugin functionality — ASK FIRST.** The `.axe`/marketplace plugin is the cross-platform source of truth: portability, marketplace updates, "one place for everyone." If a plugin already provides something — `resolve`, `listModels`, the model `options`/`fallbackOptions`/`default`, scrobble, AI chat — **call the plugin, don't write a native Kotlin/Swift equivalent.** A native reimplementation forks behavior and goes stale (we shipped a native per-provider `listModels` when `chatgpt.axe`/`gemini.axe` already had one — #223; it was reverted). **Before writing any native reimplementation of `.axe` logic, STOP and check with the user, with a concrete reason** (e.g. the `.axe` genuinely can't do it on this platform). The ONE legitimate native layer is the host GLUE that *runs* the `.axe` (e.g. iOS's JavaScriptCore unique-key polling for async `.axe` calls, the `NativeBridge` fetch polyfill) — never a reimplementation of the plugin's own logic. **Corollary (dispatch side): don't hardwire per-service hosts/logic into a feature** (`when (host) { "open.spotify.com" -> … }`) — route through the resolver registry (`findResolverForUrl` + `lookupPlaylist`/`resolve`/…) so new service plugins drop in with zero feature code. See "Extensibility principle — abstract over the plugin registry" under the .axe Plugin System section.
 
 ### KMP / shared/commonMain rules
 
