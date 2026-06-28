@@ -39,6 +39,9 @@ import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.MirrorOnlyState
 import com.parachord.shared.sync.SpotifySyncProvider
 import com.parachord.shared.sync.SyncEngine
+import com.parachord.shared.sync.MigrationPlanSummary
+import com.parachord.shared.sync.buildMigrationReport
+import com.parachord.shared.sync.summarizeMigrationPlan
 import com.parachord.shared.sync.TrackTombstoneService
 import com.parachord.shared.model.Friend
 import com.parachord.shared.model.Track
@@ -447,6 +450,39 @@ class IosContainer private constructor() {
             playlistDao = playlistDao,
             syncEngine = syncEngine,
         )
+    }
+
+    // ── Legacy → N-way migration preview (#289 brick #5) ──────────────
+    private var lastMigrationSummary: MigrationPlanSummary? = null
+
+    /** Forced, no-write dry-run preview, shaped for Swift (call from `Task`). */
+    suspend fun previewMigration(): IosMigrationSummary {
+        val s = summarizeMigrationPlan(syncEngine.previewMigration())
+        lastMigrationSummary = s
+        return s.toIosSummary()
+    }
+
+    /** Accept: recompute; flip `sync_engine_mode='new'` only if the plan is
+     *  unchanged since the user looked, else return the fresh plan
+     *  (`flipped=false`) to re-show (recompute-on-accept). */
+    suspend fun acceptMigration(): IosMigrationAcceptResult {
+        val prev = lastMigrationSummary
+        val fresh = summarizeMigrationPlan(syncEngine.previewMigration())
+        lastMigrationSummary = fresh
+        val drifted = prev == null || fresh.totalAdds != prev.totalAdds ||
+            fresh.totalRemoves != prev.totalRemoves || fresh.changed.size != prev.changed.size ||
+            fresh.protectedList.size != prev.protectedList.size
+        if (!drifted) settingsStore.setSyncEngineMode("new")
+        return IosMigrationAcceptResult(flipped = !drifted, summary = fresh.toIosSummary())
+    }
+
+    /** Prefilled GitHub-issue report for the last previewed plan. */
+    fun migrationReport(): IosMigrationReport {
+        val s = lastMigrationSummary
+            ?: return IosMigrationReport("", "", "https://github.com/Parachord/parachord-mobile/issues/new")
+        val version = (NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: "").trim()
+        val r = buildMigrationReport(s, version)
+        return IosMigrationReport(r.title, r.body, r.githubUrl)
     }
 
     /** Run a full sync (gated internally on Settings → sync enabled). Returns
@@ -2973,6 +3009,54 @@ data class IosSearchRelease(
     val title: String,
     val artist: String,
     val year: String?,
+)
+
+// ── Migration preview (#289 brick #5) — flat Swift-facing render model ──
+data class IosMigrationTrack(val artist: String, val title: String)
+data class IosMigrationProviderDiff(
+    val providerId: String,
+    val adds: List<IosMigrationTrack>,
+    val removes: List<IosMigrationTrack>,
+)
+data class IosMigrationPlaylist(val displayName: String, val providers: List<IosMigrationProviderDiff>)
+data class IosMigrationProtected(val displayName: String, val reason: String)
+data class IosMigrationSummary(
+    val changed: List<IosMigrationPlaylist>,
+    val protectedList: List<IosMigrationProtected>,
+    val noopCount: Int,
+    val totalAdds: Int,
+    val totalRemoves: Int,
+    val hasRemoves: Boolean,
+    val hasChanges: Boolean,
+    val errorCount: Int,
+    val cycles: Int,
+)
+data class IosMigrationReport(val title: String, val body: String, val githubUrl: String)
+/** [flipped]=true → switched to `new`; else the plan drifted on recompute and
+ *  [summary] is the fresh one to re-show. */
+data class IosMigrationAcceptResult(val flipped: Boolean, val summary: IosMigrationSummary)
+
+private fun MigrationPlanSummary.toIosSummary(): IosMigrationSummary = IosMigrationSummary(
+    changed = changed.map { pl ->
+        IosMigrationPlaylist(
+            pl.displayName,
+            pl.providers.map { p ->
+                IosMigrationProviderDiff(
+                    p.providerId,
+                    p.adds.map { IosMigrationTrack(it.artist, it.title) },
+                    p.removes.map { IosMigrationTrack(it.artist, it.title) },
+                )
+            },
+        )
+    },
+    protectedList = protectedList.map { IosMigrationProtected(it.displayName, it.reason) },
+    noopCount = noopCount,
+    totalAdds = totalAdds,
+    totalRemoves = totalRemoves,
+    hasRemoves = hasRemoves,
+    hasChanges = hasChanges,
+    errorCount = errorCount,
+    cycles = cycles,
 )
 
 /** Flat artist result for the #233 search screen (MetadataService cascade →

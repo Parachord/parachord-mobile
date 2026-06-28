@@ -3016,7 +3016,17 @@ private fun GeneralTab(
         // For validating the merge against a real library before propagation.
         if (BuildConfig.DEBUG) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
-            item { SectionHeader("Developer · N-way sync (shadow)") }
+            item { SectionHeader("Developer · sync engine") }
+            item {
+                Text(
+                    "“Use new sync” below is the real migration flow (preview → accept). The " +
+                        "shadow-mode + propagation toggles under it are dev-only validation — " +
+                        "continuous dry-run logging and scoped real-write testing; users never need them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             item {
                 ListItem(
                     headlineContent = { Text("Use new sync (preview)") },
