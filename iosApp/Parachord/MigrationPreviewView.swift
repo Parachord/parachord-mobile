@@ -110,7 +110,11 @@ struct MigrationPreviewView: View {
                 .font(.footnote).foregroundStyle(.secondary)
 
             if !summary.hasChanges && summary.protectedList.isEmpty {
-                Text("No changes needed — your playlists are already in sync. Switching is a zero-risk cutover.")
+                if summary.noopCount > 0 {
+                    Text("Reviewed \(summary.noopCount) playlist\(summary.noopCount == 1 ? "" : "s") — all already in sync. Switching is a zero-risk cutover.")
+                } else {
+                    Text("No changes needed — your playlists are already in sync. Switching is a zero-risk cutover.")
+                }
             } else {
                 Text("Switching to the new sync engine would make these changes:").font(.subheadline)
                 ForEach(summary.changed) { pl in

@@ -101,7 +101,14 @@ private fun MigrationPlanBody(summary: MigrationPlanSummary, recomputed: Boolean
         )
         Spacer(Modifier.height(12.dp))
         if (!summary.hasChanges && summary.protectedList.isEmpty()) {
-            Text("No changes needed — your playlists are already in sync. Switching is a zero-risk cutover.")
+            Text(
+                if (summary.noopCount > 0) {
+                    "Reviewed ${summary.noopCount} playlist${if (summary.noopCount == 1) "" else "s"} — " +
+                        "all already in sync. Switching is a zero-risk cutover."
+                } else {
+                    "No changes needed — your playlists are already in sync. Switching is a zero-risk cutover."
+                },
+            )
             return@Column
         }
         Text(
