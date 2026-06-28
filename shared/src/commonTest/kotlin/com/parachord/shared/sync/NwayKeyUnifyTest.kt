@@ -263,4 +263,39 @@ class NwayKeyUnifyTest {
         )))
         assertEquals(listOf(listOf("isrc-XXAAA0000001", "isrc-XXAAA0000001", "isrc-XXCCC0000003")), out)
     }
+
+    @Test
+    fun guard_mbidBridgedNode_isNotAWeakNormBridge_readingC() {
+        // desktop #944 discriminator (B vs C): #1 is mbid-only (node-ISRC-free) but
+        // its COMPONENT carries ISRC AAA via the shared MBID (from #0 in a different
+        // norm group "a|one"), so #1 must NOT bridge the pure-norm #3 into AAA.
+        // Reading (C): weak set + ISRC count are component-level + global → #3 stays
+        // norm-only. (Reading (B) would give #3 -> isrc-AAA.)
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "XXAAA0000001", mbid = "m-shared", norm = "a|one"),
+            k(mbid = "m-shared", norm = "a|two"),
+            k(isrc = "XXBBB0000002", norm = "a|two"),
+            k(norm = "a|two"),
+        )))
+        assertEquals(
+            listOf(listOf("isrc-XXAAA0000001", "isrc-XXAAA0000001", "isrc-XXBBB0000002", "norm-a|two")),
+            out,
+        )
+    }
+
+    @Test
+    fun guard_mbidOnlyNode_notBridgedToIsrc_joinsWeakSet_readingNotA() {
+        // Rules out reading (A): an mbid-only node NOT bridged to any ISRC is still
+        // weak and unions with the pure-norm node (repr = its mbid).
+        val out = unifyTrackKeys(listOf(listOf(
+            k(isrc = "XXAAA0000001", norm = "a|b"),
+            k(isrc = "XXBBB0000002", norm = "a|b"),
+            k(mbid = "m-weak", norm = "a|b"),
+            k(norm = "a|b"),
+        )))
+        assertEquals(
+            listOf(listOf("isrc-XXAAA0000001", "isrc-XXBBB0000002", "mbid-m-weak", "mbid-m-weak")),
+            out,
+        )
+    }
 }
