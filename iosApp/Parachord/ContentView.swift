@@ -2557,11 +2557,13 @@ struct DevSmokeTestView: View {
     @State private var pkceSample: (verifier: String, challenge: String, state: String)?
     @State private var oauthError: String?
     @State private var spotifyConnect = IosSpotifyConnect()
+    @State private var showMigrationPreview = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
+                migrationPreviewCard
                 resolverScoringCard
                 pluginHostCard
                 queueCard
@@ -2575,9 +2577,23 @@ struct DevSmokeTestView: View {
             }
             .padding()
         }
+        .sheet(isPresented: $showMigrationPreview) { MigrationPreviewView() }
     }
 
     // MARK: - Phase 2 (sync)
+
+    private var migrationPreviewCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Use new sync (migration preview, #289)").font(.headline)
+            Text("Preview exactly what switching to the new sync engine would change — then accept, report a problem, or cancel. Nothing is armed until you accept.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Button("Preview") { showMigrationPreview = true }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
