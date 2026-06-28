@@ -130,7 +130,9 @@ fun summarizeMigrationPlan(shadowOutput: MigrationShadowOutput): MigrationPlanSu
 
 /** Render model → a prefilled GitHub issue. The caller ALSO copies `body` to the
  *  clipboard before opening `githubUrl` (GitHub truncates very long prefilled
- *  bodies in the URL). `·` separators use · to match desktop. */
+ *  bodies in the URL). Targets the **parachord-mobile** repo — this shared code
+ *  serves the iOS + Android apps; desktop's `migration-plan.js` deliberately keeps
+ *  its own `Parachord/parachord`. (The only intentional divergence from desktop.) */
 fun buildMigrationReport(summary: MigrationPlanSummary, appVersion: String): MigrationReport {
     val v = appVersion.ifEmpty { "unknown" }
     val lines = mutableListOf<String>()
@@ -156,7 +158,7 @@ fun buildMigrationReport(summary: MigrationPlanSummary, appVersion: String): Mig
     }
     val body = lines.joinToString("\n")
     val title = "New sync preview looks wrong (${summary.totalRemoves} remove(s), v$v)"
-    val githubUrl = "https://github.com/Parachord/parachord/issues/new" +
+    val githubUrl = "https://github.com/Parachord/parachord-mobile/issues/new" +
         "?title=${encodeUriComponent(title)}" +
         "&body=${encodeUriComponent(body)}" +
         "&labels=${encodeUriComponent("sync")}"

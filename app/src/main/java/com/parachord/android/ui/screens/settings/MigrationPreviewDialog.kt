@@ -89,6 +89,17 @@ private fun MigrationPlanBody(summary: MigrationPlanSummary, recomputed: Boolean
             )
             Spacer(Modifier.height(8.dp))
         }
+        // Cross-client coexistence nudge (#289): running the old engine on one
+        // device and the new engine on another against the SAME shared playlists
+        // can churn them until every client matches.
+        Text(
+            "Using Parachord on another device (desktop, etc.)? Switch it to new sync too — " +
+                "running the old and new engines on the same playlists can churn them until all " +
+                "your devices match.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(12.dp))
         if (!summary.hasChanges && summary.protectedList.isEmpty()) {
             Text("No changes needed — your playlists are already in sync. Switching is a zero-risk cutover.")
             return@Column
