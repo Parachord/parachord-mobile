@@ -1,5 +1,7 @@
 package com.parachord.shared.sync
 
+import com.parachord.shared.model.PlaylistTrack
+
 /**
  * Pure shaping for the legacy → N-way migration preview (parachord#911 / mobile#289
  * brick #5). Byte-aligned port of desktop `migration-plan.js`. Consumes the shadow
@@ -159,6 +161,32 @@ fun buildMigrationReport(summary: MigrationPlanSummary, appVersion: String): Mig
         "&body=${encodeUriComponent(body)}" +
         "&labels=${encodeUriComponent("sync")}"
     return MigrationReport(title, body, githubUrl)
+}
+
+/**
+ * Build one push target's named diff for the preview. Runs the SAME identity
+ * [computeMaterializeDiff] the executor uses, then maps the diff's OWN keyspace
+ * back to tracks 1:1 with the inputs — adds resolve from the canonical (merged)
+ * list, removes from the target's remote list (which the caller fetches fresh for
+ * an unchanged-but-lagging mirror so a removed track still has a name). A track's
+ * preview name is `{trackArtist, trackTitle}` (mobile PlaylistTrack is already
+ * normalized — no `name`/`artistName` fallbacks needed). Pure.
+ */
+fun buildMigrationPerTarget(
+    providerId: String,
+    mergedTracks: List<PlaylistTrack>,
+    remoteTracks: List<PlaylistTrack>,
+): MigrationPerTarget {
+    val diff = computeMaterializeDiff(mergedTracks, remoteTracks)
+    val keyToCanonical = HashMap<String, PlaylistTrack>()
+    diff.canonicalKeys.forEachIndexed { i, k -> if (k !in keyToCanonical) keyToCanonical[k] = mergedTracks[i] }
+    val keyToRemote = HashMap<String, PlaylistTrack>()
+    diff.remoteKeys.forEachIndexed { i, k -> if (k !in keyToRemote) keyToRemote[k] = remoteTracks[i] }
+    return MigrationPerTarget(
+        providerId = providerId,
+        addTracks = diff.addKeys.mapNotNull { k -> keyToCanonical[k]?.let { PreviewTrack(it.trackArtist, it.trackTitle) } },
+        removeTracks = diff.removeKeys.mapNotNull { k -> keyToRemote[k]?.let { PreviewTrack(it.trackArtist, it.trackTitle) } },
+    )
 }
 
 /** `encodeURIComponent` equivalent — UTF-8 %XX for everything except the JS

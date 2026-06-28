@@ -1,5 +1,6 @@
 package com.parachord.shared.sync
 
+import com.parachord.shared.model.PlaylistTrack
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -115,5 +116,39 @@ class MigrationPlanTest {
         val report = buildMigrationReport(empty, "")
         assertTrue(report.body.contains("App version: unknown"))
         assertTrue(report.githubUrl.startsWith("https://github.com/"))
+    }
+
+    // ── buildMigrationPerTarget (Piece B): diff keys → named tracks ─────────
+
+    private fun pt(title: String, artist: String, isrc: String? = null) =
+        PlaylistTrack(playlistId = "p", position = 0, trackTitle = title, trackArtist = artist, trackIsrc = isrc)
+
+    @Test
+    fun perTarget_names_adds_from_canonical_and_removes_from_remote() {
+        val merged = listOf(pt("Song A", "Artist A", "USAAA0000001"), pt("Song B", "Artist B", "USBBB0000002"))
+        val remote = listOf(pt("Song A", "Artist A", "USAAA0000001"), pt("Song C", "Artist C", "USCCC0000003"))
+        val d = buildMigrationPerTarget("spotify", merged, remote)
+        assertEquals("spotify", d.providerId)
+        assertEquals(listOf(PreviewTrack("Artist B", "Song B")), d.addTracks)
+        assertEquals(listOf(PreviewTrack("Artist C", "Song C")), d.removeTracks)
+    }
+
+    @Test
+    fun perTarget_is_empty_when_identical() {
+        val tracks = listOf(pt("Song A", "Artist A", "USAAA0000001"))
+        val d = buildMigrationPerTarget("applemusic", tracks, tracks)
+        assertTrue(d.addTracks.isEmpty())
+        assertTrue(d.removeTracks.isEmpty())
+    }
+
+    @Test
+    fun perTarget_bridges_identity_no_churny_add_remove() {
+        // Same recording (same ISRC), drifted title across services → matches via the
+        // unify, so it's NOT a spurious remove-old + add-new.
+        val merged = listOf(pt("Creep - 2008 Remaster", "Radiohead", "GBAYE0601477"))
+        val remote = listOf(pt("Creep", "Radiohead", "GBAYE0601477"))
+        val d = buildMigrationPerTarget("spotify", merged, remote)
+        assertTrue(d.addTracks.isEmpty())
+        assertTrue(d.removeTracks.isEmpty())
     }
 }

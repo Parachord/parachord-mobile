@@ -67,6 +67,9 @@ data class NwayPropagationEntry(
     val pendingAdds: Int = 0,
     /** Removes a provider can't honor (e.g. Apple Music's append-only PUT degradation). */
     val unsupportedRemoves: Int = 0,
+    /** Per-target named add/remove tracks for the migration preview — populated
+     *  only in dry-run/preview (#289 brick #5); empty during real propagation. */
+    val perTarget: List<MigrationPerTarget> = emptyList(),
 )
 
 /**
