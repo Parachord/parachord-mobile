@@ -23,10 +23,14 @@ final class ShareViewController: UIViewController {
         }
     }
 
+    // Forward any web URL (or spotify: scheme) and let the HOST decide via its
+    // resolver registry — so a new resolver "just works" without an extension
+    // change (#281). Host-scoping the share sheet via an NSExtensionActivationRule
+    // predicate (vs. the current broad web-URL rule) is a tracked follow-up.
     private static func isSupported(_ url: URL) -> Bool {
         if url.scheme == "spotify" { return true }
-        let host = url.host?.lowercased() ?? ""
-        return host == "open.spotify.com" || host == "music.apple.com"
+        let s = url.scheme?.lowercased()
+        return s == "http" || s == "https"
     }
 
     /// Pull the first URL out of the shared item — a `public.url` attachment, or a

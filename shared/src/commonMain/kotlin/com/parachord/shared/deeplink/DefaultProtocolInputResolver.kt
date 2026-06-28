@@ -35,13 +35,15 @@ class DefaultProtocolInputResolver(
     private val httpClient: HttpClient,
     appleMusicDeveloperToken: String = "",
     spotifyAccessToken: suspend () -> String? = { null },
+    pluginLookupPlaylistJson: (suspend (String) -> String?)? = null,
 ) : ProtocolInputResolver {
 
     private val maxTracklistBytes: Int = 100 * 1024  // 100KB body cap
 
-    // play/playlist provider-page resolution (parachord#930).
+    // play/playlist provider-page resolution (parachord#930 + #281 registry fallback).
     private val providerPlaylistResolver = ProviderPlaylistResolver(
         spotifyClient, appleMusicClient, httpClient, appleMusicDeveloperToken, spotifyAccessToken,
+        pluginLookupPlaylistJson,
     )
 
     override suspend fun resolveProviderPlaylist(url: String): ResolvedProtocolPlay? =

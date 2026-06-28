@@ -974,6 +974,7 @@ val androidModule = module {
     // + handler orchestrator. The teardown's listen-along stopper is wired
     // separately at MainActivity startup via setListenAlongStopper().
     single<com.parachord.shared.deeplink.ProtocolInputResolver> {
+        val pluginManager = get<com.parachord.shared.plugin.PluginManager>()
         com.parachord.android.deeplink.AndroidProtocolInputResolver(
             musicBrainzClient = get(),
             spotifyClient = get(),
@@ -982,6 +983,8 @@ val androidModule = module {
             httpClient = get(),
             appleMusicDeveloperToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
             spotifyAccessToken = { get<com.parachord.shared.settings.SettingsStore>().getSpotifyAccessToken() },
+            // Registry fallback for non-native providers (SoundCloud + future, #281).
+            pluginLookupPlaylistJson = { url -> pluginManager.lookupPlaylist(url) },
         )
     }
     single { com.parachord.android.deeplink.AndroidProtocolPlayTeardown(playbackController = get()) }

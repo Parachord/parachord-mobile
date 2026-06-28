@@ -14,6 +14,8 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 private const val TAG = "PluginManager"
+private const val LOOKUP_POLL_ATTEMPTS = 60
+private const val LOOKUP_POLL_INTERVAL_MS = 100L
 
 /**
  * Central wrapper for .axe plugin loading and execution.
@@ -277,6 +279,50 @@ class PluginManager constructor(
                 return result ? JSON.stringify(result) : null;
             })()
         """.trimIndent())?.unquote()
+    }
+
+    private var lookupCounter = 0
+
+    /**
+     * Registry-driven playlist resolution (#281): the resolver-loader finds the
+     * resolver whose `urlPatterns` claim [url] and calls its `lookupPlaylist`.
+     * Returns the raw `{playlist, resolverId}` JSON (caller parses), or null if no
+     * resolver claims it / it has no `lookupPlaylist` / the lookup fails. This is
+     * what makes any resolver "just work" for playlist URLs — no per-provider code.
+     *
+     * Uses the unique-key POLL (not a bare `(async()=>)()`, which yields the
+     * unresolved Promise serialized as `{}` once a real async `fetch` is awaited).
+     */
+    suspend fun lookupPlaylist(url: String): String? {
+        ensureInitialized()
+        val key = "lpl_${lookupCounter++}"
+        val escaped = escapeForJs(url)
+        jsRuntime.evaluate(
+            """
+            (function() {
+                window.__resolveResults = window.__resolveResults || {};
+                window.__resolveResults['$key'] = 'pending';
+                (async () => {
+                    try {
+                        var result = await window.__resolverLoader.lookupPlaylist('$escaped');
+                        window.__resolveResults['$key'] = result ? JSON.stringify(result) : 'null';
+                    } catch (e) {
+                        window.__resolveResults['$key'] = 'error:' + ((e && e.message) ? e.message : String(e));
+                    }
+                })();
+            })();
+            """.trimIndent(),
+        )
+        repeat(LOOKUP_POLL_ATTEMPTS) {
+            delay(LOOKUP_POLL_INTERVAL_MS)
+            val raw = jsRuntime.evaluate("window.__resolveResults['$key']")?.unquote()
+            if (raw != null && raw != "pending") {
+                jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
+                if (raw == "null" || raw.startsWith("error:")) return null
+                return raw
+            }
+        }
+        return null
     }
 
     // ── AI Provider Calls ────────────────────────────────────────────

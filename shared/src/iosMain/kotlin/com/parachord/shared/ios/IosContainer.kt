@@ -935,6 +935,8 @@ class IosContainer private constructor() {
             musicBrainzClient, spotifyClient, appleMusicClient, metadataService, httpClient,
             appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
             spotifyAccessToken = { settingsStore.getSpotifyAccessToken() },
+            // Registry fallback for non-native providers (SoundCloud + future, #281).
+            pluginLookupPlaylistJson = { url -> resolverRuntime.lookupPlaylist(url) },
         )
     }
 
@@ -1071,14 +1073,20 @@ class IosContainer private constructor() {
         val u = try { io.ktor.http.Url(rawUrl) } catch (e: Exception) {
             return IosComplexLink("failed", message = "Couldn't read that link")
         }
-        val host = u.host.lowercase()
-        val segs = u.encodedPath.split("/").filter { it.isNotBlank() }
-        val action: DeepLinkAction = when (host) {
-            "open.spotify.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseSpotifyUrl(host, segs)
-            "music.apple.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseAppleMusicUrl(segs, u.parameters["i"])
-            else -> return IosComplexLink("failed", message = "That isn't a Spotify or Apple Music link")
-        }
         return try {
+            // Any provider PLAYLIST first — Spotify/Apple/Achordion (native) +
+            // SoundCloud & future resolvers (registry, #281) — so a shared playlist
+            // link works regardless of provider, no per-provider branch here.
+            protocolInputResolver.resolveProviderPlaylist(rawUrl)?.let { return it.toExternalPlay() }
+
+            // Else classify track/album/artist via the shared ExternalUrlParser.
+            val host = u.host.lowercase()
+            val segs = u.encodedPath.split("/").filter { it.isNotBlank() }
+            val action: DeepLinkAction = when (host) {
+                "open.spotify.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseSpotifyUrl(host, segs)
+                "music.apple.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseAppleMusicUrl(segs, u.parameters["i"])
+                else -> return IosComplexLink("failed", message = "That link type isn't supported yet")
+            }
             dispatchExternalAction(action, rawUrl)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e

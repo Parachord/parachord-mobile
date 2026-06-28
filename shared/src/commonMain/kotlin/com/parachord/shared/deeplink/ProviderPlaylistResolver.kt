@@ -37,10 +37,10 @@ private val embedJson = Json { ignoreUnknownKeys = true; isLenient = true }
  * (`getCatalogPlaylist`) on both platforms (devToken from `AppConfig`).
  *
  * **SoundCloud is not yet supported on mobile** — there's no native SoundCloud
- * playlist-fetch client (unlike desktop's `.axe` `lookupPlaylist`). Both the
- * canonical `/sets/` URL and the `on.soundcloud.com` short link throw a clear
- * "not supported yet" error rather than silently HTML-parsing the page. Adding a
- * SoundCloud playlist client (or `.axe` lookup plumbing) is a tracked follow-up.
+ * playlist-fetch client, so SoundCloud (and any future provider) resolves through
+ * the **resolver registry** ([pluginLookupPlaylistJson] → the `.axe` whose
+ * `urlPatterns` claim the URL + implement `lookupPlaylist`, #281). Adding a
+ * resolver therefore needs no code here — only its `.axe`.
  *
  * Semantics mirror desktop: a *recognized* provider playlist that fails to load
  * **throws** (surfaced as a toast); an *unrecognized* URL returns **null** (caller
@@ -52,23 +52,55 @@ class ProviderPlaylistResolver(
     private val httpClient: HttpClient,
     private val appleMusicDeveloperToken: String,
     private val spotifyAccessToken: suspend () -> String?,
+    /**
+     * Registry-driven fallback (#281): given a provider URL, returns the raw
+     * `{playlist, resolverId}` JSON from the resolver-loader's `lookupPlaylist`
+     * (whichever `.axe` claims the URL via `urlPatterns`), or null. Wired per
+     * platform — `PluginManager.lookupPlaylist` (Android) / `IosResolverRuntime.
+     * lookupPlaylist` (iOS). This is what makes ANY resolver "just work" for
+     * playlist URLs (SoundCloud today; future resolvers with no new code).
+     */
+    private val pluginLookupPlaylistJson: (suspend (String) -> String?)? = null,
 ) {
     suspend fun resolve(rawUrl: String): ResolvedProtocolPlay? {
         when (val kind = classifyPlaylistUrl(rawUrl)) {
             is PlaylistUrlKind.Achordion -> return fetchAchordionXspf(kind.xspfUrl)
-            // SoundCloud short link → would 302 to /sets/, but mobile can't fetch
-            // a SoundCloud playlist anyway, so surface the gap directly.
-            PlaylistUrlKind.SoundCloudShort ->
-                throw IllegalStateException("SoundCloud playlists aren't supported on mobile yet.")
-            PlaylistUrlKind.Standard -> Unit // sniff below
+            // SoundCloud short link / any other host → fall through to native
+            // Spotify/Apple, then the resolver registry below.
+            PlaylistUrlKind.SoundCloudShort -> Unit
+            PlaylistUrlKind.Standard -> Unit
         }
 
+        // Native fast-paths (real track IDs / no JS bridge).
         extractSpotifyPlaylistId(rawUrl)?.let { return fetchSpotifyPlaylist(it) }
         extractAppleMusicPlaylist(rawUrl)?.let { (sf, id) -> return fetchAppleMusicPlaylist(sf, id) }
-        if (isSoundCloudSet(rawUrl)) {
-            throw IllegalStateException("SoundCloud playlists aren't supported on mobile yet.")
-        }
+
+        // Registry fallback — any resolver whose urlPatterns claim this URL and
+        // that implements lookupPlaylist (SoundCloud /sets/ + future providers).
+        resolveViaRegistry(rawUrl)?.let { return it }
+
         return null // not a provider playlist page → caller parses as a tracklist document
+    }
+
+    /** Resolve via the resolver-loader registry (the `.axe` that claims [url]). */
+    private suspend fun resolveViaRegistry(url: String): ResolvedProtocolPlay? {
+        val raw = pluginLookupPlaylistJson?.invoke(url) ?: return null
+        return try {
+            val pl = embedJson.parseToJsonElement(raw).jsonObject["playlist"]?.jsonObject ?: return null
+            val name = pl["name"]?.jsonPrimitive?.contentOrNull
+                ?: pl["title"]?.jsonPrimitive?.contentOrNull ?: "Playlist"
+            val list = pl["tracks"]?.jsonArray ?: return null
+            val tracks = list.mapNotNull { el ->
+                val o = el.jsonObject
+                val title = o["title"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val artist = o["artist"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                ProtocolTrack(artist = artist, title = title, album = o["album"]?.jsonPrimitive?.contentOrNull)
+            }
+            if (tracks.isEmpty()) null
+            else ResolvedProtocolPlay(displayName = name, tracks = tracks, albumArt = pl["albumArt"]?.jsonPrimitive?.contentOrNull)
+        } catch (e: Exception) {
+            Log.w(TAG, "registry playlist parse failed for $url: ${e.message}"); null
+        }
     }
 
     // ── Achordion → public XSPF endpoint, then the standard tracklist parser ──
@@ -176,8 +208,6 @@ class ProviderPlaylistResolver(
         return m.groupValues[1] to m.groupValues[2]
     }
 
-    private fun isSoundCloudSet(url: String): Boolean =
-        Regex("(?:^|//)(?:[a-z0-9-]+\\.)?soundcloud\\.com/[^/]+/sets/").containsMatchIn(url.lowercase())
 }
 
 /**

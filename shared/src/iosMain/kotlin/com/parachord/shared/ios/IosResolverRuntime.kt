@@ -379,6 +379,45 @@ class IosResolverRuntime(
         return emptyList()
     }
 
+    /**
+     * Registry-driven playlist resolution (#281) — the iOS counterpart of
+     * `PluginManager.lookupPlaylist`. Finds the resolver whose `urlPatterns` claim
+     * [url] and runs its `lookupPlaylist` via the same JSC unique-key poll as
+     * [resolveOne]/[listModelsDynamic]. Returns the raw `{playlist, resolverId}` JSON
+     * (caller parses), or null when no resolver claims it / it lacks `lookupPlaylist`
+     * / the lookup fails. JSC returns the JS string value raw, so no unquoting.
+     */
+    suspend fun lookupPlaylist(url: String): String? {
+        val key = "lpl_${callCounter++}"
+        val u = url.jsEsc()
+        jsRuntime.evaluate(
+            """
+            (function() {
+                window.__resolveResults = window.__resolveResults || {};
+                window.__resolveResults['$key'] = 'pending';
+                (async () => {
+                    try {
+                        var result = await window.__resolverLoader.lookupPlaylist('$u');
+                        window.__resolveResults['$key'] = result ? JSON.stringify(result) : 'null';
+                    } catch (e) {
+                        window.__resolveResults['$key'] = 'error:' + ((e && e.message) ? e.message : String(e));
+                    }
+                })();
+            })();
+            """.trimIndent(),
+        )
+        repeat(POLL_ATTEMPTS) {
+            delay(POLL_INTERVAL_MS)
+            val raw = jsRuntime.evaluate("window.__resolveResults['$key']")
+            if (raw != null && raw != "pending") {
+                jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
+                if (raw == "null" || raw.startsWith("error:")) return null
+                return raw
+            }
+        }
+        return null
+    }
+
     private fun String.jsEsc(): String = replace("\\", "\\\\").replace("'", "\\'")
 
     private companion object {

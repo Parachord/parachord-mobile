@@ -49,15 +49,17 @@ class AndroidProtocolInputResolver constructor(
     private val httpClient: HttpClient,
     appleMusicDeveloperToken: String = "",
     spotifyAccessToken: suspend () -> String? = { null },
+    pluginLookupPlaylistJson: (suspend (String) -> String?)? = null,
 ) : ProtocolInputResolver {
 
     /** Body cap on URL-fetched tracklists — guards against very large
      *  publisher errors. 100KB matches desktop's per-payload limit. */
     private val maxTracklistBytes: Int = 100 * 1024
 
-    // play/playlist provider-page resolution (parachord#930) — shared with iOS.
+    // play/playlist provider-page resolution (parachord#930 + #281 registry fallback) — shared with iOS.
     private val providerPlaylistResolver = com.parachord.shared.deeplink.ProviderPlaylistResolver(
         spotifyClient, appleMusicClient, httpClient, appleMusicDeveloperToken, spotifyAccessToken,
+        pluginLookupPlaylistJson,
     )
 
     override suspend fun resolveProviderPlaylist(url: String): ResolvedProtocolPlay? =
