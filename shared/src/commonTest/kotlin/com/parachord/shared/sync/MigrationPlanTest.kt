@@ -105,7 +105,7 @@ class MigrationPlanTest {
         assertTrue(title.contains("1.2.3"))
         assertTrue(body.contains("Khruangbin — May ninth"))
         assertTrue(body.contains("App version: 1.2.3"))
-        assertTrue(githubUrl.startsWith("https://github.com/Parachord/parachord/issues/new?"))
+        assertTrue(githubUrl.startsWith("https://github.com/Parachord/parachord-mobile/issues/new?"))
         assertTrue(githubUrl.contains("title=${encodeUriComponent(title)}"))
         assertTrue(githubUrl.contains("labels=sync"))
     }
