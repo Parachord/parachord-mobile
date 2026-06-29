@@ -2830,21 +2830,6 @@ private fun SyncTab(
 
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            // Change sync settings button
-                            OutlinedButton(
-                                onClick = {
-                                    syncSetupProviderId = "spotify"
-                                    syncViewModel.resetSetup()
-                                    showSyncSetupSheet = true
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(8.dp),
-                            ) {
-                                Text("Change sync settings")
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
                             // Configure what syncs — per-provider picker (#266).
                             // Choose which of your Spotify playlists to import.
                             OutlinedButton(
@@ -2941,7 +2926,7 @@ private fun SyncTab(
                             ),
                         ) {
                             Text(
-                                if (appleMusicSyncEnabled) "Choose what to sync…"
+                                if (appleMusicSyncEnabled) "Configure what syncs"
                                 else "Set up Apple Music sync…"
                             )
                         }
@@ -2984,37 +2969,54 @@ private fun SyncTab(
             item { Spacer(modifier = Modifier.height(8.dp)) }
             item { SectionHeader("ListenBrainz Sync") }
             item {
-                ListItem(
-                    headlineContent = { Text("ListenBrainz Sync") },
-                    supportingContent = {
-                        Text(
-                            "Pushes Parachord-curated playlists to your ListenBrainz profile. " +
-                                "Loved tracks already sync separately via scrobblers.",
-                        )
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = listenBrainzSyncEnabled,
-                            onCheckedChange = onSetListenBrainzSyncEnabled,
-                        )
-                    },
-                )
-            }
-            // Configure what syncs — push picker (#266): All / Choose / None
-            // over the local playlists eligible to mirror to ListenBrainz.
-            if (listenBrainzSyncEnabled) {
-                item {
-                    TextButton(
-                        onClick = { configSyncProviderId = "listenbrainz" },
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    ) {
-                        Text("Configure what syncs")
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.ChevronRight,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    if (listenBrainzSyncEnabled) "Syncing enabled" else "Syncing disabled",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    "Pushes Parachord-curated playlists to your ListenBrainz " +
+                                        "profile. Loved tracks sync separately via scrobblers.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = listenBrainzSyncEnabled,
+                                onCheckedChange = onSetListenBrainzSyncEnabled,
+                            )
+                        }
+                        // Configure what syncs — push picker (#266): All / Choose /
+                        // None over the local playlists eligible to mirror to LB.
+                        if (listenBrainzSyncEnabled) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            OutlinedButton(
+                                onClick = { configSyncProviderId = "listenbrainz" },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text("Configure what syncs")
+                            }
+                        }
                     }
                 }
             }
