@@ -2730,6 +2730,8 @@ private fun SyncTab(
     val syncViewModel: SyncViewModel = koinViewModel()
     val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
     val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
+    val isSyncing by syncViewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncProgress by syncViewModel.syncProgress.collectAsStateWithLifecycle()
     // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
     // screen (koinViewModel is nav-entry-scoped).
     val settingsViewModel: SettingsViewModel = koinViewModel()
@@ -2752,6 +2754,56 @@ private fun SyncTab(
     var configSyncProviderId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // Sync status + global "Sync now" (#303) — one action that syncs every
+        // enabled service; disabled while a sync runs (no more "already syncing").
+        if (spotifyConnected || appleMusicAuthorized || listenBrainzConnected) {
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (isSyncing) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    if (syncProgress.total > 0)
+                                        "Syncing… ${syncProgress.current}/${syncProgress.total}"
+                                    else syncProgress.message.ifBlank { "Syncing…" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        } else {
+                            Text(
+                                "Last synced: ${formatRelativeTime(lastSyncAt)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { syncViewModel.syncNow() },
+                            enabled = !isSyncing,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(if (isSyncing) "Syncing…" else "Sync now")
+                        }
+                    }
+                }
+            }
+        }
+
         // Spotify Sync section — only shown when Spotify is connected
         if (spotifyConnected) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
@@ -2811,24 +2863,6 @@ private fun SyncTab(
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                             )
                             Spacer(modifier = Modifier.height(16.dp))
-
-                            // Sync Now button
-                            Button(
-                                onClick = {
-                                    syncSetupProviderId = "spotify"
-                                    syncViewModel.syncNow()
-                                    showSyncSetupSheet = true
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF1DB954),
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                            ) {
-                                Text("Sync Now")
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
 
                             // Configure what syncs — per-provider picker (#266).
                             // Choose which of your Spotify playlists to import.

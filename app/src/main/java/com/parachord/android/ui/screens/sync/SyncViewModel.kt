@@ -151,6 +151,11 @@ class SyncViewModel constructor(
     private val _syncResult = MutableStateFlow<com.parachord.shared.sync.SyncEngine.FullSyncResult?>(null)
     val syncResult: StateFlow<com.parachord.shared.sync.SyncEngine.FullSyncResult?> = _syncResult
 
+    /** True while a full sync is running — drives the Sync-settings status header
+     *  (animated indicator + disabled "Sync now"). Set by [syncNow]. */
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing
+
     val syncEnabled = settingsStore.syncEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -384,13 +389,19 @@ class SyncViewModel constructor(
     }
 
     fun syncNow() {
+        if (_isSyncing.value) return // guard: ignore taps while a sync is running
         _currentStep.value = SetupStep.SYNCING
+        _isSyncing.value = true
         viewModelScope.launch {
-            val result = syncEngine.syncAll(
-                onProgress = { progress -> _syncProgress.value = progress },
-            )
-            _syncResult.value = result
-            _currentStep.value = SetupStep.COMPLETE
+            try {
+                val result = syncEngine.syncAll(
+                    onProgress = { progress -> _syncProgress.value = progress },
+                )
+                _syncResult.value = result
+                _currentStep.value = SetupStep.COMPLETE
+            } finally {
+                _isSyncing.value = false
+            }
         }
     }
 
