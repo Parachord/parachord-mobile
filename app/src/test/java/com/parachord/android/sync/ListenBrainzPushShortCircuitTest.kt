@@ -104,8 +104,7 @@ class ListenBrainzPushShortCircuitTest {
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
-            hydrationBudgetPerSync = hydrationBudget,
-        )
+        ).also { it.hydrationBudgetPerSync = hydrationBudget }
 
         suspend fun seedLocalPlaylist(id: String, name: String, trackCount: Int = 2, hydrated: Boolean = true) {
             playlistDao.insert(

@@ -62,6 +62,11 @@ class SyncEngine constructor(
      */
     private val providers: List<com.parachord.shared.sync.SyncProvider>,
     private val tombstones: TrackTombstoneService,
+) {
+
+    private val spotifyProvider: SpotifySyncProvider
+        get() = providers.first { it.id == SpotifySyncProvider.PROVIDER_ID } as SpotifySyncProvider
+
     /**
      * Per-sync cap on track-id hydration searches ([hydrateMissingTrackIds]),
      * shared across all providers + playlists in ONE sync (#300). Bounds the
@@ -69,13 +74,14 @@ class SyncEngine constructor(
      * empty ListenBrainz mirrors at once) can't burst thousands of lookups and
      * self-throttle (observed: 2,359 MB 429s in a single sync). Tracks beyond the
      * budget stay un-hydrated and retry next sync — misses are not cached, so the
-     * mirrors fill gradually instead of flooding. Injectable for tests.
+     * mirrors fill gradually instead of flooding.
+     *
+     * A settable property, NOT a constructor param: Koin's `singleOf(::SyncEngine)`
+     * resolves every ctor param by type and does NOT honor Kotlin defaults, so an
+     * unbound `Int` param crashed app startup (#305 regression). Tests override it
+     * directly after construction.
      */
-    private val hydrationBudgetPerSync: Int = HYDRATION_BUDGET_PER_SYNC,
-) {
-
-    private val spotifyProvider: SpotifySyncProvider
-        get() = providers.first { it.id == SpotifySyncProvider.PROVIDER_ID } as SpotifySyncProvider
+    var hydrationBudgetPerSync: Int = HYDRATION_BUDGET_PER_SYNC
 
     /** Remaining hydration-search budget for the in-flight sync; reset at the top
      *  of [syncPlaylists]. Guarded by [hydrationBudgetMutex] — the searches run in
