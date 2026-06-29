@@ -2873,19 +2873,6 @@ private fun SyncTab(
                             ) {
                                 Text("Configure what syncs")
                             }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Stop syncing button
-                            TextButton(
-                                onClick = { showStopSyncDialog = true },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    "Stop syncing",
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
                         }
                     }
                 }
@@ -2917,65 +2904,49 @@ private fun SyncTab(
                     ),
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        // Header + status text.
-                        Text(
-                            if (appleMusicSyncEnabled) "Apple Music sync is on"
-                            else "Apple Music sync is off",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            if (appleMusicSyncEnabled)
-                                "Tap below to choose which library items to sync."
-                            else
-                                "Tap below to choose which library items to sync from Apple Music.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // PRIMARY ENTRY — filled button (not outlined). The wizard's
-                        // OPTIONS step is the only place users can change axis
-                        // selection, so make this button impossible to miss.
-                        // When AM is off this button enables it via the wizard;
-                        // when on it re-opens the wizard with current selection.
-                        Button(
-                            onClick = {
-                                if (appleMusicSyncEnabled) {
-                                    // Already on — go straight to the per-provider
-                                    // picker (#266: axes + which AM playlists to
-                                    // import), not the all-or-nothing setup wizard.
-                                    configSyncProviderId = "applemusic"
-                                } else {
-                                    syncSetupProviderId = "applemusic"
-                                    syncViewModel.resetSetup()
-                                    showSyncSetupSheet = true
-                                }
-                            },
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFA243C),
-                            ),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                if (appleMusicSyncEnabled) "Configure what syncs"
-                                else "Set up Apple Music sync…"
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    if (appleMusicSyncEnabled) "Syncing enabled" else "Syncing disabled",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    "Sync your Apple Music library and playlists.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            // Toggle ON opens the setup wizard (first-time axis
+                            // selection); OFF disables AM sync directly.
+                            Switch(
+                                checked = appleMusicSyncEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        syncSetupProviderId = "applemusic"
+                                        syncViewModel.resetSetup()
+                                        showSyncSetupSheet = true
+                                    } else {
+                                        onSetAppleMusicSyncEnabled(false)
+                                    }
+                                },
                             )
                         }
-
-                        // SECONDARY — only shown when AM is on, gives an explicit
-                        // off path. Wizard handles axis changes; this is for the
-                        // simple "I'm done with AM sync entirely" case.
                         if (appleMusicSyncEnabled) {
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
                             OutlinedButton(
-                                onClick = { onSetAppleMusicSyncEnabled(false) },
+                                onClick = { configSyncProviderId = "applemusic" },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp),
                             ) {
-                                Text("Turn off Apple Music sync")
+                                Text("Configure what syncs")
                             }
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
