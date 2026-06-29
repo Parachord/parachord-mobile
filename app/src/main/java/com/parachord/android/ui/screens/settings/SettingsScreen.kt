@@ -2732,6 +2732,8 @@ private fun SyncTab(
     val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
     val isSyncing by syncViewModel.isSyncing.collectAsStateWithLifecycle()
     val syncProgress by syncViewModel.syncProgress.collectAsStateWithLifecycle()
+    val syncedSummaries by syncViewModel.syncedSummaries.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { syncViewModel.loadSyncedSummaries() }
     // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
     // screen (koinViewModel is nav-entry-scoped).
     val settingsViewModel: SettingsViewModel = koinViewModel()
@@ -2831,7 +2833,12 @@ private fun SyncTab(
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
-                                    if (syncEnabled) "Syncing enabled" else "Syncing disabled",
+                                    when {
+                                        syncEnabled && syncedSummaries["spotify"].orEmpty().isNotEmpty() ->
+                                            "Syncing: ${syncedSummaries["spotify"]}"
+                                        syncEnabled -> "Syncing enabled"
+                                        else -> "Syncing disabled"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -2915,7 +2922,9 @@ private fun SyncTab(
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
-                                    "Sync your Apple Music library and playlists.",
+                                    if (appleMusicSyncEnabled && syncedSummaries["applemusic"].orEmpty().isNotEmpty())
+                                        "Syncing: ${syncedSummaries["applemusic"]}"
+                                    else "Sync your Apple Music library and playlists.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -2995,7 +3004,9 @@ private fun SyncTab(
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
-                                    "Pushes Parachord-curated playlists to your ListenBrainz " +
+                                    if (listenBrainzSyncEnabled && syncedSummaries["listenbrainz"].orEmpty().isNotEmpty())
+                                        "Syncing: ${syncedSummaries["listenbrainz"]}"
+                                    else "Pushes Parachord-curated playlists to your ListenBrainz " +
                                         "profile. Loved tracks sync separately via scrobblers.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
