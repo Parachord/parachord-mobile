@@ -3040,26 +3040,18 @@ class SyncEngine constructor(
         val providerId = provider.id
         var added = 0
 
-        // Per-provider playlist-push selection (the user's "which playlists, if
-        // any" choice). ListenBrainz defaults to NONE, so a fresh install never
-        // pushes to LB — NONE makes `candidates` empty, short-circuiting the
-        // whole push (no fetch-remote, no loop). SELECTED restricts to the
-        // chosen local ids; ALL preserves mirror-everything.
-        val selection = settingsStore.getPlaylistSelection(providerId)
+        // A playlist is pushed to [providerId] when it's type-eligible
+        // ([isPushCandidate]) AND the provider is in its EFFECTIVE channels (see
+        // [shouldPushToProvider]): an explicit per-playlist override, OR an existing
+        // mirror LINK, OR the provider's mode-default push selection. Reading the
+        // LINK — not just the override/selection — is #300: a row already mirrored to
+        // LB but lacking an explicit override (the picker keeps the link as truth and
+        // writes no override on a no-op) was silently dropped from the push.
+        // ListenBrainz still defaults to a NONE selection, so a fresh install with no
+        // LB links never pushes to LB (candidates empty → whole push short-circuits).
         val allPlaylists = playlistDao.getAllSync()
-        // A per-playlist channel override (from the playlist Sync menu) is
-        // AUTHORITATIVE — it overrides the provider's push mode for that one
-        // playlist. Otherwise fall back to the per-provider selection.
         val candidates = allPlaylists.filter {
-            it.name.isNotBlank() && isPushCandidate(it, providerId) && run {
-                val override = settingsStore.getPlaylistChannels(it.id)
-                // Override is authoritative (explicit opt-in). Otherwise fall to the
-                // per-provider default — but a ListenBrainz-imported playlist NEVER
-                // auto-mirrors (autoMirrorsByDefault=false): re-exporting LB → Spotify/AM
-                // is opt-in only, so a pulled LB library can't flood them.
-                if (override != null) providerId in override
-                else autoMirrorsByDefault(it) && selection.includes(it.id)
-            }
+            it.name.isNotBlank() && shouldPushToProvider(it, providerId)
         }
 
         val liveRemote = remotePlaylists.filter { it.spotifyId !in deletedExternalIds }
@@ -3346,6 +3338,20 @@ class SyncEngine constructor(
      */
     private fun isPushCandidate(playlist: Playlist, providerId: String): Boolean =
         isPlaylistPushCandidate(playlist, providerId)
+
+    /**
+     * Whether [playlist] should be PUSHED to [providerId] this cycle: type-eligible
+     * ([isPushCandidate]) AND the provider is in the playlist's EFFECTIVE channels —
+     * an explicit per-playlist override, OR an existing mirror LINK, OR the provider's
+     * mode-default push selection. Honoring the LINK (not just override/selection) is
+     * #300: the push picker keeps the link as the source of truth and writes NO
+     * override on a no-op, so a row already mirrored to a provider but lacking an
+     * explicit override would otherwise be silently dropped from the push. An explicit
+     * override stays authoritative (it short-circuits [effectivePlaylistChannels]), so
+     * a deselected provider is still respected over a lingering link.
+     */
+    suspend fun shouldPushToProvider(playlist: Playlist, providerId: String): Boolean =
+        isPushCandidate(playlist, providerId) && providerId in effectivePlaylistChannels(playlist.id)
 
     /**
      * Extracts the per-provider external IDs from a playlist's tracks.
