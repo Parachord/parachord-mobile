@@ -47,6 +47,8 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         private const val TAG = "ListenBrainzClient"
         private const val BASE_URL = "https://api.listenbrainz.org"
         private const val MAPPER_URL = "https://mapper.listenbrainz.org"
+        /** LB's playlist item/add endpoint caps at 100 recordings per call (#300). */
+        private const val LB_MAX_ADD_PER_CALL = 100
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
         /** Canonical ISRC shape (after uppercasing): 2-char country + 3-char registrant + 7 digits. */
         private val ISRC_REGEX = Regex("^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
@@ -413,40 +415,46 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         token: String,
     ) {
         if (recordingMbids.isEmpty()) return
-        val body = buildJsonObject {
-            put(
-                "playlist",
-                buildJsonObject {
-                    put(
-                        "track",
-                        buildJsonArray {
-                            for (mbid in recordingMbids) {
-                                add(
-                                    buildJsonObject {
-                                        put("identifier", "https://musicbrainz.org/recording/$mbid")
-                                    },
-                                )
-                            }
-                        },
-                    )
-                },
-            )
-        }
-        val response = executeWithRetry {
-            httpClient.post("$BASE_URL/1/playlist/$playlistMbid/item/add") {
-                header("Authorization", "Token $token")
-                contentType(io.ktor.http.ContentType.Application.Json)
-                setBody(body)
+        // LB caps the item/add endpoint at 100 recordings per call (#300: a >100-track
+        // playlist 400s "You may only add max 100 recordings per call" and never fills).
+        // Chunk + append in order — each POST appends, so the playlist builds up 100 at
+        // a time. A mid-chunk failure throws (caller's per-playlist try/catch handles it).
+        for (chunk in recordingMbids.chunked(LB_MAX_ADD_PER_CALL)) {
+            val body = buildJsonObject {
+                put(
+                    "playlist",
+                    buildJsonObject {
+                        put(
+                            "track",
+                            buildJsonArray {
+                                for (mbid in chunk) {
+                                    add(
+                                        buildJsonObject {
+                                            put("identifier", "https://musicbrainz.org/recording/$mbid")
+                                        },
+                                    )
+                                }
+                            },
+                        )
+                    },
+                )
             }
-        }
-        if (response.status == HttpStatusCode.Unauthorized) {
-            throw ListenBrainzUnauthorizedException(
-                "ListenBrainz returned 401 on addPlaylistItems — token rejected",
-            )
-        }
-        if (!response.status.isSuccess()) {
-            val text = response.bodyAsText().take(200)
-            throw Exception("addPlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
+            val response = executeWithRetry {
+                httpClient.post("$BASE_URL/1/playlist/$playlistMbid/item/add") {
+                    header("Authorization", "Token $token")
+                    contentType(io.ktor.http.ContentType.Application.Json)
+                    setBody(body)
+                }
+            }
+            if (response.status == HttpStatusCode.Unauthorized) {
+                throw ListenBrainzUnauthorizedException(
+                    "ListenBrainz returned 401 on addPlaylistItems — token rejected",
+                )
+            }
+            if (!response.status.isSuccess()) {
+                val text = response.bodyAsText().take(200)
+                throw Exception("addPlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
+            }
         }
     }
 
