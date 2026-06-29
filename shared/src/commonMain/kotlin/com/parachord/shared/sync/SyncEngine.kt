@@ -3175,15 +3175,28 @@ class SyncEngine constructor(
                     }
                 }
 
-                // Cheap unchanged short-circuit. An already-linked playlist with
-                // NO local edits has nothing to push — skip the hydrate + remote
-                // tracklist fetch + replace entirely (the link already exists and
-                // its content is current). This is what stops ListenBrainz from
-                // doing a per-playlist round-trip for ALL N playlists on every
-                // sync; the previous skip-unchanged still fetched each remote
-                // tracklist to compare. A `locallyModified` playlist (or one
-                // whose link is missing/stale) falls through to the full push.
-                if (matchSource == "id-link" && !playlist.locallyModified) {
+                // Cheap unchanged short-circuit — Spotify / Apple Music ONLY.
+                // An already-linked, unmodified playlist has nothing to push, so
+                // skip the hydrate + replace. (Spotify also short-circuits
+                // structurally via its spotifyId==null candidate filter; AM's
+                // append-only PUT degradation makes a blind re-push actively
+                // harmful — it APPENDS duplicates — so both must keep this skip.)
+                //
+                // ListenBrainz is DELIBERATELY EXCLUDED (#300). For LB the link's
+                // EXISTENCE is NOT proof the mirror is in sync: a push that created
+                // the link but failed to materialize tracks — an empty add (0
+                // hydrated MBIDs) or a >100-track add that 400'd on LB's per-call
+                // cap — leaves the mirror EMPTY behind a live, "synced-looking"
+                // link. Skipping it here stranded it empty forever (College Daze,
+                // Springadingding, Starred, Huff'n Duster, …). LB instead falls
+                // through to the rule-6 remote-tracklist compare below
+                // ([remoteTracklistMatches]), which RE-FILLS an empty/short mirror
+                // yet still skips the WRITE when the remote genuinely matches (no
+                // last_modified churn) — the cost is one lightweight READ per LB
+                // link per sync.
+                if (matchSource == "id-link" && !playlist.locallyModified &&
+                    providerId != ListenBrainzSyncProvider.PROVIDER_ID
+                ) {
                     continue
                 }
 

@@ -326,6 +326,50 @@ class ListenBrainzPushShortCircuitTest {
         assertEquals("the re-push carries all three tracks", 3, h.provider.replaceCalls.last().second.size)
     }
 
+    /**
+     * #300 regression: a linked playlist whose REMOTE mirror is empty (a prior
+     * push created the LB playlist + link but the track add never materialized —
+     * an empty hydration, or a >100-track add that 400'd on LB's per-call cap)
+     * must RE-FILL on the next sync, even though the local row is unchanged
+     * (NOT locallyModified). The old cheap short-circuit (`id-link &&
+     * !locallyModified → continue`) trusted the link's EXISTENCE as proof of sync
+     * and skipped this forever, stranding the mirror empty (College Daze,
+     * Springadingding, Starred, Huff'n Duster, …). The rule-6 remote-tracklist
+     * compare is the correct gate: it detects the empty remote and re-pushes,
+     * while still skipping the WRITE when the remote genuinely matches.
+     */
+    @Test
+    fun `linked playlist whose remote mirror is empty re-fills on next sync (300)`() = runBlocking {
+        val h = Harness()
+        h.seedLocalPlaylist("local-0", "Stuck Empty")
+
+        h.engine.syncAll()
+        assertEquals("first sync creates + fills the mirror", 1, h.provider.replaceCalls.size)
+
+        // Model the bug's aftermath: the remote mirror went empty (failed add),
+        // the link still points to it, and the local row is unchanged.
+        val mbid = h.linkDao.selectForLink("local-0", ListenBrainzSyncProvider.PROVIDER_ID)!!.externalId
+        h.provider.remote[mbid]!!.tracks.clear()
+
+        h.engine.syncAll()
+
+        assertEquals(
+            "EMPTY-MIRROR HEAL: a live link to an empty remote must re-push, not skip",
+            2,
+            h.provider.replaceCalls.size,
+        )
+        assertEquals("the re-fill carries the local tracklist", 2, h.provider.replaceCalls.last().second.size)
+
+        // And it's idempotent — a third sync sees the remote now matches and
+        // skips the WRITE (no last_modified churn).
+        h.engine.syncAll()
+        assertEquals(
+            "once re-filled, the rule-6 compare skips the redundant write",
+            2,
+            h.provider.replaceCalls.size,
+        )
+    }
+
     @Test
     fun `N-way migration seeds baseline and per-provider state once enabled`() = runBlocking {
         val h = Harness(nway = true)
