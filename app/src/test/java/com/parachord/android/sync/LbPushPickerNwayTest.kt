@@ -457,4 +457,59 @@ class LbPushPickerNwayTest {
         assertNull("no override written on a no-op", h.settings.getPlaylistChannels("local-A"))
         assertEquals("no remote-delete", 0, h.provider.deleteCount)
     }
+
+    // ── #300: the push gate must honor the LINK, not just override/selection ──
+    // The picker keeps the link as the source of truth and writes NO override on a
+    // no-op (see above). So a row mirrored to LB with no explicit override + an empty
+    // per-provider selection used to be silently DROPPED from the push (gate read
+    // override ?? selection). The gate must read the link too (effective channels).
+
+    @Test
+    fun `linked row with no override is a push candidate (honor the link)`() = runBlocking {
+        val h = Harness()
+        h.seedPlaylist("local-A")
+        h.linkDao.upsert("local-A", LB, "remote-A") // mirror link, NO channel override, empty selection
+        val p = h.playlistDao.getById("local-A")!!
+        assertTrue("a linked mirror must remain a push candidate", h.engine.shouldPushToProvider(p, LB))
+    }
+
+    @Test
+    fun `explicit override deselecting LB beats a lingering link`() = runBlocking {
+        val h = Harness()
+        h.seedPlaylist("local-A")
+        h.linkDao.upsert("local-A", LB, "remote-A")
+        h.settings.channels["local-A"] = emptySet() // user deselected LB → override excludes it
+        val p = h.playlistDao.getById("local-A")!!
+        assertFalse("an explicit override is authoritative over a lingering link", h.engine.shouldPushToProvider(p, LB))
+    }
+
+    /**
+     * The exact user-reported round-trip (#300): pick in the "Configure what syncs"
+     * picker → later UNSYNC it via the per-playlist Sync context menu → re-open the
+     * picker (must show UNCHECKED) → re-select it. All three surfaces read/write the
+     * same channel-override, so the state stays coherent end to end.
+     */
+    @Test
+    fun `picker select, context-menu unsync, reopen shows unchecked, re-select round-trips`() = runBlocking {
+        val h = Harness()
+        h.seedPlaylist("local-A")
+
+        // 1) Select it in the picker (seed = current checked → add A → Done).
+        applyPushDiff(h.engine, original = h.engine.linkedPlaylistIdsForProvider(LB), checked = setOf("local-A"))
+        assertTrue("1) selected ⇒ checked + pushable",
+            "local-A" in h.engine.linkedPlaylistIdsForProvider(LB) && h.engine.shouldPushToProvider(h.playlistDao.getById("local-A")!!, LB))
+
+        // 2) Unsync it from LB via the per-playlist Sync context menu.
+        h.engine.unlinkPlaylistFromProviderLocally("local-A", LB)
+
+        // 3) Re-open the picker: A must now be UNCHECKED, and the push gate excludes it.
+        val afterUnsync = h.engine.linkedPlaylistIdsForProvider(LB)
+        assertFalse("3) unsynced ⇒ shown unchecked", "local-A" in afterUnsync)
+        assertFalse("3) unsynced ⇒ not pushed", h.engine.shouldPushToProvider(h.playlistDao.getById("local-A")!!, LB))
+
+        // 4) Re-select it from the picker (seed = current → add A → Done).
+        applyPushDiff(h.engine, original = afterUnsync, checked = setOf("local-A"))
+        assertTrue("4) re-selected ⇒ checked + pushable again",
+            "local-A" in h.engine.linkedPlaylistIdsForProvider(LB) && h.engine.shouldPushToProvider(h.playlistDao.getById("local-A")!!, LB))
+    }
 }
