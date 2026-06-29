@@ -3522,53 +3522,79 @@ class SyncEngine constructor(
         val needsHydration = tracks.filter { missingProviderId(it, provider.id) }
         if (needsHydration.isEmpty()) return tracks
 
-        // Per-sync budget (#300): atomically claim up to needsHydration.size from
-        // the shared budget. Beyond it, leave tracks un-hydrated — they retry next
-        // sync (misses aren't cached), so a mass re-hydration fills gradually
-        // instead of bursting thousands of MusicBrainz lookups at once.
+        // Cooldown-cache pre-pass (#300). Route each missing track through the
+        // persistent provider-id cache (the same [TrackProviderIdCacheDao] the
+        // N-way HydrationCoordinator uses) BEFORE spending the budget:
+        //  - a cached HIT (a previously-resolved id) is reused with NO search;
+        //  - a recent MISS within the (7d→30d) cooldown is SKIPPED — re-tried only
+        //    after the cooldown, so MusicBrainz community additions still land, just
+        //    not re-searched every sync (the death-spiral fix);
+        //  - the rest are SEARCHABLE (fresh or cooldown-expired).
+        // Without this, a mass re-hydration burns the whole budget re-searching the
+        // same un-findable tracks every cycle, starving the playlists behind them.
+        val now = currentTimeMillis()
+        val cachedHits = HashMap<Int, String>()
+        val searchable = ArrayList<Triple<PlaylistTrack, String, Long>>(needsHydration.size)
+        for (t in needsHydration) {
+            val key = canonicalTrackKey(t)
+            val e = trackProviderIdCacheDao.select(key, provider.id)
+            when {
+                !e?.resolvedId.isNullOrBlank() -> cachedHits[t.position] = e!!.resolvedId!!
+                e != null && now - e.lastAttemptAt < HydrationCoordinator.cooldownMs(e.attempts) -> Unit // in cooldown
+                else -> searchable.add(Triple(t, key, e?.attempts ?: 0L))
+            }
+        }
+
+        // Per-sync budget (#300): caps only LIVE searches — cache hits + cooldown
+        // skips cost nothing. Tracks beyond the budget defer to the next sync.
         val claimed = hydrationBudgetMutex.withLock {
-            val take = minOf(needsHydration.size, hydrationBudgetRemaining)
+            val take = minOf(searchable.size, hydrationBudgetRemaining)
             hydrationBudgetRemaining -= take
             take
         }
-        if (claimed <= 0) {
-            Log.d(TAG, "Hydrate: per-sync budget exhausted — deferring ${needsHydration.size} track(s) for $playlistId on ${provider.id}")
+        val toSearch = searchable.take(claimed)
+        if (cachedHits.isEmpty() && toSearch.isEmpty()) {
+            Log.d(TAG, "Hydrate: $playlistId on ${provider.id} — ${needsHydration.size} missing, all in cooldown or budget-deferred this sync")
             return tracks
         }
-        val toHydrate = needsHydration.take(claimed)
-        Log.d(TAG, "Hydrating $claimed/${tracks.size} track IDs for $playlistId on ${provider.id}" +
-            if (claimed < needsHydration.size) " (budget-limited; ${needsHydration.size - claimed} defer to next sync)" else "")
+        Log.d(TAG, "Hydrating $playlistId on ${provider.id}: ${cachedHits.size} cached + ${toSearch.size} live" +
+            (if (toSearch.size < searchable.size) " (budget-limited; ${searchable.size - toSearch.size} defer)" else "") +
+            (if (searchable.size < needsHydration.size) "; ${needsHydration.size - searchable.size} in cooldown" else ""))
 
-        // Bound concurrency: unbounded parallel `awaitAll` against a 100-track
-        // playlist trips iTunes Search rate-limiting (HTTP 429) instantly,
-        // and Spotify's catalog search has its own per-token quotas. 4
-        // concurrent requests is enough to keep latency reasonable without
-        // burning through quota in seconds.
+        // Bound concurrency: 4 in-flight keeps latency reasonable without tripping
+        // iTunes/Spotify per-token rate limits.
         val hydrationSem = Semaphore(HYDRATE_MAX_CONCURRENCY)
-        val resolved: List<Pair<Int, String?>> = coroutineScope {
-            toHydrate.map { track ->
+        val searched: List<Pair<Int, String?>> = coroutineScope {
+            toSearch.map { (track, key, priorAttempts) ->
                 async {
                     val resolvedId = hydrationSem.withPermit {
-                        try {
+                        val id = try {
                             provider.searchForTrackId(
                                 title = track.trackTitle,
                                 artist = track.trackArtist,
                                 album = track.trackAlbum,
                                 isrc = track.trackIsrc,
                             )
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             Log.w(TAG, "hydrate: search threw for '${track.trackTitle}'", e)
                             null
                         }
+                        // Record the attempt: a hit caches the id for cross-playlist
+                        // reuse; a miss stamps the cooldown (attempts++ → 7d→30d).
+                        trackProviderIdCacheDao.upsert(key, provider.id, id, currentTimeMillis(), priorAttempts + 1L)
+                        id
                     }
                     track.position to resolvedId
                 }
             }.awaitAll()
         }
 
-        val resolvedByPosition: Map<Int, String> = resolved
-            .mapNotNull { (pos, id) -> if (id != null) pos to id else null }
-            .toMap()
+        val resolvedByPosition: Map<Int, String> = buildMap {
+            putAll(cachedHits)
+            for ((pos, id) in searched) if (id != null) put(pos, id)
+        }
 
         if (resolvedByPosition.isEmpty()) {
             Log.d(TAG, "Hydrate: no IDs resolved for $playlistId on ${provider.id}")

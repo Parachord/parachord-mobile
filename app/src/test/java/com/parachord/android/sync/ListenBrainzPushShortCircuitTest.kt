@@ -17,6 +17,7 @@ import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.sync.DeleteResult
 import com.parachord.shared.sync.ListenBrainzSyncProvider
+import com.parachord.shared.sync.canonicalTrackKey
 import com.parachord.shared.sync.PlaylistSyncMode
 import com.parachord.shared.sync.ProviderFeatures
 import com.parachord.shared.sync.ProviderPlaylistSelection
@@ -76,6 +77,7 @@ class ListenBrainzPushShortCircuitTest {
         val sourceDao = SyncPlaylistSourceDao(db)
         val baselineDao = SyncPlaylistBaselineDao(db)
         val nwayDao = SyncPlaylistNwayDao(db)
+        val cacheDao = TrackProviderIdCacheDao(db)
 
         val provider = RemoteModelingProvider()
         val settings = FakeSyncSettings(
@@ -100,7 +102,7 @@ class ListenBrainzPushShortCircuitTest {
             syncPlaylistSourceDao = sourceDao,
             syncPlaylistBaselineDao = baselineDao,
             syncPlaylistNwayDao = nwayDao,
-            trackProviderIdCacheDao = TrackProviderIdCacheDao(db),
+            trackProviderIdCacheDao = cacheDao,
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
@@ -395,6 +397,33 @@ class ListenBrainzPushShortCircuitTest {
 
         h.engine.syncAll()
         assertEquals("budget resets each sync — 3 more deferred tracks hydrate", 6, h.provider.searchCalls.size)
+    }
+
+    /**
+     * #300: a track that recently FAILED to resolve (a cache miss) is skipped for
+     * the 7d→30d cooldown instead of being re-searched every sync — so the budget
+     * spends on resolvable tracks, while the miss is still re-tried after the
+     * cooldown (catching MusicBrainz community additions). Here track 0 is seeded
+     * with a fresh miss, so only track 1 is searched this sync.
+     */
+    @Test
+    fun `a track in the miss-cooldown is skipped, not re-searched (300)`() = runBlocking {
+        val h = Harness()
+        h.seedLocalPlaylist("local-0", "Cooldown", trackCount = 2, hydrated = false)
+        // Seed a recent MISS (resolvedId = null) for track 0's identity key.
+        val track0 = PlaylistTrack(
+            playlistId = "local-0", position = 0,
+            trackTitle = "Cooldown track 0", trackArtist = "Artist 0",
+        )
+        h.cacheDao.upsert(
+            canonicalTrackKey(track0), ListenBrainzSyncProvider.PROVIDER_ID,
+            null, System.currentTimeMillis(), 1L,
+        )
+
+        h.engine.syncAll()
+
+        assertEquals("the cooled-down track is not re-searched", 1, h.provider.searchCalls.size)
+        assertEquals("only the non-cooled track searched", "Cooldown track 1", h.provider.searchCalls.single())
     }
 
     @Test
