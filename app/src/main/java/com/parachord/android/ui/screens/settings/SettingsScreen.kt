@@ -245,7 +245,7 @@ fun SettingsScreen(
         )
 
         SwipeableTabLayout(
-            tabs = listOf("Plug-Ins", "General", "About"),
+            tabs = listOf("Plug-Ins", "Sync", "General", "About"),
         ) { page ->
             when (page) {
                 0 -> PlugInsTab(
@@ -311,11 +311,7 @@ fun SettingsScreen(
                     onSeatGeekClientIdSubmit = { viewModel.setSeatGeekClientId(it) },
                     onSeatGeekDisconnect = { viewModel.clearSeatGeekClientId() },
                 )
-                1 -> GeneralTab(
-                    themeMode = themeMode,
-                    onThemeModeChanged = { viewModel.setThemeMode(it) },
-                    persistQueue = persistQueue,
-                    onPersistQueueChanged = { viewModel.setPersistQueue(it) },
+                1 -> SyncTab(
                     spotifyConnected = spotifyConnected,
                     appleMusicAuthorized = appleMusicAuthorized,
                     appleMusicSyncEnabled = appleMusicSyncEnabled,
@@ -324,7 +320,13 @@ fun SettingsScreen(
                     listenBrainzSyncEnabled = listenBrainzSyncEnabled,
                     onSetListenBrainzSyncEnabled = { viewModel.setListenBrainzSyncEnabled(it) },
                 )
-                2 -> AboutTab()
+                2 -> GeneralTab(
+                    themeMode = themeMode,
+                    onThemeModeChanged = { viewModel.setThemeMode(it) },
+                    persistQueue = persistQueue,
+                    onPersistQueueChanged = { viewModel.setPersistQueue(it) },
+                )
+                3 -> AboutTab()
             }
         }
     }
@@ -2674,38 +2676,7 @@ private fun GeneralTab(
     onThemeModeChanged: (String) -> Unit,
     persistQueue: Boolean,
     onPersistQueueChanged: (Boolean) -> Unit,
-    spotifyConnected: Boolean,
-    appleMusicAuthorized: Boolean,
-    appleMusicSyncEnabled: Boolean,
-    onSetAppleMusicSyncEnabled: (Boolean) -> Unit,
-    listenBrainzConnected: Boolean,
-    listenBrainzSyncEnabled: Boolean,
-    onSetListenBrainzSyncEnabled: (Boolean) -> Unit,
 ) {
-    val syncViewModel: SyncViewModel = koinViewModel()
-    val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
-    val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
-    // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
-    // screen (koinViewModel is nav-entry-scoped).
-    val settingsViewModel: SettingsViewModel = koinViewModel()
-    val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
-    val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
-    val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
-    val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
-    val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
-    val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
-    val migrationPreview by settingsViewModel.migrationPreview.collectAsStateWithLifecycle()
-    val migrationReport by settingsViewModel.migrationReport.collectAsStateWithLifecycle()
-    var showSyncSetupSheet by remember { mutableStateOf(false) }
-    /** Which provider the wizard is currently configuring. The same sheet
-     *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
-     *  row below writes `"applemusic"`. */
-    var syncSetupProviderId by remember { mutableStateOf("spotify") }
-    var showStopSyncDialog by remember { mutableStateOf(false) }
-    /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
-     *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
-    var configSyncProviderId by remember { mutableStateOf<String?>(null) }
-
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SectionHeader("Appearance") }
         item {
@@ -2741,7 +2712,46 @@ private fun GeneralTab(
                 },
             )
         }
+    }
+}
 
+// ── Sync Tab ───────────────────────────────────────────────────────
+
+@Composable
+private fun SyncTab(
+    spotifyConnected: Boolean,
+    appleMusicAuthorized: Boolean,
+    appleMusicSyncEnabled: Boolean,
+    onSetAppleMusicSyncEnabled: (Boolean) -> Unit,
+    listenBrainzConnected: Boolean,
+    listenBrainzSyncEnabled: Boolean,
+    onSetListenBrainzSyncEnabled: (Boolean) -> Unit,
+) {
+    val syncViewModel: SyncViewModel = koinViewModel()
+    val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
+    val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
+    // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
+    // screen (koinViewModel is nav-entry-scoped).
+    val settingsViewModel: SettingsViewModel = koinViewModel()
+    val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
+    val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
+    val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
+    val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
+    val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
+    val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
+    val migrationPreview by settingsViewModel.migrationPreview.collectAsStateWithLifecycle()
+    val migrationReport by settingsViewModel.migrationReport.collectAsStateWithLifecycle()
+    var showSyncSetupSheet by remember { mutableStateOf(false) }
+    /** Which provider the wizard is currently configuring. The same sheet
+     *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
+     *  row below writes `"applemusic"`. */
+    var syncSetupProviderId by remember { mutableStateOf("spotify") }
+    var showStopSyncDialog by remember { mutableStateOf(false) }
+    /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
+     *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
+    var configSyncProviderId by remember { mutableStateOf<String?>(null) }
+
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
         // Spotify Sync section — only shown when Spotify is connected
         if (spotifyConnected) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
