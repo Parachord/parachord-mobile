@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 
@@ -61,10 +62,26 @@ class SyncEngine constructor(
      */
     private val providers: List<com.parachord.shared.sync.SyncProvider>,
     private val tombstones: TrackTombstoneService,
+    /**
+     * Per-sync cap on track-id hydration searches ([hydrateMissingTrackIds]),
+     * shared across all providers + playlists in ONE sync (#300). Bounds the
+     * MusicBrainz / catalog-search load so a mass re-hydration (e.g. healing many
+     * empty ListenBrainz mirrors at once) can't burst thousands of lookups and
+     * self-throttle (observed: 2,359 MB 429s in a single sync). Tracks beyond the
+     * budget stay un-hydrated and retry next sync — misses are not cached, so the
+     * mirrors fill gradually instead of flooding. Injectable for tests.
+     */
+    private val hydrationBudgetPerSync: Int = HYDRATION_BUDGET_PER_SYNC,
 ) {
 
     private val spotifyProvider: SpotifySyncProvider
         get() = providers.first { it.id == SpotifySyncProvider.PROVIDER_ID } as SpotifySyncProvider
+
+    /** Remaining hydration-search budget for the in-flight sync; reset at the top
+     *  of [syncPlaylists]. Guarded by [hydrationBudgetMutex] — the searches run in
+     *  parallel, so the take-and-decrement must be atomic. */
+    private val hydrationBudgetMutex = Mutex()
+    private var hydrationBudgetRemaining = 0
     companion object {
         private const val TAG = "SyncEngine"
         /** Benign skip result when a sync is already running (tryLock held). Not a failure. */
@@ -119,6 +136,11 @@ class SyncEngine constructor(
          * threshold while still hydrating a 100-track playlist in ~30s.
          */
         private const val HYDRATE_MAX_CONCURRENCY = 4
+
+        /** Per-sync hydration-search budget (#300) — see [hydrationBudgetPerSync].
+         *  ~2,359 lookups in one heal sync flooded MusicBrainz; cap it so the fill
+         *  spreads across syncs instead of bursting. */
+        private const val HYDRATION_BUDGET_PER_SYNC = 250
 
         /**
          * Backfill `sync_playlist_source` from playlist rows whose id prefix
@@ -2110,6 +2132,11 @@ class SyncEngine constructor(
         var updated = 0
         var unchanged = 0
 
+        // Reset the per-sync hydration-search budget (#300): bounds total track-id
+        // lookups this sync so a mass re-hydration (healing many empty LB mirrors)
+        // can't flood MusicBrainz. The rest defer to next sync (misses uncached).
+        hydrationBudgetMutex.withLock { hydrationBudgetRemaining = hydrationBudgetPerSync }
+
         // Idempotent startup migration: make sure any playlist that already
         // has a `spotifyId` set has a matching row in `sync_playlist_link`.
         // Cheap (single query + conditional upsert) and guarantees the
@@ -3489,8 +3516,22 @@ class SyncEngine constructor(
         val needsHydration = tracks.filter { missingProviderId(it, provider.id) }
         if (needsHydration.isEmpty()) return tracks
 
-        Log.d(TAG, "Hydrating ${needsHydration.size}/${tracks.size} track IDs for " +
-            "$playlistId on ${provider.id}")
+        // Per-sync budget (#300): atomically claim up to needsHydration.size from
+        // the shared budget. Beyond it, leave tracks un-hydrated — they retry next
+        // sync (misses aren't cached), so a mass re-hydration fills gradually
+        // instead of bursting thousands of MusicBrainz lookups at once.
+        val claimed = hydrationBudgetMutex.withLock {
+            val take = minOf(needsHydration.size, hydrationBudgetRemaining)
+            hydrationBudgetRemaining -= take
+            take
+        }
+        if (claimed <= 0) {
+            Log.d(TAG, "Hydrate: per-sync budget exhausted — deferring ${needsHydration.size} track(s) for $playlistId on ${provider.id}")
+            return tracks
+        }
+        val toHydrate = needsHydration.take(claimed)
+        Log.d(TAG, "Hydrating $claimed/${tracks.size} track IDs for $playlistId on ${provider.id}" +
+            if (claimed < needsHydration.size) " (budget-limited; ${needsHydration.size - claimed} defer to next sync)" else "")
 
         // Bound concurrency: unbounded parallel `awaitAll` against a 100-track
         // playlist trips iTunes Search rate-limiting (HTTP 429) instantly,
@@ -3499,7 +3540,7 @@ class SyncEngine constructor(
         // burning through quota in seconds.
         val hydrationSem = Semaphore(HYDRATE_MAX_CONCURRENCY)
         val resolved: List<Pair<Int, String?>> = coroutineScope {
-            needsHydration.map { track ->
+            toHydrate.map { track ->
                 async {
                     val resolvedId = hydrationSem.withPermit {
                         try {

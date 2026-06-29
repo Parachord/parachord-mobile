@@ -60,7 +60,7 @@ import org.junit.Test
  */
 class ListenBrainzPushShortCircuitTest {
 
-    private class Harness(nway: Boolean = false, propagate: Boolean = false) {
+    private class Harness(nway: Boolean = false, propagate: Boolean = false, hydrationBudget: Int = 250) {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also {
             ParachordDb.Schema.create(it)
         }
@@ -104,9 +104,10 @@ class ListenBrainzPushShortCircuitTest {
             settingsStore = settings,
             providers = listOf(provider),
             tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
+            hydrationBudgetPerSync = hydrationBudget,
         )
 
-        suspend fun seedLocalPlaylist(id: String, name: String, trackCount: Int = 2) {
+        suspend fun seedLocalPlaylist(id: String, name: String, trackCount: Int = 2, hydrated: Boolean = true) {
             playlistDao.insert(
                 Playlist(
                     id = id,
@@ -124,7 +125,7 @@ class ListenBrainzPushShortCircuitTest {
                     position = i,
                     trackTitle = "$name track $i",
                     trackArtist = "Artist $i",
-                    trackRecordingMbid = "mbid-track-$id-$i",
+                    trackRecordingMbid = if (hydrated) "mbid-track-$id-$i" else null,
                 )
             }
             playlistTrackDao.insertAll(tracks)
@@ -156,6 +157,8 @@ class ListenBrainzPushShortCircuitTest {
         var createCount = 0
             private set
         val replaceCalls = mutableListOf<Pair<String, List<String>>>()
+        /** Records each hydration search so a test can assert the per-sync budget. */
+        val searchCalls = mutableListOf<String>()
 
         override suspend fun createPlaylist(name: String, description: String?): RemoteCreated {
             createCount++
@@ -202,6 +205,11 @@ class ListenBrainzPushShortCircuitTest {
                     trackRecordingMbid = mbid,
                 )
             } ?: emptyList()
+        }
+
+        override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
+            searchCalls.add(title)
+            return "mbid-search-$title"
         }
 
         override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
@@ -368,6 +376,26 @@ class ListenBrainzPushShortCircuitTest {
             2,
             h.provider.replaceCalls.size,
         )
+    }
+
+    /**
+     * #300: hydration is bounded per-sync so a mass re-hydration (healing many
+     * empty mirrors at once) can't burst thousands of MusicBrainz lookups — the
+     * heal flooded MB with 2,359 rate-limited calls in one sync. With budget=3
+     * and 8 un-hydrated tracks across two playlists, exactly 3 searches fire this
+     * sync; the rest defer and resume next sync (the budget resets, misses uncached).
+     */
+    @Test
+    fun `hydration searches are capped by the per-sync budget (300)`() = runBlocking {
+        val h = Harness(hydrationBudget = 3)
+        h.seedLocalPlaylist("local-0", "Alpha", trackCount = 5, hydrated = false)
+        h.seedLocalPlaylist("local-1", "Beta", trackCount = 3, hydrated = false)
+
+        h.engine.syncAll()
+        assertEquals("per-sync budget caps total hydration searches", 3, h.provider.searchCalls.size)
+
+        h.engine.syncAll()
+        assertEquals("budget resets each sync — 3 more deferred tracks hydrate", 6, h.provider.searchCalls.size)
     }
 
     @Test
