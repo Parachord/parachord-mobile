@@ -55,4 +55,39 @@ New **Sync tab inserted before General**: tabs = `["Plug-Ins", "Sync", "General"
 4. What's-synced summary — item 10.
 5. Toggle-as-stop + confirm dialog — item 4.
 
-Then **iOS** — mirror the structure in the SwiftUI settings (separate follow-up; iosApp).
+## Android status — COMPLETE (PR #310)
+
+All 10 items shipped across 5 launch-verified commits on `feat/303-sync-settings-redesign`:
+tab split (1); unified cards LB→Card + label/style + drop dup buttons (6,7,9); status
+header global Sync-now + animation + `isSyncing` disable (2,3,5); Apple Music Switch +
+drop redundant stop buttons (4,8); per-card what's-synced summary via
+`SyncViewModel.syncedSummaries` ← `getSyncCollectionsForProvider` (10).
+
+## iOS port (status + plan)
+
+**iOS is already ~80% aligned.** `iosApp/Parachord/SettingsView.swift`; sync UI in
+`GeneralTab.syncSection`. The shared `SyncModel` already exposes `syncing` + `syncPhase`
+(engine-driven via Combine watchers) — the status signal Android lacked exists natively.
+**Already done on iOS (no work):** item 3 (`Sync now` `.disabled(!anyOn || syncing)`),
+item 5 (one global `Sync now`, no wizard), item 8 (all 3 `syncToggle` rows consistent +
+connection-gated), items 6/7 (one `configureRow` "Configure what syncs ›", same style),
+item 4 (toggle IS enable/disable via `setProvider`/`setAppleMusic`/`confirmDisable`, no
+separate stop button), item 2 partial (`Syncing… (phase)` text + `sync.status`).
+
+**iOS gaps to close:**
+1. **Item 1 — own tab.** `PCTabs(["Plug-ins","General","About"])` @525 →
+   `["Plug-ins","Sync","General","About"]`; reindex `switch tab` (0 PlugIns, 1 SyncTab,
+   2 General, 3 About). Extract `syncSection`/`syncToggle`/`configureRow` + the
+   `@State SyncModel`/`configProvider` + the per-provider config sheet from `GeneralTab`
+   into a new `SyncTab` struct; General keeps theme/scrobbling/queue + the sync-engine
+   (migration preview) rows. Multi-member refactor — verify on simulator, don't do blind.
+2. **Item 10 — what's-synced summary.** Replace each `syncToggle`'s static `desc` with
+   the selected-axes summary when enabled. Add `SyncModel.summary(for:)` reading the
+   shared `settingsStore.getSyncCollectionsForProvider(id)` (suspend → bridge via the
+   existing async/`FlowWatcher` pattern) → "Liked Songs · Albums · Playlists". Mirrors
+   Android's `syncedSummaries` + `formatAxesSummary`.
+3. **Item 2 polish (optional).** Swap `Syncing… (phase)` text for a `ProgressView()`
+   spinner; add per-row "Last synced …" (`SyncModel.status` is a coarse result string today).
+
+**Verify via the simulator build/screenshot flow (`iosApp/AGENTS.md`).** Android impl
+(PR #310) is the spec.
