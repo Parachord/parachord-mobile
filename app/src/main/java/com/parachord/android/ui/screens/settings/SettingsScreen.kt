@@ -245,7 +245,7 @@ fun SettingsScreen(
         )
 
         SwipeableTabLayout(
-            tabs = listOf("Plug-Ins", "General", "About"),
+            tabs = listOf("Plug-Ins", "Sync", "General", "About"),
         ) { page ->
             when (page) {
                 0 -> PlugInsTab(
@@ -311,11 +311,7 @@ fun SettingsScreen(
                     onSeatGeekClientIdSubmit = { viewModel.setSeatGeekClientId(it) },
                     onSeatGeekDisconnect = { viewModel.clearSeatGeekClientId() },
                 )
-                1 -> GeneralTab(
-                    themeMode = themeMode,
-                    onThemeModeChanged = { viewModel.setThemeMode(it) },
-                    persistQueue = persistQueue,
-                    onPersistQueueChanged = { viewModel.setPersistQueue(it) },
+                1 -> SyncTab(
                     spotifyConnected = spotifyConnected,
                     appleMusicAuthorized = appleMusicAuthorized,
                     appleMusicSyncEnabled = appleMusicSyncEnabled,
@@ -324,7 +320,13 @@ fun SettingsScreen(
                     listenBrainzSyncEnabled = listenBrainzSyncEnabled,
                     onSetListenBrainzSyncEnabled = { viewModel.setListenBrainzSyncEnabled(it) },
                 )
-                2 -> AboutTab()
+                2 -> GeneralTab(
+                    themeMode = themeMode,
+                    onThemeModeChanged = { viewModel.setThemeMode(it) },
+                    persistQueue = persistQueue,
+                    onPersistQueueChanged = { viewModel.setPersistQueue(it) },
+                )
+                3 -> AboutTab()
             }
         }
     }
@@ -2674,38 +2676,7 @@ private fun GeneralTab(
     onThemeModeChanged: (String) -> Unit,
     persistQueue: Boolean,
     onPersistQueueChanged: (Boolean) -> Unit,
-    spotifyConnected: Boolean,
-    appleMusicAuthorized: Boolean,
-    appleMusicSyncEnabled: Boolean,
-    onSetAppleMusicSyncEnabled: (Boolean) -> Unit,
-    listenBrainzConnected: Boolean,
-    listenBrainzSyncEnabled: Boolean,
-    onSetListenBrainzSyncEnabled: (Boolean) -> Unit,
 ) {
-    val syncViewModel: SyncViewModel = koinViewModel()
-    val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
-    val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
-    // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
-    // screen (koinViewModel is nav-entry-scoped).
-    val settingsViewModel: SettingsViewModel = koinViewModel()
-    val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
-    val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
-    val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
-    val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
-    val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
-    val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
-    val migrationPreview by settingsViewModel.migrationPreview.collectAsStateWithLifecycle()
-    val migrationReport by settingsViewModel.migrationReport.collectAsStateWithLifecycle()
-    var showSyncSetupSheet by remember { mutableStateOf(false) }
-    /** Which provider the wizard is currently configuring. The same sheet
-     *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
-     *  row below writes `"applemusic"`. */
-    var syncSetupProviderId by remember { mutableStateOf("spotify") }
-    var showStopSyncDialog by remember { mutableStateOf(false) }
-    /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
-     *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
-    var configSyncProviderId by remember { mutableStateOf<String?>(null) }
-
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SectionHeader("Appearance") }
         item {
@@ -2741,6 +2712,99 @@ private fun GeneralTab(
                 },
             )
         }
+    }
+}
+
+// ── Sync Tab ───────────────────────────────────────────────────────
+
+@Composable
+private fun SyncTab(
+    spotifyConnected: Boolean,
+    appleMusicAuthorized: Boolean,
+    appleMusicSyncEnabled: Boolean,
+    onSetAppleMusicSyncEnabled: (Boolean) -> Unit,
+    listenBrainzConnected: Boolean,
+    listenBrainzSyncEnabled: Boolean,
+    onSetListenBrainzSyncEnabled: (Boolean) -> Unit,
+) {
+    val syncViewModel: SyncViewModel = koinViewModel()
+    val syncEnabled by syncViewModel.syncEnabled.collectAsStateWithLifecycle()
+    val lastSyncAt by syncViewModel.lastSyncAt.collectAsStateWithLifecycle()
+    val isSyncing by syncViewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncProgress by syncViewModel.syncProgress.collectAsStateWithLifecycle()
+    val syncedSummaries by syncViewModel.syncedSummaries.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { syncViewModel.loadSyncedSummaries() }
+    // N-way multimaster (dev) — toggle + shadow report. Same VM instance as the
+    // screen (koinViewModel is nav-entry-scoped).
+    val settingsViewModel: SettingsViewModel = koinViewModel()
+    val nwayEnabled by settingsViewModel.nwayEnabled.collectAsStateWithLifecycle()
+    val nwayShadowLog by settingsViewModel.nwayShadowLog.collectAsStateWithLifecycle()
+    val shadowScanning by settingsViewModel.shadowScanning.collectAsStateWithLifecycle()
+    val nwayPropagateEnabled by settingsViewModel.nwayPropagateEnabled.collectAsStateWithLifecycle()
+    val nwayPropagationLog by settingsViewModel.nwayPropagationLog.collectAsStateWithLifecycle()
+    val propagating by settingsViewModel.propagating.collectAsStateWithLifecycle()
+    val migrationPreview by settingsViewModel.migrationPreview.collectAsStateWithLifecycle()
+    val migrationReport by settingsViewModel.migrationReport.collectAsStateWithLifecycle()
+    var showSyncSetupSheet by remember { mutableStateOf(false) }
+    /** Which provider the wizard is currently configuring. The same sheet
+     *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
+     *  row below writes `"applemusic"`. */
+    var syncSetupProviderId by remember { mutableStateOf("spotify") }
+    var showStopSyncDialog by remember { mutableStateOf(false) }
+    /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
+     *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
+    var configSyncProviderId by remember { mutableStateOf<String?>(null) }
+
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        // Sync status + global "Sync now" (#303) — one action that syncs every
+        // enabled service; disabled while a sync runs (no more "already syncing").
+        if (spotifyConnected || appleMusicAuthorized || listenBrainzConnected) {
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (isSyncing) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    if (syncProgress.total > 0)
+                                        "Syncing… ${syncProgress.current}/${syncProgress.total}"
+                                    else syncProgress.message.ifBlank { "Syncing…" },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        } else {
+                            Text(
+                                "Last synced: ${formatRelativeTime(lastSyncAt)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { syncViewModel.syncNow() },
+                            enabled = !isSyncing,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(if (isSyncing) "Syncing…" else "Sync now")
+                        }
+                    }
+                }
+            }
+        }
 
         // Spotify Sync section — only shown when Spotify is connected
         if (spotifyConnected) {
@@ -2769,7 +2833,12 @@ private fun GeneralTab(
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
-                                    if (syncEnabled) "Syncing enabled" else "Syncing disabled",
+                                    when {
+                                        syncEnabled && syncedSummaries["spotify"].orEmpty().isNotEmpty() ->
+                                            "Syncing: ${syncedSummaries["spotify"]}"
+                                        syncEnabled -> "Syncing enabled"
+                                        else -> "Syncing disabled"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -2802,39 +2871,6 @@ private fun GeneralTab(
                             )
                             Spacer(modifier = Modifier.height(16.dp))
 
-                            // Sync Now button
-                            Button(
-                                onClick = {
-                                    syncSetupProviderId = "spotify"
-                                    syncViewModel.syncNow()
-                                    showSyncSetupSheet = true
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = Color(0xFF1DB954),
-                                ),
-                                shape = RoundedCornerShape(8.dp),
-                            ) {
-                                Text("Sync Now")
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Change sync settings button
-                            OutlinedButton(
-                                onClick = {
-                                    syncSetupProviderId = "spotify"
-                                    syncViewModel.resetSetup()
-                                    showSyncSetupSheet = true
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(8.dp),
-                            ) {
-                                Text("Change sync settings")
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
                             // Configure what syncs — per-provider picker (#266).
                             // Choose which of your Spotify playlists to import.
                             OutlinedButton(
@@ -2843,19 +2879,6 @@ private fun GeneralTab(
                                 shape = RoundedCornerShape(8.dp),
                             ) {
                                 Text("Configure what syncs")
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Stop syncing button
-                            TextButton(
-                                onClick = { showStopSyncDialog = true },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(
-                                    "Stop syncing",
-                                    color = MaterialTheme.colorScheme.error,
-                                )
                             }
                         }
                     }
@@ -2888,65 +2911,51 @@ private fun GeneralTab(
                     ),
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        // Header + status text.
-                        Text(
-                            if (appleMusicSyncEnabled) "Apple Music sync is on"
-                            else "Apple Music sync is off",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            if (appleMusicSyncEnabled)
-                                "Tap below to choose which library items to sync."
-                            else
-                                "Tap below to choose which library items to sync from Apple Music.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // PRIMARY ENTRY — filled button (not outlined). The wizard's
-                        // OPTIONS step is the only place users can change axis
-                        // selection, so make this button impossible to miss.
-                        // When AM is off this button enables it via the wizard;
-                        // when on it re-opens the wizard with current selection.
-                        Button(
-                            onClick = {
-                                if (appleMusicSyncEnabled) {
-                                    // Already on — go straight to the per-provider
-                                    // picker (#266: axes + which AM playlists to
-                                    // import), not the all-or-nothing setup wizard.
-                                    configSyncProviderId = "applemusic"
-                                } else {
-                                    syncSetupProviderId = "applemusic"
-                                    syncViewModel.resetSetup()
-                                    showSyncSetupSheet = true
-                                }
-                            },
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFA243C),
-                            ),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                if (appleMusicSyncEnabled) "Choose what to sync…"
-                                else "Set up Apple Music sync…"
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    if (appleMusicSyncEnabled) "Syncing enabled" else "Syncing disabled",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    if (appleMusicSyncEnabled && syncedSummaries["applemusic"].orEmpty().isNotEmpty())
+                                        "Syncing: ${syncedSummaries["applemusic"]}"
+                                    else "Sync your Apple Music library and playlists.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            // Toggle ON opens the setup wizard (first-time axis
+                            // selection); OFF disables AM sync directly.
+                            Switch(
+                                checked = appleMusicSyncEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        syncSetupProviderId = "applemusic"
+                                        syncViewModel.resetSetup()
+                                        showSyncSetupSheet = true
+                                    } else {
+                                        onSetAppleMusicSyncEnabled(false)
+                                    }
+                                },
                             )
                         }
-
-                        // SECONDARY — only shown when AM is on, gives an explicit
-                        // off path. Wizard handles axis changes; this is for the
-                        // simple "I'm done with AM sync entirely" case.
                         if (appleMusicSyncEnabled) {
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
                             OutlinedButton(
-                                onClick = { onSetAppleMusicSyncEnabled(false) },
+                                onClick = { configSyncProviderId = "applemusic" },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(8.dp),
                             ) {
-                                Text("Turn off Apple Music sync")
+                                Text("Configure what syncs")
                             }
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
@@ -2974,37 +2983,56 @@ private fun GeneralTab(
             item { Spacer(modifier = Modifier.height(8.dp)) }
             item { SectionHeader("ListenBrainz Sync") }
             item {
-                ListItem(
-                    headlineContent = { Text("ListenBrainz Sync") },
-                    supportingContent = {
-                        Text(
-                            "Pushes Parachord-curated playlists to your ListenBrainz profile. " +
-                                "Loved tracks already sync separately via scrobblers.",
-                        )
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = listenBrainzSyncEnabled,
-                            onCheckedChange = onSetListenBrainzSyncEnabled,
-                        )
-                    },
-                )
-            }
-            // Configure what syncs — push picker (#266): All / Choose / None
-            // over the local playlists eligible to mirror to ListenBrainz.
-            if (listenBrainzSyncEnabled) {
-                item {
-                    TextButton(
-                        onClick = { configSyncProviderId = "listenbrainz" },
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    ) {
-                        Text("Configure what syncs")
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.ChevronRight,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    if (listenBrainzSyncEnabled) "Syncing enabled" else "Syncing disabled",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    if (listenBrainzSyncEnabled && syncedSummaries["listenbrainz"].orEmpty().isNotEmpty())
+                                        "Syncing: ${syncedSummaries["listenbrainz"]}"
+                                    else "Pushes Parachord-curated playlists to your ListenBrainz " +
+                                        "profile. Loved tracks sync separately via scrobblers.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Switch(
+                                checked = listenBrainzSyncEnabled,
+                                onCheckedChange = onSetListenBrainzSyncEnabled,
+                            )
+                        }
+                        // Configure what syncs — push picker (#266): All / Choose /
+                        // None over the local playlists eligible to mirror to LB.
+                        if (listenBrainzSyncEnabled) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            OutlinedButton(
+                                onClick = { configSyncProviderId = "listenbrainz" },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text("Configure what syncs")
+                            }
+                        }
                     }
                 }
             }

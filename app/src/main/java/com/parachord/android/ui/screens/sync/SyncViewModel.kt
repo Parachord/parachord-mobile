@@ -151,6 +151,34 @@ class SyncViewModel constructor(
     private val _syncResult = MutableStateFlow<com.parachord.shared.sync.SyncEngine.FullSyncResult?>(null)
     val syncResult: StateFlow<com.parachord.shared.sync.SyncEngine.FullSyncResult?> = _syncResult
 
+    /** True while a full sync is running — drives the Sync-settings status header
+     *  (animated indicator + disabled "Sync now"). Set by [syncNow]. */
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing
+
+    /** Per-provider "what's synced" summary for the Sync-settings cards (#303 item
+     *  10), e.g. "Liked Songs · Albums · Playlists". Refreshed by
+     *  [loadSyncedSummaries] when the Sync tab shows + after a config change. */
+    private val _syncedSummaries = MutableStateFlow<Map<String, String>>(emptyMap())
+    val syncedSummaries: StateFlow<Map<String, String>> = _syncedSummaries
+
+    fun loadSyncedSummaries() {
+        viewModelScope.launch {
+            _syncedSummaries.value = listOf("spotify", "applemusic", "listenbrainz")
+                .associateWith { formatAxesSummary(settingsStore.getSyncCollectionsForProvider(it)) }
+        }
+    }
+
+    private fun formatAxesSummary(axes: Set<String>): String {
+        val labels = listOf(
+            "tracks" to "Liked Songs",
+            "albums" to "Albums",
+            "artists" to "Artists",
+            "playlists" to "Playlists",
+        )
+        return labels.filter { it.first in axes }.joinToString(" · ") { it.second }
+    }
+
     val syncEnabled = settingsStore.syncEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -384,13 +412,19 @@ class SyncViewModel constructor(
     }
 
     fun syncNow() {
+        if (_isSyncing.value) return // guard: ignore taps while a sync is running
         _currentStep.value = SetupStep.SYNCING
+        _isSyncing.value = true
         viewModelScope.launch {
-            val result = syncEngine.syncAll(
-                onProgress = { progress -> _syncProgress.value = progress },
-            )
-            _syncResult.value = result
-            _currentStep.value = SetupStep.COMPLETE
+            try {
+                val result = syncEngine.syncAll(
+                    onProgress = { progress -> _syncProgress.value = progress },
+                )
+                _syncResult.value = result
+                _currentStep.value = SetupStep.COMPLETE
+            } finally {
+                _isSyncing.value = false
+            }
         }
     }
 
@@ -553,6 +587,7 @@ class SyncViewModel constructor(
         _configPendingRemoval.value = null
         _pendingPullRemoval.value = null
         _pendingPushRemoval.value = null
+        loadSyncedSummaries() // #303: refresh the card summaries after a config change
     }
 
     /** Toggle an axis live; persists immediately (matches iOS). */
