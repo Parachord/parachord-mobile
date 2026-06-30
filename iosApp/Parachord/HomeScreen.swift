@@ -17,7 +17,12 @@ enum PCRoute: Hashable {
     /// Artist page opened straight to the On Tour tab (Now Playing on-tour dot, #201).
     case artistOnTour(String)
     case album(title: String, artist: String)
+    /// Ephemeral/weekly playlist (tracks fetched from ListenBrainz on open).
     case playlist(id: String, title: String)
+    /// A SAVED (DB-backed) playlist — opens the same detail as the Playlists tab.
+    /// Distinct from `.playlist` (which loads weekly/ephemeral tracks and would
+    /// show empty for a saved row).
+    case savedPlaylist(id: String)
     /// A friend's listening profile (#235 / #196).
     case friend(id: String, username: String, service: String, name: String)
 }
@@ -70,6 +75,7 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .artistOnTour(let name):      ArtistScreen(artistName: name, initialTab: .onTour)
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
+    case .savedPlaylist(let id):       SavedPlaylistDetailView(playlistId: id)
     case .friend(let id, let username, let service, let name):
         FriendProfileScreen(friendId: id, username: username, service: service, name: name)
     }
@@ -477,7 +483,7 @@ struct HomeScreen: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
                 ForEach(feed.recentPlaylists, id: \.id) { pl in
-                    NavigationLink(value: PCRoute.playlist(id: pl.id, title: pl.name)) {
+                    NavigationLink(value: PCRoute.savedPlaylist(id: pl.id)) {
                         VStack(alignment: .leading, spacing: 6) {
                             pcCover(pl.artworkUrl, seed: pl.name, size: 130, radius: 10)
                             Text(pl.name).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
@@ -488,7 +494,7 @@ struct HomeScreen: View {
                     .buttonStyle(.plain)
                     .contextMenu {
                         Button { playPlaylist(pl) } label: { Label("Play Playlist", systemImage: "play.fill") }
-                        Button { path.append(.playlist(id: pl.id, title: pl.name)) } label: { Label("Open", systemImage: "arrow.up.right") }
+                        Button { path.append(.savedPlaylist(id: pl.id)) } label: { Label("Open", systemImage: "arrow.up.right") }
                     }
                 }
             }
