@@ -178,12 +178,20 @@ final class IosSpotifyConnect {
             return false
         }
 
-        // 1. Warm path — cached local device still present.
+        // 1. Warm path — fire startPlayback DIRECTLY at the cached local device
+        //    id, with NO getDevices() gate. A Spotify device that just finished a
+        //    track drops out of GET /me/player/devices (that endpoint only lists
+        //    ACTIVE sessions), so gating on presence made auto-transition between
+        //    songs miss the warm path and fall to the cold path — which wakes /
+        //    foregrounds Spotify on almost every track (#283). Manual skip didn't
+        //    hit it because the previous track is still actively playing, so the
+        //    device is still listed. Connect's startPlayback re-activates an
+        //    idle-but-present device silently; only a genuinely stale id (Spotify
+        //    restarted) fails → we clear + fall through to the cold resolve.
+        //    Mirrors Android's "fire startPlayback directly without any device
+        //    fetch" warm-path optimization.
         if deviceVerified, let warmId = lastResolvedLocalId {
-            let devs = (try? await client.getDevices())?.devices ?? []
-            if devs.contains(where: { $0.id == warmId }) {
-                if await startPlayback(client, uri: uri, deviceId: warmId) { return true }
-            }
+            if await startPlayback(client, uri: uri, deviceId: warmId) { return true }
             lastResolvedLocalId = nil
             deviceVerified = false
         }
@@ -516,6 +524,11 @@ struct SpotifyDevicePickerSheet: View {
                     }
                 } header: {
                     Text("Where would you like to play?")
+                } footer: {
+                    // #285: set expectations for the "This device" cold-launch —
+                    // Spotify has to come to the foreground once to start, then
+                    // the rest of the queue plays silently via Connect.
+                    Text("Choosing “This device” opens Spotify once to start playback — then come back to Parachord to keep listening. The rest of your queue plays without leaving the app.")
                 }
             }
             .navigationTitle("Choose Spotify Device")
