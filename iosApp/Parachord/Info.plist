@@ -6,6 +6,10 @@
 	<string>$(ACHORDION_BEARER_TOKEN)</string>
 	<key>AppleMusicDeveloperToken</key>
 	<string>$(APPLE_MUSIC_DEVELOPER_TOKEN)</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.parachord.ios.refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -61,6 +65,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>fetch</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>
