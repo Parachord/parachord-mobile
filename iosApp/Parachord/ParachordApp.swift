@@ -4,11 +4,17 @@ import Shared
 
 @main
 struct ParachordApp: App {
-    // NOTE: deliberately NO init() work. Touching IosContainer.companion.shared
+    // NOTE: deliberately NO container init() work. Touching IosContainer.companion.shared
     // here forced Koin + plugin-host init SYNCHRONOUSLY before SwiftUI could
     // commit its first frame, so the system's (white) launch screen lingered for
     // seconds. All container access now happens inside RootGate's async warm-up,
     // AFTER the splash's first frame is on screen.
+    init() {
+        // BGTaskScheduler.register MUST run before the app finishes launching. It
+        // only installs a closure — it does NOT touch IosContainer (the handler
+        // does, but that runs later), so it's safe here without blocking the first frame.
+        BackgroundSync.register()
+    }
     var body: some Scene {
         WindowGroup {
             RootGate()
@@ -22,6 +28,7 @@ struct ParachordApp: App {
 /// blinks). Mirrors the desktop's loading screen.
 private struct RootGate: View {
     @State private var ready = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -53,6 +60,12 @@ private struct RootGate: View {
             async let floor: () = { _ = try? await Task.sleep(nanoseconds: 900_000_000) }()
             _ = await (warm, floor)
             withAnimation(.easeOut(duration: 0.35)) { ready = true }
+            BackgroundSync.schedule()   // queue a first background run
+        }
+        // Re-queue the background sync whenever we leave the foreground (Apple's
+        // recommended scheduling point).
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { BackgroundSync.schedule() }
         }
     }
 }
