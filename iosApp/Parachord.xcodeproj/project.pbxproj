@@ -37,6 +37,12 @@
 		AA0000000000000000000090 /* IosLocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000091 /* IosLocationManager.swift */; };
 		AA00000000000000000000D1 /* CollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000D0 /* CollectionView.swift */; };
 		AA00000000000000000000E1 /* SpotifyReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E0 /* SpotifyReauthBanner.swift */; };
+		AA00000000000000000000ED /* SyncViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000EC /* SyncViewModel.swift */; };
+		AA00000000000000000000EF /* SyncProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000EE /* SyncProgressView.swift */; };
+		AA00000000000000000000F1 /* SyncCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F0 /* SyncCardView.swift */; };
+		AA00000000000000000000F3 /* SyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F2 /* SyncSettingsView.swift */; };
+		AA00000000000000000000F5 /* ProviderConfigSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F4 /* ProviderConfigSheet.swift */; };
+		AA00000000000000000000F7 /* AppleMusicReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */; };
 		AA00000000000000000000E3 /* ListenAlongController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E2 /* ListenAlongController.swift */; };
 		AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E4 /* FriendProfileScreen.swift */; };
 		AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E6 /* MediaLibraryScanner.swift */; };
@@ -103,6 +109,12 @@
 		AA00000000000000000000C1 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Parachord/Config.xcconfig; sourceTree = SOURCE_ROOT; };
 		AA00000000000000000000D0 /* CollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionView.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E0 /* SpotifyReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotifyReauthBanner.swift; sourceTree = "<group>"; };
+		AA00000000000000000000EC /* SyncViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncViewModel.swift; sourceTree = "<group>"; };
+		AA00000000000000000000EE /* SyncProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProgressView.swift; sourceTree = "<group>"; };
+		AA00000000000000000000F0 /* SyncCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCardView.swift; sourceTree = "<group>"; };
+		AA00000000000000000000F2 /* SyncSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsView.swift; sourceTree = "<group>"; };
+		AA00000000000000000000F4 /* ProviderConfigSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderConfigSheet.swift; sourceTree = "<group>"; };
+		AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicReauthBanner.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E2 /* ListenAlongController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenAlongController.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E4 /* FriendProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendProfileScreen.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E6 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
@@ -188,6 +200,12 @@
 				AA0000000000000000000017 /* DiscoverView.swift */,
 				AA0000000000000000000054 /* MigrationPreviewView.swift */,
 				AA00000000000000000000E0 /* SpotifyReauthBanner.swift */,
+				AA00000000000000000000EC /* SyncViewModel.swift */,
+				AA00000000000000000000EE /* SyncProgressView.swift */,
+				AA00000000000000000000F0 /* SyncCardView.swift */,
+				AA00000000000000000000F2 /* SyncSettingsView.swift */,
+				AA00000000000000000000F4 /* ProviderConfigSheet.swift */,
+				AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */,
 				AA00000000000000000000E2 /* ListenAlongController.swift */,
 				AA00000000000000000000E8 /* SpinoffController.swift */,
 				AA00000000000000000000EA /* ChatScreen.swift */,
@@ -354,6 +372,12 @@
 				AA0000000000000000000027 /* DiscoverView.swift in Sources */,
 				AA0000000000000000000055 /* MigrationPreviewView.swift in Sources */,
 				AA00000000000000000000E1 /* SpotifyReauthBanner.swift in Sources */,
+				AA00000000000000000000ED /* SyncViewModel.swift in Sources */,
+				AA00000000000000000000EF /* SyncProgressView.swift in Sources */,
+				AA00000000000000000000F1 /* SyncCardView.swift in Sources */,
+				AA00000000000000000000F3 /* SyncSettingsView.swift in Sources */,
+				AA00000000000000000000F5 /* ProviderConfigSheet.swift in Sources */,
+				AA00000000000000000000F7 /* AppleMusicReauthBanner.swift in Sources */,
 				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,
 				AA00000000000000000000E9 /* SpinoffController.swift in Sources */,
 				AA00000000000000000000EB /* ChatScreen.swift in Sources */,

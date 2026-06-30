@@ -588,6 +588,30 @@ class IosContainer private constructor() {
     fun watchSyncPhase(onEach: (String?) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(syncEngine.syncPhase) { onEach(it as? String) }
 
+    /** Observe the STAGED sync-progress label — the Android status-header string
+     *  ("Syncing Apple Music albums… (12/40)") — or null when idle. Built here in
+     *  Kotlin so Swift just displays it; mirrors SettingsScreen.kt's label logic
+     *  (message, falling back to a phase-name title, with "(current/total)" when
+     *  total > 0). */
+    fun watchSyncProgress(onEach: (String?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.syncProgress) { value ->
+            val p = value as? SyncEngine.SyncProgress
+            onEach(p?.let { syncProgressLabel(it) })
+        }
+
+    private fun syncProgressLabel(p: SyncEngine.SyncProgress): String {
+        val title = p.message.ifBlank {
+            when (p.phase) {
+                SyncEngine.SyncPhase.TRACKS -> "Syncing tracks"
+                SyncEngine.SyncPhase.ALBUMS -> "Syncing albums"
+                SyncEngine.SyncPhase.ARTISTS -> "Syncing artists"
+                SyncEngine.SyncPhase.PLAYLISTS -> "Syncing playlists"
+                else -> "Syncing…"
+            }
+        }
+        return if (p.total > 0) "$title (${p.current}/${p.total})" else title
+    }
+
     /**
      * LB sync needs BOTH the token and the username. The plugin config derives
      * the username from the token via `validateToken` on entry, but if that

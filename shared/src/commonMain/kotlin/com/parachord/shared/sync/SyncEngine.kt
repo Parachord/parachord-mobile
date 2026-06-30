@@ -320,6 +320,14 @@ class SyncEngine constructor(
     private val _syncPhase = MutableStateFlow<String?>(null)
     val syncPhase: StateFlow<String?> = _syncPhase
 
+    // Rich staged progress (phase + current/total + provider-named message) for
+    // ANY sync trigger, so a UI can show "Syncing Apple Music albums… (N/M)". The
+    // Android VM captures progress via its own onProgress callback; this
+    // engine-level flow makes the same data available to iOS (and any other
+    // observer) regardless of who started the sync. Null when idle.
+    private val _syncProgress = MutableStateFlow<SyncProgress?>(null)
+    val syncProgress: StateFlow<SyncProgress?> = _syncProgress
+
     /** True when an Apple Music LIBRARY call 401s (stale Music-User-Token). The UI
      *  surfaces a "Reconnect Apple Music" banner instead of silently showing 0
      *  results; self-clears once an AM library fetch succeeds again. */
@@ -397,6 +405,11 @@ class SyncEngine constructor(
             providers.firstOrNull { it.id == activeProviderId }?.displayName ?: activeProviderId
         } else null
 
+        // Mirror every progress emission onto the engine-level [syncProgress] flow
+        // (so iOS/observers see staged progress for ANY trigger) while still
+        // forwarding to the caller's onProgress (Android's VM capture path).
+        val emit: (SyncProgress) -> Unit = { p -> _syncProgress.value = p; onProgress(p) }
+
         return try {
             // Watchdog: if the sync body hangs (e.g. a MusicBrainz 503
             // tight-retry never returns), withTimeout cancels it so the
@@ -411,34 +424,34 @@ class SyncEngine constructor(
 
             if (settings.syncTracks) {
                 _syncPhase.value = "tracks"
-                onProgress(SyncProgress(SyncPhase.TRACKS,
+                emit(SyncProgress(SyncPhase.TRACKS,
                     message = if (providerLabel != null) "Syncing $providerLabel songs..."
                               else "Syncing Spotify Liked Songs..."))
-                trackResult = syncTracks(onProgress, activeProviderId)
+                trackResult = syncTracks(emit, activeProviderId)
             }
 
             if (settings.syncAlbums) {
                 _syncPhase.value = "albums"
-                onProgress(SyncProgress(SyncPhase.ALBUMS,
+                emit(SyncProgress(SyncPhase.ALBUMS,
                     message = if (providerLabel != null) "Syncing $providerLabel albums..."
                               else "Syncing saved albums..."))
-                albumResult = syncAlbums(onProgress, activeProviderId)
+                albumResult = syncAlbums(emit, activeProviderId)
             }
 
             if (settings.syncArtists) {
                 _syncPhase.value = "artists"
-                onProgress(SyncProgress(SyncPhase.ARTISTS,
+                emit(SyncProgress(SyncPhase.ARTISTS,
                     message = if (providerLabel != null) "Syncing $providerLabel artists..."
                               else "Syncing followed artists..."))
-                artistResult = syncArtists(onProgress, activeProviderId)
+                artistResult = syncArtists(emit, activeProviderId)
             }
 
             if (settings.syncPlaylists) {
                 _syncPhase.value = "playlists"
-                onProgress(SyncProgress(SyncPhase.PLAYLISTS,
+                emit(SyncProgress(SyncPhase.PLAYLISTS,
                     message = if (providerLabel != null) "Syncing $providerLabel playlists..."
                               else "Syncing playlists..."))
-                playlistResult = syncPlaylists(settings, onProgress, activeProviderId)
+                playlistResult = syncPlaylists(settings, emit, activeProviderId)
             }
 
             settingsStore.setLastSyncAt(currentTimeMillis())
@@ -449,7 +462,7 @@ class SyncEngine constructor(
                 artists = artistResult,
                 playlists = playlistResult,
             )
-            onProgress(SyncProgress(SyncPhase.COMPLETE, message = "Sync complete"))
+            emit(SyncProgress(SyncPhase.COMPLETE, message = "Sync complete"))
             Log.d(TAG, "Sync complete: $result")
             result
             }
@@ -467,6 +480,7 @@ class SyncEngine constructor(
             FullSyncResult(success = false, error = e.message)
         } finally {
             _syncPhase.value = null
+            _syncProgress.value = null
             _syncing.value = false
             syncMutex.unlock()
         }
