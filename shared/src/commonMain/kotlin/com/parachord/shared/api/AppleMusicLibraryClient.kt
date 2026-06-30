@@ -422,18 +422,28 @@ data class AmLibraryArtistAttributes(
 data class AmPlaylistListResponse(
     val data: List<AmPlaylist> = emptyList(),
     val next: String? = null,
+    // Apple wraps the library total in `meta.total` on paginated list endpoints
+    // (matches the song/album/artist responses). Used to keep paginating when
+    // `next` is unreliable + to report real progress.
+    val meta: AmListMeta? = null,
 )
 
 @Serializable
 data class AmPlaylist(
     val id: String,
-    val type: String,
-    val attributes: AmPlaylistAttributes,
+    val type: String? = null,
+    // Nullable + defaulted so ONE library playlist with incomplete metadata
+    // (missing attributes/name — a cloud or oddly-tagged playlist) can't throw
+    // during decode and take the WHOLE page down with it. A whole-page decode
+    // throw propagates out of fetchPlaylists, where SyncEngine.pullPlaylistsForProvider's
+    // catch reads it as "0 remote playlists" and the user is left with whatever
+    // stale rows the DB already had. The mapper skips name-less rows.
+    val attributes: AmPlaylistAttributes? = null,
 )
 
 @Serializable
 data class AmPlaylistAttributes(
-    val name: String,
+    val name: String? = null,
     val description: AmDescription? = null,
     val canEdit: Boolean = false,
     val dateAdded: String? = null,

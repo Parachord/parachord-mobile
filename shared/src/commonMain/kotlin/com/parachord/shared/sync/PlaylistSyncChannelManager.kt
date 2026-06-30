@@ -39,6 +39,33 @@ data class MirrorOnlyState(val effective: Boolean, val forced: Boolean)
  * `setPlaylistChannel` / `disablePlaylistChannel` so the two platforms can't
  * drift. Only shared methods are used.
  */
+/**
+ * One row of the per-provider "Configure what syncs" picker: a playlist that CAN
+ * sync with the provider, plus whether it currently does ([enabled]). [isMirror] =
+ * a push mirror to this provider (the local row belongs to another provider or is
+ * local-only) — rendered with a "mirror" chip. Selection toggles through
+ * [PlaylistSyncChannelManager.setChannel] (the same authoritative override the
+ * per-playlist Sync menu writes).
+ */
+data class ProviderChannelPlaylist(
+    val localId: String,
+    val name: String,
+    val trackCount: Int,
+    val ownerName: String?,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val lastModified: Long,
+    val isMirror: Boolean,
+    /** For a non-native row, the playlist's HOME provider display name
+     *  ("Spotify" / "Local" / …) — shown as a chip so the user knows what it is;
+     *  null for a provider-native row. */
+    val originLabel: String?,
+    val enabled: Boolean,
+    /** True for a live-fetched provider playlist that has no local row yet —
+     *  checking it imports it on the next sync. */
+    val notImported: Boolean = false,
+)
+
 class PlaylistSyncChannelManager(
     private val settingsStore: SettingsStore,
     private val libraryRepository: LibraryRepository,
@@ -88,6 +115,53 @@ class PlaylistSyncChannelManager(
         if (!enabled) {
             syncEngine.detachPlaylistFromProvider(localId, providerId)
         }
+    }
+
+    /**
+     * Transpose of [getChannels]: for ONE provider, every playlist where that
+     * provider is an AVAILABLE channel (the playlist is provider-native, OR a
+     * valid push target), each with its current enabled state. Powers the
+     * per-provider "Configure what syncs" picker off the SAME authoritative
+     * channel override that [getChannels] / [setChannel] use, so the picker and
+     * the per-playlist Sync menu can never drift. Toggling a row goes through
+     * [setChannel] (detach-on-disable, never delete).
+     */
+    suspend fun getProviderChannelPlaylists(providerId: String): List<ProviderChannelPlaylist> {
+        return playlistDao.getAllSync()
+            .filter {
+                // Native (this provider's own imports) OR a push candidate (a local
+                // playlist that CAN sync to this provider). Both show; checked =
+                // currently synced, unchecked = available to enable.
+                it.name.isNotBlank() &&
+                    (it.id.startsWith("$providerId-") || isPlaylistPushCandidate(it, providerId))
+            }
+            .map { p ->
+                val isNative = p.id.startsWith("$providerId-")
+                val override = settingsStore.getPlaylistChannels(p.id)
+                val effective = override ?: libraryRepository.getPlaylistMirrors(p.id).keys
+                ProviderChannelPlaylist(
+                    localId = p.id,
+                    name = p.name,
+                    trackCount = p.trackCount,
+                    ownerName = p.ownerName,
+                    createdAt = p.createdAt,
+                    updatedAt = p.updatedAt,
+                    lastModified = p.lastModified,
+                    isMirror = !isNative,
+                    originLabel = if (isNative) null else originLabelFor(p.id),
+                    enabled = providerId in effective,
+                )
+            }
+    }
+
+    /** A non-native playlist's home-provider chip label (by id prefix). */
+    private fun originLabelFor(localId: String): String? = when {
+        localId.startsWith("spotify-") -> "Spotify"
+        localId.startsWith("applemusic-") -> "Apple Music"
+        localId.startsWith("listenbrainz-") -> "ListenBrainz"
+        localId.startsWith("local-") -> "Local"
+        localId.startsWith("hosted-") -> "Hosted"
+        else -> null
     }
 
     /** Effective + forced one-way-mirror state for this playlist's Sync toggle.

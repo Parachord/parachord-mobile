@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.sync
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.ui.theme.ParachordTheme
 import com.parachord.android.ui.theme.PurpleDark
 import com.parachord.android.ui.theme.PurpleLight
+import com.parachord.android.ui.screens.playlists.PlaylistSort
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
@@ -46,6 +48,7 @@ import org.koin.androidx.compose.koinViewModel
 fun ProviderSyncConfigSheet(
     providerId: String,
     onDismiss: () -> Unit,
+    onDone: (() -> Unit)? = null,
     viewModel: SyncViewModel = koinViewModel(),
 ) {
     val scope = rememberCoroutineScope()
@@ -113,11 +116,7 @@ fun ProviderSyncConfigSheet(
 
                 if ("playlists" in axes) {
                     Spacer(Modifier.height(8.dp))
-                    if (viewModel.isPullProvider(providerId)) {
-                        PullPlaylistPicker(viewModel, providerId, displayName, accent)
-                    } else {
-                        PushPlaylistPicker(viewModel, displayName, accent)
-                    }
+                    UnifiedChannelPicker(viewModel, providerId, displayName, accent)
                 }
 
                 Spacer(Modifier.height(24.dp))
@@ -126,9 +125,12 @@ fun ProviderSyncConfigSheet(
                         scope.launch {
                             // Axis-off keep/remove first, then playlist-deselect
                             // keep/remove (matches iOS ordering). Either raises a
-                            // dialog and keeps the sheet open; otherwise persist
-                            // + dismiss.
-                            if (!viewModel.configNeedsPrompt()) dismiss()
+                            // dialog and keeps the sheet open; otherwise confirm
+                            // (enable, if this was a toggle-on gate) + dismiss.
+                            if (!viewModel.configNeedsPrompt()) {
+                                onDone?.invoke()
+                                dismiss()
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
@@ -323,6 +325,159 @@ private fun PlaylistCheckRow(
             )
         }
     }
+}
+
+// ── Unified per-provider channel picker ──────────────────────────────
+// One picker for ALL providers, reading the same authoritative channel state as
+// the per-playlist Sync context-menu. Every playlist that CAN sync with the
+// provider is shown; checked = currently synced; a "mirror" chip marks playlists
+// pushed UP to this provider (their local row is another provider's). Toggling
+// goes through SyncViewModel.toggleConfigChannel → setChannel (detach on disable,
+// never delete).
+@Composable
+private fun UnifiedChannelPicker(
+    viewModel: SyncViewModel,
+    providerId: String,
+    displayName: String,
+    accent: Color,
+) {
+    val playlists by viewModel.configChannelPlaylists.collectAsStateWithLifecycle()
+    val sort by viewModel.configChannelSort.collectAsStateWithLifecycle()
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        ConfigSectionLabel("$displayName playlists")
+        Spacer(Modifier.weight(1f))
+        PlaylistSortDropdown(sort, accent) { viewModel.setConfigChannelSort(it) }
+    }
+    if (playlists.isEmpty()) {
+        Text(
+            "No playlists available for $displayName yet.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(vertical = 8.dp),
+        )
+    } else {
+        for (pl in playlists) {
+            RemotePlaylistCheckRow(
+                name = pl.name,
+                ownerName = pl.ownerName,
+                trackCount = pl.trackCount,
+                checked = pl.enabled,
+                originLabel = pl.originLabel,
+                notImported = pl.notImported,
+                accent = accent,
+                onToggle = { viewModel.toggleConfigChannel(pl.localId) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PlaylistSortDropdown(
+    current: PlaylistSort,
+    accent: Color,
+    onSelect: (PlaylistSort) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(
+            onClick = { expanded = true },
+            contentPadding = PaddingValues(horizontal = 8.dp),
+        ) {
+            Text(current.label, color = accent, style = MaterialTheme.typography.labelMedium)
+            Icon(Icons.Default.ArrowDropDown, contentDescription = "Sort", tint = accent)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            for (opt in PlaylistSort.values()) {
+                DropdownMenuItem(
+                    text = { Text(opt.label) },
+                    onClick = { onSelect(opt); expanded = false },
+                    trailingIcon = {
+                        if (opt == current) Icon(Icons.Default.Check, contentDescription = null, tint = accent)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemotePlaylistCheckRow(
+    name: String,
+    ownerName: String?,
+    trackCount: Int,
+    checked: Boolean,
+    originLabel: String?,
+    notImported: Boolean,
+    accent: Color,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleable(value = checked, role = Role.Checkbox, onValueChange = { onToggle() })
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (checked) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+            contentDescription = null,
+            tint = if (checked) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (originLabel != null) {
+                    Spacer(Modifier.width(6.dp))
+                    // Match the Playlists-tab source chips (PlaylistSourceChip):
+                    // per-provider brand color at 12% alpha.
+                    val chipColor = originChipColor(originLabel)
+                    Text(
+                        originLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = chipColor,
+                        modifier = Modifier
+                            .background(chipColor.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
+            val subtitle = buildString {
+                if (notImported) append("Tap to import")
+                else append("$trackCount track${if (trackCount == 1) "" else "s"}")
+                if (!ownerName.isNullOrBlank()) append(" · $ownerName")
+            }
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** Origin-chip brand colors — kept in lockstep with the Playlists tab's
+ *  PlaylistSourceChip (SpotifyGreen / AppleMusicRed / LB orange). */
+private fun originChipColor(label: String): Color = when (label) {
+    "Spotify" -> Color(0xFF1DB954)
+    "Apple Music" -> Color(0xFFFA243C)
+    "ListenBrainz" -> Color(0xFFEB743B)
+    "Hosted" -> Color(0xFF3B82F6)
+    else -> Color(0xFF6B7280) // Local / unknown
 }
 
 @Composable
