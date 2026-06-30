@@ -2779,10 +2779,25 @@ private fun SyncTab(
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Text(
-                                    if (syncProgress.total > 0)
-                                        "Syncing… ${syncProgress.current}/${syncProgress.total}"
-                                    else syncProgress.message.ifBlank { "Syncing…" },
+                                    run {
+                                        // Show WHAT is syncing (the phase/message), not
+                                        // just bare counters. Prefer the engine's
+                                        // descriptive message; fall back to the phase.
+                                        val title = syncProgress.message.ifBlank {
+                                            when (syncProgress.phase.name) {
+                                                "TRACKS" -> "Syncing tracks"
+                                                "ALBUMS" -> "Syncing albums"
+                                                "ARTISTS" -> "Syncing artists"
+                                                "PLAYLISTS" -> "Syncing playlists"
+                                                else -> "Syncing…"
+                                            }
+                                        }
+                                        if (syncProgress.total > 0) "$title (${syncProgress.current}/${syncProgress.total})"
+                                        else title
+                                    },
                                     style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         } else {
@@ -2828,17 +2843,14 @@ private fun SyncTab(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "Sync Library",
+                                    if (syncEnabled) "Syncing enabled" else "Syncing disabled",
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.Medium,
                                 )
                                 Text(
-                                    when {
-                                        syncEnabled && syncedSummaries["spotify"].orEmpty().isNotEmpty() ->
-                                            "Syncing: ${syncedSummaries["spotify"]}"
-                                        syncEnabled -> "Syncing enabled"
-                                        else -> "Syncing disabled"
-                                    },
+                                    if (syncEnabled && syncedSummaries["spotify"].orEmpty().isNotEmpty())
+                                        "Syncing: ${syncedSummaries["spotify"]}"
+                                    else "Sync your saved tracks, albums, artists, and playlists.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

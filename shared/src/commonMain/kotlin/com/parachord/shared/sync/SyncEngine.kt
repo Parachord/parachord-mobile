@@ -406,7 +406,7 @@ class SyncEngine constructor(
                 _syncPhase.value = "tracks"
                 onProgress(SyncProgress(SyncPhase.TRACKS,
                     message = if (providerLabel != null) "Syncing $providerLabel songs..."
-                              else "Syncing liked songs..."))
+                              else "Syncing Spotify Liked Songs..."))
                 trackResult = syncTracks(onProgress, activeProviderId)
             }
 
@@ -645,7 +645,7 @@ class SyncEngine constructor(
             localCount = localCount,
             latestExternalId = latest?.externalId,
             onProgress = { current, total ->
-                onProgress(SyncProgress(SyncPhase.TRACKS, current, total, "Syncing liked songs..."))
+                onProgress(SyncProgress(SyncPhase.TRACKS, current, total, "Syncing Spotify Liked Songs..."))
             },
         ) ?: return TypeSyncResult(unchanged = localCount)
 
@@ -698,7 +698,7 @@ class SyncEngine constructor(
             localCount = 0,
             latestExternalId = null,
             onProgress = { current, total ->
-                onProgress(SyncProgress(SyncPhase.TRACKS, current, total, "Syncing liked songs..."))
+                onProgress(SyncProgress(SyncPhase.TRACKS, current, total, "Syncing Spotify Liked Songs..."))
             },
         ) ?: return TypeSyncResult()
 
@@ -4009,6 +4009,13 @@ class SyncEngine constructor(
             .map { it.id }
             .toSet()
     }
+
+    /** Every EXTERNAL playlist id linked to this provider (push-mirror targets).
+     *  The config picker dedups its live-fetch against these so a pushed mirror
+     *  copy on the provider isn't shown a SECOND time as a fake 0-track
+     *  "not imported" row alongside the real mirror row. */
+    suspend fun linkedExternalIdsForProvider(providerId: String): Set<String> =
+        syncPlaylistLinkDao.selectForProvider(providerId).map { it.externalId }.toSet()
 
     /**
      * Local-only "stop pushing this playlist to [providerId]" for a PUSH

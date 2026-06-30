@@ -14,6 +14,8 @@ import com.parachord.android.sync.SyncedPlaylist
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.SyncProvider
+import com.parachord.shared.sync.ProviderChannelPlaylist
+import com.parachord.android.ui.screens.playlists.PlaylistSort
 import com.parachord.shared.sync.SyncSettings
 import com.parachord.shared.sync.isPlaylistPushCandidate
 import kotlinx.coroutines.flow.*
@@ -27,6 +29,7 @@ class SyncViewModel constructor(
     private val playlistDao: PlaylistDao,
     private val playlistTrackDao: PlaylistTrackDao,
     private val libraryRepository: LibraryRepository,
+    private val channelManager: com.parachord.shared.sync.PlaylistSyncChannelManager,
     private val providers: List<SyncProvider>,
 ) : ViewModel() {
 
@@ -464,7 +467,15 @@ class SyncViewModel constructor(
     // ─────────────────────────────────────────────────────────────────
 
     /** Lightweight row for the config-sheet pickers (local id + name + count). */
-    data class ConfigPlaylist(val id: String, val name: String, val trackCount: Int)
+    data class ConfigPlaylist(
+        val id: String,
+        val name: String,
+        val trackCount: Int,
+        val ownerName: String? = null,
+        val createdAt: Long = 0L,
+        val updatedAt: Long = 0L,
+        val lastModified: Long = 0L,
+    )
 
     /** Keep/remove prompt raised when imported playlists are deselected in a
      *  pull provider's picker. [names] drives the dialog copy. */
@@ -508,6 +519,66 @@ class SyncViewModel constructor(
     /** Local ids of imported playlists the user is keeping synced. */
     private val _configPullChecked = MutableStateFlow<Set<String>>(emptySet())
     val configPullChecked: StateFlow<Set<String>> = _configPullChecked
+    /** Snapshot of the pull-checked set at load — diffed against on Done so ONLY
+     *  rows the user ACTIVELY unchecked this session prompt for removal (not rows
+     *  that started unchecked because the allowlist already excluded them).
+     *  Mirrors [configOriginalPushChecked]; its absence caused phantom-removal
+     *  prompts when the user merely added playlists. */
+    private var configOriginalPullChecked: Set<String> = emptySet()
+
+    // ── Unified per-provider channel picker ──────────────────────────
+    // The "Configure what syncs" playlist picker, converged onto the authoritative
+    // per-playlist channel override (PlaylistSyncChannelManager) — the SAME state
+    // the per-playlist Sync context-menu writes, so the two views can't drift
+    // (matches desktop's channelOverrides). Each row toggles via setChannel
+    // (detach-on-disable, never delete) → no Done-time keep/remove prompt needed.
+    private val _configChannelPlaylists = MutableStateFlow<List<ProviderChannelPlaylist>>(emptyList())
+    val configChannelPlaylists: StateFlow<List<ProviderChannelPlaylist>> = _configChannelPlaylists
+
+    private val _configChannelSort = MutableStateFlow(PlaylistSort.RECENT)
+    val configChannelSort: StateFlow<PlaylistSort> = _configChannelSort
+
+    fun setConfigChannelSort(sort: PlaylistSort) {
+        _configChannelSort.value = sort
+        _configChannelPlaylists.value = sortChannelPlaylists(_configChannelPlaylists.value, sort)
+    }
+
+    /** Toggle a playlist's sync with the active provider — writes the authoritative
+     *  channel override (identical to the per-playlist Sync menu). Disable detaches
+     *  (keeps the playlist + tracks); enable mirrors/imports on the next sync. */
+    fun toggleConfigChannel(localId: String) {
+        val providerId = _configProviderId.value ?: return
+        val row = _configChannelPlaylists.value.firstOrNull { it.localId == localId } ?: return
+        val newEnabled = !row.enabled
+        _configChannelPlaylists.value = _configChannelPlaylists.value.map {
+            if (it.localId == localId) it.copy(enabled = newEnabled) else it
+        }
+        viewModelScope.launch { channelManager.setChannel(localId, providerId, newEnabled) }
+    }
+
+    private fun sortChannelPlaylists(
+        list: List<ProviderChannelPlaylist>,
+        sort: PlaylistSort,
+    ): List<ProviderChannelPlaylist> = when (sort) {
+        PlaylistSort.RECENT -> list.sortedByDescending { it.createdAt }
+        PlaylistSort.CREATED -> list.sortedBy { it.createdAt }
+        PlaylistSort.MODIFIED -> list.sortedByDescending { if (it.lastModified > 0L) it.lastModified else it.updatedAt }
+        PlaylistSort.ALPHA_ASC -> list.sortedBy { it.name.lowercase() }
+        PlaylistSort.ALPHA_DESC -> list.sortedByDescending { it.name.lowercase() }
+    }
+
+    private val liveFetchCache = mutableMapOf<String, Pair<Long, List<SyncedPlaylist>>>()
+
+    /** Live-fetch a provider's playlists for the picker, cached 60s so repeated
+     *  config-sheet opens don't hammer the shared Spotify client_id / AM catalog. */
+    private suspend fun fetchProviderPlaylistsCached(providerId: String): List<SyncedPlaylist> {
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        liveFetchCache[providerId]?.let { (ts, list) -> if (now - ts < 60_000L) return list }
+        val provider = providers.firstOrNull { it.id == providerId } ?: return emptyList()
+        val list = provider.fetchPlaylists()
+        liveFetchCache[providerId] = now to list
+        return list
+    }
 
     // Axis-drop keep/remove prompt (reuses [RemovalConfirmation] + the
     // existing count/remove engine methods).
@@ -548,6 +619,55 @@ class SyncViewModel constructor(
             val ax = settingsStore.getSyncCollectionsForProvider(providerId)
             _configAxes.value = ax
             configOriginalAxes = ax
+            // Unified channel picker — every playlist where this provider is an
+            // available channel (native imports + push candidates + current
+            // mirrors), with enabled state from the SAME authoritative override as
+            // the per-playlist Sync menu. PLUS, for pull providers, the provider's
+            // own playlists that aren't imported yet (live-fetched) so the user can
+            // check them to start syncing.
+            val localRows = channelManager.getProviderChannelPlaylists(providerId)
+            val combined = if (isPullProvider(providerId)) {
+                val nativeLocalIds = localRows.filter { !it.isMirror }.map { it.localId }.toSet()
+                // Exclude pushed-mirror copies already shown as mirror rows, else
+                // they reappear as fake 0-track "not imported" duplicates.
+                val linkedExternalIds = syncEngine.linkedExternalIdsForProvider(providerId)
+                // A live-fetched remote whose NAME already matches a local playlist
+                // is the same logical playlist (just not linked) — suppress it so it
+                // doesn't show as a chip-less duplicate of the existing row.
+                val localNames = playlistDao.getAllSync()
+                    .mapNotNull { it.name.trim().lowercase().ifBlank { null } }
+                    .toSet()
+                val fetched = runCatching { fetchProviderPlaylistsCached(providerId) }.getOrDefault(emptyList())
+                val notImported = fetched
+                    .filter {
+                        "$providerId-${it.spotifyId}" !in nativeLocalIds &&
+                            it.spotifyId !in linkedExternalIds &&
+                            it.entity.name.trim().lowercase() !in localNames
+                    }
+                    .map { sp ->
+                        val futureId = "$providerId-${sp.spotifyId}"
+                        // A pending check (override set before the import runs)
+                        // keeps the row checked across reopens.
+                        val pending = settingsStore.getPlaylistChannels(futureId)?.contains(providerId) == true
+                        ProviderChannelPlaylist(
+                            localId = futureId,
+                            name = sp.entity.name,
+                            trackCount = sp.trackCount,
+                            ownerName = sp.entity.ownerName,
+                            createdAt = sp.entity.createdAt,
+                            updatedAt = sp.entity.updatedAt,
+                            lastModified = sp.entity.lastModified,
+                            isMirror = false,
+                            originLabel = null,
+                            enabled = pending,
+                            notImported = true,
+                        )
+                    }
+                localRows + notImported
+            } else {
+                localRows
+            }
+            _configChannelPlaylists.value = sortChannelPlaylists(combined, _configChannelSort.value)
             if (isPushProvider(providerId)) {
                 // Seed "checked" from the ACTUAL live mirrors (links ∩ existing
                 // playlists, pull-source rows excluded), NOT the corrupt/vestigial
@@ -558,7 +678,7 @@ class SyncViewModel constructor(
                 val linkedIds = syncEngine.linkedPlaylistIdsForProvider(providerId)
                 val pushable = all
                     .filter { isPlaylistPushCandidate(it, providerId) || it.id in linkedIds }
-                    .map { ConfigPlaylist(it.id, it.name, it.trackCount) }
+                    .map { ConfigPlaylist(it.id, it.name, it.trackCount, it.ownerName, it.createdAt, it.updatedAt, it.lastModified) }
                 _configPushable.value = pushable
                 _configPushChecked.value = linkedIds
                 configOriginalPushChecked = linkedIds
@@ -566,7 +686,7 @@ class SyncViewModel constructor(
             if (isPullProvider(providerId)) {
                 val imported = playlistDao.getAllSync()
                     .filter { it.id.startsWith("$providerId-") && it.name.isNotBlank() }
-                    .map { ConfigPlaylist(it.id, it.name, it.trackCount) }
+                    .map { ConfigPlaylist(it.id, it.name, it.trackCount, it.ownerName, it.createdAt, it.updatedAt, it.lastModified) }
                 val allow = settingsStore.getPullPlaylists(providerId)
                 _configImported.value = imported
                 // Empty allowlist = sync all → everything checked. Otherwise check
@@ -577,6 +697,7 @@ class SyncViewModel constructor(
                     imported.filter { remoteIdFor(providerId, it.id) in allow }
                         .map { it.id }.toSet()
                 }
+                configOriginalPullChecked = _configPullChecked.value
             }
             _configLoading.value = false
         }
@@ -635,28 +756,10 @@ class SyncViewModel constructor(
             )
             return true
         }
-        // 2) Pull-deselect keep/remove (Spotify / Apple Music only).
-        if (isPullProvider(providerId)) {
-            val deselected = _configImported.value.filter { it.id !in _configPullChecked.value }
-            if (deselected.isNotEmpty()) {
-                _pendingPullRemoval.value = PullRemovalPrompt(deselected.map { it.name })
-                return true
-            }
-            // Nothing deselected — persist the (possibly empty) allowlist now.
-            applyPullSelection(providerId, removeLocalIds = emptyList(), keepLocalIds = emptyList())
-        }
-        // 3) Push-deselect "Stop syncing" (ListenBrainz only).
-        if (isPushProvider(providerId)) {
-            val deselected = _configPushable.value.filter {
-                it.id in configOriginalPushChecked && it.id !in _configPushChecked.value
-            }
-            if (deselected.isNotEmpty()) {
-                _pendingPushRemoval.value = PushRemovalPrompt(deselected.map { it.name })
-                return true
-            }
-            // Nothing deselected (additions only / no change) — persist now.
-            applyPushSelection()
-        }
+        // Playlist selection is managed live by the unified channel picker
+        // (toggleConfigChannel → channelManager.setChannel, which detaches on
+        // disable and never deletes), so there's no Done-time playlist deselect
+        // prompt or allowlist write here — only the axis-off prompt above.
         return false
     }
 
@@ -698,7 +801,7 @@ class SyncViewModel constructor(
             try {
                 if (providerId != null) {
                     val deselected = _configImported.value
-                        .filter { it.id !in _configPullChecked.value }
+                        .filter { it.id in configOriginalPullChecked && it.id !in _configPullChecked.value }
                         .map { it.id }
                     applyPullSelection(providerId, removeLocalIds = emptyList(), keepLocalIds = deselected)
                 }
@@ -720,7 +823,7 @@ class SyncViewModel constructor(
             try {
                 if (providerId != null) {
                     val deselected = _configImported.value
-                        .filter { it.id !in _configPullChecked.value }
+                        .filter { it.id in configOriginalPullChecked && it.id !in _configPullChecked.value }
                         .map { it.id }
                     applyPullSelection(providerId, removeLocalIds = deselected, keepLocalIds = emptyList())
                 }

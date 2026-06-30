@@ -189,20 +189,48 @@ class AppleMusicSyncProvider(
     ): List<SyncedPlaylist> {
         val all = mutableListOf<SyncedPlaylist>()
         var offset = 0
+        var page = 0
         while (true) {
             delay(INTER_REQUEST_DELAY_MS)
-            val resp = api.listPlaylists(limit = PAGE_SIZE, offset = offset)
-            for (am in resp.data) {
-                all.add(am.toSyncedPlaylist())
+            // Per-page decode/fetch guard: a single malformed playlist in a
+            // later page must NOT throw out of fetchPlaylists. That throw
+            // propagates to SyncEngine.pullPlaylistsForProvider's catch, which
+            // reads it as "0 remote playlists" and leaves the user with stale
+            // DB rows (the "only 8 AM playlists show" symptom). Keep the pages
+            // we DID decode.
+            val resp = try {
+                api.listPlaylists(limit = PAGE_SIZE, offset = offset)
+            } catch (e: AppleMusicReauthRequiredException) {
+                // Auth is broken (missing MUT or 401 — e.g. an expired dev-token
+                // JWT). Don't swallow it as "0 playlists" — rethrow so the engine
+                // surfaces a reauth prompt instead of silently wiping the picker.
+                Log.e(TAG, "listPlaylists AUTH FAILED at offset=$offset (reauth required); kept ${all.size}")
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "listPlaylists failed at offset=$offset: ${e::class.simpleName}: ${e.message} (kept ${all.size} so far)", e)
+                break
             }
-            // Total count isn't in the response; report as we go so the
-            // UI sees progress.
-            onProgress?.invoke(all.size, all.size)
-            // `next` is the URL of the next page; `null` (or a short
-            // page) means we're done.
-            if (resp.next == null || resp.data.size < PAGE_SIZE) break
+            page++
+            var mapped = 0
+            for (am in resp.data) {
+                am.toSyncedPlaylistOrNull()?.let { all.add(it); mapped++ }
+            }
+            val total = resp.meta?.total
+            Log.d(
+                TAG,
+                "AM playlists page=$page offset=$offset got=${resp.data.size} mapped=$mapped " +
+                    "skipped=${resp.data.size - mapped} next=${resp.next != null} total=$total accum=${all.size}",
+            )
+            onProgress?.invoke(all.size, total ?: all.size)
+            // Continue while the server advertises a next page OR the running
+            // count is still short of the advertised total (covers an unreliable
+            // `next`). Stop on an empty page, or when neither signal says more.
+            val moreByNext = resp.next != null
+            val moreByTotal = total != null && all.size < total
+            if (resp.data.isEmpty() || (!moreByNext && !moreByTotal)) break
             offset += resp.data.size
         }
+        Log.d(TAG, "AM fetchPlaylists DONE: ${all.size} playlists across $page page(s)")
         return all
     }
 
@@ -297,7 +325,7 @@ class AppleMusicSyncProvider(
             while (true) {
                 val resp = api.listPlaylists(limit = PAGE_SIZE, offset = offset)
                 val match = resp.data.firstOrNull { it.id == externalPlaylistId }
-                if (match != null) return match.attributes.lastModifiedDate
+                if (match != null) return match.attributes?.lastModifiedDate
                 if (resp.next == null || resp.data.size < PAGE_SIZE) return null
                 offset += resp.data.size
             }
@@ -323,7 +351,7 @@ class AppleMusicSyncProvider(
             ?: throw IllegalStateException("Apple Music createPlaylist returned empty data")
         return RemoteCreated(
             externalId = created.id,
-            snapshotId = created.attributes.lastModifiedDate,
+            snapshotId = created.attributes?.lastModifiedDate,
         )
     }
 
@@ -760,9 +788,14 @@ class AppleMusicSyncProvider(
 
     // ── Mappers ──────────────────────────────────────────────────────
 
-    private fun AmPlaylist.toSyncedPlaylist(): SyncedPlaylist {
-        val name = attributes.name
-        val desc = attributes.description?.standard ?: attributes.description?.short
+    private fun AmPlaylist.toSyncedPlaylistOrNull(): SyncedPlaylist? {
+        // Attributes + name are nullable on the DTO (so one bad row can't throw
+        // the whole page) — skip a playlist we can't name rather than import a
+        // blank row that the picker's `name.isNotBlank()` filter would hide anyway.
+        val attrs = attributes ?: return null
+        val name = attrs.name
+        if (name.isNullOrBlank()) return null
+        val desc = attrs.description?.standard ?: attrs.description?.short
         // The PlaylistEntity carries Spotify-specific fields by historical
         // accident. Apple Music's identifier goes in the SyncedPlaylist's
         // generic `spotifyId` slot (the field name was Spotify-shaped at
@@ -771,12 +804,12 @@ class AppleMusicSyncProvider(
             id = "applemusic-$id",
             name = name,
             description = desc,
-            artworkUrl = resolveArtworkUrl(attributes.artwork?.url),
+            artworkUrl = resolveArtworkUrl(attrs.artwork?.url),
             trackCount = 0,
             createdAt = 0L,
             updatedAt = currentTimeMillis(),
             spotifyId = null,
-            snapshotId = attributes.lastModifiedDate,
+            snapshotId = attrs.lastModifiedDate,
             lastModified = 0L,
             locallyModified = false,
             ownerName = null,
@@ -784,18 +817,18 @@ class AppleMusicSyncProvider(
             sourceContentHash = null,
             localOnly = false,
             // AM has no collaborative concept; canEdit IS the writability signal.
-            writable = attributes.canEdit,
+            writable = attrs.canEdit,
         )
         return SyncedPlaylist(
             entity = playlistEntity,
             spotifyId = id,
-            snapshotId = attributes.lastModifiedDate,
+            snapshotId = attrs.lastModifiedDate,
             trackCount = 0,
             // canEdit defaults to false on the response when the field
             // is omitted; treat that as not-owned (we only push to
             // owned playlists anyway).
-            isOwned = attributes.canEdit,
-            writable = attributes.canEdit,
+            isOwned = attrs.canEdit,
+            writable = attrs.canEdit,
         )
     }
 
