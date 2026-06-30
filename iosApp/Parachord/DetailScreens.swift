@@ -217,8 +217,15 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
         // of keeping the stale image. `.task(id: url)` only fires on a url change.
         if let cached = PCImageStore.load(url) { loaded = cached; return }   // memory or disk — no network
         failed = false
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let ui = UIImage(data: data) else {
+        // file:// (e.g. the ImageEnrichmentService 2×2 playlist mosaic) must be
+        // read locally — URLSession.data(from:) rejects file URLs.
+        let data: Data?
+        if url.isFileURL {
+            data = try? Data(contentsOf: url)
+        } else {
+            data = (try? await URLSession.shared.data(from: url))?.0
+        }
+        guard let data, let ui = UIImage(data: data) else {
             failed = true
             return
         }

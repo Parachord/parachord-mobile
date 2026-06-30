@@ -1754,13 +1754,32 @@ class IosContainer private constructor() {
         )
     }
 
+    private val mosaicComposer: com.parachord.shared.metadata.IosMosaicComposer by lazy {
+        com.parachord.shared.metadata.IosMosaicComposer(httpClient)
+    }
+
     val imageEnrichmentService: ImageEnrichmentService by lazy {
         ImageEnrichmentService(
             enrichMetadataService, artistDao, albumDao, trackDao, playlistDao, playlistTrackDao,
             httpClient,
-            composeMosaic = { _, _ -> null },
+            // 2×2 album-art mosaic for playlists (ListenBrainz weeklies, hosted
+            // XSPF, etc.) — UIGraphics composite → file:// JPEG (Android parity).
+            composeMosaic = { playlistId, urls -> mosaicComposer.compose(playlistId, urls) },
         )
     }
+
+    /** Regenerate the 2×2 mosaic for every playlist with missing/stale art
+     *  (Android's ParachordApplication startup hook). Call fire-and-forget on
+     *  launch. Guarded: bridged suspend must not throw across the ObjC bridge. */
+    suspend fun regeneratePlaylistMosaics() {
+        try { imageEnrichmentService.regenerateAllPlaylistMosaics() } catch (_: Exception) {}
+    }
+
+    /** Enrich ONE playlist's mosaic art (Android's enrichPlaylistArtIfNeeded) —
+     *  e.g. just after saving a ListenBrainz weekly. Returns the file:// URL or
+     *  null. Guarded for the bridge. */
+    suspend fun enrichPlaylistArt(playlistId: String): String? =
+        try { imageEnrichmentService.enrichPlaylistArt(playlistId) } catch (e: Exception) { null }
 
     val criticalDarlingsRepository: CriticalDarlingsRepository by lazy {
         CriticalDarlingsRepository(

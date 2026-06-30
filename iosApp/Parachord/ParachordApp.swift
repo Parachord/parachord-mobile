@@ -61,6 +61,11 @@ private struct RootGate: View {
             _ = await (warm, floor)
             withAnimation(.easeOut(duration: 0.35)) { ready = true }
             BackgroundSync.schedule()   // queue a first background run
+            // Generate the 2×2 album-art mosaic for any playlist without one
+            // (ListenBrainz weeklies, hosted XSPF, …). Idempotent — only touches
+            // playlists whose art isn't already a file:// mosaic. Android parity:
+            // ParachordApplication.onCreate. Fire-and-forget.
+            Task { try? await IosContainer.companion.shared.regeneratePlaylistMosaics() }
         }
         // Re-queue the background sync whenever we leave the foreground (Apple's
         // recommended scheduling point).
