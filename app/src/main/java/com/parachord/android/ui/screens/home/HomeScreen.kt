@@ -100,6 +100,7 @@ import com.parachord.android.data.db.entity.FriendEntity
 import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.AnnouncementBanner
+import com.parachord.android.ui.components.AppleMusicReauthBanner
 import com.parachord.android.ui.components.SpotifyReauthBanner
 import android.content.Intent
 import android.net.Uri
@@ -326,11 +327,34 @@ fun HomeScreen(
                 org.koin.compose.koinInject()
             val spotifyReauthRequired by oAuthManager.spotifyReauthRequired
                 .collectAsStateWithLifecycle()
+            // ── Apple Music reauth banner (stale Music-User-Token) ───────
+            val syncEngine: com.parachord.shared.sync.SyncEngine = org.koin.compose.koinInject()
+            val musicKitBridge: com.parachord.android.playback.handlers.MusicKitWebBridge =
+                org.koin.compose.koinInject()
+            val appleMusicReauthRequired by syncEngine.appleMusicReauthRequired
+                .collectAsStateWithLifecycle()
+            val reauthScope = androidx.compose.runtime.rememberCoroutineScope()
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 24.dp),
             ) {
+                if (appleMusicReauthRequired) {
+                    item(key = "applemusic-reauth-banner") {
+                        AppleMusicReauthBanner(
+                            onReconnect = {
+                                reauthScope.launch {
+                                    runCatching { musicKitBridge.authorize() }
+                                    syncEngine.clearAppleMusicReauth()
+                                }
+                            },
+                            modifier = Modifier.padding(
+                                horizontal = 16.dp,
+                                vertical = 8.dp,
+                            ),
+                        )
+                    }
+                }
                 if (spotifyReauthRequired) {
                     item(key = "spotify-reauth-banner") {
                         SpotifyReauthBanner(

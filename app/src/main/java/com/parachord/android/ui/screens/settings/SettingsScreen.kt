@@ -2754,6 +2754,10 @@ private fun SyncTab(
     /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
      *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
     var configSyncProviderId by remember { mutableStateOf<String?>(null) }
+    /** When non-null, the config sheet is open as a first-time ENABLE gate for
+     *  this provider — sync isn't actually turned on until the user taps Done
+     *  (cleared without enabling if they cancel). Drives the optimistic toggle. */
+    var pendingEnableProviderId by remember { mutableStateOf<String?>(null) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         // Sync status + global "Sync now" (#303) — one action that syncs every
@@ -2810,7 +2814,9 @@ private fun SyncTab(
                         Spacer(modifier = Modifier.height(12.dp))
                         Button(
                             onClick = { syncViewModel.syncNow() },
-                            enabled = !isSyncing,
+                            // Disabled when no service is actually enabled to sync.
+                            enabled = !isSyncing &&
+                                (syncEnabled || appleMusicSyncEnabled || listenBrainzSyncEnabled),
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
                         ) {
@@ -2856,11 +2862,15 @@ private fun SyncTab(
                                 )
                             }
                             Switch(
-                                checked = syncEnabled,
+                                // Optimistically ON while confirming in the config
+                                // sheet; reverts if the user cancels.
+                                checked = syncEnabled || pendingEnableProviderId == "spotify",
                                 onCheckedChange = { enabled ->
                                     if (enabled) {
-                                        syncSetupProviderId = "spotify"
-                                        showSyncSetupSheet = true
+                                        // Gate: open the config sheet first; sync
+                                        // only enables when they tap Done.
+                                        pendingEnableProviderId = "spotify"
+                                        configSyncProviderId = "spotify"
                                     } else {
                                         showStopSyncDialog = true
                                     }
@@ -2944,12 +2954,12 @@ private fun SyncTab(
                             // Toggle ON opens the setup wizard (first-time axis
                             // selection); OFF disables AM sync directly.
                             Switch(
-                                checked = appleMusicSyncEnabled,
+                                checked = appleMusicSyncEnabled || pendingEnableProviderId == "applemusic",
                                 onCheckedChange = { enabled ->
                                     if (enabled) {
-                                        syncSetupProviderId = "applemusic"
-                                        syncViewModel.resetSetup()
-                                        showSyncSetupSheet = true
+                                        // Gate: confirm what syncs before enabling.
+                                        pendingEnableProviderId = "applemusic"
+                                        configSyncProviderId = "applemusic"
                                     } else {
                                         onSetAppleMusicSyncEnabled(false)
                                     }
@@ -3025,8 +3035,16 @@ private fun SyncTab(
                                 )
                             }
                             Switch(
-                                checked = listenBrainzSyncEnabled,
-                                onCheckedChange = onSetListenBrainzSyncEnabled,
+                                checked = listenBrainzSyncEnabled || pendingEnableProviderId == "listenbrainz",
+                                onCheckedChange = { enabled ->
+                                    if (enabled) {
+                                        // Gate: confirm what syncs before enabling.
+                                        pendingEnableProviderId = "listenbrainz"
+                                        configSyncProviderId = "listenbrainz"
+                                    } else {
+                                        onSetListenBrainzSyncEnabled(false)
+                                    }
+                                },
                             )
                         }
                         // Configure what syncs — push picker (#266): All / Choose /
@@ -3252,7 +3270,13 @@ private fun SyncTab(
     configSyncProviderId?.let { pid ->
         ProviderSyncConfigSheet(
             providerId = pid,
-            onDismiss = { configSyncProviderId = null },
+            // Done in a first-time ENABLE gate actually turns sync on; a plain
+            // "Configure what syncs" open (no pending) just persists + closes.
+            onDone = { pendingEnableProviderId?.let { syncViewModel.enableProviderFromConfig(it) } },
+            onDismiss = {
+                configSyncProviderId = null
+                pendingEnableProviderId = null
+            },
             viewModel = syncViewModel,
         )
     }

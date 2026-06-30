@@ -48,6 +48,7 @@ import org.koin.androidx.compose.koinViewModel
 fun ProviderSyncConfigSheet(
     providerId: String,
     onDismiss: () -> Unit,
+    onDone: (() -> Unit)? = null,
     viewModel: SyncViewModel = koinViewModel(),
 ) {
     val scope = rememberCoroutineScope()
@@ -124,9 +125,12 @@ fun ProviderSyncConfigSheet(
                         scope.launch {
                             // Axis-off keep/remove first, then playlist-deselect
                             // keep/remove (matches iOS ordering). Either raises a
-                            // dialog and keeps the sheet open; otherwise persist
-                            // + dismiss.
-                            if (!viewModel.configNeedsPrompt()) dismiss()
+                            // dialog and keeps the sheet open; otherwise confirm
+                            // (enable, if this was a toggle-on gate) + dismiss.
+                            if (!viewModel.configNeedsPrompt()) {
+                                onDone?.invoke()
+                                dismiss()
+                            }
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),

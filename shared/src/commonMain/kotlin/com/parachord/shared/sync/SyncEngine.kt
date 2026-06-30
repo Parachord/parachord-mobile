@@ -320,6 +320,13 @@ class SyncEngine constructor(
     private val _syncPhase = MutableStateFlow<String?>(null)
     val syncPhase: StateFlow<String?> = _syncPhase
 
+    /** True when an Apple Music LIBRARY call 401s (stale Music-User-Token). The UI
+     *  surfaces a "Reconnect Apple Music" banner instead of silently showing 0
+     *  results; self-clears once an AM library fetch succeeds again. */
+    private val _appleMusicReauthRequired = MutableStateFlow(false)
+    val appleMusicReauthRequired: StateFlow<Boolean> = _appleMusicReauthRequired
+    fun clearAppleMusicReauth() { _appleMusicReauthRequired.value = false }
+
     // N-way SHADOW report (Phase 3 dev surface). Holds the LATEST cycle's
     // would-do entries for every migrated playlist that has a pending delta.
     // Populated only while isNwayEnabled; reviewed in Android Settings before
@@ -2706,7 +2713,16 @@ class SyncEngine constructor(
         val remotePlaylists = try {
             provider.fetchPlaylists { current, total ->
                 onProgress(SyncProgress(SyncPhase.PLAYLISTS, current, total, "Fetching ${provider.displayName} playlists..."))
+            }.also {
+                // Library fetch succeeded — AM is reconnected; clear any banner.
+                if (providerId == "applemusic") _appleMusicReauthRequired.value = false
             }
+        } catch (e: AppleMusicReauthRequiredException) {
+            // Stale Music-User-Token. Don't silently show "0 playlists" — surface a
+            // "Reconnect Apple Music" banner via the StateFlow.
+            Log.e(TAG, "Apple Music reauth required (playlists) — surfacing reconnect banner", e)
+            _appleMusicReauthRequired.value = true
+            return TypeSyncResult()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch playlists from ${provider.displayName}", e)
             return TypeSyncResult()

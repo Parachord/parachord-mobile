@@ -367,6 +367,46 @@ class SyncViewModel constructor(
         _currentStep.value = SetupStep.OPTIONS
     }
 
+    /** Enable a provider's sync AFTER the user confirms via the config sheet (the
+     *  toggle-opens-config gate). Axes/channels were already persisted live by the
+     *  config sheet; this flips the enable flags (mirrors persistAndRunSync's
+     *  enable, minus the wizard) and runs a provider-filtered sync. */
+    fun enableProviderFromConfig(providerId: String) {
+        viewModelScope.launch {
+            val enabled = settingsStore.getEnabledSyncProviders() + providerId
+            settingsStore.setEnabledSyncProviders(enabled)
+            if (providerId == SpotifySyncProvider.PROVIDER_ID) {
+                // Legacy SyncSettings drives the Spotify card toggle + the
+                // global-toggle codepaths; AM/LB use the per-provider opt-in only.
+                val axes = settingsStore.getSyncCollectionsForProvider(providerId)
+                settingsStore.saveSyncSettings(SyncSettings(
+                    enabled = true,
+                    provider = "spotify",
+                    syncTracks = "tracks" in axes,
+                    syncAlbums = "albums" in axes,
+                    syncArtists = "artists" in axes,
+                    syncPlaylists = "playlists" in axes,
+                    selectedPlaylistIds = emptySet(),
+                    pushLocalPlaylists = true,
+                ))
+            }
+            syncScheduler.startInAppTimer()
+            syncScheduler.enableWorkManagerSync()
+            _currentStep.value = SetupStep.SYNCING
+            _isSyncing.value = true
+            try {
+                val result = syncEngine.syncAll(
+                    onProgress = { progress -> _syncProgress.value = progress },
+                    providerFilter = providerId,
+                )
+                _syncResult.value = result
+                _currentStep.value = SetupStep.COMPLETE
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
     private suspend fun persistAndRunSync(activeId: String, collections: Set<String>) {
         _currentStep.value = SetupStep.SYNCING
         // Persist per-provider axis opt-in. Earlier this was a single
