@@ -52,6 +52,15 @@ fun SpotifyDevicePickerDialog(
                         onClick = { onDeviceSelected(device) },
                     )
                 }
+                // #285: set expectations for the "This device" cold-launch —
+                // Spotify foregrounds once to start, then the queue plays
+                // silently via Connect (parity with the iOS picker footer).
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = "Choosing \"This device\" opens Spotify once to start playback — then come back to Parachord to keep listening. The rest of your queue plays without leaving the app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {},
