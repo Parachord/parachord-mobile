@@ -16,7 +16,8 @@ class LastFmSignatureTest {
      */
     @Test
     fun lastFmSignature_simpleParams_matchesKnownDigest() {
-        val params = sortedMapOf(
+        // The signature helper sorts params internally, so map order here is irrelevant.
+        val params = mapOf(
             "method" to "auth.gettoken",
             "api_key" to "xxxxxxxxxxxxxxxx",
         )
@@ -29,7 +30,7 @@ class LastFmSignatureTest {
     fun lastFmSignature_skipsApiSigParam() {
         // If api_sig is in the input map (defensive), it should NOT be included
         // in the concat — that's circular.
-        val params = sortedMapOf(
+        val params = mapOf(
             "api_sig" to "should-be-ignored",
             "api_key" to "xxxxxxxxxxxxxxxx",
             "method" to "auth.gettoken",
@@ -41,7 +42,7 @@ class LastFmSignatureTest {
     @Test
     fun lastFmSignature_skipsFormatParam() {
         // Per Last.fm docs, the "format" param (json/xml) is NOT signed.
-        val params = sortedMapOf(
+        val params = mapOf(
             "api_key" to "xxxxxxxxxxxxxxxx",
             "format" to "json",
             "method" to "auth.gettoken",
@@ -53,7 +54,7 @@ class LastFmSignatureTest {
     @Test
     fun lastFmSignature_lowercaseHex() {
         // Output must be lowercase hex; Last.fm rejects uppercase.
-        val params = sortedMapOf("method" to "test")
+        val params = mapOf("method" to "test")
         val sig = lastFmSignature(params, "secret")
         assertEquals(sig, sig.lowercase())
         assertEquals(32, sig.length)

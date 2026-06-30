@@ -22,7 +22,7 @@ class SpotifyRefreshClassificationTest {
     }
 
     @Test
-    fun `400 invalid_grant is terminal (the six-month-expiry case)`() {
+    fun `400 invalid_grant is terminal - the six-month-expiry case`() {
         assertEquals(SpotifyRefreshOutcome.TERMINAL, classifySpotifyRefresh(400, "invalid_grant"))
     }
 
@@ -71,7 +71,7 @@ class SpotifyRefreshClassificationTest {
     }
 
     @Test
-    fun `parseSpotifyErrorCode is null for empty, non-JSON, or error-less bodies`() {
+    fun `parseSpotifyErrorCode is null for empty non-JSON or error-less bodies`() {
         assertNull(parseSpotifyErrorCode(null))
         assertNull(parseSpotifyErrorCode(""))
         assertNull(parseSpotifyErrorCode("   "))

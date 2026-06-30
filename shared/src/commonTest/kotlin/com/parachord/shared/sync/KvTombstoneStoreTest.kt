@@ -24,7 +24,7 @@ class KvTombstoneStoreTest {
         assertTrue(MemBlob().store().read().isEmpty())
     }
 
-    @Test fun `corrupt blob reads as empty, does not throw`() {
+    @Test fun `corrupt blob reads as empty and does not throw`() {
         val m = MemBlob().apply { blob = "{not valid json" }
         assertTrue(m.store().read().isEmpty())
     }
@@ -41,7 +41,7 @@ class KvTombstoneStoreTest {
         assertNull(TrackTombstones.getTombstone(reread, "spotify", "missing"))
     }
 
-    @Test fun `empty-object entry decodes to null removedAt (desktop corrupt-entry shape)`() {
+    @Test fun `empty-object entry decodes to null removedAt - desktop corrupt-entry shape`() {
         // Mirrors desktop's `{ [provider]: { [ext]: {} } }` corrupt entry: an
         // entry with no removedAt must round-trip to Tombstone(null) so
         // pruneExpired treats it as corrupt and sweeps it. Depends on

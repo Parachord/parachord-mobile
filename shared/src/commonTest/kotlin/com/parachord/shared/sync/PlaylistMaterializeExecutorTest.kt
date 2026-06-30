@@ -133,7 +133,7 @@ class PlaylistMaterializeExecutorTest {
         { it.trackRecordingMbid }
 
     @Test
-    fun `ByNativeId — adds resolved are appended, removes target remote native ids`() = runTest {
+    fun `ByNativeId — adds resolved are appended and removes target remote native ids`() = runTest {
         // canonical = {a, b, c}; remote = {a, x}. add {b, c}; remove {x}.
         val provider = FakeProvider(features(TrackRemoveMode.ByNativeId))
         val result = materializeToProvider(
@@ -177,7 +177,7 @@ class PlaylistMaterializeExecutorTest {
     }
 
     @Test
-    fun `Unsupported — removes are skipped and counted, adds still applied`() = runTest {
+    fun `Unsupported — removes are skipped and counted while adds still applied`() = runTest {
         // canonical = {a, b}; remote = {a, x}. add {b}; remove {x} is unsupported.
         val provider = FakeProvider(features(TrackRemoveMode.Unsupported))
         val result = materializeToProvider(
@@ -241,7 +241,7 @@ class PlaylistMaterializeExecutorTest {
     }
 
     @Test
-    fun `ReplaceOnly — an existing canonical track with a null native id degrades to additive (no shrinking replace)`() = runTest {
+    fun `ReplaceOnly — an existing canonical track with a null native id degrades to additive with no shrinking replace`() = runTest {
         // The I1 regression: every ADD resolves, but an EXISTING canonical track (`a`,
         // already on the remote) has a null native id — it matched the remote on the
         // isrc/norm identity tier, not its native-id column. The OLD full-coverage gate
