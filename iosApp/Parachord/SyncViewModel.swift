@@ -25,6 +25,8 @@ final class SyncViewModel {
     var spotifyCooldownMs: Int64 = 0
     /// providerId → "Liked Songs · Albums · Artists · Playlists"
     var syncedSummaries: [String: String] = [:]
+    /// Per-client sync-engine mode: "legacy" | "shadow" | "new" (N-way migration).
+    var engineMode = "legacy"
 
     private var pendingResync = false
     private var syncWatcher: Cancellable?
@@ -55,9 +57,20 @@ final class SyncViewModel {
         listenBrainzOn = (try? await container.isProviderSyncEnabled(providerId: "listenbrainz"))?.boolValue ?? false
         appleMusicOn = (try? await container.isProviderSyncEnabled(providerId: "applemusic"))?.boolValue ?? false
         spotifyCooldownMs = container.spotifyCooldownRemainingMs()
+        engineMode = (try? await container.getSyncEngineMode()) ?? "legacy"
         await refreshSummaries()
         await refreshLastSynced()
         startWatching()
+    }
+
+    func refreshEngineMode() async {
+        engineMode = (try? await container.getSyncEngineMode()) ?? "legacy"
+    }
+
+    /// Revert to the legacy engine (preview/accept handles legacy → new).
+    func revertToLegacy() {
+        engineMode = "legacy"
+        Task { try? await container.setSyncEngineMode(mode: "legacy") }
     }
 
     func refreshSummaries() async {

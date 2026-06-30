@@ -1033,7 +1033,6 @@ private struct PluginConfigSheet: View {
 
 private struct GeneralTab: View {
     @Bindable var model: SettingsViewModel
-    @State private var showMigrationPreview = false
     private let themes = ["system", "light", "dark"]
 
     var body: some View {
@@ -1053,25 +1052,8 @@ private struct GeneralTab: View {
             }
             .tint(PC.accent)
             .padding(.horizontal, 20).padding(.top, 4)
-
-            label("Sync engine")
-            Button { showMigrationPreview = true } label: {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Use new sync").font(.system(size: 15)).foregroundStyle(PC.fg1)
-                        Text("Preview what switching to the new sync engine would change — then accept, report a problem, or cancel. Nothing is armed until you accept.")
-                            .font(.system(size: 12)).foregroundStyle(PC.fg3)
-                            .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 12)
-                    Text("Preview").font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.accent)
-                }
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 20).padding(.top, 8)
         }
         .padding(.bottom, 130)
-        .sheet(isPresented: $showMigrationPreview) { MigrationPreviewView() }
     }
 
     private func label(_ t: String) -> some View {

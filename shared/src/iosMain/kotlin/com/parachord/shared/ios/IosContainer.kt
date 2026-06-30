@@ -533,6 +533,14 @@ class IosContainer private constructor() {
         return IosMigrationAcceptResult(flipped = !drifted, summary = fresh.toIosSummary())
     }
 
+    /** Current per-client sync-engine mode: `legacy` | `shadow` | `new`. Drives
+     *  the Sync-tab "Sync engine" section (shows which engine is active). */
+    suspend fun getSyncEngineMode(): String = settingsStore.getSyncEngineMode()
+
+    /** Set the sync-engine mode directly. Used to revert `new` → `legacy`
+     *  (the migration preview handles `legacy` → `new` via [acceptMigration]). */
+    suspend fun setSyncEngineMode(mode: String) = settingsStore.setSyncEngineMode(mode)
+
     /** Prefilled GitHub-issue report for the last previewed plan. */
     fun migrationReport(): IosMigrationReport {
         val s = lastMigrationSummary

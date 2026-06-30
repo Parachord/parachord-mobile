@@ -12,6 +12,7 @@ struct SyncSettingsView: View {
     /// conflict in SwiftUI and can spuriously present). `.configure` = the normal
     /// "Configure what syncs" sheet; `.gate` = the toggle-ON enable gate.
     @State private var activeSheet: SyncConfigSheet?
+    @State private var showMigration = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -39,10 +40,15 @@ struct SyncSettingsView: View {
             if model.isConnected("spotify") { spotifyCard }
             appleMusicCard
             if model.isConnected("listenbrainz") { listenBrainzCard }
+
+            syncEngineSection
         }
         .padding(.bottom, 130)
         .task { await sync.load(); reauth.start() }
         .onDisappear { sync.stopWatching(); reauth.stop() }
+        .sheet(isPresented: $showMigration, onDismiss: { Task { await sync.refreshEngineMode() } }) {
+            MigrationPreviewView()
+        }
         // Keep-or-remove on disable (#194 / cross-provider dedup). Dismissing
         // without a choice defaults to keep (the provider is disabled either way).
         .confirmationDialog(
@@ -124,6 +130,78 @@ struct SyncSettingsView: View {
             onToggle: { sync.toggle("listenbrainz", $0) },
             onConfigure: { activeSheet = .configure(id: "listenbrainz", name: "ListenBrainz") }
         )
+    }
+
+    /// "Sync engine" section — the N-way (multimaster) migration opt-in. Shows
+    /// the current engine and a Preview→switch entry (mirrors Android's migration
+    /// preview). The preview is a no-write dry-run; switching to "new" only
+    /// happens on Accept inside the sheet.
+    private var syncEngineSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("SYNC ENGINE")
+                .font(.system(size: 11, weight: .semibold)).tracking(1.4)
+                .foregroundStyle(PC.fg3)
+                .padding(.horizontal, 20).padding(.bottom, 8)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(engineTitle).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.fg1)
+                        Text(engineDesc)
+                            .font(.system(size: 12)).foregroundStyle(PC.fg2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if sync.engineMode == "new" {
+                        Text("NEW")
+                            .font(.system(size: 10, weight: .bold)).tracking(0.5)
+                            .foregroundStyle(PC.accent)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 5).fill(PC.accent.opacity(0.12)))
+                    }
+                }
+
+                Divider().background(PC.cardBorder)
+
+                if sync.engineMode == "new" {
+                    Button { sync.revertToLegacy() } label: {
+                        Text("Switch back to legacy sync")
+                            .font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg2)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button { showMigration = true } label: {
+                        HStack {
+                            Text("Preview & switch to new sync")
+                                .font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(PC.accent)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 12).fill(PC.cardBg))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(PC.cardBorder, lineWidth: 1))
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private var engineTitle: String {
+        // Matches the other platforms' label ("Use new sync (preview)"); once
+        // switched, reflects that you're on the new multimaster engine.
+        sync.engineMode == "new" ? "New sync (multimaster)" : "Use New Sync (preview)"
+    }
+
+    private var engineDesc: String {
+        switch sync.engineMode {
+        case "new":
+            return "Reconciles playlist edits across Spotify, Apple Music, and ListenBrainz. Using Parachord elsewhere? Switch those devices to new sync too."
+        default:
+            return "Preview exactly what switching to the new sync engine would change — then accept, report a problem, or cancel. Nothing is armed until you accept."
+        }
     }
 
     private func syncProviderName(_ id: String?) -> String {
