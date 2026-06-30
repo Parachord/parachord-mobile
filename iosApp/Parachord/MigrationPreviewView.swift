@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import SafariServices
 import Shared
 
 // Swift-side Identifiable view models (the Ios* DTOs are flattened into these so
@@ -62,11 +63,33 @@ final class MigrationPreviewModel {
         }
     }
 
-    func report() {
+    /// Build the prefilled GitHub-issue URL + copy the body to the clipboard
+    /// (fallback in case GitHub truncates a very long prefill). The caller opens
+    /// the URL in an in-app SFSafariViewController so it loads GitHub *web*
+    /// (which honors the `?title&body` prefill) instead of `UIApplication.open`
+    /// deep-linking the GitHub app — which ignores the query params and shows a
+    /// blank form (#318).
+    func reportLink() -> ReportLink? {
         let r = container.migrationReport()
         UIPasteboard.general.string = r.body
-        if let url = URL(string: r.githubUrl) { UIApplication.shared.open(url) }
+        guard let url = URL(string: r.githubUrl) else { return nil }
+        return ReportLink(url: url)
     }
+}
+
+/// Identifiable wrapper so the prefilled GitHub URL drives a `.sheet(item:)`.
+struct ReportLink: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// In-app Safari (SFSafariViewController). Unlike `UIApplication.open`, it shows
+/// web content and does NOT route github.com through the GitHub app via
+/// Universal Links — so the prefilled new-issue page actually renders (#318).
+struct SafariView: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
+    func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
 }
 
 /// Preview → approve / report / cancel for the new-sync cutover (mirrors the
@@ -74,6 +97,7 @@ final class MigrationPreviewModel {
 struct MigrationPreviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var model = MigrationPreviewModel()
+    @State private var reportLink: ReportLink?
 
     var body: some View {
         NavigationStack {
@@ -85,6 +109,7 @@ struct MigrationPreviewView: View {
                 }
         }
         .onAppear { model.load() }
+        .sheet(item: $reportLink) { SafariView(url: $0.url) }
     }
 
     @ViewBuilder private var content: some View {
@@ -148,7 +173,7 @@ struct MigrationPreviewView: View {
                     .buttonStyle(.borderedProminent)
                 Spacer()
                 if summary.hasChanges || !summary.protectedList.isEmpty {
-                    Button("Report a problem") { model.report() }
+                    Button("Report a problem") { reportLink = model.reportLink() }
                 }
             }
             .padding(.top, 8)
