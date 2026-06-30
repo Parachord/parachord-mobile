@@ -460,6 +460,11 @@ struct HomeScreen: View {
                         .frame(width: 130, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                    .pcAlbumContextMenu(
+                        title: album.title, artist: album.artist, artworkUrl: album.artworkUrl,
+                        coordinator: coordinator,
+                        onGoToAlbum: { path.append(.album(title: album.title, artist: album.artist)) },
+                        onGoToArtist: { path.append(.artist(album.artist)) })
                 }
             }
             .padding(.horizontal, 20)
@@ -481,11 +486,25 @@ struct HomeScreen: View {
                         .frame(width: 130, alignment: .leading)
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button { playPlaylist(pl) } label: { Label("Play Playlist", systemImage: "play.fill") }
+                        Button { path.append(.playlist(id: pl.id, title: pl.name)) } label: { Label("Open", systemImage: "arrow.up.right") }
+                    }
                 }
             }
             .padding(.horizontal, 20)
         }
         .padding(.bottom, 8)
+    }
+
+    private func playPlaylist(_ p: Playlist) {
+        Task {
+            let tracks = (try? await container.getPlaylistTracksOnce(id: p.id)) ?? []
+            let entities = tracks.map { pcTrack(from: $0) }
+            guard !entities.isEmpty else { return }
+            coordinator.setQueue(entities, startIndex: 0,
+                                 context: PlaybackContext(type: "playlist", name: p.name, id: p.id))
+        }
     }
 
     // ── Your Collection (stat cards → Collection / Playlists tabs) ────────
@@ -604,6 +623,11 @@ struct HomeScreen: View {
                                 .frame(width: 120, alignment: .leading)
                             }
                             .buttonStyle(.plain)
+                            .pcAlbumContextMenu(
+                                title: al.title, artist: al.artist, artworkUrl: al.artworkUrl,
+                                coordinator: coordinator,
+                                onGoToAlbum: { path.append(.album(title: al.title, artist: al.artist)) },
+                                onGoToArtist: { path.append(.artist(al.artist)) })
                         }
                     }
                     .padding(.horizontal, 20)
@@ -623,6 +647,9 @@ struct HomeScreen: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .pcArtistContextMenu(
+                                name: ar.name, imageUrl: ar.imageUrl, coordinator: coordinator,
+                                onGoToArtist: { path.append(.artist(ar.name)) })
                         }
                     }
                     .padding(.horizontal, 20)
