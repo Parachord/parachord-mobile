@@ -39,6 +39,7 @@ import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.shared.sync.MirrorOnlyState
 import com.parachord.shared.sync.SpotifySyncProvider
 import com.parachord.shared.sync.SyncEngine
+import com.parachord.shared.sync.ProviderChannelPlaylist
 import com.parachord.shared.sync.MigrationPlanSummary
 import com.parachord.shared.sync.buildMigrationReport
 import com.parachord.shared.sync.summarizeMigrationPlan
@@ -452,6 +453,62 @@ class IosContainer private constructor() {
         )
     }
 
+    // ── Sync-settings bridge for SwiftUI (mirrors Android PR #310/#311) ────────
+
+    /** Apple Music reauth banner: true when an AM library call 401s (stale MUT). */
+    fun watchAppleMusicReauthRequired(onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.appleMusicReauthRequired) { onEach((it as? Boolean) ?: false) }
+
+    fun clearAppleMusicReauth() = syncEngine.clearAppleMusicReauth()
+
+    /** Per-provider "what's synced" summary axes (tracks/albums/artists/playlists). */
+    suspend fun getSyncCollectionsForProvider(providerId: String): Set<String> =
+        settingsStore.getSyncCollectionsForProvider(providerId)
+
+    /**
+     * The unified "Configure what syncs" picker rows for a provider: the local
+     * channel-relevant playlists (native imports + push candidates + current
+     * mirrors) PLUS — for pull providers (Spotify / Apple Music) — live-fetched
+     * not-yet-imported native playlists, deduped against native rows + linked
+     * mirror copies + same-name local rows so a playlist never appears twice.
+     * Mirrors Android's SyncViewModel.openConfig merge; call from a `Task`.
+     */
+    suspend fun getProviderPickerRows(providerId: String): List<ProviderChannelPlaylist> {
+        val local = playlistSyncChannelManager.getProviderChannelPlaylists(providerId)
+        val provider = when (providerId) {
+            "spotify" -> spotifySyncProvider
+            "applemusic" -> appleMusicSyncProvider
+            else -> return local // ListenBrainz: no live catalog to merge
+        }
+        val nativeLocalIds = local.filter { !it.isMirror }.map { it.localId }.toSet()
+        val linkedExternalIds = syncEngine.linkedExternalIdsForProvider(providerId)
+        val localNames = playlistDao.getAllSync()
+            .mapNotNull { it.name.trim().lowercase().ifBlank { null } }.toSet()
+        val fetched = runCatching { provider.fetchPlaylists() }.getOrElse { emptyList() }
+        val notImported = fetched
+            .filter {
+                "$providerId-${it.spotifyId}" !in nativeLocalIds &&
+                    it.spotifyId !in linkedExternalIds &&
+                    it.entity.name.trim().lowercase() !in localNames
+            }
+            .map { sp ->
+                ProviderChannelPlaylist(
+                    localId = "$providerId-${sp.spotifyId}",
+                    name = sp.entity.name,
+                    trackCount = sp.trackCount,
+                    ownerName = sp.entity.ownerName,
+                    createdAt = sp.entity.createdAt,
+                    updatedAt = sp.entity.updatedAt,
+                    lastModified = sp.entity.lastModified,
+                    isMirror = false,
+                    originLabel = null,
+                    enabled = false,
+                    notImported = true,
+                )
+            }
+        return local + notImported
+    }
+
     // ── Legacy → N-way migration preview (#289 brick #5) ──────────────
     private var lastMigrationSummary: MigrationPlanSummary? = null
 
@@ -475,6 +532,14 @@ class IosContainer private constructor() {
         if (!drifted) settingsStore.setSyncEngineMode("new")
         return IosMigrationAcceptResult(flipped = !drifted, summary = fresh.toIosSummary())
     }
+
+    /** Current per-client sync-engine mode: `legacy` | `shadow` | `new`. Drives
+     *  the Sync-tab "Sync engine" section (shows which engine is active). */
+    suspend fun getSyncEngineMode(): String = settingsStore.getSyncEngineMode()
+
+    /** Set the sync-engine mode directly. Used to revert `new` → `legacy`
+     *  (the migration preview handles `legacy` → `new` via [acceptMigration]). */
+    suspend fun setSyncEngineMode(mode: String) = settingsStore.setSyncEngineMode(mode)
 
     /** Prefilled GitHub-issue report for the last previewed plan. */
     fun migrationReport(): IosMigrationReport {
@@ -530,6 +595,30 @@ class IosContainer private constructor() {
      *  which phase a stuck sync is in. */
     fun watchSyncPhase(onEach: (String?) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(syncEngine.syncPhase) { onEach(it as? String) }
+
+    /** Observe the STAGED sync-progress label — the Android status-header string
+     *  ("Syncing Apple Music albums… (12/40)") — or null when idle. Built here in
+     *  Kotlin so Swift just displays it; mirrors SettingsScreen.kt's label logic
+     *  (message, falling back to a phase-name title, with "(current/total)" when
+     *  total > 0). */
+    fun watchSyncProgress(onEach: (String?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(syncEngine.syncProgress) { value ->
+            val p = value as? SyncEngine.SyncProgress
+            onEach(p?.let { syncProgressLabel(it) })
+        }
+
+    private fun syncProgressLabel(p: SyncEngine.SyncProgress): String {
+        val title = p.message.ifBlank {
+            when (p.phase) {
+                SyncEngine.SyncPhase.TRACKS -> "Syncing tracks"
+                SyncEngine.SyncPhase.ALBUMS -> "Syncing albums"
+                SyncEngine.SyncPhase.ARTISTS -> "Syncing artists"
+                SyncEngine.SyncPhase.PLAYLISTS -> "Syncing playlists"
+                else -> "Syncing…"
+            }
+        }
+        return if (p.total > 0) "$title (${p.current}/${p.total})" else title
+    }
 
     /**
      * LB sync needs BOTH the token and the username. The plugin config derives
