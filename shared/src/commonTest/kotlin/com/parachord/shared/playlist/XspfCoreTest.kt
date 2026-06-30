@@ -77,7 +77,7 @@ class XspfCoreTest {
         assertEquals("My & Mix", XspfParser.parse(sample).title)
     }
 
-    @Test fun `rejects DOCTYPE (XXE defense)`() {
+    @Test fun `rejects DOCTYPE for XXE defense`() {
         assertFailsWith<IllegalArgumentException> {
             XspfParser.parse("<!DOCTYPE x [<!ENTITY a \"b\">]><playlist><title>t</title></playlist>")
         }

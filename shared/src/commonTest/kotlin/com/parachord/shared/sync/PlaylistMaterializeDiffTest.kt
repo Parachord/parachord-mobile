@@ -40,7 +40,7 @@ class PlaylistMaterializeDiffTest {
     }
 
     @Test
-    fun `norm-bridged same song (remaster suffix) is neither added nor removed`() {
+    fun `norm-bridged same song with remaster suffix is neither added nor removed`() {
         // Title drifts via a remaster suffix and mbid drifts (m1/m2), but the
         // Step-4 REMASTER_SUFFIX strip collapses BOTH titles to "zombie", so both
         // tracks land on the SAME norm ("x|zombie"). They unify via the NORM tier
@@ -60,7 +60,7 @@ class PlaylistMaterializeDiffTest {
     }
 
     @Test
-    fun `isrc-bridged same song (different mbid AND norm) is neither added nor removed`() {
+    fun `isrc-bridged same song with different mbid AND norm is neither added nor removed`() {
         // The P2-incident case: the SAME recording with a DIFFERENT mbid (m1/m2)
         // AND a DIFFERENT norm — only the shared ISRC can bridge them.
         //
@@ -133,7 +133,7 @@ class PlaylistMaterializeDiffTest {
     }
 
     @Test
-    fun `empty remote — every canonical track is an add (fresh mirror first push)`() {
+    fun `empty remote — every canonical track is an add on fresh mirror first push`() {
         val d = computeMaterializeDiff(canonical = listOf(t("a"), t("b")), remote = emptyList())
         assertEquals(2, d.addKeys.size)
         assertTrue(d.removeKeys.isEmpty())

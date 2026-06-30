@@ -568,7 +568,7 @@ class ListenBrainzClientMutationTest {
     }
 
     @Test
-    fun `getUserOwnedPlaylists propagates parse failures (malformed JSON)`() = runTest {
+    fun `getUserOwnedPlaylists propagates parse failures on malformed JSON`() = runTest {
         // Parse failures must throw, not swallow to empty list — otherwise the
         // sync provider can't distinguish "user has no playlists" from "LB
         // returned garbage" and would wipe the local mirror.
@@ -611,7 +611,7 @@ class ListenBrainzClientMutationTest {
     }
 
     @Test
-    fun `getUserOwnedPlaylists throws on partial fetch (empty page before playlist_count)`() = runTest {
+    fun `getUserOwnedPlaylists throws on partial fetch with empty page before playlist_count`() = runTest {
         // Interop contract rule 4: a partial/truncated fetch is NOT a
         // confirmed-empty result. If LB reports playlist_count=250 but a page
         // comes back empty before we've walked the whole list, the client MUST
@@ -637,7 +637,7 @@ class ListenBrainzClientMutationTest {
     }
 
     @Test
-    fun `getUserOwnedPlaylists returns empty on first-page 404 (no playlists)`() = runTest {
+    fun `getUserOwnedPlaylists returns empty on first-page 404 with no playlists`() = runTest {
         // A 404 on offset 0 is the one legitimate empty result: the user has no
         // playlists. Must return empty, not throw.
         val engine = MockEngine { respond("", HttpStatusCode.NotFound) }
