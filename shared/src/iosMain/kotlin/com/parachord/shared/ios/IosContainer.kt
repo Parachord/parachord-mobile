@@ -104,6 +104,11 @@ import com.parachord.shared.ai.ChatPlaybackSnapshot
 import com.parachord.shared.ai.providers.ChatGptProvider
 import com.parachord.shared.ai.providers.ClaudeProvider
 import com.parachord.shared.ai.providers.GeminiProvider
+import com.parachord.shared.ai.AiRecommendationService
+import com.parachord.shared.ai.AiProviderEntry
+import com.parachord.shared.ai.AiRecommendations
+import com.parachord.shared.repository.AnnouncementsRepository
+import com.parachord.shared.api.Announcement
 import com.parachord.shared.db.dao.ChatMessageDao
 import com.parachord.shared.resolver.ResolvedSource
 import kotlin.concurrent.Volatile
@@ -540,6 +545,80 @@ class IosContainer private constructor() {
     /** Set the sync-engine mode directly. Used to revert `new` → `legacy`
      *  (the migration preview handles `legacy` → `new` via [acceptMigration]). */
     suspend fun setSyncEngineMode(mode: String) = settingsStore.setSyncEngineMode(mode)
+
+    // ── AI Suggestions (Shuffleupagus) — home parity (#196) ──────────────
+    private val aiRecommendationService: AiRecommendationService by lazy {
+        AiRecommendationService(
+            settingsStore = settingsStore,
+            historyRepository = historyRepository,
+            libraryRepository = libraryRepository,
+            providers = mapOf(
+                "chatgpt" to AiProviderEntry(chatGptProvider, "gpt-4o-mini"),
+                "claude" to AiProviderEntry(claudeProvider, "claude-sonnet-4-6-20250320"),
+                "gemini" to AiProviderEntry(geminiProvider, "gemini-2.0-flash"),
+            ),
+            metadataService = metadataService,
+            cacheRead = { IosFileCache.read("ai_suggestions_cache.json") },
+            cacheWrite = { IosFileCache.write("ai_suggestions_cache.json", it) },
+        )
+    }
+
+    // CRITICAL (Kotlin/Native): these are Swift-bridged `suspend`s. An exception
+    // that escapes one does NOT reach Swift's `try?` — Kotlin/Native aborts the
+    // process at the ObjC bridge (terminateWithUnhandledException → SIGABRT). The
+    // AI calls (live HTTP + JSON parse + disk read) throw routinely, so every body
+    // is wrapped to return a safe default instead of throwing across the bridge.
+
+    /** True when any AI provider (ChatGPT/Claude/Gemini) has a key configured. */
+    suspend fun hasAiSuggestionsPlugin(): Boolean =
+        try { aiRecommendationService.hasEnabledProvider() } catch (e: Exception) { false }
+
+    /** Stale-while-revalidate: disk-cached AI suggestions (instant), or null. */
+    suspend fun aiSuggestionsCached(): IosAiSuggestions? =
+        try { aiRecommendationService.getCachedRecommendations()?.toIos() } catch (e: Exception) { null }
+
+    /** Fresh AI suggestions (a live provider call — 30–60s). Empty on any error. */
+    suspend fun loadAiSuggestions(): IosAiSuggestions =
+        try { aiRecommendationService.loadRecommendations().toIos() }
+        catch (e: Exception) { IosAiSuggestions(emptyList(), emptyList()) }
+
+    private fun AiRecommendations.toIos() = IosAiSuggestions(
+        albums = albums.map { IosAiAlbumSuggestion(it.title, it.artist, it.reason, it.artworkUrl) },
+        artists = artists.map { IosAiArtistSuggestion(it.name, it.reason, it.imageUrl) },
+    )
+
+    // ── In-app announcements — home parity (#196) ────────────────────────
+    private val announcementsRepository: AnnouncementsRepository by lazy {
+        AnnouncementsRepository(achordionClient, kvStore, appVersionString())
+    }
+
+    private fun appVersionString(): String =
+        (NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: "").trim()
+
+    /** Fetch the announcement feed (cold start). Fire-and-forget; failures swallowed. */
+    suspend fun refreshAnnouncements() { try { announcementsRepository.refreshNow() } catch (_: Exception) {} }
+
+    /** Observe the top visible (surface/version-matched, not-dismissed) announcement. */
+    fun watchTopAnnouncement(onEach: (IosAnnouncement?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(announcementsRepository.visibleAnnouncements) { value ->
+            val list = (value as? List<*>)?.filterIsInstance<Announcement>() ?: emptyList()
+            onEach(list.firstOrNull()?.toIos())
+        }
+
+    /** Telemetry: "view" | "cta-click" | "dismiss". Fire-and-forget. */
+    suspend fun trackAnnouncementEvent(id: String, event: String) {
+        try { achordionClient.trackAnnouncementEvent(id, event) } catch (_: Exception) {}
+    }
+
+    /** Persistently dismiss an announcement (also fires the dismiss event). */
+    suspend fun dismissAnnouncement(id: String) {
+        try { announcementsRepository.dismiss(id) } catch (_: Exception) {}
+    }
+
+    private fun Announcement.toIos() = IosAnnouncement(
+        id = id, title = title, body = body, severity = severity,
+        ctaLabel = cta?.label, ctaUrl = cta?.url,
+    )
 
     /** Prefilled GitHub-issue report for the last previewed plan. */
     fun migrationReport(): IosMigrationReport {
@@ -1675,13 +1754,32 @@ class IosContainer private constructor() {
         )
     }
 
+    private val mosaicComposer: com.parachord.shared.metadata.IosMosaicComposer by lazy {
+        com.parachord.shared.metadata.IosMosaicComposer(httpClient)
+    }
+
     val imageEnrichmentService: ImageEnrichmentService by lazy {
         ImageEnrichmentService(
             enrichMetadataService, artistDao, albumDao, trackDao, playlistDao, playlistTrackDao,
             httpClient,
-            composeMosaic = { _, _ -> null },
+            // 2×2 album-art mosaic for playlists (ListenBrainz weeklies, hosted
+            // XSPF, etc.) — UIGraphics composite → file:// JPEG (Android parity).
+            composeMosaic = { playlistId, urls -> mosaicComposer.compose(playlistId, urls) },
         )
     }
+
+    /** Regenerate the 2×2 mosaic for every playlist with missing/stale art
+     *  (Android's ParachordApplication startup hook). Call fire-and-forget on
+     *  launch. Guarded: bridged suspend must not throw across the ObjC bridge. */
+    suspend fun regeneratePlaylistMosaics() {
+        try { imageEnrichmentService.regenerateAllPlaylistMosaics() } catch (_: Exception) {}
+    }
+
+    /** Enrich ONE playlist's mosaic art (Android's enrichPlaylistArtIfNeeded) —
+     *  e.g. just after saving a ListenBrainz weekly. Returns the file:// URL or
+     *  null. Guarded for the bridge. */
+    suspend fun enrichPlaylistArt(playlistId: String): String? =
+        try { imageEnrichmentService.enrichPlaylistArt(playlistId) } catch (e: Exception) { null }
 
     val criticalDarlingsRepository: CriticalDarlingsRepository by lazy {
         CriticalDarlingsRepository(
@@ -3121,6 +3219,19 @@ data class IosMigrationSummary(
     val cycles: Int,
 )
 data class IosMigrationReport(val title: String, val body: String, val githubUrl: String)
+
+// ── Home parity (#196): AI Suggestions + Announcements DTOs (flat for Swift) ──
+data class IosAiAlbumSuggestion(val title: String, val artist: String, val reason: String, val artworkUrl: String?)
+data class IosAiArtistSuggestion(val name: String, val reason: String, val imageUrl: String?)
+data class IosAiSuggestions(val albums: List<IosAiAlbumSuggestion>, val artists: List<IosAiArtistSuggestion>)
+data class IosAnnouncement(
+    val id: String,
+    val title: String,
+    val body: String?,
+    val severity: String?,
+    val ctaLabel: String?,
+    val ctaUrl: String?,
+)
 /** [flipped]=true → switched to `new`; else the plan drifted on recompute and
  *  [summary] is the fresh one to re-show. */
 data class IosMigrationAcceptResult(val flipped: Boolean, val summary: IosMigrationSummary)

@@ -85,11 +85,18 @@ struct HomeScreen: View {
     /// Opened by the Spotify reauth banner when there's no stored Client ID to
     /// OAuth with (the user sets it + connects in Settings).
     var onOpenSettings: () -> Void = {}
+    /// Switch the shell's main tab (Collection / Playlists) for the stats row —
+    /// these are tabs, not pushable routes. Optional CollectionTab sub-selection.
+    var onSelectTab: (PCTab, CollectionTab?) -> Void = { _, _ in }
 
     @State private var path: [PCRoute] = []
     @State private var model = DiscoverViewModel.shared
+    @State private var feed = HomeFeedModel()
     @State private var reauth = SpotifyReauthModel()
+    @State private var amReauth = AppleMusicReauthModel()
+    @State private var scanner = MediaLibraryScanner.shared
     private let container = IosContainer.companion.shared
+    private let resolverCache = IosTrackResolverCache.shared
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
@@ -98,15 +105,38 @@ struct HomeScreen: View {
                 PCTopBar(title: "Parachord", leading: .menu, onLeading: onMenu)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        // ── Banners (announcement → AM reauth → Spotify reauth) ──
+                        if let ann = feed.announcement {
+                            announcementBanner(ann)
+                        }
+                        if amReauth.required {
+                            PCAppleMusicReauthBanner(connecting: amReauth.connecting) { amReauth.reconnect() }
+                                .padding(.top, 12)
+                        }
                         if reauth.required {
                             PCSpotifyReauthBanner(connecting: reauth.connecting) {
                                 reauth.reconnect(onNeedsSetup: onOpenSettings)
                             }
                         }
 
+                        // Empty-library prompt (no saved tracks/albums/playlists yet).
+                        if feed.libraryLoaded && feed.libraryEmpty {
+                            welcomeScanCard
+                        }
+
                         if let t = coordinator.currentTrack {
                             sectionHeader("Continue Listening")
                             continueCard(t)
+                        }
+
+                        if !feed.recentAlbums.isEmpty {
+                            sectionHeader("Recently Added")
+                            recentAlbumsRow
+                        }
+
+                        if !feed.recentPlaylists.isEmpty {
+                            sectionHeader("Your Playlists")
+                            recentPlaylistsRow
                         }
 
                         sectionHeader("Discover")
@@ -124,6 +154,18 @@ struct HomeScreen: View {
                             sectionHeader("Friend Activity")
                             friendActivitySection
                         }
+
+                        aiSuggestionsSection
+
+                        if !feed.libraryEmpty {
+                            sectionHeader("Your Collection")
+                            collectionStatsRow
+                        }
+
+                        if !feed.recentLoves.isEmpty {
+                            sectionHeader("Recent Loves")
+                            recentLovesList
+                        }
                     }
                     .padding(.bottom, 130) // clear the floating tab bar
                 }
@@ -136,6 +178,8 @@ struct HomeScreen: View {
         }
         .task { model.start(); await model.load() }
         .task { reauth.start() }
+        .task { feed.start(); amReauth.start() }
+        .onDisappear { feed.stop(); amReauth.stop() }
     }
 
     // MARK: Sections
@@ -397,6 +441,296 @@ struct HomeScreen: View {
                 .frame(width: 36, height: 36).clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         } else {
             PCArtwork(name: seed, size: 36, radius: 4)
+        }
+    }
+
+    // MARK: Library sections (#196)
+
+    // ── Recently Added (8 most-recently-added albums) ─────────────────────
+    private var recentAlbumsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(feed.recentAlbums, id: \.id) { album in
+                    NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            pcCover(album.artworkUrl, seed: album.title + album.artist, size: 130, radius: 10)
+                            Text(album.title).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                            Text(album.artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
+                        }
+                        .frame(width: 130, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .pcAlbumContextMenu(
+                        title: album.title, artist: album.artist, artworkUrl: album.artworkUrl,
+                        coordinator: coordinator,
+                        onGoToAlbum: { path.append(.album(title: album.title, artist: album.artist)) },
+                        onGoToArtist: { path.append(.artist(album.artist)) })
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 8)
+    }
+
+    // ── Your Playlists (6 most-recently-modified) ─────────────────────────
+    private var recentPlaylistsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(feed.recentPlaylists, id: \.id) { pl in
+                    NavigationLink(value: PCRoute.playlist(id: pl.id, title: pl.name)) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            pcCover(pl.artworkUrl, seed: pl.name, size: 130, radius: 10)
+                            Text(pl.name).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                            Text("\(pl.trackCount) tracks").font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
+                        }
+                        .frame(width: 130, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button { playPlaylist(pl) } label: { Label("Play Playlist", systemImage: "play.fill") }
+                        Button { path.append(.playlist(id: pl.id, title: pl.name)) } label: { Label("Open", systemImage: "arrow.up.right") }
+                    }
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func playPlaylist(_ p: Playlist) {
+        Task {
+            let tracks = (try? await container.getPlaylistTracksOnce(id: p.id)) ?? []
+            let entities = tracks.map { pcTrack(from: $0) }
+            guard !entities.isEmpty else { return }
+            coordinator.setQueue(entities, startIndex: 0,
+                                 context: PlaybackContext(type: "playlist", name: p.name, id: p.id))
+        }
+    }
+
+    // ── Your Collection (stat cards → Collection / Playlists tabs) ────────
+    private var collectionStatsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                statCard("Songs", feed.songCount, "music.note") { onSelectTab(.collection, .songs) }
+                statCard("Albums", feed.albumCount, "square.stack") { onSelectTab(.collection, .albums) }
+                statCard("Artists", feed.artistCount, "person") { onSelectTab(.collection, .artists) }
+                statCard("Playlists", feed.playlistCount, "music.note.list") { onSelectTab(.playlists, nil) }
+                statCard("Friends", feed.friendCount, "person.2") { onSelectTab(.collection, .friends) }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func statCard(_ label: String, _ count: Int, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Image(systemName: icon).font(.system(size: 17)).foregroundStyle(PC.accent)
+                Text("\(count)").font(.system(size: 22, weight: .bold)).foregroundStyle(PC.fg1)
+                Text(label).font(.system(size: 12)).foregroundStyle(PC.fg2)
+            }
+            .padding(14)
+            .frame(width: 100, alignment: .leading)
+            .background(PC.cardBg, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(PC.cardBorder, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // ── Recent Loves (10 most-recently-added tracks, with resolver badges) ─
+    private var recentLovesList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(feed.recentLoves.enumerated()), id: \.element.id) { i, track in
+                loveRow(track, index: i)
+            }
+        }
+    }
+
+    private func loveRow(_ track: Track, index: Int) -> some View {
+        Button {
+            coordinator.setQueue(feed.recentLoves, startIndex: index,
+                                 context: PlaybackContext(type: "collection", name: "Recent Loves", id: nil))
+        } label: {
+            HStack(spacing: 12) {
+                pcCover(pcTrackArt(track.artworkUrl, artist: track.artist, title: track.title, album: track.album),
+                        seed: track.title + track.artist, size: 44, radius: 6)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                    Text(track.album.map { "\(track.artist) · \($0)" } ?? track.artist)
+                        .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
+                   !ranked.isEmpty {
+                    ResolverBadgeRow(sources: ranked)
+                }
+            }
+            .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onAppear { resolverCache.resolve(ResolveRequest(artist: track.artist, title: track.title, album: track.album), order: index) }
+        .pcTrackContextMenu(
+            track, coordinator: coordinator,
+            onGoToArtist: { path.append(.artist(track.artist)) },
+            onGoToAlbum: track.album.map { album in { path.append(.album(title: album, artist: track.artist)) } })
+    }
+
+    // ── Welcome / Scan card (empty library) ───────────────────────────────
+    @ViewBuilder private var welcomeScanCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Welcome to Parachord").font(.system(size: 18, weight: .bold)).foregroundStyle(PC.fg1)
+            Text("Scan your local music, or connect a streaming service in Settings, to start building your library.")
+                .font(.system(size: 13)).foregroundStyle(PC.fg2).fixedSize(horizontal: false, vertical: true)
+            switch scanner.phase {
+            case .scanning(let done, let total):
+                ProgressView(value: Double(done), total: Double(max(total, 1))).tint(PC.accent)
+                Text("Scanning… \(done)/\(total)").font(.system(size: 12)).foregroundStyle(PC.fg3)
+            case .requesting:
+                ProgressView().tint(PC.accent)
+            case .denied:
+                Text("Music access denied — enable it in iOS Settings → Privacy → Media & Apple Music.")
+                    .font(.system(size: 12)).foregroundStyle(PC.warning)
+            case .failed(let msg):
+                Text("Scan failed: \(msg)").font(.system(size: 12)).foregroundStyle(PC.warning)
+            default:
+                Button { scanner.scan() } label: {
+                    Text("Scan Local Music").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).padding(.vertical, 11)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(PC.accent))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(16)
+        .background(PC.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 20).padding(.top, 12)
+    }
+
+    // ── AI Suggestions (Shuffleupagus) ────────────────────────────────────
+    @ViewBuilder private var aiSuggestionsSection: some View {
+        if feed.hasAiPlugins == true {
+            if !feed.aiAlbums.isEmpty {
+                aiHeader("Album Suggestions")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(Array(feed.aiAlbums.enumerated()), id: \.offset) { _, al in
+                            NavigationLink(value: PCRoute.album(title: al.title, artist: al.artist)) {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    pcCover(al.artworkUrl, seed: al.title + al.artist, size: 120, radius: 10)
+                                    Text(al.title).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                                    Text(al.artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
+                                }
+                                .frame(width: 120, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .pcAlbumContextMenu(
+                                title: al.title, artist: al.artist, artworkUrl: al.artworkUrl,
+                                coordinator: coordinator,
+                                onGoToAlbum: { path.append(.album(title: al.title, artist: al.artist)) },
+                                onGoToArtist: { path.append(.artist(al.artist)) })
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.bottom, 8)
+            }
+            if !feed.aiArtists.isEmpty {
+                aiHeader("Artist Suggestions")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(Array(feed.aiArtists.enumerated()), id: \.offset) { _, ar in
+                            NavigationLink(value: PCRoute.artist(ar.name)) {
+                                VStack(spacing: 6) {
+                                    pcCover(ar.imageUrl, seed: ar.name, size: 90, radius: 45)
+                                    Text(ar.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1)
+                                        .lineLimit(1).frame(width: 90)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .pcArtistContextMenu(
+                                name: ar.name, imageUrl: ar.imageUrl, coordinator: coordinator,
+                                onGoToArtist: { path.append(.artist(ar.name)) })
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.bottom, 8)
+            }
+            if feed.aiLoading && feed.aiAlbums.isEmpty && feed.aiArtists.isEmpty {
+                aiHeader("Suggestions")
+                ProgressView().tint(PC.accent).frame(maxWidth: .infinity).padding(.vertical, 24)
+            }
+        } else if feed.hasAiPlugins == false {
+            // Parity with Android's "Surprise Me / Configure Plugins" card.
+            Button { onOpenSettings() } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Surprise Me", systemImage: "sparkles").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                    Text("Enable an AI plugin (ChatGPT, Claude, or Gemini) in Settings to get personalized album & artist suggestions.")
+                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(colors: [Color(uiColor: UIColor(hex: 0x6366f1)), Color(uiColor: UIColor(hex: 0x7c3aed))],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 20).padding(.top, 18)
+        }
+    }
+
+    private func aiHeader(_ title: String) -> some View {
+        HStack(spacing: 10) {
+            Text(title).pcSectionHeader()
+            Text("Shuffleupagus").font(.system(size: 11, weight: .semibold)).foregroundStyle(PC.accent)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(PC.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+            Spacer()
+            Button { Task { await feed.loadAi() } } label: {
+                Image(systemName: "arrow.clockwise").font(.system(size: 13)).foregroundStyle(PC.accent)
+            }
+        }
+        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+    }
+
+    // ── Announcement banner ───────────────────────────────────────────────
+    private func announcementBanner(_ ann: IosAnnouncement) -> some View {
+        let color = announcementColor(ann.severity)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(ann.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(PC.fg1)
+                    if let body = ann.body {
+                        Text(body).font(.system(size: 13)).foregroundStyle(PC.fg2).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button { feed.dismissAnnouncement() } label: {
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(PC.fg3)
+                }
+            }
+            if let label = ann.ctaLabel, let urlStr = ann.ctaUrl, let url = URL(string: urlStr) {
+                Button {
+                    feed.trackAnnouncement(ann.id, event: "cta-click")
+                    UIApplication.shared.open(url)
+                } label: {
+                    Text(label).font(.system(size: 14, weight: .semibold)).foregroundStyle(color)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 20).padding(.top, 12)
+    }
+
+    private func announcementColor(_ severity: String?) -> Color {
+        switch severity {
+        case "error":            return Color(uiColor: UIColor(hex: 0xef4444))
+        case "warn", "warning":  return PC.warning
+        case "success":          return PC.success
+        default:                 return PC.accent
         }
     }
 }
