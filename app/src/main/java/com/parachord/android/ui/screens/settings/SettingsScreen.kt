@@ -3068,37 +3068,38 @@ private fun SyncTab(
             }
         }
 
-        // ── N-way multimaster (DEV ONLY) ─────────────────────────────
-        // Debug-build gate: flips the dormant nway_enabled flag so sync runs
-        // migration + SHADOW mode (logs + the report below; pushes nothing).
-        // For validating the merge against a real library before propagation.
+        // ── New sync engine — opt-in migration (ALL builds) ─────────
+        // User-facing preview → accept flow (desktop parity, parachord#911 /
+        // v0.9.5). Nothing is armed until the user accepts; accept flips
+        // sync_engine_mode='new'. The MigrationPreviewDialog (rendered later in
+        // this composable, outside any build gate) drives the diff/accept/report
+        // UI. The shadow-mode + propagation toggles further down stay DEV-only —
+        // validation tooling users never need.
+        item { Spacer(modifier = Modifier.height(8.dp)) }
+        item { SectionHeader("New sync engine") }
+        item {
+            ListItem(
+                headlineContent = { Text("Use new sync (preview)") },
+                supportingContent = {
+                    Text(
+                        "Make playlist edits round-trip across every service instead of one " +
+                            "always winning. Preview exactly what switching would change — then " +
+                            "accept, report a problem, or cancel. Nothing changes until you accept, " +
+                            "and you can switch back anytime.",
+                    )
+                },
+                trailingContent = {
+                    Button(onClick = { settingsViewModel.openMigrationPreview() }) { Text("Preview") }
+                },
+            )
+        }
+
+        // ── N-way shadow + propagation (DEV ONLY) ────────────────────
+        // Dev validation only: continuous dry-run logging + scoped real-write
+        // testing. The preview → accept entry above is the real user path.
         if (BuildConfig.DEBUG) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
             item { SectionHeader("Developer · sync engine") }
-            item {
-                Text(
-                    "“Use new sync” below is the real migration flow (preview → accept). The " +
-                        "shadow-mode + propagation toggles under it are dev-only validation — " +
-                        "continuous dry-run logging and scoped real-write testing; users never need them.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-            item {
-                ListItem(
-                    headlineContent = { Text("Use new sync (preview)") },
-                    supportingContent = {
-                        Text(
-                            "Preview exactly what switching to the new sync engine would change " +
-                                "— then accept, report a problem, or cancel. Nothing is armed until you accept.",
-                        )
-                    },
-                    trailingContent = {
-                        Button(onClick = { settingsViewModel.openMigrationPreview() }) { Text("Preview") }
-                    },
-                )
-            }
             item {
                 ListItem(
                     headlineContent = { Text("N-way shadow mode") },
