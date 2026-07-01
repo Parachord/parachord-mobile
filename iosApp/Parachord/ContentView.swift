@@ -30,9 +30,19 @@ enum IosAudioSession {
     /// prior mixable "external" mode.
     static func configureForLocal() { apply(options: [], context: "local") }
 
-    /// Mixable session for EXTERNAL audio (Spotify / Apple Music) so our silent
-    /// keepalive never interrupts them.
-    static func configureForExternal() { apply(options: [.mixWithOthers], context: "external") }
+    /// **Apple Music → NON-mixable `.playback`.** `ApplicationMusicPlayer` plays
+    /// through OUR process session and wants to be the primary/now-playing app;
+    /// `.mixWithOthers` marks us secondary, so MusicKit force-resets the session
+    /// (options 1→0) on the first background and the track briefly drops (seen in
+    /// the #322 trace). Non-mixable is what MusicKit wants — no fight, no hiccup.
+    /// We still run the silent keepalive so the app isn't suspended.
+    static func configureForAppleMusic() { apply(options: [], context: "applemusic") }
+
+    /// **Spotify → mixable `.playback`.** Spotify plays in its OWN app, so our
+    /// (silent-keepalive) session must NOT interrupt it — `.mixWithOthers` is the
+    /// iOS analog of Android's `handleAudioFocus = false`. This is also what stops
+    /// Spotify dropping out when Parachord returns to the foreground.
+    static func configureForSpotify() { apply(options: [.mixWithOthers], context: "spotify") }
 
     private static func apply(options: AVAudioSession.CategoryOptions, context: String) {
         let session = AVAudioSession.sharedInstance()
@@ -1298,11 +1308,11 @@ final class IosAVPlayer {
 
     /// Stop our AVPlayer's audio WITHOUT touching the shared session or
     /// `MPNowPlayingInfoCenter` — used when handing playback off to an external
-    /// engine (Spotify / Apple Music). The coordinator switches the session to
-    /// the mixable "external" mode and starts the silent keepalive itself
-    /// (`IosAudioSession.configureForExternal` + `IosExternalKeepAlive`), so we
-    /// must NOT deactivate here: the app has to keep a live session to survive
-    /// backgrounding (Android `silence.wav` parity).
+    /// engine (Spotify / Apple Music). The coordinator reconfigures the session
+    /// for that engine and starts the silent keepalive itself
+    /// (`IosAudioSession.configureForSpotify` / `configureForAppleMusic` +
+    /// `IosExternalKeepAlive`), so we must NOT deactivate here: the app has to
+    /// keep a live session to survive backgrounding (Android `silence.wav` parity).
     func haltAudio() {
         teardown()
     }
@@ -1862,19 +1872,19 @@ final class QueuePlaybackCoordinator {
             if previousEngine == .spotify { await spotify.pause() }
         case .musicKit:
             // Apple Music started via ApplicationMusicPlayer (shares our
-            // session). Stop our AVPlayer audio, switch to the mixable session,
-            // and run the silent keepalive so we aren't suspended in the
-            // background (which would freeze AM's controller).
+            // session). Stop our AVPlayer audio, keep the session NON-mixable
+            // (what MusicKit wants), and run the silent keepalive so we aren't
+            // suspended in the background (which would freeze AM's controller).
             player.haltAudio()
             if previousEngine == .spotify { await spotify.pause() }
-            IosAudioSession.configureForExternal()
+            IosAudioSession.configureForAppleMusic()
             keepAlive.start()
         case .spotify:
             // Spotify plays in its own app — mixable session + keepalive so we
             // neither interrupt it nor get suspended (breaking auto-advance).
             player.haltAudio()
             if previousEngine == .musicKit { musicKit.pause() }
-            IosAudioSession.configureForExternal()
+            IosAudioSession.configureForSpotify()
             keepAlive.start()
         case .browser:
             keepAlive.stop()
@@ -1927,7 +1937,8 @@ final class QueuePlaybackCoordinator {
         player: IosAVPlayer,
         musicKit: IosMusicKitPlayer,
         spotify: IosSpotifyConnect,
-        resolverCache: IosTrackResolverCache
+        resolverCache: IosTrackResolverCache,
+        installLifecycleMonitor: Bool = true
     ) {
         self.player = player
         self.musicKit = musicKit
@@ -1950,12 +1961,17 @@ final class QueuePlaybackCoordinator {
         // #322: observe audio-session interruptions + app lifecycle (the PCAUDIO
         // "audio-logs" trace) and resume the active engine after a resumable
         // interruption. Observers fire on .main; hop onto the main actor to
-        // touch engine state.
-        let monitor = IosAudioSessionMonitor()
-        monitor.onShouldResume = { [weak self] in
-            Task { @MainActor in self?.resumeActiveEngine() }
+        // touch engine state. ONLY the primary (AppPlayback) coordinator installs
+        // this — the Dev-tab smoke-test coordinator passes false so we don't get
+        // two monitors (doubled PCAUDIO logs + a stray resume on the idle Dev
+        // player).
+        if installLifecycleMonitor {
+            let monitor = IosAudioSessionMonitor()
+            monitor.onShouldResume = { [weak self] in
+                Task { @MainActor in self?.resumeActiveEngine() }
+            }
+            self.audioMonitor = monitor
         }
-        self.audioMonitor = monitor
         // Refresh the stream:false resolver set from plugin capabilities (the
         // seeded "bandcamp" default covers the pre-load window).
         Task { @MainActor [weak self] in
@@ -3195,7 +3211,10 @@ struct DevSmokeTestView: View {
                     player: avPlayer,
                     musicKit: IosMusicKitPlayer(),
                     spotify: IosSpotifyConnect(),
-                    resolverCache: IosTrackResolverCache.shared
+                    resolverCache: IosTrackResolverCache.shared,
+                    // Dev-tab smoke test — don't install the audio-session monitor
+                    // (the primary AppPlayback coordinator owns it). #322.
+                    installLifecycleMonitor: false
                 )
                 queue = coordinator
                 let tracks = Self.queueTracks.enumerated().map { idx, t in

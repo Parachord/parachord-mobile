@@ -621,28 +621,44 @@ The fix is a **direct port of Android's external-playback survival** (root
 `CLAUDE.md` "External Playback Background Survival"; `PlaybackController` +
 `PlaybackService`):
 
-- **Per-engine session ownership** (`IosAudioSession` in `ContentView.swift`).
-  Local AVPlayer audio → `.playback`, no options (we own the route; activated in
-  `IosAVPlayer.play()`, released in `stop()` — NOT at launch). External
-  (Spotify/Apple Music) → `.playback` **+ `.mixWithOthers`**, the iOS analog of
-  Android's `handleAudioFocus = false`, so we never interrupt the real audio.
+- **Per-engine session ownership** (`IosAudioSession` in `ContentView.swift`) —
+  the category *options* are the load-bearing part, and they DIFFER per engine:
+  - Local AVPlayer audio → `.playback`, no options (we own the route; activated
+    in `IosAVPlayer.play()`, released in `stop()` — NOT at launch).
+  - **Apple Music → `.playback`, NON-mixable** (`configureForAppleMusic`).
+    `ApplicationMusicPlayer` plays through our process session and wants to be
+    the primary/now-playing app. `.mixWithOthers` marks us *secondary*, so
+    MusicKit force-resets the session (`options 1→0`) on the first background and
+    the track briefly drops + an `INTERRUPTION` fires — confirmed in the #322
+    trace (it recovered, but ugly). Non-mixable is MusicKit's own preferred mode,
+    so there's no fight and no hiccup.
+  - **Spotify → `.playback` + `.mixWithOthers`** (`configureForSpotify`) — the
+    iOS analog of Android's `handleAudioFocus = false`. Spotify plays in its OWN
+    app, so our (silent-keepalive) session must not interrupt it; this is also
+    what stops Spotify dropping out when Parachord returns to the foreground.
+
+  **Don't collapse these back into one `configureForExternal`.** The first cut
+  did (both `.mixWithOthers`) and it caused the Apple Music background hiccup.
 - **Silent keepalive** (`IosExternalKeepAlive`) — the iOS port of Android's
   `res/raw/silence.wav` loop. A code-generated zero-filled PCM buffer looped at
   volume 0 through `AVAudioEngine` keeps `UIBackgroundModes: audio` satisfied so
-  the app stays alive in the background (auto-advance keeps running; AM's
-  controller isn't frozen). No bundled asset. Started/stopped on engine handoff
+  the app stays alive in the background (Apple Music auto-advances in the
+  background — verified; the trace advanced to the next track while backgrounded).
+  No bundled asset. Started/stopped on engine handoff
   (`QueuePlaybackCoordinator.applyEngineHandoff`).
 - **Interruption/lifecycle monitor** (`IosAudioSessionMonitor`) — logs the
   `PCAUDIO:` trace (grep `xcrun simctl log` / `idevicesyslog` for `PCAUDIO`) and
   resumes the active engine on `.ended + .shouldResume` (phone-call recovery).
+  **Only the primary `AppPlayback` coordinator installs it** — the Dev-tab
+  smoke-test coordinator passes `installLifecycleMonitor: false`, or you get two
+  monitors (doubled PCAUDIO lines — the tell that a second coordinator is live —
+  plus a stray resume on the idle Dev player).
 
-**Still to verify on-device (couldn't be built/tested headlessly):** whether
-`.mixWithOthers` degrades `ApplicationMusicPlayer`'s lock-screen/now-playing
-ownership or our `MPRemoteCommandCenter` next/prev during external playback, and
-whether reconfiguring the session to `.mixWithOthers` *after* AM starts causes a
-brief hiccup (the handoff runs after `router.play`). If lock-screen controls
-misbehave during Apple Music, revisit whether AM should keep a non-mixable
-session while only Spotify uses `.mixWithOthers`.
+**Still to watch on-device:** whether `.mixWithOthers` (Spotify only now) keeps
+the app alive enough for background *auto-advance* on Spotify — a `.mixWithOthers`
+app can be suspended in the background even while its keepalive plays, so
+Spotify's current track survives but queue advancement may not until foreground.
+Apple Music (non-mixable) auto-advances in the background fine.
 
 **Key files:** `iosApp/Parachord/ContentView.swift` (`IosAudioSession`,
 `IosExternalKeepAlive`, `IosAudioSessionMonitor`, `IosAVPlayer.play/stop`,
