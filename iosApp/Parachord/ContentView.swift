@@ -66,51 +66,94 @@ enum IosAudioSession {
 }
 
 /// Silent-audio keepalive for EXTERNAL playback (#322) — the iOS port of
-/// Android's `res/raw/silence.wav` loop. When Spotify / Apple Music is the
-/// source, Parachord produces no audio itself, so iOS would suspend the app in
-/// the background after ~30s — freezing its polling / auto-advance and (for
-/// `ApplicationMusicPlayer`, whose controller is our process) pausing the
-/// music. A looped SILENT buffer at volume 0 keeps `UIBackgroundModes: audio`
-/// satisfied so the app stays alive. The session is `.mixWithOthers` while this
-/// runs, so the silence never interrupts the real audio (Android's
-/// `handleAudioFocus = false` equivalent). The buffer is generated in code, so
-/// there's no bundled asset to register in the Xcode project.
+/// Android's `res/raw/silence.wav` loop (+ its partial WakeLock / WiFi lock).
+/// When Spotify / Apple Music is the source, Parachord produces no audio
+/// itself, so iOS would suspend the app in the background — freezing its
+/// polling / auto-advance and (for `ApplicationMusicPlayer`, whose controller
+/// is our process) pausing the music. A looped SILENT buffer at volume 0 keeps
+/// `UIBackgroundModes: audio` satisfied so the app stays alive; iOS grants an
+/// actively-playing app both CPU and network in the background, so there's no
+/// separate wakelock/wifi-lock to port. The session is `.mixWithOthers` for
+/// Spotify so the silence never interrupts the real audio.
+///
+/// **Resilience is the load-bearing part for background AUTO-ADVANCE.** Unlike
+/// Android's FGS + wakelock (inherently persistent), an `AVAudioEngine` is
+/// stopped by the system on audio-route / configuration changes (and after
+/// interruptions). If it isn't restarted the app is suspended the moment the
+/// screen locks and the poll loop dies — so the current track keeps playing (in
+/// Spotify's app) but never advances. So this observes
+/// `AVAudioEngineConfigurationChange` and re-arms itself, and the coordinator
+/// re-arms it after interruptions (`resumeActiveEngine`). The buffer is
+/// generated in code — no bundled asset to register in the Xcode project.
 final class IosExternalKeepAlive {
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
     private var running = false
+    private var configObserver: NSObjectProtocol?
 
-    /// Start the silent loop. Idempotent.
+    deinit {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
+    }
+
+    /// Start the silent loop and keep it alive across route/config changes.
+    /// Idempotent — a no-op if already running (use `restart()` to force).
     func start() {
         guard !running else { return }
+        running = true
+        // A route/format change (headphones, AirPlay, Bluetooth) stops the
+        // engine graph; restart it so we never stop producing (silent) audio and
+        // the app stays alive — the durability Android gets from the wakelock.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.running else { return }
+            NSLog("PCAUDIO: KEEPALIVE_CONFIG_CHANGE")
+            self.armEngine()
+        }
+        armEngine()
+        NSLog("PCAUDIO: KEEPALIVE_START")
+    }
+
+    /// Force the engine back to a playing state — used after an audio-session
+    /// interruption, where the engine is stopped but `running` is still true.
+    func restart() {
+        guard running else { start(); return }
+        armEngine()
+        NSLog("PCAUDIO: KEEPALIVE_RESTART")
+    }
+
+    /// (Re)build the graph and start the silent loop. Safe to call repeatedly.
+    private func armEngine() {
         guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else {
             NSLog("PCAUDIO: KEEPALIVE_BUFFER_FAILED")
             return
         }
         buffer.frameLength = buffer.frameCapacity   // zero-filled == silence
-        engine.attach(node)
+        if node.engine == nil { engine.attach(node) }
         engine.connect(node, to: engine.mainMixerNode, format: format)
         node.volume = 0
         do {
-            try engine.start()
-            node.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
-            node.play()
-            running = true
-            NSLog("PCAUDIO: KEEPALIVE_START")
+            if !engine.isRunning { try engine.start() }
+            if !node.isPlaying {
+                node.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
+                node.play()
+            }
         } catch {
-            NSLog("PCAUDIO: KEEPALIVE_START_FAILED \(error.localizedDescription)")
-            engine.detach(node)
+            NSLog("PCAUDIO: KEEPALIVE_ARM_FAILED \(error.localizedDescription)")
         }
     }
 
     /// Stop the silent loop. Idempotent.
     func stop() {
         guard running else { return }
+        running = false
+        if let o = configObserver {
+            NotificationCenter.default.removeObserver(o)
+            configObserver = nil
+        }
         node.stop()
         engine.stop()
-        engine.detach(node)
-        running = false
         NSLog("PCAUDIO: KEEPALIVE_STOP")
     }
 }
@@ -1892,14 +1935,28 @@ final class QueuePlaybackCoordinator {
     }
 
     /// Resume the currently-active engine after a resumable audio-session
-    /// interruption ended (#322 — wired from `IosAudioSessionMonitor`).
+    /// interruption ended (#322 — wired from `IosAudioSessionMonitor`). For the
+    /// external engines this ALSO re-activates the session and re-arms the silent
+    /// keepalive: an interruption stops our `AVAudioEngine`, and if we don't
+    /// restart it the app is suspended and background auto-advance stops.
     @MainActor
     private func resumeActiveEngine() {
         switch activeEngine {
-        case .avPlayer: if !player.isPlaying { player.play() }
-        case .musicKit: musicKit.resume()
-        case .spotify: Task { @MainActor in await spotify.resume(); spotifyPlaying = spotify.isPlaying }
-        case .browser: break
+        case .avPlayer:
+            if !player.isPlaying { player.play() }
+        case .musicKit:
+            IosAudioSession.configureForAppleMusic()
+            keepAlive.restart()
+            musicKit.resume()
+        case .spotify:
+            Task { @MainActor in
+                IosAudioSession.configureForSpotify()
+                keepAlive.restart()
+                await spotify.resume()
+                spotifyPlaying = spotify.isPlaying
+            }
+        case .browser:
+            break
         }
     }
 

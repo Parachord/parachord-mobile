@@ -640,25 +640,34 @@ The fix is a **direct port of Android's external-playback survival** (root
   **Don't collapse these back into one `configureForExternal`.** The first cut
   did (both `.mixWithOthers`) and it caused the Apple Music background hiccup.
 - **Silent keepalive** (`IosExternalKeepAlive`) — the iOS port of Android's
-  `res/raw/silence.wav` loop. A code-generated zero-filled PCM buffer looped at
-  volume 0 through `AVAudioEngine` keeps `UIBackgroundModes: audio` satisfied so
-  the app stays alive in the background (Apple Music auto-advances in the
-  background — verified; the trace advanced to the next track while backgrounded).
-  No bundled asset. Started/stopped on engine handoff
-  (`QueuePlaybackCoordinator.applyEngineHandoff`).
+  `res/raw/silence.wav` loop **AND its partial WakeLock / WiFi lock**. A
+  code-generated zero-filled PCM buffer looped at volume 0 through `AVAudioEngine`
+  keeps `UIBackgroundModes: audio` satisfied so the app stays alive in the
+  background; iOS grants an actively-playing app both CPU and network, so there's
+  no separate wakelock/wifi-lock to port. This is what lets the background poll
+  loops (`IosMusicKitPlayer` tick, `startSpotifyPolling`) keep running and fire
+  `autoAdvance` → the next track **without foregrounding** — the whole point.
+  **Resilience is load-bearing:** unlike Android's FGS + wakelock, an
+  `AVAudioEngine` is stopped by the system on audio-route/config changes and
+  interruptions; if it isn't restarted the app is suspended and auto-advance
+  dies. So the keepalive observes `AVAudioEngineConfigurationChange` and re-arms
+  itself, and `resumeActiveEngine` re-arms it (+ re-activates the session) after
+  interruptions. Started/stopped on engine handoff (`applyEngineHandoff`).
 - **Interruption/lifecycle monitor** (`IosAudioSessionMonitor`) — logs the
   `PCAUDIO:` trace (grep `xcrun simctl log` / `idevicesyslog` for `PCAUDIO`) and
-  resumes the active engine on `.ended + .shouldResume` (phone-call recovery).
+  resumes the active engine on `.ended + .shouldResume` (phone-call recovery),
+  re-arming the session + keepalive for the external engines.
   **Only the primary `AppPlayback` coordinator installs it** — the Dev-tab
   smoke-test coordinator passes `installLifecycleMonitor: false`, or you get two
   monitors (doubled PCAUDIO lines — the tell that a second coordinator is live —
   plus a stray resume on the idle Dev player).
 
-**Still to watch on-device:** whether `.mixWithOthers` (Spotify only now) keeps
-the app alive enough for background *auto-advance* on Spotify — a `.mixWithOthers`
-app can be suspended in the background even while its keepalive plays, so
-Spotify's current track survives but queue advancement may not until foreground.
-Apple Music (non-mixable) auto-advances in the background fine.
+Background **auto-advance** works the same way on both engines: the app stays
+alive on the silent keepalive, the per-engine poll loop detects the track end
+(Spotify: `checkSpotifyEnd` advances ~2s early via interpolation, so it doesn't
+even need a Web-API resync mid-cooldown), and `autoAdvance` starts the next
+track over the Web API / MusicKit — no foreground. The next-track Spotify
+`startPlayback` is the warm path (device already active), so it stays silent.
 
 **Key files:** `iosApp/Parachord/ContentView.swift` (`IosAudioSession`,
 `IosExternalKeepAlive`, `IosAudioSessionMonitor`, `IosAVPlayer.play/stop`,
