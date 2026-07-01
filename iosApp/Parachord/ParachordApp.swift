@@ -14,6 +14,8 @@ struct ParachordApp: App {
         // only installs a closure — it does NOT touch IosContainer (the handler
         // does, but that runs later), so it's safe here without blocking the first frame.
         BackgroundSync.register()
+        // #322: read-only audio-session event logging (Console filter: PCAUDIO).
+        AudioSessionDiagnostics.install()
     }
     var body: some Scene {
         WindowGroup {

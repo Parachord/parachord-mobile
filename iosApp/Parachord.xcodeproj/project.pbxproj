@@ -45,6 +45,7 @@
 		AA00000000000000000000F7 /* AppleMusicReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */; };
 		AA00000000000000000000F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F8 /* BackgroundSync.swift */; };
 		AA00000000000000000000FB /* HomeFeedModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FA /* HomeFeedModel.swift */; };
+		AA00000000000000000000FD /* AudioSessionDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FC /* AudioSessionDiagnostics.swift */; };
 		AA00000000000000000000E3 /* ListenAlongController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E2 /* ListenAlongController.swift */; };
 		AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E4 /* FriendProfileScreen.swift */; };
 		AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E6 /* MediaLibraryScanner.swift */; };
@@ -119,6 +120,7 @@
 		AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicReauthBanner.swift; sourceTree = "<group>"; };
 		AA00000000000000000000F8 /* BackgroundSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSync.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FA /* HomeFeedModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedModel.swift; sourceTree = "<group>"; };
+		AA00000000000000000000FC /* AudioSessionDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionDiagnostics.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E2 /* ListenAlongController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListenAlongController.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E4 /* FriendProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendProfileScreen.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E6 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
@@ -212,6 +214,7 @@
 				AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */,
 				AA00000000000000000000F8 /* BackgroundSync.swift */,
 				AA00000000000000000000FA /* HomeFeedModel.swift */,
+				AA00000000000000000000FC /* AudioSessionDiagnostics.swift */,
 				AA00000000000000000000E2 /* ListenAlongController.swift */,
 				AA00000000000000000000E8 /* SpinoffController.swift */,
 				AA00000000000000000000EA /* ChatScreen.swift */,
@@ -386,6 +389,7 @@
 				AA00000000000000000000F7 /* AppleMusicReauthBanner.swift in Sources */,
 				AA00000000000000000000F9 /* BackgroundSync.swift in Sources */,
 				AA00000000000000000000FB /* HomeFeedModel.swift in Sources */,
+				AA00000000000000000000FD /* AudioSessionDiagnostics.swift in Sources */,
 				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,
 				AA00000000000000000000E9 /* SpinoffController.swift in Sources */,
 				AA00000000000000000000EB /* ChatScreen.swift in Sources */,

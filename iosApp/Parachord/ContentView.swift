@@ -1548,7 +1548,9 @@ final class QueuePlaybackCoordinator {
 
     /// Which engine the current track is playing on. The UI reads unified
     /// state below so it doesn't care which one.
-    var activeEngine: PlaybackEngineKind = .avPlayer
+    var activeEngine: PlaybackEngineKind = .avPlayer {
+        didSet { AudioSessionDiagnostics.logState("ENGINE=\(activeEngine.rawValue)") }  // #322 diag (read-only)
+    }
 
     /// True from the moment a track is tapped until its engine starts (resolve
     /// + route can take a beat). The mini-player shows a spinner so the tap
