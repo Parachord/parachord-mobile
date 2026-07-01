@@ -2028,36 +2028,16 @@ final class QueuePlaybackCoordinator {
     @MainActor func switchResolver(_ resolver: String) {
         guard let t = currentTrack,
               let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
-              let chosen = srcs.first(where: { $0.resolver == resolver })
+              srcs.contains(where: { $0.resolver == resolver && !$0.noMatch })
         else { return }
-        // Android parity (switchSource): flip the deck to the picked resolver
-        // IMMEDIATELY and show the buffering spinner, rather than waiting for the
-        // new engine to confirm. `activeResolverName` reads `currentTrack.resolver`,
-        // so restamping it here updates the "Playing From" label instantly; the
-        // spinner (driven by `isStarting`) covers the device-wake / buffer window.
-        currentTrack = container.trackWithResolvedSources(track: t, sources: srcs, playedResolver: resolver)
-        isStarting = true
-        Task { @MainActor in
-            let result = await router.play(ranked: [chosen], title: t.title, artist: t.artist)
-            isStarting = false
-            if case .played(let kind, let playedResolver) = result {
-                let previousEngine = activeEngine
-                activeEngine = kind
-                await applyEngineHandoff(from: previousEngine, to: kind)
-                // Restamp the now-playing track's origin to the resolver the user
-                // switched to, so the scrobble reflects the service actually
-                // streaming after a manual deck tap (#260 / #276).
-                currentTrack = container.trackWithResolvedSources(track: t, sources: srcs, playedResolver: playedResolver)
-                container.updateScrobbleSources(trackId: t.id, sources: srcs)
-                if kind == .avPlayer { startAVPlaybackWhenReady() }
-                if kind == .spotify {
-                    spotifyPlaying = spotify.isPlaying
-                    spotifyPositionSec = 0; spotifyDurationSec = 0
-                    spotifyElapsedSec = 0; spotifyEndHandled = false
-                    startSpotifyPolling()
-                }
-            }
-        }
+        // Android parity (switchSource → playTrackInternal(switched, skipReselect=true)):
+        // restart the song from 0:00 on the picked source via the shared play path,
+        // which stops the old engine, runs the engine handoff, and shows the
+        // buffering spinner. Optimistically restamp `currentTrack.resolver` first so
+        // the deck's "Playing From" label flips to the chosen source immediately
+        // (`activeResolverName` reads it) instead of after the new engine confirms.
+        let switched = container.trackWithResolvedSources(track: t, sources: srcs, playedResolver: resolver)
+        playTrack(switched, forcedResolver: resolver)
     }
 
     init(
@@ -2361,7 +2341,14 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
-    private func playTrack(_ track: Track) {
+    /// Play (or restart) a track. When [forcedResolver] is set the user explicitly
+    /// picked a source in the Now Playing deck: play ONLY that resolver's cached
+    /// source and skip the active-resolver re-gate — Android's
+    /// `switchSource → playTrackInternal(switched, skipReselect = true)`. Reusing
+    /// this path (not a bespoke router call) guarantees the switch stops the old
+    /// engine, restarts the song from 0:00 on the chosen source, shows the
+    /// buffering spinner, and runs the engine handoff.
+    private func playTrack(_ track: Track, forcedResolver: String? = nil) {
         currentTrack = track
         // New track → re-arm the next-track Apple Music pre-fetch (#322).
         prefetchedNextForCurrentTrack = false
@@ -2385,8 +2372,10 @@ final class QueuePlaybackCoordinator {
             container.enrichTrackMbidInBackground(track: track)
 
             // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
-            // play straight through AVPlayer, no resolver round-trip.
-            if let url = track.sourceUrl, !url.isEmpty,
+            // play straight through AVPlayer, no resolver round-trip. Skipped for a
+            // forced-resolver switch — the user picked a specific cached source, not
+            // the track's (possibly stale) direct URL.
+            if forcedResolver == nil, let url = track.sourceUrl, !url.isEmpty,
                resolverCache.cached(artist: track.artist, title: track.title, album: track.album) == nil {
                 activeEngine = .avPlayer
                 player.load(url: url, title: track.title, artist: track.artist)
@@ -2398,7 +2387,12 @@ final class QueuePlaybackCoordinator {
             // Two-layer resolution: cache (background pre-resolved) first,
             // on-the-fly fallback on a miss.
             var ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album)
-            if ranked == nil || ranked!.isEmpty {
+            if let forced = forcedResolver {
+                // Manual deck switch (Android skipReselect=true): honor the user's
+                // explicit pick — play ONLY that resolver's cached source, never
+                // re-gate it back to the auto-best.
+                ranked = (ranked ?? []).filter { $0.resolver == forced && !$0.noMatch }
+            } else if ranked == nil || ranked!.isEmpty {
                 ranked = (try? await container.resolveSources(
                     artist: track.artist, title: track.title, album: track.album,
                     // Play-time fallback also benefits from the #211 hint when the
@@ -2469,8 +2463,10 @@ final class QueuePlaybackCoordinator {
 
             case .noPlayableSource:
                 // Resolved but no engine could play it (e.g. Apple-Music-only
-                // match with no subscription) — advance to the next track.
-                skipNext()
+                // match with no subscription) — advance to the next track. On a
+                // forced deck switch, DON'T skip: the user asked to change source,
+                // not to skip the song — leave the current playback as-is.
+                if forcedResolver == nil { skipNext() }
             }
             isStarting = false
         }
