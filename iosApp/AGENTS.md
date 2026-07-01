@@ -639,21 +639,30 @@ The fix is a **direct port of Android's external-playback survival** (root
 
   **Don't collapse these back into one `configureForExternal`.** The first cut
   did (both `.mixWithOthers`) and it caused the Apple Music background hiccup.
-- **Silent keepalive** (`IosExternalKeepAlive`) — **SPOTIFY ONLY**. The iOS port
-  of Android's `res/raw/silence.wav` loop **AND its partial WakeLock / WiFi
-  lock**. Spotify plays in a *separate app*, so without our own background audio
-  iOS suspends Parachord and the `startSpotifyPolling` loop stops → no
-  auto-advance. A code-generated zero-filled PCM buffer looped at volume 0
-  through `AVAudioEngine` keeps `UIBackgroundModes: audio` satisfied so the app
-  stays alive; iOS grants an actively-playing app both CPU and network, so
-  there's no separate wakelock/wifi-lock to port.
-  **Do NOT run the keepalive for Apple Music.** `ApplicationMusicPlayer` is a
-  system now-playing player that keeps the app alive in the background on its own
-  (its `IosMusicKitPlayer` tick loop keeps running + auto-advancing without our
-  help). Running a second `AVAudioEngine` producing silence on AM's *non-mixable*
-  session fights it — observed as **Apple Music pausing ~once a second** (#322).
-  So `applyEngineHandoff` calls `keepAlive.start()` for `.spotify` and
-  `keepAlive.stop()` for `.musicKit`.
+- **Silent keepalive** (`IosExternalKeepAlive`) — **BOTH external engines**
+  (Spotify AND Apple Music). The iOS port of Android's `res/raw/silence.wav`
+  loop **AND its partial WakeLock / WiFi lock**. A code-generated zero-filled
+  PCM buffer looped at volume 0 through `AVAudioEngine` keeps
+  `UIBackgroundModes: audio` satisfied so the app stays alive; iOS grants an
+  actively-playing app both CPU and network, so there's no separate
+  wakelock/wifi-lock to port.
+  - **Spotify** plays in a separate app → without our background audio iOS
+    suspends us and `startSpotifyPolling` stops → no auto-advance.
+  - **Apple Music** renders OUT OF PROCESS (`RemotePlayerService`), so from
+    iOS's background-execution view our app isn't "producing audio" either — it
+    gets suspended, the `IosMusicKitPlayer` tick loop freezes, and the track
+    only auto-advances when you next foreground (confirmed in the #322 trace: a
+    track sat idle in the background and advanced ~12s AFTER `DID_BECOME_ACTIVE`).
+    So AM needs the keepalive too. `applyEngineHandoff` calls `keepAlive.start()`
+    for BOTH `.spotify` and `.musicKit`.
+  - **The once-a-second AM stutter was the DOUBLED keepalive** (a second
+    coordinator ran a second `AVAudioEngine` on the same session), NOT the
+    keepalive itself — the `AppPlayback.shared` singleton makes that impossible.
+    (If a SINGLE keepalive still stutters AM on its non-mixable session, the
+    fallback is `.mixWithOthers` for AM too — the 4b6a6dd trace showed
+    mix-with-others + keepalive auto-advanced without the per-second stutter, at
+    the cost of a one-time hiccup when MusicKit resets the session on first
+    background.)
   **Resilience is load-bearing:** unlike Android's FGS + wakelock, an
   `AVAudioEngine` is stopped by the system on audio-route/config changes and
   interruptions; if it isn't restarted the app is suspended and auto-advance
