@@ -710,6 +710,19 @@ alive on the silent keepalive, the per-engine poll loop detects the track end
 even need a Web-API resync mid-cooldown), and `autoAdvance` starts the next
 track over the Web API / MusicKit — no foreground. The next-track Spotify
 `startPlayback` is the warm path (device already active), so it stays silent.
+The `PCSPOT: poll tick` heartbeat CONFIRMED (#322) the app stays alive for
+Spotify locked — 4+ minutes of ticks with the screen off — so the keepalive
+works for a separate-app (Spotify) context too, not just Apple Music.
+
+**Retry the warm `startPlayback` on a transient failure while locked.** With the
+screen locked, the Ktor PUT for the next-track warm `startPlayback` intermittently
+THROWS a network error (`status=-1`, alongside `nw_protocol …udp` churn) — the
+device is still valid, it's just a lock-time network blip. `startPlayback` retries
+`502`/`-1` up to 3×0.8s. **Do NOT let a transient warm failure fall through to the
+cold path**: cold wake foregrounds Spotify via `spotify://`, which can't happen
+while locked, so a warm auto-advance would stall (the old track's interpolated
+`pos` keeps counting past `dur` while nothing new starts). The retry keeps it on
+the warm path so the advance succeeds silently.
 
 **Key files:** `iosApp/Parachord/ContentView.swift` (`IosAudioSession`,
 `IosExternalKeepAlive`, `IosAudioSessionMonitor`, `IosAVPlayer.play/stop`,

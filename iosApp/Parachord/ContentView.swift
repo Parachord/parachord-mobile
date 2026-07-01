@@ -687,8 +687,18 @@ final class IosSpotifyConnect {
             }
         }
         var status = await attempt()
-        if status == 502 {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        // Retry transient failures before giving up: a 502, or -1 (a thrown Ktor
+        // network error — common when the screen is LOCKED and the network stack
+        // churns, seen as `nw_protocol …udp` noise). The device is still valid, so
+        // a brief retry usually succeeds. Critically we must NOT fall through to
+        // the cold wake path on a transient blip: cold wake foregrounds Spotify,
+        // which CAN'T happen while locked, so a warm auto-advance would stall
+        // (#322). 3 × 0.8s ≈ 2.4s covers a lock-time network hiccup.
+        var retries = 0
+        while (status == 502 || status < 0) && retries < 3 {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            retries += 1
+            NSLog("PCSPOT: startPlayback retry \(retries) (prev status=\(status))")
             status = await attempt()
         }
         NSLog("PCSPOT: startPlayback status=\(status) device=\(deviceId)")
