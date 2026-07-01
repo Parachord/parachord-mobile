@@ -625,20 +625,24 @@ The fix is a **direct port of Android's external-playback survival** (root
   the category *options* are the load-bearing part, and they DIFFER per engine:
   - Local AVPlayer audio → `.playback`, no options (we own the route; activated
     in `IosAVPlayer.play()`, released in `stop()` — NOT at launch).
-  - **Apple Music → `.playback`, NON-mixable** (`configureForAppleMusic`).
-    `ApplicationMusicPlayer` plays through our process session and wants to be
-    the primary/now-playing app. `.mixWithOthers` marks us *secondary*, so
-    MusicKit force-resets the session (`options 1→0`) on the first background and
-    the track briefly drops + an `INTERRUPTION` fires — confirmed in the #322
-    trace (it recovered, but ugly). Non-mixable is MusicKit's own preferred mode,
-    so there's no fight and no hiccup.
+  - **Apple Music → `.playback` + `.mixWithOthers`** (`configureForAppleMusic`).
+    AM needs our keepalive to stay alive in the background (see below), but the
+    keepalive `AVAudioEngine` and `ApplicationMusicPlayer` then share ONE process
+    session. On a NON-mixable session those two fight and **AM stutters ~once a
+    second** (confirmed on-device with a SINGLE keepalive — so it was NOT the
+    doubling). `.mixWithOthers` makes our engine register as *secondary* so it
+    stops fighting AM. Cost: MusicKit force-resets the session (`options 1→0`)
+    once on the first background — a one-time brief drop, far better than a
+    per-second stutter. **Configure mixable BEFORE `keepAlive.start()`** so the
+    engine comes up secondary. (Tried non-mixable to avoid the one-time hiccup;
+    it re-introduced the per-second stutter — don't.)
   - **Spotify → `.playback` + `.mixWithOthers`** (`configureForSpotify`) — the
     iOS analog of Android's `handleAudioFocus = false`. Spotify plays in its OWN
     app, so our (silent-keepalive) session must not interrupt it; this is also
     what stops Spotify dropping out when Parachord returns to the foreground.
 
-  **Don't collapse these back into one `configureForExternal`.** The first cut
-  did (both `.mixWithOthers`) and it caused the Apple Music background hiccup.
+  Both external engines end up on `.mixWithOthers` — kept as two functions only
+  for the distinct `SESSION_CONFIG context=…` log tag.
 - **Silent keepalive** (`IosExternalKeepAlive`) — **BOTH external engines**
   (Spotify AND Apple Music). The iOS port of Android's `res/raw/silence.wav`
   loop **AND its partial WakeLock / WiFi lock**. A code-generated zero-filled

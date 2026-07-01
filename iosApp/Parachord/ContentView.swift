@@ -30,13 +30,19 @@ enum IosAudioSession {
     /// prior mixable "external" mode.
     static func configureForLocal() { apply(options: [], context: "local") }
 
-    /// **Apple Music → NON-mixable `.playback`.** `ApplicationMusicPlayer` plays
-    /// through OUR process session and wants to be the primary/now-playing app;
-    /// `.mixWithOthers` marks us secondary, so MusicKit force-resets the session
-    /// (options 1→0) on the first background and the track briefly drops (seen in
-    /// the #322 trace). Non-mixable is what MusicKit wants — no fight, no hiccup.
-    /// We still run the silent keepalive so the app isn't suspended.
-    static func configureForAppleMusic() { apply(options: [], context: "applemusic") }
+    /// **Apple Music → mixable `.playback` (`.mixWithOthers`).** AM needs the
+    /// silent keepalive to stay alive in the background (it renders out of
+    /// process, so iOS otherwise suspends us and auto-advance freezes) — but our
+    /// keepalive `AVAudioEngine` and `ApplicationMusicPlayer` then share ONE
+    /// process session. On a NON-mixable session those two fight and AM stutters
+    /// ~once a second (confirmed on-device with a SINGLE keepalive, #322).
+    /// `.mixWithOthers` makes our engine register as SECONDARY so it no longer
+    /// fights AM — the same config Spotify uses. Cost: MusicKit force-resets the
+    /// session (options 1→0) once on the first background, briefly dropping the
+    /// track — a one-time hiccup, far better than a per-second stutter. Order
+    /// matters: configure mixable BEFORE `keepAlive.start()` so the engine comes
+    /// up secondary.
+    static func configureForAppleMusic() { apply(options: [.mixWithOthers], context: "applemusic") }
 
     /// **Spotify → mixable `.playback`.** Spotify plays in its OWN app, so our
     /// (silent-keepalive) session must NOT interrupt it — `.mixWithOthers` is the
@@ -421,9 +427,16 @@ final class IosSpotifyConnect {
         //    Mirrors Android's "fire startPlayback directly without any device
         //    fetch" warm-path optimization.
         if deviceVerified, let warmId = lastResolvedLocalId {
-            if await startPlayback(client, uri: uri, deviceId: warmId) { return true }
+            NSLog("PCSPOT: warm attempt device=\(warmId)")
+            if await startPlayback(client, uri: uri, deviceId: warmId) {
+                NSLog("PCSPOT: warm OK (no wake)")
+                return true
+            }
+            NSLog("PCSPOT: warm FAILED — clearing + cold path")
             lastResolvedLocalId = nil
             deviceVerified = false
+        } else {
+            NSLog("PCSPOT: warm SKIPPED deviceVerified=\(deviceVerified) haveId=\(lastResolvedLocalId != nil)")
         }
 
         // 2. Resolve the target device (Android `pickDevice` parity).
@@ -678,6 +691,7 @@ final class IosSpotifyConnect {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             status = await attempt()
         }
+        NSLog("PCSPOT: startPlayback status=\(status) device=\(deviceId)")
         switch status {
         case 200...204: lastAction = "Spotify playback started"; isPlaying = true; return true
         case 403: lastAction = "Spotify Premium required"; return false
