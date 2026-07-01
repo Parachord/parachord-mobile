@@ -1932,14 +1932,18 @@ final class QueuePlaybackCoordinator {
             if previousEngine == .musicKit { musicKit.pause() }
             if previousEngine == .spotify { await spotify.pause() }
         case .musicKit:
-            // Apple Music started via ApplicationMusicPlayer (shares our
-            // session). Stop our AVPlayer audio, keep the session NON-mixable
-            // (what MusicKit wants), and run the silent keepalive so we aren't
-            // suspended in the background (which would freeze AM's controller).
+            // Apple Music via ApplicationMusicPlayer. Stop our AVPlayer audio and
+            // keep the session NON-mixable (what MusicKit wants). Do NOT run our
+            // silent keepalive here: ApplicationMusicPlayer is a system
+            // now-playing player that keeps the app alive in the background on
+            // its own, and a second AVAudioEngine producing silence on the same
+            // non-mixable session fights it — observed as Apple Music pausing
+            // ~once a second (#322). The keepalive is for Spotify only (a
+            // separate app, where our process would otherwise be suspended).
             player.haltAudio()
             if previousEngine == .spotify { await spotify.pause() }
+            keepAlive.stop()
             IosAudioSession.configureForAppleMusic()
-            keepAlive.start()
         case .spotify:
             // Spotify plays in its own app — mixable session + keepalive so we
             // neither interrupt it nor get suspended (breaking auto-advance).
@@ -1963,8 +1967,9 @@ final class QueuePlaybackCoordinator {
         case .avPlayer:
             if !player.isPlaying { player.play() }
         case .musicKit:
+            // No keepalive for Apple Music (see applyEngineHandoff) — AM keeps
+            // the app alive itself; our engine would fight it.
             IosAudioSession.configureForAppleMusic()
-            keepAlive.restart()
             musicKit.resume()
         case .spotify:
             Task { @MainActor in

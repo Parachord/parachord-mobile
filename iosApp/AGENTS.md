@@ -639,14 +639,21 @@ The fix is a **direct port of Android's external-playback survival** (root
 
   **Don't collapse these back into one `configureForExternal`.** The first cut
   did (both `.mixWithOthers`) and it caused the Apple Music background hiccup.
-- **Silent keepalive** (`IosExternalKeepAlive`) — the iOS port of Android's
-  `res/raw/silence.wav` loop **AND its partial WakeLock / WiFi lock**. A
-  code-generated zero-filled PCM buffer looped at volume 0 through `AVAudioEngine`
-  keeps `UIBackgroundModes: audio` satisfied so the app stays alive in the
-  background; iOS grants an actively-playing app both CPU and network, so there's
-  no separate wakelock/wifi-lock to port. This is what lets the background poll
-  loops (`IosMusicKitPlayer` tick, `startSpotifyPolling`) keep running and fire
-  `autoAdvance` → the next track **without foregrounding** — the whole point.
+- **Silent keepalive** (`IosExternalKeepAlive`) — **SPOTIFY ONLY**. The iOS port
+  of Android's `res/raw/silence.wav` loop **AND its partial WakeLock / WiFi
+  lock**. Spotify plays in a *separate app*, so without our own background audio
+  iOS suspends Parachord and the `startSpotifyPolling` loop stops → no
+  auto-advance. A code-generated zero-filled PCM buffer looped at volume 0
+  through `AVAudioEngine` keeps `UIBackgroundModes: audio` satisfied so the app
+  stays alive; iOS grants an actively-playing app both CPU and network, so
+  there's no separate wakelock/wifi-lock to port.
+  **Do NOT run the keepalive for Apple Music.** `ApplicationMusicPlayer` is a
+  system now-playing player that keeps the app alive in the background on its own
+  (its `IosMusicKitPlayer` tick loop keeps running + auto-advancing without our
+  help). Running a second `AVAudioEngine` producing silence on AM's *non-mixable*
+  session fights it — observed as **Apple Music pausing ~once a second** (#322).
+  So `applyEngineHandoff` calls `keepAlive.start()` for `.spotify` and
+  `keepAlive.stop()` for `.musicKit`.
   **Resilience is load-bearing:** unlike Android's FGS + wakelock, an
   `AVAudioEngine` is stopped by the system on audio-route/config changes and
   interruptions; if it isn't restarted the app is suspended and auto-advance
@@ -668,10 +675,21 @@ The fix is a **direct port of Android's external-playback survival** (root
   `PCAUDIO:` trace (grep `xcrun simctl log` / `idevicesyslog` for `PCAUDIO`) and
   resumes the active engine on `.ended + .shouldResume` (phone-call recovery),
   re-arming the session + keepalive for the external engines.
-  **Only the primary `AppPlayback` coordinator installs it** — the Dev-tab
-  smoke-test coordinator passes `installLifecycleMonitor: false`, or you get two
-  monitors (doubled PCAUDIO lines — the tell that a second coordinator is live —
-  plus a stray resume on the idle Dev player).
+  Doubled PCAUDIO lines are the tell that a **second coordinator** is live. The
+  fix is the `AppPlayback.shared` singleton (below) — there must be exactly one
+  `QueuePlaybackCoordinator` process-wide. (`installLifecycleMonitor: false` on
+  the Dev-tab coordinator is belt-and-suspenders; `DevSmokeTestView` is
+  `#Preview`-only and doesn't run in the app anyway.)
+
+**One coordinator, always — `AppPlayback.shared`.** `ContentView` binds the
+`AppPlayback.shared` singleton, NOT a fresh `AppPlayback()`. On iPad
+(`UIApplicationSupportsMultipleScenes = true`) a second window scene — or a
+SwiftUI `@State` re-init — otherwise constructs a *second* `AppPlayback` →
+second coordinator → doubled audio-session monitor, a second keepalive engine,
+and a second `IosMusicKitPlayer` poll loop poking the SHARED
+`ApplicationMusicPlayer` (that second AM poll loop was a suspect for the
+once-a-second AM stutter). Two audio pipelines can't co-exist; there is exactly
+one playback engine per process.
 
 Background **auto-advance** works the same way on both engines: the app stays
 alive on the silent keepalive, the per-engine poll loop detects the track end

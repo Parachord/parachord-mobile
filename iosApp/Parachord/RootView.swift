@@ -9,7 +9,9 @@ import UniformTypeIdentifiers
 /// tab bar, a floating mini-player that expands to Now Playing, a slide-in
 /// Sidebar, and the Add action sheet. Components live in `Shell.swift`.
 struct ContentView: View {
-    @State private var playback = AppPlayback()
+    // Shared singleton, NOT a fresh AppPlayback() — a second window scene or a
+    // @State re-init must not create a second playback coordinator (#322).
+    @State private var playback = AppPlayback.shared
     @State private var theme = ThemeObserver()
     @State private var creator = PlaylistCreator.shared
     @State private var importer = PlaylistImporter.shared

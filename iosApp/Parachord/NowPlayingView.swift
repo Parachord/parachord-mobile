@@ -11,6 +11,15 @@ import Shared
 
 @Observable
 final class AppPlayback {
+    /// The ONE app-wide playback engine. `ContentView` binds this shared
+    /// instance rather than `AppPlayback()` so a second window scene (iPad
+    /// supports multiple scenes) or a SwiftUI `@State` re-init can't spin up a
+    /// second `QueuePlaybackCoordinator` — which would double the audio-session
+    /// monitor, run a second keepalive, and poke the SHARED
+    /// `ApplicationMusicPlayer` from a second poll loop (observed as doubled
+    /// PCAUDIO logs + Apple Music stuttering, #322).
+    @MainActor static let shared = AppPlayback()
+
     let player: IosAVPlayer
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
