@@ -262,6 +262,14 @@ class SpotifyClient(
         )
     }
 
+    // @Throws so a thrown exception (e.g. a Ktor network error while the app is
+    // backgrounded) is delivered to the iOS Swift caller's catch as an NSError
+    // instead of aborting the process. Kotlin/Native TERMINATES the app
+    // (Kotlin_ObjCExport_runCompletionFailure) when a suspend fun exposed to
+    // Swift throws an exception NOT covered by @Throws — this crashed background
+    // Spotify auto-advance (#322). Every Spotify Connect method iOS calls
+    // directly needs it.
+    @Throws(Throwable::class)
     suspend fun getTrack(trackId: String, market: String = "from_token"): SpTrack =
         gatedGet("$BASE/v1/tracks/$trackId") { applyAuth(this); parameter("market", market) }
 
@@ -281,31 +289,43 @@ class SpotifyClient(
 
     // ── Playback Control (Spotify Connect) ───────────────────────────
 
+    // All @Throws(Throwable::class): these Spotify Connect methods are called
+    // directly from iOS Swift, and a suspend fun that throws an un-@Throws'd
+    // exception across the Kotlin/Native → Swift bridge TERMINATES the app
+    // rather than surfacing to the caller's catch (crashed background
+    // auto-advance, #322). The annotation delivers the error as an NSError.
+    @Throws(Throwable::class)
     suspend fun getDevices(): SpDevicesResponse =
         httpClient.get("$BASE/v1/me/player/devices") { applyAuth(this) }.body()
 
+    @Throws(Throwable::class)
     suspend fun transferPlayback(body: SpTransferRequest): HttpResponse =
         httpClient.put("$BASE/v1/me/player") {
             applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
         }
 
+    @Throws(Throwable::class)
     suspend fun startPlayback(body: SpPlaybackRequest, deviceId: String? = null): HttpResponse =
         httpClient.put("$BASE/v1/me/player/play") {
             applyAuth(this); contentType(ContentType.Application.Json); setBody(body)
             if (deviceId != null) parameter("device_id", deviceId)
         }
 
+    @Throws(Throwable::class)
     suspend fun resumePlayback(): HttpResponse =
         httpClient.put("$BASE/v1/me/player/play") { applyAuth(this) }
 
+    @Throws(Throwable::class)
     suspend fun pausePlayback(): HttpResponse =
         httpClient.put("$BASE/v1/me/player/pause") { applyAuth(this) }
 
+    @Throws(Throwable::class)
     suspend fun seekPlayback(positionMs: Long): HttpResponse =
         httpClient.put("$BASE/v1/me/player/seek") {
             applyAuth(this); parameter("position_ms", positionMs)
         }
 
+    @Throws(Throwable::class)
     suspend fun setVolume(volumePercent: Int, deviceId: String? = null): HttpResponse =
         httpClient.put("$BASE/v1/me/player/volume") {
             applyAuth(this)
@@ -313,6 +333,7 @@ class SpotifyClient(
             if (deviceId != null) parameter("device_id", deviceId)
         }
 
+    @Throws(Throwable::class)
     suspend fun getPlaybackState(): HttpResponse =
         httpClient.get("$BASE/v1/me/player") { applyAuth(this) }
 
