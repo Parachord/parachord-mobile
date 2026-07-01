@@ -1915,6 +1915,13 @@ final class QueuePlaybackCoordinator {
 
     /// The resolver currently producing audio, for the Now Playing deck.
     @MainActor var activeResolverName: String {
+        // Android parity: the deck shows `track.resolver` — the resolver actually
+        // playing, stamped onto `currentTrack` by `trackWithResolvedSources` after
+        // the (gated) route. Prefer it so the deck reflects the real played source
+        // instead of reverse-engineering it from the engine (which collapses every
+        // AVPlayer source to a hardcoded "localfiles"). Fall back to engine
+        // inference only while the very first route is still in flight.
+        if let r = currentTrack?.resolver, !r.isEmpty { return r }
         switch activeEngine {
         case .spotify: return "spotify"
         case .musicKit: return "applemusic"
@@ -2023,8 +2030,16 @@ final class QueuePlaybackCoordinator {
               let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
               let chosen = srcs.first(where: { $0.resolver == resolver })
         else { return }
+        // Android parity (switchSource): flip the deck to the picked resolver
+        // IMMEDIATELY and show the buffering spinner, rather than waiting for the
+        // new engine to confirm. `activeResolverName` reads `currentTrack.resolver`,
+        // so restamping it here updates the "Playing From" label instantly; the
+        // spinner (driven by `isStarting`) covers the device-wake / buffer window.
+        currentTrack = container.trackWithResolvedSources(track: t, sources: srcs, playedResolver: resolver)
+        isStarting = true
         Task { @MainActor in
             let result = await router.play(ranked: [chosen], title: t.title, artist: t.artist)
+            isStarting = false
             if case .played(let kind, let playedResolver) = result {
                 let previousEngine = activeEngine
                 activeEngine = kind
@@ -2389,6 +2404,21 @@ final class QueuePlaybackCoordinator {
                     // Play-time fallback also benefits from the #211 hint when the
                     // track already carries streaming IDs.
                     spotifyId: track.spotifyId, appleMusicId: track.appleMusicId)) ?? []
+            } else {
+                // Android parity (PlaybackController.reselectBestSource → selectBest):
+                // re-apply the LIVE active-resolver gate to CACHED sources on every
+                // play. The cache is written with whatever active set existed when the
+                // track was resolved (and persists across sessions to disk), so a
+                // resolver the user has since DISABLED still sits at the head of the
+                // cached list. `rankSources` == `selectRanked` with the live gate +
+                // 0.60 floor + priority, so this drops the disabled source and routes
+                // the next enabled one — instead of playing the stale top source.
+                // Only swap when the re-gate yields a source: if the user has
+                // disabled EVERY matched resolver, keep the original cached list so
+                // playback still has something to try (matches Android's
+                // reselectBestSource returning the track unchanged on a null best).
+                let regated = (try? await container.rankSources(sources: ranked!)) ?? []
+                if !regated.isEmpty { ranked = regated }
             }
             // A newer playTrack superseded us during the async resolve — don't
             // route a stale track over the one the user actually wants.

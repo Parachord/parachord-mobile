@@ -90,11 +90,18 @@ struct PCNowPlaying: View {
                         titleRow(track)
                         scrubber
                         transport
-                        PCResolverDeck(
-                            active: coordinator.activeResolverName,
-                            available: coordinator.availableResolvers(),
-                            onPick: { coordinator.switchResolver($0) }
-                        )
+                        // Android parity: the "Playing From" deck only shows once a
+                        // resolver is actually playing (NowPlayingScreen gates on
+                        // `track.resolver != null`). Hiding it until then avoids the
+                        // old hardcoded "Local Files" default appearing on launch /
+                        // mid-resolve.
+                        if coordinator.currentTrack?.resolver != nil {
+                            PCResolverDeck(
+                                active: coordinator.activeResolverName,
+                                available: coordinator.availableResolvers(),
+                                onPick: { coordinator.switchResolver($0) }
+                            )
+                        }
                         bottomActions
                         if hSize == .regular { Spacer(minLength: 0) }
                     }
@@ -246,10 +253,20 @@ struct PCNowPlaying: View {
             }
             Spacer()
             Button { coordinator.togglePlayPause() } label: {
-                Image(systemName: coordinator.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 30)).foregroundStyle(.black)
-                    .frame(width: 76, height: 76).background(.white, in: Circle())
-                    .shadow(color: .black.opacity(0.3), radius: 12, y: 8)
+                ZStack {
+                    Circle().fill(.white).frame(width: 76, height: 76)
+                        .shadow(color: .black.opacity(0.3), radius: 12, y: 8)
+                    // Buffering spinner while a track/source is spinning up (Android
+                    // parity: the play/pause button shows a CircularProgressIndicator
+                    // when isBuffering). Covers device-wake / stream-start after a
+                    // manual source switch or a track change.
+                    if coordinator.isStarting {
+                        ProgressView().controlSize(.regular).tint(.black)
+                    } else {
+                        Image(systemName: coordinator.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 30)).foregroundStyle(.black)
+                    }
+                }
             }
             Spacer()
             Button {
