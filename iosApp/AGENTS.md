@@ -605,6 +605,153 @@ the SDK does not improve the cold case. See
 
 ---
 
+## Background playback / audio session (#322) — the Android port
+
+Playback stopping when the app backgrounds (Spotify OR Apple Music) traced to a
+single root cause: `IosAVPlayer.init()` did `setActive(true)` on a **non-mixable
+`.playback`** `AVAudioSession` at launch and never released it. There is ONE
+`AVAudioSession` per process, so holding it active-but-silent (we produce no
+audio for external engines) (a) interrupted Spotify the instant the app became
+active (`otherAudioPlaying` flipped true→false on `DID_BECOME_ACTIVE` in the
+trace), and (b) made iOS suspend the app ~30s after backgrounding (`INTERRUPTION
+type=began` with no `type=ended`), freezing polling/auto-advance and pausing
+`ApplicationMusicPlayer` (whose controller is our process).
+
+The fix is a **direct port of Android's external-playback survival** (root
+`CLAUDE.md` "External Playback Background Survival"; `PlaybackController` +
+`PlaybackService`):
+
+- **Per-engine session ownership** (`IosAudioSession` in `ContentView.swift`) —
+  the category *options* are the load-bearing part, and they DIFFER per engine:
+  - Local AVPlayer audio → `.playback`, no options (we own the route; activated
+    in `IosAVPlayer.play()`, released in `stop()` — NOT at launch).
+  - **Apple Music → `.playback` + `.mixWithOthers`** (`configureForAppleMusic`).
+    AM needs our keepalive to stay alive in the background (see below), but the
+    keepalive `AVAudioEngine` and `ApplicationMusicPlayer` then share ONE process
+    session. On a NON-mixable session those two fight and **AM stutters ~once a
+    second** (confirmed on-device with a SINGLE keepalive — so it was NOT the
+    doubling). `.mixWithOthers` makes our engine register as *secondary* so it
+    stops fighting AM. Cost: MusicKit force-resets the session (`options 1→0`)
+    once on the first background — a one-time brief drop, far better than a
+    per-second stutter. **Configure mixable BEFORE `keepAlive.start()`** so the
+    engine comes up secondary. (Tried non-mixable to avoid the one-time hiccup;
+    it re-introduced the per-second stutter — don't.)
+  - **Spotify → `.playback` + `.mixWithOthers`** (`configureForSpotify`) — the
+    iOS analog of Android's `handleAudioFocus = false`. Spotify plays in its OWN
+    app, so our (silent-keepalive) session must not interrupt it; this is also
+    what stops Spotify dropping out when Parachord returns to the foreground.
+
+  Both external engines end up on `.mixWithOthers` — kept as two functions only
+  for the distinct `SESSION_CONFIG context=…` log tag.
+- **Silent keepalive** (`IosExternalKeepAlive`) — **BOTH external engines**
+  (Spotify AND Apple Music). The iOS port of Android's `res/raw/silence.wav`
+  loop **AND its partial WakeLock / WiFi lock**. A code-generated zero-filled
+  PCM buffer looped at volume 0 through `AVAudioEngine` keeps
+  `UIBackgroundModes: audio` satisfied so the app stays alive; iOS grants an
+  actively-playing app both CPU and network, so there's no separate
+  wakelock/wifi-lock to port.
+  - **Spotify** plays in a separate app → without our background audio iOS
+    suspends us and `startSpotifyPolling` stops → no auto-advance.
+  - **Apple Music** renders OUT OF PROCESS (`RemotePlayerService`), so from
+    iOS's background-execution view our app isn't "producing audio" either —
+    WITHOUT the keepalive it gets suspended, the `IosMusicKitPlayer` tick loop
+    freezes, and the track only auto-advances when you next foreground (an early
+    #322 trace showed a track sitting idle in the background, advancing only
+    ~12s AFTER `DID_BECOME_ACTIVE`). So AM needs the keepalive too;
+    `applyEngineHandoff` calls `keepAlive.start()` for BOTH `.spotify` and
+    `.musicKit`. WITH it, the final trace confirmed AM auto-advances fully locked.
+  - **The once-a-second AM stutter was the DOUBLED keepalive** (a second
+    coordinator ran a second `AVAudioEngine` on the same session), NOT the
+    keepalive itself — the `AppPlayback.shared` singleton makes that impossible.
+    (If a SINGLE keepalive still stutters AM on its non-mixable session, the
+    fallback is `.mixWithOthers` for AM too — the 4b6a6dd trace showed
+    mix-with-others + keepalive auto-advanced without the per-second stutter, at
+    the cost of a one-time hiccup when MusicKit resets the session on first
+    background.)
+  **Resilience is load-bearing:** unlike Android's FGS + wakelock, an
+  `AVAudioEngine` is stopped by the system on audio-route/config changes and
+  interruptions; if it isn't restarted the app is suspended and auto-advance
+  dies. So the keepalive observes `AVAudioEngineConfigurationChange` and restarts
+  the engine, and `resumeActiveEngine` re-arms it (+ re-activates the session)
+  after interruptions. Started/stopped on engine handoff (`applyEngineHandoff`).
+
+  **DANGER — never reconnect a RUNNING `AVAudioEngine` on the config-change
+  path.** `engine.connect(...)` on a running engine itself posts an
+  `AVAudioEngineConfigurationChange`, so "reconnect on every notification" feeds
+  itself into a loop that fires many times a second, thrashes the shared audio
+  route, and **distorts other apps' audio (Spotify) badly enough to wedge the
+  audio daemon until a device reboot** (hit once, #322). The graph is therefore
+  attached+connected exactly ONCE (`buildGraphIfNeeded`, on a stopped engine),
+  and the config-change handler only calls `startEngineAndPlay()` **guarded on
+  `!engine.isRunning`** — restart-when-stopped can't re-trigger itself. Same
+  guard on `restart()`. Don't "simplify" these guards away.
+- **Interruption monitor** (`IosAudioSessionMonitor`) — resumes the active engine
+  on `.ended + .shouldResume` (phone-call recovery), re-arming the session +
+  keepalive for the external engines. There must be exactly one
+  `QueuePlaybackCoordinator` process-wide (via the `AppPlayback.shared` singleton,
+  below), so only one monitor is installed. (`installLifecycleMonitor: false` on
+  the Dev-tab coordinator is belt-and-suspenders; `DevSmokeTestView` is
+  `#Preview`-only and doesn't run in the app anyway.)
+  - *During bring-up this class (plus a `PCAUDIO:`/`PCSPOT:` `NSLog` trace across
+    the session/keepalive/Spotify/AM paths) instrumented the whole flow; the trace
+    was removed once it confirmed the fix. If you're re-debugging background
+    playback, re-add temporary `NSLog`s at the same points — a **doubled** trace
+    is the tell that a second coordinator went live.*
+
+**One coordinator, always — `AppPlayback.shared`.** `ContentView` binds the
+`AppPlayback.shared` singleton, NOT a fresh `AppPlayback()`. On iPad
+(`UIApplicationSupportsMultipleScenes = true`) a second window scene — or a
+SwiftUI `@State` re-init — otherwise constructs a *second* `AppPlayback` →
+second coordinator → doubled audio-session monitor, a second keepalive engine,
+and a second `IosMusicKitPlayer` poll loop poking the SHARED
+`ApplicationMusicPlayer` (that second AM poll loop was a suspect for the
+once-a-second AM stutter). Two audio pipelines can't co-exist; there is exactly
+one playback engine per process.
+
+Background **auto-advance** works the same way on both engines: the app stays
+alive on the silent keepalive, the per-engine poll loop detects the track end
+(Spotify: `checkSpotifyEnd` advances ~2s early via interpolation, so it doesn't
+even need a Web-API resync mid-cooldown), and `autoAdvance` starts the next
+track over the Web API / MusicKit — no foreground. The next-track Spotify
+`startPlayback` is the warm path (device already active), so it stays silent.
+The bring-up trace CONFIRMED (#322) the app stays alive for Spotify locked — 4+
+minutes of poll ticks with the screen off — AND that **cross-service Spotify→AM
+auto-advance runs fully locked** (AM started ~4 min into background with no
+`DID_BECOME_ACTIVE` in the trace). So the keepalive works for a separate-app
+(Spotify) context too, not just Apple Music.
+
+**Next-track Apple Music `Song` pre-fetch (perf, #322).** `play(appleMusicId:)`
+turns the `appleMusicId` string into a playable MusicKit `Song` via
+`MusicCatalogResourceRequest<Song>` — a ~1.6s network round-trip that the queue's
+resolver cache does NOT cover (it stores the `appleMusicId`, but a `Song` is an
+iOS-only type it can't hold). So `QueuePlaybackCoordinator.prefetchNextIfNeeded`
+(driven off the 1s engine-agnostic tick) warms the next queued track's `Song`
+~15s before the boundary — Android's pre-resolve-early pattern
+(`PlaybackController.kt:1273`) applied to the MusicKit fetch — and `play()` uses
+the cached `Song` (`IosMusicKitPlayer.prefetchedSong`, keyed by id) to skip the
+round-trip. Measured AM start dropped ~3.1s → ~2.3s. A catalog lookup is a plain
+REST call that never touches `ApplicationMusicPlayer`, so pre-fetching mid-playback
+can't disrupt the outgoing Spotify or AM stream (unlike Android's WebView
+`preload()` caveat). One-shot per current track; fires only when the next track
+routes to AM. The remaining ~2.3s (queue-set + DRM buffer) is a tracked follow-up
+(#336: pre-`prepareToPlay` on Spotify→AM only, unsafe for AM→AM).
+
+**Retry the warm `startPlayback` on a transient failure while locked.** With the
+screen locked, the Ktor PUT for the next-track warm `startPlayback` intermittently
+THROWS a network error (`status=-1`, alongside `nw_protocol …udp` churn) — the
+device is still valid, it's just a lock-time network blip. `startPlayback` retries
+`502`/`-1` up to 3×0.8s. **Do NOT let a transient warm failure fall through to the
+cold path**: cold wake foregrounds Spotify via `spotify://`, which can't happen
+while locked, so a warm auto-advance would stall (the old track's interpolated
+`pos` keeps counting past `dur` while nothing new starts). The retry keeps it on
+the warm path so the advance succeeds silently.
+
+**Key files:** `iosApp/Parachord/ContentView.swift` (`IosAudioSession`,
+`IosExternalKeepAlive`, `IosAudioSessionMonitor`, `IosAVPlayer.play/stop`,
+`QueuePlaybackCoordinator.applyEngineHandoff/resumeActiveEngine`).
+
+---
+
 ## What's intentionally deferred (don't "fix")
 
 - Full Koin DI graph — `IosContainer` is hand-rolled on purpose until

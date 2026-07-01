@@ -1411,6 +1411,10 @@ class IosContainer private constructor() {
     // Lightweight spinoff-availability probe (Android's checkSpinoffAvailability,
     // limit=1) — does the seed have ANY Last.fm similar tracks? Throws on API error
     // so the caller (iOS) can map a failure to "unchecked" (nil) rather than false.
+    // @Throws — awaited from Swift on every track change (incl. backgrounded
+    // auto-advance); a thrown Last.fm network error must reach the Swift catch,
+    // not abort the app across the Kotlin/Native bridge (#322).
+    @Throws(Throwable::class)
     suspend fun spinoffAvailable(seedArtist: String, seedTitle: String): Boolean {
         val resp = lastFmClient.getSimilarTracks(
             track = seedTitle, artist = seedArtist,
@@ -2453,6 +2457,11 @@ class IosContainer private constructor() {
      * floor-filtered sources (best first). The Swift `PlaybackRouter` walks
      * this list for the first engine-available source.
      */
+    // @Throws so a background network / JSC error is delivered to the Swift
+    // caller's catch instead of aborting the app across the Kotlin/Native bridge
+    // (see SpotifyClient — same #322 crash class; this runs in the same
+    // backgrounded auto-advance path when the next track isn't cached).
+    @Throws(Throwable::class)
     suspend fun resolveSources(
         artist: String,
         title: String,

@@ -142,7 +142,12 @@ struct PopOfTheTopsScreen: View {
     // ── Songs tab: rank + art + title/artist + resolver squares ─────────
     private var songsList: some View {
         LazyVStack(spacing: 0) {
-            ForEach(Array(model.songs.enumerated()), id: \.element.id) { index, song in
+            // ZIP songs + entities so the two parallel arrays stay paired — they're
+            // set in separate @Observable assignments, so a raw songEntities[index]
+            // can go out of range and crash on render after a background
+            // auto-advance changes currentTrack. #322.
+            ForEach(Array(zip(model.songs, model.songEntities).enumerated()), id: \.offset) { index, pair in
+                let (song, entity) = pair
                 Button {
                     coordinator.setQueue(model.songEntities, startIndex: index,
                                          context: PlaybackContext(type: "charts", name: "Top Songs", id: nil))
@@ -154,7 +159,7 @@ struct PopOfTheTopsScreen: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(song.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: song.artist, title: song.title, album: song.album) ? PC.fg3
-                                    : (coordinator.currentTrack?.id == model.songEntities[index].id ? PC.accent : PC.fg1))
+                                    : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1))
                                 .lineLimit(1)
                             Text(song.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                         }
@@ -169,7 +174,7 @@ struct PopOfTheTopsScreen: View {
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(song, index: index) }
                 .pcTrackContextMenu(
-                    model.songEntities[index], coordinator: coordinator,
+                    entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = song.artist },
                     onGoToAlbum: song.album.map { album in { navAlbum = PCAlbumRef(title: album, artist: song.artist) } }
                 )

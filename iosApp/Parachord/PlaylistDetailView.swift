@@ -142,17 +142,24 @@ struct PlaylistDetailView: View {
                 ScrollView {
                     header
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(model.tracks.enumerated()), id: \.element.id) { index, track in
+                        // ZIP tracks + entities so the two parallel arrays are always
+                        // paired — `tracks` and `trackEntities` are set in two separate
+                        // @Observable assignments (non-atomic), so a raw
+                        // `trackEntities[index]` can go out of range mid-update and
+                        // crash on the next render (e.g. after a background auto-advance
+                        // changes currentTrack). #322.
+                        ForEach(Array(zip(model.tracks, model.trackEntities).enumerated()), id: \.offset) { index, pair in
+                            let (track, entity) = pair
                             Button { coordinator.setQueue(model.trackEntities, startIndex: index, context: playlistContext) } label: {
                                 row(index: index, track: track)
                             }
                             .buttonStyle(.plain)
                             .onAppear { model.resolveVisible(track, index: index) }
                             .pcTrackContextMenu(
-                                model.trackEntities[index], coordinator: coordinator,
-                                onGoToArtist: { navArtist = model.trackEntities[index].artist },
-                                onGoToAlbum: model.trackEntities[index].album.map { album in
-                                    { navAlbum = PCAlbumRef(title: album, artist: model.trackEntities[index].artist) }
+                                entity, coordinator: coordinator,
+                                onGoToArtist: { navArtist = entity.artist },
+                                onGoToAlbum: entity.album.map { album in
+                                    { navAlbum = PCAlbumRef(title: album, artist: entity.artist) }
                                 })
                         }
                     }
@@ -1110,14 +1117,18 @@ struct SavedPlaylistDetailView: View {
                 Text("No tracks in this playlist.").font(.system(size: 14)).foregroundStyle(PC.fg3).padding(40)
             } else {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(model.tracks.enumerated()), id: \.offset) { i, t in
+                    // ZIP so tracks + entities stay paired (non-atomic @Observable
+                    // updates would otherwise let entities[i] go out of range and
+                    // crash on render after a background auto-advance). #322.
+                    ForEach(Array(zip(model.tracks, model.entities).enumerated()), id: \.offset) { i, pair in
+                        let (t, entity) = pair
                         Button { coordinator.setQueue(model.entities, startIndex: i, context: ctx) } label: {
                             trackRow(t, index: i)
                         }
                         .buttonStyle(.plain)
                         .onAppear { resolverCache.resolve(ResolveRequest(artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum), order: i) }
                         .pcTrackContextMenu(
-                            model.entities[i], coordinator: coordinator,
+                            entity, coordinator: coordinator,
                             onGoToArtist: { navArtist = t.trackArtist },
                             onGoToAlbum: t.trackAlbum.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.trackArtist) } })
                     }
@@ -1134,7 +1145,7 @@ struct SavedPlaylistDetailView: View {
                     seed: t.trackTitle + t.trackArtist, size: 44, radius: 6)
             VStack(alignment: .leading, spacing: 2) {
                 Text(t.trackTitle).font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1).lineLimit(1)
+                    .foregroundStyle(coordinator.currentTrack?.id == model.entities[safe: index]?.id ? PC.accent : PC.fg1).lineLimit(1)
                 Text(t.trackAlbum.map { "\(t.trackArtist) · \($0)" } ?? t.trackArtist)
                     .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
             }

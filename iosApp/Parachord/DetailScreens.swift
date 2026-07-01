@@ -2,6 +2,17 @@ import SwiftUI
 import Shared
 @preconcurrency import Vision
 
+/// Bounds-checked subscript. Parallel arrays (a display list + a `[Track]`
+/// entity list indexed by the SAME offset) can briefly differ in length while
+/// a detail model reloads; a raw `entities[index]` then crashes with "index out
+/// of range". This re-renders on every `currentTrack` change (auto-advance), so
+/// a background track change could crash the screen on the next foreground.
+extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
 // MARK: - Album & Artist detail (Phase 4 — docs/design/parachord-ios)
 //
 // Backed by the shared MetadataService (cascading MusicBrainz → Last.fm →
@@ -551,7 +562,7 @@ struct AlbumScreen: View {
                             Text(t.title)
                                 .font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
-                                    : (coordinator.currentTrack?.id == model.entities[index].id ? PC.accent : PC.fg1))
+                                    : (coordinator.currentTrack?.id == model.entities[safe: index]?.id ? PC.accent : PC.fg1))
                                 .lineLimit(1)
                             // Always show the per-track artist for a consistent
                             // tracklist look (and correct for compilations).
@@ -574,7 +585,7 @@ struct AlbumScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(t, index: index) }
-                .pcTrackContextMenu(model.entities[index], coordinator: coordinator)
+                .pcTrackContextMenu(model.entities[safe: index] ?? pcTrack(from: t), coordinator: coordinator)
             }
         }
     }
@@ -1137,7 +1148,7 @@ struct ArtistScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(t, index: index) }
-                .pcTrackContextMenu(model.topEntities[index], coordinator: coordinator)
+                .pcTrackContextMenu(model.topEntities[safe: index] ?? pcTrack(from: t), coordinator: coordinator)
             }
             if model.topTracks.isEmpty && model.loaded {
                 Text("No top tracks").font(.system(size: 14)).foregroundStyle(PC.fg3).padding(40)

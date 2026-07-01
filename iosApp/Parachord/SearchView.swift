@@ -265,8 +265,11 @@ struct SearchView: View {
                     if !model.remoteTracks.isEmpty {
                         sectionHeader("Tracks")
                         let entities = model.remoteTrackEntities
-                        ForEach(Array(model.remoteTracks.enumerated()), id: \.offset) { i, t in
-                            trackRow(entities[i], index: i, queue: entities,
+                        // ZIP so a shorter entities array (non-atomic @Observable
+                        // update) can't index out of range vs remoteTracks. #322.
+                        ForEach(Array(zip(model.remoteTracks, entities).enumerated()), id: \.offset) { i, pair in
+                            let (t, entity) = pair
+                            trackRow(entity, index: i, queue: entities,
                                      resultType: "track", resultName: t.title, resultArtist: t.artist,
                                      artwork: t.artworkUrl)
                         }
