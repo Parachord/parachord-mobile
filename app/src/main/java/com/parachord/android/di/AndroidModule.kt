@@ -151,7 +151,9 @@ val androidModule = module {
             achordionBearerToken = com.parachord.android.BuildConfig.ACHORDION_BEARER_TOKEN,
             lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
             lastFmSharedSecret = com.parachord.android.BuildConfig.LASTFM_SHARED_SECRET,
-            spotifyClientId = com.parachord.android.BuildConfig.SPOTIFY_CLIENT_ID,
+            // BYO — Parachord ships no Spotify key; the user adds theirs in
+            // Settings → Spotify (stored via SettingsStore.setSpotifyClientId).
+            spotifyClientId = "",
             soundCloudClientId = com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_ID,
             soundCloudClientSecret = com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_SECRET,
             appleMusicDeveloperToken = com.parachord.android.BuildConfig.APPLE_MUSIC_DEVELOPER_TOKEN,

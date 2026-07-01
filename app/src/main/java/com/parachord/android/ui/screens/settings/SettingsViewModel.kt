@@ -244,6 +244,18 @@ class SettingsViewModel constructor(
         .map { it != null }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /**
+     * The user's BYO Spotify Developer Client ID. Parachord ships no Spotify
+     * key, so each user creates their own app at developer.spotify.com and
+     * pastes the Client ID here. Empty = Spotify unusable (mirrors iOS).
+     */
+    val spotifyClientId: StateFlow<String> = settingsStore.getSpotifyClientIdFlow()
+        .map { it ?: "" }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    /** One-shot error surfaced when Connect is attempted without a Client ID. */
+    val spotifyError: MutableStateFlow<String?> = MutableStateFlow(null)
+
     /** Whether a preferred Spotify device ID is saved. */
     val hasPreferredSpotifyDevice: StateFlow<Boolean> = settingsStore.getPreferredSpotifyDeviceIdFlow()
         .map { it != null }
@@ -433,9 +445,29 @@ class SettingsViewModel constructor(
         viewModelScope.launch { settingsStore.setScrobblingEnabled(enabled) }
     }
 
-    fun connectSpotify(clientId: String) {
-        oAuthManager.launchSpotifyAuth(clientId)
-        ensureResolverEnabledOnConnect("spotify")
+    /**
+     * Save (or clear, when blank) the BYO Spotify Client ID. Clearing any
+     * prior Connect error since a fresh save is a new attempt. A Client ID
+     * gain/loss flips Spotify's usability (mirrors iOS `setSpotifyClientId`).
+     */
+    fun setSpotifyClientId(id: String) {
+        val trimmed = id.trim()
+        viewModelScope.launch { settingsStore.setSpotifyClientId(trimmed) }
+        spotifyError.value = null
+    }
+
+    /** Launch the Spotify OAuth flow using the user's stored BYO Client ID. */
+    fun connectSpotify() {
+        viewModelScope.launch {
+            val clientId = settingsStore.getSpotifyClientId()?.trim().orEmpty()
+            if (clientId.isBlank()) {
+                spotifyError.value = "Enter your Spotify Client ID first."
+                return@launch
+            }
+            spotifyError.value = null
+            oAuthManager.launchSpotifyAuth(clientId)
+            ensureResolverEnabledOnConnect("spotify")
+        }
     }
 
     fun connectLastFm(apiKey: String) {

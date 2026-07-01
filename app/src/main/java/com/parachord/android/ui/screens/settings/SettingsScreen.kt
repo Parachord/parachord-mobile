@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
@@ -54,6 +56,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -82,6 +85,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -89,6 +95,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -264,7 +271,7 @@ fun SettingsScreen(
                     onResolverOrderChanged = { viewModel.setResolverOrder(it) },
                     onSpotifyToggle = {
                         if (spotifyConnected) viewModel.disconnectSpotify()
-                        else viewModel.connectSpotify(BuildConfig.SPOTIFY_CLIENT_ID)
+                        else viewModel.connectSpotify()
                     },
                     onLastFmToggle = {
                         if (lastFmConnected) viewModel.disconnectLastFm()
@@ -403,6 +410,10 @@ private fun PlugInsTab(
     val disabledPlugins by settingsViewModel.disabledPlugins.collectAsStateWithLifecycle()
     // #213: per-resolver enable/disable (independent of connection). Empty = all on.
     val activeResolvers by settingsViewModel.activeResolvers.collectAsStateWithLifecycle()
+    // BYO Spotify Client ID + its Connect error, sourced from the local VM
+    // reference (like lovePushEnabled below) — no prop threading needed.
+    val spotifyClientId by settingsViewModel.spotifyClientId.collectAsStateWithLifecycle()
+    val spotifyError by settingsViewModel.spotifyError.collectAsStateWithLifecycle()
     fun isResolverEnabled(id: String): Boolean = activeResolvers.isEmpty() || id in activeResolvers
     val allPlugins = remember(axePlugins) { buildPluginList(axePlugins) }
 
@@ -422,7 +433,9 @@ private fun PlugInsTab(
         if (id in disabledPlugins) return false
 
         return when (id) {
-            "spotify" -> spotifyConnected
+            // A stale token alone isn't a usable connection without the BYO
+            // Client ID — both are required (mirrors iOS isConnected).
+            "spotify" -> spotifyConnected && spotifyClientId.isNotBlank()
             "soundcloud" -> soundCloudConnected
             "applemusic" -> appleMusicConfigured && appleMusicAuthorized
             "lastfm" -> lastFmConnected
@@ -771,6 +784,10 @@ private fun PlugInsTab(
             onClearAiProvider = onClearAiProvider,
             hasPreferredSpotifyDevice = hasPreferredSpotifyDevice,
             onClearPreferredSpotifyDevice = onClearPreferredSpotifyDevice,
+            spotifyClientId = spotifyClientId,
+            onSaveSpotifyClientId = { settingsViewModel.setSpotifyClientId(it) },
+            onClearSpotifyClientId = { settingsViewModel.setSpotifyClientId("") },
+            spotifyError = spotifyError,
             scanProgress = scanProgress,
             onScanLocalFiles = onScanLocalFiles,
             onTicketmasterApiKeySubmit = onTicketmasterApiKeySubmit,
@@ -1038,6 +1055,10 @@ private fun PluginConfigSheet(
     onClearAiProvider: (String) -> Unit = {},
     hasPreferredSpotifyDevice: Boolean = false,
     onClearPreferredSpotifyDevice: () -> Unit = {},
+    spotifyClientId: String = "",
+    onSaveSpotifyClientId: (String) -> Unit = {},
+    onClearSpotifyClientId: () -> Unit = {},
+    spotifyError: String? = null,
     scanProgress: ScanProgress = ScanProgress(),
     onScanLocalFiles: () -> Unit = {},
     onTicketmasterApiKeySubmit: (String) -> Unit = {},
@@ -1193,6 +1214,10 @@ private fun PluginConfigSheet(
                 "spotify" -> SpotifyConfig(
                     isConnected = isConnected,
                     onToggle = onToggleConnection,
+                    clientId = spotifyClientId,
+                    onSaveClientId = onSaveSpotifyClientId,
+                    onClearClientId = onClearSpotifyClientId,
+                    error = spotifyError,
                     hasPreferredDevice = hasPreferredSpotifyDevice,
                     onClearPreferredDevice = onClearPreferredSpotifyDevice,
                 )
@@ -1328,9 +1353,91 @@ private fun PluginConfigSheet(
 private fun SpotifyConfig(
     isConnected: Boolean,
     onToggle: () -> Unit,
+    clientId: String = "",
+    onSaveClientId: (String) -> Unit = {},
+    onClearClientId: () -> Unit = {},
+    error: String? = null,
     hasPreferredDevice: Boolean = false,
     onClearPreferredDevice: () -> Unit = {},
 ) {
+    val uriHandler = LocalUriHandler.current
+
+    Spacer(modifier = Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(modifier = Modifier.height(16.dp))
+
+    // ── Spotify Developer Client ID (BYO) ──────────────────────────────
+    Text(
+        text = "Spotify Developer Client ID",
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = FontWeight.Medium,
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+
+    var clientIdDraft by remember(clientId) { mutableStateOf(clientId) }
+    // Masked by default so a saved Client ID isn't left in plaintext on the
+    // screen (matches iOS's SecureField); the eye toggle reveals it to verify a
+    // paste. A Spotify Client ID isn't a true secret, but leaving it visible is
+    // still poor form for a shoulder-surf / screenshot.
+    var revealClientId by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = clientIdDraft,
+        onValueChange = { clientIdDraft = it },
+        label = { Text("Client ID") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+        keyboardOptions = KeyboardOptions(
+            autoCorrectEnabled = false,
+            capitalization = KeyboardCapitalization.None,
+        ),
+        visualTransformation = if (revealClientId) VisualTransformation.None
+        else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { revealClientId = !revealClientId }) {
+                Icon(
+                    imageVector = if (revealClientId) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (revealClientId) "Hide Client ID" else "Show Client ID",
+                )
+            }
+        },
+    )
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(
+            onClick = { onSaveClientId(clientIdDraft.trim()) },
+            enabled = clientIdDraft.trim().isNotEmpty() && clientIdDraft.trim() != clientId,
+        ) {
+            Text("Save Client ID")
+        }
+        if (clientId.isNotBlank()) {
+            TextButton(onClick = {
+                clientIdDraft = ""
+                onClearClientId()
+            }) {
+                Text("Clear", color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+    Text(
+        text = "Get a Client ID — developer.spotify.com →",
+        style = MaterialTheme.typography.bodySmall,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.hapticClickable {
+            uriHandler.openUri("https://developer.spotify.com/dashboard")
+        },
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        text = "Parachord ships no Spotify key. Create a free app at " +
+            "developer.spotify.com/dashboard, add the redirect URI " +
+            "parachord://auth/callback/spotify, then paste the Client ID. " +
+            "Spotify Premium is required for playback.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
     Spacer(modifier = Modifier.height(16.dp))
     HorizontalDivider()
     Spacer(modifier = Modifier.height(16.dp))
@@ -1398,8 +1505,29 @@ private fun SpotifyConfig(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(12.dp))
-        TextButton(onClick = onToggle) {
-            Text("Connect Spotify", color = MaterialTheme.colorScheme.primary)
+        TextButton(
+            onClick = onToggle,
+            enabled = clientId.isNotBlank(),
+        ) {
+            Text(
+                "Connect Spotify",
+                color = if (clientId.isNotBlank()) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (clientId.isBlank()) {
+            Text(
+                text = "Save your Client ID above to enable Connect.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (error != null) {
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }

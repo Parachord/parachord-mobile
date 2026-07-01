@@ -333,6 +333,8 @@ fun HomeScreen(
                 org.koin.compose.koinInject()
             val appleMusicReauthRequired by syncEngine.appleMusicReauthRequired
                 .collectAsStateWithLifecycle()
+            val settingsStore: com.parachord.android.data.store.SettingsStore =
+                org.koin.compose.koinInject()
             val reauthScope = androidx.compose.runtime.rememberCoroutineScope()
 
             LazyColumn(
@@ -359,9 +361,17 @@ fun HomeScreen(
                     item(key = "spotify-reauth-banner") {
                         SpotifyReauthBanner(
                             onReconnect = {
-                                oAuthManager.launchSpotifyAuth(
-                                    com.parachord.android.BuildConfig.SPOTIFY_CLIENT_ID,
-                                )
+                                // BYO: reconnect with the user's own stored
+                                // Client ID (Parachord ships none). If they
+                                // haven't set one yet, they add it in
+                                // Settings → Spotify before reconnecting.
+                                reauthScope.launch {
+                                    val clientId =
+                                        settingsStore.getSpotifyClientId()?.trim().orEmpty()
+                                    if (clientId.isNotBlank()) {
+                                        oAuthManager.launchSpotifyAuth(clientId)
+                                    }
+                                }
                             },
                             modifier = Modifier.padding(
                                 horizontal = 16.dp,

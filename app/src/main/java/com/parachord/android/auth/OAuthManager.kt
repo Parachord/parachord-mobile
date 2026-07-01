@@ -115,7 +115,7 @@ class OAuthManager constructor(
      * Uses Dispatchers.IO since OkHttp execute() is a blocking call.
      */
     suspend fun refreshSpotifyToken(): Boolean =
-        refreshSpotifyTokenWithConfig(BuildConfig.SPOTIFY_CLIENT_ID)
+        refreshSpotifyTokenWithConfig(settingsStore.getSpotifyClientId() ?: "")
 
     internal suspend fun refreshSpotifyTokenWithConfig(
         clientId: String,
@@ -325,7 +325,7 @@ class OAuthManager constructor(
                 .add("grant_type", "authorization_code")
                 .add("code", code)
                 .add("redirect_uri", "$REDIRECT_URI/spotify")
-                .add("client_id", BuildConfig.SPOTIFY_CLIENT_ID)
+                .add("client_id", settingsStore.getSpotifyClientId() ?: "")
                 .add("code_verifier", verifier)
                 .build()
 

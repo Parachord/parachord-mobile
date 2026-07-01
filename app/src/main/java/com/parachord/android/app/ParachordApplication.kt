@@ -21,6 +21,7 @@ class ParachordApplication : Application() {
     private val crossResolverEnrichmentScheduler: CrossResolverEnrichmentScheduler by inject()
     private val announcementsRepository: com.parachord.shared.repository.AnnouncementsRepository by inject()
     private val trackTombstoneService: com.parachord.shared.sync.TrackTombstoneService by inject()
+    private val settingsStore: com.parachord.android.data.store.SettingsStore by inject()
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -54,6 +55,31 @@ class ParachordApplication : Application() {
                 }
             } catch (_: Exception) {
                 // Background sweep; ignore failures.
+            }
+        }
+
+        // BYO Spotify Client ID migration: Parachord no longer ships a
+        // built-in Spotify key, so a token minted under the old built-in
+        // client is unusable. If no Client ID is set but a stale Spotify
+        // token exists, clear it so the fleet stops refreshing on the
+        // removed key and the user gets a clean reconnect with their own
+        // Client ID (mirrors iOS's launch-time stale-token prune). This is
+        // a hard BYO cutover — existing users must reconnect.
+        appScope.launch {
+            try {
+                val clientId = settingsStore.getSpotifyClientId()?.trim().orEmpty()
+                if (clientId.isBlank() &&
+                    (settingsStore.getSpotifyAccessToken() != null ||
+                        settingsStore.getSpotifyRefreshToken() != null)
+                ) {
+                    settingsStore.clearSpotifyTokens()
+                    com.parachord.shared.platform.Log.d(
+                        "ParachordApplication",
+                        "Cleared stale Spotify token (no BYO Client ID set)",
+                    )
+                }
+            } catch (_: Exception) {
+                // Background migration; ignore failures.
             }
         }
 
