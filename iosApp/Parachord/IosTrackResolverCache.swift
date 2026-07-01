@@ -88,9 +88,16 @@ final class IosTrackResolverCache {
     //   without re-resolving, so a track cached pre-v2 never gained an ISRC and its
     //   Achordion submit (recording- or ISRC-keyed) silently skipped. Bumping to v2
     //   discards those so the catalog re-resolve captures `attributes.isrc`.
+    //   v3 (Jul 2026, #287): the `spotifyId` hint used to inject a Spotify source
+    //   with no connection check, so v2 caches for Spotify-imported tracks hold a
+    //   Spotify source even when Spotify isn't connected — badging + ranking Spotify
+    //   first while the router falls through to Apple Music. The hint is now gated on
+    //   the Spotify token (IosContainer.resolveSources); bumping to v3 discards the
+    //   stale entries so they re-resolve under the gate (no Spotify badge/route when
+    //   disconnected). Same for the analogous appleMusicId hint gate.
     // Android has no equivalent problem: it re-derives ISRC from fresh resolution
     // every play (reselectBestSource / resolveOnTheFly), never from a stale blob.
-    private static let cacheSchemaVersion = 2
+    private static let cacheSchemaVersion = 3
     private let persistURL: URL = {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return dir.appendingPathComponent("resolver-cache-v\(IosTrackResolverCache.cacheSchemaVersion).json")

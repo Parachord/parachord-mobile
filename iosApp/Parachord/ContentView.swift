@@ -2032,12 +2032,13 @@ final class QueuePlaybackCoordinator {
         else { return }
         // Android parity (switchSource → playTrackInternal(switched, skipReselect=true)):
         // restart the song from 0:00 on the picked source via the shared play path,
-        // which stops the old engine, runs the engine handoff, and shows the
-        // buffering spinner. Optimistically restamp `currentTrack.resolver` first so
-        // the deck's "Playing From" label flips to the chosen source immediately
-        // (`activeResolverName` reads it) instead of after the new engine confirms.
-        let switched = container.trackWithResolvedSources(track: t, sources: srcs, playedResolver: resolver)
-        playTrack(switched, forcedResolver: resolver)
+        // which stops the old engine, runs the engine handoff, and shows the buffering
+        // spinner. Pass the CURRENT track (no optimistic restamp): playTrack flips the
+        // "Playing From" label to the picked resolver only on a confirmed `.played`, so
+        // a switch to a source that can't actually play leaves the label — and playback
+        // — on the current source instead of showing a resolver that isn't playing (the
+        // "selection updates but nothing plays" symptom, #287).
+        playTrack(t, forcedResolver: resolver)
     }
 
     init(
