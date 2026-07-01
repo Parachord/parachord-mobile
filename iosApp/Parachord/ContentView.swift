@@ -1166,12 +1166,14 @@ final class IosMusicKitPlayer {
     @MainActor
     @discardableResult
     func play(appleMusicId: String) async -> Bool {
+        NSLog("PCAUDIO: AM play() ENTER id=\(appleMusicId) auth=\(MusicAuthorization.currentStatus.shortName)")
         lastError = nil
         guard MusicAuthorization.currentStatus == .authorized else {
             lastError = "Not authorized for Apple Music"
             return false
         }
         do {
+            NSLog("PCAUDIO: AM play() catalog request id=\(appleMusicId)")
             let request = MusicCatalogResourceRequest<Song>(
                 matching: \.id,
                 equalTo: MusicItemID(appleMusicId)
