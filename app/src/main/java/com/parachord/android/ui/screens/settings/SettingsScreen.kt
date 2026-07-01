@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -71,6 +72,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,6 +101,8 @@ import androidx.compose.ui.zIndex
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.BuildConfig
+import com.parachord.android.diagnostics.DiagnosticLogExporter
+import kotlinx.coroutines.launch
 import com.parachord.android.data.scanner.ScanProgress
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.ui.components.ResolverIconSquare
@@ -3342,6 +3346,10 @@ private fun AboutTab() {
     val uriHandler = LocalUriHandler.current
     val accent = MaterialTheme.colorScheme.primary
     val tertiary = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    val settingsStore = org.koin.compose.koinInject<com.parachord.shared.settings.SettingsStore>()
+    var exportingLogs by remember { mutableStateOf(false) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item {
@@ -3396,6 +3404,61 @@ private fun AboutTab() {
                         tagline.getStringAnnotations("URL", offset, offset)
                             .firstOrNull()?.let { uriHandler.openUri(it.item) }
                     },
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Report a bug with logs — copies the app's own logs to the
+                // clipboard and opens a prefilled GitHub issue for the user to
+                // paste them into, so reporters don't need adb (#327 follow-up).
+                // Logs are too big for a new-issue URL, hence clipboard. No
+                // tokens are included.
+                OutlinedButton(
+                    onClick = {
+                        if (exportingLogs) return@OutlinedButton
+                        exportingLogs = true
+                        scope.launch {
+                            val report = DiagnosticLogExporter(context, settingsStore).prepareBugReport()
+                            exportingLogs = false
+                            if (report != null) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Logs copied — paste them into the issue",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                                try {
+                                    uriHandler.openUri(report.issueUrl)
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(
+                                        context, "Couldn't open GitHub", android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context, "Couldn't collect logs", android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        }
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    if (exportingLogs) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Collecting…")
+                    } else {
+                        Icon(Icons.Outlined.BugReport, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Report a bug with logs")
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Copies your logs and opens a prefilled GitHub issue — just paste and describe the problem. No account tokens are included.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = tertiary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 32.dp),
                 )
 
                 Spacer(modifier = Modifier.height(32.dp))
