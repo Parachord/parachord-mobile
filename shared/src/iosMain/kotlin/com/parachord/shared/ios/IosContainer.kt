@@ -2468,20 +2468,8 @@ class IosContainer private constructor() {
         album: String?,
         spotifyId: String? = null,
         appleMusicId: String? = null,
-    ): List<ResolvedSource> {
-        // Don't inject a streaming source from an ID hint unless that service is
-        // CONNECTED. The hint path (ResolverCoordinator.resolveRankedWithHints)
-        // emits a direct source from the bare ID with NO auth check, so a
-        // Spotify-imported track carrying a spotifyId would badge + rank Spotify
-        // first even when Spotify isn't connected — then the router's `canPlay`
-        // gate skips it and falls through to Apple Music, showing a Spotify badge
-        // but playing AM on every such track (parachord-mobile#287). Gate each hint
-        // on its connection signal, matching the native-resolve gates: the Spotify
-        // `resolveSpotify` lambda's token check, and #328's Apple Music MUT check.
-        val spotifyHint = spotifyId?.takeIf { settingsStore.getSpotifyAccessToken() != null }
-        val appleMusicHint = appleMusicId?.takeIf { !settingsStore.getAppleMusicUserToken().isNullOrBlank() }
-        return resolverCoordinator.resolveSources(artist, title, album, spotifyHint, appleMusicHint)
-    }
+    ): List<ResolvedSource> =
+        resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId)
 
     /**
      * Return [track] enriched with the streaming IDs + active resolver taken from

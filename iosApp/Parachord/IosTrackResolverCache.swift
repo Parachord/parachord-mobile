@@ -88,13 +88,16 @@ final class IosTrackResolverCache {
     //   without re-resolving, so a track cached pre-v2 never gained an ISRC and its
     //   Achordion submit (recording- or ISRC-keyed) silently skipped. Bumping to v2
     //   discards those so the catalog re-resolve captures `attributes.isrc`.
-    //   v3 (Jul 2026, #287): the `spotifyId` hint used to inject a Spotify source
-    //   with no connection check, so v2 caches for Spotify-imported tracks hold a
-    //   Spotify source even when Spotify isn't connected — badging + ranking Spotify
-    //   first while the router falls through to Apple Music. The hint is now gated on
-    //   the Spotify token (IosContainer.resolveSources); bumping to v3 discards the
-    //   stale entries so they re-resolve under the gate (no Spotify badge/route when
-    //   disconnected). Same for the analogous appleMusicId hint gate.
+    //   v3 (Jul 2026, #287): shipped a Spotify/AM ID-hint connection gate that has
+    //   since been REVERTED (the gate keyed off the same access-token signal as the
+    //   router's canPlay, so it didn't change connected behavior, and the forced
+    //   re-resolve fed a Spotify rate-limit window). The version stays at 3 on
+    //   purpose — the v3 purge already ran on shipped builds, and reverting the
+    //   number to 2 would trigger ANOTHER purge → another full re-resolve → more
+    //   Spotify search traffic (exactly the rate-limit risk we're avoiding). Bump to
+    //   4+ only for a genuinely NEW ResolvedSource-shape reason, ideally gated on
+    //   rateLimitRemainingMs()==0 so a schema bump can't force a re-resolve into a
+    //   Spotify cooldown (follow-up).
     // Android has no equivalent problem: it re-derives ISRC from fresh resolution
     // every play (reselectBestSource / resolveOnTheFly), never from a stale blob.
     private static let cacheSchemaVersion = 3
