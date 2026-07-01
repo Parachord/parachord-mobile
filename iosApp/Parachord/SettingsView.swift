@@ -2,6 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 import StoreKit
 import Shared
+import OSLog
+import UIKit
 
 // MARK: - Settings (full, tabbed) — Plug-ins / General / About
 //
@@ -1081,7 +1083,92 @@ struct AxisRemovalPrompt: Identifiable {
 
 // MARK: - About tab
 
+// MARK: - Diagnostic bug report (Settings → About → "Report a bug with logs")
+
+/// Collects the app's own logs for a bug report. iOS can read its current
+/// process's log entries via `OSLogStore(.currentProcessIdentifier)` with no
+/// entitlement (iOS 15+), capturing what the shared `Log` (NSLog) wrote —
+/// resolver / Spotify / Apple Music / sync — the context for reports like #327.
+/// Logs are too big for a GitHub new-issue URL (~8 KB → 414), so the flow copies
+/// the full text to the clipboard and opens a prefilled issue to paste into. The
+/// prefilled URL renders via the in-app `SafariView` (NOT `UIApplication.open`,
+/// which deep-links the GitHub app and drops the `?title&body` prefill — #318).
+enum IosDiagnostics {
+    static func prepareReport(container: IosContainer) async -> ReportLink? {
+        let header = await buildHeader(container: container)
+        let logs = await Task.detached(priority: .utility) { readLogs() }.value
+        UIPasteboard.general.string = header + "\n\n" + logs
+        return ReportLink(url: issueURL(header: header))
+    }
+
+    @MainActor private static func buildHeader(container: IosContainer) async -> String {
+        let info = Bundle.main.infoDictionary
+        let ver = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+        let build = (info?["CFBundleVersion"] as? String) ?? "?"
+        let spotifyTok = (try? await container.settingsStore.getSpotifyAccessToken()) ?? nil
+        let amTok = (try? await container.settingsStore.getAppleMusicUserToken()) ?? nil
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss z"
+        let dev = UIDevice.current
+        var s = "Parachord diagnostics\n"
+        s += "generated:   \(df.string(from: Date()))\n"
+        s += "app:         \(ver) (\(build))\n"
+        s += "device:      \(dev.model) · iOS \(dev.systemVersion)\n"
+        s += "locale:      \(Locale.current.identifier)\n"
+        s += "spotify:     \((spotifyTok?.isEmpty == false) ? "connected" : "not connected")\n"
+        s += "apple music: \((amTok?.isEmpty == false) ? "connected" : "not connected")"
+        return s
+    }
+
+    private static func readLogs() -> String {
+        guard let store = try? OSLogStore(scope: .currentProcessIdentifier) else {
+            return "(diagnostic log store unavailable)"
+        }
+        let start = store.position(date: Date().addingTimeInterval(-2 * 60 * 60))
+        guard let entries = try? store.getEntries(at: start) else {
+            return "(no log entries)"
+        }
+        var lines: [String] = []
+        for entry in entries {
+            if let log = entry as? OSLogEntryLog {
+                lines.append("\(log.date) \(log.composedMessage)")
+            }
+        }
+        let tail = lines.suffix(5000).joined(separator: "\n")
+        return tail.count > 512 * 1024 ? String(tail.suffix(512 * 1024)) : tail
+    }
+
+    private static func issueURL(header: String) -> URL {
+        let fallback = URL(string: "https://github.com/Parachord/parachord-mobile/issues/new")!
+        let body = """
+        ## What happened?
+        <!-- Describe the problem: what you tapped, what you expected, what happened. -->
+
+        ## Diagnostics
+        <!-- Your full logs are on the clipboard — long-press below and Paste. -->
+
+        <details><summary>Environment</summary>
+
+        ```
+        \(header)
+        ```
+        </details>
+        """
+        var comps = URLComponents(string: "https://github.com/Parachord/parachord-mobile/issues/new")
+        comps?.queryItems = [
+            URLQueryItem(name: "labels", value: "bug"),
+            URLQueryItem(name: "title", value: "Bug report — Parachord (iOS)"),
+            URLQueryItem(name: "body", value: body),
+        ]
+        return comps?.url ?? fallback
+    }
+}
+
 private struct AboutTab: View {
+    @State private var reportLink: ReportLink?
+    @State private var collecting = false
+    private let container = IosContainer.companion.shared
+
     var body: some View {
         VStack(spacing: 12) {
             Image("ParachordWordmark").renderingMode(.template).resizable().scaledToFit()
@@ -1094,9 +1181,34 @@ private struct AboutTab: View {
                 .font(.system(size: 13)).foregroundStyle(PC.fg2).multilineTextAlignment(.center).padding(.horizontal, 40)
             Link("View on GitHub →", destination: URL(string: "https://github.com/Parachord/parachord-mobile")!)
                 .font(.system(size: 13)).foregroundStyle(PC.accent)
+
+            Divider().frame(width: 64).padding(.vertical, 6)
+
+            // Report a bug with logs — copies the app's own logs to the clipboard
+            // and opens a prefilled GitHub issue to paste them into, so reporters
+            // don't need Xcode/Console (#327 follow-up). No tokens are included.
+            Button {
+                guard !collecting else { return }
+                collecting = true
+                Task {
+                    let link = await IosDiagnostics.prepareReport(container: container)
+                    collecting = false
+                    reportLink = link
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if collecting { ProgressView().controlSize(.mini) } else { Image(systemName: "ladybug") }
+                    Text(collecting ? "Collecting…" : "Report a bug with logs")
+                }
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(PC.accent)
+            }
+            Text("Copies your logs and opens a prefilled GitHub issue — just paste and describe the problem. No account tokens are included.")
+                .font(.system(size: 11)).foregroundStyle(PC.fg3).multilineTextAlignment(.center).padding(.horizontal, 40)
+
             Text("© Jason Herskowitz · Licensed under the MIT License")
                 .font(.system(size: 11)).foregroundStyle(PC.fg3).padding(.top, 4)
         }
         .frame(maxWidth: .infinity).padding(.bottom, 130)
+        .sheet(item: $reportLink) { SafariView(url: $0.url) }
     }
 }
