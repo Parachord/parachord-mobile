@@ -653,12 +653,13 @@ The fix is a **direct port of Android's external-playback survival** (root
   - **Spotify** plays in a separate app → without our background audio iOS
     suspends us and `startSpotifyPolling` stops → no auto-advance.
   - **Apple Music** renders OUT OF PROCESS (`RemotePlayerService`), so from
-    iOS's background-execution view our app isn't "producing audio" either — it
-    gets suspended, the `IosMusicKitPlayer` tick loop freezes, and the track
-    only auto-advances when you next foreground (confirmed in the #322 trace: a
-    track sat idle in the background and advanced ~12s AFTER `DID_BECOME_ACTIVE`).
-    So AM needs the keepalive too. `applyEngineHandoff` calls `keepAlive.start()`
-    for BOTH `.spotify` and `.musicKit`.
+    iOS's background-execution view our app isn't "producing audio" either —
+    WITHOUT the keepalive it gets suspended, the `IosMusicKitPlayer` tick loop
+    freezes, and the track only auto-advances when you next foreground (an early
+    #322 trace showed a track sitting idle in the background, advancing only
+    ~12s AFTER `DID_BECOME_ACTIVE`). So AM needs the keepalive too;
+    `applyEngineHandoff` calls `keepAlive.start()` for BOTH `.spotify` and
+    `.musicKit`. WITH it, the final trace confirmed AM auto-advances fully locked.
   - **The once-a-second AM stutter was the DOUBLED keepalive** (a second
     coordinator ran a second `AVAudioEngine` on the same session), NOT the
     keepalive itself — the `AppPlayback.shared` singleton makes that impossible.
@@ -684,15 +685,18 @@ The fix is a **direct port of Android's external-playback survival** (root
   and the config-change handler only calls `startEngineAndPlay()` **guarded on
   `!engine.isRunning`** — restart-when-stopped can't re-trigger itself. Same
   guard on `restart()`. Don't "simplify" these guards away.
-- **Interruption/lifecycle monitor** (`IosAudioSessionMonitor`) — logs the
-  `PCAUDIO:` trace (grep `xcrun simctl log` / `idevicesyslog` for `PCAUDIO`) and
-  resumes the active engine on `.ended + .shouldResume` (phone-call recovery),
-  re-arming the session + keepalive for the external engines.
-  Doubled PCAUDIO lines are the tell that a **second coordinator** is live. The
-  fix is the `AppPlayback.shared` singleton (below) — there must be exactly one
-  `QueuePlaybackCoordinator` process-wide. (`installLifecycleMonitor: false` on
+- **Interruption monitor** (`IosAudioSessionMonitor`) — resumes the active engine
+  on `.ended + .shouldResume` (phone-call recovery), re-arming the session +
+  keepalive for the external engines. There must be exactly one
+  `QueuePlaybackCoordinator` process-wide (via the `AppPlayback.shared` singleton,
+  below), so only one monitor is installed. (`installLifecycleMonitor: false` on
   the Dev-tab coordinator is belt-and-suspenders; `DevSmokeTestView` is
   `#Preview`-only and doesn't run in the app anyway.)
+  - *During bring-up this class (plus a `PCAUDIO:`/`PCSPOT:` `NSLog` trace across
+    the session/keepalive/Spotify/AM paths) instrumented the whole flow; the trace
+    was removed once it confirmed the fix. If you're re-debugging background
+    playback, re-add temporary `NSLog`s at the same points — a **doubled** trace
+    is the tell that a second coordinator went live.*
 
 **One coordinator, always — `AppPlayback.shared`.** `ContentView` binds the
 `AppPlayback.shared` singleton, NOT a fresh `AppPlayback()`. On iPad
@@ -710,9 +714,27 @@ alive on the silent keepalive, the per-engine poll loop detects the track end
 even need a Web-API resync mid-cooldown), and `autoAdvance` starts the next
 track over the Web API / MusicKit — no foreground. The next-track Spotify
 `startPlayback` is the warm path (device already active), so it stays silent.
-The `PCSPOT: poll tick` heartbeat CONFIRMED (#322) the app stays alive for
-Spotify locked — 4+ minutes of ticks with the screen off — so the keepalive
-works for a separate-app (Spotify) context too, not just Apple Music.
+The bring-up trace CONFIRMED (#322) the app stays alive for Spotify locked — 4+
+minutes of poll ticks with the screen off — AND that **cross-service Spotify→AM
+auto-advance runs fully locked** (AM started ~4 min into background with no
+`DID_BECOME_ACTIVE` in the trace). So the keepalive works for a separate-app
+(Spotify) context too, not just Apple Music.
+
+**Next-track Apple Music `Song` pre-fetch (perf, #322).** `play(appleMusicId:)`
+turns the `appleMusicId` string into a playable MusicKit `Song` via
+`MusicCatalogResourceRequest<Song>` — a ~1.6s network round-trip that the queue's
+resolver cache does NOT cover (it stores the `appleMusicId`, but a `Song` is an
+iOS-only type it can't hold). So `QueuePlaybackCoordinator.prefetchNextIfNeeded`
+(driven off the 1s engine-agnostic tick) warms the next queued track's `Song`
+~15s before the boundary — Android's pre-resolve-early pattern
+(`PlaybackController.kt:1273`) applied to the MusicKit fetch — and `play()` uses
+the cached `Song` (`IosMusicKitPlayer.prefetchedSong`, keyed by id) to skip the
+round-trip. Measured AM start dropped ~3.1s → ~2.3s. A catalog lookup is a plain
+REST call that never touches `ApplicationMusicPlayer`, so pre-fetching mid-playback
+can't disrupt the outgoing Spotify or AM stream (unlike Android's WebView
+`preload()` caveat). One-shot per current track; fires only when the next track
+routes to AM. The remaining ~2.3s (queue-set + DRM buffer) is a tracked follow-up
+(#336: pre-`prepareToPlay` on Spotify→AM only, unsafe for AM→AM).
 
 **Retry the warm `startPlayback` on a transient failure while locked.** With the
 screen locked, the Ktor PUT for the next-track warm `startPlayback` intermittently

@@ -28,7 +28,7 @@ import CryptoKit
 enum IosAudioSession {
     /// Own the session for OUR AVPlayer audio (non-mixable). Resets from any
     /// prior mixable "external" mode.
-    static func configureForLocal() { apply(options: [], context: "local") }
+    static func configureForLocal() { apply(options: []) }
 
     /// **Apple Music → mixable `.playback` (`.mixWithOthers`).** AM needs the
     /// silent keepalive to stay alive in the background (it renders out of
@@ -42,22 +42,21 @@ enum IosAudioSession {
     /// track — a one-time hiccup, far better than a per-second stutter. Order
     /// matters: configure mixable BEFORE `keepAlive.start()` so the engine comes
     /// up secondary.
-    static func configureForAppleMusic() { apply(options: [.mixWithOthers], context: "applemusic") }
+    static func configureForAppleMusic() { apply(options: [.mixWithOthers]) }
 
     /// **Spotify → mixable `.playback`.** Spotify plays in its OWN app, so our
     /// (silent-keepalive) session must NOT interrupt it — `.mixWithOthers` is the
     /// iOS analog of Android's `handleAudioFocus = false`. This is also what stops
     /// Spotify dropping out when Parachord returns to the foreground.
-    static func configureForSpotify() { apply(options: [.mixWithOthers], context: "spotify") }
+    static func configureForSpotify() { apply(options: [.mixWithOthers]) }
 
-    private static func apply(options: AVAudioSession.CategoryOptions, context: String) {
+    private static func apply(options: AVAudioSession.CategoryOptions) {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.playback, mode: .default, options: options)
             try session.setActive(true)
-            NSLog("PCAUDIO: SESSION_CONFIG context=\(context) \(IosAudioSessionMonitor.snapshot())")
         } catch {
-            NSLog("PCAUDIO: SESSION_CONFIG_FAILED context=\(context) \(error.localizedDescription)")
+            // Non-fatal — leave the prior session config in place.
         }
     }
 
@@ -66,7 +65,6 @@ enum IosAudioSession {
             try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         } catch {
             // Non-fatal — often "session still in use" during a fast handoff.
-            NSLog("PCAUDIO: DEACTIVATE_FAILED \(error.localizedDescription)")
         }
     }
 }
@@ -123,10 +121,8 @@ final class IosExternalKeepAlive {
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
             guard let self, self.running, !self.engine.isRunning else { return }
-            NSLog("PCAUDIO: KEEPALIVE_CONFIG_CHANGE")
             self.startEngineAndPlay()
         }
-        NSLog("PCAUDIO: KEEPALIVE_START")
     }
 
     /// Force the engine back to a playing state — used after an audio-session
@@ -136,7 +132,6 @@ final class IosExternalKeepAlive {
         guard running else { start(); return }
         guard !engine.isRunning else { return }
         startEngineAndPlay()
-        NSLog("PCAUDIO: KEEPALIVE_RESTART")
     }
 
     /// Attach + connect the silent node ONCE. Connecting only ever happens here,
@@ -153,7 +148,6 @@ final class IosExternalKeepAlive {
     /// reconnect the graph — safe to call after the engine stops.
     private func startEngineAndPlay() {
         guard let format, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else {
-            NSLog("PCAUDIO: KEEPALIVE_BUFFER_FAILED")
             return
         }
         buffer.frameLength = buffer.frameCapacity   // zero-filled == silence
@@ -164,7 +158,7 @@ final class IosExternalKeepAlive {
                 node.play()
             }
         } catch {
-            NSLog("PCAUDIO: KEEPALIVE_START_FAILED \(error.localizedDescription)")
+            // Non-fatal — the config-change observer re-attempts on the next change.
         }
     }
 
@@ -178,18 +172,16 @@ final class IosExternalKeepAlive {
         }
         node.stop()
         engine.stop()
-        NSLog("PCAUDIO: KEEPALIVE_STOP")
     }
 }
 
-/// Observes audio-session interruptions, route changes, and app-lifecycle
-/// transitions, logging a `PCAUDIO:` trace (the "audio-logs" instrumentation
-/// this branch is named for) and resuming the active engine when an
-/// interruption ends with `.shouldResume` (e.g. after a phone call).
+/// Observes audio-session interruptions and resumes the active engine when an
+/// interruption ends with `.shouldResume` (e.g. after a phone call), so external
+/// playback recovers instead of staying silent (#322).
 ///
 /// Not actor-isolated so the coordinator can construct it in its synchronous
-/// init; every observer fires on `.main`, so the `onShouldResume` hand-off and
-/// the AVAudioSession reads are main-thread-safe.
+/// init; the observer fires on `.main`, so the `onShouldResume` hand-off is
+/// main-thread-safe.
 final class IosAudioSessionMonitor {
     private var tokens: [NSObjectProtocol] = []
     /// Invoked on interruption-ended-with-shouldResume. The coordinator resumes
@@ -202,20 +194,6 @@ final class IosAudioSessionMonitor {
         tokens.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
             self?.handleInterruption(note)
         })
-        tokens.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { note in
-            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
-            NSLog("PCAUDIO: ROUTE_CHANGE reason=\(reason) \(IosAudioSessionMonitor.snapshot())")
-        })
-        for (name, label) in [
-            (UIApplication.willResignActiveNotification, "WILL_RESIGN_ACTIVE"),
-            (UIApplication.didEnterBackgroundNotification, "DID_ENTER_BACKGROUND"),
-            (UIApplication.willEnterForegroundNotification, "WILL_ENTER_FOREGROUND"),
-            (UIApplication.didBecomeActiveNotification, "DID_BECOME_ACTIVE"),
-        ] {
-            tokens.append(nc.addObserver(forName: name, object: nil, queue: .main) { _ in
-                NSLog("PCAUDIO: \(label) \(IosAudioSessionMonitor.snapshot())")
-            })
-        }
     }
 
     deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
@@ -226,22 +204,14 @@ final class IosAudioSessionMonitor {
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
         switch type {
         case .began:
-            let reason = (info[AVAudioSessionInterruptionReasonKey] as? UInt).map { "\($0)" } ?? "?"
-            NSLog("PCAUDIO: INTERRUPTION type=began reason=\(reason) \(IosAudioSessionMonitor.snapshot())")
+            break
         case .ended:
             let optsRaw = (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
             let shouldResume = AVAudioSession.InterruptionOptions(rawValue: optsRaw).contains(.shouldResume)
-            NSLog("PCAUDIO: INTERRUPTION type=ended shouldResume=\(shouldResume) \(IosAudioSessionMonitor.snapshot())")
             if shouldResume { onShouldResume?() }
         @unknown default:
             break
         }
-    }
-
-    /// One-line snapshot of the shared session for the PCAUDIO trace.
-    static func snapshot() -> String {
-        let s = AVAudioSession.sharedInstance()
-        return "category=\(s.category.rawValue) options=\(s.categoryOptions.rawValue) otherAudioPlaying=\(s.isOtherAudioPlaying) secondaryHint=\(s.secondaryAudioShouldBeSilencedHint)"
     }
 }
 
@@ -427,16 +397,11 @@ final class IosSpotifyConnect {
         //    Mirrors Android's "fire startPlayback directly without any device
         //    fetch" warm-path optimization.
         if deviceVerified, let warmId = lastResolvedLocalId {
-            NSLog("PCSPOT: warm attempt device=\(warmId)")
             if await startPlayback(client, uri: uri, deviceId: warmId) {
-                NSLog("PCSPOT: warm OK (no wake)")
                 return true
             }
-            NSLog("PCSPOT: warm FAILED — clearing + cold path")
             lastResolvedLocalId = nil
             deviceVerified = false
-        } else {
-            NSLog("PCSPOT: warm SKIPPED deviceVerified=\(deviceVerified) haveId=\(lastResolvedLocalId != nil)")
         }
 
         // 2. Resolve the target device (Android `pickDevice` parity).
@@ -698,10 +663,8 @@ final class IosSpotifyConnect {
         while (status == 502 || status < 0) && retries < 3 {
             try? await Task.sleep(nanoseconds: 800_000_000)
             retries += 1
-            NSLog("PCSPOT: startPlayback retry \(retries) (prev status=\(status))")
             status = await attempt()
         }
-        NSLog("PCSPOT: startPlayback status=\(status) device=\(deviceId)")
         switch status {
         case 200...204: lastAction = "Spotify playback started"; isPlaying = true; return true
         case 403: lastAction = "Spotify Premium required"; return false
@@ -1172,10 +1135,9 @@ final class IosMusicKitPlayer {
             let response = try await request.response()
             if let song = response.items.first {
                 prefetchedSong = (appleMusicId, song)
-                NSLog("PCAUDIO: AM prefetch cached id=\(appleMusicId)")
             }
         } catch {
-            NSLog("PCAUDIO: AM prefetch failed id=\(appleMusicId) err=\(error.localizedDescription)")
+            // Non-fatal — play() falls back to its own catalog fetch on a miss.
         }
     }
 
@@ -1197,7 +1159,6 @@ final class IosMusicKitPlayer {
     @MainActor
     @discardableResult
     func play(appleMusicId: String) async -> Bool {
-        NSLog("PCAUDIO: AM play() ENTER id=\(appleMusicId) auth=\(MusicAuthorization.currentStatus.shortName)")
         lastError = nil
         guard MusicAuthorization.currentStatus == .authorized else {
             lastError = "Not authorized for Apple Music"
@@ -1206,11 +1167,10 @@ final class IosMusicKitPlayer {
         do {
             let song: Song
             if let cached = prefetchedSong, cached.id == appleMusicId {
-                NSLog("PCAUDIO: AM play() using prefetched song id=\(appleMusicId)")
+                // Warmed by prefetch() ~15s before the boundary — skip the fetch.
                 song = cached.song
                 prefetchedSong = nil
             } else {
-                NSLog("PCAUDIO: AM play() catalog request id=\(appleMusicId)")
                 let request = MusicCatalogResourceRequest<Song>(
                     matching: \.id,
                     equalTo: MusicItemID(appleMusicId)
@@ -1238,9 +1198,7 @@ final class IosMusicKitPlayer {
             duration = 0
             let player = ApplicationMusicPlayer.shared
             player.queue = [song]
-            NSLog("PCAUDIO: AM play() calling ApplicationMusicPlayer.play id=\(appleMusicId)")
             try await player.play()
-            NSLog("PCAUDIO: AM play() started OK id=\(appleMusicId)")
             nowPlayingTitle = song.title
             isPlaying = true
             duration = song.duration ?? 0
@@ -1251,7 +1209,6 @@ final class IosMusicKitPlayer {
             startPollingIfNeeded()
             return true
         } catch {
-            NSLog("PCAUDIO: AM play() FAILED id=\(appleMusicId) err=\(error.localizedDescription)")
             lastError = "Playback failed: \(error.localizedDescription)"
             // Re-arm so a transient failure can't leave end-detection
             // permanently suppressed for the next successful play.
@@ -1885,8 +1842,9 @@ final class QueuePlaybackCoordinator {
     /// Silent-audio keepalive that keeps the app alive in the background during
     /// EXTERNAL playback (Spotify / Apple Music) — Android `silence.wav` parity.
     @ObservationIgnored private let keepAlive = IosExternalKeepAlive()
-    /// Logs the PCAUDIO interruption/lifecycle trace and resumes the active
-    /// engine after a resumable interruption (e.g. a phone call).
+    /// Resumes the active engine after a resumable audio-session interruption
+    /// (e.g. a phone call), so external playback recovers instead of staying
+    /// silent (#322).
     @ObservationIgnored private var audioMonitor: IosAudioSessionMonitor?
 
     /// True from the moment a track is tapped until its engine starts (resolve
@@ -1996,7 +1954,6 @@ final class QueuePlaybackCoordinator {
     /// parity). Also stops the previous engine's audio so two never overlap.
     @MainActor
     private func applyEngineHandoff(from previousEngine: PlaybackEngineKind, to kind: PlaybackEngineKind) async {
-        NSLog("PCAUDIO: handoff \(previousEngine) → \(kind)")
         guard previousEngine != kind else { return }
         switch kind {
         case .avPlayer:
@@ -2113,13 +2070,12 @@ final class QueuePlaybackCoordinator {
         // (engine-agnostic), not a single player — the "real next/previous"
         // the AVPlayer's skip±15s stand-ins anticipated.
         setupQueueRemoteCommands()
-        // #322: observe audio-session interruptions + app lifecycle (the PCAUDIO
-        // "audio-logs" trace) and resume the active engine after a resumable
-        // interruption. Observers fire on .main; hop onto the main actor to
-        // touch engine state. ONLY the primary (AppPlayback) coordinator installs
-        // this — the Dev-tab smoke-test coordinator passes false so we don't get
-        // two monitors (doubled PCAUDIO logs + a stray resume on the idle Dev
-        // player).
+        // #322: observe audio-session interruptions and resume the active engine
+        // after a resumable interruption (e.g. a phone call). The observer fires
+        // on .main; hop onto the main actor to touch engine state. ONLY the
+        // primary (AppPlayback) coordinator installs this — the Dev-tab smoke-test
+        // coordinator passes false so we don't get two monitors (a stray resume
+        // on the idle Dev player).
         if installLifecycleMonitor {
             let monitor = IosAudioSessionMonitor()
             monitor.onShouldResume = { [weak self] in
@@ -2509,12 +2465,6 @@ final class QueuePlaybackCoordinator {
                 }
                 self.spotifyElapsedSec += 1
                 if self.spotifyPlaying { self.spotifyPositionSec += 1 } // interpolate
-                // Heartbeat: if these keep printing while the iPad is LOCKED, the
-                // app is alive and the poll loop runs (issue is elsewhere). If
-                // they STOP on lock and resume on foreground, the app is being
-                // suspended during Spotify playback. (#322 cross-service debug)
-                NSLog("PCSPOT: poll tick elapsed=\(self.spotifyElapsedSec) pos=\(Int(self.spotifyPositionSec)) dur=\(Int(self.spotifyDurationSec)) playing=\(self.spotifyPlaying)")
-
                 let resyncDue = self.spotifyElapsedSec == 2 || self.spotifyElapsedSec % 8 == 0
                 let cooldown = IosContainer.companion.shared.spotifyClient.rateLimitRemainingMs()
                 if resyncDue, self.spotifyPlaying, cooldown == 0 {
@@ -2539,7 +2489,6 @@ final class QueuePlaybackCoordinator {
         let nearEnd = spotifyPositionSec >= spotifyDurationSec - 2 && spotifyPlaying
         let finished = !spotifyPlaying && spotifyPositionSec >= spotifyDurationSec - 1
         if nearEnd || finished {
-            NSLog("PCSPOT: end detected (nearEnd=\(nearEnd) finished=\(finished)) → autoAdvance")
             spotifyEndHandled = true
             autoAdvance()
         }

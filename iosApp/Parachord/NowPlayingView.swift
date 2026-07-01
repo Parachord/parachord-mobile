@@ -16,8 +16,8 @@ final class AppPlayback {
     /// supports multiple scenes) or a SwiftUI `@State` re-init can't spin up a
     /// second `QueuePlaybackCoordinator` — which would double the audio-session
     /// monitor, run a second keepalive, and poke the SHARED
-    /// `ApplicationMusicPlayer` from a second poll loop (observed as doubled
-    /// PCAUDIO logs + Apple Music stuttering, #322).
+    /// `ApplicationMusicPlayer` from a second poll loop (observed as Apple Music
+    /// stuttering, #322).
     @MainActor static let shared = AppPlayback()
 
     let player: IosAVPlayer
