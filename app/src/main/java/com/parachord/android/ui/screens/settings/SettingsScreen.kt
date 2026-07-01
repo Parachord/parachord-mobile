@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
@@ -54,6 +56,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -92,6 +95,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -1371,6 +1375,11 @@ private fun SpotifyConfig(
     Spacer(modifier = Modifier.height(8.dp))
 
     var clientIdDraft by remember(clientId) { mutableStateOf(clientId) }
+    // Masked by default so a saved Client ID isn't left in plaintext on the
+    // screen (matches iOS's SecureField); the eye toggle reveals it to verify a
+    // paste. A Spotify Client ID isn't a true secret, but leaving it visible is
+    // still poor form for a shoulder-surf / screenshot.
+    var revealClientId by remember { mutableStateOf(false) }
     OutlinedTextField(
         value = clientIdDraft,
         onValueChange = { clientIdDraft = it },
@@ -1382,6 +1391,16 @@ private fun SpotifyConfig(
             autoCorrectEnabled = false,
             capitalization = KeyboardCapitalization.None,
         ),
+        visualTransformation = if (revealClientId) VisualTransformation.None
+        else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { revealClientId = !revealClientId }) {
+                Icon(
+                    imageVector = if (revealClientId) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (revealClientId) "Hide Client ID" else "Show Client ID",
+                )
+            }
+        },
     )
     Spacer(modifier = Modifier.height(12.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
