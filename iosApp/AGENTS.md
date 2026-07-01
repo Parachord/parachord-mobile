@@ -605,6 +605,51 @@ the SDK does not improve the cold case. See
 
 ---
 
+## Background playback / audio session (#322) — the Android port
+
+Playback stopping when the app backgrounds (Spotify OR Apple Music) traced to a
+single root cause: `IosAVPlayer.init()` did `setActive(true)` on a **non-mixable
+`.playback`** `AVAudioSession` at launch and never released it. There is ONE
+`AVAudioSession` per process, so holding it active-but-silent (we produce no
+audio for external engines) (a) interrupted Spotify the instant the app became
+active (`otherAudioPlaying` flipped true→false on `DID_BECOME_ACTIVE` in the
+trace), and (b) made iOS suspend the app ~30s after backgrounding (`INTERRUPTION
+type=began` with no `type=ended`), freezing polling/auto-advance and pausing
+`ApplicationMusicPlayer` (whose controller is our process).
+
+The fix is a **direct port of Android's external-playback survival** (root
+`CLAUDE.md` "External Playback Background Survival"; `PlaybackController` +
+`PlaybackService`):
+
+- **Per-engine session ownership** (`IosAudioSession` in `ContentView.swift`).
+  Local AVPlayer audio → `.playback`, no options (we own the route; activated in
+  `IosAVPlayer.play()`, released in `stop()` — NOT at launch). External
+  (Spotify/Apple Music) → `.playback` **+ `.mixWithOthers`**, the iOS analog of
+  Android's `handleAudioFocus = false`, so we never interrupt the real audio.
+- **Silent keepalive** (`IosExternalKeepAlive`) — the iOS port of Android's
+  `res/raw/silence.wav` loop. A code-generated zero-filled PCM buffer looped at
+  volume 0 through `AVAudioEngine` keeps `UIBackgroundModes: audio` satisfied so
+  the app stays alive in the background (auto-advance keeps running; AM's
+  controller isn't frozen). No bundled asset. Started/stopped on engine handoff
+  (`QueuePlaybackCoordinator.applyEngineHandoff`).
+- **Interruption/lifecycle monitor** (`IosAudioSessionMonitor`) — logs the
+  `PCAUDIO:` trace (grep `xcrun simctl log` / `idevicesyslog` for `PCAUDIO`) and
+  resumes the active engine on `.ended + .shouldResume` (phone-call recovery).
+
+**Still to verify on-device (couldn't be built/tested headlessly):** whether
+`.mixWithOthers` degrades `ApplicationMusicPlayer`'s lock-screen/now-playing
+ownership or our `MPRemoteCommandCenter` next/prev during external playback, and
+whether reconfiguring the session to `.mixWithOthers` *after* AM starts causes a
+brief hiccup (the handoff runs after `router.play`). If lock-screen controls
+misbehave during Apple Music, revisit whether AM should keep a non-mixable
+session while only Spotify uses `.mixWithOthers`.
+
+**Key files:** `iosApp/Parachord/ContentView.swift` (`IosAudioSession`,
+`IosExternalKeepAlive`, `IosAudioSessionMonitor`, `IosAVPlayer.play/stop`,
+`QueuePlaybackCoordinator.applyEngineHandoff/resumeActiveEngine`).
+
+---
+
 ## What's intentionally deferred (don't "fix")
 
 - Full Koin DI graph — `IosContainer` is hand-rolled on purpose until

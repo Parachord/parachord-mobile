@@ -9,6 +9,165 @@ import MusicKit
 import AuthenticationServices
 import CryptoKit
 
+// MARK: - Audio session management (#322 — background playback)
+//
+// There is exactly ONE `AVAudioSession` per process. Our `AVPlayer` (local /
+// soundcloud / direct) and `ApplicationMusicPlayer` (Apple Music) both share
+// it; Spotify plays in its own app. The category *options* decide whether we
+// interrupt other apps — the iOS analog of Android's `handleAudioFocus` flag.
+//
+// Ported from Android's external-playback survival (`PlaybackController` /
+// `PlaybackService`, CLAUDE.md "External Playback Background Survival"):
+//   • Local playback → `.playback`, no options: we ARE the audio, ducking
+//     others is correct.
+//   • External playback (Spotify / Apple Music) → `.playback` + `.mixWithOthers`
+//     (== `handleAudioFocus = false`) PLUS a silent keepalive loop, so the app
+//     keeps producing (silent) audio and iOS doesn't suspend it in the
+//     background — without interrupting the real audio.
+
+enum IosAudioSession {
+    /// Own the session for OUR AVPlayer audio (non-mixable). Resets from any
+    /// prior mixable "external" mode.
+    static func configureForLocal() { apply(options: [], context: "local") }
+
+    /// Mixable session for EXTERNAL audio (Spotify / Apple Music) so our silent
+    /// keepalive never interrupts them.
+    static func configureForExternal() { apply(options: [.mixWithOthers], context: "external") }
+
+    private static func apply(options: AVAudioSession.CategoryOptions, context: String) {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .default, options: options)
+            try session.setActive(true)
+            NSLog("PCAUDIO: SESSION_CONFIG context=\(context) \(IosAudioSessionMonitor.snapshot())")
+        } catch {
+            NSLog("PCAUDIO: SESSION_CONFIG_FAILED context=\(context) \(error.localizedDescription)")
+        }
+    }
+
+    static func deactivate() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Non-fatal — often "session still in use" during a fast handoff.
+            NSLog("PCAUDIO: DEACTIVATE_FAILED \(error.localizedDescription)")
+        }
+    }
+}
+
+/// Silent-audio keepalive for EXTERNAL playback (#322) — the iOS port of
+/// Android's `res/raw/silence.wav` loop. When Spotify / Apple Music is the
+/// source, Parachord produces no audio itself, so iOS would suspend the app in
+/// the background after ~30s — freezing its polling / auto-advance and (for
+/// `ApplicationMusicPlayer`, whose controller is our process) pausing the
+/// music. A looped SILENT buffer at volume 0 keeps `UIBackgroundModes: audio`
+/// satisfied so the app stays alive. The session is `.mixWithOthers` while this
+/// runs, so the silence never interrupts the real audio (Android's
+/// `handleAudioFocus = false` equivalent). The buffer is generated in code, so
+/// there's no bundled asset to register in the Xcode project.
+final class IosExternalKeepAlive {
+    private let engine = AVAudioEngine()
+    private let node = AVAudioPlayerNode()
+    private var running = false
+
+    /// Start the silent loop. Idempotent.
+    func start() {
+        guard !running else { return }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else {
+            NSLog("PCAUDIO: KEEPALIVE_BUFFER_FAILED")
+            return
+        }
+        buffer.frameLength = buffer.frameCapacity   // zero-filled == silence
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        node.volume = 0
+        do {
+            try engine.start()
+            node.scheduleBuffer(buffer, at: nil, options: [.loops], completionHandler: nil)
+            node.play()
+            running = true
+            NSLog("PCAUDIO: KEEPALIVE_START")
+        } catch {
+            NSLog("PCAUDIO: KEEPALIVE_START_FAILED \(error.localizedDescription)")
+            engine.detach(node)
+        }
+    }
+
+    /// Stop the silent loop. Idempotent.
+    func stop() {
+        guard running else { return }
+        node.stop()
+        engine.stop()
+        engine.detach(node)
+        running = false
+        NSLog("PCAUDIO: KEEPALIVE_STOP")
+    }
+}
+
+/// Observes audio-session interruptions, route changes, and app-lifecycle
+/// transitions, logging a `PCAUDIO:` trace (the "audio-logs" instrumentation
+/// this branch is named for) and resuming the active engine when an
+/// interruption ends with `.shouldResume` (e.g. after a phone call).
+///
+/// Not actor-isolated so the coordinator can construct it in its synchronous
+/// init; every observer fires on `.main`, so the `onShouldResume` hand-off and
+/// the AVAudioSession reads are main-thread-safe.
+final class IosAudioSessionMonitor {
+    private var tokens: [NSObjectProtocol] = []
+    /// Invoked on interruption-ended-with-shouldResume. The coordinator resumes
+    /// whichever engine is active.
+    var onShouldResume: (() -> Void)?
+
+    init() {
+        let nc = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+        tokens.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: session, queue: .main) { [weak self] note in
+            self?.handleInterruption(note)
+        })
+        tokens.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: session, queue: .main) { note in
+            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) ?? 0
+            NSLog("PCAUDIO: ROUTE_CHANGE reason=\(reason) \(IosAudioSessionMonitor.snapshot())")
+        })
+        for (name, label) in [
+            (UIApplication.willResignActiveNotification, "WILL_RESIGN_ACTIVE"),
+            (UIApplication.didEnterBackgroundNotification, "DID_ENTER_BACKGROUND"),
+            (UIApplication.willEnterForegroundNotification, "WILL_ENTER_FOREGROUND"),
+            (UIApplication.didBecomeActiveNotification, "DID_BECOME_ACTIVE"),
+        ] {
+            tokens.append(nc.addObserver(forName: name, object: nil, queue: .main) { _ in
+                NSLog("PCAUDIO: \(label) \(IosAudioSessionMonitor.snapshot())")
+            })
+        }
+    }
+
+    deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
+
+    private func handleInterruption(_ note: Notification) {
+        guard let info = note.userInfo,
+              let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        switch type {
+        case .began:
+            let reason = (info[AVAudioSessionInterruptionReasonKey] as? UInt).map { "\($0)" } ?? "?"
+            NSLog("PCAUDIO: INTERRUPTION type=began reason=\(reason) \(IosAudioSessionMonitor.snapshot())")
+        case .ended:
+            let optsRaw = (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0
+            let shouldResume = AVAudioSession.InterruptionOptions(rawValue: optsRaw).contains(.shouldResume)
+            NSLog("PCAUDIO: INTERRUPTION type=ended shouldResume=\(shouldResume) \(IosAudioSessionMonitor.snapshot())")
+            if shouldResume { onShouldResume?() }
+        @unknown default:
+            break
+        }
+    }
+
+    /// One-line snapshot of the shared session for the PCAUDIO trace.
+    static func snapshot() -> String {
+        let s = AVAudioSession.sharedInstance()
+        return "category=\(s.category.rawValue) options=\(s.categoryOptions.rawValue) otherAudioPlaying=\(s.isOtherAudioPlaying) secondaryHint=\(s.secondaryAudioShouldBeSilencedHint)"
+    }
+}
+
 // MARK: - Spotify Connect (phase 4.8)
 //
 // iOS Spotify playback uses the Web API (Spotify Connect over HTTP),
@@ -1111,11 +1270,20 @@ final class IosAVPlayer {
         tearDownRemoteCommands()
     }
 
-    /// Activate `.playback` category so audio plays through the
-    /// device speaker (not the silent-ringer-respecting `.ambient`
-    /// default) and stays alive across audio interruptions. Without
-    /// this, AVPlayer plays through the receiver and respects the
-    /// hardware mute switch.
+    /// Set the `.playback` category so OUR audio plays through the device
+    /// speaker (not the silent-ringer-respecting `.ambient` default) and
+    /// ignores the hardware mute switch. **Category only — NOT `setActive`.**
+    ///
+    /// #322: there is ONE `AVAudioSession` per process. Activating a
+    /// non-mixable `.playback` session at launch — while we produce no audio
+    /// ourselves (Spotify plays in its own app; Apple Music via
+    /// `ApplicationMusicPlayer`) — (a) interrupts Spotify the moment Parachord
+    /// becomes active, and (b) makes iOS suspend the app in the background for
+    /// holding an active-but-silent session, which pauses Apple Music. So we
+    /// only *activate* the session when our own AVPlayer is about to play
+    /// (`play()` → `IosAudioSession.configureForLocal`); for external engines the
+    /// coordinator switches to the mixable session + silent keepalive instead.
+    /// Setting the category here is inert until activation, so it's safe at init.
     private func configureAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setCategory(
@@ -1123,10 +1291,20 @@ final class IosAVPlayer {
                 mode: .default,
                 options: []
             )
-            try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             errorMessage = "AVAudioSession setup failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Stop our AVPlayer's audio WITHOUT touching the shared session or
+    /// `MPNowPlayingInfoCenter` — used when handing playback off to an external
+    /// engine (Spotify / Apple Music). The coordinator switches the session to
+    /// the mixable "external" mode and starts the silent keepalive itself
+    /// (`IosAudioSession.configureForExternal` + `IosExternalKeepAlive`), so we
+    /// must NOT deactivate here: the app has to keep a live session to survive
+    /// backgrounding (Android `silence.wav` parity).
+    func haltAudio() {
+        teardown()
     }
 
     /// Imported local files are referenced container-relative (`pcfile://…`) or,
@@ -1218,6 +1396,11 @@ final class IosAVPlayer {
     }
 
     func play() {
+        // Take the shared session in LOCAL mode (`.playback`, non-mixable) right
+        // before producing audio (#322 — we don't hold it at launch, and we
+        // reset from any prior mixable "external" mode so our own audio ducks
+        // others as it should).
+        IosAudioSession.configureForLocal()
         player?.play()
         isPlaying = true
         status = .playing
@@ -1245,6 +1428,10 @@ final class IosAVPlayer {
 
     func stop() {
         teardown()
+        // Release the shared session so other apps can resume (#322). The
+        // coordinator stops the silent keepalive around this for external
+        // playback; for local playback this is the final release.
+        IosAudioSession.deactivate()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         lastNowPlayingKeys = []
     }
@@ -1550,6 +1737,14 @@ final class QueuePlaybackCoordinator {
     /// state below so it doesn't care which one.
     var activeEngine: PlaybackEngineKind = .avPlayer
 
+    // ── Background survival (#322) ─────────────────────────────────────
+    /// Silent-audio keepalive that keeps the app alive in the background during
+    /// EXTERNAL playback (Spotify / Apple Music) — Android `silence.wav` parity.
+    @ObservationIgnored private let keepAlive = IosExternalKeepAlive()
+    /// Logs the PCAUDIO interruption/lifecycle trace and resumes the active
+    /// engine after a resumable interruption (e.g. a phone call).
+    @ObservationIgnored private var audioMonitor: IosAudioSessionMonitor?
+
     /// True from the moment a track is tapped until its engine starts (resolve
     /// + route can take a beat). The mini-player shows a spinner so the tap
     /// feels responsive instead of the play/pause glyph lagging behind.
@@ -1650,6 +1845,54 @@ final class QueuePlaybackCoordinator {
         return out
     }
 
+    /// Hand the shared process audio session off when the active engine changes
+    /// (#322). Only OUR AVPlayer holds a non-mixable session; Spotify and Apple
+    /// Music run on a MIXABLE session + a silent keepalive so the app survives
+    /// backgrounding without interrupting them (Android external-playback
+    /// parity). Also stops the previous engine's audio so two never overlap.
+    @MainActor
+    private func applyEngineHandoff(from previousEngine: PlaybackEngineKind, to kind: PlaybackEngineKind) async {
+        guard previousEngine != kind else { return }
+        switch kind {
+        case .avPlayer:
+            // Our own audio — drop the external keepalive; player.play()
+            // (startAVPlaybackWhenReady) reconfigures the session to local mode.
+            keepAlive.stop()
+            if previousEngine == .musicKit { musicKit.pause() }
+            if previousEngine == .spotify { await spotify.pause() }
+        case .musicKit:
+            // Apple Music started via ApplicationMusicPlayer (shares our
+            // session). Stop our AVPlayer audio, switch to the mixable session,
+            // and run the silent keepalive so we aren't suspended in the
+            // background (which would freeze AM's controller).
+            player.haltAudio()
+            if previousEngine == .spotify { await spotify.pause() }
+            IosAudioSession.configureForExternal()
+            keepAlive.start()
+        case .spotify:
+            // Spotify plays in its own app — mixable session + keepalive so we
+            // neither interrupt it nor get suspended (breaking auto-advance).
+            player.haltAudio()
+            if previousEngine == .musicKit { musicKit.pause() }
+            IosAudioSession.configureForExternal()
+            keepAlive.start()
+        case .browser:
+            keepAlive.stop()
+        }
+    }
+
+    /// Resume the currently-active engine after a resumable audio-session
+    /// interruption ended (#322 — wired from `IosAudioSessionMonitor`).
+    @MainActor
+    private func resumeActiveEngine() {
+        switch activeEngine {
+        case .avPlayer: if !player.isPlaying { player.play() }
+        case .musicKit: musicKit.resume()
+        case .spotify: Task { @MainActor in await spotify.resume(); spotifyPlaying = spotify.isPlaying }
+        case .browser: break
+        }
+    }
+
     /// Switch the current track to a specific resolver's source (deck tap):
     /// re-route the SAME track through the existing router with just that
     /// source, so playback moves to the chosen service.
@@ -1661,7 +1904,9 @@ final class QueuePlaybackCoordinator {
         Task { @MainActor in
             let result = await router.play(ranked: [chosen], title: t.title, artist: t.artist)
             if case .played(let kind, let playedResolver) = result {
+                let previousEngine = activeEngine
                 activeEngine = kind
+                await applyEngineHandoff(from: previousEngine, to: kind)
                 // Restamp the now-playing track's origin to the resolver the user
                 // switched to, so the scrobble reflects the service actually
                 // streaming after a manual deck tap (#260 / #276).
@@ -1702,6 +1947,15 @@ final class QueuePlaybackCoordinator {
         // (engine-agnostic), not a single player — the "real next/previous"
         // the AVPlayer's skip±15s stand-ins anticipated.
         setupQueueRemoteCommands()
+        // #322: observe audio-session interruptions + app lifecycle (the PCAUDIO
+        // "audio-logs" trace) and resume the active engine after a resumable
+        // interruption. Observers fire on .main; hop onto the main actor to
+        // touch engine state.
+        let monitor = IosAudioSessionMonitor()
+        monitor.onShouldResume = { [weak self] in
+            Task { @MainActor in self?.resumeActiveEngine() }
+        }
+        self.audioMonitor = monitor
         // Refresh the stream:false resolver set from plugin capabilities (the
         // seeded "bandcamp" default covers the pre-load window).
         Task { @MainActor [weak self] in
@@ -1803,7 +2057,17 @@ final class QueuePlaybackCoordinator {
         // through to the user's (never-modified) queue, which resumes here.
         if advanceSpinoff() { return }
         guard let next = queueManager.skipNext(currentTrack: currentTrack) else {
-            // Queue exhausted — stop cleanly.
+            // Queue exhausted — stop cleanly. Halt whichever engine is active,
+            // drop the external keepalive, then release the session (#322).
+            let engine = activeEngine
+            Task { @MainActor in
+                switch engine {
+                case .musicKit: musicKit.pause()
+                case .spotify: await spotify.pause()
+                case .avPlayer, .browser: break
+                }
+            }
+            keepAlive.stop()
             player.stop()
             currentTrack = nil
             syncSnapshot()
@@ -1874,6 +2138,15 @@ final class QueuePlaybackCoordinator {
             } else if !originalQueue.isEmpty {
                 setQueue(originalQueue, startIndex: 0)   // wrap to the top
             } else {
+                let engine = activeEngine
+                Task { @MainActor in
+                    switch engine {
+                    case .musicKit: musicKit.pause()
+                    case .spotify: await spotify.pause()
+                    case .avPlayer, .browser: break
+                    }
+                }
+                keepAlive.stop()          // #322: drop the external keepalive
                 player.stop(); currentTrack = nil; syncSnapshot()
             }
         case .off:
@@ -1965,7 +2238,9 @@ final class QueuePlaybackCoordinator {
             if Task.isCancelled { return }
             switch result {
             case .played(let kind, let playedResolver):
+                let previousEngine = activeEngine
                 activeEngine = kind
+                await applyEngineHandoff(from: previousEngine, to: kind)
                 // Enrich the now-playing track with the resolved streaming IDs so
                 // the scrobble path carries them: achordion's played-source
                 // confidence, the native Achordion submit (#215), and LB source
