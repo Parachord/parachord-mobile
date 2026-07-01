@@ -1132,20 +1132,32 @@ private fun PluginConfigSheet(
                     fontWeight = FontWeight.Medium,
                 )
                 Spacer(modifier = Modifier.weight(1f))
+                // The chip must reflect whether the resolver is actually WORKING,
+                // not just connected. A resolver that's connected but toggled OFF
+                // (active_resolvers, #213) doesn't resolve or show badges — showing
+                // "ENABLED" for it is what made a Spotify-only user think Spotify
+                // worked when the toggle was off (#338). "OFF" distinguishes the
+                // toggled-off case from a genuinely not-connected one.
+                val statusEnabled = isConnected && (!isResolver || resolverEnabled)
+                val statusText = when {
+                    statusEnabled -> "ENABLED"
+                    isConnected && isResolver -> "OFF"
+                    else -> "DISABLED"
+                }
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .background(
-                            if (isConnected) Success.copy(alpha = 0.15f)
+                            if (statusEnabled) Success.copy(alpha = 0.15f)
                             else MaterialTheme.colorScheme.surfaceVariant,
                         )
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 ) {
                     Text(
-                        text = if (isConnected) "ENABLED" else "DISABLED",
+                        text = statusText,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
-                        color = if (isConnected) Success else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (statusEnabled) Success else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
