@@ -238,6 +238,12 @@ class IosResolverRuntime(
     }
 
     private suspend fun resolveAppleMusicNative(artist: String, title: String): ResolvedSource? {
+        // Don't offer Apple Music unless the user has connected it. The catalog
+        // search below needs only the developer token, so without this gate AM
+        // resolves for EVERY user — including Spotify-only users — and tapping the
+        // resulting badge routes playback to the Apple Music login screen (#327).
+        // Mirrors the Spotify token gate on the resolver's native Spotify branch.
+        if (settingsStore.getAppleMusicUserToken().isNullOrBlank()) return null
         val storefront = settingsStore.getAppleMusicStorefront()?.ifBlank { null } ?: "us"
         val term = "$artist $title".encodeURLParameter()
         val url = "https://api.music.apple.com/v1/catalog/$storefront/search?types=songs&limit=10&term=$term"

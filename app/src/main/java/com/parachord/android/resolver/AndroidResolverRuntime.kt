@@ -77,6 +77,12 @@ class AndroidResolverRuntime constructor(
         targetTitle: String? = null,
         targetArtist: String? = null,
     ): ResolvedSource? {
+        // Don't offer Apple Music as a source unless the user has connected it.
+        // Tier 2 below is the no-auth iTunes Search API, so without this gate AM
+        // resolves for EVERY user — including Spotify-only users — and tapping the
+        // resulting badge routes playback to the Apple Music login screen (#327).
+        // Mirrors the Spotify token gate in ResolverManager.verifySpotifyTrack.
+        if (settingsStore.getAppleMusicUserToken().isNullOrBlank()) return null
         // Tier 1: MusicKit JS (requires developer token + auth)
         if (musicKitBridge.configured.value) {
             try {
