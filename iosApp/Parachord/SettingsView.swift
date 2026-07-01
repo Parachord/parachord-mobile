@@ -1134,8 +1134,11 @@ enum IosDiagnostics {
                 lines.append("\(log.date) \(log.composedMessage)")
             }
         }
-        let tail = lines.suffix(5000).joined(separator: "\n")
-        return tail.count > 512 * 1024 ? String(tail.suffix(512 * 1024)) : tail
+        // Cap so the copied text pastes into a GitHub issue (~64 KB body limit)
+        // and Slack / other apps. Keep the most recent slice (a just-happened bug
+        // is at the tail).
+        let tail = lines.suffix(1500).joined(separator: "\n")
+        return tail.count > 45_000 ? "…(older log lines truncated to fit)…\n" + String(tail.suffix(45_000)) : tail
     }
 
     private static func issueURL(header: String) -> URL {

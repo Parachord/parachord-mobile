@@ -111,7 +111,7 @@ class DiagnosticLogExporter(
             ).redirectErrorStream(true).start()
             val text = process.inputStream.bufferedReader().use { it.readText() }
             process.waitFor()
-            if (text.length > MAX_CHARS) "…(truncated)…\n" + text.takeLast(MAX_CHARS) else text
+            if (text.length > MAX_CHARS) "…(older log lines truncated to fit)…\n" + text.takeLast(MAX_CHARS) else text
         } catch (e: Exception) {
             "logcat capture failed: ${e.message}"
         }
@@ -133,8 +133,11 @@ class DiagnosticLogExporter(
 
     companion object {
         private const val TAG = "DiagnosticLogExporter"
-        private const val MAX_LINES = 5000
-        private const val MAX_CHARS = 512 * 1024
+        // Cap so the copied text pastes into a GitHub issue (~64 KB body limit)
+        // and Slack / other apps without being rejected or silently truncated.
+        // Keep the most RECENT slice — a just-happened bug's evidence is at the tail.
+        private const val MAX_LINES = 1500
+        private const val MAX_CHARS = 45_000
         private const val MASK = "«redacted»"
 
         private val REDACTIONS = listOf(
