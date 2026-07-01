@@ -1187,7 +1187,9 @@ final class IosMusicKitPlayer {
             duration = 0
             let player = ApplicationMusicPlayer.shared
             player.queue = [song]
+            NSLog("PCAUDIO: AM play() calling ApplicationMusicPlayer.play id=\(appleMusicId)")
             try await player.play()
+            NSLog("PCAUDIO: AM play() started OK id=\(appleMusicId)")
             nowPlayingTitle = song.title
             isPlaying = true
             duration = song.duration ?? 0
@@ -1198,6 +1200,7 @@ final class IosMusicKitPlayer {
             startPollingIfNeeded()
             return true
         } catch {
+            NSLog("PCAUDIO: AM play() FAILED id=\(appleMusicId) err=\(error.localizedDescription)")
             lastError = "Playback failed: \(error.localizedDescription)"
             // Re-arm so a transient failure can't leave end-detection
             // permanently suppressed for the next successful play.
@@ -1937,6 +1940,7 @@ final class QueuePlaybackCoordinator {
     /// parity). Also stops the previous engine's audio so two never overlap.
     @MainActor
     private func applyEngineHandoff(from previousEngine: PlaybackEngineKind, to kind: PlaybackEngineKind) async {
+        NSLog("PCAUDIO: handoff \(previousEngine) → \(kind)")
         guard previousEngine != kind else { return }
         switch kind {
         case .avPlayer:
@@ -2414,6 +2418,11 @@ final class QueuePlaybackCoordinator {
                 }
                 self.spotifyElapsedSec += 1
                 if self.spotifyPlaying { self.spotifyPositionSec += 1 } // interpolate
+                // Heartbeat: if these keep printing while the iPad is LOCKED, the
+                // app is alive and the poll loop runs (issue is elsewhere). If
+                // they STOP on lock and resume on foreground, the app is being
+                // suspended during Spotify playback. (#322 cross-service debug)
+                NSLog("PCSPOT: poll tick elapsed=\(self.spotifyElapsedSec) pos=\(Int(self.spotifyPositionSec)) dur=\(Int(self.spotifyDurationSec)) playing=\(self.spotifyPlaying)")
 
                 let resyncDue = self.spotifyElapsedSec == 2 || self.spotifyElapsedSec % 8 == 0
                 let cooldown = IosContainer.companion.shared.spotifyClient.rateLimitRemainingMs()
@@ -2439,6 +2448,7 @@ final class QueuePlaybackCoordinator {
         let nearEnd = spotifyPositionSec >= spotifyDurationSec - 2 && spotifyPlaying
         let finished = !spotifyPlaying && spotifyPositionSec >= spotifyDurationSec - 1
         if nearEnd || finished {
+            NSLog("PCSPOT: end detected (nearEnd=\(nearEnd) finished=\(finished)) → autoAdvance")
             spotifyEndHandled = true
             autoAdvance()
         }
