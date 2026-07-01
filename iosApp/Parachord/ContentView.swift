@@ -88,7 +88,9 @@ enum IosAudioSession {
 final class IosExternalKeepAlive {
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
+    private let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2)
     private var running = false
+    private var graphBuilt = false
     private var configObserver: NSObjectProtocol?
 
     deinit {
@@ -100,39 +102,55 @@ final class IosExternalKeepAlive {
     func start() {
         guard !running else { return }
         running = true
-        // A route/format change (headphones, AirPlay, Bluetooth) stops the
-        // engine graph; restart it so we never stop producing (silent) audio and
-        // the app stays alive — the durability Android gets from the wakelock.
+        buildGraphIfNeeded()
+        startEngineAndPlay()
+        // A route/format change (headphones, AirPlay, Bluetooth) STOPS the
+        // engine; restart it so we keep producing (silent) audio and the app
+        // stays alive — the durability Android gets from the wakelock. CRITICAL:
+        // only restart when the engine has actually STOPPED, and NEVER reconnect
+        // a running engine here. Reconnecting a running AVAudioEngine itself
+        // posts an AVAudioEngineConfigurationChange, so a reconnect-on-every-
+        // notification loops many times a second and thrashes the shared audio
+        // route — observed distorting Spotify and wedging the audio daemon until
+        // a reboot (#322). Restart-only-when-stopped can't feed itself.
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
-            guard let self, self.running else { return }
+            guard let self, self.running, !self.engine.isRunning else { return }
             NSLog("PCAUDIO: KEEPALIVE_CONFIG_CHANGE")
-            self.armEngine()
+            self.startEngineAndPlay()
         }
-        armEngine()
         NSLog("PCAUDIO: KEEPALIVE_START")
     }
 
     /// Force the engine back to a playing state — used after an audio-session
     /// interruption, where the engine is stopped but `running` is still true.
+    /// No-op if it's already running (never restart a healthy engine).
     func restart() {
         guard running else { start(); return }
-        armEngine()
+        guard !engine.isRunning else { return }
+        startEngineAndPlay()
         NSLog("PCAUDIO: KEEPALIVE_RESTART")
     }
 
-    /// (Re)build the graph and start the silent loop. Safe to call repeatedly.
-    private func armEngine() {
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 2),
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else {
+    /// Attach + connect the silent node ONCE. Connecting only ever happens here,
+    /// on a stopped engine — never on the config-change path (see `start`).
+    private func buildGraphIfNeeded() {
+        guard !graphBuilt, let format else { return }
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        node.volume = 0
+        graphBuilt = true
+    }
+
+    /// Start the engine and (re)schedule the looping silent buffer. Does NOT
+    /// reconnect the graph — safe to call after the engine stops.
+    private func startEngineAndPlay() {
+        guard let format, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100) else {
             NSLog("PCAUDIO: KEEPALIVE_BUFFER_FAILED")
             return
         }
         buffer.frameLength = buffer.frameCapacity   // zero-filled == silence
-        if node.engine == nil { engine.attach(node) }
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        node.volume = 0
         do {
             if !engine.isRunning { try engine.start() }
             if !node.isPlaying {
@@ -140,7 +158,7 @@ final class IosExternalKeepAlive {
                 node.play()
             }
         } catch {
-            NSLog("PCAUDIO: KEEPALIVE_ARM_FAILED \(error.localizedDescription)")
+            NSLog("PCAUDIO: KEEPALIVE_START_FAILED \(error.localizedDescription)")
         }
     }
 

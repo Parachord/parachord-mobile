@@ -650,9 +650,20 @@ The fix is a **direct port of Android's external-playback survival** (root
   **Resilience is load-bearing:** unlike Android's FGS + wakelock, an
   `AVAudioEngine` is stopped by the system on audio-route/config changes and
   interruptions; if it isn't restarted the app is suspended and auto-advance
-  dies. So the keepalive observes `AVAudioEngineConfigurationChange` and re-arms
-  itself, and `resumeActiveEngine` re-arms it (+ re-activates the session) after
-  interruptions. Started/stopped on engine handoff (`applyEngineHandoff`).
+  dies. So the keepalive observes `AVAudioEngineConfigurationChange` and restarts
+  the engine, and `resumeActiveEngine` re-arms it (+ re-activates the session)
+  after interruptions. Started/stopped on engine handoff (`applyEngineHandoff`).
+
+  **DANGER — never reconnect a RUNNING `AVAudioEngine` on the config-change
+  path.** `engine.connect(...)` on a running engine itself posts an
+  `AVAudioEngineConfigurationChange`, so "reconnect on every notification" feeds
+  itself into a loop that fires many times a second, thrashes the shared audio
+  route, and **distorts other apps' audio (Spotify) badly enough to wedge the
+  audio daemon until a device reboot** (hit once, #322). The graph is therefore
+  attached+connected exactly ONCE (`buildGraphIfNeeded`, on a stopped engine),
+  and the config-change handler only calls `startEngineAndPlay()` **guarded on
+  `!engine.isRunning`** — restart-when-stopped can't re-trigger itself. Same
+  guard on `restart()`. Don't "simplify" these guards away.
 - **Interruption/lifecycle monitor** (`IosAudioSessionMonitor`) — logs the
   `PCAUDIO:` trace (grep `xcrun simctl log` / `idevicesyslog` for `PCAUDIO`) and
   resumes the active engine on `.ended + .shouldResume` (phone-call recovery),
