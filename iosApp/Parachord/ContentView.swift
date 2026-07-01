@@ -1148,6 +1148,37 @@ final class IosMusicKitPlayer {
     private var trackEndHandled = false   // fire onTrackEnded once per track
     private var observedPlaying = false   // require .playing before honoring .stopped
 
+    /// A catalog `Song` fetched AHEAD of the boundary and cached by id, so
+    /// `play(appleMusicId:)` at a track transition can skip the ~1.5s
+    /// `MusicCatalogResourceRequest` round-trip (measured in the #322 trace:
+    /// ENTER→calling-play was ~1.6s, all of it the catalog lookup). Mirrors
+    /// Android's PlaybackController pre-resolving the next track ~30s early
+    /// (`PlaybackController.kt:1273`). A catalog lookup is a plain REST call —
+    /// it does NOT touch `ApplicationMusicPlayer`, so pre-fetching mid-playback
+    /// can't disrupt the outgoing Spotify or Apple Music stream (unlike
+    /// Android's WebView `preload()` caveat).
+    private var prefetchedSong: (id: String, song: Song)?
+
+    /// Fetch + cache the catalog `Song` for `appleMusicId` ahead of a boundary.
+    /// Idempotent per id, failures swallowed (play() falls back to its own
+    /// fetch), safe to call during active playback. Fire-and-forget.
+    @MainActor
+    func prefetch(appleMusicId: String) async {
+        guard MusicAuthorization.currentStatus == .authorized else { return }
+        if prefetchedSong?.id == appleMusicId { return }   // already warm
+        do {
+            let request = MusicCatalogResourceRequest<Song>(
+                matching: \.id, equalTo: MusicItemID(appleMusicId))
+            let response = try await request.response()
+            if let song = response.items.first {
+                prefetchedSong = (appleMusicId, song)
+                NSLog("PCAUDIO: AM prefetch cached id=\(appleMusicId)")
+            }
+        } catch {
+            NSLog("PCAUDIO: AM prefetch failed id=\(appleMusicId) err=\(error.localizedDescription)")
+        }
+    }
+
     /// Request Apple Music access. Shows the system prompt IF the
     /// MusicKit entitlement is present; without it this resolves to
     /// `.denied` (or errors) — see the verification note above.
@@ -1173,15 +1204,23 @@ final class IosMusicKitPlayer {
             return false
         }
         do {
-            NSLog("PCAUDIO: AM play() catalog request id=\(appleMusicId)")
-            let request = MusicCatalogResourceRequest<Song>(
-                matching: \.id,
-                equalTo: MusicItemID(appleMusicId)
-            )
-            let response = try await request.response()
-            guard let song = response.items.first else {
-                lastError = "Catalog song \(appleMusicId) not found"
-                return false
+            let song: Song
+            if let cached = prefetchedSong, cached.id == appleMusicId {
+                NSLog("PCAUDIO: AM play() using prefetched song id=\(appleMusicId)")
+                song = cached.song
+                prefetchedSong = nil
+            } else {
+                NSLog("PCAUDIO: AM play() catalog request id=\(appleMusicId)")
+                let request = MusicCatalogResourceRequest<Song>(
+                    matching: \.id,
+                    equalTo: MusicItemID(appleMusicId)
+                )
+                let response = try await request.response()
+                guard let fetched = response.items.first else {
+                    lastError = "Catalog song \(appleMusicId) not found"
+                    return false
+                }
+                song = fetched
             }
             // SUPPRESS end-detection ACROSS the queue swap, BEFORE mutating the
             // shared player. Swapping `queue` flips `playbackStatus` to .stopped
@@ -1701,6 +1740,11 @@ final class QueuePlaybackCoordinator {
     /// ScrobbleManager (#193). Cancelled with the coordinator.
     @ObservationIgnored private var scrobblePublishTask: Task<Void, Never>?
 
+    /// One-shot guard so we pre-fetch the NEXT track's Apple Music `Song` only
+    /// once per current track (see `prefetchNextIfNeeded`). Reset when a new
+    /// track starts in `playTrack`.
+    @ObservationIgnored private var prefetchedNextForCurrentTrack = false
+
     /// Republished from `QueueManager.snapshot.value` after every
     /// mutation so SwiftUI can render the up-next list reactively.
     var currentTrack: Track?
@@ -2106,9 +2150,42 @@ final class QueuePlaybackCoordinator {
                         positionMs: Int64(self.currentTime * 1000),
                         durationMs: Int64(self.duration * 1000)
                     )
+                    // #322: warm the next track's Apple Music `Song` ~15s before
+                    // the boundary so its play() skips the ~1.6s catalog fetch.
+                    self.prefetchNextIfNeeded(remainingSec: self.duration - self.currentTime)
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
+        }
+    }
+
+    /// Pre-fetch the NEXT queued track's Apple Music catalog `Song` when the
+    /// current track is within ~15s of ending, so the boundary `play()` skips
+    /// the ~1.6s `MusicCatalogResourceRequest` (measured in the #322 trace).
+    /// Android parity: `PlaybackController` pre-resolves the next track ~30s
+    /// early. One-shot per current track; fire-and-forget; a plain catalog REST
+    /// lookup that never touches `ApplicationMusicPlayer`, so it can't disrupt
+    /// the outgoing Spotify or Apple Music stream. Only fires when the next
+    /// track will actually route to Apple Music (has an `appleMusicId`).
+    @MainActor
+    private func prefetchNextIfNeeded(remainingSec: Double) {
+        guard !prefetchedNextForCurrentTrack,
+              remainingSec > 0, remainingSec <= 15,
+              let next = upNext.first else { return }
+        prefetchedNextForCurrentTrack = true
+        Task { @MainActor in
+            // The queue already resolved title/artist → appleMusicId; read that
+            // (cache hit, instant), falling back to a live resolve on a miss.
+            var ranked = resolverCache.cached(artist: next.artist, title: next.title, album: next.album)
+            if ranked == nil || ranked!.isEmpty {
+                ranked = (try? await container.resolveSources(
+                    artist: next.artist, title: next.title, album: next.album,
+                    spotifyId: next.spotifyId, appleMusicId: next.appleMusicId)) ?? []
+            }
+            let amId = (ranked ?? []).first { $0.resolver == "applemusic" && !$0.noMatch }?.appleMusicId
+                ?? next.appleMusicId
+            guard let amId, !amId.isEmpty else { return }
+            await musicKit.prefetch(appleMusicId: amId)
         }
     }
 
@@ -2315,6 +2392,8 @@ final class QueuePlaybackCoordinator {
 
     private func playTrack(_ track: Track) {
         currentTrack = track
+        // New track → re-arm the next-track Apple Music pre-fetch (#322).
+        prefetchedNextForCurrentTrack = false
         // Refresh whether spinoff is available for this track (#231) — no-op during
         // spinoff (the pool tracks don't re-check; the ✨ button shows "exit").
         checkSpinoffAvailability(for: track)
