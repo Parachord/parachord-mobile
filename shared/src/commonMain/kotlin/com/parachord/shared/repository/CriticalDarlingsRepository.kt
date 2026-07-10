@@ -22,7 +22,8 @@ import kotlinx.serialization.json.Json
  * Repository for Critical Darlings — top-rated albums from leading music publications.
  *
  * Mirrors the desktop app's `loadCriticsPicks()` / `parseCriticsPicksRSS()` implementation:
- * 1. Fetch the Critical Darlings RSS feed from Achordion (achordion.xyz/api/critical-darlings/feed.xml)
+ * 1. Fetch the Critical Darlings RSS feed(s) — Achordion (source of truth) unioned
+ *    with the retired RSSground feed during migration; dedup by "Album by Artist" (#343)
  * 2. Parse each item as "Album Title by Artist Name"
  * 3. Progressively fetch album art via Cover Art Archive (MusicBrainz release search → MBID → CAA)
  *
@@ -58,12 +59,19 @@ class CriticalDarlingsRepository(
 ) {
     companion object {
         private const val TAG = "CriticalDarlingsRepo"
-        // Achordion is the source of truth for Critical Darlings (#343). Its
-        // public RSS feed is byte-compatible with the retired RSSground feed
-        // (`<title>` = "Album by Artist", Spotify URL in `<description>`,
-        // Metacritic `<link>`) — no parser changes needed. No auth; keep a
-        // descriptive User-Agent. Covers are still resolved via MusicBrainz/CAA.
-        private const val RSS_URL = "https://achordion.xyz/api/critical-darlings/feed.xml"
+        // Achordion is the source of truth for Critical Darlings (#343). Both
+        // feeds are byte-compatible (`<title>` = "Album by Artist", Spotify URL
+        // in `<description>`, Metacritic `<link>`) — no parser changes needed. No
+        // auth; keep a descriptive User-Agent. Covers resolved via MusicBrainz/CAA.
+        //
+        // DUAL-SOURCE during migration: Achordion's feed is store-only and
+        // first-party, so it backfills slowly (a few picks/week) and is thin right
+        // after cutover. Until it has real history we ALSO read the retired
+        // RSSground feed and UNION the two (dedup by "Album by Artist"), so users
+        // never see a near-empty list. Achordion wins the dedup (fresh, first-
+        // party). Drop RSSGROUND_RSS_URL once RSSground is retired (#345 / achordion#81).
+        private const val ACHORDION_RSS_URL = "https://achordion.xyz/api/critical-darlings/feed.xml"
+        private const val RSSGROUND_RSS_URL = "https://www.rssground.com/p/uncoveries"
         /** Short interval to prevent re-fetching when navigating back and forth quickly. */
         private const val MIN_REFETCH_INTERVAL = 5 * 60 * 1000L // 5 minutes
 
@@ -235,14 +243,32 @@ class CriticalDarlingsRepository(
      * Mirrors desktop's `parseCriticsPicksRSS()`.
      */
     private suspend fun fetchAndParseRSS(): List<CriticsPickAlbum> {
+        // Dual-source union during the RSSground → Achordion migration (#343):
+        // read both feeds, tolerating either failing, and union by "Album by
+        // Artist". Achordion first so its fresh first-party picks win the dedup;
+        // RSSground fills the historical backlog while Achordion's store is thin.
+        val achordion = fetchOneFeed(ACHORDION_RSS_URL)
+        val rssground = fetchOneFeed(RSSGROUND_RSS_URL)
+
+        val seen = mutableSetOf<String>()
+        val union = mutableListOf<CriticsPickAlbum>()
+        for (album in achordion + rssground) {
+            val key = "${album.title.lowercase()}|${album.artist.lowercase()}"
+            if (seen.add(key)) union.add(album)
+        }
+        return union
+    }
+
+    /** Fetch + parse one Critical Darlings feed; empty list on any failure. */
+    private suspend fun fetchOneFeed(url: String): List<CriticsPickAlbum> {
         val response = try {
-            httpClient.get(RSS_URL)
+            httpClient.get(url)
         } catch (e: Exception) {
-            Log.w(TAG, "RSS fetch failed: ${e.message}")
+            Log.w(TAG, "RSS fetch failed ($url): ${e.message}")
             return emptyList()
         }
         if (!response.status.isSuccess()) {
-            Log.w(TAG, "RSS fetch failed: ${response.status.value}")
+            Log.w(TAG, "RSS fetch failed ($url): ${response.status.value}")
             return emptyList()
         }
         return parseRSS(response.bodyAsText())
