@@ -66,6 +66,13 @@ class CriticalDarlingsRepository(
         private const val RSS_URL = "https://achordion.xyz/api/critical-darlings/feed.xml"
         /** Short interval to prevent re-fetching when navigating back and forth quickly. */
         private const val MIN_REFETCH_INTERVAL = 5 * 60 * 1000L // 5 minutes
+
+        /**
+         * Target list size for the union-with-cache fallback (#343). We keep every
+         * fresh feed pick and top up from cache to this many while the Achordion
+         * feed backfills; once the feed alone reaches it, no cached picks are added.
+         */
+        private const val TARGET_ALBUM_COUNT = 25
     }
 
     private val diskJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -154,15 +161,28 @@ class CriticalDarlingsRepository(
                 return@flow
             }
 
-            // Carry over album art from cached albums so we don't re-fetch everything
-            val oldArtByKey = cachedAlbums?.associateBy(
-                { "${it.title.lowercase()}|${it.artist.lowercase()}" },
-                { it.albumArt },
-            ) ?: emptyMap()
-            val mergedAlbums = albums.map { album ->
-                val cachedArt = oldArtByKey["${album.title.lowercase()}|${album.artist.lowercase()}"]
+            // Carry over album art from cached albums so we don't re-fetch everything.
+            val oldByKey = cachedAlbums?.associateBy {
+                "${it.title.lowercase()}|${it.artist.lowercase()}"
+            } ?: emptyMap()
+            val freshAlbums = albums.map { album ->
+                val cachedArt = oldByKey["${album.title.lowercase()}|${album.artist.lowercase()}"]?.albumArt
                 if (cachedArt != null) album.copy(albumArt = cachedArt) else album
             }
+
+            // Union-with-cache fallback (#343 ramp-up): the Achordion feed backfills
+            // over time, so a freshly-migrated client can briefly see only a couple of
+            // picks. Keep ALL fresh feed picks, then top up with recent cached picks
+            // that aren't in the feed (deduped by title|artist) until we reach
+            // TARGET_ALBUM_COUNT. The feed is never truncated, so once it grows past
+            // the target no cached picks are appended and the list converges to
+            // feed-only. (Mirrors the desktop change for the same migration.)
+            val freshKeys = freshAlbums.map { "${it.title.lowercase()}|${it.artist.lowercase()}" }.toSet()
+            val cachedOnly = (cachedAlbums ?: emptyList()).filterNot {
+                "${it.title.lowercase()}|${it.artist.lowercase()}" in freshKeys
+            }
+            val fillCount = (TARGET_ALBUM_COUNT - freshAlbums.size).coerceAtLeast(0)
+            val mergedAlbums = freshAlbums + cachedOnly.take(fillCount)
 
             cachedAlbums = mergedAlbums
             lastFetchedAt = now
