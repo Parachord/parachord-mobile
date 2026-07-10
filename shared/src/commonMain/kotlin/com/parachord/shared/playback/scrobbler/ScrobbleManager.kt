@@ -97,6 +97,10 @@ class ScrobbleManager(
     // Track state for scrobble threshold logic.
     private var currentTrackId: String? = null
     private var nowPlayingSent = false
+    // Whether the now-playing we sent carried a real (engine) duration. If the
+    // first now-playing went out before the engine reported a duration, we
+    // re-send once when it becomes known so LB gets a correct playing-now TTL (#347).
+    private var nowPlayingDurationSent = false
     private var scrobbleSubmitted = false
     private var trackStartTimestamp: Long = 0
 
@@ -120,26 +124,40 @@ class ScrobbleManager(
     private suspend fun processPlaybackState(state: ScrobbleState) {
         val track = state.currentTrack ?: return
 
+        // The actual playing-source (engine) duration in ms, or null when the
+        // engine hasn't reported it yet. This — NOT the metadata track.duration —
+        // is what we submit (#347).
+        val engineDurationMs = state.duration.takeIf { it > 0 }
+
         // New track started.
         if (track.id != currentTrackId) {
             currentTrackId = track.id
             nowPlayingSent = false
+            nowPlayingDurationSent = false
             scrobbleSubmitted = false
             trackStartTimestamp = currentTimeMillis() / 1000
 
-            if (state.isPlaying) dispatchNowPlaying(track)
+            if (state.isPlaying) dispatchNowPlaying(track, engineDurationMs)
             return
         }
 
-        // Track is playing — send now playing if not yet sent.
-        if (state.isPlaying && !nowPlayingSent) dispatchNowPlaying(track)
+        // Track is playing — send now playing if not yet sent, or re-send ONCE
+        // when the engine duration first becomes known (it can lag the track
+        // change) so LB gets a correct playing-now TTL instead of a duration-less
+        // (or default-TTL) entry.
+        if (state.isPlaying && !nowPlayingSent) {
+            dispatchNowPlaying(track, engineDurationMs)
+        } else if (state.isPlaying && !nowPlayingDurationSent && engineDurationMs != null) {
+            dispatchNowPlaying(track, engineDurationMs)
+        }
 
         // Check scrobble threshold.
         if (state.isPlaying && !scrobbleSubmitted && state.duration > 0) {
             val positionSeconds = state.position / 1000
             val durationSeconds = state.duration / 1000
             if (positionSeconds >= scrobbleThreshold(durationSeconds)) {
-                dispatchScrobble(track, trackStartTimestamp)
+                // state.duration > 0 here, so this is the reliable engine duration.
+                dispatchScrobble(track, trackStartTimestamp, state.duration)
             }
         }
     }
@@ -203,14 +221,16 @@ class ScrobbleManager(
         }
     }
 
-    /** Dispatch "now playing" to all enabled scrobblers and JS plugins. */
-    private suspend fun dispatchNowPlaying(track: Track) {
+    /** Dispatch "now playing" to all enabled scrobblers and JS plugins.
+     *  [durationMs] is the engine duration in ms (or null if not yet known). */
+    private suspend fun dispatchNowPlaying(track: Track, durationMs: Long?) {
         nowPlayingSent = true
+        nowPlayingDurationSent = durationMs != null
         val enrichedTrack = refreshTrackMbids(track)
         for (scrobbler in scrobblers) {
             scope.launch {
                 try {
-                    if (scrobbler.isEnabled()) scrobbler.sendNowPlaying(enrichedTrack)
+                    if (scrobbler.isEnabled()) scrobbler.sendNowPlaying(enrichedTrack, durationMs)
                 } catch (e: Exception) {
                     Log.e(TAG, "${scrobbler.displayName}: now playing failed", e)
                 }
@@ -219,14 +239,15 @@ class ScrobbleManager(
         dispatchToPlugins("updateNowPlaying", enrichedTrack)
     }
 
-    /** Dispatch scrobble to all enabled scrobblers and JS plugins. */
-    private suspend fun dispatchScrobble(track: Track, timestamp: Long) {
+    /** Dispatch scrobble to all enabled scrobblers and JS plugins.
+     *  [durationMs] is the engine duration in ms. */
+    private suspend fun dispatchScrobble(track: Track, timestamp: Long, durationMs: Long?) {
         scrobbleSubmitted = true
         val enrichedTrack = refreshTrackMbids(track)
         for (scrobbler in scrobblers) {
             scope.launch {
                 try {
-                    if (scrobbler.isEnabled()) scrobbler.submitScrobble(enrichedTrack, timestamp)
+                    if (scrobbler.isEnabled()) scrobbler.submitScrobble(enrichedTrack, timestamp, durationMs)
                 } catch (e: Exception) {
                     Log.e(TAG, "${scrobbler.displayName}: scrobble failed", e)
                 }

@@ -30,7 +30,7 @@ class LibreFmScrobbler(
 
     override suspend fun isEnabled(): Boolean = settingsStore.getLibreFmSessionKey() != null
 
-    override suspend fun sendNowPlaying(track: Track) {
+    override suspend fun sendNowPlaying(track: Track, durationMs: Long?) {
         val sessionKey = settingsStore.getLibreFmSessionKey() ?: return
         val ok = lastFmClient.updateNowPlaying(
             artist = track.artist,
@@ -40,13 +40,14 @@ class LibreFmScrobbler(
             sharedSecret = SHARED_SECRET,
             album = track.album,
             recordingMbid = track.recordingMbid,
-            durationSec = track.duration?.let { it / 1000 },
+            // Engine duration in ms → seconds (#347), not metadata track.duration.
+            durationSec = durationMs?.let { it / 1000 },
             apiUrl = API_URL,
         )
         if (ok) Log.d(TAG, "Now playing: ${track.artist} - ${track.title}")
     }
 
-    override suspend fun submitScrobble(track: Track, timestamp: Long) {
+    override suspend fun submitScrobble(track: Track, timestamp: Long, durationMs: Long?) {
         val sessionKey = settingsStore.getLibreFmSessionKey() ?: return
         val ok = lastFmClient.scrobble(
             artist = track.artist,
@@ -57,7 +58,8 @@ class LibreFmScrobbler(
             sharedSecret = SHARED_SECRET,
             album = track.album,
             recordingMbid = track.recordingMbid,
-            durationSec = track.duration?.let { it / 1000 },
+            // Engine duration in ms → seconds (#347).
+            durationSec = durationMs?.let { it / 1000 },
             apiUrl = API_URL,
         )
         if (ok) Log.d(TAG, "Scrobbled: ${track.artist} - ${track.title}")

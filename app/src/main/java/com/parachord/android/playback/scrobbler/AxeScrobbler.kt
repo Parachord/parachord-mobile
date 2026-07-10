@@ -46,7 +46,7 @@ class AxeScrobbler(
         }
     }
 
-    override suspend fun sendNowPlaying(track: TrackEntity) {
+    override suspend fun sendNowPlaying(track: TrackEntity, durationMs: Long?) {
         if (!isEnabled()) return
         try {
             val trackJson = buildTrackJson(track)
@@ -65,7 +65,7 @@ class AxeScrobbler(
         }
     }
 
-    override suspend fun submitScrobble(track: TrackEntity, timestamp: Long) {
+    override suspend fun submitScrobble(track: TrackEntity, timestamp: Long, durationMs: Long?) {
         if (!isEnabled()) return
         try {
             val trackJson = buildTrackJson(track, timestamp)

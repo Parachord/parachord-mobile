@@ -34,7 +34,7 @@ class ListenBrainzScrobbler(
 
     override suspend fun isEnabled(): Boolean = settingsStore.getListenBrainzToken() != null
 
-    override suspend fun sendNowPlaying(track: Track) {
+    override suspend fun sendNowPlaying(track: Track, durationMs: Long?) {
         val token = settingsStore.getListenBrainzToken() ?: return
         val e = deriveLbSourceEnrichment(track)
         val ok = listenBrainzClient.submitListens(
@@ -45,7 +45,11 @@ class ListenBrainzScrobbler(
             recordingMbid = e.recordingMbid,
             artistMbids = e.artistMbids,
             releaseMbid = e.releaseMbid,
-            durationMs = track.duration,
+            // Real playing-source (engine) duration in ms (#347) — NOT the
+            // metadata track.duration (inconsistent units / 0 for metadata-only).
+            // LB expires the playing-now entry off this; a bad value pins "Now
+            // Playing" forever. Null when the engine hasn't reported yet → omitted.
+            durationMs = durationMs,
             listenedAt = null,
             originUrl = e.originUrl,
             musicService = e.musicService,
@@ -56,7 +60,7 @@ class ListenBrainzScrobbler(
         if (ok) Log.d(TAG, "Now playing: ${track.artist} - ${track.title}")
     }
 
-    override suspend fun submitScrobble(track: Track, timestamp: Long) {
+    override suspend fun submitScrobble(track: Track, timestamp: Long, durationMs: Long?) {
         val token = settingsStore.getListenBrainzToken() ?: return
         val e = deriveLbSourceEnrichment(track)
         val ok = listenBrainzClient.submitListens(
@@ -67,7 +71,8 @@ class ListenBrainzScrobbler(
             recordingMbid = e.recordingMbid,
             artistMbids = e.artistMbids,
             releaseMbid = e.releaseMbid,
-            durationMs = track.duration,
+            // Engine duration in ms (#347); see sendNowPlaying above.
+            durationMs = durationMs,
             listenedAt = timestamp,
             originUrl = e.originUrl,
             musicService = e.musicService,
