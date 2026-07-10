@@ -19,11 +19,22 @@ interface Scrobbler {
     /** True when the user has authenticated this service. */
     suspend fun isEnabled(): Boolean
 
-    /** Send a "now playing" update when a track starts. */
-    suspend fun sendNowPlaying(track: Track)
+    /**
+     * Send a "now playing" update when a track starts. [durationMs] is the
+     * ACTUAL playing-source (engine) duration in milliseconds — prefer it over
+     * the metadata `track.duration`, which is unreliable (inconsistent units per
+     * source, `0` for metadata-only tracks). Null when the engine hasn't reported
+     * a duration yet; consumers should then OMIT the duration rather than fall
+     * back to the metadata value (#347).
+     */
+    suspend fun sendNowPlaying(track: Track, durationMs: Long? = null)
 
-    /** Submit a scrobble once the listen-threshold is reached. */
-    suspend fun submitScrobble(track: Track, timestamp: Long)
+    /**
+     * Submit a scrobble once the listen-threshold is reached. [durationMs] is the
+     * engine duration in ms (see [sendNowPlaying]); reliably non-null here since
+     * the threshold gates on a known duration.
+     */
+    suspend fun submitScrobble(track: Track, timestamp: Long, durationMs: Long? = null)
 
     /**
      * Push a love/feedback for the track. Default no-op — only services that
