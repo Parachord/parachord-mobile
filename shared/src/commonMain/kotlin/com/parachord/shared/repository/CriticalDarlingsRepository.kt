@@ -22,7 +22,7 @@ import kotlinx.serialization.json.Json
  * Repository for Critical Darlings — top-rated albums from leading music publications.
  *
  * Mirrors the desktop app's `loadCriticsPicks()` / `parseCriticsPicksRSS()` implementation:
- * 1. Fetch RSS feed from rssground.com/p/uncoveries
+ * 1. Fetch the Critical Darlings RSS feed from Achordion (achordion.xyz/api/critical-darlings/feed.xml)
  * 2. Parse each item as "Album Title by Artist Name"
  * 3. Progressively fetch album art via Cover Art Archive (MusicBrainz release search → MBID → CAA)
  *
@@ -58,7 +58,12 @@ class CriticalDarlingsRepository(
 ) {
     companion object {
         private const val TAG = "CriticalDarlingsRepo"
-        private const val RSS_URL = "https://www.rssground.com/p/uncoveries"
+        // Achordion is the source of truth for Critical Darlings (#343). Its
+        // public RSS feed is byte-compatible with the retired RSSground feed
+        // (`<title>` = "Album by Artist", Spotify URL in `<description>`,
+        // Metacritic `<link>`) — no parser changes needed. No auth; keep a
+        // descriptive User-Agent. Covers are still resolved via MusicBrainz/CAA.
+        private const val RSS_URL = "https://achordion.xyz/api/critical-darlings/feed.xml"
         /** Short interval to prevent re-fetching when navigating back and forth quickly. */
         private const val MIN_REFETCH_INTERVAL = 5 * 60 * 1000L // 5 minutes
     }
