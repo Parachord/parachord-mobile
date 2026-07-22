@@ -114,4 +114,10 @@ jobs:
 
       - name: Upload AAB to Play Console
         if: startsWith(github.ref, 'refs/tags/v') && env.HAS_PLAY_CREDS == 'true'
-        run: ./gradlew publishBundle --stacktrace
+        # Stable tags publish straight to PRODUCTION. Play evaluates policy
+        # (e.g. the target-API requirement) against the production release, so
+        # uploading to `internal` left compliant builds sitting un-promoted.
+        # Prerelease tags are still routed to `internal` regardless of this flag
+        # by the `isPrerelease` guard in app/build.gradle.kts — so a `v0.9.5-beta.1`
+        # style tag stays internal-only.
+        run: ./gradlew publishBundle -Pplay.track=production --stacktrace
