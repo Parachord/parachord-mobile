@@ -41,6 +41,17 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!--
+	  Export compliance, answered at build time so App Store Connect stops
+	  prompting on every upload. NO = the app uses only exempt encryption:
+	  HTTPS/TLS via URLSession, CryptoKit, and Keychain are all provided by
+	  Apple's OS, and the bundled kotlincrypto MD5 / SHA-256 are HASH functions
+	  (Last.fm request signing + XSPF change detection), not encryption. If a
+	  non-exempt encryption implementation is ever added, flip this to YES and
+	  file the annual self-classification report.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>spotify</string>
