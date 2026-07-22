@@ -20,7 +20,7 @@
 		AA0000000000000000000055 /* MigrationPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000054 /* MigrationPreviewView.swift */; };
 		AA0000000000000000000028 /* PlaylistDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000018 /* PlaylistDetailView.swift */; };
 		AA0000000000000000000029 /* resolver-loader.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000019 /* resolver-loader.js */; };
-		AA000000000000000000002A /* plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* plugins */; };
+		AA000000000000000000002A /* axe-plugins in Resources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001A /* axe-plugins */; };
 		AA000000000000000000002B /* IosTrackResolverCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001B /* IosTrackResolverCache.swift */; };
 		AA000000000000000000002C /* PlaybackRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001C /* PlaybackRouter.swift */; };
 		AA000000000000000000002D /* ResolverBadgeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000001D /* ResolverBadgeRow.swift */; };
@@ -93,7 +93,7 @@
 		AA0000000000000000000054 /* MigrationPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MigrationPreviewView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000018 /* PlaylistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistDetailView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000019 /* resolver-loader.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/resolver-loader.js"; sourceTree = "<group>"; };
-		AA000000000000000000001A /* plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources/plugins; sourceTree = "<group>"; };
+		AA000000000000000000001A /* axe-plugins */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "Resources/axe-plugins"; sourceTree = "<group>"; };
 		AA000000000000000000001B /* IosTrackResolverCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosTrackResolverCache.swift; sourceTree = "<group>"; };
 		AA000000000000000000001C /* PlaybackRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackRouter.swift; sourceTree = "<group>"; };
 		AA000000000000000000001D /* ResolverBadgeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolverBadgeRow.swift; sourceTree = "<group>"; };
@@ -233,7 +233,7 @@
 				AA00000000000000000000D0 /* CollectionView.swift */,
 				AA000000000000000000006E /* CuratedAlbumScreens.swift */,
 				AA0000000000000000000019 /* resolver-loader.js */,
-				AA000000000000000000001A /* plugins */,
+				AA000000000000000000001A /* axe-plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
 			);
 			path = Parachord;
@@ -327,7 +327,7 @@
 			files = (
 				AA0000000000000000000022 /* Assets.xcassets in Resources */,
 				AA0000000000000000000029 /* resolver-loader.js in Resources */,
-				AA000000000000000000002A /* plugins in Resources */,
+				AA000000000000000000002A /* axe-plugins in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -426,6 +426,7 @@
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YR3XETE537;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
@@ -435,6 +436,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -449,6 +451,7 @@
 			buildSettings = {
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = YR3XETE537;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShareExtension/Info.plist;
@@ -458,6 +461,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
+				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.parachord.ios.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

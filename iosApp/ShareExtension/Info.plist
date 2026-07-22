@@ -2,12 +2,30 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!--
+	  This target sets GENERATE_INFOPLIST_FILE = NO, so Xcode synthesizes NOTHING
+	  here — it only expands $(...) variables. Every required key must be declared
+	  explicitly. Omitting CFBundleExecutable made App Store validation reject the
+	  build (90360 "Missing Info.plist value ... CFBundleExecutable" + 90171, which
+	  reports the extension's binary as a "standalone executable" precisely because
+	  no CFBundleExecutable claims it). CFBundleVersion / CFBundleShortVersionString
+	  must also MATCH the containing app, so they read the same build settings the
+	  app target uses (mirrored onto this target in project.pbxproj).
+	-->
 	<key>CFBundleDisplayName</key>
 	<string>Parachord</string>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>NSExtension</key>

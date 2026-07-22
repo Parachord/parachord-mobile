@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Export options for App Store Connect / TestFlight distribution of the
+  Parachord iOS app. Consumed by `iosApp/scripts/testflight.sh` and by
+  `xcodebuild -exportArchive -exportOptionsPlist`.
+
+  - method app-store-connect: Xcode 15.3+ name for an App Store build (was
+    "app-store" on older Xcode). This tree builds on Xcode 26 / iOS 26.5 SDK.
+  - signingStyle automatic + team YR3XETE537: matches the project's Automatic
+    signing. The archive/export steps pass -allowProvisioningUpdates so Xcode
+    mints the distribution cert + App Store profiles for BOTH targets
+    (com.parachord.ios and the embedded com.parachord.ios.share extension).
+  - destination export: produce a signed .ipa locally. The script uploads as a
+    separate, explicit step (--upload) so a plain run never pushes to Apple.
+  - manageAppVersionAndBuildNumber false: keep the explicit MARKETING_VERSION /
+    CURRENT_PROJECT_VERSION from the project; don't let Xcode auto-increment.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>teamID</key>
+    <string>YR3XETE537</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>uploadSymbols</key>
+    <true/>
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+</dict>
+</plist>
