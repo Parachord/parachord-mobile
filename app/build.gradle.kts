@@ -18,12 +18,12 @@ fun localProp(key: String): String =
 
 android {
     namespace = "com.parachord.android"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.parachord.android"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 17
         versionName = "0.9.3"
 
