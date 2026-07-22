@@ -3,8 +3,12 @@
 # Archive + export (and optionally upload) the Parachord iOS app for
 # TestFlight / App Store Connect.
 #
-#   ./iosApp/scripts/testflight.sh              # archive + export a signed .ipa
-#   ./iosApp/scripts/testflight.sh --upload     # also upload to App Store Connect
+#   <repo>/iosApp/scripts/testflight.sh              # archive + export a signed .ipa
+#   <repo>/iosApp/scripts/testflight.sh --upload     # also upload to App Store Connect
+#
+# Invoke by ABSOLUTE path. Shell cwd does not reliably persist between agent
+# tool calls, and a relative `./iosApp/scripts/testflight.sh` resolved against
+# `iosApp/` instead of the repo root and failed with exit 127.
 #
 # Signing is Automatic (team YR3XETE537). For the archive/export steps, Xcode
 # must be signed into an account with access to the team (Xcode > Settings >

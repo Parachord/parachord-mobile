@@ -372,6 +372,73 @@ never from a persisted blob, so this is an iOS-only discipline.
   Developer Mode on, then the profile generates.
 ---
 
+## TestFlight / App Store distribution
+
+```bash
+/Users/jherskowitz/.../iosApp/scripts/testflight.sh            # archive + export .ipa
+/Users/jherskowitz/.../iosApp/scripts/testflight.sh --upload   # + upload (needs ASC API key)
+```
+
+**Always invoke the script by ABSOLUTE path.** The Bash tool's cwd does not
+reliably persist between calls (same rule as the `xcodebuild -project` one
+above); a relative `./iosApp/scripts/testflight.sh` resolved against `iosApp/`
+and died with exit 127.
+
+`ExportOptions.plist` is `method = app-store-connect` — that names the SERVICE,
+not "release to the App Store." Uploading a build only makes it available in the
+TestFlight tab; an App Store release is a separate, explicit submission. There is
+no TestFlight-only upload pipeline.
+
+**Local success proves NOTHING about uploadability.** `ARCHIVE SUCCEEDED` +
+`EXPORT SUCCEEDED` + a valid `codesign -v` all passed on two archives that Apple's
+server-side validator then rejected. Distribution defects surface only at upload.
+Both bugs below were also **invisible on the simulator**, which is why the Share
+Extension shipped broken for so long — verify distribution changes by uploading.
+
+### Trap 1 — `PlugIns` is RESERVED; never name a bundled folder that case-folds to it
+
+The bundled `.axe` resource folder used to be `Resources/plugins`. iOS puts app
+extensions in `PlugIns/`, and **the macOS build filesystem is case-INSENSITIVE**,
+so `plugins` and `PlugIns` became ONE directory: `ShareExtension.appex` got swept
+into the resources folder and the archive had **no `PlugIns/` at all**. App Store
+validation rejected it (90680 / 90354 / 90171), and on a real (case-sensitive)
+device iOS could never have registered the extension — so sharing a link into
+Parachord would silently do nothing.
+
+Fixed by renaming to **`Resources/axe-plugins`** (+ `pbxproj` file-ref path +
+both `PluginFileAccess.ios.kt` `pathForResource("axe-plugins")` calls). The
+plugin CACHE dir stays `<AppSupport>/plugins` — it's outside the bundle, so it
+can't collide, and renaming it would orphan every downloaded plugin update.
+
+### Trap 2 — the ShareExtension target is `GENERATE_INFOPLIST_FILE = NO`
+
+Unlike the app target, the extension uses a hand-written
+`INFOPLIST_FILE = ShareExtension/Info.plist`. In that mode Xcode **synthesizes
+nothing** — it only expands `$(...)` variables — so every required key must be
+declared explicitly. The plist (authored by the `xcodeproj` gem when the target
+was added, #17) omitted them, and validation rejected the build: 90360 (missing
+`CFBundleExecutable`) plus 90171, which reports the extension's binary as a
+forbidden "standalone executable" precisely BECAUSE no `CFBundleExecutable`
+claims it.
+
+Required keys now present: `CFBundleExecutable = $(EXECUTABLE_NAME)`,
+`CFBundleInfoDictionaryVersion`, `CFBundleVersion = $(CURRENT_PROJECT_VERSION)`,
+`CFBundleShortVersionString = $(MARKETING_VERSION)`.
+
+**`MARKETING_VERSION` + `CURRENT_PROJECT_VERSION` are mirrored onto BOTH
+ShareExtension build configs** in `project.pbxproj` — they were app-target-only,
+so those `$(...)` refs would have expanded to EMPTY strings (trading one
+validation error for another). Apple also requires the extension's version to
+MATCH the containing app's. **Bumping the version means editing all four configs
+(app Debug/Release + extension Debug/Release).**
+
+### Version / build numbers
+
+`MARKETING_VERSION = 0.1`, `CURRENT_PROJECT_VERSION = 1`. Each upload App Store
+Connect *accepts* needs a unique, increasing build number — but a build rejected
+at validation is never accepted, so the same number can be reused after a fix.
+---
+
 ## Deep links & Universal Links (`parachord://` + `https://parachord.com`)
 
 The dispatch chain: `RootView.handleDeepLink` (parachord://) and
