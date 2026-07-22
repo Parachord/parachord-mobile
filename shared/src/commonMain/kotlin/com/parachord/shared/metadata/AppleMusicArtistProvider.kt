@@ -1,6 +1,7 @@
 package com.parachord.shared.metadata
 
 import com.parachord.shared.platform.Log
+import com.parachord.shared.platform.currentTimeMillis
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -47,7 +48,36 @@ class AppleMusicArtistProvider(
     override val name = "applemusic"
     override val priority = 25
 
-    override suspend fun isAvailable(): Boolean = developerToken.isNotBlank()
+    init {
+        // Surface an expiring/expired token at construction. The whole failure
+        // mode this guards (#186) is that expiry is otherwise INVISIBLE: every
+        // request just 401s and artist images quietly stop appearing.
+        val days = DeveloperTokenExpiry.daysRemaining(developerToken, currentTimeMillis() / 1000)
+        when {
+            days == null -> Unit // no/unparseable exp — nothing useful to say
+            days < 0 -> Log.w(
+                TAG,
+                "Apple Music developer token EXPIRED ${-days}d ago — artist images are disabled. " +
+                    "Rotate it (see parachord-mobile#186; builds mint it from the .p8 when configured).",
+            )
+            days <= DeveloperTokenExpiry.WARN_WITHIN_DAYS -> Log.w(
+                TAG,
+                "Apple Music developer token expires in ${days}d — rotate before artist images break.",
+            )
+        }
+    }
+
+    /**
+     * False when the token is missing OR past its `exp`.
+     *
+     * The expiry half is the #186 fix: an expired token used to pass this check
+     * (it only tested `isNotBlank()`), so the provider stayed "available" and
+     * every call 401'd silently. Returning false makes MetadataService skip it
+     * cleanly and fall through to the other image sources.
+     */
+    override suspend fun isAvailable(): Boolean =
+        developerToken.isNotBlank() &&
+            !DeveloperTokenExpiry.isExpired(developerToken, currentTimeMillis() / 1000)
     override suspend fun searchTracks(query: String, limit: Int): List<TrackSearchResult> = emptyList()
     override suspend fun searchAlbums(query: String, limit: Int): List<AlbumSearchResult> = emptyList()
     override suspend fun searchArtists(query: String, limit: Int): List<ArtistInfo> = emptyList()

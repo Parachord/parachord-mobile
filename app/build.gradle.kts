@@ -16,6 +16,74 @@ val localProps = Properties().apply {
 fun localProp(key: String): String =
     (localProps.getProperty(key) ?: System.getenv(key) ?: "").trim()
 
+/**
+ * Apple Music developer token (ES256 JWT), minted from the MusicKit `.p8` at
+ * build time — parachord-mobile#186.
+ *
+ * Set `APPLE_MUSIC_P8_PATH` / `APPLE_MUSIC_KEY_ID` / `APPLE_MUSIC_TEAM_ID` in
+ * `local.properties` (or as env vars in CI) and the token is generated fresh,
+ * so it can never silently expire or drift out of sync with iOS.
+ *
+ * **Falls back to the legacy hand-pasted `APPLE_MUSIC_DEVELOPER_TOKEN`** when
+ * the `.p8` isn't configured, so contributors without the private key still get
+ * a working build. Generation is an upgrade, not a hard requirement.
+ */
+val appleMusicDeveloperToken: String by lazy {
+    val p8 = localProp("APPLE_MUSIC_P8_PATH")
+    val keyId = localProp("APPLE_MUSIC_KEY_ID")
+    val teamId = localProp("APPLE_MUSIC_TEAM_ID")
+    val legacy = localProp("APPLE_MUSIC_DEVELOPER_TOKEN")
+
+    if (p8.isBlank() || keyId.isBlank() || teamId.isBlank()) {
+        if (legacy.isNotBlank()) {
+            logger.info("Apple Music: using static APPLE_MUSIC_DEVELOPER_TOKEN (no .p8 configured)")
+        }
+        legacy
+    } else {
+        try {
+            // Cached so the token is byte-stable within a day — ECDSA signatures
+            // are non-deterministic, and a token that changed every build would
+            // rewrite BuildConfig and force a full recompile each time.
+            AppleMusicToken.generateCached(
+                cacheFile = layout.buildDirectory.file("apple-music-token.jwt").get().asFile,
+                p8Path = p8,
+                keyId = keyId,
+                teamId = teamId,
+            )
+        } catch (e: Exception) {
+            // Never fail the build over the artist-image gap-filler: degrade to
+            // the static token (or empty, which disables the provider cleanly).
+            logger.warn("Apple Music: token generation failed (${e.message}); falling back to static token")
+            legacy
+        }
+    }
+}
+
+/**
+ * Prints the freshly-minted token to stdout for the iOS build.
+ *
+ * The Xcode "Generate Apple Music token" build phase runs
+ * `./gradlew -q :app:printAppleMusicToken` and writes the result into the built
+ * Info.plist. Keeping ONE signer here (rather than a second one in a shell or
+ * Node script) is the whole point of #186 — two implementations drift.
+ * `-q` keeps stdout to just the token.
+ */
+tasks.register("printAppleMusicToken") {
+    description = "Prints the Apple Music developer token (used by the iOS build phase)."
+    // The token depends on the .p8 + the current day, not on any task input.
+    outputs.upToDateWhen { false }
+    doLast {
+        val token = appleMusicDeveloperToken
+        if (token.isBlank()) {
+            throw GradleException(
+                "No Apple Music developer token: set APPLE_MUSIC_P8_PATH/KEY_ID/TEAM_ID " +
+                    "or APPLE_MUSIC_DEVELOPER_TOKEN in local.properties."
+            )
+        }
+        println(token)
+    }
+}
+
 android {
     namespace = "com.parachord.android"
     compileSdk = 36
@@ -36,7 +104,7 @@ android {
         buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"${localProp("SPOTIFY_CLIENT_ID")}\"")
         buildConfigField("String", "SOUNDCLOUD_CLIENT_ID", "\"${localProp("SOUNDCLOUD_CLIENT_ID")}\"")
         buildConfigField("String", "SOUNDCLOUD_CLIENT_SECRET", "\"${localProp("SOUNDCLOUD_CLIENT_SECRET")}\"")
-        buildConfigField("String", "APPLE_MUSIC_DEVELOPER_TOKEN", "\"${localProp("APPLE_MUSIC_DEVELOPER_TOKEN")}\"")
+        buildConfigField("String", "APPLE_MUSIC_DEVELOPER_TOKEN", "\"$appleMusicDeveloperToken\"")
         buildConfigField("String", "TICKETMASTER_API_KEY", "\"${localProp("TICKETMASTER_API_KEY")}\"")
         buildConfigField("String", "SEATGEEK_CLIENT_ID", "\"${localProp("SEATGEEK_CLIENT_ID")}\"")
     }
