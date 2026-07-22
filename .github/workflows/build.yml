@@ -101,9 +101,12 @@ jobs:
 
       # ── Play Store upload (gated on secret presence) ────────────────
       # Triple-T `gradle-play-publisher` uploads the AAB to the Play
-      # Console release track. Prerelease tags (v0.4.0-beta.1) route to
-      # `internal`; stable tags default to `internal` too and must be
-      # promoted through the Play Console UI. Gated on PLAY_SERVICE_
+      # Console release track. Stable tags go to `alpha` — Play's **Closed
+      # testing** track — because Google's production-access requirement
+      # counts testers on a CLOSED test (12+ opted in for 14 continuous
+      # days); internal-testing testers do NOT count toward it. Prerelease
+      # tags (v0.4.0-beta.1) still route to `internal` via the
+      # `isPrerelease` guard in app/build.gradle.kts. Gated on PLAY_SERVICE_
       # ACCOUNT_JSON being present so forks and tag pushes from pre-
       # setup states don't fail this step.
       - name: Write Play service account JSON
@@ -114,4 +117,6 @@ jobs:
 
       - name: Upload AAB to Play Console
         if: startsWith(github.ref, 'refs/tags/v') && env.HAS_PLAY_CREDS == 'true'
-        run: ./gradlew publishBundle --stacktrace
+        # `alpha` is the API name for Play's default "Closed testing" track.
+        # If you use a CUSTOM-named closed track, change this to that name.
+        run: ./gradlew publishBundle -Pplay.track=alpha --stacktrace
