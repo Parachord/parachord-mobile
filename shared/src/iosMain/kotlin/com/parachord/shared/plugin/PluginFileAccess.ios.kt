@@ -17,10 +17,20 @@ import platform.Foundation.writeToFile
 /**
  * iOS implementation of [PluginFileAccess].
  *
- * - **Bundled** plugins live under `Bundle.main/plugins/` (added at build
+ * - **Bundled** plugins live under `Bundle.main/axe-plugins/` (added at build
  *   time when the iOS app shell ships).
+ *
+ *   The directory is `axe-plugins`, NOT `plugins`: iOS reserves `PlugIns/` for
+ *   app extensions, and the build filesystem on macOS is case-INSENSITIVE, so a
+ *   bundled resource folder named `plugins` merges with it. That silently swept
+ *   `ShareExtension.appex` into the resources folder and produced an archive
+ *   with no `PlugIns/` at all — App Store validation rejects it (90680 / 90171 /
+ *   90354) and the extension can't register on a real (case-sensitive) device.
+ *   The simulator hides the bug because it runs off the host's case-insensitive
+ *   filesystem. Keep this name distinct from `PlugIns` in any case-folding.
  * - **Cached** plugins live under `<NSApplicationSupportDirectory>/plugins/`
  *   so PluginSyncService can write hot-reload updates between app launches.
+ *   (That path is outside the app bundle, so it can't collide — left as-is.)
  *
  * Filename validation matches the Android implementation (security: H2)
  * — the same `^[A-Za-z0-9_.-]+\.axe$` regex prevents path traversal via
@@ -63,7 +73,7 @@ actual class PluginFileAccess {
     }
 
     actual fun listBundledPlugins(): List<String> {
-        val bundlePath = NSBundle.mainBundle.pathForResource("plugins", ofType = null)
+        val bundlePath = NSBundle.mainBundle.pathForResource("axe-plugins", ofType = null)
             ?: return emptyList()
         val contents = NSFileManager.defaultManager.contentsOfDirectoryAtPath(bundlePath, null)
             ?: return emptyList()
@@ -73,7 +83,7 @@ actual class PluginFileAccess {
 
     actual fun readBundledPlugin(filename: String): String {
         validateSafeFilename(filename)
-        val bundlePath = NSBundle.mainBundle.pathForResource("plugins", ofType = null)
+        val bundlePath = NSBundle.mainBundle.pathForResource("axe-plugins", ofType = null)
             ?: return ""
         val filePath = "$bundlePath/$filename"
         return readFileAsString(filePath)
