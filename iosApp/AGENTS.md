@@ -434,9 +434,46 @@ MATCH the containing app's. **Bumping the version means editing all four configs
 
 ### Version / build numbers
 
-`MARKETING_VERSION = 0.1`, `CURRENT_PROJECT_VERSION = 1`. Each upload App Store
+`MARKETING_VERSION = 0.1`. `CURRENT_PROJECT_VERSION` is the build number, bumped
+per shipped TestFlight build (0.1 (1) → 0.1 (2) → …). Each upload App Store
 Connect *accepts* needs a unique, increasing build number — but a build rejected
 at validation is never accepted, so the same number can be reused after a fix.
+Bumping means editing **all four configs** (app + extension, Debug + Release).
+
+### Bumping the iOS build must NOT ride the Android release pipeline
+
+**iOS TestFlight builds are cut LOCALLY** (`scripts/testflight.sh` → Xcode
+Organizer / `--upload`). They do not go through CI at all, and the iOS build
+number (`CURRENT_PROJECT_VERSION`, in `project.pbxproj`) is **completely separate**
+from the Android `versionCode` (in `app/build.gradle.kts`). Do not conflate them.
+
+**The workflow: bump on a BRANCH, ship from the branch, don't merge just for the bump.**
+```
+git checkout -b chore/ios-testflight-build-N main
+# bump CURRENT_PROJECT_VERSION in all four configs, commit
+scripts/testflight.sh            # archive + export, upload via Organizer
+```
+Merging the bump into `main` is optional book-keeping — it is NOT required to
+ship to TestFlight, and it's easy to over-worry about. Here's what actually
+happens, verified against `.github/workflows/build.yml`:
+
+- **Push to `main` (e.g. merging a PR)** → the "Build Release" workflow runs
+  `assembleRelease`/`bundleRelease` and uploads the APK+AAB as **14-day CI
+  artifacts only**. It does **NOT** publish a GitHub Release and does **NOT**
+  upload to Play Console — both are gated `if: startsWith(github.ref, 'refs/tags/v')`.
+- So merging an iOS-only bump to `main` is **harmless** — no Android publish, no
+  duplicate-`versionCode` Play rejection. Its only cost is one ~15–20 min CI build
+  producing throwaway artifacts. (Earlier worry that it would "republish Android at
+  the same versionCode" was wrong — Play upload is tag-gated, not push-gated.)
+- **Android is published only by a `v*` tag**, and every such tag must carry a
+  freshly-bumped Android `versionCode`. That's the real duplicate-`versionCode`
+  rule — it lives at Android *tag-release* time and has nothing to do with iOS
+  build bumps.
+
+Net: keep iOS build bumps on a branch so `main`'s CI isn't churned by
+TestFlight-only changes, ship TestFlight from that branch, and fold the bump into
+`main` whenever it's convenient (or alongside other work) — never tag `v*` for an
+iOS-only change.
 ---
 
 ## Deep links & Universal Links (`parachord://` + `https://parachord.com`)
