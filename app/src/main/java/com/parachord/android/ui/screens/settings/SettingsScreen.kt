@@ -88,6 +88,7 @@ import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -1361,6 +1362,9 @@ private fun SpotifyConfig(
     onClearPreferredDevice: () -> Unit = {},
 ) {
     val uriHandler = LocalUriHandler.current
+    // Cleared on Save so the soft keyboard stops covering the Connect button
+    // below (part of why the Client-ID flow felt broken — #363).
+    val focusManager = LocalFocusManager.current
 
     Spacer(modifier = Modifier.height(16.dp))
     HorizontalDivider()
@@ -1405,7 +1409,10 @@ private fun SpotifyConfig(
     Spacer(modifier = Modifier.height(12.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         TextButton(
-            onClick = { onSaveClientId(clientIdDraft.trim()) },
+            onClick = {
+                focusManager.clearFocus()
+                onSaveClientId(clientIdDraft.trim())
+            },
             enabled = clientIdDraft.trim().isNotEmpty() && clientIdDraft.trim() != clientId,
         ) {
             Text("Save Client ID")
