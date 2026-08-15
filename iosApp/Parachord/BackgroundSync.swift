@@ -28,7 +28,10 @@ enum BackgroundSync {
         let request = BGAppRefreshTaskRequest(identifier: taskId)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do { try BGTaskScheduler.shared.submit(request) }
-        catch { NSLog("BackgroundSync: submit failed: \(error.localizedDescription)") }
+        // %@ + arg, never an interpolated format string: a '%' in the error text
+        // would otherwise be read as a format specifier and crash (see Log in
+        // Platform.ios.kt).
+        catch { NSLog("BackgroundSync: submit failed: %@", error.localizedDescription) }
     }
 
     private static func handle(_ task: BGAppRefreshTask) {
