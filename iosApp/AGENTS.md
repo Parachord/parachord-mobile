@@ -567,20 +567,32 @@ that populates `AppConfig.appleMusicDeveloperToken`, used by the shared
 `AppleMusicArtistProvider` (a catalog gap-filler for **artist images** in the
 metadata cascade — NOT playback).
 
-- **iOS source:** `iosApp/Parachord/Secrets.xcconfig`
-  (`APPLE_MUSIC_DEVELOPER_TOKEN`, gitignored) → `Info.plist`
-  `AppleMusicDeveloperToken = $(APPLE_MUSIC_DEVELOPER_TOKEN)` →
+**It is now minted at BUILD TIME from the `.p8` (#186)** — no hand-pasting, and
+one signer for both platforms (`buildSrc/src/main/kotlin/AppleMusicToken.kt`).
+
+- **iOS path:** the **"Embed Apple Music developer token"** build phase (last in
+  the Parachord target's phases) runs `iosApp/scripts/embed-apple-music-token.sh`,
+  which asks Gradle for the token (`:app:printAppleMusicToken`) and PlistBuddy-
+  writes it into the BUILT `Info.plist`, read by
   `IosContainer.plist("AppleMusicDeveloperToken")`.
-- **Android source:** `local.properties:APPLE_MUSIC_DEVELOPER_TOKEN` (the same
-  JWT). **Both files hold the same value and must BOTH be updated on every
-  rotation** — forget one and that platform's Apple Music artist images go
-  blank with no error (`isAvailable()` checks `isNotBlank()`, never `exp`, so
-  an expired token fails silently per-request).
-- **Rotation today:** paste the new JWT into BOTH `Secrets.xcconfig` and
-  Android `local.properties`.
-- **Planned fix:** mint the JWT at build time from the `.p8` (already used for
-  Mac builds) so it never drifts or expires unexpectedly —
-  [parachord-mobile#186](https://github.com/Parachord/parachord-mobile/issues/186).
+  - **Why the built plist and not an xcconfig:** xcconfig values resolve BEFORE
+    any build phase runs, so a phase physically cannot feed one. The phase must
+    also stay AFTER "Process Info.plist" and before code signing — hence last.
+  - **Don't reimplement JWT signing in the shell script.** It shells out to the
+    one Kotlin signer on purpose; a second implementation is what drifts.
+- **Config** (Android `local.properties`, or env vars in CI — the iOS build
+  reads them through Gradle): `APPLE_MUSIC_P8_PATH`, `APPLE_MUSIC_KEY_ID`,
+  `APPLE_MUSIC_TEAM_ID`. Key `437JVHZMMK`, team `YR3XETE537` — the same key
+  desktop uses (`parachord-desktop/main.js:2385`).
+- **Fail-soft:** with no `.p8` configured the phase only warns and leaves
+  whatever `Secrets.xcconfig` supplied, so a contributor without the private key
+  still gets a working build. Artist images are a gap-filler and must never
+  break the build.
+- **Rotation is now `.p8`-only.** Nothing to paste on either platform.
+- **Expiry is no longer silent:** `AppleMusicArtistProvider.isAvailable()` checks
+  the `exp` claim (`DeveloperTokenExpiry`) and warns within 14 days. It
+  previously checked only `isNotBlank()`, so an expired token stayed "available"
+  and every request 401'd with no visible symptom beyond blank artist images.
 
 ---
 

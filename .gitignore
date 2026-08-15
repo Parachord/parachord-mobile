@@ -36,3 +36,7 @@ iosApp/Parachord.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.p
 # $(LASTFM_API_KEY) / $(LASTFM_SHARED_SECRET); real values live here only.
 # Committed Config.xcconfig optionally #includes this; copy from the .example.
 iosApp/Parachord/Secrets.xcconfig
+
+# buildSrc compiled output (AppleMusicToken signer, #186)
+buildSrc/build/
+buildSrc/.gradle/
