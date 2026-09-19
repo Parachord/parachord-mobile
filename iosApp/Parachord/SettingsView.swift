@@ -158,6 +158,17 @@ final class SettingsViewModel {
     var libreFmConnected = false
     var libreFmUser = ""
     var libreFmPass = ""
+
+    /// Apple Music **Music User Token** present. Not cosmetic: catalog
+    /// RESOLUTION is gated on this token (`IosResolverRuntime
+    /// .resolveAppleMusicNative` returns null without it, #327), so with no MUT
+    /// Apple Music silently resolves nothing at all. Previously this screen
+    /// hardcoded Apple Music as connected and told users "No key needed",
+    /// leaving no way to acquire the token and no hint why AM produced no
+    /// results — the only acquisition path was the unrelated Sync tab.
+    var appleMusicConnected = false
+    var appleMusicBusy = false
+    var appleMusicError: String?
     var libreFmError: String?
     var libreFmBusy = false
 
@@ -258,6 +269,8 @@ final class SettingsViewModel {
             mobileBlocked = blocked
             await refreshLoadedPlugins()
 
+            appleMusicConnected = (try? await container.hasAppleMusicUserToken())?.boolValue ?? false
+
             spotifyClientId = (try? await store.getSpotifyClientId()) ?? ""
             // Read Spotify connection up-front so the load-time recompute gates
             // it correctly (the connected-flow watcher only fires later).
@@ -282,6 +295,35 @@ final class SettingsViewModel {
         }
     }
 
+    /// Acquire the Apple Music Music User Token, decoupled from sync.
+    ///
+    /// The same StoreKit call the Sync tab makes — but wanting Apple Music
+    /// PLAYBACK shouldn't require turning on Apple Music LIBRARY SYNC, which
+    /// was the only way to get here before.
+    func connectAppleMusic() {
+        Task { @MainActor in
+            appleMusicBusy = true
+            appleMusicError = nil
+            defer { appleMusicBusy = false }
+            let dev = (try? await container.appleMusicDeveloperToken()) ?? ""
+            guard !dev.isEmpty else {
+                appleMusicError = "This build has no Apple Music developer key."
+                return
+            }
+            guard let mut = await acquireAppleMusicMUT(developerToken: dev), !mut.isEmpty else {
+                appleMusicError = "Apple Music authorization was declined."
+                return
+            }
+            try? await container.setAppleMusicUserToken(token: mut)
+            appleMusicConnected = true
+            // Tracks resolved while the gate was closed cached no Apple Music
+            // source. Merge it in additively so existing results survive —
+            // without this the fix appears not to work until each track is
+            // re-resolved by some other means.
+            IosTrackResolverCache.shared.resolverEnabled("applemusic")
+        }
+    }
+
     // ── Connect status ────────────────────────────────────────────────
     func isConnected(_ id: String) -> Bool {
         switch id {
@@ -291,7 +333,9 @@ final class SettingsViewModel {
         case "librefm": return libreFmConnected
         // Scrobbling needs the session key (OAuth), not the read-only username.
         case "lastfm": return lastFmConnected
-        case "localfiles", "bandcamp", "applemusic": return true   // no key needed / MusicKit at play time
+        case "localfiles", "bandcamp": return true   // genuinely need no credentials
+        // NOT unconditionally true: resolution needs the Music User Token.
+        case "applemusic": return appleMusicConnected
         // No-key meta (Discogs) + any uncataloged loaded plugin (Wikipedia,
         // Achordion): they work without credentials, so "active" == enabled.
         case "discogs": return !disabledPlugins.contains(id)
@@ -776,7 +820,7 @@ private struct PluginConfigSheet: View {
                 case "spotify": spotifySection
                 case "lastfm": lastFmSection
                 case "librefm": libreFmSection
-                case "applemusic": infoSection("Apple Music is authorized at playback time via MusicKit. No key needed.")
+                case "applemusic": appleMusicSection
                 case "localfiles": localFilesSection
                 case "bandcamp": infoSection("Bandcamp needs no credentials — it resolves and opens tracks in the browser.")
                 // No key required (matches Android's toggle-only Discogs) — the
@@ -981,6 +1025,47 @@ private struct PluginConfigSheet: View {
             } footer: {
                 Text("Lets the DJ use your recent listening, top artists, and library to personalize replies. Applies to all AI providers.")
             }
+        }
+    }
+
+    /// Apple Music: a real Connect action, not a claim that none is needed.
+    ///
+    /// The copy here used to read "authorized at playback time via MusicKit. No
+    /// key needed." True of playback, FALSE of resolution — which is gated on
+    /// the Music User Token and silently returns nothing without it. So the one
+    /// screen a user checks asserted there was nothing to do, while Apple Music
+    /// resolved zero tracks and the only way to get a token was to enable an
+    /// unrelated feature (library sync) on another tab.
+    @ViewBuilder private var appleMusicSection: some View {
+        Section {
+            if model.appleMusicConnected {
+                HStack {
+                    Label("Connected", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                }
+            } else {
+                Button {
+                    model.connectAppleMusic()
+                } label: {
+                    HStack(spacing: 8) {
+                        if model.appleMusicBusy { ProgressView().controlSize(.small) }
+                        Text(model.appleMusicBusy ? "Connecting…" : "Connect Apple Music")
+                    }
+                }
+                .disabled(model.appleMusicBusy)
+            }
+            if let err = model.appleMusicError {
+                Text(err).font(.caption).foregroundStyle(.red)
+            }
+        } footer: {
+            Text(
+                model.appleMusicConnected
+                    ? "Apple Music can match tracks in your library and play them. Requires an active subscription."
+                    : "Connect to let Parachord match your tracks to Apple Music and play them. "
+                      + "Until you do, Apple Music won't appear as a source for any track. "
+                      + "Requires an active subscription."
+            )
         }
     }
 
