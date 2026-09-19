@@ -211,12 +211,17 @@ class HistoryRepository(
         val imageCache = mutableMapOf<String, String>()
         val cacheMutex = Mutex()
 
-        // Batch-lookup missing images concurrently (limit to 15)
+        // Batch-lookup missing images concurrently (limit to 15).
+        // getArtistImage, NOT getArtistInfo: the image path is serial per
+        // artist, short-circuits at the first provider that has one, and hits
+        // the persistent artist-image cache. getArtistInfo fans out to EVERY
+        // provider in parallel, so this 15-wide batch was firing ~90 requests
+        // at once and exhausting the device DNS resolver (Sept 2026) — for a
+        // full cascade whose only field we read is imageUrl.
         artists.filter { it.imageUrl == null }.take(15).map { artist ->
             async {
                 try {
-                    val info = metadataService.getArtistInfo(artist.name)
-                    val imageUrl = info?.imageUrl
+                    val imageUrl = metadataService.getArtistImage(artist.name)
                     if (imageUrl != null) {
                         cacheMutex.withLock { imageCache[artist.name.lowercase()] = imageUrl }
                     }

@@ -782,11 +782,14 @@ class FriendsRepository(
     private suspend fun enrichArtistImages(artists: List<HistoryArtist>): List<HistoryArtist> = coroutineScope {
         val imageCache = mutableMapOf<String, String>()
         val cacheMutex = Mutex()
+        // getArtistImage, NOT getArtistInfo — see HistoryRepository: the full
+        // cascade fans out to every provider in parallel, so a 15-wide batch
+        // burst the device DNS resolver for a result whose only field used
+        // here is imageUrl. The image path is serial and cached.
         artists.filter { it.imageUrl == null }.take(15).map { artist ->
             async {
                 try {
-                    val info = metadataService.getArtistInfo(artist.name)
-                    val imageUrl = info?.imageUrl
+                    val imageUrl = metadataService.getArtistImage(artist.name)
                     if (imageUrl != null) {
                         cacheMutex.withLock { imageCache[artist.name.lowercase()] = imageUrl }
                     }
