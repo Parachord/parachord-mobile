@@ -63,6 +63,15 @@ kotlin {
             // In-memory MapSettings-backed KvStore for SettingsStore tests (#289).
             implementation(libs.multiplatform.settings.test)
         }
+        // JVM-specific tests for shared code: commonTest must also compile for
+        // iOS, so anything needing real java.* types (e.g. the java.net
+        // exceptions the network-handoff retry keys on) lives here. Also has
+        // visibility of `internal` shared declarations, which :app does not.
+        androidUnitTest.dependencies {
+            implementation(kotlin("test"))
+            implementation(libs.ktor.client.mock)
+            implementation(libs.kotlinx.coroutines.test)
+        }
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
             api(libs.sqldelight.android.driver)

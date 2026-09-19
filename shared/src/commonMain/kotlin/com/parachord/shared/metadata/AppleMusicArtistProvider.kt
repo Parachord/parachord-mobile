@@ -1,6 +1,7 @@
 package com.parachord.shared.metadata
 
 import com.parachord.shared.platform.Log
+import com.parachord.shared.platform.currentTimeMillis
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -54,6 +55,7 @@ class AppleMusicArtistProvider(
 
     override suspend fun getArtistInfo(artistName: String): ArtistInfo? = withContext(Dispatchers.Default) {
         if (developerToken.isBlank()) return@withContext null
+        val startedAt = currentTimeMillis()
         try {
             val url = "https://api.music.apple.com/v1/catalog/$storefront/search" +
                 "?types=artists&limit=5&term=${artistName.encodeURLParameter()}"
@@ -78,7 +80,12 @@ class AppleMusicArtistProvider(
 
             ArtistInfo(name = artistName, imageUrl = imageUrl, provider = name)
         } catch (e: Exception) {
-            Log.w(TAG, "Apple Music artist lookup failed for '$artistName'", e)
+            // Name the exception TYPE and how long we waited. Without this the
+            // failure was undiagnosable: the bare message couldn't distinguish
+            // an HTTP error from a cancellation imposed by the caller's
+            // withTimeoutOrNull, and no stack trace reached logcat.
+            val ms = currentTimeMillis() - startedAt
+            Log.w(TAG, "Apple Music artist lookup failed for '$artistName' after ${ms}ms: ${e::class.simpleName}: ${e.message}", e)
             null
         }
     }

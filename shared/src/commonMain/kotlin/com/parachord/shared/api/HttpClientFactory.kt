@@ -7,6 +7,7 @@ import com.parachord.shared.api.transport.OAuthRefreshPlugin
 import com.parachord.shared.config.AppConfig
 import io.ktor.client.HttpClient
 import io.ktor.client.HttpClientConfig
+import io.ktor.client.plugins.HttpRequestRetry
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
@@ -68,6 +69,26 @@ internal fun HttpClientConfig<*>.installSharedPlugins(
     }
     install(ListenBrainzAuthPlugin) {
         this.tokenProvider = lbTokenProvider
+    }
+    // Survive the device changing networks under an in-flight request.
+    //
+    // On a handoff (Wi-Fi <-> LTE, carrier IPsec re-establishing) every open
+    // socket is aborted and DNS is briefly unresolvable, so EVERY provider in
+    // flight fails at the same instant regardless of service or credentials —
+    // the "Apple Music and Discogs failing in lockstep" symptom. The hosts
+    // resolve fine a second later; nothing was retrying, so a 200ms blip
+    // permanently lost those artist images for the session.
+    //
+    // Scoped tightly on purpose (see isTransientNetworkError): connection
+    // failures ONLY, never HTTP status codes. Retrying statuses here would
+    // fight RateLimitGate and risk re-poking a rate-limited Spotify account,
+    // which is what earns an account-wide abuse ban (#176/#177).
+    install(HttpRequestRetry) {
+        maxRetries = 2
+        retryOnExceptionIf { _, cause -> isTransientNetworkError(cause) }
+        // ~250ms then ~500ms: long enough for a handoff to settle, short
+        // enough that a user waiting on artwork doesn't notice.
+        exponentialDelay(base = 2.0, baseDelayMs = 250, maxDelayMs = 2_000)
     }
     install(HttpTimeout) {
         requestTimeoutMillis = 60_000     // AI endpoints take 30–60s (CLAUDE.md "AI generation needs long timeouts")

@@ -109,7 +109,7 @@ class DiscogsProvider(
         }.bodyAsText()
         if (body.isBlank()) null else json.parseToJsonElement(body).jsonObject
     } catch (e: Exception) {
-        Log.w(TAG, "Discogs request failed: $url", e)
+        Log.w(TAG, "Discogs request failed: $url — ${e::class.simpleName}: ${e.message}", e)
         null
     }
 
