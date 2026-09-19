@@ -37,6 +37,7 @@ class SearchViewModel constructor(
     private val resolverManager: ResolverManager,
     private val settingsStore: SettingsStore,
     private val trackResolverCache: TrackResolverCache,
+    private val musicBrainzClient: com.parachord.shared.api.MusicBrainzClient,
 ) : ViewModel() {
 
     /** User-configured resolver priority order, used to sort resolver icons on track rows. */
@@ -70,6 +71,11 @@ class SearchViewModel constructor(
 
     private val _artistResults = MutableStateFlow<List<ArtistInfo>>(emptyList())
     val artistResults: StateFlow<List<ArtistInfo>> = _artistResults.asStateFlow()
+
+    /** True when MusicBrainz is throttling us and the client's retries didn't
+     *  clear it. The screen shows this INSTEAD of "No results" — a throttled
+     *  search has not established that nothing matched (#375). */
+    val musicBrainzRateLimited: StateFlow<Boolean> = musicBrainzClient.rateLimited
 
     private val _isSearchingRemote = MutableStateFlow(false)
     val isSearchingRemote: StateFlow<Boolean> = _isSearchingRemote.asStateFlow()

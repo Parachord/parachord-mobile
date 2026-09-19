@@ -70,6 +70,7 @@ fun SearchScreen(
     val remoteAlbums by viewModel.remoteAlbumResults.collectAsStateWithLifecycle()
     val artists by viewModel.artistResults.collectAsStateWithLifecycle()
     val isSearchingRemote by viewModel.isSearchingRemote.collectAsStateWithLifecycle()
+    val mbRateLimited by viewModel.musicBrainzRateLimited.collectAsStateWithLifecycle()
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val trackResolvers by viewModel.trackResolvers.collectAsState()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsStateWithLifecycle()
@@ -295,7 +296,13 @@ fun SearchScreen(
                 if (query.isNotBlank() && !hasAnyResults && !isSearchingRemote) {
                     item {
                         Text(
-                            text = "No results for \"$query\"",
+                            // A throttled MusicBrainz has NOT established that
+                            // nothing matched, so don't claim it did (#375).
+                            text = if (mbRateLimited) {
+                                "MusicBrainz is rate-limiting requests — retrying…"
+                            } else {
+                                "No results for \"$query\""
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(32.dp),
