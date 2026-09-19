@@ -1,0 +1,105 @@
+name: Apple Music Token Expiry
+
+# The CI secret APPLE_MUSIC_DEVELOPER_TOKEN is the LAST copy of this token that
+# can still die quietly. Apple caps it at 180 days. Dev machines auto-rotate it
+# at gradle-configure time (see app/build.gradle.kts + scripts/apple-music-token.py),
+# but CI has no `.p8` and shipping one here would mean storing a private signing
+# key in GitHub — so the secret is rotated by hand and nothing renews it.
+#
+# That asymmetry is the trap: once it lapses, local builds keep working while
+# every RELEASE build ships a dead token, and Apple Music breaks for users with
+# no signal to us. In Sept 2026 the same expiry surfaced in-app as a bogus
+# "Sign in to Apple Music" loop nobody could escape.
+#
+# This job is the smoke alarm. It reads the secret, decodes only the `exp`
+# claim, and fails 30 days out — then files an issue, because a red cron in the
+# Actions tab is only a signal if somebody happens to look.
+
+on:
+  schedule:
+    - cron: '0 14 * * 1' # Mondays 14:00 UTC — weekly is plenty for a 30-day window
+  workflow_dispatch:
+    inputs:
+      renew_within_days:
+        description: 'Days before expiry that should fail the check'
+        required: false
+        default: '30'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-expiry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check the CI secret's expiry
+        id: check
+        continue-on-error: true
+        env:
+          # Only the `exp` claim is ever printed; the token itself is masked by
+          # Actions and never echoed by the script.
+          APPLE_MUSIC_DEVELOPER_TOKEN: ${{ secrets.APPLE_MUSIC_DEVELOPER_TOKEN }}
+        run: |
+          set -o pipefail
+          python3 scripts/apple-music-token.py \
+            --check-env \
+            --renew-within "${{ github.event.inputs.renew_within_days || '30' }}" \
+            2>&1 | tee result.txt
+
+      - name: Report the outcome
+        if: steps.check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: 'Apple Music developer token needs rotating'
+        run: |
+          DETAIL=$(sed 's/^::error:://' result.txt | head -5)
+
+          BODY=$(cat <<EOF
+          $DETAIL
+
+          **Why this matters:** the GitHub Actions secret \`APPLE_MUSIC_DEVELOPER_TOKEN\`
+          is the only copy of this token that nothing renews automatically. Local
+          Android builds rotate themselves at gradle-configure time, so this will
+          NOT reproduce on a dev machine — it breaks release builds only, and
+          surfaces to users as Apple Music playback, search and resolution failing.
+
+          **To rotate** (from a checkout with \`APPLE_MUSIC_AUTHKEY_P8\` set in
+          \`local.properties\`):
+
+          \`\`\`bash
+          ./scripts/apple-music-token.py --write   # local.properties + Secrets.xcconfig
+          grep -E '^APPLE_MUSIC_DEVELOPER_TOKEN=' local.properties \\
+            | sed 's/^[^=]*=//' | tr -d ' "\n' \\
+            | gh secret set APPLE_MUSIC_DEVELOPER_TOKEN --repo ${{ github.repository }}
+          \`\`\`
+
+          Then confirm: \`./scripts/apple-music-token.py --check\` and re-run this workflow.
+
+          _Filed automatically by [\`apple-music-token-expiry.yml\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})._
+          EOF
+          )
+
+          # Reuse the open issue if there is one, so a weekly cron doesn't
+          # accumulate a pile of duplicates.
+          EXISTING=$(gh issue list --repo "${{ github.repository }}" \
+            --state open --search "in:title \"$TITLE\"" \
+            --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "Updating existing issue #$EXISTING"
+            gh issue comment "$EXISTING" --repo "${{ github.repository }}" --body "$BODY"
+          else
+            echo "Filing a new issue"
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Fail if the token is expiring
+        if: steps.check.outcome == 'failure'
+        run: |
+          cat result.txt
+          exit 1
