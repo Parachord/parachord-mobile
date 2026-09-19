@@ -381,7 +381,9 @@ class SyncEngine constructor(
         providerFilter: String? = null,
     ): FullSyncResult {
         val settings = settingsStore.getSyncSettings()
-        if (!settings.enabled) {
+        // NOT `settings.enabled` alone — that flag is Spotify-only, so an
+        // Apple-Music- or ListenBrainz-only setup would silently no-op (#377).
+        if (!isAnySyncProviderEnabled(settings.enabled, settingsStore.getEnabledSyncProviders())) {
             return FullSyncResult(success = false, error = "Sync not enabled")
         }
 

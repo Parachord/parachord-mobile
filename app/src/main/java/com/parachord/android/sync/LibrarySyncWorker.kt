@@ -28,7 +28,12 @@ class LibrarySyncWorker(
 
     override suspend fun doWork(): Result {
         val settings = settingsStore.getSyncSettings()
-        if (!settings.enabled) {
+        // Spotify-only flag; see isAnySyncProviderEnabled (#377).
+        if (!com.parachord.shared.sync.isAnySyncProviderEnabled(
+                settings.enabled,
+                settingsStore.getEnabledSyncProviders(),
+            )
+        ) {
             Log.d(TAG, "Sync not enabled, skipping")
             return Result.success()
         }
