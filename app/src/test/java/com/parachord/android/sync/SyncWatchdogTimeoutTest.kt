@@ -109,8 +109,19 @@ class SyncWatchdogTimeoutTest {
             syncPlaylists = true,
             pushLocalPlaylists = true,
         )
+        /**
+         * Hangs from the SECOND call onward, not the first.
+         *
+         * This method is the test's chosen "hang somewhere deep in the sync
+         * body" point. Since #377 it is ALSO read by syncAll's enabled-gate,
+         * which runs before the mutex and the watchdog are armed — hanging
+         * there would abort outside the watchdog's protection and test
+         * nothing. Letting the gate's read succeed keeps this a watchdog test.
+         */
+        private var calls = 0
         override suspend fun getEnabledSyncProviders(): Set<String> {
-            if (armed) awaitCancellation() // hang forever until the watchdog cancels us
+            calls++
+            if (armed && calls > 1) awaitCancellation() // hang until the watchdog cancels us
             return setOf(providerId)
         }
         override suspend fun getSyncCollectionsForProvider(providerId: String) =

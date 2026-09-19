@@ -224,3 +224,28 @@ interface SyncSettingsProvider {
      */
     suspend fun clearSyncSettings()
 }
+
+/**
+ * True when sync should run at all — the gate for "Sync now", the in-app
+ * timer, and the background worker.
+ *
+ * **Why this isn't just [SyncSettings.enabled].** That legacy flag is written
+ * ONLY on the Spotify path (`SyncViewModel.enableProviderFromConfig` /
+ * `persistAndRunSync` both guard on `providerId == spotify`, by design — for
+ * Apple Music and ListenBrainz the per-provider opt-in in
+ * `enabled_sync_providers` is the source of truth). So an Apple-Music-only or
+ * ListenBrainz-only setup left `enabled = false` while the provider was fully
+ * configured, and all three gates tripped: "Sync now" was tappable and
+ * silently no-opped, and background sync never ran at all (#377).
+ *
+ * **Why Spotify is excluded from the provider scan rather than using
+ * `isNotEmpty()`.** `enabled_sync_providers` DEFAULTS to `setOf("spotify")`
+ * when unset, so a plain non-empty check would report every fresh, unconfigured
+ * install as sync-enabled. Spotify's own state is exactly what [legacyEnabled]
+ * already tracks, so it must not be double-counted here.
+ *
+ * @param legacyEnabled `SyncSettings.enabled` — effectively the Spotify switch.
+ * @param enabledProviders the `enabled_sync_providers` set.
+ */
+fun isAnySyncProviderEnabled(legacyEnabled: Boolean, enabledProviders: Set<String>): Boolean =
+    legacyEnabled || enabledProviders.any { it != SpotifySyncProvider.PROVIDER_ID }

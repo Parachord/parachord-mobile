@@ -47,7 +47,14 @@ class SyncScheduler constructor(
 
     private suspend fun runBackgroundSync() {
         val settings = settingsStore.getSyncSettings()
-        if (!settings.enabled) return
+        // Spotify-only flag; see isAnySyncProviderEnabled (#377).
+        if (!com.parachord.shared.sync.isAnySyncProviderEnabled(
+                settings.enabled,
+                settingsStore.getEnabledSyncProviders(),
+            )
+        ) {
+            return
+        }
 
         val lastSync = settingsStore.lastSyncAtFlow.first()
         if (System.currentTimeMillis() - lastSync < MIN_SYNC_GAP_MS) {
