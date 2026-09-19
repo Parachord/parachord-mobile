@@ -206,6 +206,38 @@ def cmd_check() -> int:
     return worst
 
 
+def cmd_check_env(renew_within_days: int) -> int:
+    """
+    Check the token supplied via the environment — i.e. the CI secret, the one
+    copy this script cannot rotate and no local build will ever renew.
+
+    Exits non-zero when it is absent, unreadable, expired, or inside the
+    renewal window, so a scheduled job can fail before users are locked out
+    rather than after. Prints only the expiry date — never the token.
+    """
+    token = os.environ.get(KEY, "").strip()
+    if not token:
+        print(f"::error::{KEY} is not set (secret missing or empty)")
+        return 1
+    exp = expires_at(token)
+    if exp is None:
+        print(f"::error::{KEY} is not a readable JWT — cannot determine expiry")
+        return 1
+
+    days_left = (exp - time.time()) / 86400
+    when = time.strftime("%Y-%m-%d", time.gmtime(exp))
+    if days_left < 0:
+        print(f"::error::Apple Music developer token EXPIRED on {when} "
+              f"({abs(days_left):.0f} days ago). Apple Music is broken in releases built from this secret.")
+        return 1
+    if days_left <= renew_within_days:
+        print(f"::error::Apple Music developer token expires {when} "
+              f"({days_left:.0f} days). Rotate it before it lapses.")
+        return 1
+    print(f"Apple Music developer token valid until {when} ({days_left:.0f} days left)")
+    return 0
+
+
 def resolve_config() -> tuple[str, str, str]:
     props = read_props(LOCAL_PROPS)
     p8 = config(props, "APPLE_MUSIC_AUTHKEY_P8")
@@ -236,11 +268,18 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--check", action="store_true", help="report expiry of each copy")
+    g.add_argument("--check-env", action="store_true",
+                   help=f"check the {KEY} env var (the CI secret); non-zero if expiring")
     g.add_argument("--print", dest="do_print", action="store_true", help="mint and print")
     g.add_argument("--write", action="store_true", help="mint and update every copy")
     g.add_argument("--ensure", action="store_true", help="rotate only if expiring soon")
     ap.add_argument("--days", type=int, default=MAX_DAYS, help=f"lifetime (max {MAX_DAYS})")
+    ap.add_argument("--renew-within", type=int, default=RENEW_WITHIN_DAYS,
+                    help=f"days before expiry that counts as due (default {RENEW_WITHIN_DAYS})")
     args = ap.parse_args()
+
+    if args.check_env:
+        return cmd_check_env(args.renew_within)
 
     if args.check or not any([args.do_print, args.write, args.ensure]):
         return cmd_check()
