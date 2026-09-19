@@ -214,6 +214,18 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
+    // Surface one-shot Settings messages (e.g. a failed Apple Music connect).
+    // Without this, a failed Connect leaves the user staring at an unchanged
+    // screen with no idea anything happened.
+    val toastContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        viewModel.toastEvents.collect { message ->
+            android.widget.Toast
+                .makeText(toastContext, message, android.widget.Toast.LENGTH_SHORT)
+                .show()
+        }
+    }
+
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val scrobbling by viewModel.scrobblingEnabled.collectAsStateWithLifecycle()
     val spotifyConnected by viewModel.spotifyConnected.collectAsStateWithLifecycle()

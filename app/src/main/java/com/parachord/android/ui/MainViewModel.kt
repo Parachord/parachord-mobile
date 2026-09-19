@@ -270,6 +270,15 @@ class MainViewModel constructor(
                 _navigateToSettings.emit(Unit)
             }
         }
+        // The app's own Apple Music key expired — NOT a user sign-in problem.
+        // Deliberately does not send the user to Settings: there is nothing
+        // for them to do there, and routing them to a Connect button that
+        // cannot succeed is exactly the loop this split fixes (Sept 2026).
+        viewModelScope.launch {
+            musicKitBridge.developerTokenExpired.collect {
+                _toastEvents.emit("Apple Music key expired — update Parachord to restore it")
+            }
+        }
     }
 
     /** Track key of last played track to avoid replaying the same one. Observable

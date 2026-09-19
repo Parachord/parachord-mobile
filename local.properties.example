@@ -8,3 +8,20 @@ LASTFM_SHARED_SECRET=
 
 # Spotify — get yours at https://developer.spotify.com/dashboard
 SPOTIFY_CLIENT_ID=
+
+# Apple Music — https://developer.apple.com/account/resources/authkeys/list
+#
+# Point APPLE_MUSIC_AUTHKEY_P8 at your MusicKit AuthKey and the build MINTS
+# the developer token for you, rotating it automatically before it expires
+# (Apple caps these at 180 days, and a lapsed one takes down Apple Music
+# playback, search and resolution — not just artwork).
+#
+# KEY_ID is inferred from the AuthKey filename and TEAM_ID from an existing
+# token, so usually only the path is needed.
+APPLE_MUSIC_AUTHKEY_P8=
+# APPLE_MUSIC_KEY_ID=
+# APPLE_MUSIC_TEAM_ID=
+#
+# Leave APPLE_MUSIC_DEVELOPER_TOKEN blank to have it generated on first build.
+# Manage it by hand with: ./scripts/apple-music-token.py --check | --write
+APPLE_MUSIC_DEVELOPER_TOKEN=
