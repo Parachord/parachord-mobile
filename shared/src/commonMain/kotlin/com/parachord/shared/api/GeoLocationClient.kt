@@ -23,7 +23,7 @@ import kotlinx.serialization.json.Json
  * Uses the shared Ktor HttpClient — global User-Agent, timeouts, and
  * sanitized logging are inherited automatically (no per-call UA needed;
  * Nominatim's "be polite" UA policy is satisfied by the global
- * "Parachord/<version> (Android|iOS; https://parachord.app)" header).
+ * "Parachord/<version> ( Android|iOS; https://parachord.com )" header).
  *
  * Migrated to shared in Phase 9E.1.2.
  */

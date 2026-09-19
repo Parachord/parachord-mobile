@@ -89,6 +89,24 @@ class HttpRetryWiringTest {
     }
 
     @Test
+    fun `a 5xx is NOT retried - Ktor retries these BY DEFAULT and must not`() = runBlocking {
+        // Regression guard: HttpRequestRetry's default policy retries server
+        // errors. Configuring only retryOnExceptionIf leaves that ON, which
+        // silently tripled every MusicBrainz 503 — the exact re-poke of a
+        // throttled service that RateLimitGate exists to prevent. Caught only
+        // because a 503 is 5xx while this suite originally tested just 429.
+        val calls = AtomicInteger(0)
+        val client = HttpClient(
+            MockEngine { calls.incrementAndGet(); respond("", HttpStatusCode.ServiceUnavailable) },
+        ) { installSharedPlugins(json, appConfig, stubProvider, stubRefresher) }
+
+        val resp = client.get("https://musicbrainz.org/ws/2/recording/")
+
+        assertEquals(HttpStatusCode.ServiceUnavailable, resp.status)
+        assertEquals(1, calls.get(), "a 503 is a throttle signal, not a transport failure")
+    }
+
+    @Test
     fun `an HTTP error status is NOT retried - RateLimitGate owns that`() = runBlocking {
         val calls = AtomicInteger(0)
         val client = HttpClient(

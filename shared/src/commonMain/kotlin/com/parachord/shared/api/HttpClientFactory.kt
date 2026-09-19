@@ -85,6 +85,14 @@ internal fun HttpClientConfig<*>.installSharedPlugins(
     // which is what earns an account-wide abuse ban (#176/#177).
     install(HttpRequestRetry) {
         maxRetries = 2
+        // Ktor's DEFAULT retries 5xx responses. That must be OFF: a 503 is how
+        // MusicBrainz says "you are over 1 req/sec", and silently re-firing it
+        // triples the request count against an already-throttled service —
+        // precisely the re-poke that RateLimitGate exists to prevent. Each
+        // client owns its own status policy (MusicBrainzClient waits out a
+        // Retry-After; RateLimitGate owns Spotify's 429s). Transport failures
+        // ONLY here.
+        retryIf { _, _ -> false }
         retryOnExceptionIf { _, cause -> isTransientNetworkError(cause) }
         // ~250ms then ~500ms: long enough for a handoff to settle, short
         // enough that a user waiting on artwork doesn't notice.

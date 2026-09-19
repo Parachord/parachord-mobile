@@ -159,7 +159,7 @@ val androidModule = module {
             appleMusicDeveloperToken = com.parachord.android.BuildConfig.APPLE_MUSIC_DEVELOPER_TOKEN,
             ticketmasterApiKey = com.parachord.android.BuildConfig.TICKETMASTER_API_KEY,
             seatGeekClientId = com.parachord.android.BuildConfig.SEATGEEK_CLIENT_ID,
-            userAgent = "Parachord/${com.parachord.android.BuildConfig.VERSION_NAME} (Android; https://parachord.app)",
+            userAgent = com.parachord.android.net.parachordUserAgent(com.parachord.android.BuildConfig.VERSION_NAME),
             parachordClient = "android",
             isDebug = com.parachord.android.BuildConfig.DEBUG,
         )
@@ -185,7 +185,7 @@ val androidModule = module {
                 val req = chain.request().newBuilder()
                     .header(
                         "User-Agent",
-                        "Parachord/${com.parachord.android.BuildConfig.VERSION_NAME} (Android; https://parachord.app)",
+                        com.parachord.android.net.parachordUserAgent(com.parachord.android.BuildConfig.VERSION_NAME),
                     )
                     .build()
                 chain.proceed(req)
