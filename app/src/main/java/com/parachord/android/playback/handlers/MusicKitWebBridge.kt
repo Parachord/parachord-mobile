@@ -18,6 +18,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
 import com.parachord.android.data.store.SettingsStore
+import com.parachord.shared.api.AppleMusicTokenExpiry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -158,6 +159,19 @@ class MusicKitWebBridge constructor(
     /** Emitted when playback requires Apple ID sign-in. UI should prompt the user. */
     private val _signInRequired = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val signInRequired: SharedFlow<Unit> = _signInRequired.asSharedFlow()
+
+    /**
+     * Emitted when the bundled Apple Music **developer token** has expired.
+     *
+     * Distinct from [signInRequired] on purpose: this is the app's own ES256
+     * key lapsing (Apple caps it at 180 days), not the user being signed out.
+     * The user can do nothing about it, so the UI must NOT prompt them to
+     * sign in — that was the Sept 2026 bug where Connect silently failed and
+     * re-fired the sign-in toast in a loop. Needs a new app build with a
+     * rotated token.
+     */
+    private val _developerTokenExpired = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val developerTokenExpired: SharedFlow<Unit> = _developerTokenExpired.asSharedFlow()
 
     // ── Lifecycle ─────────────────────────────────────────────────
 
@@ -481,25 +495,21 @@ class MusicKitWebBridge constructor(
     // ── Configuration & Auth ──────────────────────────────────────
 
     /**
-     * Check if a JWT developer token has expired.
-     * Returns true if expired or unparseable.
+     * Check if the JWT developer token has expired.
+     *
+     * Delegates to the shared [AppleMusicTokenExpiry] so Android, iOS and the
+     * build-time rotation check agree on one answer. Note the deliberate
+     * difference from the old local copy: an *unparseable* token is no longer
+     * treated as expired. Blocking a token we merely failed to parse would
+     * lock the user out of a working Apple Music; let Apple reject it.
      */
-    private fun isTokenExpired(token: String): Boolean {
-        return try {
-            val parts = token.split(".")
-            if (parts.size != 3) return true
-            val payload = String(Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_PADDING))
-            val expMatch = Regex("\"exp\"\\s*:\\s*(\\d+)").find(payload)
-            val exp = expMatch?.groupValues?.get(1)?.toLongOrNull() ?: return true
-            val nowSec = System.currentTimeMillis() / 1000
-            (nowSec >= exp).also { expired ->
-                if (expired) Log.w(TAG, "Developer token expired (exp=$exp, now=$nowSec)")
+    private fun isTokenExpired(token: String): Boolean =
+        AppleMusicTokenExpiry.isExpired(token).also { expired ->
+            if (expired) {
+                val exp = AppleMusicTokenExpiry.expiresAtMs(token)
+                Log.w(TAG, "Developer token expired (exp=$exp, now=${System.currentTimeMillis()})")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to check token expiration: ${e.message}")
-            false // Assume valid if we can't parse — let MusicKit reject it
         }
-    }
 
     /**
      * Configure MusicKit with the developer token from settings.
@@ -518,8 +528,13 @@ class MusicKitWebBridge constructor(
             return false
         }
         if (isTokenExpired(token)) {
-            Log.w(TAG, "Apple Music developer token has expired — needs regeneration")
-            _signInRequired.tryEmit(Unit)
+            // NOT a sign-in problem. The app's own Apple Music key has
+            // lapsed, and no amount of signing in can fix it — emitting
+            // signInRequired here is what produced the Sept 2026 loop where
+            // tapping Connect silently re-fired "Sign in to Apple Music"
+            // forever. Report the true cause instead.
+            Log.e(TAG, "Apple Music developer token has EXPIRED — needs regeneration (not user sign-in)")
+            _developerTokenExpired.tryEmit(Unit)
             return false
         }
         // Base64-encode tokens to eliminate injection risk from string

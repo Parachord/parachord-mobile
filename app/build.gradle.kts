@@ -1,3 +1,4 @@
+import java.util.Base64
 import java.util.Properties
 
 plugins {
@@ -15,6 +16,65 @@ val localProps = Properties().apply {
 
 fun localProp(key: String): String =
     (localProps.getProperty(key) ?: System.getenv(key) ?: "").trim()
+
+/**
+ * Unverified `exp` claim of a JWT, in epoch seconds. Null when absent or
+ * unparseable — we never *block* on a token we merely failed to read.
+ */
+fun jwtExpirySeconds(token: String): Long? = runCatching {
+    val payload = token.split(".").getOrNull(1) ?: return null
+    val padded = payload.padEnd(payload.length + (4 - payload.length % 4) % 4, '=')
+    val json = String(Base64.getUrlDecoder().decode(padded))
+    Regex("\"exp\"\\s*:\\s*(\\d+)").find(json)?.groupValues?.get(1)?.toLong()
+}.getOrNull()
+
+/**
+ * The Apple Music developer token, auto-rotated before it can lapse.
+ *
+ * Apple caps this ES256 JWT at 180 days. It used to be hand-pasted with
+ * nothing watching its expiry, so in Sept 2026 it silently died and took
+ * Apple Music down across the app — surfacing as a "Sign in to Apple Music"
+ * loop that no user action could clear. The build now mints a fresh one
+ * whenever the current token is inside its renewal window and the signing
+ * key is configured (`APPLE_MUSIC_AUTHKEY_P8` in local.properties).
+ *
+ * Degrades quietly rather than breaking unrelated work:
+ * - no `.p8` configured (CI, fresh clone) → use whatever value is supplied
+ * - token expired and unrotatable → loud warning, build continues
+ */
+fun appleMusicDeveloperToken(): String {
+    val key = "APPLE_MUSIC_DEVELOPER_TOKEN"
+    val current = localProp(key)
+    val renewWithinSec = 30L * 24 * 60 * 60
+    val nowSec = System.currentTimeMillis() / 1000
+    val exp = jwtExpirySeconds(current)
+    val needsRotation = current.isBlank() || exp == null || exp - nowSec < renewWithinSec
+
+    if (needsRotation && localProp("APPLE_MUSIC_AUTHKEY_P8").isNotBlank()) {
+        val script = rootProject.file("scripts/apple-music-token.py")
+        if (script.exists()) {
+            runCatching {
+                providers.exec {
+                    commandLine("python3", script.absolutePath, "--ensure")
+                }.standardOutput.asText.get().trim().let { if (it.isNotBlank()) logger.lifecycle(it) }
+                // The script rewrote local.properties — re-read it.
+                rootProject.file("local.properties").inputStream().use { localProps.load(it) }
+            }.onFailure { logger.warn("w: Apple Music token auto-rotation failed: ${it.message}") }
+        }
+    }
+
+    val token = localProp(key)
+    val finalExp = jwtExpirySeconds(token)
+    if (token.isBlank()) {
+        logger.warn("w: APPLE_MUSIC_DEVELOPER_TOKEN is not set — Apple Music will be unavailable.")
+    } else if (finalExp != null && finalExp <= nowSec) {
+        logger.warn(
+            "w: APPLE_MUSIC_DEVELOPER_TOKEN EXPIRED — Apple Music will fail in this build. " +
+                "Run ./scripts/apple-music-token.py --write (and rotate the CI secret).",
+        )
+    }
+    return token
+}
 
 android {
     namespace = "com.parachord.android"
@@ -36,7 +96,7 @@ android {
         buildConfigField("String", "SPOTIFY_CLIENT_ID", "\"${localProp("SPOTIFY_CLIENT_ID")}\"")
         buildConfigField("String", "SOUNDCLOUD_CLIENT_ID", "\"${localProp("SOUNDCLOUD_CLIENT_ID")}\"")
         buildConfigField("String", "SOUNDCLOUD_CLIENT_SECRET", "\"${localProp("SOUNDCLOUD_CLIENT_SECRET")}\"")
-        buildConfigField("String", "APPLE_MUSIC_DEVELOPER_TOKEN", "\"${localProp("APPLE_MUSIC_DEVELOPER_TOKEN")}\"")
+        buildConfigField("String", "APPLE_MUSIC_DEVELOPER_TOKEN", "\"${appleMusicDeveloperToken()}\"")
         buildConfigField("String", "TICKETMASTER_API_KEY", "\"${localProp("TICKETMASTER_API_KEY")}\"")
         buildConfigField("String", "SEATGEEK_CLIENT_ID", "\"${localProp("SEATGEEK_CLIENT_ID")}\"")
     }

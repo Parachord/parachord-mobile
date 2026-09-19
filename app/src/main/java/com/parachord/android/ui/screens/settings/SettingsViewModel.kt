@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import android.util.Log
 import com.parachord.android.auth.OAuthManager
 import com.parachord.shared.api.ListenBrainzClient
+import com.parachord.shared.api.AppleMusicTokenExpiry
 import com.parachord.shared.sync.MigrationReport
 import com.parachord.shared.sync.buildMigrationReport
 import com.parachord.shared.sync.summarizeMigrationPlan
@@ -17,10 +18,13 @@ import com.parachord.android.playback.QueuePersistence
 import com.parachord.android.playback.handlers.MusicKitWebBridge
 import com.parachord.android.playback.scrobbler.LibreFmScrobbler
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -512,12 +516,31 @@ class SettingsViewModel constructor(
     private val _appleMusicConnecting = MutableStateFlow(false)
     val appleMusicConnecting: StateFlow<Boolean> = _appleMusicConnecting
 
+    /** One-shot user-facing messages for the Settings screen to surface. */
+    private val _toastEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val toastEvents: SharedFlow<String> = _toastEvents.asSharedFlow()
+
     fun connectAppleMusic() {
         viewModelScope.launch {
             _appleMusicConnecting.value = true
             try {
-                musicKitBridge.authorize()
-                ensureResolverEnabledOnConnect("applemusic")
+                val authorized = musicKitBridge.authorize()
+                if (authorized) {
+                    ensureResolverEnabledOnConnect("applemusic")
+                } else if (!AppleMusicTokenExpiry.isExpired(
+                        settingsStore.getAppleMusicDeveloperToken(),
+                    )
+                ) {
+                    // Never drop this on the floor. Discarding authorize()'s
+                    // result is half of why the Sept 2026 expiry presented as
+                    // "Connect does nothing at all".
+                    //
+                    // The expired-key case is deliberately excluded: the
+                    // bridge already emitted developerTokenExpired, which
+                    // MainViewModel surfaces app-wide with the accurate
+                    // message. Toasting here too would just double it.
+                    _toastEvents.emit("Couldn't connect to Apple Music — please try again")
+                }
             } finally {
                 _appleMusicConnecting.value = false
             }
