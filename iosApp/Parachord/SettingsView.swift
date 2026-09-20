@@ -166,6 +166,10 @@ final class SettingsViewModel {
     /// hardcoded Apple Music as connected and told users "No key needed",
     /// leaving no way to acquire the token and no hint why AM produced no
     /// results — the only acquisition path was the unrelated Sync tab.
+    /// Per-resolver dB offsets (desktop parity). Loaded in loadAll, written
+    /// straight through on change so the cached gain stays truthful.
+    var volumeOffsets: [String: Int] = [:]
+
     var appleMusicConnected = false
     var appleMusicBusy = false
     var appleMusicError: String?
@@ -271,6 +275,15 @@ final class SettingsViewModel {
 
             appleMusicConnected = (try? await container.hasAppleMusicUserToken())?.boolValue ?? false
 
+            var vo: [String: Int] = [:]
+            for id in ["spotify", "applemusic", "localfiles", "soundcloud", "bandcamp", "youtube"] {
+                if let db = try? await container.resolverVolumeOffsetDb(resolverId: id) {
+                    vo[id] = Int(truncating: db)
+                }
+            }
+            volumeOffsets = vo
+            await IosVolumeOffsets.shared.refresh()
+
             spotifyClientId = (try? await store.getSpotifyClientId()) ?? ""
             // Read Spotify connection up-front so the load-time recompute gates
             // it correctly (the connected-flow watcher only fires later).
@@ -292,6 +305,16 @@ final class SettingsViewModel {
             resolverOrder = ((try? await store.getResolverOrder())?.filter { resolverService($0) != nil }) ?? []
             resolversReady = true
             recomputeResolvers()
+        }
+    }
+
+    func setVolumeOffset(_ resolverId: String, _ db: Int) {
+        volumeOffsets[resolverId] = db
+        Task { @MainActor in
+            try? await container.setResolverVolumeOffsetDb(resolverId: resolverId, db: Int32(db))
+            // Refresh the synchronous cache the players read, or the change
+            // only takes effect after the next app launch.
+            await IosVolumeOffsets.shared.refresh()
         }
     }
 
@@ -623,6 +646,8 @@ private struct PlugInsTab: View {
                 }
             }
 
+            volumeBalanceSection
+
             if !model.disabledResolvers.isEmpty {
                 Text("DISABLED").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(PC.fg3)
                     .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
@@ -642,6 +667,51 @@ private struct PlugInsTab: View {
             pluginUpdates
         }
         .padding(.bottom, 130)
+    }
+
+    /// Per-resolver loudness trim (desktop parity: -12…+6 dB sliders).
+    ///
+    /// Apple Music is listed but DISABLED, exactly as desktop does. iOS has no
+    /// per-app volume and `ApplicationMusicPlayer` follows the system, so a
+    /// working slider is impossible — showing one would be a placebo. Hiding
+    /// the row entirely would be worse: users would wonder why the loudest
+    /// source is missing from the loudness control.
+    @ViewBuilder private var volumeBalanceSection: some View {
+        sectionLabel("Volume Balance")
+        Text("Trim louder sources so switching between them doesn't jump. Negative values reduce volume.")
+            .font(.system(size: 12)).foregroundStyle(PC.fg3)
+            .padding(.horizontal, 20).padding(.bottom, 6)
+        VStack(spacing: 0) {
+            ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
+                if let svc = model.resolverService(id) {
+                    let controllable = IosContainer.companion.shared.isResolverVolumeControllable(resolverId: id)
+                    let reason = IosContainer.companion.shared.resolverVolumeDisabledReason(resolverId: id)
+                    HStack(spacing: 12) {
+                        Text(svc.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(controllable ? PC.fg1 : PC.fg3)
+                            .frame(width: 92, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { Double(model.volumeOffsets[id] ?? 0) },
+                                set: { model.setVolumeOffset(id, Int($0.rounded())) }
+                            ),
+                            in: -12...6,
+                            step: 1
+                        )
+                        .disabled(!controllable)
+                        .tint(PC.accent)
+                        Text(controllable ? "\(model.volumeOffsets[id] ?? 0) dB" : (reason ?? ""))
+                            .font(.system(size: 12))
+                            .foregroundStyle(PC.fg3)
+                            .frame(width: 62, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .opacity(controllable ? 1 : 0.5)
+                    if i < model.resolverOrder.count - 1 { Divider().padding(.leading, 20) }
+                }
+            }
+        }
     }
 
     private func resolverRow(_ svc: PCService, index: Int) -> some View {

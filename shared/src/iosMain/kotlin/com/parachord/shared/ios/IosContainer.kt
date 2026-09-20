@@ -1,5 +1,7 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.playback.ResolverVolume
+
 import com.parachord.shared.api.GeoLocation
 import com.parachord.shared.api.GeoLocationClient
 import com.parachord.shared.api.ListenBrainzClient
@@ -749,6 +751,40 @@ class IosContainer private constructor() {
      */
     suspend fun isProviderSyncEnabled(providerId: String): Boolean =
         settingsStore.getSyncSettings().enabled && providerId in settingsStore.getEnabledSyncProviders()
+
+    // ── Per-resolver volume offsets (desktop parity) ─────────────────
+    // Scalar signatures on purpose: Kotlin's Map<String, Int> bridges to
+    // [String: KotlinInt], which makes every Swift call site box and unbox.
+
+    /** Stored dB offset for [resolverId] (0 when unset). */
+    suspend fun resolverVolumeOffsetDb(resolverId: String): Int =
+        settingsStore.getResolverVolumeOffsets()[resolverId] ?: 0
+
+    suspend fun setResolverVolumeOffsetDb(resolverId: String, db: Int) {
+        val clamped = db.coerceIn(ResolverVolume.MIN_OFFSET_DB, ResolverVolume.MAX_OFFSET_DB)
+        settingsStore.setResolverVolumeOffsets(
+            settingsStore.getResolverVolumeOffsets() + (resolverId to clamped),
+        )
+    }
+
+    /**
+     * The 0–100 volume [resolverId] should play at.
+     *
+     * Base is fixed at 100 because iOS has no in-app volume slider — the
+     * offsets attenuate from full. See
+     * docs/plans/2026-09-20-ios-volume-normalizer-design.md.
+     */
+    suspend fun resolverVolumePercent(resolverId: String): Int =
+        ResolverVolume.effectiveVolumePercent(100, resolverVolumeOffsetDb(resolverId))
+
+    /** Whether a slider should be offered at all — false for Apple Music
+     *  (system volume) and browser-playback resolvers. */
+    fun isResolverVolumeControllable(resolverId: String): Boolean =
+        ResolverVolume.isVolumeControllable(resolverId)
+
+    /** Short reason shown beside a disabled slider, or null when controllable. */
+    fun resolverVolumeDisabledReason(resolverId: String): String? =
+        ResolverVolume.uncontrollableReason(resolverId)
 
     suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
 

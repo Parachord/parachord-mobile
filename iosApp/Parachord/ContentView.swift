@@ -666,12 +666,43 @@ final class IosSpotifyConnect {
             status = await attempt()
         }
         switch status {
-        case 200...204: lastAction = "Spotify playback started"; isPlaying = true; return true
+        case 200...204:
+            lastAction = "Spotify playback started"
+            isPlaying = true
+            await applyConnectVolume(client, deviceId: deviceId)
+            return true
         case 403: lastAction = "Spotify Premium required"; return false
         case 429: lastAction = "Spotify rate-limited"; return false
         default:
             if status >= 0 { lastAction = "Spotify play failed (status \(status))" }
             return false
+        }
+    }
+
+    /// Set the Spotify Connect device's own volume after a successful start.
+    ///
+    /// Spotify plays on a Connect device whose volume is a SEPARATE gain that
+    /// multiplies with system volume. Parachord never set it on iOS, so it sat
+    /// wherever the Spotify app last left it — which is why Spotify sounded
+    /// quiet next to Apple Music no matter how far up the phone was turned,
+    /// and why turning the phone up could never fix it. Apple Music can't be
+    /// attenuated on iOS (no per-app volume), so raising Spotify to meet it is
+    /// the only lever.
+    ///
+    /// Fire-and-forget by contract: a volume failure must NEVER fail playback.
+    /// Spotify Free devices are `restricted` and 403 this endpoint, and the
+    /// music is already playing by the time we get here.
+    private func applyConnectVolume(_ client: SpotifyClient, deviceId: String) async {
+        // Advisory cooldown check. Volume is an interactive PUT and so bypasses
+        // RateLimitGate (CLAUDE.md), but poking a throttled account is what
+        // extends the abuse window — so skip rather than push through.
+        if client.rateLimitRemainingMs() > 0 { return }
+        let percent = IosVolumeOffsets.shared.percent(for: "spotify")
+        do {
+            _ = try await client.setVolume(volumePercent: Int32(percent), deviceId: deviceId)
+        } catch {
+            // Deliberately silent: not worth a user-visible error, and the
+            // track is playing regardless.
         }
     }
 
@@ -1323,6 +1354,62 @@ private extension MusicAuthorization.Status {
 // fine for the smoke-test demo.
 
 @Observable
+/// Per-resolver volume offsets, cached so they can be applied SYNCHRONOUSLY.
+///
+/// Reading them is a suspend call into the shared SettingsStore, but the
+/// volume has to be set in the same turn the AVPlayer is created — setting it
+/// from a Task afterwards lets the first few milliseconds play at full volume,
+/// which is an audible blip on exactly the loud sources this feature exists to
+/// tame. So the values are cached and refreshed at startup and whenever a
+/// slider moves.
+/// Per-resolver volume offsets, cached so they can be applied SYNCHRONOUSLY.
+///
+/// Reading them is a suspend call into the shared SettingsStore, but the
+/// volume has to be set in the same turn the AVPlayer is created — setting it
+/// from a Task afterwards lets the first few milliseconds play at full volume,
+/// which is an audible blip on exactly the loud sources this feature exists to
+/// tame. So the values are cached and refreshed at startup and whenever a
+/// slider moves.
+///
+/// Deliberately NOT @MainActor: `IosAVPlayer.load` is nonisolated and must
+/// read this synchronously. A lock around a tiny dictionary is cheaper than
+/// hopping actors on the play path.
+final class IosVolumeOffsets: @unchecked Sendable {
+    static let shared = IosVolumeOffsets()
+    private let lock = NSLock()
+    private var offsets: [String: Int] = [:]
+
+    /// 0.0–1.0 gain for an AVPlayer. Unknown resolver → full volume, which is
+    /// what a 0 dB offset produces anyway.
+    func fraction(for resolver: String) -> Float {
+        Float(percent(for: resolver)) / 100.0
+    }
+
+    /// 0–100, the shape Spotify's Connect volume endpoint wants.
+    func percent(for resolver: String) -> Int {
+        lock.lock()
+        let db = offsets[resolver] ?? 0
+        lock.unlock()
+        guard db != 0 else { return 100 }
+        return Int(ResolverVolume.shared.effectiveVolumePercent(baseVolume: 100, offsetDb: Int32(db)))
+    }
+
+    /// Re-read every offset from the shared store. Cheap; call after any
+    /// slider change and once at startup.
+    func refresh() async {
+        let container = IosContainer.companion.shared
+        var next: [String: Int] = [:]
+        for id in ["spotify", "applemusic", "localfiles", "soundcloud", "bandcamp", "youtube", "direct"] {
+            if let db = try? await container.resolverVolumeOffsetDb(resolverId: id) {
+                next[id] = Int(truncating: db)
+            }
+        }
+        lock.lock()
+        offsets = next
+        lock.unlock()
+    }
+}
+
 final class IosAVPlayer {
     enum Status: String {
         case idle, loading, ready, playing, paused, failed
@@ -1424,7 +1511,10 @@ final class IosAVPlayer {
     func load(
         url urlString: String,
         title: String = "",
-        artist: String = ""
+        artist: String = "",
+        /// Drives the per-resolver volume offset. "direct" is the fast-path
+        /// default and carries no offset unless one has been set for it.
+        resolver: String = "direct"
     ) {
         guard let url = URL(string: Self.resolveLocalImportPath(urlString)) else {
             status = .failed
@@ -1436,6 +1526,10 @@ final class IosAVPlayer {
         nowPlayingArtist = artist
         let item = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: item)
+        // Set BEFORE the item can start: AVPlayer.volume is a real per-player
+        // gain independent of system volume, so this is the half of desktop's
+        // normalizer that genuinely ports to iOS.
+        newPlayer.volume = IosVolumeOffsets.shared.fraction(for: resolver)
         // KVO on `status` — when item becomes `.readyToPlay`, durationis known
         // and we can publish it. `.failed` surfaces the error to the UI.
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -2379,7 +2473,7 @@ final class QueuePlaybackCoordinator {
             if forcedResolver == nil, let url = track.sourceUrl, !url.isEmpty,
                resolverCache.cached(artist: track.artist, title: track.title, album: track.album) == nil {
                 activeEngine = .avPlayer
-                player.load(url: url, title: track.title, artist: track.artist)
+                player.load(url: url, title: track.title, artist: track.artist, resolver: "direct")
                 startAVPlaybackWhenReady()
                 isStarting = false
                 return
