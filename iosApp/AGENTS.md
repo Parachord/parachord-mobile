@@ -372,6 +372,31 @@ never from a persisted blob, so this is an iOS-only discipline.
   Developer Mode on, then the profile generates.
 ---
 
+## Apple Music developer token — embedded at build time
+
+The `Embed Apple Music developer token` build phase on the Parachord target
+runs `scripts/embed-apple-music-token.sh`, which calls the repo's single
+signer (`scripts/apple-music-token.py --ensure`) and stamps the current token
+into the BUILT `Info.plist`. You do NOT hand-paste it into
+`Secrets.xcconfig` before a release any more.
+
+- **It stamps the built plist, not an xcconfig, on purpose.** xcconfig values
+  are resolved before any build phase runs, so a phase cannot feed one.
+  Writing `$TARGET_BUILD_DIR/$INFOPLIST_PATH` after "Process Info.plist" and
+  before code signing is the supported injection point — and it's why a token
+  rotated during a build still reaches that build.
+- **`--ensure`, not `--print`:** rotation happens only inside the 30-day
+  renewal window, so ordinary builds reuse the existing token instead of
+  churning `Info.plist` on every compile.
+- **Fail-soft:** no `.p8` configured (outside contributor, CI without the key)
+  warns and keeps whatever `Secrets.xcconfig` supplied. A metadata token must
+  never break the build. Verified by building with both the `.p8` config and
+  `Secrets.xcconfig` removed: `BUILD SUCCEEDED` with a warning.
+- **Don't add a second JWT signer here.** One script serves both platforms;
+  a second implementation is exactly the drift this replaced.
+
+---
+
 ## TestFlight / App Store distribution
 
 ```bash

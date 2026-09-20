@@ -251,6 +251,7 @@
 				AA0000000000000000000031 /* Resources */,
 				AA0000000000000000000032 /* Frameworks */,
 				354680D14A40E6BD63419C6B /* Embed Foundation Extensions */,
+				AA0000000000000000000034 /* Embed Apple Music developer token */,
 			);
 			buildRules = (
 			);
@@ -352,6 +353,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "set -e\ncd \"$SRCROOT/..\"\n./gradlew :shared:embedAndSignAppleFrameworkForXcode\n";
+		};
+		AA0000000000000000000034 /* Embed Apple Music developer token */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Apple Music developer token";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/scripts/embed-apple-music-token.sh\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
