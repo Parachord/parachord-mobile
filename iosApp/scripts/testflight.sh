@@ -78,6 +78,31 @@ if [[ -z "$IPA" ]]; then
 fi
 echo "✅ Exported: $IPA"
 
+# --- publish the archive to Xcode's Organizer --------------------------------
+# Xcode's Organizer ONLY lists ~/Library/Developer/Xcode/Archives/<date>/. This
+# script archives into the repo's build dir, so without this copy the build is
+# invisible there and "select the latest archive → Distribute App" silently
+# ships whatever older build IS listed. That is not hypothetical: build 0.1 (4)
+# was uploaded as August's 0.1 (2) exactly this way (Sept 2026). Every build
+# goes where the tools expect to find it.
+ORGANIZER_DIR="$HOME/Library/Developer/Xcode/Archives/$(date +%Y-%m-%d)"
+ARCHIVE_PLIST="$ARCHIVE/Info.plist"
+AV_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleShortVersionString' "$ARCHIVE_PLIST" 2>/dev/null || echo '')"
+AV_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleVersion' "$ARCHIVE_PLIST" 2>/dev/null || echo '')"
+if [[ -n "$AV_SHORT" && -n "$AV_BUILD" ]]; then
+  ORGANIZER_ARCHIVE="$ORGANIZER_DIR/Parachord $AV_SHORT ($AV_BUILD).xcarchive"
+else
+  # Fall back to a timestamp rather than skipping — an unnamed archive in the
+  # right place still beats a correctly-named one Organizer can't see.
+  ORGANIZER_ARCHIVE="$ORGANIZER_DIR/Parachord $(date +%H%M%S).xcarchive"
+fi
+if mkdir -p "$ORGANIZER_DIR" && rm -rf "$ORGANIZER_ARCHIVE" && cp -R "$ARCHIVE" "$ORGANIZER_ARCHIVE"; then
+  echo "✅ Archive published to Organizer: $(basename "$ORGANIZER_ARCHIVE")"
+else
+  echo "⚠️  Could not copy the archive into $ORGANIZER_DIR — it will NOT appear in Organizer."
+  echo "    Upload the .ipa with Transporter instead; do not pick 'the latest archive' in Organizer."
+fi
+
 # --- upload (optional) -------------------------------------------------------
 if [[ "$UPLOAD" == "1" ]]; then
   : "${ASC_KEY_ID:?set ASC_KEY_ID (App Store Connect API Key ID) for --upload}"
@@ -94,10 +119,9 @@ else
   cat <<EOF
 
 Archive is signed and ready. Upload it one of three ways:
-  • Transporter.app (RECOMMENDED) — drag in the .ipa below.
-    NOT Xcode Organizer: this script archives to $BUILD_DIR, which is OUTSIDE
-    ~/Library/Developer/Xcode/Archives, so Organizer does NOT list this build.
-    Uploading "the latest archive" from Organizer ships a stale one.
+  • Xcode → Window → Organizer → "$(basename "$ORGANIZER_ARCHIVE")" → Distribute App
+    (this script now copies every build there; CONFIRM the build number in the
+    list matches the one above before distributing)
   • Transporter.app → drag in:
         $IPA
   • Re-run with an API key configured:
