@@ -409,6 +409,15 @@ reliably persist between calls (same rule as the `xcodebuild -project` one
 above); a relative `./iosApp/scripts/testflight.sh` resolved against `iosApp/`
 and died with exit 127.
 
+> **Upload with Transporter, NOT Xcode Organizer.** This script archives to
+> `iosApp/build/testflight/Parachord.xcarchive` — OUTSIDE
+> `~/Library/Developer/Xcode/Archives`, which is the only place Organizer
+> looks. So a build cut by this script **never appears in Organizer**, and
+> "select the latest archive → Distribute App" silently ships a months-old
+> one instead. Drag the exported `.ipa` into Transporter, or use `--upload`.
+> This bit us on build 4 (Sept 2026): the fix was verified present in the
+> `.ipa`, but Organizer's newest archive was 0.1 (2) from August.
+
 `ExportOptions.plist` is `method = app-store-connect` — that names the SERVICE,
 not "release to the App Store." Uploading a build only makes it available in the
 TestFlight tab; an App Store release is a separate, explicit submission. There is

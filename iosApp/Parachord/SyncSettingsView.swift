@@ -17,7 +17,7 @@ struct SyncSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             if reauth.required {
-                PCAppleMusicReauthBanner(connecting: reauth.connecting) { reauth.reconnect() }
+                PCAppleMusicReauthBanner(connecting: reauth.connecting, error: reauth.error) { reauth.reconnect() }
                     .padding(.top, 18)
             }
 

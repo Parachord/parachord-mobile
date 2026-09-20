@@ -116,7 +116,7 @@ struct HomeScreen: View {
                             announcementBanner(ann)
                         }
                         if amReauth.required {
-                            PCAppleMusicReauthBanner(connecting: amReauth.connecting) { amReauth.reconnect() }
+                            PCAppleMusicReauthBanner(connecting: amReauth.connecting, error: amReauth.error) { amReauth.reconnect() }
                                 .padding(.top, 12)
                         }
                         if reauth.required {
