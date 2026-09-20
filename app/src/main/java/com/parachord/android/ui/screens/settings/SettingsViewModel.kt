@@ -6,6 +6,7 @@ import android.util.Log
 import com.parachord.android.auth.OAuthManager
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.api.AppleMusicTokenExpiry
+import com.parachord.shared.playback.ResolverVolume
 import com.parachord.shared.sync.MigrationReport
 import com.parachord.shared.sync.buildMigrationReport
 import com.parachord.shared.sync.summarizeMigrationPlan
@@ -511,6 +512,26 @@ class SettingsViewModel constructor(
 
     fun setAppleMusicStorefront(storefront: String) {
         viewModelScope.launch { settingsStore.setAppleMusicStorefront(storefront) }
+    }
+
+    /** Per-resolver dB offsets (desktop parity). Applied by PlaybackController
+     *  (ExoPlayer gain) and SpotifyPlaybackHandler (Connect device volume). */
+    private val _resolverVolumeOffsets = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val resolverVolumeOffsets: StateFlow<Map<String, Int>> = _resolverVolumeOffsets
+
+    init {
+        viewModelScope.launch {
+            _resolverVolumeOffsets.value = settingsStore.getResolverVolumeOffsets()
+        }
+    }
+
+    fun setResolverVolumeOffset(resolverId: String, db: Int) {
+        val clamped = db.coerceIn(ResolverVolume.MIN_OFFSET_DB, ResolverVolume.MAX_OFFSET_DB)
+        // Optimistic: the slider must track the finger, not the disk write.
+        _resolverVolumeOffsets.value = _resolverVolumeOffsets.value + (resolverId to clamped)
+        viewModelScope.launch {
+            settingsStore.setResolverVolumeOffsets(_resolverVolumeOffsets.value)
+        }
     }
 
     private val _appleMusicConnecting = MutableStateFlow(false)

@@ -119,7 +119,10 @@ import com.parachord.android.ui.components.ModalBgDarker
 import com.parachord.android.ui.components.ModalTextActive
 import com.parachord.android.ui.components.ModalTextPrimary
 import com.parachord.android.ui.components.ModalScrim
+import androidx.compose.material3.Slider
 import com.parachord.android.ui.components.SectionHeader
+import androidx.compose.ui.draw.alpha
+import com.parachord.shared.playback.ResolverVolume
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.screens.sync.ProviderSyncConfigSheet
 import com.parachord.android.ui.screens.sync.SyncSetupSheet
@@ -246,6 +249,7 @@ fun SettingsScreen(
     val listenBrainzAuthError by viewModel.listenBrainzAuthError.collectAsStateWithLifecycle()
     val disabledMetaProviders by viewModel.disabledMetaProviders.collectAsStateWithLifecycle()
     val resolverOrder by viewModel.resolverOrder.collectAsStateWithLifecycle()
+    val resolverVolumeOffsets by viewModel.resolverVolumeOffsets.collectAsStateWithLifecycle()
     val chatGptConnected by viewModel.chatGptConnected.collectAsStateWithLifecycle()
     val claudeConnected by viewModel.claudeConnected.collectAsStateWithLifecycle()
     val geminiConnected by viewModel.geminiConnected.collectAsStateWithLifecycle()
@@ -281,6 +285,8 @@ fun SettingsScreen(
                     libreFmConnected = libreFmConnected,
                     soundCloudConnected = soundCloudConnected,
                     resolverOrder = resolverOrder,
+                    resolverVolumeOffsets = resolverVolumeOffsets,
+                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                     onResolverOrderChanged = { viewModel.setResolverOrder(it) },
                     onSpotifyToggle = {
                         if (spotifyConnected) viewModel.disconnectSpotify()
@@ -371,6 +377,8 @@ private fun PlugInsTab(
     onSpotifyToggle: () -> Unit,
     onLastFmToggle: () -> Unit,
     resolverOrder: List<String> = emptyList(),
+    resolverVolumeOffsets: Map<String, Int> = emptyMap(),
+    onResolverVolumeOffsetChanged: (String, Int) -> Unit = { _, _ -> },
     onResolverOrderChanged: (List<String>) -> Unit = {},
     soundCloudCredentialsSaved: Boolean = false,
     onSoundCloudSaveCredentials: (String, String) -> Unit = { _, _ -> },
@@ -612,6 +620,60 @@ private fun PlugInsTab(
         item { Spacer(modifier = Modifier.height(24.dp)) }
 
         // Meta Services section
+        // Volume Balance — per-resolver loudness trim (desktop parity).
+        if (orderedEnabled.isNotEmpty()) {
+            item { SectionHeader("Volume Balance") }
+            item {
+                Text(
+                    text = "Trim louder sources so switching between them doesn't jump. " +
+                        "Negative values reduce volume.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            items(orderedEnabled.toList(), key = { "vol-$it" }) { id ->
+                val plugin = findPlugin(id)
+                // Apple Music is listed but DISABLED, as on desktop and iOS:
+                // MusicKit's `music.volume` is inert on Android WebView (DRM
+                // audio bypasses the JS pipeline), so a working slider is
+                // impossible. Hiding the row would be worse — users would ask
+                // why the loudest source is missing from the loudness control.
+                val controllable = ResolverVolume.isVolumeControllable(id)
+                val reason = ResolverVolume.uncontrollableReason(id)
+                val offset = resolverVolumeOffsets[id] ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .alpha(if (controllable) 1f else 0.5f),
+                ) {
+                    Text(
+                        text = plugin?.name ?: id,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.width(96.dp),
+                    )
+                    Slider(
+                        value = offset.toFloat(),
+                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
+                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
+                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
+                        enabled = controllable,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = if (controllable) "$offset dB" else (reason ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(72.dp),
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
+        }
+
         item { SectionHeader("Meta Services") }
         item {
             Text(

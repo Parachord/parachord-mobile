@@ -6,6 +6,8 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.PowerManager
 import com.parachord.shared.platform.Log
+import com.parachord.shared.playback.ResolverVolume
+import com.parachord.android.data.store.SettingsStore
 import android.widget.Toast
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -63,6 +65,7 @@ class PlaybackController constructor(
     private val resolverScoring: ResolverScoring,
     private val trackResolverCache: TrackResolverCache,
     private val widgetUpdater: MiniPlayerWidgetUpdater,
+    private val settingsStore: SettingsStore,
 ) {
     companion object {
         private const val TAG = "PlaybackController"
@@ -682,8 +685,11 @@ class PlaybackController constructor(
                 stopAppleMusicStatePolling()
 
                 val ctrl = controller ?: return
-                // Restore normal ExoPlayer settings after external playback
-                ctrl.volume = 1f
+                // Restore normal ExoPlayer settings after external playback,
+                // at this resolver's balanced level rather than a flat 1f — a
+                // hot local file or SoundCloud stream otherwise jumps against
+                // whatever source preceded it (desktop parity).
+                ctrl.volume = resolverVolumeFraction(routedTrack.resolver)
                 ctrl.repeatMode = Player.REPEAT_MODE_OFF
                 ctrl.setAudioAttributes(
                     androidx.media3.common.AudioAttributes.Builder()
@@ -887,7 +893,30 @@ class PlaybackController constructor(
     }
 
     /** Fallback: play directly via ExoPlayer when no handler matches. */
-    private fun playViaExoPlayer(track: TrackEntity) {
+    /**
+     * ExoPlayer gain (0f–1f) for [resolverId]'s configured dB offset.
+     *
+     * Base is 100 because Android, like iOS, has no in-app volume slider — the
+     * offsets attenuate from full. A null/unknown resolver gets 1f, same as a
+     * 0 dB offset.
+     *
+     * Deliberately NOT applied to the silence keepalive (`ctrl.volume = 0f`),
+     * which must stay silent whatever the offsets say.
+     */
+    private suspend fun resolverVolumeFraction(resolverId: String?): Float {
+        val id = resolverId ?: return 1f
+        return try {
+            ResolverVolume.effectiveVolumeFraction(
+                100,
+                settingsStore.getResolverVolumeOffsets()[id] ?: 0,
+            )
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            1f
+        }
+    }
+
+    private suspend fun playViaExoPlayer(track: TrackEntity) {
         val ctrl = controller ?: return
         if (isExternalPlayback) sendExternalPlaybackStop()
         isExternalPlayback = false
@@ -898,6 +927,7 @@ class PlaybackController constructor(
         // Restore normal ExoPlayer settings after external playback
         ctrl.volume = 1f
         ctrl.repeatMode = Player.REPEAT_MODE_OFF
+        ctrl.volume = resolverVolumeFraction(track.resolver)
         ctrl.setAudioAttributes(
             androidx.media3.common.AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
