@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import com.parachord.shared.platform.Log
+import com.parachord.shared.playback.ResolverVolume
 import android.view.KeyEvent
 import com.parachord.android.auth.OAuthManager
 import com.parachord.shared.api.SpPlaybackRequest
@@ -232,6 +233,7 @@ class SpotifyPlaybackHandler constructor(
                     val resp = spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = warmDeviceId)
                     if (resp.status.isSuccess() || resp.status.value == 204) {
                         Log.d(TAG, "Warm path succeeded in ${System.currentTimeMillis() - flowStart}ms")
+                        applyConnectVolume(warmDeviceId)
                         return true
                     }
                     Log.d(TAG, "Warm path startPlayback failed (${resp.status.value}), falling through")
@@ -290,6 +292,7 @@ class SpotifyPlaybackHandler constructor(
 
                 if (resp.status.isSuccess() || resp.status.value == 204) {
                     Log.d(TAG, "Playback accepted on '${targetDevice.name}' (attempt $attempt, ${System.currentTimeMillis() - playStart}ms)")
+                    applyConnectVolume(targetDevice.id)
                     stickyDefaultLocalIfUnset(targetDevice)
 
                     // Quick verification on cold devices only
@@ -346,6 +349,35 @@ class SpotifyPlaybackHandler constructor(
      * 2 polls at 500ms intervals (1s total) — much faster than the old
      * 5 polls at 1s intervals (5s).
      */
+    /**
+     * Set the Spotify Connect device's own volume after a successful start.
+     *
+     * Spotify plays on a Connect device whose volume is a SEPARATE gain that
+     * multiplies with system volume, so it sits wherever the Spotify app last
+     * left it — which is why Spotify can sound quiet next to Apple Music no
+     * matter how far up the phone is turned. Apple Music can't be attenuated
+     * (MusicKit's `music.volume` is inert on Android WebView — DRM audio
+     * bypasses the JS audio pipeline), so raising Spotify is the only lever.
+     *
+     * Fire-and-forget by contract: a volume failure must NEVER fail playback.
+     * Spotify Free devices are `restricted` and 403 this endpoint, and the
+     * music is already playing by the time we get here.
+     */
+    private suspend fun applyConnectVolume(deviceId: String?) {
+        // Advisory cooldown check. Volume is an interactive PUT and so bypasses
+        // RateLimitGate (CLAUDE.md), but poking a throttled account is what
+        // extends the abuse window — skip rather than push through.
+        if (spotifyClient.rateLimitRemainingMs() > 0) return
+        try {
+            val offsetDb = settingsStore.getResolverVolumeOffsets()["spotify"] ?: 0
+            val percent = ResolverVolume.effectiveVolumePercent(100, offsetDb)
+            spotifyClient.setVolume(percent, deviceId)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.d(TAG, "Connect volume not set (harmless): ${e.message}")
+        }
+    }
+
     private suspend fun verifyPlaybackStarted(): Boolean {
         for (poll in 1..2) {
             delay(500)
