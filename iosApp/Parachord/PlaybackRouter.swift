@@ -57,7 +57,7 @@ struct PlaybackRouter {
             switch source.resolver {
             case "soundcloud", "localfiles", "direct":
                 guard !source.url.isEmpty else { continue }
-                avPlayer.load(url: source.url, title: title, artist: artist)
+                avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver)
                 return .played(.avPlayer, resolver: source.resolver)
 
             case "applemusic":
