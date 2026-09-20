@@ -94,7 +94,10 @@ else
   cat <<EOF
 
 Archive is signed and ready. Upload it one of three ways:
-  • Xcode → Window → Organizer → select the archive → Distribute App → App Store Connect
+  • Transporter.app (RECOMMENDED) — drag in the .ipa below.
+    NOT Xcode Organizer: this script archives to $BUILD_DIR, which is OUTSIDE
+    ~/Library/Developer/Xcode/Archives, so Organizer does NOT list this build.
+    Uploading "the latest archive" from Organizer ships a stale one.
   • Transporter.app → drag in:
         $IPA
   • Re-run with an API key configured:

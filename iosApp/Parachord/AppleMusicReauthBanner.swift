@@ -12,6 +12,11 @@ final class AppleMusicReauthModel {
 
     var required = false
     var connecting = false
+    /// Why the last reconnect attempt failed. Without this the button was a
+    /// no-op from the user's side: on failure the spinner simply stopped and
+    /// the banner stayed, which is indistinguishable from the tap not
+    /// registering.
+    var error: String?
 
     func start() {
         guard sub == nil else { return }
@@ -28,19 +33,34 @@ final class AppleMusicReauthModel {
     func reconnect() {
         guard !connecting else { return }
         connecting = true
+        error = nil
         Task { @MainActor in
             defer { connecting = false }
             let dev = (try? await container.appleMusicDeveloperToken()) ?? ""
-            if let mut = await acquireAppleMusicMUT(developerToken: dev), !mut.isEmpty {
-                try? await container.setAppleMusicUserToken(token: mut)
-                container.clearAppleMusicReauth()
+            guard !dev.isEmpty else {
+                error = "This build has no Apple Music developer key."
+                return
             }
+            guard let mut = await acquireAppleMusicMUT(developerToken: dev), !mut.isEmpty else {
+                error = "Apple Music authorization was declined."
+                return
+            }
+            do {
+                try await container.setAppleMusicUserToken(token: mut)
+            } catch {
+                // Don't clear the flag on a failed save — the banner must stay
+                // up, and now says why instead of just reappearing.
+                self.error = "Couldn't save the Apple Music token."
+                return
+            }
+            container.clearAppleMusicReauth()
         }
     }
 }
 
 struct PCAppleMusicReauthBanner: View {
     let connecting: Bool
+    var error: String? = nil
     let onReconnect: () -> Void
 
     var body: some View {
@@ -62,6 +82,12 @@ struct PCAppleMusicReauthBanner: View {
             .buttonStyle(.plain)
             .disabled(connecting)
             .padding(.top, 2)
+            if let error {
+                Text(error)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.red)
+                    .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
