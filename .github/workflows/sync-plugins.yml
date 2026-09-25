@@ -56,7 +56,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add app/src/main/assets/plugins iosApp/Parachord/Resources/plugins
+          git add app/src/main/assets/plugins iosApp/Parachord/Resources/axe-plugins
           git commit -m "Sync bundled plugins from marketplace"
           # Plain --force (not --force-with-lease): this is a disposable bot
           # branch regenerated each run, and the shallow checkout has no
@@ -65,7 +65,7 @@ jobs:
           # earlier same-day run. Unconditional overwrite is safe + idempotent here.
           git push -u origin "$BRANCH" --force
 
-          BODY="Automated version-aware update of the bundled \`.axe\` fallback (Android \`app/src/main/assets/plugins\` + iOS \`iosApp/Parachord/Resources/plugins\`) from [parachord-plugins](https://github.com/Parachord/parachord-plugins). Only strictly-greater versions are adopted; nothing is downgraded, added, or removed. Runtime delivery already happens via PluginSyncService — this just keeps fresh installs from shipping stale plugins."
+          BODY="Automated version-aware update of the bundled \`.axe\` fallback (Android \`app/src/main/assets/plugins\` + iOS \`iosApp/Parachord/Resources/axe-plugins\`) from [parachord-plugins](https://github.com/Parachord/parachord-plugins). Only strictly-greater versions are adopted; nothing is downgraded, added, or removed. Runtime delivery already happens via PluginSyncService — this just keeps fresh installs from shipping stale plugins."
           COMPARE="${{ github.server_url }}/${{ github.repository }}/compare/main...${BRANCH}?expand=1"
 
           EXISTING=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number' 2>/dev/null || echo "")
