@@ -84,8 +84,8 @@ android {
         applicationId = "com.parachord.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.9.8"
+        versionCode = 23
+        versionName = "0.9.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
