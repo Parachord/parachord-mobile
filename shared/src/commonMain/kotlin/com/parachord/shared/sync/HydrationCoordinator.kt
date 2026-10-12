@@ -32,7 +32,10 @@ import kotlinx.coroutines.CancellationException
  *     a later cycle / background drain picks it up).
  *  6. **Search** — `provider.searchForTrackId(...)`. A 429 surfaces as null here
  *     (the provider's own RateLimitGate already gates the burst); we record the
- *     miss + bump `attempts` so the cooldown grows.
+ *     miss + bump `attempts` so the cooldown grows. A
+ *     [TrackIdLookupUnreachableException] is the one exception: the identity
+ *     services didn't ANSWER, so the track stays pending and NO attempt is
+ *     stamped — an outage must never park a track in the miss cooldown (#394).
  *  7. **Cache write + additive row backfill** — always stamp the attempt; on a hit
  *     also call [persistRowId] (the null-only COALESCE backfill onto the row).
  *
@@ -81,6 +84,11 @@ class HydrationCoordinator(
             provider.searchForTrackId(track.trackTitle, track.trackArtist, track.trackAlbum, track.trackIsrc)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: TrackIdLookupUnreachableException) {
+            // Nothing answered. Not a miss: leave the track pending for a later
+            // cycle WITHOUT stamping the attempt, so an outage can't escalate
+            // the 7→30-day cooldown on a perfectly mappable track (#394).
+            return null
         } catch (e: Exception) {
             null
         }

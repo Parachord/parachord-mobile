@@ -2,6 +2,7 @@ package com.parachord.shared.sync
 
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.metadata.MbidEnrichmentService
+import com.parachord.shared.metadata.RecordingMbidLookup
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.platform.Log
@@ -371,22 +372,38 @@ class ListenBrainzSyncProvider(
     ): String? {
         // Full fallback chain (the mapper-outage fix). LB's external ID is the
         // recording MBID; resolve it with progressive fallback:
-        //   1. LB mapper (canonical, primary) — via getRecordingMbid, then
+        //   1. LB mapper, then the labs acr-lookup dataset when the mapper can't
+        //      be reached (#394) — via lookupRecordingMbid, then
         //   2. MusicBrainz /isrc/ (EXACT) when an ISRC is carried (Spotify-sourced
-        //      tracks carry external_ids.isrc) — also inside getRecordingMbid, then
+        //      tracks carry external_ids.isrc) — also inside lookupRecordingMbid, then
         //   3. fuzzy MusicBrainz recording search (title+artist, confidence-gated)
         //      as the last resort for tracks with no ISRC.
         // The week-long mapper outage made step 1 always-null; without 2/3 every
         // LB playlist push hydrated to ZERO MBIDs and the coverage guard skipped
         // the whole mirror. Steps 2/3 use MusicBrainz, a different service that
         // stays up during the mapper outage.
-        return try {
-            mbidEnrichmentService.getRecordingMbid(artist, title, isrc)
-                ?: mbidEnrichmentService.searchRecordingMbid(artist, title)
+        //
+        // Three outcomes, not two. A step-1 UNREACHABLE (nothing answered) that
+        // the MusicBrainz fallbacks can't rescue is thrown as
+        // TrackIdLookupUnreachableException so HydrationCoordinator leaves the
+        // track pending instead of stamping a 7→30-day miss cooldown — an outage
+        // must never be recorded as "this track is unmappable" (#394, item 6).
+        // A genuine NotFound still returns null and counts as a miss.
+        val outcome = try {
+            mbidEnrichmentService.lookupRecordingMbid(artist, title, isrc, album)
         } catch (e: Throwable) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "LB searchForTrackId failed for '$title' / '$artist'", e)
-            null
+            return null
+        }
+        return when (outcome) {
+            is RecordingMbidLookup.Found -> outcome.mbid
+            is RecordingMbidLookup.NotFound -> mbidEnrichmentService.searchRecordingMbid(artist, title)
+            is RecordingMbidLookup.Unreachable ->
+                mbidEnrichmentService.searchRecordingMbid(artist, title)
+                    ?: throw TrackIdLookupUnreachableException(
+                        "MBID services unreachable for '$title' / '$artist'",
+                    )
         }
     }
 

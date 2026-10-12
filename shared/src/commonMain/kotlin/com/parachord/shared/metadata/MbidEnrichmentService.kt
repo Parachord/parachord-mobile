@@ -1,6 +1,8 @@
 package com.parachord.shared.metadata
 
 import com.parachord.shared.api.ListenBrainzClient
+import com.parachord.shared.api.MbidLookupOutcome
+import com.parachord.shared.api.MbidLookupSource
 import com.parachord.shared.api.MbidMapperResult
 import com.parachord.shared.api.MusicBrainzClient
 import com.parachord.shared.db.dao.TrackDao
@@ -24,8 +26,16 @@ import kotlinx.serialization.json.Json
  * in the collection. The MBID Mapper resolves in ~4ms with no strict rate limits,
  * making it suitable for batch enrichment.
  *
- * Results are cached to disk with a 90-day TTL (matching desktop's cache_mbid_mapper).
- * Misses are cached too (as null MBIDs) to avoid repeated lookups.
+ * Lookups go mapper-first with a fallback to the labs `acr-lookup` dataset when
+ * the mapper can't be reached (#394; see [ListenBrainzClient.resolveRecordingMbid]).
+ * Caching distinguishes THREE outcomes, because during the 2026-09 mapper
+ * outage every failed request was recorded as a 90-day miss:
+ *  - hit            → cached 90 days (matching desktop's cache_mbid_mapper)
+ *  - mapper miss    → cached 90 days (as null MBIDs) to avoid repeated lookups
+ *  - acr-lookup miss→ cached 6 hours only — it's the stricter matcher, so a
+ *                     mapper that comes back might still match
+ *  - unreachable    → NEVER cached, never counted against the track
+ * Source-less misses recorded since the outage began are purged once on load.
  *
  * Used by:
  * - FreshDropsRepository (artist MBID for release-group browsing)
@@ -58,10 +68,25 @@ class MbidEnrichmentService(
      * tests + callers without MusicBrainz can omit it.
      */
     private val musicBrainzClient: MusicBrainzClient? = null,
+    /** Clock source — injectable so the per-source TTLs and the outage purge are unit-testable. */
+    private val nowMs: () -> Long = { currentTimeMillis() },
 ) {
     companion object {
         private const val TAG = "MbidEnrichment"
         private const val CACHE_TTL = 90L * 24 * 60 * 60 * 1000 // 90 days
+
+        /** An acr-lookup miss is trusted for 6 h only (stricter matcher than the mapper). */
+        private const val ACR_MISS_TTL = 6L * 60 * 60 * 1000
+
+        /**
+         * 2026-09-21T00:00Z — the day mapper.listenbrainz.org went unreachable.
+         * Misses written before this change carry no `source`; any such miss
+         * recorded on or after this instant is an outage artifact (a failed
+         * request cached as "no match"), not a verdict, and is dropped on load.
+         * Misses written by the new code always carry a source, so the purge is
+         * naturally one-shot.
+         */
+        internal const val OUTAGE_START_MS = 1_789_948_800_000L
     }
 
     // Background enrichment is best-effort — a mapper network failure (e.g. Ktor
@@ -168,55 +193,78 @@ class MbidEnrichmentService(
         val cached = getCachedEntry(key)
         if (cached != null) return cached.artistMbid
 
-        val result = mapperLookup(artistName, recordingName) ?: return null
-        putCache(key, result)
-        return result.artistMbid
+        val hit = lookup(artistName, recordingName) as? MbidLookupOutcome.Hit ?: return null
+        putCache(key, hit.result)
+        return hit.result.artistMbid
     }
 
     /**
-     * Look up a recording MBID from the cache or via the mapper.
-     * Returns null if not found at the mapper's confidence threshold.
+     * Look up a recording MBID from the cache or via the mapper/acr-lookup chain,
+     * with the ISRC fallback. Returns null if not found.
      * Does not persist to Room (no trackId context).
      *
      * Used by [com.parachord.android.bridge.NativeBridge.resolveMbidForLove]
-     * to back the JS bridge's `window.resolveMbidForLove(track)` Promise.
-     * The achordion plugin's `resolveMbid(track)` fallback calls this when
-     * `track.mbid` is absent. Same-shape mirror of [getArtistMbid].
+     * to back the JS bridge's `window.resolveMbidForLove(track)` Promise, and by
+     * the scrobblers. **Collapses NotFound and Unreachable to `null`** — fine for
+     * a one-shot "do I have an MBID for this play?", but callers that feed a
+     * negative cache must use [lookupRecordingMbid] instead.
      */
     suspend fun getRecordingMbid(
         artistName: String,
         recordingName: String,
         isrc: String? = null,
-    ): String? {
+        album: String? = null,
+    ): String? = (lookupRecordingMbid(artistName, recordingName, isrc, album) as? RecordingMbidLookup.Found)?.mbid
+
+    /**
+     * The three-outcome form of [getRecordingMbid]: mapper → acr-lookup → ISRC.
+     *
+     * The status is decided by the mapper/acr-lookup chain; the ISRC fallback
+     * can only UPGRADE it to [RecordingMbidLookup.Found]. So "nothing answered
+     * about this artist/title and the ISRC didn't rescue it" stays
+     * [RecordingMbidLookup.Unreachable] — we never learned the pair is
+     * unmappable, and the caller must not record it as such (#394).
+     */
+    suspend fun lookupRecordingMbid(
+        artistName: String,
+        recordingName: String,
+        isrc: String? = null,
+        album: String? = null,
+    ): RecordingMbidLookup {
         val key = cacheKey(artistName, recordingName)
         val cached = getCachedEntry(key)
-        if (cached != null) return cached.recordingMbid
-
-        val result = mapperLookup(artistName, recordingName)
-        if (result != null) {
-            putCache(key, result)
-            return result.recordingMbid
+        if (cached != null) {
+            // A cached entry is a prior ANSWER (hits and misses only; unreachable
+            // is never cached), so a cached miss is a genuine NotFound.
+            return cached.recordingMbid?.let { RecordingMbidLookup.Found(it) }
+                ?: RecordingMbidLookup.NotFound
         }
 
-        // Fallback: the LB mapper is unavailable (e.g. a mapper outage) or has no
-        // confident match. Resolve via the played source's ISRC through
-        // MusicBrainz `/isrc/` — a different service, and exact (the ISRC is the
-        // recording the user is streaming), so no fuzzy wrong-variant risk.
+        val outcome = lookup(artistName, recordingName, album)
+        if (outcome is MbidLookupOutcome.Hit) {
+            putCache(key, outcome.result)
+            outcome.result.recordingMbid?.let { return RecordingMbidLookup.Found(it) }
+        }
+
+        // Fallback: the chain is unavailable (an outage) or has no confident
+        // match. Resolve via the played source's ISRC through MusicBrainz
+        // `/isrc/` — a different service, and exact (the ISRC is the recording
+        // the user is streaming), so no fuzzy wrong-variant risk.
         //
         // Deliberately NOT cached: an ISRC-only result lacks canonical names +
         // artist/release MBIDs, and caching it (90-day TTL) would block the
         // richer mapper entry once the mapper recovers. The scrobble submit only
         // needs the bare MBID for this play.
         if (!isrc.isNullOrBlank() && musicBrainzClient != null) {
-            return try {
-                musicBrainzClient.lookupRecordingMbidByIsrc(isrc)
+            try {
+                musicBrainzClient.lookupRecordingMbidByIsrc(isrc)?.let { return RecordingMbidLookup.Found(it) }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "ISRC MBID fallback failed for isrc=$isrc: ${e.message}")
-                null
             }
         }
-        return null
+        return if (outcome is MbidLookupOutcome.Unreachable) RecordingMbidLookup.Unreachable
+        else RecordingMbidLookup.NotFound
     }
 
     /**
@@ -296,20 +344,22 @@ class MbidEnrichmentService(
             return
         }
 
-        // Call the mapper
-        val result = mapperLookup(artist, title)
-        val entry = if (result != null) {
-            MbidCacheEntry(
-                recordingMbid = result.recordingMbid,
-                artistMbid = result.artistMbid,
-                releaseMbid = result.releaseMbid,
-                canonicalArtistName = result.artistCreditName,
-                canonicalRecordingName = result.recordingName,
-                cachedAt = currentTimeMillis(),
+        // Mapper → acr-lookup. Three outcomes, and only the first two are cached:
+        // an Unreachable means nothing answered, so there is no verdict to keep
+        // and the track is simply retried next time (#394).
+        val entry = when (val outcome = lookup(artist, title)) {
+            is MbidLookupOutcome.Hit -> MbidCacheEntry(
+                recordingMbid = outcome.result.recordingMbid,
+                artistMbid = outcome.result.artistMbid,
+                releaseMbid = outcome.result.releaseMbid,
+                canonicalArtistName = outcome.result.artistCreditName,
+                canonicalRecordingName = outcome.result.recordingName,
+                source = outcome.result.source,
+                cachedAt = nowMs(),
             )
-        } else {
-            // Cache the miss
-            MbidCacheEntry(cachedAt = currentTimeMillis())
+            // Cache the miss. The source decides its TTL (see ttlMs).
+            is MbidLookupOutcome.Miss -> MbidCacheEntry(source = outcome.source, cachedAt = nowMs())
+            is MbidLookupOutcome.Unreachable -> return
         }
 
         putCache(key, entry)
@@ -322,22 +372,23 @@ class MbidEnrichmentService(
     }
 
     /**
-     * Lookup an MBID for the given (artist, recording) pair via the LB mapper.
+     * Look up the (artist, recording) pair via the mapper → acr-lookup chain.
      *
-     * Returns null when the mapper has no high-confidence match (its own
-     * internal confidence floor) OR when the lookup throws. Exceptions are
-     * swallowed and logged — callers (including [ListenBrainzSyncProvider.searchForTrackId])
-     * treat null as "no match, skip the track".
+     * Never throws: the client already maps request failures to
+     * [MbidLookupOutcome.Unreachable], and anything that still escapes (a bug,
+     * a serialization surprise) is reported the same way — a failure to ASK is
+     * never a "no match".
      *
      * Note arg order: `(artist, recording)` — matches the underlying
-     * `ListenBrainzClient.mbidMapperLookup` signature, NOT `(title, artist)`.
+     * `ListenBrainzClient.resolveRecordingMbid` signature, NOT `(title, artist)`.
      */
-    suspend fun mapperLookup(artist: String, recording: String): MbidMapperResult? {
+    suspend fun lookup(artist: String, recording: String, album: String? = null): MbidLookupOutcome {
         return try {
-            listenBrainzClient.mbidMapperLookup(artist, recording)
+            listenBrainzClient.resolveRecordingMbid(artist, recording, album)
         } catch (e: Exception) {
-            Log.w(TAG, "Mapper lookup failed for '$artist' - '$recording'", e)
-            null
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "MBID lookup failed for '$artist' - '$recording'", e)
+            MbidLookupOutcome.Unreachable(mapOf("lookup" to (e.message ?: "error")))
         }
     }
 
@@ -348,14 +399,30 @@ class MbidEnrichmentService(
         ensureDiskCacheLoaded()
         return cacheMutex.withLock {
             val entry = diskCache[key] ?: return@withLock null
-            // TTL check
-            if (currentTimeMillis() - entry.cachedAt > CACHE_TTL) {
+            // TTL check — per-source for misses (see ttlMs).
+            if (nowMs() - entry.cachedAt > ttlMs(entry)) {
                 diskCache.remove(key)
                 return@withLock null
             }
             entry
         }
     }
+
+    /**
+     * How long an entry is trusted. Hits and mapper misses keep the 90-day TTL;
+     * an acr-lookup MISS is trusted for only 6 hours — acr-lookup is the stricter
+     * matcher (no suffix tolerance), so a mapper that comes back might still
+     * match the same pair.
+     */
+    private fun ttlMs(entry: MbidCacheEntry): Long =
+        if (!entry.hasAnyMbid && entry.source == MbidLookupSource.ACR_LOOKUP) ACR_MISS_TTL else CACHE_TTL
+
+    /**
+     * A miss with no `source` recorded on/after the outage began: written by the
+     * pre-#394 code, which cached a failed request exactly like "no match".
+     */
+    private fun isOutageArtifact(entry: MbidCacheEntry): Boolean =
+        !entry.hasAnyMbid && entry.source == null && entry.cachedAt >= OUTAGE_START_MS
 
     private suspend fun putCache(key: String, result: MbidMapperResult) {
         putCache(key, MbidCacheEntry(
@@ -364,7 +431,8 @@ class MbidEnrichmentService(
             releaseMbid = result.releaseMbid,
             canonicalArtistName = result.artistCreditName,
             canonicalRecordingName = result.recordingName,
-            cachedAt = currentTimeMillis(),
+            source = result.source,
+            cachedAt = nowMs(),
         ))
     }
 
@@ -379,9 +447,14 @@ class MbidEnrichmentService(
             try {
                 val json = cacheRead() ?: return
                 val entries = diskJson.decodeFromString<Map<String, MbidCacheEntry>>(json)
-                val now = currentTimeMillis()
-                diskCache = entries.filterValues { now - it.cachedAt < CACHE_TTL }.toMutableMap()
-                Log.d(TAG, "Loaded ${diskCache.size} cached MBIDs from disk")
+                val now = nowMs()
+                var purged = 0
+                diskCache = entries.filterValues { entry ->
+                    if (isOutageArtifact(entry)) { purged++; return@filterValues false }
+                    now - entry.cachedAt < ttlMs(entry)
+                }.toMutableMap()
+                Log.d(TAG, "Loaded ${diskCache.size} cached MBIDs from disk" +
+                    if (purged > 0) " (purged $purged outage-era misses)" else "")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to load MBID disk cache", e)
             }
@@ -396,6 +469,18 @@ class MbidEnrichmentService(
             Log.w(TAG, "Failed to save MBID disk cache", e)
         }
     }
+}
+
+/**
+ * Outcome of [MbidEnrichmentService.lookupRecordingMbid]. Three cases so a
+ * caller that keeps a negative cache can tell "no match" from "nobody answered".
+ */
+sealed class RecordingMbidLookup {
+    data class Found(val mbid: String) : RecordingMbidLookup()
+    /** A service answered: genuinely no match. Safe to count as a miss. */
+    data object NotFound : RecordingMbidLookup()
+    /** Nothing answered. NOT a miss — don't cache it, don't count it against the track. */
+    data object Unreachable : RecordingMbidLookup()
 }
 
 /** Request to enrich a track with MBIDs. */
@@ -415,6 +500,12 @@ internal data class MbidCacheEntry(
     val canonicalArtistName: String? = null,
     /** Canonical recording name from MusicBrainz (for scrobble name correction). */
     val canonicalRecordingName: String? = null,
+    /**
+     * Which service produced this entry ("mapper" / "acr-lookup"). Decides a
+     * miss's TTL. Null on entries written before #394 — which is how the
+     * one-shot outage purge recognises them.
+     */
+    val source: String? = null,
     val cachedAt: Long = 0L,
 ) {
     val hasAnyMbid: Boolean get() = !recordingMbid.isNullOrBlank() || !artistMbid.isNullOrBlank() || !releaseMbid.isNullOrBlank()

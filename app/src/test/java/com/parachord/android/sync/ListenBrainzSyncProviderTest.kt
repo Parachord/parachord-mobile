@@ -522,33 +522,36 @@ class ListenBrainzSyncProviderTest {
     // ── searchForTrackId (Task 13) ─────────────────────────────────────
 
     @Test
-    fun `searchForTrackId returns recordingMbid from getRecordingMbid on hit`() = runTest {
-        // searchForTrackId now routes through getRecordingMbid (mapper → ISRC),
-        // passing the args as (artist, title, isrc) — the canonical primary path.
+    fun `searchForTrackId returns recordingMbid from lookupRecordingMbid on hit`() = runTest {
+        // searchForTrackId routes through lookupRecordingMbid (mapper → acr-lookup →
+        // ISRC), passing the args as (artist, title, isrc, album) — the canonical primary path.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { getRecordingMbid("Artist", "Title", null) } returns "mbid-result"
+            coEvery { lookupRecordingMbid("Artist", "Title", null, null) } returns
+                com.parachord.shared.metadata.RecordingMbidLookup.Found("mbid-result")
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
         assertEquals("mbid-result", provider.searchForTrackId("Title", "Artist"))
     }
 
     @Test
-    fun `searchForTrackId passes the ISRC through to getRecordingMbid`() = runTest {
-        // The ISRC must reach getRecordingMbid so the MusicBrainz /isrc/ fallback
-        // can fire during a mapper outage.
+    fun `searchForTrackId passes the ISRC and album through to lookupRecordingMbid`() = runTest {
+        // The ISRC must reach the lookup so the MusicBrainz /isrc/ fallback can
+        // fire during a mapper outage; the album feeds the mapper's release_name.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { getRecordingMbid("Artist", "Title", "US-ABC-12-34567") } returns "isrc-mbid"
+            coEvery { lookupRecordingMbid("Artist", "Title", "US-ABC-12-34567", "Album") } returns
+                com.parachord.shared.metadata.RecordingMbidLookup.Found("isrc-mbid")
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
-        assertEquals("isrc-mbid", provider.searchForTrackId("Title", "Artist", isrc = "US-ABC-12-34567"))
+        assertEquals("isrc-mbid", provider.searchForTrackId("Title", "Artist", album = "Album", isrc = "US-ABC-12-34567"))
     }
 
     @Test
-    fun `searchForTrackId falls back to fuzzy MB search when getRecordingMbid misses`() = runTest {
-        // Mapper down + no/failed ISRC → getRecordingMbid null → the last-resort
-        // fuzzy MusicBrainz recording search must run.
+    fun `searchForTrackId falls back to fuzzy MB search on a genuine NotFound`() = runTest {
+        // A service answered "no match" → the last-resort fuzzy MusicBrainz
+        // recording search must still run.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { getRecordingMbid(any(), any(), any()) } returns null
+            coEvery { lookupRecordingMbid(any(), any(), any(), any()) } returns
+                com.parachord.shared.metadata.RecordingMbidLookup.NotFound
             coEvery { searchRecordingMbid("Artist", "Title") } returns "fuzzy-mbid"
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
@@ -556,9 +559,10 @@ class ListenBrainzSyncProviderTest {
     }
 
     @Test
-    fun `searchForTrackId returns null when the whole fallback chain misses`() = runTest {
+    fun `searchForTrackId returns null (a countable miss) when NotFound and fuzzy search misses`() = runTest {
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { getRecordingMbid(any(), any(), any()) } returns null
+            coEvery { lookupRecordingMbid(any(), any(), any(), any()) } returns
+                com.parachord.shared.metadata.RecordingMbidLookup.NotFound
             coEvery { searchRecordingMbid(any(), any()) } returns null
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
@@ -566,11 +570,45 @@ class ListenBrainzSyncProviderTest {
     }
 
     @Test
-    fun `searchForTrackId returns null when the chain throws`() = runTest {
-        // The provider must never propagate a failure — the sync engine would
-        // abort the whole hydrate-loop on a single bad lookup.
+    fun `searchForTrackId still uses the fuzzy MB fallback when the MBID services are unreachable`() = runTest {
+        // The whole point of the MusicBrainz fallback: MB may be up while the
+        // mapper/labs are not, so an Unreachable must still try it.
         val enrichment: MbidEnrichmentService = mockk {
-            coEvery { getRecordingMbid(any(), any(), any()) } throws Exception("Network error")
+            coEvery { lookupRecordingMbid(any(), any(), any(), any()) } returns
+                com.parachord.shared.metadata.RecordingMbidLookup.Unreachable
+            coEvery { searchRecordingMbid("Artist", "Title") } returns "fuzzy-mbid"
+        }
+        val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
+        assertEquals("fuzzy-mbid", provider.searchForTrackId("Title", "Artist"))
+    }
+
+    @Test
+    fun `searchForTrackId throws Unreachable (not null) when nothing answered and fuzzy search misses`() = runTest {
+        // #394 item 6: an outage must NOT be recorded as a miss. Null would make
+        // HydrationCoordinator stamp a 7→30-day cooldown on the track; the typed
+        // exception tells it to leave the track pending instead.
+        val enrichment: MbidEnrichmentService = mockk {
+            coEvery { lookupRecordingMbid(any(), any(), any(), any()) } returns
+                com.parachord.shared.metadata.RecordingMbidLookup.Unreachable
+            coEvery { searchRecordingMbid(any(), any()) } returns null
+        }
+        val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
+        var threw = false
+        try {
+            provider.searchForTrackId("Title", "Artist")
+        } catch (e: com.parachord.shared.sync.TrackIdLookupUnreachableException) {
+            threw = true
+        }
+        assertTrue("expected TrackIdLookupUnreachableException", threw)
+    }
+
+    @Test
+    fun `searchForTrackId returns null when the chain throws an unexpected error`() = runTest {
+        // Any OTHER failure must not propagate — the sync engine would abort the
+        // whole hydrate-loop on a single bad lookup. (Only the typed Unreachable
+        // exception is allowed through, by design.)
+        val enrichment: MbidEnrichmentService = mockk {
+            coEvery { lookupRecordingMbid(any(), any(), any(), any()) } throws Exception("Network error")
         }
         val provider = ListenBrainzSyncProvider(mockk(), mockk(relaxed = true), enrichment)
         assertNull(provider.searchForTrackId("Title", "Artist"))
