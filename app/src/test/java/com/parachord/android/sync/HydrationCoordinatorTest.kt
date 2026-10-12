@@ -130,6 +130,44 @@ class HydrationCoordinatorTest {
     }
 
     @Test
+    fun `unreachable — nothing answered is NOT a miss, no attempt is stamped, next cycle re-searches`() = runBlocking {
+        // #394: during the 2026-09 mapper outage every failed lookup was recorded
+        // as a miss, parking LB-synced tracks in a 7→30-day cooldown for a
+        // service problem. A TrackIdLookupUnreachableException must leave the
+        // track pending with NO cache row, so the very next cycle asks again.
+        val dao = TrackProviderIdCacheDao(TestDatabaseFactory.create())
+        val provider = FakeProvider(searchResultFor = {
+            throw com.parachord.shared.sync.TrackIdLookupUnreachableException()
+        })
+        val coordinator = HydrationCoordinator(dao, nowMs = { 1_000_000L })
+        val t = track("Outage")
+
+        assertNull(coordinator.resolve(provider, t))
+        assertEquals(1, provider.searchCalls)
+        // No attempt stamped — nothing for the cooldown to escalate on.
+        assertNull(dao.select(canonicalTrackKey(t), provider.id))
+
+        // Same clock, next resolve: NOT short-circuited by any cooldown.
+        assertNull(coordinator.resolve(provider, t))
+        assertEquals("an unreachable lookup must be retried, not cooled down", 2, provider.searchCalls)
+    }
+
+    @Test
+    fun `other exceptions still count as a miss and stamp the attempt`() = runBlocking {
+        // The unreachable carve-out is narrow by design: a generic failure keeps
+        // today's behaviour, so genuinely broken providers still back off.
+        val dao = TrackProviderIdCacheDao(TestDatabaseFactory.create())
+        val provider = FakeProvider(searchResultFor = { throw IllegalStateException("boom") })
+        val coordinator = HydrationCoordinator(dao, nowMs = { 1_000_000L })
+        val t = track("Broken")
+
+        assertNull(coordinator.resolve(provider, t))
+        val entry = dao.select(canonicalTrackKey(t), provider.id)
+        assertNotNull(entry)
+        assertEquals(1L, entry!!.attempts)
+    }
+
+    @Test
     fun `cooldown expiry — past the window it re-searches`() = runBlocking {
         val dao = TrackProviderIdCacheDao(TestDatabaseFactory.create())
         var now = 1_000_000L

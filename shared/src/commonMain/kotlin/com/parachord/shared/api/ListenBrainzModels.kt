@@ -73,7 +73,11 @@ data class LbPlaylistTrack(
     val mbid: String? = null,
 )
 
-/** Result from the ListenBrainz MBID Mapper lookup. */
+/**
+ * Result from a recording-MBID lookup — the ListenBrainz MBID Mapper, or the
+ * labs `acr-lookup` dataset when the mapper can't be reached. Both are shaped
+ * identically so every consumer works unchanged; [source] says which answered.
+ */
 data class MbidMapperResult(
     val artistMbid: String?,
     val artistCreditName: String?,
@@ -82,4 +86,43 @@ data class MbidMapperResult(
     val releaseName: String?,
     val releaseMbid: String?,
     val confidence: Double = 0.0,
+    /** [MbidLookupSource.MAPPER] or [MbidLookupSource.ACR_LOOKUP]. */
+    val source: String = MbidLookupSource.MAPPER,
 )
+
+/** Which service answered a recording-MBID lookup. */
+object MbidLookupSource {
+    const val MAPPER = "mapper"
+    const val ACR_LOOKUP = "acr-lookup"
+}
+
+/**
+ * Outcome of [ListenBrainzClient.resolveRecordingMbid] — three cases, not two.
+ *
+ * A plain `null` used to mean both "no match" and "the request failed", and
+ * during the 2026-09 mapper outage every failure was recorded as a miss. The
+ * distinction is load-bearing for every cache downstream (parachord-mobile#394;
+ * desktop parachord#991 `mbid-lookup.js`).
+ */
+sealed class MbidLookupOutcome {
+    /** A service matched; [result] is mapper-shaped, `result.source` says which. */
+    data class Hit(val result: MbidMapperResult) : MbidLookupOutcome()
+
+    /**
+     * A service ANSWERED and has no match. Trust an [MbidLookupSource.ACR_LOOKUP]
+     * miss less than a mapper miss — it's a stricter (semi-exact) matcher, so a
+     * mapper that comes back might still match.
+     */
+    data class Miss(val source: String) : MbidLookupOutcome()
+
+    /**
+     * Nothing answered (network/TLS error or non-2xx from both). NOT a miss:
+     * never cache it and never count it against the track. [errors] says what
+     * each service did, for logging.
+     */
+    data class Unreachable(val errors: Map<String, String>) : MbidLookupOutcome()
+}
+
+/** Thrown by the labs gate if a cooldown is ever armed; surfaces as [MbidLookupOutcome.Unreachable]. */
+class ListenBrainzLabsRateLimitedException(val retryAfterSeconds: Long?) :
+    Exception("ListenBrainz labs rate-limited (retry after ${retryAfterSeconds ?: "?"}s)")

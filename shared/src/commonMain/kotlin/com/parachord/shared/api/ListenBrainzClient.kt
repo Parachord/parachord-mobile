@@ -52,7 +52,32 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
         /** Canonical ISRC shape (after uppercasing): 2-char country + 3-char registrant + 7 digits. */
         private val ISRC_REGEX = Regex("^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
+
+        /**
+         * The labs dataset hoster's "artist credit + recording" lookup — the
+         * fallback when the mapper can't be reached (#394). Returns the same
+         * identifiers the mapper does, as a JSON array (empty on no match).
+         */
+        private const val ACR_LOOKUP_URL = "https://labs.api.listenbrainz.org/acr-lookup/json"
+
+        /**
+         * acr-lookup is exact on normalized strings and has no confidence score,
+         * so a hit is reported with a fixed one — at least as sure as a mapper
+         * result at the canonical-retry floor (0.7). Matches desktop.
+         */
+        const val ACR_CONFIDENCE = 0.9
+
+        /** A hit needs a real recording MBID; anything else is treated as no match (desktop parity). */
+        private val RECORDING_MBID_REGEX = Regex("^[a-f0-9-]{36}$", RegexOption.IGNORE_CASE)
     }
+
+    /**
+     * Gate for the labs host (2 concurrent, 150 ms gap — the [RateLimitGate]
+     * defaults, and desktop's numbers). The mapper answered in ~4 ms so batch
+     * enrichment could fire every lookup at once; the dataset hoster is a
+     * smaller service on infrastructure MetaBrainz has said is under strain.
+     */
+    private val labsGate = RateLimitGate(tag = "ListenBrainzLabs")
 
     /** Validate that a ListenBrainz user exists (no auth required). */
     suspend fun validateUser(username: String): Boolean {
@@ -943,36 +968,119 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
         }
     }
 
-    /** ListenBrainz MBID Mapper lookup. ~4ms, no auth, no documented strict rate limits. */
-    suspend fun mbidMapperLookup(
+    /**
+     * Recording-MBID lookup: the ListenBrainz MBID Mapper first, then the labs
+     * `acr-lookup` dataset ONLY when the mapper can't be reached.
+     *
+     * Why the fallback (#394): `mapper.listenbrainz.org` has been unreachable
+     * since 2026-09-21 — it serves a `*.musicbrainz.org` certificate that doesn't
+     * cover its own hostname, and answers 502 even with verification skipped —
+     * and it was 502 for two days in June (LB-2007). The labs hoster has a valid
+     * certificate and returns the same identifiers. It is a semi-exact matcher
+     * (case/punctuation normalized; suffixes like "(Remastered)" are not), so it
+     * has no confidence score and is reported with [ACR_CONFIDENCE].
+     *
+     * Mirrors desktop `mbid-lookup.js` `resolveRecordingMbid` exactly:
+     *  - a mapper `200` with no match is a plain [MbidLookupOutcome.Miss] and
+     *    labs is NOT asked;
+     *  - a mapper network/TLS error or non-2xx falls through to labs;
+     *  - nothing answering is [MbidLookupOutcome.Unreachable] — never a miss;
+     *  - a hit requires a well-formed recording MBID (anything else = no match);
+     *  - `release_name` is sent to both when [album] is given.
+     */
+    suspend fun resolveRecordingMbid(
         artistName: String,
         recordingName: String,
-    ): MbidMapperResult? {
-        return try {
+        album: String? = null,
+    ): MbidLookupOutcome {
+        val errors = mutableMapOf<String, String>()
+        if (artistName.isBlank() || recordingName.isBlank()) return MbidLookupOutcome.Unreachable(errors)
+
+        try {
             val response = httpClient.get("$MAPPER_URL/mapping/lookup") {
                 parameter("artist_credit_name", artistName)
                 parameter("recording_name", recordingName)
+                if (!album.isNullOrBlank()) parameter("release_name", album)
             }
-            if (!response.status.isSuccess()) return null
-            val body = response.bodyAsText()
-            val parsed = json.decodeFromString<MbidMapperWire>(body)
-            // The mapper returns {} when there's no match — artistCreditMbids will be null.
-            if (parsed.artistCreditMbids == null) return null
-            MbidMapperResult(
-                artistMbid = parsed.artistCreditMbids.firstOrNull()?.ifBlank { null },
-                artistCreditName = parsed.artistCreditName?.ifBlank { null },
-                recordingName = parsed.recordingName?.ifBlank { null },
-                recordingMbid = parsed.recordingMbid?.ifBlank { null },
-                releaseName = parsed.releaseName?.ifBlank { null },
-                releaseMbid = parsed.releaseMbid?.ifBlank { null },
-                confidence = parsed.confidence ?: 0.0,
-            )
+            if (response.status.isSuccess()) {
+                // The mapper returns {} when there's no match.
+                val parsed = json.decodeFromString<MbidMapperWire>(response.bodyAsText())
+                val result = mapperWireToResult(parsed)
+                return if (result != null) MbidLookupOutcome.Hit(result)
+                else MbidLookupOutcome.Miss(MbidLookupSource.MAPPER)
+            }
+            errors[MbidLookupSource.MAPPER] = "HTTP ${response.status.value}"
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            Log.w(TAG, "MBID mapper lookup failed for '$artistName' - '$recordingName'", e)
-            null
+            errors[MbidLookupSource.MAPPER] = e.message ?: e::class.simpleName ?: "error"
         }
+
+        try {
+            val response = labsGate.withPermit(
+                exceptionFactory = { ListenBrainzLabsRateLimitedException(it) },
+            ) {
+                httpClient.get(ACR_LOOKUP_URL) {
+                    parameter("artist_credit_name", artistName)
+                    parameter("recording_name", recordingName)
+                    if (!album.isNullOrBlank()) parameter("release_name", album)
+                }
+            }
+            if (response.status.isSuccess()) {
+                val rows = json.decodeFromString<List<AcrLookupRowWire>>(response.bodyAsText())
+                val result = rows.firstOrNull()?.let { acrRowToResult(it) }
+                return if (result != null) MbidLookupOutcome.Hit(result)
+                else MbidLookupOutcome.Miss(MbidLookupSource.ACR_LOOKUP)
+            }
+            errors[MbidLookupSource.ACR_LOOKUP] = "HTTP ${response.status.value}"
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            errors[MbidLookupSource.ACR_LOOKUP] = e.message ?: e::class.simpleName ?: "error"
+        }
+
+        Log.w(TAG, "MBID lookup unreachable for '$artistName' - '$recordingName': $errors")
+        return MbidLookupOutcome.Unreachable(errors)
+    }
+
+    /**
+     * Compatibility wrapper over [resolveRecordingMbid] for callers that only
+     * want a hit. **Collapses [MbidLookupOutcome.Miss] AND
+     * [MbidLookupOutcome.Unreachable] to `null`** — never feed its null into a
+     * negative cache. New code should use [resolveRecordingMbid].
+     */
+    suspend fun mbidMapperLookup(
+        artistName: String,
+        recordingName: String,
+    ): MbidMapperResult? = (resolveRecordingMbid(artistName, recordingName) as? MbidLookupOutcome.Hit)?.result
+
+    private fun mapperWireToResult(w: MbidMapperWire): MbidMapperResult? {
+        val recordingMbid = w.recordingMbid?.takeIf { RECORDING_MBID_REGEX.matches(it) } ?: return null
+        return MbidMapperResult(
+            artistMbid = w.artistCreditMbids?.firstOrNull()?.ifBlank { null },
+            artistCreditName = w.artistCreditName?.ifBlank { null },
+            recordingName = w.recordingName?.ifBlank { null },
+            recordingMbid = recordingMbid,
+            releaseName = w.releaseName?.ifBlank { null },
+            releaseMbid = w.releaseMbid?.ifBlank { null },
+            confidence = w.confidence ?: 0.0,
+            source = MbidLookupSource.MAPPER,
+        )
+    }
+
+    /** acr row → mapper shape: `artist_mbids` is the mapper's `artist_credit_mbids`. */
+    private fun acrRowToResult(row: AcrLookupRowWire): MbidMapperResult? {
+        val recordingMbid = row.recordingMbid?.takeIf { RECORDING_MBID_REGEX.matches(it) } ?: return null
+        return MbidMapperResult(
+            artistMbid = row.artistMbids?.firstOrNull()?.ifBlank { null },
+            artistCreditName = row.artistCreditName?.ifBlank { null },
+            recordingName = row.recordingName?.ifBlank { null },
+            recordingMbid = recordingMbid,
+            releaseName = row.releaseName?.ifBlank { null },
+            releaseMbid = row.releaseMbid?.ifBlank { null },
+            confidence = ACR_CONFIDENCE,
+            source = MbidLookupSource.ACR_LOOKUP,
+        )
     }
 
     /**
@@ -1154,4 +1262,20 @@ private data class MbidMapperWire(
     @SerialName("release_name") val releaseName: String? = null,
     @SerialName("release_mbid") val releaseMbid: String? = null,
     val confidence: Double? = null,
+)
+
+/**
+ * One row of `labs.api.listenbrainz.org/acr-lookup/json`. The response is a JSON
+ * array of these (empty on no match). Note `artist_mbids`, not the mapper's
+ * `artist_credit_mbids`; the echoed `*_arg` / `index` / `artist_credit_id`
+ * fields are ignored.
+ */
+@Serializable
+private data class AcrLookupRowWire(
+    @SerialName("artist_mbids") val artistMbids: List<String>? = null,
+    @SerialName("artist_credit_name") val artistCreditName: String? = null,
+    @SerialName("recording_name") val recordingName: String? = null,
+    @SerialName("recording_mbid") val recordingMbid: String? = null,
+    @SerialName("release_name") val releaseName: String? = null,
+    @SerialName("release_mbid") val releaseMbid: String? = null,
 )
