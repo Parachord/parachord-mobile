@@ -500,7 +500,11 @@ private fun PlugInsTab(
     val offResolverPlugins = resolverPlugins.filter {
         isConnected(it.resolverId) && !isResolverEnabled(it.resolverId)
     }
+    // Easiest-to-set-up first (Spotify), in the canonical resolver order (#400).
     val disabledResolverPlugins = resolverPlugins.filter { !isConnected(it.resolverId) }
+        .sortedBy { p ->
+            com.parachord.shared.resolver.ResolverScoring.CANONICAL_RESOLVER_ORDER.indexOf(p.resolverId).let { if (it < 0) Int.MAX_VALUE else it }
+        }
 
     // Mutable state for drag-to-reorder (synced from persisted order)
     val orderedEnabled = remember(enabledResolverIds) {
@@ -589,6 +593,14 @@ private fun PlugInsTab(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 0.dp),
                 )
+                // #400: grayed tiles read as "broken" without this. Say they need
+                // setup and that a tap opens it.
+                Text(
+                    text = "These need your own account before they can play. Tap one to set it up.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
                 Spacer(modifier = Modifier.height(12.dp))
             }
             item {
@@ -600,6 +612,11 @@ private fun PlugInsTab(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     disabledResolverPlugins.forEach { plugin ->
+                        // Desktop's label for an unconfigured resolver is an amber
+                        // "Setup required" under the name (settings-cards.js). A plugin
+                        // the user switched off entirely isn't a setup problem, so it
+                        // gets a neutral label instead.
+                        val userDisabled = plugin.id in disabledPlugins
                         PluginTile(
                             plugin = plugin,
                             isConnected = false,
@@ -607,6 +624,12 @@ private fun PlugInsTab(
                             onClick = { selectedPlugin = plugin },
                             modifier = Modifier.width(100.dp),
                             grayed = true,
+                            statusLabel = if (userDisabled) "Turned off" else "Setup required",
+                            statusLabelColor = if (userDisabled) {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            } else {
+                                SetupRequiredAmber
+                            },
                         )
                     }
                     // Fill remaining space
@@ -1007,6 +1030,9 @@ private fun PluginTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     grayed: Boolean = false,
+    /** Small line under the name, e.g. "Setup required" (#400). Null = none. */
+    statusLabel: String? = null,
+    statusLabelColor: Color = Color.Unspecified,
 ) {
     val tileAlpha = if (grayed) 0.35f else 1f
 
@@ -1086,8 +1112,23 @@ private fun PluginTile(
                 MaterialTheme.colorScheme.onSurface
             },
         )
+
+        if (statusLabel != null) {
+            Text(
+                text = statusLabel,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = statusLabelColor,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
     }
 }
+
+/** Desktop's "Setup required" amber (`#d97706`, settings-cards.js). Not brand purple: it's a warning. */
+private val SetupRequiredAmber = Color(0xFFD97706)
 
 // ── Plugin Config Bottom Sheet ─────────────────────────────────────
 
@@ -1662,6 +1703,18 @@ private fun SoundCloudConfig(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (!credentialsSaved) {
+            // #400: be honest. Parachord ships no SoundCloud key, and SoundCloud
+            // restricts new API apps, so most people can't get one. Point them at
+            // what will work instead of letting the grayed tile look broken.
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "SoundCloud restricts who can create API apps, so you may not be able to get " +
+                    "credentials. Spotify and Apple Music are easier to set up.",
+                style = MaterialTheme.typography.bodySmall,
+                color = SetupRequiredAmber,
+            )
+        }
         Spacer(modifier = Modifier.height(12.dp))
         TextButton(
             onClick = onConnect,
