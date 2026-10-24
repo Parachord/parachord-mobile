@@ -14,3 +14,5 @@ actual object Log {
 actual fun randomUUID(): String = java.util.UUID.randomUUID().toString()
 
 actual fun currentTimeMillis(): Long = System.currentTimeMillis()
+
+actual fun nfkd(s: String): String = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFKD)

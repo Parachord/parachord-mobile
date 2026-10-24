@@ -1,6 +1,7 @@
 package com.parachord.shared.platform
 
 import platform.Foundation.NSDate
+import platform.Foundation.decomposedStringWithCompatibilityMapping
 import platform.Foundation.NSUUID
 import platform.Foundation.NSLog
 import platform.Foundation.timeIntervalSince1970
@@ -33,3 +34,10 @@ actual object Log {
 actual fun randomUUID(): String = NSUUID().UUIDString
 
 actual fun currentTimeMillis(): Long = (NSDate().timeIntervalSince1970 * 1000).toLong()
+
+// `decomposedStringWithCompatibilityMapping` is declared in an NSString ObjC
+// *category*, which Kotlin/Native surfaces as an extension property — it needs
+// this explicit import; the NSString cast alone doesn't bring it into scope.
+@Suppress("CAST_NEVER_SUCCEEDS") // Kotlin String bridges to NSString at runtime
+actual fun nfkd(s: String): String =
+    (s as platform.Foundation.NSString).decomposedStringWithCompatibilityMapping

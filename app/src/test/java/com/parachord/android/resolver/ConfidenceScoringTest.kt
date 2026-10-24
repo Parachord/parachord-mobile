@@ -32,9 +32,11 @@ class ConfidenceScoringTest {
     }
 
     @Test
-    fun `normalizeStr handles unicode accents`() {
-        // Accented chars are stripped since they're non a-z0-9
-        assertEquals("bjrk", normalizeStr("Björk"))
+    fun `normalizeStr folds unicode accents to the base letter`() {
+        // #404: accented letters fold (NFKD + strip combining marks) instead of
+        // being deleted. This test used to assert "bjrk", which pinned the bug.
+        // Full desktop-parity vectors live in shared NormalizeStrTest.
+        assertEquals("bjork", normalizeStr("Björk"))
     }
 
     @Test
