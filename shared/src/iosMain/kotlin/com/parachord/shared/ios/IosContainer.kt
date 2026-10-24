@@ -1576,8 +1576,9 @@ class IosContainer private constructor() {
 
     // Remove from collection — sync-aware (#194): tombstones the item + attempts
     // remote removal on each linked provider BEFORE the local delete, so the next
-    // pull doesn't re-import it.
-    suspend fun removeTrackFromCollection(track: Track) { libraryRepository.deleteTrackWithSync(track) }
+    // pull doesn't re-import it. Tracks come from any screen (weekly playlist,
+    // player, search) whose id isn't the library row's, so resolve the row first.
+    suspend fun removeTrackFromCollection(track: Track) { libraryRepository.removeFromCollection(track) }
     suspend fun removeAlbumFromCollection(album: Album) { libraryRepository.deleteAlbumWithSync(album) }
     suspend fun removeArtistFromCollection(artist: Artist) { libraryRepository.deleteArtistWithSync(artist) }
 

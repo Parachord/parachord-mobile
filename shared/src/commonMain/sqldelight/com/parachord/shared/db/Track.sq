@@ -39,6 +39,9 @@ SELECT * FROM tracks WHERE title LIKE '%' || ? || '%' OR artist LIKE '%' || ? ||
 existsByTitleAndArtist:
 SELECT COUNT(*) > 0 FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?);
 
+getByTitleAndArtist:
+SELECT * FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) ORDER BY addedAt ASC LIMIT 1;
+
 getRecentSync:
 SELECT * FROM tracks ORDER BY addedAt DESC LIMIT ?;
 
