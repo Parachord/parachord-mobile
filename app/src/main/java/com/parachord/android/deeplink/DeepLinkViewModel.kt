@@ -397,6 +397,11 @@ class DeepLinkViewModel constructor(
                 // misrepresent the station as a fixed-length playlist.
                 DeepLinkNavEvent.Toast("Playing ${r.displayName}")
             )
+            // No seed for an artist-only link (#397): desktop's exact wording, and
+            // the dispatcher returned before clearing the queue.
+            is PlayRadioResult.NoSeed -> _navEvents.emit(
+                DeepLinkNavEvent.Toast(com.parachord.shared.playback.noSpinoffSeedMessage(r.artist))
+            )
             is PlayRadioResult.Failed -> _navEvents.emit(
                 DeepLinkNavEvent.Toast("Radio failed: ${r.reason}")
             )

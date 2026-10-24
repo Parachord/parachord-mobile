@@ -1231,17 +1231,19 @@ class IosContainer private constructor() {
     ): IosComplexLink {
         return when (val mode = action.mode) {
             is com.parachord.shared.deeplink.RadioMode.ArtistSeed -> {
-                val title = mode.title
-                if (title != null) {
-                    // Mode B title-bearing: Last.fm similar-track pool (same as in-app spinoff).
-                    val pool = spinoffPool(mode.artist, title)
-                    if (pool.isEmpty()) IosComplexLink("failed", message = "No similar tracks for ${mode.artist}")
-                    else IosComplexLink("radioPool", name = action.name ?: "Radio: ${mode.artist} – $title", tracks = pool)
-                } else {
-                    // Mode B artist-only: synthesize an LB-radio URL; reuse it as the refill URL.
-                    val lbUrl = buildLbRadioUrl(mode.artist)
-                    resolveRadioPool(com.parachord.shared.deeplink.ProtocolPlayInput(url = lbUrl), poolOpts, action.name ?: "Radio: ${mode.artist}", lbUrl)
-                }
+                // Mode B: Last.fm similar-track pool (same as in-app spinoff). An
+                // artist-only link seeds from the artist's top Last.fm track — desktop
+                // parachord#1005, shared with Android (#397). It used to synthesize a
+                // ListenBrainz lb-radio URL, which 401s without an LB token.
+                // RootView only touches the queue on "radioPool", so every failure
+                // here leaves the user's queue alone.
+                val seed = com.parachord.shared.playback.resolveSpinoffSeed(mode.artist, mode.title, ::artistTopTrackTitle)
+                    ?: return IosComplexLink("failed", message = com.parachord.shared.playback.noSpinoffSeedMessage(mode.artist))
+                val pool = spinoffPool(seed.artist, seed.title)
+                val name = action.name
+                    ?: if (!mode.title.isNullOrBlank()) "Radio: ${mode.artist} – ${mode.title}" else "Radio: ${mode.artist}"
+                if (pool.isEmpty()) IosComplexLink("failed", message = "No similar tracks for \"${seed.title}\"")
+                else IosComplexLink("radioPool", name = name, tracks = pool)
             }
             is com.parachord.shared.deeplink.RadioMode.PoolBased -> {
                 val input = action.input ?: return IosComplexLink("failed", message = "Radio missing input")
@@ -1387,10 +1389,10 @@ class IosContainer private constructor() {
         }
     }
 
-    private fun buildLbRadioUrl(artist: String): String {
-        val prompt = percentEncode("artist:($artist)")
-        return "https://api.listenbrainz.org/1/explore/lb-radio?prompt=$prompt&mode=easy"
-    }
+    /** The artist's top Last.fm track title, or null — the artist-only radio seed (#397). */
+    private suspend fun artistTopTrackTitle(artist: String): String? =
+        lastFmClient.getArtistTopTracks(artist = artist, apiKey = appConfig.lastFmApiKey, limit = 1)
+            .toptracks?.track?.firstOrNull()?.name
 
     private fun percentEncode(s: String): String = buildString {
         for (c in s) {
