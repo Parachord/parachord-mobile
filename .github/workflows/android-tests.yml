@@ -1,0 +1,71 @@
+name: Android Unit Tests
+
+# Runs the JVM unit tests: the shared KMP suite (Android target) and the :app suite.
+#
+# build.yml only assembles the release APK/AAB and runs NO tests, so until this
+# job existed ~1,370 unit tests never ran in CI; they ran only when someone
+# remembered to run them locally. The iOS counterpart is ios-tests.yml (the JVM
+# run can't see Kotlin/Native-only failures; see CLAUDE.md KMP rules #13/#14).
+#
+# Deliberately gets NO API secrets: unit tests must not depend on real keys.
+# BuildConfig fields fall back to "" when local.properties is absent, so a
+# test that only passes with a real key is a test bug this job should surface.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'shared/**'
+      - 'gradle/**'
+      - '**/*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'shared/**'
+      - 'gradle/**'
+      - '**/*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: android-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # --continue: a failure in one module still runs (and reports) the other.
+      - name: Run unit tests (shared + app)
+        run: ./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest --continue --stacktrace
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: |
+            shared/build/reports/tests/testDebugUnitTest/
+            app/build/reports/tests/testDebugUnitTest/
+            shared/build/test-results/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+          retention-days: 14

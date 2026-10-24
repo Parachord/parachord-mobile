@@ -1,0 +1,105 @@
+name: iOS Shared Tests
+
+# Runs the shared KMP test suite on the iOS simulator (Kotlin/Native).
+#
+# Why this job exists: the JVM test run cannot see Native-only failures, and two
+# of them went unnoticed for weeks (#404, CLAUDE.md KMP rules #13/#14):
+#   - Kotlin/Native's Regex rejects `\p{N}`; a throwing top-level regex poisons
+#     its whole file, so scoreConfidence/validateIsrc/selectBestMatch failed on
+#     iOS while every JVM test passed.
+#   - A comma in a backtick test name is legal on the JVM but a compile error on
+#     Native, which disabled EVERY shared test on iOS for ~5 weeks.
+# Neither shows up in the Android build, so iOS needs its own run.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'shared/**'
+      - 'gradle/**'
+      - '**/*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/ios-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'shared/**'
+      - 'gradle/**'
+      - '**/*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/ios-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-simulator-tests:
+    # iosSimulatorArm64 test binaries need an Apple Silicon host.
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The Kotlin/Native toolchain + dependencies are ~1 GB and re-download on
+      # every run without this. Keyed on the Kotlin version.
+      - name: Cache Kotlin/Native toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.konan
+          key: konan-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml') }}
+          restore-keys: konan-${{ runner.os }}-
+
+      # The test task boots a default simulator by NAME, and which devices exist
+      # depends on the runner's Xcode. Pick a real, available iPhone on the newest
+      # iOS runtime instead of guessing, and pass its UDID explicitly.
+      - name: Pick an iOS simulator
+        run: |
+          # Plain string concatenation, no f-strings: the runner's python3 version
+          # isn't pinned, and escaped quotes inside f-strings need Python 3.12+.
+          read -r SIM_UDID SIM_LABEL < <(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          devices = json.load(sys.stdin)["devices"]
+          def ver(rt):
+              m = re.search(r"iOS-(\d+)-(\d+)", rt)
+              return (int(m.group(1)), int(m.group(2))) if m else (-1, -1)
+          for rt in sorted((r for r in devices if ".iOS-" in r), key=ver, reverse=True):
+              for d in devices[rt]:
+                  if d.get("isAvailable") and d["name"].startswith("iPhone"):
+                      major, minor = ver(rt)
+                      print(d["udid"] + " " + d["name"] + " (iOS " + str(major) + "." + str(minor) + ")")
+                      sys.exit(0)
+          ') || true
+          # Process substitution hides python's exit status, so check the result.
+          if [ -z "${SIM_UDID:-}" ]; then
+            echo "::error::No available iPhone simulator on this runner"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "Using simulator: $SIM_LABEL — $SIM_UDID"
+          echo "SIM_UDID=$SIM_UDID" >> "$GITHUB_ENV"
+
+      - name: Run shared tests on the iOS simulator
+        run: ./gradlew :shared:iosSimulatorArm64Test --device "$SIM_UDID" --stacktrace
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-test-report
+          path: |
+            shared/build/reports/tests/iosSimulatorArm64Test/
+            shared/build/test-results/iosSimulatorArm64Test/
+          retention-days: 14
