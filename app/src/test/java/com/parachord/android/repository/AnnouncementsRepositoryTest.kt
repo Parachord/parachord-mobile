@@ -239,7 +239,9 @@ class AnnouncementsRepositoryTest {
             ann(id = "a1"), ann(id = "a2"),
         )
         val kv = fakeKv()
-        val repo = AnnouncementsRepository(achordion, kv, appVersion = "0.6.1")
+        // Telemetry on the TestScope so advanceUntilIdle() waits for it (it only drains
+        // FOREGROUND work, so backgroundScope would never run the event).
+        val repo = AnnouncementsRepository(achordion, kv, appVersion = "0.6.1", scope = this)
         repo.refreshNow()
         assertEquals(listOf("a1", "a2"), repo.visibleAnnouncements.value.map { it.id })
 
@@ -262,7 +264,7 @@ class AnnouncementsRepositoryTest {
     @Test
     fun trackView_firesOncePerSession() = runTest {
         val achordion = mockk<AchordionClient>(relaxed = true)
-        val repo = AnnouncementsRepository(achordion, fakeKv(), appVersion = "0.6.1")
+        val repo = AnnouncementsRepository(achordion, fakeKv(), appVersion = "0.6.1", scope = this)
         repo.trackView("a1")
         repo.trackView("a1")
         repo.trackView("a1")

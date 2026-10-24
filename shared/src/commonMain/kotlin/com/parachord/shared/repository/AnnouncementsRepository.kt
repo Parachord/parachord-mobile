@@ -44,6 +44,14 @@ class AnnouncementsRepository(
     private val achordionClient: AchordionClient,
     private val kvStore: KvStore,
     private val appVersion: String,
+    /**
+     * Where fire-and-forget telemetry runs. Production keeps the default; tests
+     * pass their TestScope so `advanceUntilIdle()` actually waits for the event
+     * (on the real Default dispatcher the verify raced the launch and flaked in CI).
+     * Every binding constructs this explicitly, so the default is honoured — don't
+     * switch a binding to Koin `singleOf`, which ignores defaulted params.
+     */
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     companion object {
         private const val TAG = "AnnouncementsRepo"
@@ -52,7 +60,6 @@ class AnnouncementsRepository(
         const val REFRESH_GATE_MS = 6L * 60 * 60 * 1000 // 6h
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val fetchMutex = Mutex()
     private val viewedThisSession = mutableSetOf<String>()
     private val viewedMutex = Mutex()
