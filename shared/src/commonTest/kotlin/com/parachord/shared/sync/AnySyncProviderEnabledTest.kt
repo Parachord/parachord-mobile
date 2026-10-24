@@ -33,7 +33,7 @@ class AnySyncProviderEnabledTest {
     }
 
     @Test
-    fun `a non-spotify provider alongside spotify counts, legacy flag off`() {
+    fun `a non-spotify provider alongside spotify counts — legacy flag off`() {
         // Spotify present but its own switch is off; AM still needs to sync.
         assertTrue(isAnySyncProviderEnabled(false, setOf(spotify, "applemusic")))
     }
