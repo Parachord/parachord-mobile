@@ -282,6 +282,7 @@ class IosContainer private constructor() {
         AppConfig(
             userAgent = "Parachord/0.1 (iOS; https://parachord.com)",
             parachordClient = "ios",
+            appVersion = appVersionString(),
             isDebug = true,
             spotifyClientId = "",   // BYO — Parachord ships no Spotify key; user adds theirs in Settings
             lastFmApiKey = plist("LastFmApiKey"),
@@ -2220,7 +2221,12 @@ class IosContainer private constructor() {
     fun getLastFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLastFmSessionKeyFlow().map { it != null }
 
-    val listenBrainzClient: ListenBrainzClient by lazy { ListenBrainzClient(httpClient) }
+    val listenBrainzClient: ListenBrainzClient by lazy {
+        ListenBrainzClient(
+            httpClient,
+            ListenBrainzClient.formatSubmissionClientVersion(appConfig.appVersion, appConfig.parachordClient),
+        )
+    }
 
     // ── Scrobbling (#193 — shared stack, identical to Android) ─────────
     val mbidEnrichmentService: MbidEnrichmentService by lazy {

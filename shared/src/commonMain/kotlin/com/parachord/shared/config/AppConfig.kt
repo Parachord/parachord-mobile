@@ -38,6 +38,13 @@ data class AppConfig(
      */
     val parachordClient: String = "",
     /**
+     * The app's own version (Android `BuildConfig.VERSION_NAME`, iOS
+     * `CFBundleShortVersionString`). Sent in ListenBrainz's
+     * `submission_client_version` together with [parachordClient], so a listen
+     * shows which Parachord client and build submitted it (#362). Blank in tests.
+     */
+    val appVersion: String = "",
+    /**
      * True for debug builds; controls log verbosity in the HTTP transport stack
      * (e.g., Ktor Logging plugin LogLevel).
      */

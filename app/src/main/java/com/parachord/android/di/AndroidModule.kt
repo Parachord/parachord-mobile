@@ -161,6 +161,7 @@ val androidModule = module {
             seatGeekClientId = com.parachord.android.BuildConfig.SEATGEEK_CLIENT_ID,
             userAgent = com.parachord.android.net.parachordUserAgent(com.parachord.android.BuildConfig.VERSION_NAME),
             parachordClient = "android",
+            appVersion = com.parachord.android.BuildConfig.VERSION_NAME,
             isDebug = com.parachord.android.BuildConfig.DEBUG,
         )
     }

@@ -33,9 +33,11 @@ class ScrobbleNowPlayingLifecycleTest {
         override val id = "fake"
         override val displayName = "Fake"
         val nowPlaying: MutableList<Long?> = Collections.synchronizedList(mutableListOf())
+        /** listened_at of each submitted scrobble. */
+        val scrobbles: MutableList<Long> = Collections.synchronizedList(mutableListOf())
         override suspend fun isEnabled() = true
         override suspend fun sendNowPlaying(track: Track, durationMs: Long?) { nowPlaying += durationMs }
-        override suspend fun submitScrobble(track: Track, timestamp: Long, durationMs: Long?) {}
+        override suspend fun submitScrobble(track: Track, timestamp: Long, durationMs: Long?) { scrobbles += timestamp }
     }
 
     private val scrobbler = RecordingScrobbler()
@@ -87,6 +89,33 @@ class ScrobbleNowPlayingLifecycleTest {
         delay(300)
 
         assertEquals(listOf(null, 325_000L), scrobbler.nowPlaying.toList())
+    }
+
+    /**
+     * #362: one submitted listen per track per continuous play, however many
+     * state ticks land past the threshold (and across a pause/resume). The
+     * `scrobbleSubmitted` guard is what keeps an app-side double-fire impossible;
+     * this pins it so it can't silently regress.
+     */
+    @Test
+    fun scrobblesExactlyOncePerPlay_evenWithManyTicksPastTheThreshold() = runBlocking {
+        manager.startObserving()
+
+        // 3:20 track → threshold max(30, min(100, 240)) = 100 s.
+        emit(ScrobbleState(song, isPlaying = true, position = 0, duration = 200_000))
+        emit(ScrobbleState(song, isPlaying = true, position = 99_000, duration = 200_000))
+        delay(300)
+        assertEquals(0, scrobbler.scrobbles.size)
+
+        // Cross the threshold, then keep ticking past it, pause and resume.
+        for (pos in listOf(100_000L, 101_000, 120_000, 150_000, 199_000)) {
+            emit(ScrobbleState(song, isPlaying = true, position = pos, duration = 200_000))
+        }
+        emit(ScrobbleState(song, isPlaying = false, position = 160_000, duration = 200_000))
+        emit(ScrobbleState(song, isPlaying = true, position = 161_000, duration = 200_000))
+        delay(300)
+
+        assertEquals(1, scrobbler.scrobbles.size)
     }
 
     @Test

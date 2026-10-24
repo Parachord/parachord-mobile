@@ -86,7 +86,12 @@ val sharedModule = module {
     // PATCH/PUT/DELETE 401s are structural, not token-related.
     single { AppleMusicLibraryClient(get(), get()) }
     single { GeoLocationClient(get()) }
-    single { ListenBrainzClient(get()) }
+    single {
+        ListenBrainzClient(
+            get(),
+            ListenBrainzClient.formatSubmissionClientVersion(get<AppConfig>().appVersion, get<AppConfig>().parachordClient),
+        )
+    }
     // Smart Links — desktop's Cloudflare Pages share-link backend. Public, no
     // auth, CORS-open. Migrated from Retrofit → Ktor in the Smart Links cutover
     // (closes the last Retrofit footprint).
