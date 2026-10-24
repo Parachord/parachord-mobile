@@ -296,7 +296,11 @@ class AlbumViewModel constructor(
         viewModelScope.launch {
             val existing = libraryRepository.getAlbumByTitleAndArtist(detail.title, detail.artist)
             if (existing != null) {
-                libraryRepository.deleteAlbum(existing)
+                // Sync-aware removal (#261), like Library/Home. A plain delete left the
+                // album's sync_sources row behind: the album was never removed from the
+                // provider, the orphan tripped SyncEngine's entity-count guard into a
+                // full-library refetch, and that refetch re-added the album.
+                libraryRepository.deleteAlbumWithSync(existing)
             }
         }
     }
