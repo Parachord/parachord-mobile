@@ -304,6 +304,7 @@ class RecommendationsRepository(
                         title = track.title,
                         artist = track.artist,
                         album = track.album,
+                        duration = track.durationMs, // ms, like Track.duration (#349)
                         source = "listenbrainz",
                     )
                 }

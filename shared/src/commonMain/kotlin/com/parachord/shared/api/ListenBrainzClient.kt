@@ -889,6 +889,9 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                     title = track.title.orEmpty(),
                     artist = track.creator.orEmpty(),
                     album = ext?.releaseName?.ifBlank { null },
+                    // JSPF `duration` is milliseconds. Desktop reads it too, so
+                    // ListenBrainz rows show a length like Last.fm's do.
+                    durationMs = track.duration?.takeIf { it > 0 },
                 )
             }
         } catch (e: CancellationException) {
