@@ -36,7 +36,7 @@ class ResolverVolumeTest {
     }
 
     @Test
-    fun `minus 6 dB is half amplitude, minus 12 a quarter`() {
+    fun `minus 6 dB is half amplitude — minus 12 a quarter`() {
         assertEquals(50, ResolverVolume.effectiveVolumePercent(100, -6))
         assertEquals(25, ResolverVolume.effectiveVolumePercent(100, ResolverVolume.MIN_OFFSET_DB))
     }

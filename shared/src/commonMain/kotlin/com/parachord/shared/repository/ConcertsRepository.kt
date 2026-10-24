@@ -541,9 +541,16 @@ class ConcertsRepository(
         else -> source.replaceFirstChar { it.uppercase() }
     }
 
-    /** Normalize string for deduplication: lowercase, strip non-alphanumeric except spaces. */
+    /**
+     * Normalize string for deduplication: lowercase, strip everything except
+     * Unicode letters, digits and spaces. Unicode-aware (#404): the old
+     * `[^a-z0-9 ]` stripped non-Latin artist names to "", so every non-Latin
+     * act collapsed into one dedup key and distinct concerts were merged.
+     */
     private fun normalizeForDedup(str: String): String =
-        str.lowercase().replace(Regex("[^a-z0-9 ]"), "").replace(Regex("\\s+"), " ").trim()
+        str.lowercase()
+            .replace(Regex("[^${com.parachord.shared.resolver.LETTER_OR_NUMBER_CLASS} ]"), "")
+            .replace(Regex("\\s+"), " ").trim()
 
     /**
      * Format `now()` in the system timezone as `yyyy-MM-dd'T'HH:mm:ss'Z'`.

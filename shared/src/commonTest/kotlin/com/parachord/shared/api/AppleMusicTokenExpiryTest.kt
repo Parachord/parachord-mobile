@@ -53,7 +53,7 @@ class AppleMusicTokenExpiryTest {
     // ── "not expired" is not the same as "fine" ──────────────────────
 
     @Test
-    fun `absent token is unconfigured, not expired`() {
+    fun `absent token is unconfigured — not expired`() {
         assertFalse(AppleMusicTokenExpiry.isExpired(null))
         assertFalse(AppleMusicTokenExpiry.isExpired(""))
         assertFalse(AppleMusicTokenExpiry.isExpired("   "))

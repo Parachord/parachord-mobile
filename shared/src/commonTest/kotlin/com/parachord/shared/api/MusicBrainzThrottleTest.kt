@@ -95,7 +95,7 @@ class MusicBrainzThrottleTest {
     // ── 429/503 → wait and retry, not an empty result ────────────────
 
     @Test
-    fun `a 503 with Retry-After is waited out and retried, and the call succeeds`() = runTest {
+    fun `a 503 with Retry-After is waited out and retried — and the call succeeds`() = runTest {
         var calls = 0
         val mock = MockEngine {
             calls++
@@ -128,7 +128,7 @@ class MusicBrainzThrottleTest {
     }
 
     @Test
-    fun `a sustained throttle gives up bounded and reports rate-limited, not empty`() = runTest {
+    fun `a sustained throttle gives up bounded and reports rate-limited — not empty`() = runTest {
         var calls = 0
         val mock = MockEngine {
             calls++

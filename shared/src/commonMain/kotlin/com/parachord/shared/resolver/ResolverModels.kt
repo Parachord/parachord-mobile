@@ -66,11 +66,44 @@ data class ResolvedSource(
 // ── Confidence Scoring ──────────────────────────────────────────────
 
 /**
- * Normalize a string for comparison: lowercase, strip everything except
- * alphanumeric characters. Matches the desktop's normalizeStr().
+ * Unicode letters + numbers as a regex class body — desktop's `\p{L}\p{N}`.
+ *
+ * **`\p{N}` is spelled out as `\p{Nd}\p{Nl}\p{No}` because Kotlin/Native's regex
+ * engine rejects `\p{N}`** ("PatternSyntaxException: No such character class";
+ * the JVM accepts it). N is by definition the union of Nd ∪ Nl ∪ No, so the match
+ * set is identical. Worse than a bad match: [NOT_LETTER_OR_DIGIT] is a top-level
+ * val, and on Native a top-level initializer that throws poisons the WHOLE FILE
+ * (`FileFailedToInitializeException`, a Kotlin `Error`), so every function here —
+ * `scoreConfidence`, `validateIsrc`, … — would fail on iOS while every JVM test
+ * stayed green. Use this constant anywhere you'd write `\p{N}` in shared code.
  */
-fun normalizeStr(s: String?): String =
-    s?.lowercase()?.replace(Regex("[^a-z0-9]"), "") ?: ""
+internal const val LETTER_OR_NUMBER_CLASS = "\\p{L}\\p{Nd}\\p{Nl}\\p{No}"
+
+private val COMBINING_MARKS = Regex("\\p{M}")
+private val NOT_LETTER_OR_DIGIT = Regex("[^$LETTER_OR_NUMBER_CLASS]")
+
+/**
+ * Normalize a string for comparison. **Byte-aligned with desktop's
+ * `normalizeStr`** (`sync-providers/confidence-scoring.js`, parachord#943):
+ *
+ *     lowercase → NFKD → strip combining marks (\p{M}) → keep only \p{L}\p{N}
+ *
+ * Keep that ORDER — it's what makes the output identical to desktop's. (Desktop's
+ * track-slug helper lowercases after NFKD instead; that's a different function.)
+ *
+ * Unicode-aware on purpose (#404). The old `[^a-z0-9]` version deleted every
+ * non-ASCII character, so a Cyrillic / CJK / Arabic title normalized to `""`,
+ * [stringsMatch] rejected it, and [scoreConfidence] scored every search-resolved
+ * non-Latin track 0.50 — below the 0.60 floor, so it could never resolve by
+ * search. It also lost accented letters instead of folding them
+ * ("Beyoncé" → "beyonc", now "beyonce").
+ */
+fun normalizeStr(s: String?): String {
+    if (s.isNullOrEmpty()) return ""
+    return com.parachord.shared.platform.nfkd(s.lowercase())
+        .replace(COMBINING_MARKS, "")
+        .replace(NOT_LETTER_OR_DIGIT, "")
+}
 
 /**
  * Check if two normalized strings match via containment (either direction).

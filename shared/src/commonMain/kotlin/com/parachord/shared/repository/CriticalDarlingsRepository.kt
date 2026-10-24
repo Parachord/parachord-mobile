@@ -305,8 +305,11 @@ class CriticalDarlingsRepository(
                 val description = descRegex.find(itemXml)?.groupValues?.get(1)?.let(::stripCdata)?.trim() ?: ""
 
                 val parsed = parseTitle(title) ?: continue
+                // Unicode-aware keepset (#404): with `[^a-z0-9|]`, two different
+                // non-Latin albums of the same length got identical ids
+                // ("-----|-----") and `seen.add` silently dropped the second.
                 val id = "${parsed.first.lowercase()}|${parsed.second.lowercase()}"
-                    .replace(Regex("[^a-z0-9|]"), "-")
+                    .replace(Regex("[^${com.parachord.shared.resolver.LETTER_OR_NUMBER_CLASS}|]"), "-")
                 if (!seen.add(id)) continue
 
                 albums.add(

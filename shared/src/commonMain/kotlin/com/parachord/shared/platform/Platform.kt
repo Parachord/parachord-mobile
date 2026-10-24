@@ -21,3 +21,12 @@ expect fun randomUUID(): String
 
 /** Current time in milliseconds since epoch. */
 expect fun currentTimeMillis(): Long
+
+/**
+ * Unicode compatibility decomposition (NFKD) — JS `String.prototype.normalize('NFKD')`.
+ *
+ * Kotlin common has no `Normalizer`, so each platform supplies it. Used by
+ * `normalizeStr` to fold accented Latin to its base letters (é → e + U+0301,
+ * whose combining mark is then stripped) the same way desktop does (#404).
+ */
+expect fun nfkd(s: String): String
