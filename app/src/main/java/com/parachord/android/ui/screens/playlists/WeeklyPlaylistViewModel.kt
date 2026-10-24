@@ -183,7 +183,9 @@ class WeeklyPlaylistViewModel constructor(
     fun toggleCollection(track: TrackEntity, isInCollection: Boolean) {
         viewModelScope.launch {
             if (isInCollection) {
-                libraryRepository.deleteTrack(track)
+                // `track` is the ephemeral weekly-playlist row, not the library row —
+                // removeFromCollection resolves the library row and removes it sync-aware.
+                libraryRepository.removeFromCollection(track)
             } else {
                 libraryRepository.addToCollection(track)
             }

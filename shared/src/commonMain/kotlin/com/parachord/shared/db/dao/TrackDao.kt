@@ -69,6 +69,12 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.getRecentSync(limit.toLong()).executeAsList().map { it.toTrack() }
     }
 
+    /** Case-insensitive title+artist lookup — the same match [existsByTitleAndArtist]
+     *  uses, so a row this finds is the one that lit the "in collection" heart. */
+    suspend fun getByTitleAndArtist(title: String, artist: String): Track? = withContext(Dispatchers.Default) {
+        queries.getByTitleAndArtist(title, artist).executeAsOneOrNull()?.toTrack()
+    }
+
     suspend fun findLocalFile(title: String, artist: String): Track? = withContext(Dispatchers.Default) {
         queries.findLocalFile(title, artist).executeAsOneOrNull()?.toTrack()
     }
