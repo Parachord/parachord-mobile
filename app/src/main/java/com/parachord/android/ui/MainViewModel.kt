@@ -179,7 +179,12 @@ class MainViewModel constructor(
         val track = playbackState.value.effectiveTrack ?: return
         viewModelScope.launch {
             if (isCurrentTrackFavorited.value) {
-                libraryRepository.deleteTrackWithSync(track)
+                // The heart lights up on a title+artist match (isTrackInCollection),
+                // but `effectiveTrack` may be an ephemeral row (weekly playlist,
+                // recommendation, DJ chat) whose id isn't the library row's. Deleting
+                // it by id matched nothing; removeFromCollection resolves the library
+                // row the same way the heart does, then removes it sync-aware (#414).
+                libraryRepository.removeFromCollection(track)
             } else {
                 libraryRepository.addToCollection(track)
             }
