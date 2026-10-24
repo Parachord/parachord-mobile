@@ -95,6 +95,8 @@ class PlaylistDetailViewModel constructor(
                                 spotifyId = pt.trackSpotifyId,
                                 appleMusicId = pt.trackAppleMusicId,
                                 soundcloudId = pt.trackSoundcloudId,
+                                isrc = pt.trackIsrc,
+                                recordingMbid = pt.trackRecordingMbid,
                                 // Pass row coords so TrackResolverCache can
                                 // backfill resolver IDs onto the DB row —
                                 // subsequent opens of a Spotify-synced

@@ -36,6 +36,10 @@ class IosResolverCoordinator(
         // redundant Spotify search per row. nil for ID-less content.
         spotifyId: String? = null,
         appleMusicId: String? = null,
+        // The target's recording identity (#402): a source with the same ISRC or
+        // recording MBID scores 1.0 whatever its title/artist strings say.
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> {
         pluginManager.ensureInitialized()
         return coordinator.resolveRankedWithHints(
@@ -45,6 +49,8 @@ class IosResolverCoordinator(
             album = album,
             spotifyId = spotifyId,
             appleMusicId = appleMusicId,
+            targetIsrc = targetIsrc,
+            targetMbid = targetMbid,
         )
     }
 

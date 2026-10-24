@@ -2226,7 +2226,9 @@ final class QueuePlaybackCoordinator {
             if ranked == nil || ranked!.isEmpty {
                 ranked = (try? await container.resolveSources(
                     artist: next.artist, title: next.title, album: next.album,
-                    spotifyId: next.spotifyId, appleMusicId: next.appleMusicId)) ?? []
+                    spotifyId: next.spotifyId, appleMusicId: next.appleMusicId,
+                    // #402: an exact ISRC / recording-MBID match scores 1.0.
+                    targetIsrc: next.isrc, targetMbid: next.recordingMbid)) ?? []
             }
             let amId = (ranked ?? []).first { $0.resolver == "applemusic" && !$0.noMatch }?.appleMusicId
                 ?? next.appleMusicId
@@ -2492,7 +2494,9 @@ final class QueuePlaybackCoordinator {
                     artist: track.artist, title: track.title, album: track.album,
                     // Play-time fallback also benefits from the #211 hint when the
                     // track already carries streaming IDs.
-                    spotifyId: track.spotifyId, appleMusicId: track.appleMusicId)) ?? []
+                    spotifyId: track.spotifyId, appleMusicId: track.appleMusicId,
+                    // #402: an exact ISRC / recording-MBID match scores 1.0.
+                    targetIsrc: track.isrc, targetMbid: track.recordingMbid)) ?? []
             } else {
                 // Android parity (PlaybackController.reselectBestSource → selectBest):
                 // re-apply the LIVE active-resolver gate to CACHED sources on every
@@ -3084,21 +3088,24 @@ struct DevSmokeTestView: View {
         targetTitle: "Imagine",
         targetArtist: "John Lennon",
         matchedTitle: "Imagine",
-        matchedArtist: "John Lennon"
+        matchedArtist: "John Lennon",
+        targetIsrc: nil, targetMbid: nil, matchedIsrc: nil, matchedMbid: nil
     )
 
     private let wrongArtist = ResolverModelsKt.scoreConfidence(
         targetTitle: "Imagine",
         targetArtist: "John Lennon",
         matchedTitle: "Imagine",
-        matchedArtist: "A Perfect Circle"
+        matchedArtist: "A Perfect Circle",
+        targetIsrc: nil, targetMbid: nil, matchedIsrc: nil, matchedMbid: nil
     )
 
     private let noMatch = ResolverModelsKt.scoreConfidence(
         targetTitle: "Imagine",
         targetArtist: "John Lennon",
         matchedTitle: "Smells Like Teen Spirit",
-        matchedArtist: "Nirvana"
+        matchedArtist: "Nirvana",
+        targetIsrc: nil, targetMbid: nil, matchedIsrc: nil, matchedMbid: nil
     )
 
     @State private var artistQuery = "Radiohead"
@@ -3822,7 +3829,9 @@ struct DevSmokeTestView: View {
                 title: "The Underdog",
                 album: nil,
                 spotifyId: nil,
-                appleMusicId: nil
+                appleMusicId: nil,
+                targetIsrc: nil,
+                targetMbid: nil
             )
             if ranked.isEmpty {
                 pluginResolveResult = "(no source above 0.60 floor)"

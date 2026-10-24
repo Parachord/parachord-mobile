@@ -218,6 +218,9 @@ class TrackResolverCache constructor(
                             soundcloudId = track.soundcloudId,
                             targetTitle = track.title,
                             targetArtist = track.artist,
+                            // Recording identity → exact-ID matches score 1.0 (#402).
+                            targetIsrc = track.isrc,
+                            targetMbid = track.recordingMbid,
                         )
                         if (sources.isNotEmpty()) {
                             _trackSources.update { it + (key to sources) }
@@ -269,6 +272,9 @@ class TrackResolverCache constructor(
                             soundcloudId = track.soundcloudId,
                             targetTitle = track.title,
                             targetArtist = track.artist,
+                            // Recording identity → exact-ID matches score 1.0 (#402).
+                            targetIsrc = track.isrc,
+                            targetMbid = track.recordingMbid,
                         )
                         if (sources.isNotEmpty()) {
                             _trackSources.update { it + (key to sources) }
@@ -447,6 +453,9 @@ data class PlaylistTrackInfo(
     val soundcloudId: String? = null,
     val playlistId: String? = null,
     val position: Int? = null,
+    /** Recording identity for the identity tier of scoreConfidence (#402). */
+    val isrc: String? = null,
+    val recordingMbid: String? = null,
 )
 
 /** Canonical key format for track resolver lookups. */

@@ -42,17 +42,27 @@ object ResolverGating {
      * 0.60 floor in [ResolverScoring] then drops the wrong-song 0.50s). Sources
      * with neither a matched title nor a matched artist pass through unchanged:
      * their confidence was set authoritatively (e.g. a direct-ID hint at 1.0).
+     *
+     * [targetIsrc] / [targetMbid] feed [scoreConfidence]'s identity tier (#402):
+     * a source whose own ISRC or recording MBID equals the target's scores 1.0
+     * whatever its title/artist strings say.
      */
     fun rescore(
         sources: List<ResolvedSource>,
         targetTitle: String,
         targetArtist: String,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> =
         sources.map { source ->
             if (source.matchedTitle != null || source.matchedArtist != null) {
                 source.copy(
                     confidence = scoreConfidence(
                         targetTitle, targetArtist, source.matchedTitle, source.matchedArtist,
+                        targetIsrc = targetIsrc,
+                        targetMbid = targetMbid,
+                        matchedIsrc = source.isrc,
+                        matchedMbid = source.recordingMbid,
                     ),
                 )
             } else {

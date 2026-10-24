@@ -65,6 +65,10 @@ class ResolverCoordinator(
      * @param excludeResolvers ids to SKIP this run (e.g. Android's
      *   `resolveWithHints` excludes spotify when it already has an authoritative
      *   ID). Skipped resolvers never reach the network.
+     * @param targetIsrc / targetMbid the target track's recording identity (#402),
+     *   when known. Feeds the identity tier of the re-score (an exact ISRC or
+     *   recording-MBID match scores 1.0) and the native best-match pick. Null =
+     *   name-only scoring, exactly as before.
      */
     suspend fun resolveScored(
         query: String,
@@ -72,6 +76,8 @@ class ResolverCoordinator(
         targetArtist: String? = null,
         album: String? = null,
         excludeResolvers: Set<String> = emptySet(),
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> = coroutineScope {
         val active = getActive()
         val disabled = getDisabled()
@@ -87,7 +93,9 @@ class ResolverCoordinator(
             }
             for (id in runtime.nativeResolverIds) {
                 if (isActive(id)) {
-                    add(async { runtime.resolveNative(id, query, targetTitle, targetArtist, album) })
+                    add(async {
+                        runtime.resolveNative(id, query, targetTitle, targetArtist, album, targetIsrc, targetMbid)
+                    })
                 }
             }
             val axeIds = ResolverGating.axeResolverIds(
@@ -110,7 +118,7 @@ class ResolverCoordinator(
         // 0.95 when title AND artist substring-match, 0.50 single-axis. Sources
         // with no matched fields (direct-ID hints) pass through unchanged.
         if (targetTitle != null && targetArtist != null) {
-            results = ResolverGating.rescore(results, targetTitle, targetArtist)
+            results = ResolverGating.rescore(results, targetTitle, targetArtist, targetIsrc, targetMbid)
         }
         results
     }
@@ -132,9 +140,14 @@ class ResolverCoordinator(
         targetArtist: String? = null,
         album: String? = null,
         preferredResolver: String? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> =
         scoring.selectRanked(
-            resolveScored(query, targetTitle, targetArtist, album),
+            resolveScored(
+                query, targetTitle, targetArtist, album,
+                targetIsrc = targetIsrc, targetMbid = targetMbid,
+            ),
             preferredResolver,
         )
 
@@ -163,6 +176,8 @@ class ResolverCoordinator(
         appleMusicId: String? = null,
         soundcloudId: String? = null,
         preferredResolver: String? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> {
         val hints = buildList {
             if (!spotifyId.isNullOrBlank()) add(
@@ -184,10 +199,18 @@ class ResolverCoordinator(
                 ),
             )
         }
-        if (hints.isEmpty()) return resolveRanked(query, targetTitle, targetArtist, album, preferredResolver)
+        if (hints.isEmpty()) {
+            return resolveRanked(
+                query, targetTitle, targetArtist, album, preferredResolver,
+                targetIsrc = targetIsrc, targetMbid = targetMbid,
+            )
+        }
 
         val exclude = hints.map { it.resolver }.toSet()
-        val cascade = resolveScored(query, targetTitle, targetArtist, album, excludeResolvers = exclude)
+        val cascade = resolveScored(
+            query, targetTitle, targetArtist, album, excludeResolvers = exclude,
+            targetIsrc = targetIsrc, targetMbid = targetMbid,
+        )
         // Hints win for their resolver (we excluded them from the search); the
         // cascade fills every OTHER resolver. selectRanked applies the active
         // filter + 0.60 floor + priority order to the union.
@@ -221,11 +244,13 @@ class ResolverCoordinator(
         targetTitle: String?,
         targetArtist: String?,
         album: String?,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): ResolvedSource? {
         val raw = when {
             resolverId == "spotify" -> resolveSpotify(query)
             resolverId in runtime.nativeResolverIds ->
-                runtime.resolveNative(resolverId, query, targetTitle, targetArtist, album)
+                runtime.resolveNative(resolverId, query, targetTitle, targetArtist, album, targetIsrc, targetMbid)
             getPlugins().any { it.id == resolverId } ->
                 runtime.resolveAxe(resolverId, query, targetTitle, targetArtist, album)
             else -> null
@@ -238,6 +263,10 @@ class ResolverCoordinator(
                     targetArtist ?: "",
                     raw.matchedTitle,
                     raw.matchedArtist,
+                    targetIsrc = targetIsrc,
+                    targetMbid = targetMbid,
+                    matchedIsrc = raw.isrc,
+                    matchedMbid = raw.recordingMbid,
                 ),
             )
         } else {

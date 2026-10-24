@@ -2506,8 +2506,12 @@ class IosContainer private constructor() {
         album: String?,
         spotifyId: String? = null,
         appleMusicId: String? = null,
+        // Recording identity for the identity tier of scoreConfidence (#402).
+        // Kotlin defaults don't bridge to Swift: every Swift call passes these.
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> =
-        resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId)
+        resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId, targetIsrc, targetMbid)
 
     /**
      * Return [track] enriched with the streaming IDs + active resolver taken from

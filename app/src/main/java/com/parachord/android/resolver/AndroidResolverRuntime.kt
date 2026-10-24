@@ -61,6 +61,24 @@ class AndroidResolverRuntime constructor(
         else -> null
     }
 
+    /**
+     * Identity-aware dispatch (#402): Apple Music's MusicKit tier picks among
+     * several catalog hits, so it gets the target ISRC to prefer an exact
+     * recording before name matching (desktop `findBestMatch` tier 2; MusicKit
+     * hits carry an ISRC, not an MBID). Everything else ignores the identity.
+     */
+    override suspend fun resolveNative(
+        resolverId: String,
+        query: String,
+        targetTitle: String?,
+        targetArtist: String?,
+        album: String?,
+        targetIsrc: String?,
+        targetMbid: String?,
+    ): ResolvedSource? =
+        if (resolverId == "applemusic") resolveAppleMusic(query, targetTitle, targetArtist, targetIsrc)
+        else resolveNative(resolverId, query, targetTitle, targetArtist, album)
+
     override suspend fun resolveAxe(
         resolverId: String,
         query: String,
@@ -76,6 +94,7 @@ class AndroidResolverRuntime constructor(
         query: String,
         targetTitle: String? = null,
         targetArtist: String? = null,
+        targetIsrc: String? = null,
     ): ResolvedSource? {
         // Don't offer Apple Music as a source unless the user has connected it.
         // Tier 2 below is the no-auth iTunes Search API, so without this gate AM
@@ -93,8 +112,11 @@ class AndroidResolverRuntime constructor(
                 // result would score 0.50 and get floored out, leaving NO Apple
                 // Music source even when a correct match sat lower in the list.
                 val best = if (targetTitle != null && targetArtist != null) {
-                    selectBestMatch(results, targetTitle, targetArtist, { it.title }, { it.artist })
-                        ?: results.firstOrNull()
+                    selectBestMatch(
+                        results, targetTitle, targetArtist, { it.title }, { it.artist },
+                        targetIsrc = targetIsrc,
+                        isrcOf = { it.isrc },
+                    ) ?: results.firstOrNull()
                 } else {
                     results.firstOrNull()
                 }
@@ -216,6 +238,9 @@ class AndroidResolverRuntime constructor(
                 // persisted on the track row (#238) — surface it so pickTrackIsrc
                 // walks it and the ISRC→MBID fallback works for local files too.
                 isrc = com.parachord.shared.resolver.validateIsrc(track.isrc),
+                // The row's recording MBID (mapper / ISRC enrichment) feeds the
+                // identity tier of scoreConfidence (#402).
+                recordingMbid = track.recordingMbid,
                 // Local files store their artworkUrl on the track row (either
                 // a content:// URI from MediaScanner's albumart resolution or
                 // a file:// URI from ID3 embedded art). Surface it so the
@@ -357,6 +382,9 @@ class AndroidResolverRuntime constructor(
                 // streaming source MAY return its ISRC for the MBID fallback,
                 // validated/normalized so a malformed value never stores (#217).
                 isrc = com.parachord.shared.resolver.validateIsrc(result.isrc),
+                // Optional `.axe` recording MBID (`mbid` first, then
+                // `recordingMbid`, desktop's precedence) for the identity tier (#402).
+                recordingMbid = result.mbid?.takeIf { it.isNotEmpty() } ?: result.recordingMbid?.takeIf { it.isNotEmpty() },
                 confidence = 0.9,
                 matchedTitle = result.title,
                 matchedArtist = result.artist,
@@ -381,6 +409,8 @@ private data class AxeResolveResult(
     val soundcloudId: String? = null,
     val appleMusicId: String? = null,
     val isrc: String? = null,
+    val mbid: String? = null,
+    val recordingMbid: String? = null,
 )
 
 // ── iTunes API Response Models ──────────────────────────────────────

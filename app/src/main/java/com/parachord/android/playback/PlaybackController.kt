@@ -2002,6 +2002,9 @@ class PlaybackController constructor(
                 query,
                 targetTitle = track.title,
                 targetArtist = track.artist,
+                // Recording identity → exact-ID matches score 1.0 (#402).
+                targetIsrc = track.isrc,
+                targetMbid = track.recordingMbid,
             )
             if (sources.isEmpty()) {
                 Log.w(TAG, "No resolver results for '${track.title}' by ${track.artist}")
