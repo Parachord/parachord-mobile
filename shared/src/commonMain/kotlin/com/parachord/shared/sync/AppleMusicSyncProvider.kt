@@ -841,7 +841,8 @@ class AppleMusicSyncProvider(
         trackTitle = attributes.name,
         trackArtist = attributes.artistName,
         trackAlbum = attributes.albumName,
-        trackDuration = attributes.durationInMillis?.let { it / 1000 },
+        // ms, like Spotify/LB sync and PlaylistTrack's other writers (#349). Was /1000.
+        trackDuration = attributes.durationInMillis,
         trackArtworkUrl = resolveArtworkUrl(attributes.artwork?.url),
         trackSourceUrl = null,
         trackResolver = "applemusic",

@@ -325,7 +325,7 @@ class HomeViewModel constructor(
                     title = lbTrack.title,
                     artist = lbTrack.artist,
                     album = lbTrack.album ?: "",
-                    duration = lbTrack.durationMs?.let { it / 1000 } ?: 0,
+                    duration = lbTrack.durationMs ?: 0, // Track.duration is ms (#349)
                     artworkUrl = lbTrack.albumArt,
                 )
             }
@@ -464,7 +464,7 @@ class HomeViewModel constructor(
                     title = lbTrack.title,
                     artist = lbTrack.artist,
                     album = lbTrack.album ?: "",
-                    duration = lbTrack.durationMs?.let { it / 1000 } ?: 0,
+                    duration = lbTrack.durationMs ?: 0, // Track.duration is ms (#349)
                     artworkUrl = lbTrack.albumArt,
                 )
             }

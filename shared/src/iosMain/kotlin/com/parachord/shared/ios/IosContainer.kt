@@ -727,6 +727,12 @@ class IosContainer private constructor() {
         try { tombstoneService.prune() } catch (_: Exception) {}
     }
 
+    /** One-time repair of track lengths saved in seconds instead of ms (#349,
+     *  Android parity). Idempotent; never throws to Swift. */
+    suspend fun migrateDurationUnitsOnLaunch() {
+        try { com.parachord.shared.db.DurationUnitMigration.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
+    }
+
     /** Persist the Apple Music Music User Token (acquired Swift-side via
      *  SKCloudServiceController). Enables the Apple Music library API for sync. */
     suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)

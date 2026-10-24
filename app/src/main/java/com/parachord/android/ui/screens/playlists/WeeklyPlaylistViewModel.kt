@@ -108,7 +108,7 @@ class WeeklyPlaylistViewModel constructor(
                     title = lbTrack.title,
                     artist = lbTrack.artist,
                     album = lbTrack.album,
-                    duration = lbTrack.durationMs?.let { it / 1000 },
+                    duration = lbTrack.durationMs, // Track.duration is ms (#349)
                     artworkUrl = lbTrack.albumArt,
                 )
             }
