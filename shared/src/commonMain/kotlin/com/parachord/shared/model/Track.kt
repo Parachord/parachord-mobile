@@ -18,6 +18,13 @@ data class Track(
     val artist: String,
     val album: String? = null,
     val albumId: String? = null,
+    /**
+     * Track length in **milliseconds** — the engines' unit (Media3, MusicKit,
+     * Spotify `duration_ms`). Convert at the source when a provider reports
+     * seconds (Last.fm). Playback reads it before the engine reports a length
+     * (Apple Music's stall-vs-end guard, Spotify's near-end check), so a value in
+     * seconds isn't just a display bug (#349). Null/0 = unknown.
+     */
     val duration: Long? = null,
     val artworkUrl: String? = null,
     val sourceType: String? = null,

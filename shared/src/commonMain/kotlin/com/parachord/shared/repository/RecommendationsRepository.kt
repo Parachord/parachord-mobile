@@ -265,7 +265,9 @@ class RecommendationsRepository(
                     val title = item.name ?: return@mapNotNull null
                     val artistName = item.artists?.firstOrNull()?.name ?: return@mapNotNull null
                     if (title.isBlank() || artistName.isBlank()) return@mapNotNull null
-                    val duration = item.duration ?: 0L
+                    // Last.fm's station feed reports seconds (e.g. 262 for a 4:22
+                    // song); RecommendedTrack.duration, like Track.duration, is ms (#349).
+                    val duration = (item.duration ?: 0L) * 1000
                     RecommendedTrack(
                         title = title,
                         artist = artistName,
@@ -302,6 +304,7 @@ class RecommendationsRepository(
                         title = track.title,
                         artist = track.artist,
                         album = track.album,
+                        duration = track.durationMs, // ms, like Track.duration (#349)
                         source = "listenbrainz",
                     )
                 }
