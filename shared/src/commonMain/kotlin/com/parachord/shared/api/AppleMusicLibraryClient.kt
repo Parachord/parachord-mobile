@@ -460,9 +460,25 @@ data class AmDescription(
 
 @Serializable
 data class AmPlayParams(
+    /**
+     * For a LIBRARY resource this is the LIBRARY id (`i.…` for songs), NOT the
+     * catalog id — Apple's docs and real data agree (#265). Use [catalogId] for
+     * anything that talks to the catalog (ISRC lookup, playback by id,
+     * add-to-playlist). Keep this one for library operations (delete-from-library).
+     */
     val id: String,
     val kind: String,
+    /** The catalog id behind a library resource; absent for some items (e.g. uploads). */
+    val catalogId: String? = null,
 )
+
+/**
+ * The catalog id for a library item: `playParams.catalogId`, falling back to
+ * [fallback] (the library id) when Apple doesn't supply one. Same rule as
+ * desktop's `attrs.playParams?.catalogId || song.id` (sync-providers/applemusic.js).
+ */
+fun AmPlayParams?.catalogIdOr(fallback: String): String =
+    this?.catalogId?.takeIf { it.isNotBlank() } ?: fallback
 
 @Serializable
 data class AmArtwork(

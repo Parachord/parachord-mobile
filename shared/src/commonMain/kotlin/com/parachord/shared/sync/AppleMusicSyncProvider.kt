@@ -12,6 +12,7 @@ import com.parachord.shared.api.AmTrack
 import com.parachord.shared.api.AmTrackReference
 import com.parachord.shared.api.AmTracksRequest
 import com.parachord.shared.api.AmUpdatePlaylistAttributes
+import com.parachord.shared.api.catalogIdOr
 import com.parachord.shared.api.AmUpdatePlaylistRequest
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.AppleMusicLibraryClient
@@ -613,7 +614,7 @@ class AppleMusicSyncProvider(
         // for accurate progress reporting through pagination.
         delay(INTER_REQUEST_DELAY_MS)
         // Probe must compute the SAME external id storage uses
-        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // (`playParams.id ?: id`; for library items that's the LIBRARY id, #265), not the library top-level
         // `id`. Comparing library-id to the stored catalog-id never matched, so
         // the unchanged-shortcut never fired and the WHOLE song library
         // re-fetched on every sync (#261, same bug as albums).
@@ -655,12 +656,15 @@ class AppleMusicSyncProvider(
         val storefront = try { api.getStorefront().data.firstOrNull()?.id } catch (e: Exception) {
             Log.w(TAG, "attachIsrcs: getStorefront failed; keeping applemusic- ids", e); null
         } ?: return tracks
-        // `spotifyId` is the reused external-id field — for AM it holds the catalog id.
-        val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map { it.spotifyId })
+        // Look up by CATALOG id (#265). `spotifyId` (the reused external-id field)
+        // holds the LIBRARY id, which /v1/catalog/{sf}/songs rejects — that's why
+        // this used to resolve 0 ISRCs. The catalog id is on entity.appleMusicId.
+        fun catalogIdOf(t: SyncedTrack) = t.entity.appleMusicId?.takeIf { it.isNotBlank() } ?: t.spotifyId
+        val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map(::catalogIdOf))
         Log.i(TAG, "attachIsrcs: storefront=$storefront, resolved ${isrcs.size} ISRCs for ${tracks.size} songs")
         if (isrcs.isEmpty()) return tracks
         return tracks.map { synced ->
-            val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[synced.spotifyId]) ?: return@map synced
+            val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[catalogIdOf(synced)]) ?: return@map synced
             synced.copy(
                 entity = synced.entity.copy(
                     id = TrackIdentity.canonicalTrackId(isrc, synced.entity.id),
@@ -711,7 +715,7 @@ class AppleMusicSyncProvider(
         val all = mutableListOf<SyncedAlbum>()
         delay(INTER_REQUEST_DELAY_MS)
         // Probe must compute the SAME external id storage uses
-        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // (`playParams.id ?: id`; for library items that's the LIBRARY id, #265), not the library top-level
         // `id`. The mismatch made the unchanged-shortcut never fire, re-fetching
         // the WHOLE album library every sync — the multi-minute (albums) grind (#261).
         val probe = api.listLibraryAlbums(limit = 1, offset = 0)
@@ -849,9 +853,11 @@ class AppleMusicSyncProvider(
         trackSpotifyUri = null,
         trackSoundcloudId = null,
         trackSpotifyId = null,
-        // playParams.id is the catalog ID (preferred for cross-device
-        // playback); falls back to the library ID. Either is usable.
-        trackAppleMusicId = attributes.playParams?.id ?: id,
+        // The CATALOG id (#265). playParams.id is the library id (`i.…`), which
+        // the catalog rejects: iOS playback (MusicCatalogResourceRequest), the
+        // ISRC lookup and add-to-playlist all need the catalog id. Desktop parity:
+        // `attrs.playParams?.catalogId || song.id`.
+        trackAppleMusicId = attributes.playParams.catalogIdOr(attributes.playParams?.id ?: id),
     )
 
     /** Library track → cross-provider [SyncedTrack]. The library row's
@@ -863,11 +869,19 @@ class AppleMusicSyncProvider(
     private fun AmLibrarySong.toSyncedTrack(): SyncedTrack? {
         val attrs = attributes ?: return null
         val title = attrs.name?.takeIf { it.isNotBlank() } ?: return null
-        val catalogId = attrs.playParams?.id ?: id
+        // TWO ids (#265), as desktop's transformTrack keeps them apart:
+        // - libraryId (`playParams.id`, `i.…`) stays the sync key: the row id, the
+        //   sync_sources externalId the probe compares, and what DELETE
+        //   /me/library/songs/{id} needs. Changing it would make every synced song
+        //   look new and duplicate the collection.
+        // - catalogId (`playParams.catalogId`) is the Apple Music id the rest of
+        //   the app uses: playback, the ISRC lookup, add-to-playlist.
+        val libraryId = attrs.playParams?.id ?: id
+        val catalogId = attrs.playParams.catalogIdOr(libraryId)
         val addedAt = attrs.dateAdded?.let { parseIso(it) } ?: 0L
         return SyncedTrack(
             entity = Track(
-                id = "applemusic-$catalogId",
+                id = "applemusic-$libraryId",
                 title = title,
                 artist = attrs.artistName?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
                 album = attrs.albumName,
@@ -881,7 +895,7 @@ class AppleMusicSyncProvider(
                 sourceType = "synced",
                 addedAt = addedAt,
             ),
-            spotifyId = catalogId,
+            spotifyId = libraryId,
             addedAt = addedAt,
         )
     }
