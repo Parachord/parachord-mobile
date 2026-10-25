@@ -580,10 +580,17 @@ class IosContainer private constructor() {
     suspend fun aiSuggestionsCached(): IosAiSuggestions? =
         try { aiRecommendationService.getCachedRecommendations()?.toIos() } catch (e: Exception) { null }
 
-    /** Fresh AI suggestions (a live provider call — 30–60s). Empty on any error. */
-    suspend fun loadAiSuggestions(): IosAiSuggestions =
+    /**
+     * Fresh AI suggestions (a live provider call — 30–60s). Null on any error,
+     * so the caller keeps the cached suggestions it's showing. (It used to
+     * return empty lists, which the Home feed assigned over the cache.)
+     */
+    suspend fun loadAiSuggestions(): IosAiSuggestions? =
         try { aiRecommendationService.loadRecommendations().toIos() }
-        catch (e: Exception) { IosAiSuggestions(emptyList(), emptyList()) }
+        catch (e: Exception) {
+            Log.w("IosContainer", "AI suggestions refresh failed: ${e.message}")
+            null
+        }
 
     private fun AiRecommendations.toIos() = IosAiSuggestions(
         albums = albums.map { IosAiAlbumSuggestion(it.title, it.artist, it.reason, it.artworkUrl) },
@@ -2631,19 +2638,14 @@ class IosContainer private constructor() {
      * the volume that keeps re-arming Spotify's shared-key abuse window. The
      * Swift cache persists this blob to disk and reloads it on launch so a
      * track resolved once never re-searches. Mirrors Android's resolver-ID
-     * backfill intent.
+     * backfill intent. Failed (empty) resolves never reach disk — see
+     * [com.parachord.shared.resolver.ResolverCacheCodec].
      */
-    private val resolverCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-
     fun encodeResolverCache(map: Map<String, List<ResolvedSource>>): String =
-        resolverCacheJson.encodeToString(map)
+        com.parachord.shared.resolver.ResolverCacheCodec.encode(map)
 
     fun decodeResolverCache(blob: String): Map<String, List<ResolvedSource>> =
-        try {
-            resolverCacheJson.decodeFromString<Map<String, List<ResolvedSource>>>(blob)
-        } catch (e: Exception) {
-            emptyMap()
-        }
+        com.parachord.shared.resolver.ResolverCacheCodec.decode(blob)
 
     // (Removed: the Swift-managed curated-list view caches — Critical Darlings /
     // Concerts / Fresh Drops now watch the repository value-flows directly via

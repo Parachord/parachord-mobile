@@ -184,6 +184,11 @@ interface SyncProvider {
      * (0.60) using [com.parachord.shared.resolver.scoreConfidence] —
      * better to push N-1 tracks than to pollute the user's mirror
      * with a wrong-song match.
+     *
+     * Null means the catalog ANSWERED and had no good match; callers record
+     * it as a miss. When the catalog couldn't be asked (429 or cooldown, 5xx,
+     * network, expired session), throw [TrackIdLookupUnreachableException]
+     * instead, so the track isn't parked in the miss cooldown.
      */
     suspend fun searchForTrackId(
         title: String,

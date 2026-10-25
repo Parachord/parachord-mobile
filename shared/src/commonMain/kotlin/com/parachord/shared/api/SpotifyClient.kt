@@ -223,13 +223,27 @@ class SpotifyClient(
      * so the resolver doesn't crash on transient 5xx (mirrors
      * [AppleMusicClient.search]).
      */
-    suspend fun search(query: String, type: String, limit: Int = 20, market: String = "from_token"): SpSearchResponse =
+    /**
+     * @param throwOnServerError when true, a 5xx throws instead of returning an
+     *   empty response. Callers that record "no match" (sync hydration) need it:
+     *   an outage must not look like a track that isn't on Spotify.
+     */
+    suspend fun search(
+        query: String,
+        type: String,
+        limit: Int = 20,
+        market: String = "from_token",
+        throwOnServerError: Boolean = false,
+    ): SpSearchResponse =
         gate.withPermit(exceptionFactory = { SpotifyRateLimitedException(it) }) {
             val response: HttpResponse = httpClient.get("$BASE/v1/search") {
                 applyAuth(this)
                 parameter("q", query); parameter("type", type); parameter("limit", limit); parameter("market", market)
             }
             gate.handleResponse(response) { SpotifyRateLimitedException(it) }
+            if (throwOnServerError && response.status.value >= 500) {
+                throw IllegalStateException("Spotify search failed: HTTP ${response.status.value}")
+            }
             if (!response.status.isSuccess()) SpSearchResponse() else response.body()
         }
 

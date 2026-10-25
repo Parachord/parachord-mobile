@@ -2,8 +2,9 @@ package com.parachord.shared.sync
 
 /**
  * Thrown by [SyncProvider.searchForTrackId] when the lookup could not be
- * ANSWERED — the identity services were unreachable — as opposed to answering
- * "no match".
+ * ANSWERED — the identity services were unreachable, or the catalog search was
+ * rate-limited, in cooldown, returned a 5xx, or failed on the network — as
+ * opposed to answering "no match".
  *
  * [HydrationCoordinator] treats this as transient: it leaves the track pending
  * and does NOT stamp an attempt, so an outage never feeds the 7→30-day miss
@@ -13,7 +14,9 @@ package com.parachord.shared.sync
  * Why this exists: during the 2026-09 ListenBrainz mapper outage every failed
  * lookup was recorded as a miss, parking LB-synced tracks in a month-long
  * cooldown for a service problem that had nothing to do with the track
- * (parachord-mobile#394, desktop parachord#991).
+ * (parachord-mobile#394, desktop parachord#991). Spotify and Apple Music had
+ * the same problem with 429s: during Spotify's multi-hour cooldown every lookup
+ * failed instantly and was recorded as a miss.
  */
 class TrackIdLookupUnreachableException(
     message: String = "Track-id lookup unreachable",

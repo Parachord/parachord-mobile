@@ -3609,6 +3609,12 @@ class SyncEngine constructor(
                             )
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
+                        } catch (e: TrackIdLookupUnreachableException) {
+                            // Nobody answered (rate-limit, outage, network). Not a
+                            // miss: leave the track pending for the next sync without
+                            // stamping the 7→30-day cooldown (same rule as
+                            // HydrationCoordinator, #394).
+                            return@withPermit null
                         } catch (e: Exception) {
                             Log.w(TAG, "hydrate: search threw for '${track.trackTitle}'", e)
                             null

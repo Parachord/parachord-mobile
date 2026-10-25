@@ -4,7 +4,9 @@ import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.isSuccess
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -137,7 +139,9 @@ class PluginSyncService constructor(
             Log.d(TAG, "Sync complete: all plugins up to date ($unchanged unchanged)")
         }
 
-        setLastSyncTimestamp(currentTimeMillis())
+        // Only a complete sync starts the 24h wait. If any download failed, the
+        // next launch tries again instead of leaving it stale for a day.
+        if (failed.isEmpty()) setLastSyncTimestamp(currentTimeMillis())
 
         return result
     }
@@ -147,7 +151,7 @@ class PluginSyncService constructor(
     private suspend fun fetchManifest(): PluginManifest {
         // security: L5 — runtime assertion that plugin URLs are HTTPS
         require(MANIFEST_URL.startsWith("https://")) { "Plugin manifest URL must be HTTPS" }
-        val body = httpClient.get(MANIFEST_URL).bodyAsText()
+        val body = httpClient.get(MANIFEST_URL).successBody("manifest")
         // security: M6 — cap manifest size to prevent OOM from hostile CDN
         if (body.length > MAX_MANIFEST_SIZE) {
             throw Exception("Manifest too large (${body.length} bytes, max $MAX_MANIFEST_SIZE)")
@@ -158,12 +162,22 @@ class PluginSyncService constructor(
     private suspend fun fetchPlugin(pluginId: String): String {
         val url = "$PLUGINS_BASE_URL$pluginId.axe"
         require(url.startsWith("https://")) { "Plugin download URL must be HTTPS" }
-        val body = httpClient.get(url).bodyAsText()
+        val body = httpClient.get(url).successBody(pluginId)
         // security: M6 — cap .axe file size
         if (body.length > MAX_PLUGIN_SIZE) {
             throw Exception("Plugin '$pluginId' too large (${body.length} bytes, max $MAX_PLUGIN_SIZE)")
         }
         return body
+    }
+
+    /**
+     * The body of a 2xx response, else throw. The shared client doesn't throw on
+     * HTTP errors, so without this a 404/429/5xx error page was written over the
+     * cached `.axe` as if it were the plugin.
+     */
+    private suspend fun HttpResponse.successBody(what: String): String {
+        if (!status.isSuccess()) throw Exception("Fetching $what failed: HTTP ${status.value}")
+        return bodyAsText()
     }
 
     // ── Manifest model ───────────────────────────────────────────────

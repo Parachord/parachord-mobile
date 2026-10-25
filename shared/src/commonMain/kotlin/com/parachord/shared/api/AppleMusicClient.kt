@@ -54,6 +54,7 @@ class AppleMusicClient(private val httpClient: HttpClient) {
         media: String = "music",
         entity: String = "song",
         limit: Int = 25,
+        throwOnServerError: Boolean = false,
     ): AppleMusicSearchResponse {
         val response: HttpResponse = httpClient.get("$BASE_URL/search") {
             parameter("term", term)
@@ -68,7 +69,12 @@ class AppleMusicClient(private val httpClient: HttpClient) {
         if (response.status.value == 429) {
             throw ItunesRateLimitedException()
         }
-        // Non-429 non-success: return empty so the caller treats it as
+        // A 5xx is an outage, not an answer. Callers that record "no match"
+        // (sync hydration) ask to see it as an error.
+        if (throwOnServerError && response.status.value >= 500) {
+            throw IllegalStateException("iTunes Search failed: HTTP ${response.status.value}")
+        }
+        // Other non-success: return empty so the caller treats it as
         // "no match" rather than throwing during body parsing.
         if (!response.status.isSuccess()) {
             return AppleMusicSearchResponse()

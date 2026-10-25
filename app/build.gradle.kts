@@ -248,6 +248,7 @@ dependencies {
     testImplementation(libs.sqldelight.sqlite.driver)
     testImplementation(libs.sqlite.jdbc)
     testImplementation(libs.multiplatform.settings.test) // in-memory KvStore (MapSettings)
+    testImplementation(libs.ktor.client.mock)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
     androidTestImplementation(libs.androidx.test.ext)
