@@ -69,6 +69,30 @@
     // Keep nativeFetch as an alias for backward compatibility
     window.nativeFetch = window.fetch;
 
+    // iTunesRateLimiter — applemusic.axe calls `window.iTunesRateLimiter.fetch(url)`
+    // for its no-auth iTunes Search requests (searchAlbums / lookupAlbum, #424).
+    // The host supplies it; it isn't in any .axe or resolver-loader.js. It never
+    // mattered before because the NATIVE Apple Music resolver runs on Android, so
+    // the .axe's own resolve() was never called. Requests are spaced 300ms apart
+    // (iTunes Search throttles bursts); iOS supplies a passthrough.
+    (function () {
+        var last = 0;
+        var chain = Promise.resolve();
+        window.iTunesRateLimiter = {
+            fetch: function (url, options) {
+                var run = chain.then(function () {
+                    var wait = Math.max(0, last + 300 - Date.now());
+                    return new Promise(function (r) { setTimeout(r, wait); });
+                }).then(function () {
+                    last = Date.now();
+                    return window.fetch(url, options);
+                });
+                chain = run.catch(function () {});
+                return run;
+            }
+        };
+    })();
+
     // ── Storage polyfill ─────────────────────────────────────────────
     // .axe plugins access config via nativeStorage. All keys are
     // namespaced under "plugin.<id>." by the resolver-loader before

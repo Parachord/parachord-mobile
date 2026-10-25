@@ -16,6 +16,9 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 private const val TAG = "PluginManager"
 private const val LOOKUP_POLL_ATTEMPTS = 60
 private const val LOOKUP_POLL_INTERVAL_MS = 100L
+/** Album search/lookup polls a little past the catalog loader's 8s step cap, so
+ *  the loader's timeout (not the poll) decides when a slow catalog gives up. */
+private const val ALBUM_POLL_ATTEMPTS = 85
 
 /**
  * Central wrapper for .axe plugin loading and execution.
@@ -314,6 +317,83 @@ class PluginManager constructor(
             """.trimIndent(),
         )
         repeat(LOOKUP_POLL_ATTEMPTS) {
+            delay(LOOKUP_POLL_INTERVAL_MS)
+            val raw = jsRuntime.evaluate("window.__resolveResults['$key']")?.unquote()
+            if (raw != null && raw != "pending") {
+                jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
+                if (raw == "null" || raw.startsWith("error:")) return null
+                return raw
+            }
+        }
+        return null
+    }
+
+    // ── Album search (capabilities.albumSearch, #424) ──────────────────
+
+    /**
+     * Loaded resolvers that declare `capabilities.albumSearch` (and so implement
+     * `searchAlbums` + `lookupAlbum`), as (id, name). Read from the manifests,
+     * so a bundled plugin that predates the capability simply isn't listed
+     * until the marketplace sync brings the newer version.
+     */
+    fun albumSearchResolvers(): List<Pair<String, String>> =
+        plugins.value.filter { it.capabilities["albumSearch"] == true }.map { it.id to it.name }
+
+    /**
+     * `searchAlbums` on one resolver. Pass [artist] + [title] for an album
+     * page's `{ artist, title }` query, or [text] for a free-text search.
+     * Returns the raw JSON array, or null.
+     */
+    suspend fun searchAlbums(resolverId: String, artist: String?, title: String?, text: String?): String? {
+        ensureInitialized()
+        val query = if (text != null) {
+            "'${escapeForJs(text)}'"
+        } else {
+            "{ artist: '${escapeForJs(artist.orEmpty())}', title: '${escapeForJs(title.orEmpty())}' }"
+        }
+        return pollAsync(
+            "sal",
+            "window.__resolverLoader.searchAlbums ? await window.__resolverLoader.searchAlbums('${escapeForJs(resolverId)}', $query) : []",
+        )
+    }
+
+    /**
+     * `lookupAlbum` on the resolver that found the album (not URL-pattern
+     * routing: an album url can be private to its plugin). Raw
+     * `{ album, resolverId }` JSON, or null.
+     */
+    suspend fun lookupAlbumFrom(resolverId: String, url: String): String? {
+        ensureInitialized()
+        return pollAsync(
+            "lal",
+            "window.__resolverLoader.lookupAlbumFrom ? await window.__resolverLoader.lookupAlbumFrom('${escapeForJs(resolverId)}', '${escapeForJs(url)}') : null",
+        )
+    }
+
+    /**
+     * Run an async JS [expression] and return its JSON-stringified result via the
+     * unique-key poll (a bare async IIFE yields the unresolved Promise on both
+     * runtimes; see CLAUDE.md "Extensibility principle"). Null on null/error/timeout.
+     */
+    private suspend fun pollAsync(prefix: String, expression: String, attempts: Int = ALBUM_POLL_ATTEMPTS): String? {
+        val key = "${prefix}_${lookupCounter++}"
+        jsRuntime.evaluate(
+            """
+            (function() {
+                window.__resolveResults = window.__resolveResults || {};
+                window.__resolveResults['$key'] = 'pending';
+                (async () => {
+                    try {
+                        var result = $expression;
+                        window.__resolveResults['$key'] = result ? JSON.stringify(result) : 'null';
+                    } catch (e) {
+                        window.__resolveResults['$key'] = 'error:' + ((e && e.message) ? e.message : String(e));
+                    }
+                })();
+            })();
+            """.trimIndent(),
+        )
+        repeat(attempts) {
             delay(LOOKUP_POLL_INTERVAL_MS)
             val raw = jsRuntime.evaluate("window.__resolveResults['$key']")?.unquote()
             if (raw != null && raw != "pending") {
