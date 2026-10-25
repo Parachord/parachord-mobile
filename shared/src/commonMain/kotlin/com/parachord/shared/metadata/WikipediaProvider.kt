@@ -111,7 +111,9 @@ class WikipediaProvider(
             "&prop=extracts&explaintext=1&format=json"
         val pages = getJson(url)?.get("query")?.jsonObject?.get("pages")?.jsonObject ?: return null
         val firstPage = pages.values.firstOrNull()?.jsonObject ?: return null
-        return firstPage["extract"]?.jsonPrimitive?.contentOrNull?.trim()?.ifBlank { null }
+        // The whole article, trimmed to its lead + prose sections (#429,
+        // desktop parachord#1134): no lists, reference sections or `== x ==`.
+        return WikipediaBio.fromExtract(firstPage["extract"]?.jsonPrimitive?.contentOrNull)
     }
 
     private suspend fun getWikipediaImageAndUrl(wikiTitle: String): Pair<String?, String?> {
