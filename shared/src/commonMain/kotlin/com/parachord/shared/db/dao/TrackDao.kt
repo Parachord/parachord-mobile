@@ -75,6 +75,11 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.getByTitleAndArtist(title, artist).executeAsOneOrNull()?.toTrack()
     }
 
+    /** The artist's MusicBrainz id from any enriched library track by them, or null. */
+    suspend fun artistMbidForArtist(artist: String): String? = withContext(Dispatchers.Default) {
+        queries.artistMbidForArtist(artist).executeAsList().firstOrNull { !it.isNullOrBlank() }
+    }
+
     suspend fun findLocalFile(title: String, artist: String): Track? = withContext(Dispatchers.Default) {
         queries.findLocalFile(title, artist).executeAsOneOrNull()?.toTrack()
     }

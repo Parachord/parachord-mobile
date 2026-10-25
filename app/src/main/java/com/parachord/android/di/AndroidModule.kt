@@ -586,7 +586,22 @@ val androidModule = module {
         )
     }
     singleOf(::SpotifyProvider)
-    singleOf(::WikipediaProvider)
+    // Explicit binding: singleOf would try to inject the defaulted
+    // knownArtistMbid lambda and fail the whole DI graph at launch.
+    single {
+        val tracks: com.parachord.shared.db.dao.TrackDao = get()
+        WikipediaProvider(
+            musicBrainzClient = get(),
+            musicBrainzProvider = get(),
+            httpClient = get(),
+            // The artist's MBID without asking MusicBrainz (#429): the mapper
+            // cache, then the library.
+            knownArtistMbid = { name ->
+                get<com.parachord.shared.metadata.MbidEnrichmentService>().getCachedArtistMbid(name)
+                    ?: tracks.artistMbidForArtist(name)
+            },
+        )
+    }
     singleOf(::DiscogsProvider)
     // ImageEnrichmentService — shared. The 2x2 mosaic composite step is
     // platform-specific (Coil + Bitmap), forwarded via a suspend lambda.

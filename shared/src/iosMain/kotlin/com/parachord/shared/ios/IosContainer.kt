@@ -1654,6 +1654,11 @@ class IosContainer private constructor() {
     // ── Metadata (Album + Artist detail) ───────────────────────────────
     // Cascading providers per CLAUDE.md: MusicBrainz (discography/tracklists)
     // → Last.fm (images/bio/similar) → Spotify (art/IDs).
+    /** The artist's MusicBrainz id without asking MusicBrainz (#429): the
+     *  mapper cache, then the library. Lets the Wikipedia bio survive an outage. */
+    private suspend fun knownArtistMbid(artistName: String): String? =
+        mbidEnrichmentService.getCachedArtistMbid(artistName) ?: trackDao.artistMbidForArtist(artistName)
+
     // Persisted album tracklists + artist discographies (desktop keeps both 30
     // days). One instance per file, shared by both MetadataServices below — the
     // key includes the provider set, so their answers don't mix.
@@ -1683,7 +1688,7 @@ class IosContainer private constructor() {
             // Spotify isn't connected.
             providers = listOf(
                 mbProvider,
-                WikipediaProvider(musicBrainzClient, mbProvider, httpClient),
+                WikipediaProvider(musicBrainzClient, mbProvider, httpClient, knownArtistMbid = ::knownArtistMbid),
                 LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
                 DiscogsProvider(httpClient, settingsStore),
                 SpotifyProvider(spotifyClient, settingsStore),
@@ -1842,7 +1847,7 @@ class IosContainer private constructor() {
             // artist images without a connected Spotify. No auth on either.
             providers = listOf(
                 mbProvider,
-                WikipediaProvider(musicBrainzClient, mbProvider, httpClient),
+                WikipediaProvider(musicBrainzClient, mbProvider, httpClient, knownArtistMbid = ::knownArtistMbid),
                 LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
                 DiscogsProvider(httpClient, settingsStore),
                 AppleMusicArtistProvider(httpClient, appConfig.appleMusicDeveloperToken),
