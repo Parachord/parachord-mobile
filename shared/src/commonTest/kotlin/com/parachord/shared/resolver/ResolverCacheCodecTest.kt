@@ -22,6 +22,13 @@ class ResolverCacheCodecTest {
     }
 
     @Test
+    fun oneBadEntryDropsOnlyThatEntry() {
+        val blob = """{"a|ok|":[{"url":"spotify:track:1","sourceType":"spotify","resolver":"spotify"}],""" +
+            """"b|bad|":[{"url":42}],"c|notalist|":"oops"}"""
+        assertEquals(setOf("a|ok|"), ResolverCacheCodec.decode(blob).keys)
+    }
+
+    @Test
     fun anUnreadableBlobLoadsAsEmpty() {
         assertTrue(ResolverCacheCodec.decode("not json").isEmpty())
     }

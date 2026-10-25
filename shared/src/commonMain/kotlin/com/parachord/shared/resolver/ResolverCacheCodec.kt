@@ -19,10 +19,28 @@ object ResolverCacheCodec {
     fun encode(map: Map<String, List<ResolvedSource>>): String =
         json.encodeToString(map.filterValues { it.isNotEmpty() })
 
-    fun decode(blob: String): Map<String, List<ResolvedSource>> =
-        try {
-            json.decodeFromString<Map<String, List<ResolvedSource>>>(blob).filterValues { it.isNotEmpty() }
+    /**
+     * Entries are decoded one at a time: a single bad entry (a field whose type
+     * changed, a truncated value) drops only that entry. The whole map used to
+     * be decoded at once, so one bad entry threw the entire cache away and every
+     * track re-resolved — a burst of catalog searches.
+     */
+    fun decode(blob: String): Map<String, List<ResolvedSource>> {
+        val root = try {
+            json.parseToJsonElement(blob) as? kotlinx.serialization.json.JsonObject
         } catch (e: Exception) {
-            emptyMap()
+            null
+        } ?: return emptyMap()
+        val sourcesSerializer = kotlinx.serialization.builtins.ListSerializer(ResolvedSource.serializer())
+        return buildMap {
+            for ((key, value) in root) {
+                val sources = try {
+                    json.decodeFromJsonElement(sourcesSerializer, value)
+                } catch (e: Exception) {
+                    continue
+                }
+                if (sources.isNotEmpty()) put(key, sources)
+            }
         }
+    }
 }

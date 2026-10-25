@@ -37,10 +37,14 @@ DELETE FROM playlist_tracks WHERE playlistId = ?;
 deleteTrack:
 DELETE FROM playlist_tracks WHERE playlistId = ? AND position = ?;
 
+-- Keyed by position AND the row's title + artist: positions shift when a
+-- playlist is reordered or a sync rewrites it, so a write that was queued for
+-- one song must not land on whichever song now sits at that position.
 updateTrackArtwork:
 UPDATE playlist_tracks
 SET trackArtworkUrl = ?
 WHERE playlistId = ? AND position = ?
+  AND trackTitle = ? AND trackArtist = ?
   AND (trackArtworkUrl IS NULL OR trackArtworkUrl = '');
 
 replaceTrackArtworkUrl:
@@ -49,7 +53,8 @@ UPDATE playlist_tracks SET trackArtworkUrl = :fresh WHERE trackArtworkUrl = :dea
 -- Backfill resolver IDs that the in-memory resolver cache discovered but
 -- weren't on the source row. COALESCE keeps any source-provided IDs
 -- (e.g. Spotify's canonical track ID from the sync API) intact and only
--- fills in slots that were null.
+-- fills in slots that were null. Matched on title + artist as well as
+-- position, for the same reason as updateTrackArtwork.
 backfillResolverIds:
 UPDATE playlist_tracks
 SET trackSpotifyId       = COALESCE(trackSpotifyId, ?),
@@ -58,5 +63,6 @@ SET trackSpotifyId       = COALESCE(trackSpotifyId, ?),
     trackSoundcloudId    = COALESCE(trackSoundcloudId, ?),
     trackRecordingMbid   = COALESCE(trackRecordingMbid, ?),
     trackIsrc            = COALESCE(trackIsrc, ?)
-WHERE playlistId = ? AND position = ?;
+WHERE playlistId = ? AND position = ?
+  AND trackTitle = ? AND trackArtist = ?;
 
