@@ -241,6 +241,7 @@ class IosContainer private constructor() {
         /** KvStore key for the persisted Spotify rate-limit cooldown (matches
          *  Android's `spotify_rate_limit_cooldown_ms`). */
         private const val SPOTIFY_COOLDOWN_KEY = "spotify_rate_limit_cooldown_ms"
+        private const val SPOTIFY_STRIKES_KEY = "spotify_rate_limit_strikes"
     }
 
     /** App-wide coroutine scope for fire-and-forget settings writes. */
@@ -2161,6 +2162,8 @@ class IosContainer private constructor() {
             spotifyAuthProvider,
             loadCooldownEpochMs = { kvStore.getLong(SPOTIFY_COOLDOWN_KEY, 0L) },
             saveCooldownEpochMs = { kvStore.setLong(SPOTIFY_COOLDOWN_KEY, it) },
+            loadStrikes = { kvStore.getLong(SPOTIFY_STRIKES_KEY, 0L).toInt() },
+            saveStrikes = { kvStore.setLong(SPOTIFY_STRIKES_KEY, it.toLong()) },
         )
     }
 
