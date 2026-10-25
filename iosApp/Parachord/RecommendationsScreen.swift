@@ -184,7 +184,7 @@ struct RecommendationsScreen: View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                PCArtistImage(url: a.imageUrl.flatMap { URL(string: $0) }) {
+                PCArtistImage(url: a.imageUrl.flatMap { URL(string: $0) }, artistName: a.name) {
                     PCArtwork(name: a.name, size: nil, radius: 12)
                 }
             }
@@ -201,7 +201,7 @@ struct RecommendationsScreen: View {
                                          context: PlaybackContext(type: "recommendations", name: "Recommended Songs", id: nil))
                 } label: {
                     HStack(spacing: 12) {
-                        pcCover(pcTrackArt(pair.track.artworkUrl, artist: pair.track.artist, title: pair.track.title, album: pair.track.album), seed: pair.track.title + pair.track.artist, size: 44, radius: 6)
+                        pcCover(pcTrackArt(pair.track.artworkUrl, artist: pair.track.artist, title: pair.track.title, album: pair.track.album), seed: pair.track.title + pair.track.artist, size: 44, radius: 6, artist: pair.track.artist, album: pair.track.album)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pair.track.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: pair.track.artist, title: pair.track.title, album: pair.track.album) ? PC.fg3

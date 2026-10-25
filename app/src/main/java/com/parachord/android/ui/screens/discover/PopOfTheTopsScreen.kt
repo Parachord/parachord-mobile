@@ -487,6 +487,8 @@ private fun AlbumGridItem(album: ChartAlbum, onClick: () -> Unit, onLongClick: (
         Box {
             AlbumArtCard(
                 artworkUrl = album.artworkUrl,
+                artist = album.artist,
+                album = album.title,
                 size = 180.dp,
                 cornerRadius = 8.dp,
                 placeholderName = album.title,
@@ -579,6 +581,7 @@ private fun SongsTab(
                     TrackRow(
                         title = song.title,
                         artist = song.artist,
+                        album = song.album,
                         artworkUrl = song.artworkUrl,
                         trackNumber = song.rank,
                         resolvers = trackResolvers[key]?.ifEmpty { null },

@@ -312,6 +312,8 @@ fun NowPlayingScreen(
 
                 AlbumArtWithGestures(
                     artworkUrl = displayArtworkUrl,
+                    artist = track?.artist,
+                    album = track?.album,
                     isLoved = currentTrackIsLoved,
                     onSingleTap = track?.album?.takeIf { track.artist.isNotBlank() }?.let { album ->
                         {

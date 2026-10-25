@@ -377,6 +377,7 @@ private fun SongsTab(
                         TrackRow(
                             title = track.title,
                             artist = track.artist,
+                            album = track.album,
                             artworkUrl = track.artworkUrl,
                             duration = track.duration,
                             // Content resolver badges (Spotify, Apple Music, …) from the

@@ -1142,7 +1142,7 @@ struct SavedPlaylistDetailView: View {
         HStack(spacing: 12) {
             Text("\(index + 1)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
             pcCover(pcTrackArt(t.trackArtworkUrl, artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum),
-                    seed: t.trackTitle + t.trackArtist, size: 44, radius: 6)
+                    seed: t.trackTitle + t.trackArtist, size: 44, radius: 6, artist: t.trackArtist, album: t.trackAlbum)
             VStack(alignment: .leading, spacing: 2) {
                 Text(t.trackTitle).font(.system(size: 15, weight: .medium))
                     .foregroundStyle(coordinator.currentTrack?.id == model.entities[safe: index]?.id ? PC.accent : PC.fg1).lineLimit(1)

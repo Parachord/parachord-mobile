@@ -450,6 +450,8 @@ private fun CriticsPickRow(
     ) {
         AlbumArtCard(
             artworkUrl = album.albumArt,
+            artist = album.artist,
+            album = album.title,
             size = 100.dp,
             cornerRadius = 8.dp,
             placeholderName = album.title,

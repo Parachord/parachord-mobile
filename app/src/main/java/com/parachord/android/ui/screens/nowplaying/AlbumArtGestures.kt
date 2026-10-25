@@ -67,6 +67,9 @@ fun AlbumArtWithGestures(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 12.dp,
     elevation: Dp = 8.dp,
+    /** The playing track's artist + album, so a dead cover can be looked up again. */
+    artist: String? = null,
+    album: String? = null,
 ) {
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
@@ -155,6 +158,8 @@ fun AlbumArtWithGestures(
     ) {
         AlbumArtCardFill(
             artworkUrl = artworkUrl,
+            artist = artist,
+            album = album,
             modifier = Modifier.graphicsLayer {
                 translationX = offsetX.value
                 alpha = 1f - (kotlin.math.abs(offsetX.value) / screenWidthPx) * 0.3f

@@ -435,6 +435,8 @@ private fun FreshDropRow(
     ) {
         AlbumArtCard(
             artworkUrl = release.albumArt,
+            artist = release.artist,
+            album = release.title,
             size = 80.dp,
             cornerRadius = 8.dp,
             placeholderName = release.title,

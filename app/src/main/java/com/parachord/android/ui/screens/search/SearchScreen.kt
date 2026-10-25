@@ -136,6 +136,7 @@ fun SearchScreen(
                         TrackRow(
                             title = track.title,
                             artist = track.artist,
+                            album = track.album,
                             artworkUrl = track.artworkUrl,
                             resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]
                                 ?: track.availableResolvers(resolverOrder),
@@ -224,6 +225,7 @@ fun SearchScreen(
                         TrackRow(
                             title = track.title,
                             artist = track.artist,
+                            album = track.album,
                             artworkUrl = track.artworkUrl,
                             resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]?.ifEmpty { null },
                             resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
