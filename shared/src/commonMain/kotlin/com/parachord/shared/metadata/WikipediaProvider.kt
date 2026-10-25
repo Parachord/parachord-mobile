@@ -19,10 +19,16 @@ import kotlinx.serialization.json.jsonPrimitive
  * Wikipedia metadata provider (KMP / commonMain — Ktor port of the Android
  * app-side provider; one shared implementation for both platforms).
  *
- * Same 3-step chain as desktop:
- *   1. MusicBrainz artist lookup -> Wikidata relation URL
- *   2. Wikidata API -> English Wikipedia article title
- *   3. Wikipedia API -> article extract (bio) + thumbnail image
+ * Same chain as desktop:
+ *   1. The artist's MusicBrainz id: known locally ([knownArtistMbid] — the
+ *      MBID mapper cache, library tracks) when possible, else a MusicBrainz
+ *      name search.
+ *   2. Its Wikidata id: Wikidata's own P434 search first, MusicBrainz url-rels
+ *      as the fallback ([WikidataIdLookup], #429). Together with step 1, a
+ *      MusicBrainz outage no longer takes the bio down for an artist the user
+ *      has played.
+ *   3. Wikidata API -> English Wikipedia article title
+ *   4. Wikipedia API -> article extract (bio) + thumbnail image
  *
  * Priority 5 (between MusicBrainz 0 and Last.fm 10). All endpoints are public,
  * no auth. Parses with kotlinx.serialization (no org.json on Native).
@@ -31,7 +37,18 @@ class WikipediaProvider(
     private val musicBrainzClient: MusicBrainzClient,
     private val musicBrainzProvider: MusicBrainzProvider,
     private val httpClient: HttpClient,
+    /**
+     * The artist's MusicBrainz id when it's already known on the device, so no
+     * MusicBrainz request is needed. Null = not known; the MusicBrainz name
+     * search is the last resort.
+     */
+    private val knownArtistMbid: suspend (artistName: String) -> String? = { null },
 ) : MetadataProvider {
+
+    private val wikidataIds = WikidataIdLookup(httpClient, musicBrainzWikidataUrl = { mbid ->
+        musicBrainzClient.getArtist(mbid).relations
+            .firstOrNull { it.type == "wikidata" }?.url?.resource
+    })
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -45,13 +62,13 @@ class WikipediaProvider(
 
     override suspend fun getArtistInfo(artistName: String): ArtistInfo? = withContext(Dispatchers.Default) {
         try {
-            // 1. Resolve MBID via the cached MB search (MB rate-limits 1 req/s).
-            val mbid = musicBrainzProvider.resolveArtist(artistName)?.id ?: return@withContext null
-            // 2. MB artist relations -> Wikidata link.
-            val wikidataUrl = musicBrainzClient.getArtist(mbid).relations
-                .firstOrNull { it.type == "wikidata" }?.url?.resource ?: return@withContext null
-            val wikidataId = wikidataUrl.substringAfterLast("/")
-            if (wikidataId.isBlank()) return@withContext null
+            // 1. The artist's MBID: known on the device, else the cached MB
+            //    search (MB rate-limits 1 req/s).
+            val mbid = knownArtistMbid(artistName)?.takeIf { WikidataIdLookup.isMbid(it) }
+                ?: musicBrainzProvider.resolveArtist(artistName)?.id
+                ?: return@withContext null
+            // 2. Wikidata id: Wikidata's P434 search, MB url-rels as the fallback.
+            val wikidataId = wikidataIds.lookup(mbid) ?: return@withContext null
             // 3. Wikidata -> enwiki title.
             val wikiTitle = getWikiTitleFromWikidata(wikidataId) ?: return@withContext null
             // 4. Wikipedia bio + image.
