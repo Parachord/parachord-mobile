@@ -175,8 +175,11 @@ class MusicBrainzProvider(
                 },
                 provider = name,
             )
-        } catch (_: Exception) {
-            null
+        } catch (e: Exception) {
+            // Rethrow rather than answer null: MetadataService treats a provider
+            // that threw as "didn't answer" and won't cache a tracklist built
+            // without it (a null here would read as "no such album").
+            throw e
         }
     }
 

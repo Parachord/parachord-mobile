@@ -1653,6 +1653,26 @@ class IosContainer private constructor() {
     // ── Metadata (Album + Artist detail) ───────────────────────────────
     // Cascading providers per CLAUDE.md: MusicBrainz (discography/tracklists)
     // → Last.fm (images/bio/similar) → Spotify (art/IDs).
+    // Persisted album tracklists + artist discographies (desktop keeps both 30
+    // days). One instance per file, shared by both MetadataServices below — the
+    // key includes the provider set, so their answers don't mix.
+    private val albumTracksCache by lazy {
+        com.parachord.shared.cache.PersistentJsonCache(
+            AlbumDetail.serializer(),
+            read = { IosFileCache.read("album_tracks_cache.json") },
+            write = { IosFileCache.write("album_tracks_cache.json", it) },
+            ttlMs = 30L * 24 * 60 * 60 * 1000, maxEntries = 400, name = "album tracks",
+        )
+    }
+    private val artistAlbumsCache by lazy {
+        com.parachord.shared.cache.PersistentJsonCache(
+            kotlinx.serialization.builtins.ListSerializer(AlbumSearchResult.serializer()),
+            read = { IosFileCache.read("artist_albums_cache.json") },
+            write = { IosFileCache.write("artist_albums_cache.json", it) },
+            ttlMs = 30L * 24 * 60 * 60 * 1000, maxEntries = 200, name = "artist albums",
+        )
+    }
+
     val metadataService: MetadataService by lazy {
         val mbProvider = MusicBrainzProvider(musicBrainzClient)
         MetadataService(
@@ -1680,6 +1700,8 @@ class IosContainer private constructor() {
             // (was the iOS-only artist-images.json); reuse it across sessions.
             artistImageCacheRead = { IosFileCache.read("artist_images_cache.json") },
             artistImageCacheWrite = { IosFileCache.write("artist_images_cache.json", it) },
+            albumTracksCache = albumTracksCache,
+            artistAlbumsCache = artistAlbumsCache,
         )
     }
 
@@ -1815,6 +1837,10 @@ class IosContainer private constructor() {
             enrichAlbumArtwork = { artistName, albums ->
                 enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
             },
+            // Same tracklist cache: the Spotify-free enrichment pass (mosaics,
+            // curated-list art) is the heaviest caller of getAlbumTracks.
+            albumTracksCache = albumTracksCache,
+            artistAlbumsCache = artistAlbumsCache,
         )
     }
 

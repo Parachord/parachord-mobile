@@ -530,12 +530,34 @@ val androidModule = module {
         val providers = listOf(musicBrainz, wikipedia, lastFm, discogs, spotify, appleMusicArtist)
             .sortedBy { it.priority }
 
+        val filesDir = androidContext().filesDir
+        val artistImagesFile = java.io.File(filesDir, "artist_images_cache.json")
+        val albumTracksFile = java.io.File(filesDir, "album_tracks_cache.json")
+        val artistAlbumsFile = java.io.File(filesDir, "artist_albums_cache.json")
+        val day = 24L * 60 * 60 * 1000
         com.parachord.shared.metadata.MetadataService(
             providers = providers,
             getDisabledProviders = { settingsStore.getDisabledMetaProviders() },
             enrichAlbumArtwork = { artistName, albums ->
                 enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
             },
+            // Persisted like iOS already does: artist images (History/Friends ask
+            // for up to 50 per load), album tracklists and discographies (desktop
+            // keeps both 30 days). Without these every launch refetched them.
+            artistImageCacheRead = { com.parachord.android.data.cache.CacheFiles.read(artistImagesFile) },
+            artistImageCacheWrite = { com.parachord.android.data.cache.CacheFiles.write(artistImagesFile, it) },
+            albumTracksCache = com.parachord.shared.cache.PersistentJsonCache(
+                com.parachord.shared.metadata.AlbumDetail.serializer(),
+                read = { com.parachord.android.data.cache.CacheFiles.read(albumTracksFile) },
+                write = { com.parachord.android.data.cache.CacheFiles.write(albumTracksFile, it) },
+                ttlMs = 30 * day, maxEntries = 400, name = "album tracks",
+            ),
+            artistAlbumsCache = com.parachord.shared.cache.PersistentJsonCache(
+                kotlinx.serialization.builtins.ListSerializer(com.parachord.shared.metadata.AlbumSearchResult.serializer()),
+                read = { com.parachord.android.data.cache.CacheFiles.read(artistAlbumsFile) },
+                write = { com.parachord.android.data.cache.CacheFiles.write(artistAlbumsFile, it) },
+                ttlMs = 30 * day, maxEntries = 200, name = "artist albums",
+            ),
         )
     }
     singleOf(::MusicBrainzProvider)
@@ -580,12 +602,10 @@ val androidModule = module {
             listenBrainzClient = get(),
             trackDao = get(),
             cacheRead = {
-                try {
-                    if (cacheFile.exists()) cacheFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
-                try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
             // Service-agnostic ISRC → MBID fallback when the LB mapper is down.
             musicBrainzClient = get(),
@@ -774,12 +794,10 @@ val androidModule = module {
             settingsStore = get(),
             metadataService = get(),
             cacheRead = {
-                try {
-                    if (cacheFile.exists()) cacheFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
-                try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
         )
     }
@@ -798,20 +816,16 @@ val androidModule = module {
             settingsStore = get(),
             trackDao = get(),
             cacheRead = {
-                try {
-                    if (cacheFile.exists()) cacheFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
-                try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
             rotationRead = {
-                try {
-                    if (rotationFile.exists()) rotationFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(rotationFile)
             },
             rotationWrite = { json ->
-                try { rotationFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(rotationFile, json)
             },
             mbidLookupCached = { artistName -> mbidEnrichment.getCachedArtistMbid(artistName) },
             mbidLookupViaMapper = { artist, title -> mbidEnrichment.getArtistMbid(artist, title) },
@@ -830,12 +844,10 @@ val androidModule = module {
             musicBrainzClient = get(),
             imageEnrichmentService = get(),
             cacheRead = {
-                try {
-                    if (cacheFile.exists()) cacheFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
-                try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
         )
     }
@@ -863,12 +875,10 @@ val androidModule = module {
             seatGeekClient = get(),
             settingsStore = get(),
             cacheRead = {
-                try {
-                    if (cacheFile.exists()) cacheFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
-                try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
             ticketmasterApiKeyFallback = com.parachord.android.BuildConfig.TICKETMASTER_API_KEY,
             seatGeekClientIdFallback = com.parachord.android.BuildConfig.SEATGEEK_CLIENT_ID,
@@ -917,12 +927,10 @@ val androidModule = module {
             ),
             metadataService = get(),
             cacheRead = {
-                try {
-                    if (cacheFile.exists()) cacheFile.readText() else null
-                } catch (_: Exception) { null }
+                com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
-                try { cacheFile.writeText(json) } catch (_: Exception) { /* swallow */ }
+                com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
         )
     }
