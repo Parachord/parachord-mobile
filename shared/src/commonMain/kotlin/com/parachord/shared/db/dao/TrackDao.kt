@@ -146,6 +146,11 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.updateArtworkById(artworkUrl = artworkUrl, id = id)
     }
 
+    /** Replace a dead cover URL on every track row that holds it. */
+    suspend fun replaceArtworkUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
+        queries.replaceArtworkUrl(fresh = fresh, dead = dead)
+    }
+
     suspend fun delete(track: Track): Unit = withContext(Dispatchers.Default) {
         queries.deleteById(track.id)
     }

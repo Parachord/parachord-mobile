@@ -37,5 +37,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 updateArtworkByTitleAndArtist:
 UPDATE albums SET artworkUrl = ? WHERE title = ? AND artist = ? AND (artworkUrl IS NULL OR artworkUrl = '');
 
+-- A cover URL that stopped loading: swap it wherever it is stored (BrokenArtRetry).
+replaceArtworkUrl:
+UPDATE albums SET artworkUrl = :fresh WHERE artworkUrl = :dead;
+
 deleteById:
 DELETE FROM albums WHERE id = ?;

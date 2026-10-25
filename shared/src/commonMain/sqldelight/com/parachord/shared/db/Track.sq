@@ -55,6 +55,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 updateArtworkById:
 UPDATE tracks SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artworkUrl = '');
 
+replaceArtworkUrl:
+UPDATE tracks SET artworkUrl = :fresh WHERE artworkUrl = :dead;
+
 deleteById:
 DELETE FROM tracks WHERE id = ?;
 
