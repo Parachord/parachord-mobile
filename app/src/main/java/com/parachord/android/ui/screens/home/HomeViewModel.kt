@@ -195,17 +195,15 @@ class HomeViewModel constructor(
         }
     }
 
-    private fun loadAiRecommendations(forceRefresh: Boolean = false) {
+    private fun loadAiRecommendations() {
         viewModelScope.launch {
-            // Show cached results immediately (stale-while-revalidate)
+            // Stale-while-revalidate, like desktop (which refetches on every Home
+            // visit) and iOS: show the cached suggestions immediately, then always
+            // fetch fresh ones behind them. This used to return as soon as a cache
+            // existed, so the suggestions never changed after the first run unless
+            // the user tapped refresh.
             aiRecommendationService.getCachedRecommendations()?.let { cached ->
                 _aiRecommendations.value = cached
-                // Skip re-fetching if cache exists and this isn't a manual refresh.
-                // AI calls take 30-60s and generate entirely new albums each time,
-                // causing visible artwork loading. Only re-fetch on explicit refresh.
-                if (!forceRefresh) {
-                    return@launch
-                }
             }
             _aiLoading.value = true
             _aiError.value = null
@@ -223,7 +221,7 @@ class HomeViewModel constructor(
     }
 
     fun refreshAiRecommendations() {
-        loadAiRecommendations(forceRefresh = true)
+        loadAiRecommendations()
     }
 
     private fun loadDiscoverPreviews() {
