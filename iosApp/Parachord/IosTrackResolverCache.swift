@@ -67,6 +67,14 @@ final class IosTrackResolverCache {
     /// every submission — submitting tracks one-per-row must not exceed the cap
     /// (the previous per-call task group let N rows run N concurrent resolves).
     private var activeWorkers = 0
+    /// Additive single-resolver attempts that came back empty, per
+    /// "key\u{1}resolver" → when. A track that genuinely isn't on a service
+    /// used to re-search it every time its row scrolled into view, every
+    /// session; now a miss waits [missRetryInterval] before the scroll path
+    /// asks again (long enough to outlast a typical rate-limit blip, short
+    /// enough that a transient miss recovers within the session).
+    private var missedAt: [String: Date] = [:]
+    private let missRetryInterval: TimeInterval = 30 * 60
 
     /// Max concurrent resolves through the single JSC context (`.axe` plugins
     /// all share it) + the shared Spotify gate. Matches desktop's 4-ish pool.
@@ -139,10 +147,23 @@ final class IosTrackResolverCache {
         saveScheduled = true
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            saveScheduled = false
-            let blob = container.encodeResolverCache(map: cache)
-            try? blob.data(using: .utf8)?.write(to: persistURL, options: .atomic)
+            guard saveScheduled else { return }   // flushed already
+            saveNow()
         }
+    }
+
+    /// Write any pending save immediately. Called when the app goes to the
+    /// background: a process suspended and killed inside the 2s debounce
+    /// otherwise lost every resolve since the last save.
+    func flushPendingSave() {
+        guard saveScheduled else { return }
+        saveNow()
+    }
+
+    private func saveNow() {
+        saveScheduled = false
+        let blob = container.encodeResolverCache(map: cache)
+        try? blob.data(using: .utf8)?.write(to: persistURL, options: .atomic)
     }
 
     func cached(artist: String, title: String, album: String?) -> [ResolvedSource]? {
@@ -174,14 +195,18 @@ final class IosTrackResolverCache {
             // not-disabled resolver that's absent here — scoped to this now-visible
             // row, deduped against in-flight/queued work. Spotify's gate makes this
             // cheap during cooldown and effective once it clears, so scrolling the
-            // chunk back into view fills it in.
+            // chunk back into view fills it in. A resolver that came back empty for
+            // this track isn't asked again for `missRetryInterval` — otherwise a
+            // track that isn't on that service re-searched it on every scroll.
             let active = ResolverPrefs.shared.active
             guard !active.isEmpty else { return }   // empty = all-on; full resolve already covered it
             let disabled = ResolverPrefs.shared.disabled
             var enqueued = false
             for r in active where !disabled.contains(r) {
+                let flightKey = "\(key)\u{1}\(r)"
                 guard !existing.contains(where: { $0.resolver == r && !$0.noMatch }),
-                      !inFlight.contains("\(key)\u{1}\(r)"),
+                      !recentlyMissed(flightKey),
+                      !inFlight.contains(flightKey),
                       !queue.contains(where: { $0.req.key == key && $0.merge == r })
                 else { continue }
                 queue.append((order: order, req: req, merge: r))
@@ -197,12 +222,19 @@ final class IosTrackResolverCache {
         pump()
     }
 
+    private func recentlyMissed(_ flightKey: String) -> Bool {
+        guard let at = missedAt[flightKey] else { return false }
+        return Date().timeIntervalSince(at) < missRetryInterval
+    }
+
     /// A resolver was just ENABLED in Settings (#1). Additively resolve ONLY that
     /// resolver for every track we've already resolved, and MERGE its source into
     /// the cached results — existing (still-good) sources are KEPT, never
     /// invalidated. Mirrors the user's intent: enabling Spotify adds Spotify to
     /// the cached Apple Music results, it doesn't re-resolve from scratch.
     func resolverEnabled(_ resolverId: String) {
+        // An explicit enable asks every track again, misses included.
+        missedAt = missedAt.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
         for (key, req) in requests {
             guard let existing = cache[key],
                   !existing.contains(where: { $0.resolver == resolverId && !$0.noMatch }),
@@ -245,6 +277,9 @@ final class IosTrackResolverCache {
                         let ranked = (try? await self.container.rankSources(sources: merged)) ?? merged
                         self.cache[key] = ranked
                         self.scheduleSave()
+                        self.missedAt[flightKey] = nil
+                    } else {
+                        self.missedAt[flightKey] = Date()
                     }
                     self.inFlight.remove(flightKey)
                     self.activeWorkers -= 1
