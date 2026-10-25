@@ -45,7 +45,7 @@ class ListenBrainzSubmitIsrcTest {
     private val okHeaders = headersOf("Content-Type", "application/json")
 
     @Test
-    fun validIsrc_isUppercasedIntoAdditionalInfo_andVersionBumped() = runTest {
+    fun validIsrc_isUppercasedIntoAdditionalInfo() = runTest {
         var ai: JsonObject? = null
         val engine = MockEngine { request ->
             ai = additionalInfo(request)
@@ -57,8 +57,9 @@ class ListenBrainzSubmitIsrcTest {
             isrc = "usmex0800097", // lowercase input
         )
         assertEquals("USMEX0800097", ai!!["isrc"]!!.jsonPrimitive.content)
-        // submission_client_version must be bumped off the old "1.0.0".
-        assertEquals("1.1.0", ai!!["submission_client_version"]!!.jsonPrimitive.content)
+        // submission_client_version was a hard-coded "1.1.0" marker here; it is
+        // now the real app version + platform (#362), pinned in
+        // ListenBrainzSubmitListensTest. Achordion never read it.
     }
 
     @Test
