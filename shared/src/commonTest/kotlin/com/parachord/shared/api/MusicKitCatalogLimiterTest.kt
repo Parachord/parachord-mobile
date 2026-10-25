@@ -1,59 +1,67 @@
-package com.parachord.android.playback.handlers
+package com.parachord.shared.api
 
 import kotlinx.coroutines.test.runTest
-import org.junit.Test
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
+/**
+ * The Apple Music catalog limiter both platforms use (#241). Moved from the
+ * Android-only test when the class moved to shared, so it now runs on the JVM
+ * and the iOS simulator. The clock is injected so cooldown expiry is testable.
+ */
 class MusicKitCatalogLimiterTest {
+
+    /** A hand-advanced clock. */
+    private class FakeClock(var now: Long = 1_000_000L)
 
     @Test
     fun runThrottled_returnsBlockResult_whenNoCooldown() = runTest {
-        val limiter = MusicKitCatalogLimiter()
-        val result = limiter.runThrottled { 42 }
-        assertEquals(42, result)
+        assertEquals(42, MusicKitCatalogLimiter().runThrottled { 42 })
     }
 
     @Test
     fun runThrottled_skipsBlock_whenCooldownActive() = runTest {
         val limiter = MusicKitCatalogLimiter()
-        // Trip the breaker
         repeat(MusicKitCatalogLimiter.CONSECUTIVE_429_THRESHOLD) { limiter.reportRateLimit() }
         var ran = false
-        val result = limiter.runThrottled {
-            ran = true
-            "should not run"
-        }
-        assertNull(result)
-        assertFalse("block must not execute while cooldown is open", ran)
+        assertNull(limiter.runThrottled { ran = true; "should not run" })
+        assertFalse(ran, "block must not execute while cooldown is open")
     }
 
     @Test
     fun reportRateLimit_underThreshold_doesNotOpenCooldown() = runTest {
         val limiter = MusicKitCatalogLimiter()
-        // 2 of 3 — still under
         limiter.reportRateLimit()
-        limiter.reportRateLimit()
+        limiter.reportRateLimit() // 2 of 3
         var ran = false
-        val result = limiter.runThrottled {
-            ran = true
-            "ok"
-        }
-        assertEquals("ok", result)
+        assertEquals("ok", limiter.runThrottled { ran = true; "ok" })
         assertTrue(ran)
     }
 
     @Test
-    fun reportRateLimit_atThreshold_opensCooldown() = runTest {
-        val limiter = MusicKitCatalogLimiter()
+    fun reportRateLimit_atThreshold_opensCooldownForFiveMinutes() = runTest {
+        val clock = FakeClock()
+        val limiter = MusicKitCatalogLimiter(nowMs = { clock.now })
         repeat(MusicKitCatalogLimiter.CONSECUTIVE_429_THRESHOLD) { limiter.reportRateLimit() }
-        assertTrue(
-            "cooldownUntil must be in the future",
-            limiter.cooldownUntilMsForTest > System.currentTimeMillis(),
-        )
+        assertEquals(clock.now + MusicKitCatalogLimiter.COOLDOWN_MS, limiter.cooldownUntilMsForTest)
+    }
+
+    @Test
+    fun theCooldownIsTimeBound_notSessionPermanent() = runTest {
+        // One throttle must not disable Apple Music for the rest of the session.
+        val clock = FakeClock()
+        val limiter = MusicKitCatalogLimiter(nowMs = { clock.now })
+        repeat(MusicKitCatalogLimiter.CONSECUTIVE_429_THRESHOLD) { limiter.reportRateLimit() }
+
+        clock.now += MusicKitCatalogLimiter.COOLDOWN_MS - 1
+        assertNull(limiter.runThrottled { "still cooling down" })
+
+        clock.now += 1
+        assertEquals("open again", limiter.runThrottled { "open again" })
     }
 
     @Test
@@ -73,7 +81,7 @@ class MusicKitCatalogLimiterTest {
         limiter.reportRateLimit()  // 2 of 3
         limiter.reportSuccess()    // resets to 0
         limiter.reportRateLimit()
-        limiter.reportRateLimit()  // 2 of 3 again — should still be open
+        limiter.reportRateLimit()  // 2 of 3 again — still open
         assertNotNull(limiter.runThrottled { "still open" })
         limiter.reportRateLimit()  // 3 of 3 — now closed
         assertNull(limiter.runThrottled { "should skip" })
