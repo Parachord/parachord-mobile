@@ -2136,10 +2136,13 @@ class SyncEngine constructor(
             }
         }
 
-        // Persist the merged list to the LOCAL rows. The coordinator already
-        // additively backfilled any freshly-resolved provider ids onto these rows
-        // (persistRowId), so the merged list reflects local identity + ordering; the
-        // ids carry forward for future cycles via the row + the hydration cache.
+        // Persist the merged list to the LOCAL rows. mergedTracks was built before
+        // materialize, so this OVERWRITES the ids the coordinator just backfilled
+        // (persistRowId); they carry forward through the hydration cache, not the
+        // row. One consequence: an LB hit never lands an MBID on the row here, so
+        // the row's cache key can't drift norm- → mbid- mid-life. If this ever
+        // keeps the backfilled ids, carry the cache entries across too
+        // (TrackProviderIdCacheDao.copyEntriesToKey, as hydrateMissingTrackIds does).
         playlistTrackDao.replaceAll(localId, mergedTracks)
 
         // Advance the baseline + clear locallyModified EVERY cycle. Decoupled from
@@ -3655,6 +3658,12 @@ class SyncEngine constructor(
         // coverage pre-check so an under-covered ABORT leaves no partial mutation.
         if (persist) {
             playlistTrackDao.replaceAll(playlistId, updatedTracks)
+            // A ListenBrainz hit writes the MBID onto the row, which moves its
+            // cache key from norm- to mbid-. Carry the other providers' entries
+            // across, or their miss cooldowns are lost and they re-search.
+            for ((before, after) in tracks.zip(updatedTracks)) {
+                trackProviderIdCacheDao.copyEntriesToKey(canonicalTrackKey(before), canonicalTrackKey(after))
+            }
             Log.d(TAG, "Hydrated ${resolvedByPosition.size} ${provider.id} IDs into $playlistId " +
                 "(${tracks.size - resolvedByPosition.size - (tracks.size - needsHydration.size)} unresolved)")
         }

@@ -63,6 +63,16 @@ recordMissing:
 UPDATE track_provider_id_cache SET missingStreak = missingStreak + 1
 WHERE identityKey = ? AND providerId = ?;
 
+-- Carry every provider's entry from one identity key to another, keeping any
+-- entry the new key already has. Used when a row gains an MBID and its
+-- canonicalTrackKey moves from norm- to mbid-. A copy, not a move: another
+-- MBID-less row with the same artist|title still reads the old key.
+copyEntriesToKey:
+INSERT OR IGNORE INTO track_provider_id_cache
+    (identityKey, providerId, resolvedId, lastAttemptAt, attempts, missingStreak, lastSeenAt)
+SELECT CAST(:toKey AS TEXT), providerId, resolvedId, lastAttemptAt, attempts, missingStreak, lastSeenAt
+FROM track_provider_id_cache WHERE identityKey = :fromKey;
+
 -- Stale unresolved entries past the cooldown cutoff, fewest-failed first (so a
 -- never-/least-tried track is re-attempted before one that's repeatedly missed).
 selectStaleCandidates:
