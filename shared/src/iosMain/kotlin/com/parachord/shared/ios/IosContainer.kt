@@ -1893,18 +1893,28 @@ class IosContainer private constructor() {
      * fresh emissions (it persists to concerts_cache.json). Swift watches this;
      * no iOS-side duplicate cache (fixes the two-caches-fighting bug).
      */
-    fun concertsFlow(): Flow<List<ConcertEvent>> = flow {
+    fun concertsFlow(locationChanged: Boolean): Flow<List<ConcertEvent>> = flow {
+        // A new location or radius invalidates the cache: it holds the OLD
+        // area's events, which used to show for up to 30 min.
+        if (locationChanged) concertsRepository.clearLocalEvents()
         // Cache-first paint: emit the last-known events immediately (no artist-seed
         // build, no network). Previously the slow loadRecommendedArtists() rebuild
         // ran first on EVERY subscribe, blocking the cache and making the Concerts
         // page slow every visit. If the cache is still fresh, we're done — skip the
         // rebuild + revalidation entirely.
         val cached = concertsRepository.loadCachedEvents()
-        if (!cached.isNullOrEmpty()) emit(cached)
-        if (cached != null && !concertsRepository.isCacheStale) return@flow
+        val fresh = cached != null && !concertsRepository.isCacheStale
+        // A fresh cache is the answer even when it's empty — emit it, or the
+        // screen never leaves its loading skeleton. A stale empty cache stays
+        // quiet so "no concerts" doesn't flash before the refetch lands.
+        val paintedCache = cached != null && (cached.isNotEmpty() || fresh)
+        if (paintedCache) emit(cached!!)
+        if (fresh) return@flow
 
         val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
-        if (artists.isEmpty()) { if (cached == null) emit(emptyList()); return@flow }
+        // Nothing to search with: end the load (an empty answer) unless the cache
+        // already painted something.
+        if (artists.isEmpty()) { if (!paintedCache) emit(emptyList()); return@flow }
         val loc = settingsStore.getConcertLocation()
         emitAll(
             concertsRepository.getPersonalizedEvents(
@@ -3388,6 +3398,26 @@ class FlowWatcher(private val scope: CoroutineScope) {
     fun watch(flow: Flow<Any?>, onEach: (Any?) -> Unit): Cancellable {
         val job = scope.launch {
             flow.collect { value -> onEach(value) }
+        }
+        return Cancellable { job.cancel() }
+    }
+
+    /**
+     * [watch], plus [onDone] once the flow ends — completed or failed, but not
+     * cancelled. The curated repos' flows end after one pass (cache, then
+     * fresh), so this tells Swift when a load has finished and a later visit
+     * may start another one (`RevalidatingWatch`).
+     */
+    fun watchUntilDone(flow: Flow<Any?>, onEach: (Any?) -> Unit, onDone: () -> Unit): Cancellable {
+        val job = scope.launch {
+            try {
+                flow.collect { value -> onEach(value) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("FlowWatcher", "watched flow failed: ${e.message}")
+            }
+            onDone()
         }
         return Cancellable { job.cancel() }
     }

@@ -11,9 +11,8 @@ import Shared
 final class RecommendationsModel {
     static let shared = RecommendationsModel()
     private let container = IosContainer.companion.shared
-    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
-    private var subTracks: Cancellable?
-    private var subArtists: Cancellable?
+    private let refreshTracks = RevalidatingWatch(minInterval: 30 * 60)
+    private let refreshArtists = RevalidatingWatch(minInterval: 30 * 60)
     var tracks: [RecommendedTrack] = []
     var entities: [Track] = []
     var artists: [RecommendedArtist] = []
@@ -21,23 +20,28 @@ final class RecommendationsModel {
     var loaded = false
 
     // Watch the shared recommendation flows (cached-first → fresh); the repo owns
-    // its disk cache (architecture realignment).
+    // its disk cache (architecture realignment). The repo has no TTL (it always
+    // refetches), so a later visit re-runs them only after 30 min — the same
+    // staleness rule as Android's RecommendationsViewModel (#417).
     func load() async {
-        guard subTracks == nil else { return }
-        isLoading = true
-        subTracks = watcher.watch(flow: container.recommendedTracksFlow()) { [weak self] v in
-            guard let self else { return }
-            if let t = v as? [RecommendedTrack], !t.isEmpty {
-                self.tracks = t
-                self.entities = t.map { Self.makeTrack($0) }
-            }
-            self.isLoading = false
-            self.loaded = true
+        refreshTracks.run { watcher, done in
+            isLoading = true
+            return watcher.watchUntilDone(flow: container.recommendedTracksFlow(), onEach: { [weak self] v in
+                guard let self else { return }
+                if let t = v as? [RecommendedTrack], !t.isEmpty {
+                    self.tracks = t
+                    self.entities = t.map { Self.makeTrack($0) }
+                }
+                self.isLoading = false
+                self.loaded = true
+            }, onDone: done)
         }
-        subArtists = watcher.watch(flow: container.recommendedArtistsFlow()) { [weak self] v in
-            guard let self else { return }
-            if let a = v as? [RecommendedArtist], !a.isEmpty { self.artists = a }
-            self.loaded = true
+        refreshArtists.run { watcher, done in
+            watcher.watchUntilDone(flow: container.recommendedArtistsFlow(), onEach: { [weak self] v in
+                guard let self else { return }
+                if let a = v as? [RecommendedArtist], !a.isEmpty { self.artists = a }
+                self.loaded = true
+            }, onDone: done)
         }
     }
 
