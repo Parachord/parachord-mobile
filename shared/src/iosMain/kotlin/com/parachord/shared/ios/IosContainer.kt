@@ -16,6 +16,7 @@ import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.metadata.AlbumDetail
+import com.parachord.shared.metadata.AlbumCatalogLoader
 import com.parachord.shared.metadata.AlbumSearchResult
 import com.parachord.shared.metadata.ArtistInfo
 import com.parachord.shared.metadata.AppleMusicArtistProvider
@@ -1702,6 +1703,14 @@ class IosContainer private constructor() {
             artistImageCacheWrite = { IosFileCache.write("artist_images_cache.json", it) },
             albumTracksCache = albumTracksCache,
             artistAlbumsCache = artistAlbumsCache,
+            // #424: track lists and album search from the plugins' catalogs.
+            albumCatalog = AlbumCatalogLoader(
+                resolvers = { pluginManager.ensureInitialized(); pluginManager.albumSearchResolvers() },
+                searchAlbums = { id, artist, title, text -> pluginManager.searchAlbums(id, artist, title, text) },
+                lookupAlbumFrom = { id, url -> pluginManager.lookupAlbumFrom(id, url) },
+                activeResolverIds = { settingsStore.getActiveResolvers() },
+                resolverOrder = { settingsStore.getResolverOrder() },
+            ),
         )
     }
 
@@ -1740,6 +1749,11 @@ class IosContainer private constructor() {
 
     suspend fun getAlbumDetail(albumTitle: String, artistName: String): AlbumDetail? =
         metadataService.getAlbumTracks(albumTitle, artistName)
+
+    /** The album page's track list as it loads: each provider's answer, and a
+     *  plugin catalog's list when the providers can't supply one (#424). */
+    fun albumDetailFlow(albumTitle: String, artistName: String): Flow<AlbumDetail> =
+        metadataService.getAlbumTracksWithCatalogFallback(albumTitle, artistName)
 
     suspend fun getArtistInfo(artistName: String): ArtistInfo? =
         metadataService.getArtistInfo(artistName)

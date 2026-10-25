@@ -60,4 +60,11 @@ data class AlbumDetail(
     val releaseType: String? = null,
     val tracks: List<TrackSearchResult> = emptyList(),
     val provider: String = "",
+    /**
+     * Set when the track list came from a plugin's catalog (`albumSearch`)
+     * because MusicBrainz and the other providers couldn't supply one: the
+     * catalog's display name, for the page's "Track list from …" label.
+     * Null for a normal provider answer. See [AlbumCatalog].
+     */
+    val catalogSource: String? = null,
 )
