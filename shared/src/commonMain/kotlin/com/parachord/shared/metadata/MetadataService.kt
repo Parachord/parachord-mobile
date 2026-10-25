@@ -170,16 +170,24 @@ class MetadataService constructor(
      * first image — no full-cascade awaitAll, and the slow Wikipedia MB→Wikidata
      * chain never runs once a streaming image is found.
      */
-    suspend fun getArtistImage(artistName: String): String? {
+    suspend fun getArtistImage(artistName: String, exclude: String? = null): String? {
         val key = artistName.lowercase().trim()
         // Persistent cache hit (shared, both platforms) — skip the network cascade.
+        // [exclude] is an image URL that stopped loading ([BrokenArtRetry]): drop
+        // it from the cache and look again, skipping it.
         artistImageMutex.withLock {
             if (artistImageMap == null) {
                 artistImageMap = artistImageCacheRead?.invoke()?.let {
                     runCatching { artistImageJson.decodeFromString<Map<String, String>>(it).toMutableMap() }.getOrNull()
                 } ?: mutableMapOf()
             }
-            artistImageMap!![key]?.let { return it }
+            val cached = artistImageMap!![key]
+            if (cached != null && cached == exclude) {
+                artistImageMap!!.remove(key)
+                artistImageCacheWrite?.invoke(artistImageJson.encodeToString(artistImageMap!!.toMap()))
+            } else if (cached != null) {
+                return cached
+            }
         }
         val available = availableProviders().associateBy { it.name }
         val order = listOf("applemusic", "spotify", "wikipedia", "discogs", "lastfm", "musicbrainz")
@@ -188,7 +196,7 @@ class MetadataService constructor(
             val img = try {
                 withTimeoutOrNull(PROVIDER_TIMEOUT_MS) { provider.getArtistInfo(artistName)?.imageUrl }
             } catch (_: Exception) { null }
-            if (!img.isNullOrBlank()) {
+            if (!img.isNullOrBlank() && img != exclude) {
                 artistImageMutex.withLock {
                     artistImageMap!![key] = img
                     artistImageCacheWrite?.invoke(artistImageJson.encodeToString(artistImageMap!!.toMap()))

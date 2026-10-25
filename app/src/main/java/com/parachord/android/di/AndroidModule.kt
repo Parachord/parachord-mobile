@@ -571,6 +571,29 @@ val androidModule = module {
             },
         )
     }
+    // BrokenArtRetry — an image view whose cover fails to load asks for the art
+    // again (once per album/artist per session) and every stored copy of the
+    // dead URL is patched: library rows plus the curated list caches.
+    single {
+        val images: com.parachord.shared.metadata.ImageEnrichmentService = get()
+        val metadata: com.parachord.shared.metadata.MetadataService = get()
+        val albumDao: com.parachord.shared.db.dao.AlbumDao = get()
+        val trackDao: com.parachord.shared.db.dao.TrackDao = get()
+        val artistDao: com.parachord.shared.db.dao.ArtistDao = get()
+        val playlistTrackDao: com.parachord.shared.db.dao.PlaylistTrackDao = get()
+        com.parachord.shared.metadata.BrokenArtRetry(
+            refetchAlbumArt = { artist, album, dead -> images.lookupAlbumArt(album, artist, exclude = dead) },
+            refetchArtistImage = { artist, dead -> metadata.getArtistImage(artist, exclude = dead) },
+            onReplaced = { dead, fresh ->
+                albumDao.replaceArtworkUrl(dead, fresh)
+                trackDao.replaceArtworkUrl(dead, fresh)
+                playlistTrackDao.replaceTrackArtworkUrl(dead, fresh)
+                artistDao.replaceImageUrl(dead, fresh)
+                get<com.parachord.shared.repository.FreshDropsRepository>().replaceArt(dead, fresh)
+                get<com.parachord.shared.repository.CriticalDarlingsRepository>().replaceArt(dead, fresh)
+            },
+        )
+    }
     // MbidEnrichmentService — shared. Disk cache lives at
     // `<filesDir>/mbid_mapper_cache.json` and is wired in via suspend lambdas.
     single {
