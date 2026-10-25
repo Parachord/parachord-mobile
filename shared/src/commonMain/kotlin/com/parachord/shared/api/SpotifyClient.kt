@@ -86,6 +86,8 @@ class SpotifyClient(
      */
     loadCooldownEpochMs: (() -> Long)? = null,
     saveCooldownEpochMs: (suspend (Long) -> Unit)? = null,
+    loadStrikes: (() -> Int)? = null,
+    saveStrikes: (suspend (Int) -> Unit)? = null,
 ) {
 
     companion object {
@@ -124,6 +126,8 @@ class SpotifyClient(
         tag = "SpotifyClient",
         loadCooldownEpochMs = loadCooldownEpochMs,
         saveCooldownEpochMs = saveCooldownEpochMs,
+        loadStrikes = loadStrikes,
+        saveStrikes = saveStrikes,
         // Spotify's abuse-mode ban routinely outlasts a flat 1h cooldown
         // (observed: still 429ing 12+ hours later despite a quiet network).
         // With a flat cap, each lapse re-pokes the still-banned account and

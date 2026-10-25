@@ -109,6 +109,15 @@ class RateLimitGate(
      */
     private val escalateOnRepeat: Boolean = false,
     /**
+     * Persist the consecutive-strike count (paired with the cooldown callbacks)
+     * so [escalateOnRepeat] survives a process restart. Without it every restart
+     * started back at the base cooldown, and mobile processes die often enough
+     * that the ladder never climbed — the "re-poke and never clears" trap the
+     * escalation exists to fix. Null → in-memory only.
+     */
+    loadStrikes: (() -> Int)? = null,
+    private val saveStrikes: (suspend (Int) -> Unit)? = null,
+    /**
      * PROACTIVE rolling-window rate cap (opt-in). When non-null, the gate keeps
      * a sliding window of recent request timestamps and DELAYS the next call
      * until it would no longer exceed [maxRequestsPerWindow] within
@@ -143,9 +152,6 @@ class RateLimitGate(
 
     /** Consecutive rate-limited responses with no intervening success.
      *  Drives [escalateOnRepeat]. Reset to 0 on any non-rate-limited response. */
-    @Volatile
-    private var consecutiveStrikes: Int = 0
-
     /** Background scope for fire-and-forget cooldown persistence writes.
      *  Kept tiny — only ever does a single `setLong` per 429 cycle. */
     private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -157,6 +163,14 @@ class RateLimitGate(
      *  cold-probing into a fresh punishment cycle. */
     @Volatile
     private var cooldownUntilMs: Long = loadCooldownEpochMs?.invoke() ?: 0L
+
+    /** Consecutive rate-limited responses with no intervening success.
+     *  Drives [escalateOnRepeat]. Reset to 0 on any non-rate-limited response.
+     *  Restored from [loadStrikes] — unless the last cooldown ended more than
+     *  [maxCooldownMs] ago, in which case the streak is too old to count. */
+    @Volatile
+    private var consecutiveStrikes: Int =
+        if (cooldownUntilMs + maxCooldownMs < nowMs()) 0 else (loadStrikes?.invoke() ?: 0)
 
     /**
      * Run [block] under the gate. Throws via [exceptionFactory] without
@@ -231,10 +245,14 @@ class RateLimitGate(
             // A clean response ends any consecutive-strike streak. Critical for
             // the escalating breaker: a recovered call must drop the backoff
             // back to base so a single later 429 doesn't inherit a long cooldown.
-            consecutiveStrikes = 0
+            if (consecutiveStrikes != 0) {
+                consecutiveStrikes = 0
+                persistStrikes(0)
+            }
             return
         }
         consecutiveStrikes++
+        persistStrikes(consecutiveStrikes)
         val retryAfterSec = response.headers["Retry-After"]?.toLongOrNull()
         val baseMs = (retryAfterSec ?: defaultCooldownSec) * 1000L
         // Escalate: double per consecutive strike (base * 2^(strikes-1)), capped.
@@ -264,6 +282,10 @@ class RateLimitGate(
             Log.w(tag, "$tag rate-limited (HTTP ${response.status.value}). Backing off ${backoffMs / 1000}s$strikeNote; subsequent calls in this window will short-circuit.")
         }
         throw exceptionFactory(retryAfterSec)
+    }
+
+    private fun persistStrikes(value: Int) {
+        saveStrikes?.let { save -> persistScope.launch { runCatching { save(value) } } }
     }
 
     private fun checkCooldown(exceptionFactory: (retryAfterSeconds: Long?) -> Exception) {
