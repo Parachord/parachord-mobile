@@ -63,6 +63,7 @@ class MbidEnrichmentServiceTest {
         musicBrainz: MusicBrainzClient? = null,
         seededCache: String? = null,
         now: () -> Long = { outageStartMs + 2 * day },
+        saveDelayMs: Long = 2_000L,
     ): Harness {
         var cache: String? = seededCache
         val service = MbidEnrichmentService(
@@ -72,6 +73,7 @@ class MbidEnrichmentServiceTest {
             cacheWrite = { cache = it },
             musicBrainzClient = musicBrainz,
             nowMs = now,
+            saveDelayMs = saveDelayMs,
         )
         return Harness(service, client) { cache }
     }
@@ -175,6 +177,26 @@ class MbidEnrichmentServiceTest {
         assertEquals(expected, h.service.getRecordingMbid("Slowdive", "Sugar For The Pill"))
         assertEquals(expected, h.service.getRecordingMbid("Slowdive", "Sugar For The Pill"))
         coVerify(exactly = 1) { h.client.resolveRecordingMbid("Slowdive", "Sugar For The Pill", null) }
+    }
+
+    @Test
+    fun aSingleLookupIsSavedToDisk_notOnlyTheBulkImport() = runTest {
+        // iOS never uses the bulk path, so its cache file was never written, and
+        // on Android every one-at-a-time lookup was lost on restart.
+        val expected = "55555555-5555-5555-5555-555555555555"
+        val h = harness(saveDelayMs = 0L)
+        coEvery { h.client.resolveRecordingMbid("Slowdive", "Alison", null) } returns hit(expected)
+
+        h.service.getRecordingMbid("Slowdive", "Alison")
+
+        // The save runs on the service's own (real-dispatcher) scope.
+        val saved = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeoutOrNull(5_000L) {
+                while (h.cacheJson()?.contains(expected) != true) kotlinx.coroutines.delay(10L)
+                h.cacheJson()
+            }
+        }
+        assertTrue("the looked-up MBID reaches mbid_mapper_cache.json", saved?.contains(expected) == true)
     }
 
     // ── lookupRecordingMbid: three outcomes (#394) ──────────────────────────
