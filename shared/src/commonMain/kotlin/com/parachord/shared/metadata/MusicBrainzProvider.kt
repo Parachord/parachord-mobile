@@ -40,6 +40,12 @@ class MusicBrainzProvider(
     /**
      * Resolve an artist name to their MusicBrainz artist record, with caching.
      * Safe to call concurrently — duplicate in-flight requests are coalesced.
+     *
+     * Only an ANSWER is cached (an artist, or null for "MusicBrainz has no such
+     * artist"). A failed request (503/429 throttle, network) throws to every
+     * waiter and is dropped from the cache, so the next call asks again. It used
+     * to be cached as null, which left that artist's discography and bio blank
+     * until the app restarted.
      */
     suspend fun resolveArtist(artistName: String): MbArtist? {
         val key = artistName.lowercase().trim()
@@ -63,9 +69,10 @@ class MusicBrainzProvider(
             val result = api.searchArtists(artistName, limit = 1).artists.firstOrNull()
             deferred.complete(result)
             result
-        } catch (_: Exception) {
-            deferred.complete(null)
-            null
+        } catch (e: Exception) {
+            cacheMutex.withLock { if (artistSearchCache[key] === deferred) artistSearchCache.remove(key) }
+            deferred.completeExceptionally(e)
+            throw e
         }
     }
 
