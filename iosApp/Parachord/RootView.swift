@@ -255,6 +255,7 @@ struct ContentView: View {
             let container = IosContainer.companion.shared
             try? await container.pruneTombstonesOnLaunch()
             try? await container.migrateDurationUnitsOnLaunch()  // #349
+            try? await container.repairAppleMusicLibraryIdsOnLaunch()  // #265
             while !Task.isCancelled {
                 _ = try? await container.syncNow()
                 try? await Task.sleep(nanoseconds: 900_000_000_000)   // 15 min

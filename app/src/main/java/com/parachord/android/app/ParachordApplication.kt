@@ -72,6 +72,18 @@ class ParachordApplication : Application() {
             }
         }
 
+        // One-time repair of Apple Music library ids saved where a catalog id
+        // belongs (#265). Idempotent; never fail startup on it.
+        appScope.launch {
+            try {
+                if (com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore)) {
+                    com.parachord.shared.platform.Log.d("ParachordApplication", "Cleared Apple Music library ids from catalog-id columns")
+                }
+            } catch (_: Exception) {
+                // Retried next launch (the flag is only set on success).
+            }
+        }
+
         // BYO Spotify Client ID migration: Parachord no longer ships a
         // built-in Spotify key, so a token minted under the old built-in
         // client is unusable. If no Client ID is set but a stale Spotify

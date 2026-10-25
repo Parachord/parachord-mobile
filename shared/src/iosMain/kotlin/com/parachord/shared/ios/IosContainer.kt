@@ -734,6 +734,12 @@ class IosContainer private constructor() {
         try { com.parachord.shared.db.DurationUnitMigration.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
     }
 
+    /** One-time repair of Apple Music library ids saved where a catalog id
+     *  belongs (#265, Android parity). Idempotent; never throws to Swift. */
+    suspend fun repairAppleMusicLibraryIdsOnLaunch() {
+        try { com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
+    }
+
     /** Persist the Apple Music Music User Token (acquired Swift-side via
      *  SKCloudServiceController). Enables the Apple Music library API for sync. */
     suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)

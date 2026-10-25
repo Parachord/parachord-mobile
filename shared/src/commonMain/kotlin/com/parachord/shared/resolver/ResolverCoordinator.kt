@@ -171,7 +171,9 @@ class ResolverCoordinator(
                     spotifyUri = "spotify:track:$spotifyId", spotifyId = spotifyId, confidence = 1.0,
                 ),
             )
-            if (!appleMusicId.isNullOrBlank()) add(
+            // Only a CATALOG id is a usable hint; a library id (`i.…`) would emit a
+            // source no catalog lookup can play (#265). Drop it and search instead.
+            if (isAppleMusicCatalogId(appleMusicId)) add(
                 ResolvedSource(
                     url = "applemusic:song:$appleMusicId", sourceType = "applemusic",
                     resolver = "applemusic", appleMusicId = appleMusicId, confidence = 1.0,
