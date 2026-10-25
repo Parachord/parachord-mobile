@@ -70,6 +70,17 @@ class TrackProviderIdCacheDao(private val db: ParachordDb) {
             queries.selectStaleCandidates(cutoff, limit).executeAsList().map { it.toEntry() }
         }
 
+    /**
+     * Copy every provider's entry from [fromKey] to [toKey], keeping any entry
+     * [toKey] already has. Call it when a row's `canonicalTrackKey` changes (it
+     * gained an MBID), or its resolved ids, miss cooldowns and missingStreak are
+     * stranded under the old key. The old entries stay for other rows that
+     * still key off them.
+     */
+    suspend fun copyEntriesToKey(fromKey: String, toKey: String): Unit = withContext(Dispatchers.Default) {
+        if (fromKey != toKey) queries.copyEntriesToKey(toKey = toKey, fromKey = fromKey)
+    }
+
     suspend fun deleteForProvider(providerId: String): Unit = withContext(Dispatchers.Default) {
         queries.deleteForProvider(providerId)
     }
