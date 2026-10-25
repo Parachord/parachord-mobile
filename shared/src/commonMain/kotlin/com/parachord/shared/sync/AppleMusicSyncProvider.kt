@@ -546,9 +546,10 @@ class AppleMusicSyncProvider(
     override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
         // PRIMARY — exact catalog lookup by ISRC.
         if (!isrc.isNullOrBlank()) {
-            val storefront = ensureStorefront()
+            // A storefront failure (e.g. a stale Music-User-Token) falls through
+            // to iTunes Search, which needs no auth — it must not count as a miss.
             val catalogId = try {
-                api.getCatalogSongIdByIsrc(storefront, isrc)
+                api.getCatalogSongIdByIsrc(ensureStorefront(), isrc)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "catalog ISRC lookup failed for isrc=$isrc", e); null
@@ -561,14 +562,20 @@ class AppleMusicSyncProvider(
         // 5 minutes, don't ask again yet. Apple doesn't publish the throttle
         // window and stacked 429s just extend it — but the breaker self-clears so
         // a long-lived session recovers without an app restart.
-        if (nowMs() < iTunesRateLimitedUntilMs) return null
+        // Not asking isn't an answer: report unreachable so the hydration cache
+        // leaves the track pending instead of recording a miss.
+        if (nowMs() < iTunesRateLimitedUntilMs) {
+            throw TrackIdLookupUnreachableException("iTunes Search paused after a 429")
+        }
         delay(INTER_REQUEST_DELAY_MS)
         // iTunes Search has no field qualifiers; just concat the metadata
         // and let its ranking find the best song match.
         val term = listOfNotNull(title, artist, album?.takeIf { it.isNotBlank() })
             .joinToString(" ")
         return try {
-            val response = catalogClient.search(term = term, media = "music", entity = "song", limit = 5)
+            val response = catalogClient.search(
+                term = term, media = "music", entity = "song", limit = 5, throwOnServerError = true,
+            )
             val songs = response.results.filter { it.kind == "song" || it.wrapperType == "track" }
             val candidate = songs.firstOrNull { it.trackId != null } ?: return null
             val confidence = com.parachord.shared.resolver.scoreConfidence(
@@ -594,10 +601,13 @@ class AppleMusicSyncProvider(
                 Log.w(TAG, "iTunes Search rate-limited (HTTP 429) — pausing " +
                     "track-id hydration for 5 min")
             }
-            null
+            throw TrackIdLookupUnreachableException("iTunes Search rate-limited")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.w(TAG, "searchForTrackId failed for '$title' by '$artist'", e)
-            null
+            // 5xx / network: iTunes didn't answer, so this isn't a miss.
+            Log.w(TAG, "searchForTrackId: iTunes unreachable for '$title' by '$artist': ${e.message}")
+            throw TrackIdLookupUnreachableException("iTunes Search failed: ${e.message}")
         }
     }
 
