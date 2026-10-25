@@ -558,6 +558,21 @@ val androidModule = module {
                 write = { com.parachord.android.data.cache.CacheFiles.write(artistAlbumsFile, it) },
                 ttlMs = 30 * day, maxEntries = 200, name = "artist albums",
             ),
+            // #424: track lists and album search from the plugins' catalogs
+            // (capabilities.albumSearch) when MusicBrainz can't supply them.
+            albumCatalog = com.parachord.shared.metadata.AlbumCatalogLoader(
+                resolvers = {
+                    val plugins = get<com.parachord.shared.plugin.PluginManager>()
+                    plugins.ensureInitialized()
+                    plugins.albumSearchResolvers()
+                },
+                searchAlbums = { id, artist, title, text ->
+                    get<com.parachord.shared.plugin.PluginManager>().searchAlbums(id, artist, title, text)
+                },
+                lookupAlbumFrom = { id, url -> get<com.parachord.shared.plugin.PluginManager>().lookupAlbumFrom(id, url) },
+                activeResolverIds = { settingsStore.getActiveResolvers() },
+                resolverOrder = { settingsStore.getResolverOrder() },
+            ),
         )
     }
     singleOf(::MusicBrainzProvider)

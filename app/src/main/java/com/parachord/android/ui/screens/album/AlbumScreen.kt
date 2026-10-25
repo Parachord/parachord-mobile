@@ -275,6 +275,16 @@ fun AlbumScreen(
                                         )
                                     }
                                 }
+                                // The providers couldn't supply this list; a plugin's
+                                // catalog did (#424, desktop parity).
+                                detail.catalogSource?.let { source ->
+                                    Text(
+                                        text = "Track list from $source",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Button(
@@ -341,7 +351,7 @@ fun AlbumScreen(
                     }
 
                     // Provider attribution
-                    detail.provider.takeIf { it.isNotBlank() }?.let { providers ->
+                    (detail.catalogSource ?: detail.provider).takeIf { it.isNotBlank() }?.let { providers ->
                         item {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(

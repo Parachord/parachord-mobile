@@ -60,6 +60,12 @@ class MetadataService constructor(
      */
     private val albumTracksCache: com.parachord.shared.cache.PersistentJsonCache<AlbumDetail>? = null,
     private val artistAlbumsCache: com.parachord.shared.cache.PersistentJsonCache<List<AlbumSearchResult>>? = null,
+    /**
+     * The plugins' album catalogs (#424): track lists when the providers can't
+     * supply one, and extra album search results when MusicBrainz finds few.
+     * Null = no catalog fallback.
+     */
+    private val albumCatalog: AlbumCatalogLoader? = null,
 ) {
 
     private val artistImageMutex = Mutex()
@@ -67,6 +73,12 @@ class MetadataService constructor(
     private val artistImageJson = Json { ignoreUnknownKeys = true }
 
     private companion object {
+        /** Desktop: MusicBrainz finding fewer than this many albums adds catalog results. */
+        const val CATALOG_SEARCH_BELOW = 3
+
+        /** Desktop MB_SLOW_FALLBACK_MS (parachord#1132). */
+        const val CATALOG_SLOW_AFTER_MS = 5_000L
+
         /** Max time any single provider may take inside the getArtistInfo merge
          *  before it's dropped (null) — keeps a slow/hung provider from stalling
          *  the whole awaitAll. Fast providers return in <1s; this only cuts hangs. */
@@ -85,16 +97,94 @@ class MetadataService constructor(
         deduplicateTracks(results).take(limit)
     }
 
-    /** Search albums across all available providers in parallel, merge and deduplicate. */
+    /**
+     * Search albums across all available providers in parallel, merge and
+     * deduplicate. When MusicBrainz finds fewer than three albums (or fails), the
+     * plugins' album catalogs are searched too (desktop parachord#1129), so a
+     * MusicBrainz outage doesn't empty the results.
+     */
     suspend fun searchAlbums(query: String, limit: Int = 10): List<AlbumSearchResult> = coroutineScope {
-        val results = availableProviders()
+        val active = availableProviders()
+        val perProvider = active
             .map { provider -> async {
-                try { provider.searchAlbums(query, limit) } catch (_: Exception) { emptyList() }
+                provider.name to try { provider.searchAlbums(query, limit) } catch (_: Exception) { null }
             } }
             .awaitAll()
-            .flatten()
+        val results = perProvider.flatMap { it.second.orEmpty() }
 
-        deduplicateAlbums(results).take(limit)
+        val mbFound = perProvider.firstOrNull { it.first == "musicbrainz" }?.second?.size ?: 0
+        val catalogResults = if (albumCatalog != null && mbFound < CATALOG_SEARCH_BELOW) {
+            try { albumCatalog.search(query) } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emptyList()
+            }
+        } else emptyList()
+
+        deduplicateAlbums(results + catalogResults).take(limit)
+    }
+
+    /**
+     * The album page's track list (#424): [getAlbumTracksProgressively], plus the
+     * plugins' album catalogs when the providers can't supply one.
+     *
+     * - The providers' lists always win. Any provider answer with tracks is
+     *   shown, and replaces a catalog list already on screen.
+     * - If no provider has produced tracks after [slowAfterMs], the catalog's
+     *   list is shown meanwhile (desktop parachord#1132: MusicBrainz is 1 req/s
+     *   and backs up during an outage).
+     * - If every provider finishes with nothing, the catalog is asked right away.
+     * - Once a catalog list is showing, an empty provider answer doesn't blank it.
+     *
+     * A catalog list is never written to the tracklist cache — it carries
+     * [AlbumDetail.catalogSource] for the "Track list from …" label instead.
+     */
+    fun getAlbumTracksWithCatalogFallback(
+        albumTitle: String,
+        artistName: String,
+        slowAfterMs: Long = CATALOG_SLOW_AFTER_MS,
+    ): Flow<AlbumDetail> = channelFlow {
+        val catalog = albumCatalog
+        val lock = Mutex()
+        var providerHasTracks = false
+        var catalogShown = false
+
+        suspend fun showCatalog() {
+            if (catalog == null || lock.withLock { providerHasTracks || catalogShown }) return
+            val found = try { catalog.load(artistName, albumTitle) } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            } ?: return
+            val detail = AlbumCatalog.toAlbumDetail(found.album, found.resolverName, albumTitle, artistName)
+            if (detail.tracks.isEmpty()) return
+            lock.withLock {
+                if (!providerHasTracks && !catalogShown) {
+                    catalogShown = true
+                    send(detail)
+                }
+            }
+        }
+
+        val slowTimer = launch {
+            kotlinx.coroutines.delay(slowAfterMs)
+            showCatalog()
+        }
+        getAlbumTracksProgressively(albumTitle, artistName).collect { detail ->
+            lock.withLock {
+                if (detail.tracks.isNotEmpty()) {
+                    providerHasTracks = true
+                    send(detail)
+                } else if (!catalogShown) {
+                    send(detail)
+                }
+            }
+        }
+        if (lock.withLock { providerHasTracks }) {
+            slowTimer.cancel()
+        } else {
+            // Every provider is done and none had the album: don't wait out the timer.
+            slowTimer.cancel()
+            showCatalog()
+        }
     }
 
     /** Search artists across all available providers in parallel, merge and deduplicate. */

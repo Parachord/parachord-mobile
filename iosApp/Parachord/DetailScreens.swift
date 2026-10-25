@@ -479,11 +479,32 @@ final class AlbumDetailModel {
             return
         }
         isLoading = true
-        detail = try? await container.getAlbumDetail(albumTitle: title, artistName: artist)
-        entities = detail?.tracks.map { pcTrack(from: $0) } ?? []
-        isLoading = false
-        loaded = true
-        AlbumDetailCache.shared.put(cacheKey, .init(detail: detail, entities: entities, ts: Date()))
+        watchDetail()
+    }
+
+    private var detailSub: Cancellable?
+    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+
+    /// Each provider's answer as it lands, and a plugin catalog's track list when
+    /// the providers can't supply one (#424; the providers' list replaces it).
+    private func watchDetail() {
+        detailSub?.cancel()
+        detailSub = watcher.watchUntilDone(
+            flow: container.albumDetailFlow(albumTitle: title, artistName: artist),
+            onEach: { [weak self] v in
+                guard let self, let d = v as? AlbumDetail else { return }
+                self.detail = d
+                self.entities = d.tracks.map { pcTrack(from: $0) }
+                if !d.tracks.isEmpty { self.isLoading = false; self.loaded = true }
+                // Only the providers' list is reused on reopen; a catalog
+                // list must not hide MusicBrainz's when it comes back.
+                if d.catalogSource == nil && !d.tracks.isEmpty {
+                    AlbumDetailCache.shared.put(self.cacheKey, .init(detail: d, entities: self.entities, ts: Date()))
+                }
+            },
+            onDone: { [weak self] in
+                Task { @MainActor in self?.isLoading = false; self?.loaded = true }
+            })
     }
 
     private func refresh() async {
@@ -595,6 +616,10 @@ struct AlbumScreen: View {
                     if let year = model.detail?.year {
                         Text(String(year.intValue)).font(.system(size: 14)).foregroundStyle(PC.fg3)
                     }
+                }
+                // The providers couldn't supply this list; a plugin's catalog did (#424).
+                if let source = model.detail?.catalogSource {
+                    Text("Track list from \(source)").font(.system(size: 12)).foregroundStyle(PC.fg3)
                 }
             }
             Spacer(minLength: 0)
