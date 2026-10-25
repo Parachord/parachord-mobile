@@ -311,10 +311,15 @@ class FreshDropsRepository(
                     // show releases as they come in, merged with prior cache)
                     if (allReleases.isNotEmpty() && (index + 1) % 5 == 0) {
                         val progressMerged = mergeAndDedupe(allReleases, priorCachedReleases)
-                        // Save partial results so cache survives if collector is cancelled
+                        // Save partial results so the cache survives if the collector
+                        // is cancelled — but keep the PREVIOUS fetch time. Stamping
+                        // `now` here made a scan abandoned 10 artists in look like a
+                        // complete refresh, so the other artists were skipped for the
+                        // whole 6h TTL. The rotation is saved too, so the next scan
+                        // starts with the artists this one didn't reach.
                         cachedReleases = progressMerged
-                        lastFetchedAt = currentTimeMillis()
                         saveDiskCache(progressMerged, lastFetchedAt)
+                        saveRotation()
                         emit(Resource.Success(progressMerged))
                     }
 
