@@ -66,6 +66,8 @@ class MetadataService constructor(
      * Null = no catalog fallback.
      */
     private val albumCatalog: AlbumCatalogLoader? = null,
+    /** Artist info found this session, shared by every caller (#429). */
+    private val artistInfoCache: ArtistInfoCache = ArtistInfoCache(),
 ) {
 
     private val artistImageMutex = Mutex()
@@ -204,7 +206,10 @@ class MetadataService constructor(
      * Tries each provider in priority order, merging fields so that
      * later providers fill in gaps left by earlier ones.
      */
-    suspend fun getArtistInfo(artistName: String): ArtistInfo? = coroutineScope {
+    suspend fun getArtistInfo(artistName: String): ArtistInfo? =
+        artistInfoCache.load(artistName) { fetchArtistInfo(artistName) }
+
+    private suspend fun fetchArtistInfo(artistName: String): ArtistInfo? = coroutineScope {
         // Per-provider timeout so one SLOW provider can't stall the awaitAll
         // merge. The shared HttpClient has a 60s request budget (AI endpoints
         // need it), but a metadata provider that hangs — e.g. Wikipedia's
