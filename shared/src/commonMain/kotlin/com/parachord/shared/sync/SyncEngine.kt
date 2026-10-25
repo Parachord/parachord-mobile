@@ -1608,6 +1608,8 @@ class SyncEngine constructor(
                     SpotifySyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
                         playlistId = track.playlistId,
                         position = track.position,
+                        title = track.trackTitle,
+                        artist = track.trackArtist,
                         spotifyId = nativeId.removePrefix("spotify:track:").takeIf { it.isNotBlank() },
                         spotifyUri = nativeId,
                         appleMusicId = null,
@@ -1617,6 +1619,8 @@ class SyncEngine constructor(
                     AppleMusicSyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
                         playlistId = track.playlistId,
                         position = track.position,
+                        title = track.trackTitle,
+                        artist = track.trackArtist,
                         spotifyId = null,
                         spotifyUri = null,
                         appleMusicId = nativeId,
@@ -1626,6 +1630,8 @@ class SyncEngine constructor(
                     ListenBrainzSyncProvider.PROVIDER_ID -> playlistTrackDao.backfillResolverIds(
                         playlistId = track.playlistId,
                         position = track.position,
+                        title = track.trackTitle,
+                        artist = track.trackArtist,
                         spotifyId = null,
                         spotifyUri = null,
                         appleMusicId = null,

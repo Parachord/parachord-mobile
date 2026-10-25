@@ -371,7 +371,7 @@ class ImageEnrichmentService(
                             for (track in withAlbum) {
                                 val art = albumArtCache[(track.trackAlbum ?: "") to track.trackArtist]
                                     ?: continue
-                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, art)
+                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, track.trackTitle, track.trackArtist, art)
                             }
                         }
 
@@ -399,7 +399,7 @@ class ImageEnrichmentService(
                                                 null
                                             }
                                             if (art != null) {
-                                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, art)
+                                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, track.trackTitle, track.trackArtist, art)
                                             }
                                         }
                                     }

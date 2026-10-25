@@ -316,6 +316,8 @@ class TrackResolverCache constructor(
                 playlistTrackDao.backfillResolverIds(
                     playlistId = playlistId,
                     position = position,
+                    title = track.title,
+                    artist = track.artist,
                     spotifyId = spotifyId,
                     spotifyUri = spotifyUri,
                     appleMusicId = appleMusicId,
@@ -343,7 +345,7 @@ class TrackResolverCache constructor(
         val artwork = bestArtworkSource?.artworkUrl
         if (artwork != null) {
             try {
-                playlistTrackDao.updateTrackArtwork(playlistId, position, artwork)
+                playlistTrackDao.updateTrackArtwork(playlistId, position, track.title, track.artist, artwork)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to backfill playlist_track artwork for '${track.title}': ${e.message}")
             }
