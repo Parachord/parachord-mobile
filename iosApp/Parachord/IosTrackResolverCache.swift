@@ -266,7 +266,9 @@ final class IosTrackResolverCache {
                     spotifyId: item.req.spotifyId, appleMusicId: nil)) ?? []
                 self.cache[key] = ranked
                 // Persist only real results — never cache an empty/failed
-                // resolve to disk (it may be a transient rate-limit miss).
+                // resolve to disk (it may be a transient rate-limit miss). The
+                // empty entry stays in memory for this session only: the
+                // encoder drops empties from every save (ResolverCacheCodec).
                 if !ranked.isEmpty { self.scheduleSave() }
                 self.inFlight.remove(key)
                 self.activeWorkers -= 1

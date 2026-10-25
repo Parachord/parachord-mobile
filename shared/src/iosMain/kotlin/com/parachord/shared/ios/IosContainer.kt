@@ -2631,19 +2631,14 @@ class IosContainer private constructor() {
      * the volume that keeps re-arming Spotify's shared-key abuse window. The
      * Swift cache persists this blob to disk and reloads it on launch so a
      * track resolved once never re-searches. Mirrors Android's resolver-ID
-     * backfill intent.
+     * backfill intent. Failed (empty) resolves never reach disk — see
+     * [com.parachord.shared.resolver.ResolverCacheCodec].
      */
-    private val resolverCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-
     fun encodeResolverCache(map: Map<String, List<ResolvedSource>>): String =
-        resolverCacheJson.encodeToString(map)
+        com.parachord.shared.resolver.ResolverCacheCodec.encode(map)
 
     fun decodeResolverCache(blob: String): Map<String, List<ResolvedSource>> =
-        try {
-            resolverCacheJson.decodeFromString<Map<String, List<ResolvedSource>>>(blob)
-        } catch (e: Exception) {
-            emptyMap()
-        }
+        com.parachord.shared.resolver.ResolverCacheCodec.decode(blob)
 
     // (Removed: the Swift-managed curated-list view caches — Critical Darlings /
     // Concerts / Fresh Drops now watch the repository value-flows directly via
