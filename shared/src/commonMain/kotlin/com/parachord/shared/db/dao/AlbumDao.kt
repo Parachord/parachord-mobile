@@ -114,4 +114,9 @@ class AlbumDao(private val db: ParachordDb) {
                 artist = artist,
             )
         }
+
+    /** Replace a dead cover URL on every album row that holds it. */
+    suspend fun replaceArtworkUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
+        queries.replaceArtworkUrl(fresh = fresh, dead = dead)
+    }
 }

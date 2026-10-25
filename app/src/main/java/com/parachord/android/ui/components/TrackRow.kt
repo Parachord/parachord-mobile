@@ -36,6 +36,8 @@ fun TrackRow(
     title: String,
     artist: String,
     artworkUrl: String? = null,
+    /** The track's album, when known — lets a dead cover be looked up again. */
+    album: String? = null,
     resolver: String? = null,
     resolvers: List<String>? = null,
     resolverConfidences: Map<String, Float>? = null,
@@ -88,6 +90,8 @@ fun TrackRow(
         } else {
             AlbumArtCard(
                 artworkUrl = artworkUrl,
+                artist = artist,
+                album = album,
                 size = artSize,
                 cornerRadius = 4.dp,
                 elevation = 1.dp,

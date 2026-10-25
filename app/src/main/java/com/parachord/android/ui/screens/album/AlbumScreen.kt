@@ -227,6 +227,8 @@ fun AlbumScreen(
                         ) {
                             AlbumArtCard(
                                 artworkUrl = detail.artworkUrl,
+                                artist = detail.artist,
+                                album = detail.title,
                                 size = 140.dp,
                                 cornerRadius = 8.dp,
                                 elevation = 4.dp,

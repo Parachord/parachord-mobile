@@ -43,6 +43,9 @@ SET trackArtworkUrl = ?
 WHERE playlistId = ? AND position = ?
   AND (trackArtworkUrl IS NULL OR trackArtworkUrl = '');
 
+replaceTrackArtworkUrl:
+UPDATE playlist_tracks SET trackArtworkUrl = :fresh WHERE trackArtworkUrl = :dead;
+
 -- Backfill resolver IDs that the in-memory resolver cache discovered but
 -- weren't on the source row. COALESCE keeps any source-provided IDs
 -- (e.g. Spotify's canonical track ID from the sync API) intact and only

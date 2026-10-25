@@ -38,6 +38,9 @@ VALUES (?, ?, ?, ?, ?, ?);
 updateImageByName:
 UPDATE artists SET imageUrl = ? WHERE name = ? AND (imageUrl IS NULL OR imageUrl = '');
 
+replaceImageUrl:
+UPDATE artists SET imageUrl = :fresh WHERE imageUrl = :dead;
+
 deleteById:
 DELETE FROM artists WHERE id = ?;
 

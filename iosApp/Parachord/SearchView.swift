@@ -299,7 +299,7 @@ struct SearchView: View {
         } label: {
             HStack(spacing: 12) {
                 pcCover(pcTrackArt(track.artworkUrl, artist: track.artist, title: track.title, album: track.album),
-                        seed: track.title + track.artist, size: 44, radius: 6)
+                        seed: track.title + track.artist, size: 44, radius: 6, artist: track.artist, album: track.album)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                     Text(track.album.map { "\(track.artist) · \($0)" } ?? track.artist)
@@ -342,7 +342,7 @@ struct SearchView: View {
             navAlbum = PCAlbumRef(title: album.title, artist: album.artist)
         } label: {
             HStack(spacing: 12) {
-                pcCover(album.artworkUrl, seed: album.title + album.artist, size: 44, radius: 6)
+                pcCover(album.artworkUrl, seed: album.title + album.artist, size: 44, radius: 6, artist: album.artist, album: album.title)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                     Text(albumSubtitle(album)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)

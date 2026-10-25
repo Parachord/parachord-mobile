@@ -369,7 +369,7 @@ struct CollectionView: View {
                     HStack(spacing: 12) {
                         pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
                                 seed: t.title + t.artist, size: 44, radius: 6,
-                                resolving: pcTrackResolving(artist: t.artist, title: t.title, album: t.album))
+                                resolving: pcTrackResolving(artist: t.artist, title: t.title, album: t.album), artist: t.artist, album: t.album)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(coordinator.currentTrack?.id == t.id ? PC.accent : PC.fg1).lineLimit(1)
@@ -400,7 +400,7 @@ struct CollectionView: View {
             ForEach(items, id: \.id) { a in
                 Button { path.append(.album(title: a.title, artist: a.artist)) } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        pcCover(a.artworkUrl, seed: a.title + a.artist, size: nil, radius: 10)
+                        pcCover(a.artworkUrl, seed: a.title + a.artist, size: nil, radius: 10, artist: a.artist, album: a.title)
                             .aspectRatio(1, contentMode: .fit).shadow(color: .black.opacity(0.12), radius: 6, y: 3)
                         Text(a.title).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).padding(.horizontal, 2)
                         Text(albumSubtitle(a)).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1).padding(.horizontal, 2)
@@ -432,7 +432,7 @@ struct CollectionView: View {
                 Button { path.append(.artist(a.name)) } label: {
                     VStack(spacing: 6) {
                         Color.clear.aspectRatio(1, contentMode: .fit)
-                            .overlay { PCArtistImage(url: a.imageUrl.flatMap { URL(string: $0) }) { PCArtwork(name: a.name, size: nil, radius: 999) } }
+                            .overlay { PCArtistImage(url: a.imageUrl.flatMap { URL(string: $0) }, artistName: a.name) { PCArtwork(name: a.name, size: nil, radius: 999) } }
                             .clipShape(Circle())
                         Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1)
                             .lineLimit(1).multilineTextAlignment(.center)

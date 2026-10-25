@@ -172,7 +172,7 @@ struct HistoryScreen: View {
                                               context: PlaybackContext(type: "history", name: "Top Songs", id: nil)) } label: {
                     HStack(spacing: 12) {
                         Text("\(t.rank)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
-                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6)
+                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6, artist: t.artist, album: t.album)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
@@ -204,7 +204,7 @@ struct HistoryScreen: View {
                 NavigationLink(value: PCRoute.album(title: a.name, artist: a.artist)) {
                     VStack(alignment: .leading, spacing: 4) {
                         ZStack(alignment: .topLeading) {
-                            pcCover(a.artworkUrl, seed: a.name + a.artist, size: nil, radius: 10)
+                            pcCover(a.artworkUrl, seed: a.name + a.artist, size: nil, radius: 10, artist: a.artist, album: a.name)
                                 .aspectRatio(1, contentMode: .fit).shadow(color: .black.opacity(0.12), radius: 6, y: 3)
                             Text("#\(a.rank)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
@@ -255,7 +255,7 @@ struct HistoryScreen: View {
                 Button { coordinator.setQueue(model.recentEntities, startIndex: i,
                                               context: PlaybackContext(type: "history", name: "Recently Played", id: nil)) } label: {
                     HStack(spacing: 12) {
-                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6)
+                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6, artist: t.artist, album: t.album)
                         VStack(alignment: .leading, spacing: 2) {
                             Text((t.nowPlaying ? "▶ " : "") + t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) && !t.nowPlaying ? PC.fg3

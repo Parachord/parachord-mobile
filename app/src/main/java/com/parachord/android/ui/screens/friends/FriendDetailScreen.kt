@@ -451,6 +451,8 @@ private fun AlbumGridItem(album: HistoryAlbum, onClick: () -> Unit = {}, onLongC
         Box {
             AlbumArtCard(
                 artworkUrl = album.artworkUrl,
+                artist = album.artist,
+                album = album.name,
                 size = 180.dp,
                 cornerRadius = 8.dp,
                 placeholderName = album.name,

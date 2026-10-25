@@ -1832,6 +1832,32 @@ class IosContainer private constructor() {
         )
     }
 
+    /** Retries a cover or artist image that failed to load and patches every
+     *  stored copy of the dead URL (library rows + curated list caches). */
+    private val brokenArtRetry: com.parachord.shared.metadata.BrokenArtRetry by lazy {
+        com.parachord.shared.metadata.BrokenArtRetry(
+            refetchAlbumArt = { artist, album, dead -> imageEnrichmentService.lookupAlbumArt(album, artist, exclude = dead) },
+            refetchArtistImage = { artist, dead -> metadataService.getArtistImage(artist, exclude = dead) },
+            onReplaced = { dead, fresh ->
+                albumDao.replaceArtworkUrl(dead, fresh)
+                trackDao.replaceArtworkUrl(dead, fresh)
+                playlistTrackDao.replaceTrackArtworkUrl(dead, fresh)
+                artistDao.replaceImageUrl(dead, fresh)
+                freshDropsRepository.replaceArt(dead, fresh)
+                criticalDarlingsRepository.replaceArt(dead, fresh)
+            },
+        )
+    }
+
+    /** A cover failed to load: a working URL for it, or null. Once per album per
+     *  session. Guarded: a bridged suspend must not throw across the ObjC bridge. */
+    suspend fun reportBrokenAlbumArt(url: String, artist: String, album: String): String? =
+        try { brokenArtRetry.reportAlbumArt(url, artist, album) } catch (e: Exception) { null }
+
+    /** An artist image failed to load: a working URL for it, or null. */
+    suspend fun reportBrokenArtistImage(url: String, artist: String): String? =
+        try { brokenArtRetry.reportArtistImage(url, artist) } catch (e: Exception) { null }
+
     /** Regenerate the 2×2 mosaic for every playlist with missing/stale art
      *  (Android's ParachordApplication startup hook). Call fire-and-forget on
      *  launch. Guarded: bridged suspend must not throw across the ObjC bridge. */

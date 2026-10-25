@@ -292,7 +292,7 @@ struct CriticalDarlingsScreen: View {
 
     private func row(_ album: CriticsPickAlbum) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            pcCover(album.albumArt, seed: album.title + album.artist, size: 80, radius: 8)
+            pcCover(album.albumArt, seed: album.title + album.artist, size: 80, radius: 8, artist: album.artist, album: album.title)
             VStack(alignment: .leading, spacing: 3) {
                 Text(album.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(2)
                 Text(album.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -455,7 +455,7 @@ struct FreshDropsScreen: View {
 
     private func row(_ drop: FreshDrop) -> some View {
         HStack(spacing: 12) {
-            pcCover(drop.albumArt, seed: drop.title + drop.artist, size: 80, radius: 8)
+            pcCover(drop.albumArt, seed: drop.title + drop.artist, size: 80, radius: 8, artist: drop.artist, album: drop.title)
             VStack(alignment: .leading, spacing: 3) {
                 Text(drop.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(drop.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)

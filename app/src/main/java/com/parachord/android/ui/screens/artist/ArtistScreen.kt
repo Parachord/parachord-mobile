@@ -512,6 +512,8 @@ private fun DiscographyTab(
                                     ) {
                                         AlbumArtCardFill(
                                             artworkUrl = album.artworkUrl,
+                                            artist = album.artist,
+                                            album = album.title,
                                             modifier = Modifier.fillMaxWidth(),
                                             cornerRadius = 6.dp,
                                             elevation = 1.dp,

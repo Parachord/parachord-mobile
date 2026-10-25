@@ -364,6 +364,8 @@ fun CollectionScreen(
                                     ) {
                                         AlbumArtCard(
                                             artworkUrl = album.artworkUrl,
+                                            artist = album.artist,
+                                            album = album.title,
                                             size = 180.dp,
                                             cornerRadius = 8.dp,
                                             placeholderName = album.title,
@@ -454,6 +456,7 @@ fun CollectionScreen(
                                         title = track.title,
                                         artist = track.artist,
                                         artworkUrl = track.artworkUrl,
+                                        album = track.album,
                                         resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]
                                             ?: track.availableResolvers(resolverOrder),
                                         resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],

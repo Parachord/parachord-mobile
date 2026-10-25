@@ -105,6 +105,11 @@ class PlaylistTrackDao(private val db: ParachordDb) {
             )
         }
 
+    /** Replace a dead cover URL on every playlist-track row that holds it. */
+    suspend fun replaceTrackArtworkUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
+        queries.replaceTrackArtworkUrl(fresh = fresh, dead = dead)
+    }
+
     /**
      * Backfill resolver IDs onto a playlist_track row. Each parameter is
      * `COALESCE`-merged with the existing column, so a non-null source ID
