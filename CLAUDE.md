@@ -656,16 +656,16 @@ Apple Music's catalog API (`api.music.apple.com/v1/catalog/{storefront}/...`) is
 - `getPlaylist(playlistId)` — used by Apple Music playlist import
 - `preload(songId)` — fired per-track during background source enrichment
 
-**Limiter knobs** (`MusicKitCatalogLimiter`, `:app`-only since the bridge is WebView-specific):
+**Limiter knobs** (`MusicKitCatalogLimiter`, `shared/commonMain` since #241; Android's old path is a typealias):
 
 - Concurrency cap: 3 in-flight via `Semaphore`
 - Inter-request gap: 150 ms minimum, mutex-protected so simultaneous permit-grabs space themselves
 - Circuit breaker: 3 consecutive rate-limit signals trip a 5-minute cooldown. In-cooldown calls short-circuit returning null without hitting the bridge. **Time-bound, NOT session-permanent** — one transient throttle shouldn't disable Apple Music for the session.
 - Rate-limit detection via `looksLikeRateLimit(errorString)` — matches `"MusicDataRequest.Error 1"`, `"429"`, `"rate-limit"`, `"too many requests"`.
 
-iOS will need its own MusicKit limiter when the shell lands — `MusicKitWebBridge` is WebView-specific. The design (concurrency cap + inter-request gap + time-bound circuit breaker) ports cleanly; the implementation does not.
+**iOS uses the same class (#241).** iOS has no MusicKit JS bridge; it searches the catalog over plain HTTP in `IosResolverRuntime.fetchCatalog`, and every attempt now goes through a `MusicKitCatalogLimiter`. A `429` counts as a strike and a `2xx` resets the count. During a cooldown the fetch returns null without calling Apple, so the Apple Music source is skipped instead of re-poking a throttled catalog. Unthrottled, a list resolve tripped the throttle and Spotify won over a higher-ranked Apple Music (#232). The one 600 ms retry from #232 stays, inside the limiter. The clock is injectable (`nowMs`), so `MusicKitCatalogLimiterTest` (commonTest, JVM + iOS) covers cooldown expiry.
 
-**Key files:** `app/.../playback/handlers/MusicKitCatalogLimiter.kt`, `app/.../playback/handlers/MusicKitWebBridge.kt#search` / `getPlaylist` / `preload`.
+**Key files:** `shared/.../api/MusicKitCatalogLimiter.kt`, `app/.../playback/handlers/MusicKitWebBridge.kt#search` / `getPlaylist` / `preload`, `shared/iosMain/.../IosResolverRuntime.kt#fetchCatalog`.
 
 ### Spotify Rate-Limit Gate — Abuse-Ban Remediation (shared)
 

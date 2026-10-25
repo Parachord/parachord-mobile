@@ -1,5 +1,6 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.api.MusicKitCatalogLimiter
 import com.parachord.shared.platform.Log
 
 import com.parachord.shared.db.dao.TrackDao
@@ -52,6 +53,15 @@ class IosResolverRuntime(
     private val httpClient: HttpClient,
     private val appleMusicDeveloperToken: String,
     private val trackDao: TrackDao,
+    /**
+     * Throttle for the Apple Music catalog search (#241) — the same class and
+     * policy Android uses for its MusicKit bridge calls: at most 3 in flight,
+     * 150 ms between starts, and a 5-minute cooldown after 3 consecutive
+     * rate-limits. Unthrottled, a list-resolve burst tripped Apple's catalog
+     * throttle, the Apple Music source dropped out, and Spotify won even when
+     * Apple Music ranked higher (#232).
+     */
+    private val catalogLimiter: MusicKitCatalogLimiter = MusicKitCatalogLimiter(),
 ) : ResolverRuntime {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -209,34 +219,63 @@ class IosResolverRuntime(
      * by the 0.60 floor.
      */
     /**
-     * GET the Apple Music catalog with ONE spaced retry on a transient failure
-     * (429 / 5xx / network blip / blank body). Returns the response body on 2xx,
-     * or null when it can't get one. See the call site for why (#232).
+     * GET the Apple Music catalog through [catalogLimiter], with ONE spaced retry
+     * on a transient failure (429 / 5xx / network blip / blank body). Returns the
+     * body on 2xx, or null when it can't get one (#232, #241).
+     *
+     * Every attempt goes through the limiter, so a list resolve is spaced out
+     * instead of bursting. A 429 counts as a strike; a 2xx resets the count;
+     * three strikes in a row open a 5-minute cooldown in which this returns null
+     * WITHOUT calling Apple — continuing to hit a throttled catalog only extends
+     * the throttle. Other errors are not rate-limit signals and don't count.
      */
     private suspend fun fetchCatalog(url: String): String? {
         repeat(2) { attempt ->
-            try {
-                val resp = httpClient.get(url) { header("Authorization", "Bearer $appleMusicDeveloperToken") }
-                val status = resp.status.value
-                val text = resp.bodyAsText()
-                if (status in 200..299 && text.isNotBlank()) return text
-                val transient = status == 429 || status >= 500 || text.isBlank()
-                if (attempt == 0 && transient) {
-                    delay(600)
-                } else {
-                    com.parachord.shared.platform.Log.w(
-                        "IosResolverRuntime",
-                        "AM catalog returned $status — Apple Music source dropped for this resolve (#232)",
-                    )
+            val outcome = catalogLimiter.runThrottled { fetchCatalogOnce(url) }
+            if (outcome == null) {
+                Log.d("IosResolverRuntime", "AM catalog limiter cooling down — Apple Music source skipped (#241)")
+                return null
+            }
+            when (outcome) {
+                is CatalogAttempt.Ok -> {
+                    catalogLimiter.reportSuccess()
+                    return outcome.body
+                }
+                CatalogAttempt.RateLimited -> catalogLimiter.reportRateLimit()
+                CatalogAttempt.Transient -> {}
+                is CatalogAttempt.Failed -> {
+                    Log.w("IosResolverRuntime", "AM catalog returned ${outcome.status} — Apple Music source dropped for this resolve")
                     return null
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                if (attempt == 0) delay(600) else return null
             }
+            if (attempt == 0) delay(600)
         }
+        Log.w("IosResolverRuntime", "AM catalog still failing after a retry — Apple Music source dropped for this resolve (#232)")
         return null
+    }
+
+    /** One catalog GET, classified for [fetchCatalog]'s retry + limiter bookkeeping. */
+    private suspend fun fetchCatalogOnce(url: String): CatalogAttempt = try {
+        val resp = httpClient.get(url) { header("Authorization", "Bearer $appleMusicDeveloperToken") }
+        val status = resp.status.value
+        val text = resp.bodyAsText()
+        when {
+            status in 200..299 && text.isNotBlank() -> CatalogAttempt.Ok(text)
+            status == 429 -> CatalogAttempt.RateLimited
+            status >= 500 || text.isBlank() -> CatalogAttempt.Transient
+            else -> CatalogAttempt.Failed(status)
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        CatalogAttempt.Transient
+    }
+
+    private sealed interface CatalogAttempt {
+        data class Ok(val body: String) : CatalogAttempt
+        data object RateLimited : CatalogAttempt
+        data object Transient : CatalogAttempt
+        data class Failed(val status: Int) : CatalogAttempt
     }
 
     /** One-shot guard for the no-MUT log below. A duplicate log from a race is
