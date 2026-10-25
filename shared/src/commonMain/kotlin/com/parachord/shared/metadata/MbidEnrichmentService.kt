@@ -70,6 +70,8 @@ class MbidEnrichmentService(
     private val musicBrainzClient: MusicBrainzClient? = null,
     /** Clock source — injectable so the per-source TTLs and the outage purge are unit-testable. */
     private val nowMs: () -> Long = { currentTimeMillis() },
+    /** Debounce for saving the disk cache after a lookup (a burst = one write). */
+    private val saveDelayMs: Long = 2_000L,
 ) {
     companion object {
         private const val TAG = "MbidEnrichment"
@@ -438,6 +440,22 @@ class MbidEnrichmentService(
 
     private suspend fun putCache(key: String, entry: MbidCacheEntry) {
         cacheMutex.withLock { diskCache[key] = entry }
+        // Every lookup path persists — it used to be only the bulk import
+        // (`enrichBatchInBackground`). iOS never uses that path, so its
+        // mbid_mapper_cache.json was never written at all, and on Android every
+        // track enriched one at a time (playback, queueing, scrobbling) was
+        // looked up again after a restart.
+        scheduleSave()
+    }
+
+    private var saveJob: kotlinx.coroutines.Job? = null
+
+    private fun scheduleSave() {
+        saveJob?.cancel()
+        saveJob = scope.launch {
+            kotlinx.coroutines.delay(saveDelayMs)
+            saveDiskCache()
+        }
     }
 
     private suspend fun ensureDiskCacheLoaded() {
