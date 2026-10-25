@@ -580,10 +580,17 @@ class IosContainer private constructor() {
     suspend fun aiSuggestionsCached(): IosAiSuggestions? =
         try { aiRecommendationService.getCachedRecommendations()?.toIos() } catch (e: Exception) { null }
 
-    /** Fresh AI suggestions (a live provider call — 30–60s). Empty on any error. */
-    suspend fun loadAiSuggestions(): IosAiSuggestions =
+    /**
+     * Fresh AI suggestions (a live provider call — 30–60s). Null on any error,
+     * so the caller keeps the cached suggestions it's showing. (It used to
+     * return empty lists, which the Home feed assigned over the cache.)
+     */
+    suspend fun loadAiSuggestions(): IosAiSuggestions? =
         try { aiRecommendationService.loadRecommendations().toIos() }
-        catch (e: Exception) { IosAiSuggestions(emptyList(), emptyList()) }
+        catch (e: Exception) {
+            Log.w("IosContainer", "AI suggestions refresh failed: ${e.message}")
+            null
+        }
 
     private fun AiRecommendations.toIos() = IosAiSuggestions(
         albums = albums.map { IosAiAlbumSuggestion(it.title, it.artist, it.reason, it.artworkUrl) },

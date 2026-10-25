@@ -272,12 +272,12 @@ class RecommendationsViewModel constructor(
         loadJob = viewModelScope.launch {
             launch {
                 recommendationsRepository.getRecommendedArtists().collect {
-                    _allArtists.value = it
+                    _allArtists.value = keepDataOnError(_allArtists.value, it)
                 }
             }
             launch {
                 recommendationsRepository.getRecommendedTracks().collect { resource ->
-                    _allTracks.value = resource
+                    _allTracks.value = keepDataOnError(_allTracks.value, resource)
                     // Update source counts when tracks change. Badges are not
                     // resolved here: each row asks the shared cache once it's
                     // visible (resolveVisibleTrack).
@@ -300,3 +300,13 @@ data class SourceCounts(
     val lastfm: Int = 0,
     val listenbrainz: Int = 0,
 )
+
+/**
+ * The repository emits its cached list first, then an error if the refresh
+ * fails (network, both services empty). A failed refresh must not replace a
+ * list the user is already looking at with the error screen — keep the data
+ * and only surface an error when there's nothing to show. iOS already drops
+ * error emissions the same way.
+ */
+internal fun <T> keepDataOnError(current: Resource<T>, next: Resource<T>): Resource<T> =
+    if (next is Resource.Error && current is Resource.Success) current else next
