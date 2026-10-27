@@ -32,6 +32,14 @@ data class ResolvedSource(
      * MusicBrainz `/ws/2/isrc/{isrc}`. Resolvers without an ISRC leave it null.
      */
     val isrc: String? = null,
+    /**
+     * MusicBrainz recording MBID of the matched recording, when the resolver
+     * knows it (a scanned local file's row, or an `.axe` result's `mbid` /
+     * `recordingMbid`). Feeds the identity tier of [scoreConfidence] (#402):
+     * the same recording MBID as the target is the same recording whatever the
+     * title/artist strings say. Null when the resolver doesn't surface one.
+     */
+    val recordingMbid: String? = null,
     /** Match confidence from the resolver (0.0–1.0). Desktop defaults to 0.9 for successful resolves. */
     val confidence: Double? = null,
     /** Whether the resolver explicitly couldn't match this track. */
@@ -134,7 +142,28 @@ fun <T> selectBestMatch(
     targetArtist: String,
     titleOf: (T) -> String?,
     artistOf: (T) -> String?,
+    /**
+     * Identity tiers (#402 / #279), checked BEFORE any name comparison, in
+     * desktop `findBestMatch`'s order (parachord#1056): an exact recording MBID,
+     * then an exact ISRC. Both are definitive recording identity, immune to
+     * title/artist formatting. Omitted (the defaults) = name matching only.
+     */
+    targetMbid: String? = null,
+    targetIsrc: String? = null,
+    mbidOf: (T) -> String? = { null },
+    isrcOf: (T) -> String? = { null },
 ): T? {
+    // Tier 1: exact MBID. Desktop compares with `===`, i.e. case-sensitively.
+    if (!targetMbid.isNullOrEmpty()) {
+        results.firstOrNull { mbidOf(it) == targetMbid }?.let { return it }
+    }
+    // Tier 2: exact ISRC, trimmed + upper-cased on both sides (desktop has no
+    // shape check here; a value only ever equals another real ISRC anyway).
+    if (!targetIsrc.isNullOrEmpty()) {
+        val ti = targetIsrc.trim().uppercase()
+        results.firstOrNull { isrcOf(it)?.trim()?.uppercase() == ti }?.let { return it }
+    }
+    // Name tiers: the bidirectional containment gate below.
     val nt = normalizeStr(targetTitle)
     val na = normalizeStr(targetArtist)
     if (nt.isEmpty() || na.isEmpty()) return null
@@ -170,13 +199,39 @@ fun <T> selectBestMatch(
  *
  * Direct ID matches (spotifyId, appleMusicId, soundcloudId) bypass this and
  * keep their 0.95 confidence since the ID is authoritative.
+ *
+ * **Identity tier (#402, desktop parachord#1056 `calculateConfidence`).** Before
+ * any name comparison, the same recording on both sides scores **1.0** outright:
+ *
+ * 1. both ISRCs present and equal after [validateIsrc] (trim + upper-case +
+ *    shape check), or
+ * 2. both recording MBIDs present and equal case-insensitively.
+ *
+ * A missing, malformed or different id falls through to the name gate
+ * unchanged, so this only ever upgrades. ISRC is checked before MBID, as on
+ * desktop. Desktop picks the target ISRC from the track then its sources; mobile
+ * callers pass [targetIsrc] already picked (e.g. via [pickTrackIsrc]).
+ * "Various Artists / Track 1" on a rip still scores 1.0 when its ISRC matches.
  */
 fun scoreConfidence(
     targetTitle: String,
     targetArtist: String,
     matchedTitle: String?,
     matchedArtist: String?,
+    targetIsrc: String? = null,
+    targetMbid: String? = null,
+    matchedIsrc: String? = null,
+    matchedMbid: String? = null,
 ): Double {
+    val ti = validateIsrc(targetIsrc)
+    val mi = validateIsrc(matchedIsrc)
+    if (ti != null && mi != null && ti == mi) return 1.0
+    // Desktop: `targetMbid && foundMbid && lower(a) === lower(b)` — JS truthiness,
+    // so only null/empty count as absent (no trim).
+    if (!targetMbid.isNullOrEmpty() && !matchedMbid.isNullOrEmpty() &&
+        targetMbid.lowercase() == matchedMbid.lowercase()
+    ) return 1.0
+
     val normTarget = normalizeStr(targetTitle)
     val normArtist = normalizeStr(targetArtist)
     val normMatchTitle = normalizeStr(matchedTitle)

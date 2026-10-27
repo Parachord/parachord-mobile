@@ -41,6 +41,25 @@ interface ResolverRuntime {
     ): ResolvedSource?
 
     /**
+     * [resolveNative] with the target's recording identity (#402): its ISRC and
+     * MusicBrainz recording MBID, either may be null. A runtime that picks among
+     * several search hits (Apple Music) passes these to [selectBestMatch] so an
+     * exact-identity hit wins before any name comparison, as desktop's
+     * `findBestMatch` does. The coordinator always calls this overload; the
+     * default ignores the identity, so runtimes and fakes that don't use it need
+     * not override.
+     */
+    suspend fun resolveNative(
+        resolverId: String,
+        query: String,
+        targetTitle: String?,
+        targetArtist: String?,
+        album: String?,
+        targetIsrc: String?,
+        targetMbid: String?,
+    ): ResolvedSource? = resolveNative(resolverId, query, targetTitle, targetArtist, album)
+
+    /**
      * Resolve one `.axe` id (Android: `PluginManager.resolve`; iOS: JSC
      * unique-key polling). Returns null on no-match. The coordinator only calls
      * this for ids returned by [ResolverGating.axeResolverIds] (minus excludes).

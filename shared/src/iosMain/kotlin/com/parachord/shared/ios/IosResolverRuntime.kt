@@ -91,6 +91,29 @@ class IosResolverRuntime(
     }
 
     /**
+     * Identity-aware dispatch (#402): the Apple Music catalog search returns up to
+     * ten hits, so it gets the target ISRC to prefer an exact recording before
+     * name matching (desktop `findBestMatch` tier 2; catalog songs carry an ISRC,
+     * not an MBID). Android parity: `AndroidResolverRuntime.resolveNative`.
+     */
+    override suspend fun resolveNative(
+        resolverId: String,
+        query: String,
+        targetTitle: String?,
+        targetArtist: String?,
+        album: String?,
+        targetIsrc: String?,
+        targetMbid: String?,
+    ): ResolvedSource? =
+        if (resolverId == "applemusic") {
+            if (appleMusicDeveloperToken.isNotBlank()) {
+                resolveAppleMusicNative(targetArtist ?: "", targetTitle ?: "", targetIsrc)
+            } else null
+        } else {
+            resolveNative(resolverId, query, targetTitle, targetArtist, album)
+        }
+
+    /**
      * Native localfiles resolution (#219) — exact, case-insensitive title+artist
      * match against the scanned device-library rows in the DB; deterministic 1.0
      * confidence (Android parity, AndroidResolverRuntime.resolveLocalFile). The
@@ -110,6 +133,8 @@ class IosResolverRuntime(
             matchedArtist = track.artist,
             matchedDurationMs = track.duration,
             isrc = com.parachord.shared.resolver.validateIsrc(track.isrc),
+            // Recording MBID for the identity tier of scoreConfidence (#402).
+            recordingMbid = track.recordingMbid,
             artworkUrl = track.artworkUrl,
         )
     }
@@ -197,6 +222,10 @@ class IosResolverRuntime(
                     // supply its ISRC for the MBID fallback. Validated/normalized
                     // so a malformed value never enters the source record (#217).
                     isrc = com.parachord.shared.resolver.validateIsrc(parsed.isrc),
+                    // Optional `.axe` recording MBID (`mbid`, then `recordingMbid` —
+                    // desktop's precedence) for the identity tier (#402).
+                    recordingMbid = parsed.mbid?.takeIf { it.isNotEmpty() }
+                        ?: parsed.recordingMbid?.takeIf { it.isNotEmpty() },
                     // Placeholder — overridden by scoreConfidence in resolveSources.
                     confidence = 0.9,
                     matchedTitle = parsed.title,
@@ -282,7 +311,11 @@ class IosResolverRuntime(
      *  harmless; the point is to not emit one per track. */
     private var loggedMutGate = false
 
-    private suspend fun resolveAppleMusicNative(artist: String, title: String): ResolvedSource? {
+    private suspend fun resolveAppleMusicNative(
+        artist: String,
+        title: String,
+        targetIsrc: String? = null,
+    ): ResolvedSource? {
         // Don't offer Apple Music unless the user has connected it. The catalog
         // search below needs only the developer token, so without this gate AM
         // resolves for EVERY user — including Spotify-only users — and tapping the
@@ -333,6 +366,9 @@ class IosResolverRuntime(
             data, title, artist,
             { attr(it, "name") },
             { attr(it, "artistName") },
+            // Exact-ISRC hit wins before name matching (#402).
+            targetIsrc = targetIsrc,
+            isrcOf = { attr(it, "isrc") },
         ) ?: data.first()
 
         val attrs = best.jsonObject["attributes"]?.jsonObject ?: return null
@@ -512,6 +548,8 @@ private data class AxeResolveResult(
     val appleMusicId: String? = null,
     val appleMusicUrl: String? = null,
     val isrc: String? = null,
+    val mbid: String? = null,
+    val recordingMbid: String? = null,
     val previewUrl: String? = null,
     val albumArt: String? = null,
 )

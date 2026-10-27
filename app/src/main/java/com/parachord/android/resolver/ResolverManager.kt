@@ -90,6 +90,14 @@ class ResolverManager constructor(
          * cooldown. Skipped resolvers never reach the network.
          */
         excludeResolvers: Set<String> = emptySet(),
+        /**
+         * The target's recording identity (#402), when known: an ISRC (e.g. from
+         * [com.parachord.shared.resolver.pickTrackIsrc]) and a MusicBrainz
+         * recording MBID. A source carrying the same ISRC or MBID scores 1.0
+         * whatever its title/artist strings say. Null = name-only scoring.
+         */
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> {
         // Proactively refresh stale tokens before resolving (no-op, see KDoc).
         ensureTokensFresh()
@@ -99,6 +107,8 @@ class ResolverManager constructor(
             targetArtist = targetArtist,
             album = null,
             excludeResolvers = excludeResolvers,
+            targetIsrc = targetIsrc,
+            targetMbid = targetMbid,
         )
         Log.d(TAG, "Resolved '$query' → ${results.size} sources: ${results.map { "${it.resolver}(${String.format("%.0f%%", (it.confidence ?: 0.0) * 100)})" }}")
         return results
@@ -119,6 +129,9 @@ class ResolverManager constructor(
         appleMusicId: String? = null,
         targetTitle: String? = null,
         targetArtist: String? = null,
+        /** Target recording identity for the identity tier (#402); see [resolve]. */
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
     ): List<ResolvedSource> = coroutineScope {
         val results = mutableListOf<ResolvedSource>()
 
@@ -202,7 +215,10 @@ class ResolverManager constructor(
         // offender. See #176/#177.)
         val excludeFromCascade =
             if (results.any { it.resolver == "spotify" }) setOf("spotify") else emptySet()
-        val cascadeResults = resolve(query, targetTitle, targetArtist, excludeResolvers = excludeFromCascade)
+        val cascadeResults = resolve(
+            query, targetTitle, targetArtist, excludeResolvers = excludeFromCascade,
+            targetIsrc = targetIsrc, targetMbid = targetMbid,
+        )
         val cascadeByResolver = cascadeResults.associateBy { it.resolver }
         val mergedHints = results.map { hint ->
             if (hint.artworkUrl == null) {

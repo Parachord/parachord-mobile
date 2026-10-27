@@ -298,7 +298,10 @@ final class IosTrackResolverCache {
                     // #211: pass the metadata-known Spotify ID so the resolver emits
                     // it directly instead of re-searching Spotify per row. (Kotlin
                     // default args don't bridge to Swift — pass appleMusicId explicitly.)
-                    spotifyId: item.req.spotifyId, appleMusicId: nil)) ?? []
+                    spotifyId: item.req.spotifyId, appleMusicId: nil,
+                    // The row request carries no recording identity; name-only
+                    // scoring here. Play time passes the track's ISRC/MBID (#402).
+                    targetIsrc: nil, targetMbid: nil)) ?? []
                 self.cache[key] = ranked
                 // Persist only real results — never cache an empty/failed
                 // resolve to disk (it may be a transient rate-limit miss). The
