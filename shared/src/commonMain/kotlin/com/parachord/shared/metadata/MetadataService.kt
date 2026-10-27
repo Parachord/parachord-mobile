@@ -51,6 +51,23 @@ class MetadataService constructor(
     // (Android keeps its ImageEnrichmentService/DB path).
     private val artistImageCacheRead: (suspend () -> String?)? = null,
     private val artistImageCacheWrite: (suspend (String) -> Unit)? = null,
+    /**
+     * Persisted album tracklists (desktop `cache_release_details`: 30 days, 400
+     * entries) and artist discographies (desktop `cache_artist_data`: 30 days).
+     * Without them every launch refetched both from MusicBrainz at 1 req/s.
+     * Null = no caching. Only complete answers are stored — see [getAlbumTracks]
+     * and [getArtistAlbums].
+     */
+    private val albumTracksCache: com.parachord.shared.cache.PersistentJsonCache<AlbumDetail>? = null,
+    private val artistAlbumsCache: com.parachord.shared.cache.PersistentJsonCache<List<AlbumSearchResult>>? = null,
+    /**
+     * The plugins' album catalogs (#424): track lists when the providers can't
+     * supply one, and extra album search results when MusicBrainz finds few.
+     * Null = no catalog fallback.
+     */
+    private val albumCatalog: AlbumCatalogLoader? = null,
+    /** Artist info found this session, shared by every caller (#429). */
+    private val artistInfoCache: ArtistInfoCache = ArtistInfoCache(),
 ) {
 
     private val artistImageMutex = Mutex()
@@ -58,6 +75,12 @@ class MetadataService constructor(
     private val artistImageJson = Json { ignoreUnknownKeys = true }
 
     private companion object {
+        /** Desktop: MusicBrainz finding fewer than this many albums adds catalog results. */
+        const val CATALOG_SEARCH_BELOW = 3
+
+        /** Desktop MB_SLOW_FALLBACK_MS (parachord#1132). */
+        const val CATALOG_SLOW_AFTER_MS = 5_000L
+
         /** Max time any single provider may take inside the getArtistInfo merge
          *  before it's dropped (null) — keeps a slow/hung provider from stalling
          *  the whole awaitAll. Fast providers return in <1s; this only cuts hangs. */
@@ -76,16 +99,94 @@ class MetadataService constructor(
         deduplicateTracks(results).take(limit)
     }
 
-    /** Search albums across all available providers in parallel, merge and deduplicate. */
+    /**
+     * Search albums across all available providers in parallel, merge and
+     * deduplicate. When MusicBrainz finds fewer than three albums (or fails), the
+     * plugins' album catalogs are searched too (desktop parachord#1129), so a
+     * MusicBrainz outage doesn't empty the results.
+     */
     suspend fun searchAlbums(query: String, limit: Int = 10): List<AlbumSearchResult> = coroutineScope {
-        val results = availableProviders()
+        val active = availableProviders()
+        val perProvider = active
             .map { provider -> async {
-                try { provider.searchAlbums(query, limit) } catch (_: Exception) { emptyList() }
+                provider.name to try { provider.searchAlbums(query, limit) } catch (_: Exception) { null }
             } }
             .awaitAll()
-            .flatten()
+        val results = perProvider.flatMap { it.second.orEmpty() }
 
-        deduplicateAlbums(results).take(limit)
+        val mbFound = perProvider.firstOrNull { it.first == "musicbrainz" }?.second?.size ?: 0
+        val catalogResults = if (albumCatalog != null && mbFound < CATALOG_SEARCH_BELOW) {
+            try { albumCatalog.search(query) } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                emptyList()
+            }
+        } else emptyList()
+
+        deduplicateAlbums(results + catalogResults).take(limit)
+    }
+
+    /**
+     * The album page's track list (#424): [getAlbumTracksProgressively], plus the
+     * plugins' album catalogs when the providers can't supply one.
+     *
+     * - The providers' lists always win. Any provider answer with tracks is
+     *   shown, and replaces a catalog list already on screen.
+     * - If no provider has produced tracks after [slowAfterMs], the catalog's
+     *   list is shown meanwhile (desktop parachord#1132: MusicBrainz is 1 req/s
+     *   and backs up during an outage).
+     * - If every provider finishes with nothing, the catalog is asked right away.
+     * - Once a catalog list is showing, an empty provider answer doesn't blank it.
+     *
+     * A catalog list is never written to the tracklist cache — it carries
+     * [AlbumDetail.catalogSource] for the "Track list from …" label instead.
+     */
+    fun getAlbumTracksWithCatalogFallback(
+        albumTitle: String,
+        artistName: String,
+        slowAfterMs: Long = CATALOG_SLOW_AFTER_MS,
+    ): Flow<AlbumDetail> = channelFlow {
+        val catalog = albumCatalog
+        val lock = Mutex()
+        var providerHasTracks = false
+        var catalogShown = false
+
+        suspend fun showCatalog() {
+            if (catalog == null || lock.withLock { providerHasTracks || catalogShown }) return
+            val found = try { catalog.load(artistName, albumTitle) } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                null
+            } ?: return
+            val detail = AlbumCatalog.toAlbumDetail(found.album, found.resolverName, albumTitle, artistName)
+            if (detail.tracks.isEmpty()) return
+            lock.withLock {
+                if (!providerHasTracks && !catalogShown) {
+                    catalogShown = true
+                    send(detail)
+                }
+            }
+        }
+
+        val slowTimer = launch {
+            kotlinx.coroutines.delay(slowAfterMs)
+            showCatalog()
+        }
+        getAlbumTracksProgressively(albumTitle, artistName).collect { detail ->
+            lock.withLock {
+                if (detail.tracks.isNotEmpty()) {
+                    providerHasTracks = true
+                    send(detail)
+                } else if (!catalogShown) {
+                    send(detail)
+                }
+            }
+        }
+        if (lock.withLock { providerHasTracks }) {
+            slowTimer.cancel()
+        } else {
+            // Every provider is done and none had the album: don't wait out the timer.
+            slowTimer.cancel()
+            showCatalog()
+        }
     }
 
     /** Search artists across all available providers in parallel, merge and deduplicate. */
@@ -105,7 +206,10 @@ class MetadataService constructor(
      * Tries each provider in priority order, merging fields so that
      * later providers fill in gaps left by earlier ones.
      */
-    suspend fun getArtistInfo(artistName: String): ArtistInfo? = coroutineScope {
+    suspend fun getArtistInfo(artistName: String): ArtistInfo? =
+        artistInfoCache.load(artistName) { fetchArtistInfo(artistName) }
+
+    private suspend fun fetchArtistInfo(artistName: String): ArtistInfo? = coroutineScope {
         // Per-provider timeout so one SLOW provider can't stall the awaitAll
         // merge. The shared HttpClient has a 60s request budget (AI endpoints
         // need it), but a metadata provider that hangs — e.g. Wikipedia's
@@ -170,16 +274,24 @@ class MetadataService constructor(
      * first image — no full-cascade awaitAll, and the slow Wikipedia MB→Wikidata
      * chain never runs once a streaming image is found.
      */
-    suspend fun getArtistImage(artistName: String): String? {
+    suspend fun getArtistImage(artistName: String, exclude: String? = null): String? {
         val key = artistName.lowercase().trim()
         // Persistent cache hit (shared, both platforms) — skip the network cascade.
+        // [exclude] is an image URL that stopped loading ([BrokenArtRetry]): drop
+        // it from the cache and look again, skipping it.
         artistImageMutex.withLock {
             if (artistImageMap == null) {
                 artistImageMap = artistImageCacheRead?.invoke()?.let {
                     runCatching { artistImageJson.decodeFromString<Map<String, String>>(it).toMutableMap() }.getOrNull()
                 } ?: mutableMapOf()
             }
-            artistImageMap!![key]?.let { return it }
+            val cached = artistImageMap!![key]
+            if (cached != null && cached == exclude) {
+                artistImageMap!!.remove(key)
+                artistImageCacheWrite?.invoke(artistImageJson.encodeToString(artistImageMap!!.toMap()))
+            } else if (cached != null) {
+                return cached
+            }
         }
         val available = availableProviders().associateBy { it.name }
         val order = listOf("applemusic", "spotify", "wikipedia", "discogs", "lastfm", "musicbrainz")
@@ -188,7 +300,7 @@ class MetadataService constructor(
             val img = try {
                 withTimeoutOrNull(PROVIDER_TIMEOUT_MS) { provider.getArtistInfo(artistName)?.imageUrl }
             } catch (_: Exception) { null }
-            if (!img.isNullOrBlank()) {
+            if (!img.isNullOrBlank() && img != exclude) {
                 artistImageMutex.withLock {
                     artistImageMap!![key] = img
                     artistImageCacheWrite?.invoke(artistImageJson.encodeToString(artistImageMap!!.toMap()))
@@ -213,7 +325,10 @@ class MetadataService constructor(
 
     /** Get an artist's discography from all available providers. */
     suspend fun getArtistAlbums(artistName: String, limit: Int = 50): List<AlbumSearchResult> = coroutineScope {
-        val perProvider: List<Result<List<AlbumSearchResult>>> = availableProviders()
+        val active = availableProviders()
+        val cacheKey = cacheKey(active, artistName, limit.toString())
+        artistAlbumsCache?.get(cacheKey)?.let { return@coroutineScope it }
+        val perProvider: List<Result<List<AlbumSearchResult>>> = active
             .map { provider -> async {
                 try {
                     Result.success(provider.getArtistAlbums(artistName, limit))
@@ -238,8 +353,20 @@ class MetadataService constructor(
         }
 
         // Enrich albums that only have Cover Art Archive URLs (which may 404)
-        enrichAlbumArtwork?.invoke(artistName, deduped) ?: deduped
+        val enriched = enrichAlbumArtwork?.invoke(artistName, deduped) ?: deduped
+        // Cache only a complete answer: every provider responded and found
+        // something. A partial discography (one provider failed) or an empty
+        // one would otherwise be served as the whole thing for 30 days.
+        if (enriched.isNotEmpty() && perProvider.none { it.isFailure }) {
+            artistAlbumsCache?.put(cacheKey, enriched)
+        }
+        enriched
     }
+
+    /** Cache key: the request plus which providers answered it, so enabling a
+     *  provider (e.g. connecting Spotify) isn't hidden behind an older answer. */
+    private fun cacheKey(active: List<MetadataProvider>, vararg parts: String): String =
+        (parts.map { it.lowercase().trim() } + active.map { it.name }.sorted().joinToString(",")).joinToString("|")
 
     /**
      * Get album tracklist from all providers and merge.
@@ -248,20 +375,40 @@ class MetadataService constructor(
      * each track with metadata from other providers (spotifyId, artworkUrl, etc.)
      */
     suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? = coroutineScope {
-        val results = availableProviders()
+        val active = availableProviders()
+        val cacheKey = cacheKey(active, artistName, albumTitle)
+        albumTracksCache?.get(cacheKey)?.let { return@coroutineScope it }
+        var anyFailed = false
+        val results = active
             .map { provider -> async {
-                try { provider.getAlbumTracks(albumTitle, artistName) } catch (_: Exception) { null }
+                try {
+                    provider.getAlbumTracks(albumTitle, artistName)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    anyFailed = true
+                    null
+                }
             } }
             .awaitAll()
             .filterNotNull()
 
         if (results.isEmpty()) return@coroutineScope null
+        mergeAlbumResults(results).also { merged ->
+            // Cache only a complete answer (every provider answered, with tracks).
+            if (!anyFailed && merged != null && merged.tracks.isNotEmpty()) {
+                albumTracksCache?.put(cacheKey, merged)
+            }
+        }
+    }
+
+    private fun mergeAlbumResults(results: List<AlbumDetail>): AlbumDetail? {
 
         // Use the result with the most tracks as base
-        val base = results.maxByOrNull { it.tracks.size } ?: return@coroutineScope null
+        val base = results.maxByOrNull { it.tracks.size } ?: return null
         val others = results.filter { it !== base }
 
-        if (others.isEmpty()) return@coroutineScope base
+        if (others.isEmpty()) return base
 
         // Build a lookup of tracks from other providers by normalized title
         val otherTracksByTitle = others
@@ -281,7 +428,7 @@ class MetadataService constructor(
             enrichedTracks.map { t -> t.copy(artworkUrl = t.artworkUrl ?: mergedArtwork) }
         } else enrichedTracks
 
-        base.copy(
+        return base.copy(
             tracks = tracksWithArt,
             artworkUrl = mergedArtwork,
             year = base.year ?: others.firstNotNullOfOrNull { it.year },
@@ -299,6 +446,11 @@ class MetadataService constructor(
         val mutex = Mutex()
         var merged: AlbumDetail? = null
         val active = availableProviders()
+        // A cached tracklist is the whole answer: show it, no provider calls.
+        albumTracksCache?.get(cacheKey(active, artistName, albumTitle))?.let {
+            send(it)
+            return@channelFlow
+        }
         for (provider in active) {
             launch {
                 try {

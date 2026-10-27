@@ -174,6 +174,9 @@ final class ArtistImageCache {
 
     func image(for name: String) -> String? { images[name.lowercased()] }
 
+    /// A working image found after the stored one failed to load (BrokenArtRetry).
+    func replace(_ name: String, with url: String) { images[name.lowercased()] = url }
+
     /// Fetch an artist's image via the shared (now persistently-cached)
     /// getArtistImage. No-op if already in memory or in flight.
     func fetch(_ name: String) {

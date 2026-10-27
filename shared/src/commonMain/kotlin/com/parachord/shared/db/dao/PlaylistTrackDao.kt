@@ -96,24 +96,48 @@ class PlaylistTrackDao(private val db: ParachordDb) {
      * it currently has none — never overwrite art that came from the source
      * (Spotify / SoundCloud already give us per-track artwork).
      */
-    suspend fun updateTrackArtwork(playlistId: String, position: Int, artworkUrl: String): Unit =
+    /**
+     * Fill a missing cover on the row at [position] — only if that row is still
+     * [title] by [artist]. Positions shift on reorder/sync; the write must not
+     * land on a different song.
+     */
+    suspend fun updateTrackArtwork(
+        playlistId: String,
+        position: Int,
+        title: String,
+        artist: String,
+        artworkUrl: String,
+    ): Unit =
         withContext(Dispatchers.Default) {
             queries.updateTrackArtwork(
                 trackArtworkUrl = artworkUrl,
                 playlistId = playlistId,
                 position = position.toLong(),
+                trackTitle = title,
+                trackArtist = artist,
             )
         }
+
+    /** Replace a dead cover URL on every playlist-track row that holds it. */
+    suspend fun replaceTrackArtworkUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
+        queries.replaceTrackArtworkUrl(fresh = fresh, dead = dead)
+    }
 
     /**
      * Backfill resolver IDs onto a playlist_track row. Each parameter is
      * `COALESCE`-merged with the existing column, so a non-null source ID
      * (e.g. Spotify's canonical sync ID) is never overwritten — only NULL
      * slots get filled. Pass `null` for IDs that weren't discovered.
+     *
+     * Only touches the row at [position] if it is still [title] by [artist]:
+     * a resolve can wait in a queue while the playlist is reordered or a sync
+     * rewrites it, and the IDs must not land on another song.
      */
     suspend fun backfillResolverIds(
         playlistId: String,
         position: Int,
+        title: String,
+        artist: String,
         spotifyId: String?,
         spotifyUri: String?,
         appleMusicId: String?,
@@ -133,6 +157,8 @@ class PlaylistTrackDao(private val db: ParachordDb) {
             value_____ = isrc,
             playlistId = playlistId,
             position = position.toLong(),
+            trackTitle = title,
+            trackArtist = artist,
         )
     }
 

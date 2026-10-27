@@ -88,12 +88,13 @@ final class HomeFeedModel {
         }
         aiLoading = aiAlbums.isEmpty && aiArtists.isEmpty
         aiError = nil
-        do {
-            let r = try await container.loadAiSuggestions()
+        // A failed refresh returns nil: keep the cached suggestions, and only
+        // show an error when there's nothing cached to fall back on.
+        if let r = (try? await container.loadAiSuggestions()) ?? nil {
             aiAlbums = r.albums
             aiArtists = r.artists
-        } catch {
-            if aiAlbums.isEmpty && aiArtists.isEmpty { aiError = error.localizedDescription }
+        } else if aiAlbums.isEmpty && aiArtists.isEmpty {
+            aiError = "Couldn't load AI suggestions"
         }
         aiLoading = false
     }

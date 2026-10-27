@@ -6,6 +6,7 @@ data class PlaylistTrack(
     val trackTitle: String,
     val trackArtist: String,
     val trackAlbum: String? = null,
+    /** Track length in **milliseconds**; becomes [Track.duration] at play time (#349). */
     val trackDuration: Long? = null,
     val trackArtworkUrl: String? = null,
     val trackSourceUrl: String? = null,

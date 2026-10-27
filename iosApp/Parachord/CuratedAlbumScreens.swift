@@ -186,6 +186,49 @@ struct PCCuratedBanner: View {
 
 // MARK: Critical Darlings
 
+/// Re-runs a curated repository's flow on a later visit. The flows end after
+/// one pass (cached list, then fresh), and these models are app-lifetime
+/// singletons, so subscribing only once meant a process kept alive by
+/// background audio never refreshed them. The repository's own TTL decides
+/// whether a run actually hits the network; [minInterval] just stops every tab
+/// switch from starting a run. A run still in flight is never cut short (an
+/// interrupted Fresh Drops scan loses its progress).
+@MainActor
+final class RevalidatingWatch {
+    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+    private var sub: Cancellable?
+    private var running = false
+    private var startedAt: Date?
+    private let minInterval: TimeInterval
+
+    init(minInterval: TimeInterval) { self.minInterval = minInterval }
+
+    /// Starts a run unless one is in flight or the last started under
+    /// [minInterval] ago. `force` (e.g. a new concert location) cancels any
+    /// run in flight and starts over. `start` subscribes and must call `done`
+    /// when the flow ends (pass it as `watchUntilDone`'s `onDone`). Returns
+    /// whether it started.
+    @discardableResult
+    func run(force: Bool = false, _ start: (FlowWatcher, @escaping () -> Void) -> Cancellable) -> Bool {
+        if !force {
+            if running { return false }
+            if let s = startedAt, Date().timeIntervalSince(s) < minInterval { return false }
+        }
+        sub?.cancel()
+        running = true
+        startedAt = Date()
+        // Only the latest run may clear `running`: a cancelled run never calls
+        // `done`, but guard on the generation anyway.
+        generation += 1
+        let gen = generation
+        sub = start(watcher) { [weak self] in
+            Task { @MainActor in if self?.generation == gen { self?.running = false } }
+        }
+        return true
+    }
+    private var generation = 0
+}
+
 @MainActor @Observable
 final class CriticalDarlingsModel {
     // App-lifetime singleton. Watches the SHARED repository flow, which emits its
@@ -195,22 +238,22 @@ final class CriticalDarlingsModel {
     // + parallel ios_critical_view.json.
     static let shared = CriticalDarlingsModel()
     private let container = IosContainer.companion.shared
-    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
-    private var sub: Cancellable?
+    private let refresh = RevalidatingWatch(minInterval: 5 * 60)
     var albums: [CriticsPickAlbum] = []
     var isLoading = false
     var loaded = false
 
     func load() async {
-        guard sub == nil else { return }   // subscribe once; the flow stays live
-        isLoading = true
-        sub = watcher.watch(flow: container.criticsPicksFlow()) { [weak self] v in
-            guard let self else { return }
-            if let list = v as? [CriticsPickAlbum], !list.isEmpty {
-                withAnimation(.easeInOut(duration: 0.4)) { self.albums = list }
-            }
-            self.isLoading = false
-            self.loaded = true
+        refresh.run { watcher, done in
+            isLoading = true
+            return watcher.watchUntilDone(flow: container.criticsPicksFlow(), onEach: { [weak self] v in
+                guard let self else { return }
+                if let list = v as? [CriticsPickAlbum], !list.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.4)) { self.albums = list }
+                }
+                self.isLoading = false
+                self.loaded = true
+            }, onDone: done)
         }
     }
 }
@@ -249,7 +292,7 @@ struct CriticalDarlingsScreen: View {
 
     private func row(_ album: CriticsPickAlbum) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            pcCover(album.albumArt, seed: album.title + album.artist, size: 80, radius: 8)
+            pcCover(album.albumArt, seed: album.title + album.artist, size: 80, radius: 8, artist: album.artist, album: album.title)
             VStack(alignment: .leading, spacing: 3) {
                 Text(album.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(2)
                 Text(album.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -271,22 +314,23 @@ struct CriticalDarlingsScreen: View {
 final class FreshDropsModel {
     static let shared = FreshDropsModel()
     private let container = IosContainer.companion.shared
-    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
-    private var sub: Cancellable?
+    private let refresh = RevalidatingWatch(minInterval: 5 * 60)
     var drops: [FreshDrop] = []
     var isLoading = false
     var loaded = false
 
+    // Watch the shared repo flow (cached-first → fresh); re-run on a later visit.
     func load() async {
-        guard sub == nil else { return }   // watch the shared repo flow (cached-first → fresh)
-        isLoading = true
-        sub = watcher.watch(flow: container.freshDropsFlow()) { [weak self] v in
-            guard let self else { return }
-            if let list = v as? [FreshDrop], !list.isEmpty {
-                withAnimation(.easeInOut(duration: 0.4)) { self.drops = list }
-            }
-            self.isLoading = false
-            self.loaded = true
+        refresh.run { watcher, done in
+            isLoading = true
+            return watcher.watchUntilDone(flow: container.freshDropsFlow(), onEach: { [weak self] v in
+                guard let self else { return }
+                if let list = v as? [FreshDrop], !list.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.4)) { self.drops = list }
+                }
+                self.isLoading = false
+                self.loaded = true
+            }, onDone: done)
         }
     }
 }
@@ -411,7 +455,7 @@ struct FreshDropsScreen: View {
 
     private func row(_ drop: FreshDrop) -> some View {
         HStack(spacing: 12) {
-            pcCover(drop.albumArt, seed: drop.title + drop.artist, size: 80, radius: 8)
+            pcCover(drop.albumArt, seed: drop.title + drop.artist, size: 80, radius: 8, artist: drop.artist, album: drop.title)
             VStack(alignment: .leading, spacing: 3) {
                 Text(drop.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(drop.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -464,8 +508,7 @@ final class ConcertsModel {
     static let shared = ConcertsModel()
     private let container = IosContainer.companion.shared
     private var store: SettingsStore { container.settingsStore }
-    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
-    private var sub: Cancellable?
+    private let refresh = RevalidatingWatch(minInterval: 5 * 60)
     var events: [ConcertEvent] = []
     var isLoading = false
     var loaded = false
@@ -514,8 +557,7 @@ final class ConcertsModel {
                 autoDetectViaGps()
             }
         }
-        guard sub == nil else { return }
-        subscribe()
+        subscribe(locationChanged: false)
     }
 
     /// Silent cold-launch GPS auto-detect (Android parity). Commits a GPS fix when
@@ -534,28 +576,33 @@ final class ConcertsModel {
         }
     }
 
-    /// (Re)subscribe to the concerts flow. `concertsFlow()` reads
-    /// `getConcertLocation()` at build time, so after a location/radius commit we
-    /// cancel + rebuild the flow to refresh events for the new location (mirrors
-    /// Android's `loadEvents(forceRefresh = true)`).
-    private func subscribe() {
-        isLoading = true
-        sub = watcher.watch(flow: container.concertsFlow()) { [weak self] v in
-            guard let self else { return }
-            if let list = v as? [ConcertEvent], !list.isEmpty {
-                withAnimation(.easeInOut(duration: 0.4)) { self.events = list }
-            }
-            self.isLoading = false
-            self.loaded = true
+    /// (Re)subscribe to the concerts flow. It re-runs on a later visit (the
+    /// repository's 30-min TTL decides whether that refetches), and a committed
+    /// location/radius forces a fresh run that drops the old area's cached events
+    /// (mirrors Android's `loadEvents(forceRefresh = true)` + `clearLocalEvents`).
+    private func subscribe(locationChanged: Bool) {
+        refresh.run(force: locationChanged) { watcher, done in
+            isLoading = true
+            return watcher.watchUntilDone(flow: container.concertsFlow(locationChanged: locationChanged), onEach: { [weak self] v in
+                guard let self else { return }
+                if let list = v as? [ConcertEvent], !list.isEmpty {
+                    withAnimation(.easeInOut(duration: 0.4)) { self.events = list }
+                }
+                self.isLoading = false
+                self.loaded = true
+            }, onDone: { [weak self] in
+                // Whatever happened, the load is over — never leave the skeleton up.
+                Task { @MainActor in self?.isLoading = false; self?.loaded = true }
+                done()
+            })
         }
     }
 
     /// Re-arm the concerts flow for a freshly-committed location/radius.
     private func reloadEvents() {
-        sub?.cancel(); sub = nil
         loaded = false
         events = []
-        subscribe()
+        subscribe(locationChanged: true)
     }
 
     // ── Location detection (#199 parity): GPS → geoIP → typeahead ────────

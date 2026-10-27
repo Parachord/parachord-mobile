@@ -108,7 +108,7 @@ class WeeklyPlaylistViewModel constructor(
                     title = lbTrack.title,
                     artist = lbTrack.artist,
                     album = lbTrack.album,
-                    duration = lbTrack.durationMs?.let { it / 1000 },
+                    duration = lbTrack.durationMs, // Track.duration is ms (#349)
                     artworkUrl = lbTrack.albumArt,
                 )
             }
@@ -183,7 +183,9 @@ class WeeklyPlaylistViewModel constructor(
     fun toggleCollection(track: TrackEntity, isInCollection: Boolean) {
         viewModelScope.launch {
             if (isInCollection) {
-                libraryRepository.deleteTrack(track)
+                // `track` is the ephemeral weekly-playlist row, not the library row —
+                // removeFromCollection resolves the library row and removes it sync-aware.
+                libraryRepository.removeFromCollection(track)
             } else {
                 libraryRepository.addToCollection(track)
             }

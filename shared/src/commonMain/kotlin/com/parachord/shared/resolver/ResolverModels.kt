@@ -244,6 +244,18 @@ fun scoreConfidence(
     return if (titleMatch && artistMatch) 0.95 else 0.50
 }
 
+// ── Apple Music ids (#265) ─────────────────────────────────────────────────
+
+/**
+ * Is [id] an Apple Music CATALOG id (all digits, e.g. `1440857781`)? Library ids
+ * (`i.…` songs, `l.…` older items, `p.…` playlists) are not, and the catalog
+ * rejects them — a library id used as a play/lookup hint makes iOS's
+ * MusicCatalogResourceRequest return nothing. Hint paths drop non-catalog ids so
+ * stale data falls back to a normal search instead of a guaranteed miss.
+ */
+fun isAppleMusicCatalogId(id: String?): Boolean =
+    !id.isNullOrBlank() && id.all { it.isDigit() }
+
 // ── ISRC capture / walk (desktop parity, parachord#894 / mobile #217) ────────
 
 /**

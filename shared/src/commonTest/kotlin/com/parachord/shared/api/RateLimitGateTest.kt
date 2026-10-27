@@ -105,6 +105,56 @@ class RateLimitGateTest {
     }
 
     @Test
+    fun escalation_resumes_after_a_restart() = runTest {
+        // A previous process hit 2 consecutive 429s; its cooldown just lapsed.
+        // The next 429 is strike 3 (base × 4), not a fresh strike 1.
+        val now = 10_000_000L
+        val restarted = RateLimitGate(
+            tag = "test", defaultCooldownSec = 60L, maxCooldownMs = 6L * 60L * 60L * 1000L,
+            escalateOnRepeat = true,
+            loadCooldownEpochMs = { now - 1_000L },
+            loadStrikes = { 2 },
+            nowMs = { now },
+        )
+        restarted.feed429(response(HttpStatusCode.TooManyRequests, 60L))
+        assertEquals(240_000L, restarted.remainingCooldownMs())
+    }
+
+    @Test
+    fun a_streak_older_than_the_max_cooldown_is_forgotten() = runTest {
+        val max = 6L * 60L * 60L * 1000L
+        val now = 100_000_000L
+        val restarted = RateLimitGate(
+            tag = "test", defaultCooldownSec = 60L, maxCooldownMs = max,
+            escalateOnRepeat = true,
+            loadCooldownEpochMs = { now - max - 1_000L }, // ended > 6h ago
+            loadStrikes = { 3 },
+            nowMs = { now },
+        )
+        restarted.feed429(response(HttpStatusCode.TooManyRequests, 60L))
+        assertEquals(60_000L, restarted.remainingCooldownMs())
+    }
+
+    @Test
+    fun strikes_are_saved_on_a_429_and_cleared_on_success() = runTest {
+        val saved = mutableListOf<Int>()
+        val first = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val second = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var now = 0L
+        val g = RateLimitGate(
+            tag = "test", defaultCooldownSec = 60L, escalateOnRepeat = true,
+            saveStrikes = { v -> saved += v; if (!first.isCompleted) first.complete(Unit) else second.complete(Unit) },
+            nowMs = { now },
+        )
+        g.feed429(response(HttpStatusCode.TooManyRequests, 60L))
+        first.await()
+        now += 61_000L
+        g.handleResponse(response(HttpStatusCode.OK, null), exceptionFactory = { TestRateLimited(it) })
+        second.await()
+        assertEquals(listOf(1, 0), saved)
+    }
+
+    @Test
     fun escalating_gate_doubles_cooldown_on_consecutive_429s() = runTest {
         var now = 0L
         val g = gate(escalate = true, now = { now })

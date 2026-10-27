@@ -79,4 +79,30 @@ class ListenBrainzSubmitListensTest {
         )
         assertEquals(213_000L, additionalInfo(bodyJson(captured!!))["duration_ms"]!!.jsonPrimitive.long)
     }
+
+    // ── #362: say which Parachord client and build submitted the listen ─────
+
+    @Test
+    fun submitListens_carriesTheClientsVersionAndPlatform() = runTest {
+        var captured: HttpRequestData? = null
+        val engine = MockEngine { req -> captured = req; respond("{}", io.ktor.http.HttpStatusCode.OK, jsonHeaders) }
+        ListenBrainzClient(
+            HttpClient(engine) { install(ContentNegotiation) { json() } },
+            ListenBrainzClient.formatSubmissionClientVersion("0.9.9", "android"),
+        ).submitListens(token = "tok", artist = "A", title = "T", listenedAt = 1_700_000_000L)
+
+        val info = additionalInfo(bodyJson(captured!!))
+        assertEquals("0.9.9 (android)", info["submission_client_version"]!!.jsonPrimitive.content)
+        // The client name stays "Parachord": LB and Achordion group on it.
+        assertEquals("Parachord", info["submission_client"]!!.jsonPrimitive.content)
+        assertEquals("Parachord", info["media_player"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun submissionClientVersion_formatsVersionAndPlatform_andNeverInventsAVersion() {
+        assertEquals("0.1 (ios)", ListenBrainzClient.formatSubmissionClientVersion("0.1", "ios"))
+        assertEquals("0.9.9 (android)", ListenBrainzClient.formatSubmissionClientVersion(" 0.9.9 ", "android"))
+        assertEquals("unknown (android)", ListenBrainzClient.formatSubmissionClientVersion("", "android"))
+        assertEquals("unknown (unknown)", ListenBrainzClient.formatSubmissionClientVersion("", ""))
+    }
 }

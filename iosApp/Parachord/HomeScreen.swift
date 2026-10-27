@@ -255,7 +255,7 @@ struct HomeScreen: View {
         Button { coordinator.togglePlayPause() } label: {
             HStack(spacing: 14) {
                 pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
-                        seed: t.title, size: 56, radius: 8)
+                        seed: t.title, size: 56, radius: 8, artist: t.artist, album: t.album)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(t.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(1)
                     Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -459,7 +459,7 @@ struct HomeScreen: View {
                 ForEach(feed.recentAlbums, id: \.id) { album in
                     NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                         VStack(alignment: .leading, spacing: 6) {
-                            pcCover(album.artworkUrl, seed: album.title + album.artist, size: 130, radius: 10)
+                            pcCover(album.artworkUrl, seed: album.title + album.artist, size: 130, radius: 10, artist: album.artist, album: album.title)
                             Text(album.title).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                             Text(album.artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
                         }
@@ -559,7 +559,7 @@ struct HomeScreen: View {
         } label: {
             HStack(spacing: 12) {
                 pcCover(pcTrackArt(track.artworkUrl, artist: track.artist, title: track.title, album: track.album),
-                        seed: track.title + track.artist, size: 44, radius: 6)
+                        seed: track.title + track.artist, size: 44, radius: 6, artist: track.artist, album: track.album)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                     Text(track.album.map { "\(track.artist) · \($0)" } ?? track.artist)
@@ -622,7 +622,7 @@ struct HomeScreen: View {
                         ForEach(Array(feed.aiAlbums.enumerated()), id: \.offset) { _, al in
                             NavigationLink(value: PCRoute.album(title: al.title, artist: al.artist)) {
                                 VStack(alignment: .leading, spacing: 6) {
-                                    pcCover(al.artworkUrl, seed: al.title + al.artist, size: 120, radius: 10)
+                                    pcCover(al.artworkUrl, seed: al.title + al.artist, size: 120, radius: 10, artist: al.artist, album: al.title)
                                     Text(al.title).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                                     Text(al.artist).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
                                 }

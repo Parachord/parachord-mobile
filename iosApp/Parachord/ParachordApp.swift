@@ -70,7 +70,10 @@ private struct RootGate: View {
         // Re-queue the background sync whenever we leave the foreground (Apple's
         // recommended scheduling point).
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background { BackgroundSync.schedule() }
+            if phase == .background {
+                BackgroundSync.schedule()
+                IosTrackResolverCache.shared.flushPendingSave()
+            }
         }
     }
 }

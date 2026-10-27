@@ -22,6 +22,7 @@ import org.koin.dsl.module
 /** KvStore key for persisting [SpotifyClient]'s rate-limit gate cooldown
  *  epoch-ms. */
 private const val SPOTIFY_GATE_COOLDOWN_KEY = "spotify_rate_limit_cooldown_ms"
+private const val SPOTIFY_GATE_STRIKES_KEY = "spotify_rate_limit_strikes"
 
 /**
  * Shared Koin module — provides cross-platform dependencies.
@@ -73,6 +74,8 @@ val sharedModule = module {
             tokens = get(),
             loadCooldownEpochMs = { kv.getLong(SPOTIFY_GATE_COOLDOWN_KEY, 0L) },
             saveCooldownEpochMs = { value -> kv.setLong(SPOTIFY_GATE_COOLDOWN_KEY, value) },
+            loadStrikes = { kv.getLong(SPOTIFY_GATE_STRIKES_KEY, 0L).toInt() },
+            saveStrikes = { value -> kv.setLong(SPOTIFY_GATE_STRIKES_KEY, value.toLong()) },
         )
     }
     single { LastFmClient(get()) }
@@ -86,7 +89,12 @@ val sharedModule = module {
     // PATCH/PUT/DELETE 401s are structural, not token-related.
     single { AppleMusicLibraryClient(get(), get()) }
     single { GeoLocationClient(get()) }
-    single { ListenBrainzClient(get()) }
+    single {
+        ListenBrainzClient(
+            get(),
+            ListenBrainzClient.formatSubmissionClientVersion(get<AppConfig>().appVersion, get<AppConfig>().parachordClient),
+        )
+    }
     // Smart Links — desktop's Cloudflare Pages share-link backend. Public, no
     // auth, CORS-open. Migrated from Retrofit → Ktor in the Smart Links cutover
     // (closes the last Retrofit footprint).

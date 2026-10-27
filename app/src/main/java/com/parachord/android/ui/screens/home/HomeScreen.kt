@@ -610,6 +610,7 @@ fun HomeScreen(
                             title = track.title,
                             artist = track.artist,
                             artworkUrl = track.artworkUrl,
+                            album = track.album,
                             resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]
                                 ?: track.availableResolvers(resolverOrder),
                             resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
@@ -654,6 +655,8 @@ private fun RecentAlbumCard(
     ) {
         AlbumArtCard(
             artworkUrl = album.artworkUrl,
+            artist = album.artist,
+            album = album.title,
             size = 140.dp,
             cornerRadius = 8.dp,
             elevation = 2.dp,
@@ -1867,6 +1870,8 @@ private fun AiAlbumCard(
     ) {
         AlbumArtCard(
             artworkUrl = album.artworkUrl,
+            artist = album.artist,
+            album = album.title,
             size = 120.dp,
             cornerRadius = 6.dp,
             elevation = 2.dp,

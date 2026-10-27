@@ -69,6 +69,17 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.getRecentSync(limit.toLong()).executeAsList().map { it.toTrack() }
     }
 
+    /** Case-insensitive title+artist lookup — the same match [existsByTitleAndArtist]
+     *  uses, so a row this finds is the one that lit the "in collection" heart. */
+    suspend fun getByTitleAndArtist(title: String, artist: String): Track? = withContext(Dispatchers.Default) {
+        queries.getByTitleAndArtist(title, artist).executeAsOneOrNull()?.toTrack()
+    }
+
+    /** The artist's MusicBrainz id from any enriched library track by them, or null. */
+    suspend fun artistMbidForArtist(artist: String): String? = withContext(Dispatchers.Default) {
+        queries.artistMbidForArtist(artist).executeAsList().firstOrNull { !it.isNullOrBlank() }
+    }
+
     suspend fun findLocalFile(title: String, artist: String): Track? = withContext(Dispatchers.Default) {
         queries.findLocalFile(title, artist).executeAsOneOrNull()?.toTrack()
     }
@@ -138,6 +149,11 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
 
     suspend fun updateArtworkById(id: String, artworkUrl: String): Unit = withContext(Dispatchers.Default) {
         queries.updateArtworkById(artworkUrl = artworkUrl, id = id)
+    }
+
+    /** Replace a dead cover URL on every track row that holds it. */
+    suspend fun replaceArtworkUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
+        queries.replaceArtworkUrl(fresh = fresh, dead = dead)
     }
 
     suspend fun delete(track: Track): Unit = withContext(Dispatchers.Default) {

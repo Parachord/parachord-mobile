@@ -132,16 +132,19 @@ class SpotifyProvider(
             }
         } ?: emptyList()
 
+    // Not wrapped in withAuth's catch-all: a failure (rate-limit cooldown,
+    // network) must reach MetadataService as a failure, or a tracklist built
+    // without Spotify's IDs would be cached as complete.
     override suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? =
-        withAuth {
+        withAuthOrThrow {
             val response = api.search(
                 query = "album:$albumTitle artist:$artistName",
                 type = "album",
                 limit = 1,
             )
-            val album = response.albums?.items?.firstOrNull() ?: return@withAuth null
-            val albumId = album.id ?: return@withAuth null
-            val albumName = album.name ?: return@withAuth null
+            val album = response.albums?.items?.firstOrNull() ?: return@withAuthOrThrow null
+            val albumId = album.id ?: return@withAuthOrThrow null
+            val albumName = album.name ?: return@withAuthOrThrow null
             val tracksResponse = api.getAlbumTracks(albumId = albumId)
             AlbumDetail(
                 title = albumName,
@@ -172,6 +175,12 @@ class SpotifyProvider(
      * API call when no token is stored (avoids burning a refresh
      * attempt on a not-yet-connected user).
      */
+    /** [withAuth] without the catch-all: skips when not connected, otherwise lets errors through. */
+    private suspend fun <T> withAuthOrThrow(block: suspend () -> T?): T? {
+        if (settingsStore.getSpotifyAccessToken() == null) return null
+        return block()
+    }
+
     private suspend fun <T> withAuth(block: suspend () -> T): T? {
         if (settingsStore.getSpotifyAccessToken() == null) return null
         return try {

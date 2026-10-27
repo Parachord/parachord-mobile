@@ -155,10 +155,24 @@ class ConcertsRepository(
         return cachedLocalEvents
     }
 
+    /**
+     * Drop the cached events. Call when the concert location or radius changes:
+     * the cache holds the OLD area's events (it isn't keyed by location), so
+     * reusing it showed the previous city for up to [STALE_THRESHOLD]. The disk
+     * copy is blanked too, so a process killed before the refetch lands doesn't
+     * bring the old city back on the next launch.
+     */
+    suspend fun clearLocalEvents() {
+        diskCacheLoaded = true
+        cachedLocalEvents = null
+        localFetchedAt = 0L
+        try { cacheWrite("") } catch (e: Exception) { Log.w(TAG, "Failed to clear disk cache", e) }
+    }
+
     private suspend fun loadDiskCache() {
         diskCacheLoaded = true
         try {
-            val body = cacheRead() ?: return
+            val body = cacheRead()?.takeIf { it.isNotBlank() } ?: return
             val wrapper = diskJson.decodeFromString<ConcertsDiskCache>(body)
             cachedLocalEvents = wrapper.events
             localFetchedAt = wrapper.fetchedAt

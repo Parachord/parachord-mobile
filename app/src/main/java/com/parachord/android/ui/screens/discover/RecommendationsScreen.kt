@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -33,6 +34,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +78,8 @@ fun RecommendationsScreen(
     val recommendedTracks by viewModel.recommendedTracks.collectAsState()
     val sourceFilter by viewModel.sourceFilter.collectAsState()
     val sourceCounts by viewModel.sourceCounts.collectAsState()
+    val trackResolvers by viewModel.trackResolvers.collectAsState()
+    val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsState()
 
     // Auto-refresh when returning to this screen
     LifecycleResumeEffect(Unit) {
@@ -123,8 +127,11 @@ fun RecommendationsScreen(
                 )
                 1 -> SongsTab(
                     tracks = recommendedTracks,
+                    trackResolvers = trackResolvers,
+                    trackResolverConfidences = trackResolverConfidences,
                     onRefresh = viewModel::refresh,
                     onPlayTrack = viewModel::playTrack,
+                    onTrackVisible = viewModel::resolveVisibleTrack,
                 )
             }
         }
@@ -343,8 +350,11 @@ private fun RecommendedArtistItem(
 @Composable
 private fun SongsTab(
     tracks: Resource<List<RecommendedTrack>>,
+    trackResolvers: Map<String, List<String>>,
+    trackResolverConfidences: Map<String, Map<String, Float>>,
     onRefresh: () -> Unit,
     onPlayTrack: (RecommendedTrack) -> Unit = {},
+    onTrackVisible: (RecommendedTrack) -> Unit = {},
 ) {
     when (tracks) {
         is Resource.Loading -> {
@@ -359,15 +369,21 @@ private fun SongsTab(
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(tracks.data, key = { "${it.title}-${it.artist}" }) { track ->
+                        val resolverKey = trackKey(track.title, track.artist)
+                        // Visibility-scoped resolution (#177): a row resolves once it
+                        // composes (viewport + overscan). The shared cache dedups, so
+                        // scrolling back or reopening the screen fires no new searches.
+                        LaunchedEffect(resolverKey) { onTrackVisible(track) }
                         TrackRow(
                             title = track.title,
                             artist = track.artist,
+                            album = track.album,
                             artworkUrl = track.artworkUrl,
                             duration = track.duration,
-                            // Show content resolver badges (Spotify, YouTube, etc.) from the
-                            // resolver pipeline — NOT metadata source labels (Last.fm, ListenBrainz).
-                            resolvers = track.resolvers.ifEmpty { null },
-                            resolverConfidences = track.resolverConfidences.ifEmpty { null },
+                            // Content resolver badges (Spotify, Apple Music, …) from the
+                            // shared resolver cache — NOT metadata source labels.
+                            resolvers = trackResolvers[resolverKey],
+                            resolverConfidences = trackResolverConfidences[resolverKey],
                             onClick = { onPlayTrack(track) },
                         )
                     }

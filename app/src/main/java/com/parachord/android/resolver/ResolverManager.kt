@@ -180,7 +180,9 @@ class ResolverManager constructor(
         }
 
         // If we have an Apple Music ID, use it directly
-        if (appleMusicId != null) {
+        // Only a CATALOG id is a usable hint (#265): a library id (`i.…`) from older
+        // Apple Music sync data isn't — drop it and let the cascade search instead.
+        if (com.parachord.shared.resolver.isAppleMusicCatalogId(appleMusicId)) {
             results.add(
                 ResolvedSource(
                     url = "applemusic:song:$appleMusicId",

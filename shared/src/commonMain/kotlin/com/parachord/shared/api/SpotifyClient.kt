@@ -86,6 +86,8 @@ class SpotifyClient(
      */
     loadCooldownEpochMs: (() -> Long)? = null,
     saveCooldownEpochMs: (suspend (Long) -> Unit)? = null,
+    loadStrikes: (() -> Int)? = null,
+    saveStrikes: (suspend (Int) -> Unit)? = null,
 ) {
 
     companion object {
@@ -124,6 +126,8 @@ class SpotifyClient(
         tag = "SpotifyClient",
         loadCooldownEpochMs = loadCooldownEpochMs,
         saveCooldownEpochMs = saveCooldownEpochMs,
+        loadStrikes = loadStrikes,
+        saveStrikes = saveStrikes,
         // Spotify's abuse-mode ban routinely outlasts a flat 1h cooldown
         // (observed: still 429ing 12+ hours later despite a quiet network).
         // With a flat cap, each lapse re-pokes the still-banned account and
@@ -223,13 +227,27 @@ class SpotifyClient(
      * so the resolver doesn't crash on transient 5xx (mirrors
      * [AppleMusicClient.search]).
      */
-    suspend fun search(query: String, type: String, limit: Int = 20, market: String = "from_token"): SpSearchResponse =
+    /**
+     * @param throwOnServerError when true, a 5xx throws instead of returning an
+     *   empty response. Callers that record "no match" (sync hydration) need it:
+     *   an outage must not look like a track that isn't on Spotify.
+     */
+    suspend fun search(
+        query: String,
+        type: String,
+        limit: Int = 20,
+        market: String = "from_token",
+        throwOnServerError: Boolean = false,
+    ): SpSearchResponse =
         gate.withPermit(exceptionFactory = { SpotifyRateLimitedException(it) }) {
             val response: HttpResponse = httpClient.get("$BASE/v1/search") {
                 applyAuth(this)
                 parameter("q", query); parameter("type", type); parameter("limit", limit); parameter("market", market)
             }
             gate.handleResponse(response) { SpotifyRateLimitedException(it) }
+            if (throwOnServerError && response.status.value >= 500) {
+                throw IllegalStateException("Spotify search failed: HTTP ${response.status.value}")
+            }
             if (!response.status.isSuccess()) SpSearchResponse() else response.body()
         }
 

@@ -39,6 +39,16 @@ SELECT * FROM tracks WHERE title LIKE '%' || ? || '%' OR artist LIKE '%' || ? ||
 existsByTitleAndArtist:
 SELECT COUNT(*) > 0 FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?);
 
+getByTitleAndArtist:
+SELECT * FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) ORDER BY addedAt ASC LIMIT 1;
+
+-- The artist's MusicBrainz id from any enriched library track by them (#429:
+-- lets the Wikipedia bio skip a MusicBrainz name search).
+artistMbidForArtist:
+SELECT artistMbid FROM tracks
+WHERE artist = ? COLLATE NOCASE AND artistMbid IS NOT NULL AND artistMbid != ''
+LIMIT 1;
+
 getRecentSync:
 SELECT * FROM tracks ORDER BY addedAt DESC LIMIT ?;
 
@@ -51,6 +61,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateArtworkById:
 UPDATE tracks SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artworkUrl = '');
+
+replaceArtworkUrl:
+UPDATE tracks SET artworkUrl = :fresh WHERE artworkUrl = :dead;
 
 deleteById:
 DELETE FROM tracks WHERE id = ?;

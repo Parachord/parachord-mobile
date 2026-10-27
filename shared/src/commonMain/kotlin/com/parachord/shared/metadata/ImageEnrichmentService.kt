@@ -174,17 +174,20 @@ class ImageEnrichmentService(
      * `albumDao.updateArtworkByTitleAndArtist` write would be a no-op
      * at best and stomp the wrong row at worst.
      *
-     * Same provider cascade as [enrichAlbumArt] — `getAlbumTracks` first
-     * (full tracklist + artwork from MB→Last.fm→Spotify), `searchAlbums`
-     * second (when detail lookup yields no artwork). In-flight dedup
-     * shares the [albumFetches] map with the enriching variant since
-     * the work is identical until the DAO step.
+     * Cascade: `getAlbumTracks` first (full tracklist + artwork from
+     * MB→Last.fm→Spotify), then `searchAlbums`, then `searchTracks`. Each
+     * stage's candidate must pass [usableArt]: MusicBrainz always builds a
+     * Cover Art Archive URL whether or not a cover was uploaded, so a CAA
+     * candidate is HEAD-checked and a 404 falls through to the next stage
+     * instead of being returned (and stored) as the album's art.
      *
-     * Returns the first non-null artwork URL across the cascade, or null
-     * if no provider had art for this title/artist combination.
+     * [exclude] skips a URL already known to be dead ([BrokenArtRetry]).
+     * In-flight lookups for the same album are shared.
+     *
+     * Returns the first usable artwork URL across the cascade, or null.
      */
-    suspend fun lookupAlbumArt(albumTitle: String, artistName: String): String? {
-        val key = "${albumTitle.lowercase().trim()}|${artistName.lowercase().trim()}"
+    suspend fun lookupAlbumArt(albumTitle: String, artistName: String, exclude: String? = null): String? {
+        val key = "${albumTitle.lowercase().trim()}|${artistName.lowercase().trim()}|${exclude.orEmpty()}"
         val deferred = albumMutex.withLock {
             val cur = albumFetches[key]
             if (cur != null && cur.isActive) return@withLock cur
@@ -193,22 +196,21 @@ class ImageEnrichmentService(
                     // Detail lookup first (preferred — gets richer providers'
                     // artwork through the full track-list response).
                     val detail = metadataService.getAlbumTracks(albumTitle, artistName)
-                    val detailArt = detail?.artworkUrl
-                    if (detailArt != null) return@async detailArt
+                    detail?.artworkUrl?.let { if (usableArt(it, exclude)) return@async it }
 
                     // Fall back to album search across the same cascade.
                     val searchResults = metadataService.searchAlbums(
                         "$albumTitle $artistName",
                         limit = 5,
                     )
-                    val albumSearchArt = searchResults
-                        .firstOrNull {
+                    val albumCandidates = listOfNotNull(
+                        searchResults.firstOrNull {
                             it.title.equals(albumTitle, ignoreCase = true) &&
                                 it.artist.equals(artistName, ignoreCase = true)
-                        }
-                        ?.artworkUrl
-                        ?: searchResults.firstOrNull()?.artworkUrl
-                    if (albumSearchArt != null) return@async albumSearchArt
+                        }?.artworkUrl,
+                        searchResults.firstOrNull()?.artworkUrl,
+                    ).distinct()
+                    albumCandidates.firstOrNull { usableArt(it, exclude) }?.let { return@async it }
 
                     // Last resort: track-level search. Some obscure
                     // singles (e.g. one-off bandcamp drops) aren't
@@ -224,13 +226,15 @@ class ImageEnrichmentService(
                         "$artistName $albumTitle",
                         limit = 5,
                     )
-                    trackResults
-                        .firstOrNull {
+                    listOfNotNull(
+                        trackResults.firstOrNull {
                             it.album?.equals(albumTitle, ignoreCase = true) == true &&
                                 it.artist.equals(artistName, ignoreCase = true)
-                        }
-                        ?.artworkUrl
-                        ?: trackResults.firstOrNull()?.artworkUrl
+                        }?.artworkUrl,
+                        trackResults.firstOrNull()?.artworkUrl,
+                    ).distinct().firstOrNull { usableArt(it, exclude) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                     null
                 } finally {
@@ -244,49 +248,26 @@ class ImageEnrichmentService(
     }
 
     /**
+     * Can [url] be shown (and stored) as cover art? Not blank, not the known-dead
+     * [exclude], and — for Cover Art Archive URLs, which MusicBrainz builds
+     * without knowing whether a cover exists — actually serving an image.
+     * Other providers' URLs come from a real image listing, so they're trusted
+     * without a HEAD.
+     */
+    private suspend fun usableArt(url: String, exclude: String?): Boolean {
+        if (url.isBlank() || url == exclude) return false
+        if ("coverartarchive.org" !in url) return true
+        return verifyArtUrl(url)
+    }
+
+    /**
      * Fetch and persist an album's artwork if missing.
      * Returns the artwork URL or null if none found.
      */
     suspend fun enrichAlbumArt(albumTitle: String, artistName: String): String? {
-        val key = "${albumTitle.lowercase().trim()}|${artistName.lowercase().trim()}"
-        val deferred = albumMutex.withLock {
-            val cur = albumFetches[key]
-            if (cur != null && cur.isActive) return@withLock cur
-            val d = scope.async {
-                try {
-                    // Try album detail lookup first (gets artwork from tracklist providers)
-                    val detail = metadataService.getAlbumTracks(albumTitle, artistName)
-                    var artworkUrl = detail?.artworkUrl
-
-                    // Fall back to album search if detail didn't yield artwork
-                    if (artworkUrl == null) {
-                        val searchResults = metadataService.searchAlbums(
-                            "$albumTitle $artistName",
-                            limit = 5,
-                        )
-                        artworkUrl = searchResults
-                            .firstOrNull {
-                                it.title.equals(albumTitle, ignoreCase = true) &&
-                                    it.artist.equals(artistName, ignoreCase = true)
-                            }
-                            ?.artworkUrl
-                            ?: searchResults.firstOrNull()?.artworkUrl
-                    }
-
-                    if (artworkUrl != null) {
-                        albumDao.updateArtworkByTitleAndArtist(albumTitle, artistName, artworkUrl)
-                    }
-                    artworkUrl
-                } catch (_: Exception) {
-                    null
-                } finally {
-                    albumMutex.withLock { albumFetches.remove(key) }
-                }
-            }
-            albumFetches[key] = d
-            d
-        }
-        return deferred.await()
+        val artworkUrl = lookupAlbumArt(albumTitle, artistName) ?: return null
+        albumDao.updateArtworkByTitleAndArtist(albumTitle, artistName, artworkUrl)
+        return artworkUrl
     }
 
     /**
@@ -303,22 +284,25 @@ class ImageEnrichmentService(
                 try {
                     var artworkUrl: String? = null
 
-                    // Try album art first (most likely to have artwork)
+                    // Try album art first (most likely to have artwork). An
+                    // unverified Cover Art Archive URL (MusicBrainz builds one
+                    // whether or not a cover exists) isn't stored — it falls
+                    // through to track search instead.
                     if (albumTitle != null) {
                         val detail = metadataService.getAlbumTracks(albumTitle, artistName)
-                        artworkUrl = detail?.artworkUrl
+                        artworkUrl = detail?.artworkUrl?.takeIf { usableArt(it, null) }
                     }
 
                     // Fall back to track search
                     if (artworkUrl == null) {
                         val results = metadataService.searchTracks("$artistName $trackTitle", limit = 5)
-                        artworkUrl = results
-                            .firstOrNull {
+                        artworkUrl = listOfNotNull(
+                            results.firstOrNull {
                                 it.title.equals(trackTitle, ignoreCase = true) &&
                                     it.artist.equals(artistName, ignoreCase = true)
-                            }
-                            ?.artworkUrl
-                            ?: results.firstOrNull()?.artworkUrl
+                            }?.artworkUrl,
+                            results.firstOrNull()?.artworkUrl,
+                        ).distinct().firstOrNull { usableArt(it, null) }
                     }
 
                     if (artworkUrl != null) {
@@ -387,7 +371,7 @@ class ImageEnrichmentService(
                             for (track in withAlbum) {
                                 val art = albumArtCache[(track.trackAlbum ?: "") to track.trackArtist]
                                     ?: continue
-                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, art)
+                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, track.trackTitle, track.trackArtist, art)
                             }
                         }
 
@@ -415,7 +399,7 @@ class ImageEnrichmentService(
                                                 null
                                             }
                                             if (art != null) {
-                                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, art)
+                                                playlistTrackDao.updateTrackArtwork(playlistId, track.position, track.trackTitle, track.trackArtist, art)
                                             }
                                         }
                                     }

@@ -14,7 +14,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -31,6 +33,23 @@ import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
+import coil.request.SuccessResult
+import kotlinx.coroutines.launch
+
+/**
+ * A stored cover at [url] failed to load: ask [com.parachord.shared.metadata.BrokenArtRetry]
+ * for a working one (once per album per session), which also patches every
+ * stored copy. Null when the album isn't known or nothing better turned up.
+ * Desktop parity: parachord#1101.
+ */
+internal suspend fun retryBrokenAlbumArt(url: String, artist: String?, album: String?): String? {
+    if (artist.isNullOrBlank() || album.isNullOrBlank()) return null
+    return runCatching {
+        org.koin.core.context.GlobalContext.get()
+            .get<com.parachord.shared.metadata.BrokenArtRetry>()
+            .reportAlbumArt(url, artist, album)
+    }.getOrNull()
+}
 
 /**
  * Reusable album art image composable with rounded corners, shadow,
@@ -39,6 +58,10 @@ import coil.request.ImageRequest
  * When [placeholderName] is provided, uses a deterministic gradient
  * with initials (matching the desktop app's behavior). Otherwise falls
  * back to a simple music note placeholder.
+ *
+ * Pass [artist] and [album] wherever they're known: a cover that fails to
+ * load is then looked up again ([retryBrokenAlbumArt]) instead of leaving
+ * the placeholder up for as long as the dead URL stays stored.
  */
 @Composable
 fun AlbumArtCard(
@@ -49,16 +72,20 @@ fun AlbumArtCard(
     elevation: Dp = 2.dp,
     placeholderName: String? = null,
     contentDescription: String? = "Album artwork",
+    artist: String? = null,
+    album: String? = null,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
     val commonModifier = modifier
         .size(size)
         .shadow(elevation, shape)
         .clip(shape)
+    val scope = rememberCoroutineScope()
+    var replacement by remember(artworkUrl) { mutableStateOf<String?>(null) }
 
     // Animate between different artwork URLs (track switches) with a smooth crossfade
     Crossfade(
-        targetState = artworkUrl,
+        targetState = replacement ?: artworkUrl,
         animationSpec = tween(durationMillis = 300),
         modifier = commonModifier,
         label = "album-art-crossfade",
@@ -72,6 +99,9 @@ fun AlbumArtCard(
                 contentDescription = contentDescription,
                 modifier = Modifier.size(size),
                 contentScale = ContentScale.Crop,
+                onError = {
+                    scope.launch { retryBrokenAlbumArt(url, artist, album)?.let { replacement = it } }
+                },
                 loading = {
                     if (placeholderName != null) {
                         GradientPlaceholder(
@@ -125,6 +155,8 @@ fun AlbumArtCardFill(
     elevation: Dp = 4.dp,
     placeholderName: String? = null,
     contentDescription: String? = "Album artwork",
+    artist: String? = null,
+    album: String? = null,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
     val commonModifier = modifier
@@ -137,23 +169,31 @@ fun AlbumArtCardFill(
     // image stays visible until the new one is ready.
     var displayedUrl by remember { mutableStateOf(artworkUrl) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // The URL to show: the caller's, or a working replacement for it once a
+    // dead cover has been retried ([retryBrokenAlbumArt]).
+    var wantedUrl by remember(artworkUrl) { mutableStateOf(artworkUrl) }
 
-    // Prefetch the new URL; update displayedUrl only on success
-    if (artworkUrl != displayedUrl && !artworkUrl.isNullOrBlank()) {
-        androidx.compose.runtime.LaunchedEffect(artworkUrl) {
-            try {
-                val request = ImageRequest.Builder(context)
-                    .data(artworkUrl)
-                    .build()
-                context.imageLoader.execute(request)
-                // Image is now in memory cache — safe to switch
-                displayedUrl = artworkUrl
-            } catch (_: Exception) {
-                // Failed to load — keep showing current image
-            }
+    // Prefetch the new URL; update displayedUrl only on success. A failed
+    // load (Coil returns an ErrorResult, it doesn't throw) used to be shown
+    // anyway; now it keeps the current image and retries the cover.
+    LaunchedEffect(wantedUrl) {
+        val target = wantedUrl
+        if (target.isNullOrBlank()) {
+            displayedUrl = null
+            return@LaunchedEffect
         }
-    } else if (artworkUrl.isNullOrBlank()) {
-        displayedUrl = null
+        if (target == displayedUrl) return@LaunchedEffect
+        val result = try {
+            context.imageLoader.execute(ImageRequest.Builder(context).data(target).build())
+        } catch (_: Exception) {
+            null
+        }
+        if (result is SuccessResult) {
+            displayedUrl = target // now in memory cache — safe to switch
+        } else {
+            retryBrokenAlbumArt(target, artist, album)?.let { wantedUrl = it }
+        }
     }
 
     Crossfade(
@@ -170,6 +210,10 @@ fun AlbumArtCardFill(
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                // The first URL is shown without a prefetch, so its failure lands here.
+                onError = {
+                    scope.launch { retryBrokenAlbumArt(url, artist, album)?.let { wantedUrl = it } }
+                },
             )
         } else {
             if (placeholderName != null) {

@@ -92,11 +92,13 @@ class AlbumViewModel constructor(
             }
         }
 
-        // Progressive load: each provider emits as it completes
+        // Progressive load: each provider emits as it completes. When the
+        // providers can't supply a track list (MusicBrainz down or slow), a
+        // plugin catalog's list fills in, labelled with its source (#424).
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                metadataService.getAlbumTracksProgressively(albumTitle, artistName).collect { detail ->
+                metadataService.getAlbumTracksWithCatalogFallback(albumTitle, artistName).collect { detail ->
                     // Preserve local DB artwork if providers didn't return any
                     val current = _albumDetail.value
                     val enriched = if (detail.artworkUrl == null && current?.artworkUrl != null) {
@@ -296,7 +298,11 @@ class AlbumViewModel constructor(
         viewModelScope.launch {
             val existing = libraryRepository.getAlbumByTitleAndArtist(detail.title, detail.artist)
             if (existing != null) {
-                libraryRepository.deleteAlbum(existing)
+                // Sync-aware removal (#261), like Library/Home. A plain delete left the
+                // album's sync_sources row behind: the album was never removed from the
+                // provider, the orphan tripped SyncEngine's entity-count guard into a
+                // full-library refetch, and that refetch re-added the album.
+                libraryRepository.deleteAlbumWithSync(existing)
             }
         }
     }

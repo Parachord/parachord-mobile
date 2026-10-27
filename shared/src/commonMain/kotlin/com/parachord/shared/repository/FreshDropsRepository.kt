@@ -143,6 +143,20 @@ class FreshDropsRepository(
     }
 
     /** Persist cache to disk. */
+    /**
+     * A cover in the list stopped loading and [BrokenArtRetry] found a working
+     * one: swap it in memory and on disk, so the dead URL isn't restored from
+     * the cache on the next visit.
+     */
+    suspend fun replaceArt(dead: String, fresh: String) {
+        if (!diskCacheLoaded) loadDiskCache()
+        val releases = cachedReleases ?: return
+        if (releases.none { it.albumArt == dead }) return
+        val patched = releases.map { if (it.albumArt == dead) it.copy(albumArt = fresh) else it }
+        cachedReleases = patched
+        saveDiskCache(patched, lastFetchedAt)
+    }
+
     private suspend fun saveDiskCache(releases: List<FreshDrop>, fetchedAt: Long) {
         try {
             val wrapper = FreshDropsDiskCache(releases = releases, fetchedAt = fetchedAt)
@@ -250,19 +264,12 @@ class FreshDropsRepository(
         if (!forceRefresh && !isStale && cachedReleases != null) {
             Log.d(TAG, "Using ${cachedReleases!!.size} cached fresh drops")
             emit(Resource.Success(cachedReleases!!))
-            // Even on the cache-hit path, run the art repair pass —
-            // entries cached with a broken Cover Art Archive URL (CAA
-            // 404 for release groups with no uploaded front cover) would
-            // otherwise sit broken for the full 6-hour TTL. The pass is
-            // idempotent: once a release's URL has been swapped to a
-            // non-CAA cascade result, subsequent passes skip it
-            // (`needsCheck = url == null || url.contains("coverartarchive.org")`).
-            val repaired = verifyAndRepairArt(cachedReleases!!)
-            if (repaired != cachedReleases) {
-                cachedReleases = repaired
-                saveDiskCache(repaired, lastFetchedAt)
-                emit(Resource.Success(repaired))
-            }
+            // No art pass on a cache hit. It used to HEAD every Cover Art
+            // Archive URL and, for each one without a cover, run the whole
+            // lookup again — about 2 MusicBrainz calls per coverless release on
+            // every visit, since the lookup usually landed on the same CAA URL.
+            // A cover that fails to load is now retried once by the image view
+            // (BrokenArtRetry), which patches this cache via [replaceArt].
             return@flow
         }
 
@@ -311,10 +318,15 @@ class FreshDropsRepository(
                     // show releases as they come in, merged with prior cache)
                     if (allReleases.isNotEmpty() && (index + 1) % 5 == 0) {
                         val progressMerged = mergeAndDedupe(allReleases, priorCachedReleases)
-                        // Save partial results so cache survives if collector is cancelled
+                        // Save partial results so the cache survives if the collector
+                        // is cancelled — but keep the PREVIOUS fetch time. Stamping
+                        // `now` here made a scan abandoned 10 artists in look like a
+                        // complete refresh, so the other artists were skipped for the
+                        // whole 6h TTL. The rotation is saved too, so the next scan
+                        // starts with the artists this one didn't reach.
                         cachedReleases = progressMerged
-                        lastFetchedAt = currentTimeMillis()
                         saveDiskCache(progressMerged, lastFetchedAt)
+                        saveRotation()
                         emit(Resource.Success(progressMerged))
                     }
 

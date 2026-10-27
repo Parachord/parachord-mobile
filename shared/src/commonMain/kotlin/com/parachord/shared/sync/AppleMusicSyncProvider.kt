@@ -12,6 +12,7 @@ import com.parachord.shared.api.AmTrack
 import com.parachord.shared.api.AmTrackReference
 import com.parachord.shared.api.AmTracksRequest
 import com.parachord.shared.api.AmUpdatePlaylistAttributes
+import com.parachord.shared.api.catalogIdOr
 import com.parachord.shared.api.AmUpdatePlaylistRequest
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.AppleMusicLibraryClient
@@ -545,9 +546,10 @@ class AppleMusicSyncProvider(
     override suspend fun searchForTrackId(title: String, artist: String, album: String?, isrc: String?): String? {
         // PRIMARY — exact catalog lookup by ISRC.
         if (!isrc.isNullOrBlank()) {
-            val storefront = ensureStorefront()
+            // A storefront failure (e.g. a stale Music-User-Token) falls through
+            // to iTunes Search, which needs no auth — it must not count as a miss.
             val catalogId = try {
-                api.getCatalogSongIdByIsrc(storefront, isrc)
+                api.getCatalogSongIdByIsrc(ensureStorefront(), isrc)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "catalog ISRC lookup failed for isrc=$isrc", e); null
@@ -560,14 +562,20 @@ class AppleMusicSyncProvider(
         // 5 minutes, don't ask again yet. Apple doesn't publish the throttle
         // window and stacked 429s just extend it — but the breaker self-clears so
         // a long-lived session recovers without an app restart.
-        if (nowMs() < iTunesRateLimitedUntilMs) return null
+        // Not asking isn't an answer: report unreachable so the hydration cache
+        // leaves the track pending instead of recording a miss.
+        if (nowMs() < iTunesRateLimitedUntilMs) {
+            throw TrackIdLookupUnreachableException("iTunes Search paused after a 429")
+        }
         delay(INTER_REQUEST_DELAY_MS)
         // iTunes Search has no field qualifiers; just concat the metadata
         // and let its ranking find the best song match.
         val term = listOfNotNull(title, artist, album?.takeIf { it.isNotBlank() })
             .joinToString(" ")
         return try {
-            val response = catalogClient.search(term = term, media = "music", entity = "song", limit = 5)
+            val response = catalogClient.search(
+                term = term, media = "music", entity = "song", limit = 5, throwOnServerError = true,
+            )
             val songs = response.results.filter { it.kind == "song" || it.wrapperType == "track" }
             val candidate = songs.firstOrNull { it.trackId != null } ?: return null
             val confidence = com.parachord.shared.resolver.scoreConfidence(
@@ -593,10 +601,13 @@ class AppleMusicSyncProvider(
                 Log.w(TAG, "iTunes Search rate-limited (HTTP 429) — pausing " +
                     "track-id hydration for 5 min")
             }
-            null
+            throw TrackIdLookupUnreachableException("iTunes Search rate-limited")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.w(TAG, "searchForTrackId failed for '$title' by '$artist'", e)
-            null
+            // 5xx / network: iTunes didn't answer, so this isn't a miss.
+            Log.w(TAG, "searchForTrackId: iTunes unreachable for '$title' by '$artist': ${e.message}")
+            throw TrackIdLookupUnreachableException("iTunes Search failed: ${e.message}")
         }
     }
 
@@ -613,7 +624,7 @@ class AppleMusicSyncProvider(
         // for accurate progress reporting through pagination.
         delay(INTER_REQUEST_DELAY_MS)
         // Probe must compute the SAME external id storage uses
-        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // (`playParams.id ?: id`; for library items that's the LIBRARY id, #265), not the library top-level
         // `id`. Comparing library-id to the stored catalog-id never matched, so
         // the unchanged-shortcut never fired and the WHOLE song library
         // re-fetched on every sync (#261, same bug as albums).
@@ -655,12 +666,15 @@ class AppleMusicSyncProvider(
         val storefront = try { api.getStorefront().data.firstOrNull()?.id } catch (e: Exception) {
             Log.w(TAG, "attachIsrcs: getStorefront failed; keeping applemusic- ids", e); null
         } ?: return tracks
-        // `spotifyId` is the reused external-id field — for AM it holds the catalog id.
-        val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map { it.spotifyId })
+        // Look up by CATALOG id (#265). `spotifyId` (the reused external-id field)
+        // holds the LIBRARY id, which /v1/catalog/{sf}/songs rejects — that's why
+        // this used to resolve 0 ISRCs. The catalog id is on entity.appleMusicId.
+        fun catalogIdOf(t: SyncedTrack) = t.entity.appleMusicId?.takeIf { it.isNotBlank() } ?: t.spotifyId
+        val isrcs = api.getCatalogSongIsrcs(storefront, tracks.map(::catalogIdOf))
         Log.i(TAG, "attachIsrcs: storefront=$storefront, resolved ${isrcs.size} ISRCs for ${tracks.size} songs")
         if (isrcs.isEmpty()) return tracks
         return tracks.map { synced ->
-            val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[synced.spotifyId]) ?: return@map synced
+            val isrc = com.parachord.shared.resolver.validateIsrc(isrcs[catalogIdOf(synced)]) ?: return@map synced
             synced.copy(
                 entity = synced.entity.copy(
                     id = TrackIdentity.canonicalTrackId(isrc, synced.entity.id),
@@ -711,7 +725,7 @@ class AppleMusicSyncProvider(
         val all = mutableListOf<SyncedAlbum>()
         delay(INTER_REQUEST_DELAY_MS)
         // Probe must compute the SAME external id storage uses
-        // (`playParams.id ?: id` = the catalog id), not the library top-level
+        // (`playParams.id ?: id`; for library items that's the LIBRARY id, #265), not the library top-level
         // `id`. The mismatch made the unchanged-shortcut never fire, re-fetching
         // the WHOLE album library every sync — the multi-minute (albums) grind (#261).
         val probe = api.listLibraryAlbums(limit = 1, offset = 0)
@@ -841,16 +855,19 @@ class AppleMusicSyncProvider(
         trackTitle = attributes.name,
         trackArtist = attributes.artistName,
         trackAlbum = attributes.albumName,
-        trackDuration = attributes.durationInMillis?.let { it / 1000 },
+        // ms, like Spotify/LB sync and PlaylistTrack's other writers (#349). Was /1000.
+        trackDuration = attributes.durationInMillis,
         trackArtworkUrl = resolveArtworkUrl(attributes.artwork?.url),
         trackSourceUrl = null,
         trackResolver = "applemusic",
         trackSpotifyUri = null,
         trackSoundcloudId = null,
         trackSpotifyId = null,
-        // playParams.id is the catalog ID (preferred for cross-device
-        // playback); falls back to the library ID. Either is usable.
-        trackAppleMusicId = attributes.playParams?.id ?: id,
+        // The CATALOG id (#265). playParams.id is the library id (`i.…`), which
+        // the catalog rejects: iOS playback (MusicCatalogResourceRequest), the
+        // ISRC lookup and add-to-playlist all need the catalog id. Desktop parity:
+        // `attrs.playParams?.catalogId || song.id`.
+        trackAppleMusicId = attributes.playParams.catalogIdOr(attributes.playParams?.id ?: id),
     )
 
     /** Library track → cross-provider [SyncedTrack]. The library row's
@@ -862,11 +879,19 @@ class AppleMusicSyncProvider(
     private fun AmLibrarySong.toSyncedTrack(): SyncedTrack? {
         val attrs = attributes ?: return null
         val title = attrs.name?.takeIf { it.isNotBlank() } ?: return null
-        val catalogId = attrs.playParams?.id ?: id
+        // TWO ids (#265), as desktop's transformTrack keeps them apart:
+        // - libraryId (`playParams.id`, `i.…`) stays the sync key: the row id, the
+        //   sync_sources externalId the probe compares, and what DELETE
+        //   /me/library/songs/{id} needs. Changing it would make every synced song
+        //   look new and duplicate the collection.
+        // - catalogId (`playParams.catalogId`) is the Apple Music id the rest of
+        //   the app uses: playback, the ISRC lookup, add-to-playlist.
+        val libraryId = attrs.playParams?.id ?: id
+        val catalogId = attrs.playParams.catalogIdOr(libraryId)
         val addedAt = attrs.dateAdded?.let { parseIso(it) } ?: 0L
         return SyncedTrack(
             entity = Track(
-                id = "applemusic-$catalogId",
+                id = "applemusic-$libraryId",
                 title = title,
                 artist = attrs.artistName?.takeIf { it.isNotBlank() } ?: "Unknown Artist",
                 album = attrs.albumName,
@@ -880,7 +905,7 @@ class AppleMusicSyncProvider(
                 sourceType = "synced",
                 addedAt = addedAt,
             ),
-            spotifyId = catalogId,
+            spotifyId = libraryId,
             addedAt = addedAt,
         )
     }

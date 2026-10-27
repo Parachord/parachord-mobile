@@ -123,6 +123,20 @@ class CriticalDarlingsRepository(
         }
     }
 
+    /**
+     * A cover in the list stopped loading and [BrokenArtRetry] found a working
+     * one: swap it in memory and on disk. Without this the dead URL came back
+     * from the cache on every visit, because only null art is retried.
+     */
+    suspend fun replaceArt(dead: String, fresh: String) {
+        if (!diskCacheLoaded) loadDiskCache()
+        val albums = cachedAlbums ?: return
+        if (albums.none { it.albumArt == dead }) return
+        val patched = albums.map { if (it.albumArt == dead) it.copy(albumArt = fresh) else it }
+        cachedAlbums = patched
+        saveDiskCache(patched, lastFetchedAt)
+    }
+
     private suspend fun saveDiskCache(albums: List<CriticsPickAlbum>, fetchedAt: Long) {
         try {
             cacheWrite(diskJson.encodeToString(CriticalDarlingsDiskCache(albums, fetchedAt)))

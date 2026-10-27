@@ -236,6 +236,23 @@ class LibraryRepository(
         trackDao.delete(track)
     }
 
+    /**
+     * Remove [track] from the collection, sync-aware. [track] may be an
+     * ephemeral row (weekly playlist, now-playing, search result) whose id is
+     * not the library row's, so resolve the library row first — by id, then by
+     * the same title+artist match [isTrackInCollection] uses. Deleting the
+     * ephemeral row would match nothing, and [SyncEngine.onTrackRemoved] keys
+     * its sync sources + tombstones on the library row's id.
+     * Returns false when no library row matched.
+     */
+    suspend fun removeFromCollection(track: Track): Boolean {
+        val existing = trackDao.getById(track.id)
+            ?: trackDao.getByTitleAndArtist(track.title, track.artist)
+            ?: return false
+        deleteTrackWithSync(existing)
+        return true
+    }
+
     suspend fun deleteAlbumWithSync(album: Album) {
         syncEngine.onAlbumRemoved(album)
         albumDao.delete(album)

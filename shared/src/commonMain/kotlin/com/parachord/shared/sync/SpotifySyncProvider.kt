@@ -526,7 +526,9 @@ class SpotifySyncProvider(
             }
         }
         return try {
-            val response = withRetry { spotifyClient.search(query = q, type = "track", limit = 5) }
+            val response = withRetry {
+                spotifyClient.search(query = q, type = "track", limit = 5, throwOnServerError = true)
+            }
             val items = response.tracks?.items.orEmpty()
             val candidate = items.firstOrNull { it.isPlayable != false } ?: return null
             val candidateId = candidate.id ?: return null
@@ -543,9 +545,15 @@ class SpotifySyncProvider(
                 return null
             }
             "spotify:track:$candidateId"
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.w(TAG, "searchForTrackId failed for '$title' by '$artist'", e)
-            null
+            // Spotify didn't answer (rate-limit cooldown, 5xx, network, expired
+            // session). That is not "this track isn't on Spotify": report it as
+            // unreachable so the hydration cache doesn't park the track in the
+            // 7→30-day miss cooldown.
+            Log.w(TAG, "searchForTrackId: Spotify unreachable for '$title' by '$artist': ${e.message}")
+            throw TrackIdLookupUnreachableException("Spotify search failed: ${e.message}")
         }
     }
 }

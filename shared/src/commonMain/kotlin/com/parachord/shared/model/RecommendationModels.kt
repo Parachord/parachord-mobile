@@ -16,6 +16,7 @@ data class RecommendedTrack(
     val artist: String,
     val album: String? = null,
     val artworkUrl: String? = null,
+    /** Track length in **milliseconds**, as [Track.duration] (#349). */
     val duration: Long? = null,
     val source: String = "",
     val resolvers: List<String> = emptyList(),

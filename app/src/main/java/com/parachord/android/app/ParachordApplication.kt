@@ -22,6 +22,8 @@ class ParachordApplication : Application() {
     private val announcementsRepository: com.parachord.shared.repository.AnnouncementsRepository by inject()
     private val trackTombstoneService: com.parachord.shared.sync.TrackTombstoneService by inject()
     private val settingsStore: com.parachord.android.data.store.SettingsStore by inject()
+    private val sqlDriver: app.cash.sqldelight.db.SqlDriver by inject()
+    private val kvStore: com.parachord.shared.store.KvStore by inject()
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -55,6 +57,30 @@ class ParachordApplication : Application() {
                 }
             } catch (_: Exception) {
                 // Background sweep; ignore failures.
+            }
+        }
+
+        // One-time repair of track lengths saved in seconds instead of ms (#349).
+        // Idempotent; never fail startup on it.
+        appScope.launch {
+            try {
+                if (com.parachord.shared.db.DurationUnitMigration.runOnce(sqlDriver, kvStore)) {
+                    com.parachord.shared.platform.Log.d("ParachordApplication", "Repaired seconds-stored track lengths")
+                }
+            } catch (_: Exception) {
+                // Retried next launch (the flag is only set on success).
+            }
+        }
+
+        // One-time repair of Apple Music library ids saved where a catalog id
+        // belongs (#265). Idempotent; never fail startup on it.
+        appScope.launch {
+            try {
+                if (com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore)) {
+                    com.parachord.shared.platform.Log.d("ParachordApplication", "Cleared Apple Music library ids from catalog-id columns")
+                }
+            } catch (_: Exception) {
+                // Retried next launch (the flag is only set on success).
             }
         }
 

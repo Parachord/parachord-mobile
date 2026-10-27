@@ -82,14 +82,18 @@ func pcTrackArt(_ artworkUrl: String?, artist: String, title: String, album: Str
 }
 
 @ViewBuilder
-func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, resolving: Bool = false) -> some View {
+/// Pass `artist` + `album` wherever they're known: a cover that fails to load is
+/// then looked up again (`BrokenArtRetry`, desktop parachord#1101) instead of
+/// leaving the placeholder up for as long as the dead URL stays stored.
+func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, resolving: Bool = false,
+             artist: String? = nil, album: String? = nil) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     // Cover content: real art fill-cropped, gradient placeholder on miss/load.
     // While the track is still resolving (no art yet) show the shimmer skeleton
     // instead of the gradient letter tile — art pops in once resolution lands.
     let content = ZStack {
         if let url, let u = URL(string: url) {
-            PCCachedImage(url: u) { img in
+            PCCachedImage(url: u, retryArtist: artist, retryAlbum: album) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 if resolving { PCSkeletonBox(radius: radius) } else { PCArtwork(name: seed, radius: radius) }
@@ -171,16 +175,29 @@ enum PCImageStore {
 }
 
 struct PCCachedImage<Content: View, Placeholder: View>: View {
-    private let url: URL?
+    private let givenUrl: URL?
+    private let retryArtist: String?
+    private let retryAlbum: String?
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
     @State private var loaded: UIImage?
     @State private var failed = false
+    /// A working cover found after `givenUrl` failed to load (see `load`).
+    @State private var replacement: URL?
 
-    init(url: URL?,
+    /// The URL being shown: the caller's, or its replacement once a dead cover
+    /// has been retried.
+    private var url: URL? { replacement ?? givenUrl }
+
+    /// `retryArtist` + `retryAlbum`: when the cover fails to load, ask
+    /// `BrokenArtRetry` for a working one (once per album per session; it also
+    /// patches every stored copy of the dead URL).
+    init(url: URL?, retryArtist: String? = nil, retryAlbum: String? = nil,
          @ViewBuilder content: @escaping (Image) -> Content,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
-        self.url = url
+        self.givenUrl = url
+        self.retryArtist = retryArtist
+        self.retryAlbum = retryAlbum
         self.content = content
         self.placeholder = placeholder
         // Seed SYNCHRONOUSLY from the cache (memory, then disk) at construction.
@@ -219,6 +236,7 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
         .animation(.easeInOut(duration: 0.35), value: cachedImage.map { ObjectIdentifier($0) })
         .animation(.easeInOut(duration: 0.35), value: failed)
         .task(id: url) { await load() }
+        .onChange(of: givenUrl) { replacement = nil }   // a reused view got a new cover
     }
 
     private func load() async {
@@ -238,10 +256,22 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
         }
         guard let data, let ui = UIImage(data: data) else {
             failed = true
+            await retryDeadCover(url)
             return
         }
         PCImageStore.store(url, data, ui)
         loaded = ui
+    }
+
+    /// The cover at `dead` didn't load. If the album is known, look it up again;
+    /// a working URL replaces it (which re-runs `load` via `.task(id:)`).
+    private func retryDeadCover(_ dead: URL) async {
+        guard replacement == nil, !dead.isFileURL,
+              let artist = retryArtist, !artist.isEmpty,
+              let album = retryAlbum, !album.isEmpty else { return }
+        let fresh = (try? await IosContainer.companion.shared.reportBrokenAlbumArt(
+            url: dead.absoluteString, artist: artist, album: album)) ?? nil
+        if let fresh, let u = URL(string: fresh) { replacement = u }
     }
 }
 
@@ -256,7 +286,12 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
 private let pcFaceCache = NSCache<NSString, NSValue>()
 
 struct PCArtistImage<Placeholder: View>: View {
-    let url: URL?
+    let givenUrl: URL?
+    /// When set, an image that fails to load is looked up again (BrokenArtRetry).
+    let artistName: String?
+    /// A working image found after `givenUrl` failed to load.
+    @State private var replacement: URL?
+    private var url: URL? { replacement ?? givenUrl }
     /// Top area covered by the Dynamic Island / status bar in a full-bleed hero.
     /// The face is biased BELOW this; 0 (the default, used by circles) just
     /// centers the face normally.
@@ -266,8 +301,10 @@ struct PCArtistImage<Placeholder: View>: View {
     @State private var detected: UnitPoint?
     @State private var failed = false
 
-    init(url: URL?, topInset: CGFloat = 0, @ViewBuilder placeholder: @escaping () -> Placeholder) {
-        self.url = url
+    init(url: URL?, topInset: CGFloat = 0, artistName: String? = nil,
+         @ViewBuilder placeholder: @escaping () -> Placeholder) {
+        self.givenUrl = url
+        self.artistName = artistName
         self.topInset = topInset
         self.placeholder = placeholder
         // Seed synchronously from memory/disk so a revisited hero/related image
@@ -295,6 +332,7 @@ struct PCArtistImage<Placeholder: View>: View {
                 .animation(.easeInOut(duration: 0.35), value: failed)
         }
         .task(id: url) { await load() }
+        .onChange(of: givenUrl) { replacement = nil }
     }
 
     @ViewBuilder private func cropped(_ size: CGSize) -> some View {
@@ -336,7 +374,11 @@ struct PCArtistImage<Placeholder: View>: View {
             } else {
                 failed = false
                 guard let (data, _) = try? await URLSession.shared.data(from: url),
-                      let ui = UIImage(data: data) else { failed = true; return }
+                      let ui = UIImage(data: data) else {
+                    failed = true
+                    await retryDeadImage(url)
+                    return
+                }
                 PCImageStore.store(url, data, ui)
                 loaded = ui
             }
@@ -345,6 +387,18 @@ struct PCArtistImage<Placeholder: View>: View {
             let pt = await Self.detectFaceCenter(img)
             pcFaceCache.setObject(NSValue(cgPoint: CGPoint(x: pt.x, y: pt.y)), forKey: key as NSString)
             detected = pt
+        }
+    }
+
+    /// The image at `dead` didn't load: look the artist's image up again.
+    private func retryDeadImage(_ dead: URL) async {
+        guard replacement == nil, let name = artistName, !name.isEmpty else { return }
+        let fresh = (try? await IosContainer.companion.shared.reportBrokenArtistImage(
+            url: dead.absoluteString, artist: name)) ?? nil
+        if let fresh, let u = URL(string: fresh) {
+            ArtistImageCache.shared.replace(name, with: fresh)
+            failed = false
+            replacement = u
         }
     }
 
@@ -425,11 +479,32 @@ final class AlbumDetailModel {
             return
         }
         isLoading = true
-        detail = try? await container.getAlbumDetail(albumTitle: title, artistName: artist)
-        entities = detail?.tracks.map { pcTrack(from: $0) } ?? []
-        isLoading = false
-        loaded = true
-        AlbumDetailCache.shared.put(cacheKey, .init(detail: detail, entities: entities, ts: Date()))
+        watchDetail()
+    }
+
+    private var detailSub: Cancellable?
+    private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+
+    /// Each provider's answer as it lands, and a plugin catalog's track list when
+    /// the providers can't supply one (#424; the providers' list replaces it).
+    private func watchDetail() {
+        detailSub?.cancel()
+        detailSub = watcher.watchUntilDone(
+            flow: container.albumDetailFlow(albumTitle: title, artistName: artist),
+            onEach: { [weak self] v in
+                guard let self, let d = v as? AlbumDetail else { return }
+                self.detail = d
+                self.entities = d.tracks.map { pcTrack(from: $0) }
+                if !d.tracks.isEmpty { self.isLoading = false; self.loaded = true }
+                // Only the providers' list is reused on reopen; a catalog
+                // list must not hide MusicBrainz's when it comes back.
+                if d.catalogSource == nil && !d.tracks.isEmpty {
+                    AlbumDetailCache.shared.put(self.cacheKey, .init(detail: d, entities: self.entities, ts: Date()))
+                }
+            },
+            onDone: { [weak self] in
+                Task { @MainActor in self?.isLoading = false; self?.loaded = true }
+            })
     }
 
     private func refresh() async {
@@ -521,7 +596,8 @@ struct AlbumScreen: View {
                 if model.isLoading && !model.loaded {
                     PCSkeletonBox(radius: 12).frame(width: 132, height: 132)
                 } else {
-                    pcCover(model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12)
+                    pcCover(model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12,
+                            artist: model.artist, album: model.title)
                 }
             }
             .shadow(color: .black.opacity(0.18), radius: 9, y: 6)
@@ -540,6 +616,10 @@ struct AlbumScreen: View {
                     if let year = model.detail?.year {
                         Text(String(year.intValue)).font(.system(size: 14)).foregroundStyle(PC.fg3)
                     }
+                }
+                // The providers couldn't supply this list; a plugin's catalog did (#424).
+                if let source = model.detail?.catalogSource {
+                    Text("Track list from \(source)").font(.system(size: 12)).foregroundStyle(PC.fg3)
                 }
             }
             Spacer(minLength: 0)
@@ -878,7 +958,7 @@ struct ArtistScreen: View {
             // Artist photo, face-aware and biased BELOW the Dynamic Island so the
             // face isn't hidden by it (topInset = the status-bar/island height).
             PCArtistImage(url: heroImage.flatMap { $0.isEmpty ? nil : URL(string: $0) },
-                          topInset: heroTopInset) {
+                          topInset: heroTopInset, artistName: model.name) {
                 Color.clear   // no-art → the base gradient shows
             }
             // Dark scrim for text legibility + fade into the page background.
@@ -1078,7 +1158,7 @@ struct ArtistScreen: View {
                     ForEach(discoFiltered, id: \.discoId) { album in
                         Button { navAlbum = PCAlbumRef(title: album.title, artist: album.artist) } label: {
                             VStack(alignment: .leading, spacing: 0) {
-                                pcCover(album.artworkUrl, seed: album.title + album.artist, size: nil, radius: 10)
+                                pcCover(album.artworkUrl, seed: album.title + album.artist, size: nil, radius: 10, artist: album.artist, album: album.title)
                                     .aspectRatio(1, contentMode: .fit)
                                     .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
                                 Text(album.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1)
@@ -1222,7 +1302,7 @@ struct ArtistScreen: View {
         return Color.clear
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                PCArtistImage(url: url.flatMap { URL(string: $0) }) { initialCircle(a.name) }
+                PCArtistImage(url: url.flatMap { URL(string: $0) }, artistName: a.name) { initialCircle(a.name) }
             }
             .clipShape(Circle())
             .shadow(color: .black.opacity(0.1), radius: 6, y: 3)

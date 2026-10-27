@@ -14,13 +14,13 @@ import com.parachord.shared.model.Resource
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
+import com.parachord.android.resolver.TrackResolverCache
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import com.parachord.android.playback.PlaybackContext
-import com.parachord.android.resolver.ResolverScoring.Companion.MIN_CONFIDENCE_THRESHOLD
 import java.util.UUID
 /**
  * ViewModel for the Recommendations screen.
@@ -35,12 +35,20 @@ class RecommendationsViewModel constructor(
     private val playbackController: PlaybackController,
     private val metadataService: MetadataService,
     private val libraryRepository: LibraryRepository,
+    /**
+     * The app-wide resolver cache (#177). Badges come from here, keyed by
+     * title|artist, so they survive leaving and reopening the screen, and rows
+     * resolve only once they scroll into view. Recommendations used to resolve
+     * every track itself into screen-local state on every open (and again on
+     * every resume), firing ~80 Spotify + Apple Music searches each time.
+     */
+    private val trackResolverCache: TrackResolverCache,
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "RecommendationsVM"
-        /** Number of tracks to resolve before emitting a batch update. */
-        private const val RESOLVE_BATCH_SIZE = 5
+        /** [refreshIfStale] reloads on resume only past this age (30 min). */
+        private const val STALE_AFTER_MS = 30 * 60 * 1000L
     }
 
     // Initialize from singleton cache immediately — avoids flash of Loading state
@@ -65,8 +73,18 @@ class RecommendationsViewModel constructor(
     private val _sourceCounts = MutableStateFlow(SourceCounts())
     val sourceCounts: StateFlow<SourceCounts> = _sourceCounts
 
-    /** Active resolution job — cancelled when a new batch arrives. */
-    private var resolveJob: Job? = null
+    /** Resolver badge names for display, keyed by title|artist (shared cache). */
+    val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
+
+    /** Resolver confidences for dimming low-confidence badges (shared cache). */
+    val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> =
+        trackResolverCache.trackResolverConfidences
+
+    /** The current load's collectors — cancelled before a reload so they don't stack. */
+    private var loadJob: Job? = null
+
+    /** When the last load started, for [refreshIfStale]. 0 = never. */
+    private var lastLoadAtMs = 0L
 
     init {
         // Set up filtered flows
@@ -114,10 +132,37 @@ class RecommendationsViewModel constructor(
         loadRecommendations()
     }
 
-    /** Called on screen resume — reloads recommendations. */
+    /**
+     * Called on screen resume. Reloads only when the last load failed (e.g.
+     * coming back after connecting Last.fm / ListenBrainz) or is over
+     * [STALE_AFTER_MS] old. It used to reload on EVERY resume — including the
+     * first, right after init's load — so each visit loaded twice. A load still
+     * in flight is left alone. The refresh button forces a reload via [refresh].
+     */
     fun refreshIfStale() {
-        loadRecommendations()
+        val failed = _allTracks.value is Resource.Error
+        val stale = System.currentTimeMillis() - lastLoadAtMs > STALE_AFTER_MS
+        if (failed || stale) loadRecommendations()
     }
+
+    /**
+     * Resolve one recommended track once its row is visible (#177). The shared
+     * cache dedups by title|artist and bounds concurrency, so scrolling back or
+     * reopening the screen is free. backfillDb = false: these rows aren't in
+     * the library.
+     */
+    fun resolveVisibleTrack(track: RecommendedTrack) {
+        trackResolverCache.resolveInBackground(listOf(track.toEntity()), backfillDb = false)
+    }
+
+    private fun RecommendedTrack.toEntity() = TrackEntity(
+        id = "rec-${title.hashCode()}-${artist.hashCode()}",
+        title = title,
+        artist = artist,
+        album = album,
+        duration = duration,
+        artworkUrl = artworkUrl,
+    )
 
     /**
      * Play a recommended track and populate the queue with the remaining
@@ -133,16 +178,7 @@ class RecommendationsViewModel constructor(
         val allTracks = (recommendedTracks.value as? Resource.Success)?.data ?: return
         val index = allTracks.indexOf(track).coerceAtLeast(0)
 
-        val entities = allTracks.map { t ->
-            TrackEntity(
-                id = "rec-${t.title.hashCode()}-${t.artist.hashCode()}",
-                title = t.title,
-                artist = t.artist,
-                album = t.album,
-                duration = t.duration,
-                artworkUrl = t.artworkUrl,
-            )
-        }
+        val entities = allTracks.map { it.toEntity() }
 
         playbackController.playQueue(
             entities,
@@ -231,77 +267,29 @@ class RecommendationsViewModel constructor(
     }
 
     private fun loadRecommendations() {
-        viewModelScope.launch {
-            recommendationsRepository.getRecommendedArtists().collect {
-                _allArtists.value = it
-            }
-        }
-        viewModelScope.launch {
-            recommendationsRepository.getRecommendedTracks().collect { resource ->
-                _allTracks.value = resource
-                // Update source counts when tracks change
-                if (resource is Resource.Success) {
-                    val tracks = resource.data
-                    _sourceCounts.value = SourceCounts(
-                        total = tracks.size,
-                        lastfm = tracks.count { it.source == "lastfm" },
-                        listenbrainz = tracks.count { it.source == "listenbrainz" },
-                    )
-                    // Cancel any in-flight resolution and start fresh
-                    resolveJob?.cancel()
-                    resolveJob = resolveTracksProgressively(tracks)
+        lastLoadAtMs = System.currentTimeMillis()
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
+            launch {
+                recommendationsRepository.getRecommendedArtists().collect {
+                    _allArtists.value = keepDataOnError(_allArtists.value, it)
                 }
             }
-        }
-    }
-
-    /**
-     * Resolve recommendation tracks through the content resolver pipeline.
-     * This gives us actual playback source badges (e.g. Spotify, YouTube)
-     * rather than metadata source labels (Last.fm, ListenBrainz).
-     * Batches updates to avoid per-track recomposition jank.
-     */
-    private fun resolveTracksProgressively(tracks: List<RecommendedTrack>): Job {
-        return viewModelScope.launch {
-            val mutableTracks = tracks.toMutableList()
-            var pendingUpdates = 0
-            for ((index, track) in tracks.withIndex()) {
-                if (track.resolvers.isNotEmpty()) continue // already resolved
-                try {
-                    val query = "${track.title} ${track.artist}"
-                    val sources = resolverManager.resolve(
-                        query,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    if (sources.isNotEmpty()) {
-                        // Build confidence map and filter out noMatch sources (< threshold)
-                        // from display, matching desktop's noMatch sentinel filtering.
-                        val confidenceMap = sources.associate {
-                            it.resolver to (it.confidence?.toFloat() ?: 1f)
-                        }
-                        val resolverNames = sources
-                            .filter { (it.confidence ?: 0.0) >= MIN_CONFIDENCE_THRESHOLD }
-                            .map { it.resolver }
-                            .distinct()
-                        mutableTracks[index] = track.copy(
-                            resolvers = resolverNames,
-                            resolverConfidences = confidenceMap,
+            launch {
+                recommendationsRepository.getRecommendedTracks().collect { resource ->
+                    _allTracks.value = keepDataOnError(_allTracks.value, resource)
+                    // Update source counts when tracks change. Badges are not
+                    // resolved here: each row asks the shared cache once it's
+                    // visible (resolveVisibleTrack).
+                    if (resource is Resource.Success) {
+                        val tracks = resource.data
+                        _sourceCounts.value = SourceCounts(
+                            total = tracks.size,
+                            lastfm = tracks.count { it.source == "lastfm" },
+                            listenbrainz = tracks.count { it.source == "listenbrainz" },
                         )
-                        pendingUpdates++
-                        // Emit in batches to reduce recomposition churn
-                        if (pendingUpdates >= RESOLVE_BATCH_SIZE) {
-                            _allTracks.value = Resource.Success(mutableTracks.toList())
-                            pendingUpdates = 0
-                        }
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to resolve '${track.title}' by ${track.artist}", e)
                 }
-            }
-            // Flush any remaining updates
-            if (pendingUpdates > 0) {
-                _allTracks.value = Resource.Success(mutableTracks.toList())
             }
         }
     }
@@ -312,3 +300,13 @@ data class SourceCounts(
     val lastfm: Int = 0,
     val listenbrainz: Int = 0,
 )
+
+/**
+ * The repository emits its cached list first, then an error if the refresh
+ * fails (network, both services empty). A failed refresh must not replace a
+ * list the user is already looking at with the error screen — keep the data
+ * and only surface an error when there's nothing to show. iOS already drops
+ * error emissions the same way.
+ */
+internal fun <T> keepDataOnError(current: Resource<T>, next: Resource<T>): Resource<T> =
+    if (next is Resource.Error && current is Resource.Success) current else next

@@ -41,9 +41,30 @@ import kotlinx.serialization.json.putJsonObject
  * to preserve the existing consumer-facing API surface; this client file owns
  * the wire-format @Serializable types as private data classes that map to those.
  */
-class ListenBrainzClient(private val httpClient: HttpClient) {
+class ListenBrainzClient(
+    private val httpClient: HttpClient,
+    /**
+     * `additional_info.submission_client_version` on every submitted listen, e.g.
+     * `"0.9.9 (android)"` — see [formatSubmissionClientVersion]. Lets a duplicate-listen
+     * report tell two Parachord clients on one account apart from a ListenBrainz
+     * importer (#362). It was a hard-coded `"1.1.0"` on every client.
+     */
+    private val submissionClientVersion: String = formatSubmissionClientVersion("", ""),
+) {
 
     companion object {
+        /**
+         * `"<appVersion> (<platform>)"`, e.g. `"0.9.9 (android)"` / `"0.1 (ios)"`.
+         * `submission_client` stays `"Parachord"` (what LB and Achordion group on);
+         * the version string carries the build and platform. Missing parts read
+         * `"unknown"` rather than a made-up version.
+         */
+        fun formatSubmissionClientVersion(appVersion: String, platform: String): String {
+            val v = appVersion.trim().ifEmpty { "unknown" }
+            val p = platform.trim().ifEmpty { "unknown" }
+            return "$v ($p)"
+        }
+
         private const val TAG = "ListenBrainzClient"
         private const val BASE_URL = "https://api.listenbrainz.org"
         private const val MAPPER_URL = "https://mapper.listenbrainz.org"
@@ -218,7 +239,7 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                             putJsonObject("additional_info") {
                                 put("media_player", "Parachord")
                                 put("submission_client", "Parachord")
-                                put("submission_client_version", "1.1.0")
+                                put("submission_client_version", submissionClientVersion)
                                 // MUST be a positive integer — ListenBrainz rejects the
                                 // whole listen with HTTP 400 on duration_ms <= 0 (e.g. an
                                 // ephemeral listen-along / recommendation track whose Track
@@ -889,6 +910,9 @@ class ListenBrainzClient(private val httpClient: HttpClient) {
                     title = track.title.orEmpty(),
                     artist = track.creator.orEmpty(),
                     album = ext?.releaseName?.ifBlank { null },
+                    // JSPF `duration` is milliseconds. Desktop reads it too, so
+                    // ListenBrainz rows show a length like Last.fm's do.
+                    durationMs = track.duration?.takeIf { it > 0 },
                 )
             }
         } catch (e: CancellationException) {

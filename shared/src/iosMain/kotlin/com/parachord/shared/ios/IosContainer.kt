@@ -16,6 +16,7 @@ import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.metadata.AlbumDetail
+import com.parachord.shared.metadata.AlbumCatalogLoader
 import com.parachord.shared.metadata.AlbumSearchResult
 import com.parachord.shared.metadata.ArtistInfo
 import com.parachord.shared.metadata.AppleMusicArtistProvider
@@ -241,6 +242,7 @@ class IosContainer private constructor() {
         /** KvStore key for the persisted Spotify rate-limit cooldown (matches
          *  Android's `spotify_rate_limit_cooldown_ms`). */
         private const val SPOTIFY_COOLDOWN_KEY = "spotify_rate_limit_cooldown_ms"
+        private const val SPOTIFY_STRIKES_KEY = "spotify_rate_limit_strikes"
     }
 
     /** App-wide coroutine scope for fire-and-forget settings writes. */
@@ -282,6 +284,7 @@ class IosContainer private constructor() {
         AppConfig(
             userAgent = "Parachord/0.1 (iOS; https://parachord.com)",
             parachordClient = "ios",
+            appVersion = appVersionString(),
             isDebug = true,
             spotifyClientId = "",   // BYO — Parachord ships no Spotify key; user adds theirs in Settings
             lastFmApiKey = plist("LastFmApiKey"),
@@ -579,10 +582,17 @@ class IosContainer private constructor() {
     suspend fun aiSuggestionsCached(): IosAiSuggestions? =
         try { aiRecommendationService.getCachedRecommendations()?.toIos() } catch (e: Exception) { null }
 
-    /** Fresh AI suggestions (a live provider call — 30–60s). Empty on any error. */
-    suspend fun loadAiSuggestions(): IosAiSuggestions =
+    /**
+     * Fresh AI suggestions (a live provider call — 30–60s). Null on any error,
+     * so the caller keeps the cached suggestions it's showing. (It used to
+     * return empty lists, which the Home feed assigned over the cache.)
+     */
+    suspend fun loadAiSuggestions(): IosAiSuggestions? =
         try { aiRecommendationService.loadRecommendations().toIos() }
-        catch (e: Exception) { IosAiSuggestions(emptyList(), emptyList()) }
+        catch (e: Exception) {
+            Log.w("IosContainer", "AI suggestions refresh failed: ${e.message}")
+            null
+        }
 
     private fun AiRecommendations.toIos() = IosAiSuggestions(
         albums = albums.map { IosAiAlbumSuggestion(it.title, it.artist, it.reason, it.artworkUrl) },
@@ -725,6 +735,18 @@ class IosContainer private constructor() {
     /** Sweep expired track tombstones once per launch (Android parity). */
     suspend fun pruneTombstonesOnLaunch() {
         try { tombstoneService.prune() } catch (_: Exception) {}
+    }
+
+    /** One-time repair of track lengths saved in seconds instead of ms (#349,
+     *  Android parity). Idempotent; never throws to Swift. */
+    suspend fun migrateDurationUnitsOnLaunch() {
+        try { com.parachord.shared.db.DurationUnitMigration.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
+    }
+
+    /** One-time repair of Apple Music library ids saved where a catalog id
+     *  belongs (#265, Android parity). Idempotent; never throws to Swift. */
+    suspend fun repairAppleMusicLibraryIdsOnLaunch() {
+        try { com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
     }
 
     /** Persist the Apple Music Music User Token (acquired Swift-side via
@@ -1576,8 +1598,9 @@ class IosContainer private constructor() {
 
     // Remove from collection — sync-aware (#194): tombstones the item + attempts
     // remote removal on each linked provider BEFORE the local delete, so the next
-    // pull doesn't re-import it.
-    suspend fun removeTrackFromCollection(track: Track) { libraryRepository.deleteTrackWithSync(track) }
+    // pull doesn't re-import it. Tracks come from any screen (weekly playlist,
+    // player, search) whose id isn't the library row's, so resolve the row first.
+    suspend fun removeTrackFromCollection(track: Track) { libraryRepository.removeFromCollection(track) }
     suspend fun removeAlbumFromCollection(album: Album) { libraryRepository.deleteAlbumWithSync(album) }
     suspend fun removeArtistFromCollection(artist: Artist) { libraryRepository.deleteArtistWithSync(artist) }
 
@@ -1631,6 +1654,31 @@ class IosContainer private constructor() {
     // ── Metadata (Album + Artist detail) ───────────────────────────────
     // Cascading providers per CLAUDE.md: MusicBrainz (discography/tracklists)
     // → Last.fm (images/bio/similar) → Spotify (art/IDs).
+    /** The artist's MusicBrainz id without asking MusicBrainz (#429): the
+     *  mapper cache, then the library. Lets the Wikipedia bio survive an outage. */
+    private suspend fun knownArtistMbid(artistName: String): String? =
+        mbidEnrichmentService.getCachedArtistMbid(artistName) ?: trackDao.artistMbidForArtist(artistName)
+
+    // Persisted album tracklists + artist discographies (desktop keeps both 30
+    // days). One instance per file, shared by both MetadataServices below — the
+    // key includes the provider set, so their answers don't mix.
+    private val albumTracksCache by lazy {
+        com.parachord.shared.cache.PersistentJsonCache(
+            AlbumDetail.serializer(),
+            read = { IosFileCache.read("album_tracks_cache.json") },
+            write = { IosFileCache.write("album_tracks_cache.json", it) },
+            ttlMs = 30L * 24 * 60 * 60 * 1000, maxEntries = 400, name = "album tracks",
+        )
+    }
+    private val artistAlbumsCache by lazy {
+        com.parachord.shared.cache.PersistentJsonCache(
+            kotlinx.serialization.builtins.ListSerializer(AlbumSearchResult.serializer()),
+            read = { IosFileCache.read("artist_albums_cache.json") },
+            write = { IosFileCache.write("artist_albums_cache.json", it) },
+            ttlMs = 30L * 24 * 60 * 60 * 1000, maxEntries = 200, name = "artist albums",
+        )
+    }
+
     val metadataService: MetadataService by lazy {
         val mbProvider = MusicBrainzProvider(musicBrainzClient)
         MetadataService(
@@ -1640,7 +1688,7 @@ class IosContainer private constructor() {
             // Spotify isn't connected.
             providers = listOf(
                 mbProvider,
-                WikipediaProvider(musicBrainzClient, mbProvider, httpClient),
+                WikipediaProvider(musicBrainzClient, mbProvider, httpClient, knownArtistMbid = ::knownArtistMbid),
                 LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
                 DiscogsProvider(httpClient, settingsStore),
                 SpotifyProvider(spotifyClient, settingsStore),
@@ -1658,6 +1706,16 @@ class IosContainer private constructor() {
             // (was the iOS-only artist-images.json); reuse it across sessions.
             artistImageCacheRead = { IosFileCache.read("artist_images_cache.json") },
             artistImageCacheWrite = { IosFileCache.write("artist_images_cache.json", it) },
+            albumTracksCache = albumTracksCache,
+            artistAlbumsCache = artistAlbumsCache,
+            // #424: track lists and album search from the plugins' catalogs.
+            albumCatalog = AlbumCatalogLoader(
+                resolvers = { pluginManager.ensureInitialized(); pluginManager.albumSearchResolvers() },
+                searchAlbums = { id, artist, title, text -> pluginManager.searchAlbums(id, artist, title, text) },
+                lookupAlbumFrom = { id, url -> pluginManager.lookupAlbumFrom(id, url) },
+                activeResolverIds = { settingsStore.getActiveResolvers() },
+                resolverOrder = { settingsStore.getResolverOrder() },
+            ),
         )
     }
 
@@ -1696,6 +1754,11 @@ class IosContainer private constructor() {
 
     suspend fun getAlbumDetail(albumTitle: String, artistName: String): AlbumDetail? =
         metadataService.getAlbumTracks(albumTitle, artistName)
+
+    /** The album page's track list as it loads: each provider's answer, and a
+     *  plugin catalog's list when the providers can't supply one (#424). */
+    fun albumDetailFlow(albumTitle: String, artistName: String): Flow<AlbumDetail> =
+        metadataService.getAlbumTracksWithCatalogFallback(albumTitle, artistName)
 
     suspend fun getArtistInfo(artistName: String): ArtistInfo? =
         metadataService.getArtistInfo(artistName)
@@ -1784,7 +1847,7 @@ class IosContainer private constructor() {
             // artist images without a connected Spotify. No auth on either.
             providers = listOf(
                 mbProvider,
-                WikipediaProvider(musicBrainzClient, mbProvider, httpClient),
+                WikipediaProvider(musicBrainzClient, mbProvider, httpClient, knownArtistMbid = ::knownArtistMbid),
                 LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
                 DiscogsProvider(httpClient, settingsStore),
                 AppleMusicArtistProvider(httpClient, appConfig.appleMusicDeveloperToken),
@@ -1793,6 +1856,10 @@ class IosContainer private constructor() {
             enrichAlbumArtwork = { artistName, albums ->
                 enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
             },
+            // Same tracklist cache: the Spotify-free enrichment pass (mosaics,
+            // curated-list art) is the heaviest caller of getAlbumTracks.
+            albumTracksCache = albumTracksCache,
+            artistAlbumsCache = artistAlbumsCache,
         )
     }
 
@@ -1809,6 +1876,32 @@ class IosContainer private constructor() {
             composeMosaic = { playlistId, urls -> mosaicComposer.compose(playlistId, urls) },
         )
     }
+
+    /** Retries a cover or artist image that failed to load and patches every
+     *  stored copy of the dead URL (library rows + curated list caches). */
+    private val brokenArtRetry: com.parachord.shared.metadata.BrokenArtRetry by lazy {
+        com.parachord.shared.metadata.BrokenArtRetry(
+            refetchAlbumArt = { artist, album, dead -> imageEnrichmentService.lookupAlbumArt(album, artist, exclude = dead) },
+            refetchArtistImage = { artist, dead -> metadataService.getArtistImage(artist, exclude = dead) },
+            onReplaced = { dead, fresh ->
+                albumDao.replaceArtworkUrl(dead, fresh)
+                trackDao.replaceArtworkUrl(dead, fresh)
+                playlistTrackDao.replaceTrackArtworkUrl(dead, fresh)
+                artistDao.replaceImageUrl(dead, fresh)
+                freshDropsRepository.replaceArt(dead, fresh)
+                criticalDarlingsRepository.replaceArt(dead, fresh)
+            },
+        )
+    }
+
+    /** A cover failed to load: a working URL for it, or null. Once per album per
+     *  session. Guarded: a bridged suspend must not throw across the ObjC bridge. */
+    suspend fun reportBrokenAlbumArt(url: String, artist: String, album: String): String? =
+        try { brokenArtRetry.reportAlbumArt(url, artist, album) } catch (e: Exception) { null }
+
+    /** An artist image failed to load: a working URL for it, or null. */
+    suspend fun reportBrokenArtistImage(url: String, artist: String): String? =
+        try { brokenArtRetry.reportArtistImage(url, artist) } catch (e: Exception) { null }
 
     /** Regenerate the 2×2 mosaic for every playlist with missing/stale art
      *  (Android's ParachordApplication startup hook). Call fire-and-forget on
@@ -1871,18 +1964,28 @@ class IosContainer private constructor() {
      * fresh emissions (it persists to concerts_cache.json). Swift watches this;
      * no iOS-side duplicate cache (fixes the two-caches-fighting bug).
      */
-    fun concertsFlow(): Flow<List<ConcertEvent>> = flow {
+    fun concertsFlow(locationChanged: Boolean): Flow<List<ConcertEvent>> = flow {
+        // A new location or radius invalidates the cache: it holds the OLD
+        // area's events, which used to show for up to 30 min.
+        if (locationChanged) concertsRepository.clearLocalEvents()
         // Cache-first paint: emit the last-known events immediately (no artist-seed
         // build, no network). Previously the slow loadRecommendedArtists() rebuild
         // ran first on EVERY subscribe, blocking the cache and making the Concerts
         // page slow every visit. If the cache is still fresh, we're done — skip the
         // rebuild + revalidation entirely.
         val cached = concertsRepository.loadCachedEvents()
-        if (!cached.isNullOrEmpty()) emit(cached)
-        if (cached != null && !concertsRepository.isCacheStale) return@flow
+        val fresh = cached != null && !concertsRepository.isCacheStale
+        // A fresh cache is the answer even when it's empty — emit it, or the
+        // screen never leaves its loading skeleton. A stale empty cache stays
+        // quiet so "no concerts" doesn't flash before the refetch lands.
+        val paintedCache = cached != null && (cached.isNotEmpty() || fresh)
+        if (paintedCache) emit(cached!!)
+        if (fresh) return@flow
 
         val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
-        if (artists.isEmpty()) { if (cached == null) emit(emptyList()); return@flow }
+        // Nothing to search with: end the load (an empty answer) unless the cache
+        // already painted something.
+        if (artists.isEmpty()) { if (!paintedCache) emit(emptyList()); return@flow }
         val loc = settingsStore.getConcertLocation()
         emitAll(
             concertsRepository.getPersonalizedEvents(
@@ -2140,6 +2243,8 @@ class IosContainer private constructor() {
             spotifyAuthProvider,
             loadCooldownEpochMs = { kvStore.getLong(SPOTIFY_COOLDOWN_KEY, 0L) },
             saveCooldownEpochMs = { kvStore.setLong(SPOTIFY_COOLDOWN_KEY, it) },
+            loadStrikes = { kvStore.getLong(SPOTIFY_STRIKES_KEY, 0L).toInt() },
+            saveStrikes = { kvStore.setLong(SPOTIFY_STRIKES_KEY, it.toLong()) },
         )
     }
 
@@ -2213,7 +2318,12 @@ class IosContainer private constructor() {
     fun getLastFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLastFmSessionKeyFlow().map { it != null }
 
-    val listenBrainzClient: ListenBrainzClient by lazy { ListenBrainzClient(httpClient) }
+    val listenBrainzClient: ListenBrainzClient by lazy {
+        ListenBrainzClient(
+            httpClient,
+            ListenBrainzClient.formatSubmissionClientVersion(appConfig.appVersion, appConfig.parachordClient),
+        )
+    }
 
     // ── Scrobbling (#193 — shared stack, identical to Android) ─────────
     val mbidEnrichmentService: MbidEnrichmentService by lazy {
@@ -2616,19 +2726,14 @@ class IosContainer private constructor() {
      * the volume that keeps re-arming Spotify's shared-key abuse window. The
      * Swift cache persists this blob to disk and reloads it on launch so a
      * track resolved once never re-searches. Mirrors Android's resolver-ID
-     * backfill intent.
+     * backfill intent. Failed (empty) resolves never reach disk — see
+     * [com.parachord.shared.resolver.ResolverCacheCodec].
      */
-    private val resolverCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-
     fun encodeResolverCache(map: Map<String, List<ResolvedSource>>): String =
-        resolverCacheJson.encodeToString(map)
+        com.parachord.shared.resolver.ResolverCacheCodec.encode(map)
 
     fun decodeResolverCache(blob: String): Map<String, List<ResolvedSource>> =
-        try {
-            resolverCacheJson.decodeFromString<Map<String, List<ResolvedSource>>>(blob)
-        } catch (e: Exception) {
-            emptyMap()
-        }
+        com.parachord.shared.resolver.ResolverCacheCodec.decode(blob)
 
     // (Removed: the Swift-managed curated-list view caches — Critical Darlings /
     // Concerts / Fresh Drops now watch the repository value-flows directly via
@@ -3368,6 +3473,26 @@ class FlowWatcher(private val scope: CoroutineScope) {
     fun watch(flow: Flow<Any?>, onEach: (Any?) -> Unit): Cancellable {
         val job = scope.launch {
             flow.collect { value -> onEach(value) }
+        }
+        return Cancellable { job.cancel() }
+    }
+
+    /**
+     * [watch], plus [onDone] once the flow ends — completed or failed, but not
+     * cancelled. The curated repos' flows end after one pass (cache, then
+     * fresh), so this tells Swift when a load has finished and a later visit
+     * may start another one (`RevalidatingWatch`).
+     */
+    fun watchUntilDone(flow: Flow<Any?>, onEach: (Any?) -> Unit, onDone: () -> Unit): Cancellable {
+        val job = scope.launch {
+            try {
+                flow.collect { value -> onEach(value) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("FlowWatcher", "watched flow failed: ${e.message}")
+            }
+            onDone()
         }
         return Cancellable { job.cancel() }
     }

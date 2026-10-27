@@ -111,4 +111,9 @@ class ArtistDao(private val db: ParachordDb) {
     suspend fun updateImageByName(name: String, imageUrl: String): Unit = withContext(Dispatchers.Default) {
         queries.updateImageByName(imageUrl = imageUrl, name = name)
     }
+
+    /** Replace a dead image URL on every artist row that holds it. */
+    suspend fun replaceImageUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
+        queries.replaceImageUrl(fresh = fresh, dead = dead)
+    }
 }

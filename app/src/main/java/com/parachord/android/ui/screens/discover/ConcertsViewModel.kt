@@ -196,6 +196,9 @@ class ConcertsViewModel constructor(
             _locationCity.value = city
             _hasLocation.value = true
             _locationCommitted.tryEmit(Unit)   // close the picker on any commit
+            // The cache holds the old area's events — drop it so they don't show
+            // while the new location loads.
+            concertsRepository.clearLocalEvents()
             loadEvents(forceRefresh = true)
         }
     }
@@ -204,6 +207,7 @@ class ConcertsViewModel constructor(
         viewModelScope.launch {
             _radiusMiles.value = radiusMiles
             settingsStore.setConcertRadius(radiusMiles)
+            concertsRepository.clearLocalEvents()
             loadEvents(forceRefresh = true)
         }
     }
