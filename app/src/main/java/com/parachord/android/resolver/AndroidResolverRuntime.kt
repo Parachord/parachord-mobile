@@ -145,7 +145,21 @@ class AndroidResolverRuntime constructor(
             }
         }
 
-        // Tier 2: iTunes Search API (no auth, metadata-only)
+        // Tier 2: the Apple Music plugin's own resolve, through the resolver
+        // registry — the same .axe desktop runs. Its search asks the host's
+        // `appleMusicSearchWithMusicKit` (bootstrap.html), which searches
+        // Apple's catalog with the developer token and falls back to iTunes
+        // itself. MusicKit is usually still configuring when Home resolves
+        // its tracks at launch, and iTunes Search lags new releases, so this
+        // tier is what finds a just-released song ("I Know!" by Swapmeet).
+        // The native iTunes search stays only for when the plugin isn't loaded.
+        // Wait for the plugins to load first: at launch they finish a few
+        // seconds after Home starts resolving, and checking early skipped
+        // the plugin for exactly the tracks this tier is for.
+        pluginManager.ensureInitialized()
+        if (pluginManager.plugins.value.any { it.id == "applemusic" }) {
+            return resolveViaPlugin("applemusic", query, targetTitle, targetArtist)
+        }
         return resolveViaiTunes(query, targetTitle, targetArtist)
     }
 
@@ -369,7 +383,18 @@ class AndroidResolverRuntime constructor(
             null
         } else {
             val result = json.decodeFromString<AxeResolveResult>(resultJson)
-            val resolvedUrl = result.url ?: return@resolveViaPlugin null
+            // Plugins don't all return a top-level `url`: ID-based resolvers
+            // (Apple Music, Spotify) carry a catalog id they route by, and
+            // Bandcamp carries only `bandcampUrl` (its `<resolverId>Url`).
+            // Accept any of them, as iOS does.
+            val resolvedUrl = result.url
+                ?: com.parachord.shared.resolver.pluginServiceUrl(resultJson, resolverId)
+                ?: result.appleMusicUrl
+                ?: result.soundcloudUrl
+                ?: result.spotifyUrl
+                ?: result.appleMusicId?.let { "applemusic:song:$it" }
+                ?: result.spotifyUri
+                ?: return@resolveViaPlugin null
             ResolvedSource(
                 resolver = resolverId,
                 sourceType = result.sourceType ?: resolverId,
@@ -388,7 +413,8 @@ class AndroidResolverRuntime constructor(
                 confidence = 0.9,
                 matchedTitle = result.title,
                 matchedArtist = result.artist,
-                matchedDurationMs = result.duration,
+                matchedDurationMs = result.duration?.takeIf { it > 0 }?.times(1000),
+                artworkUrl = result.albumArt,
             )
         }
     } catch (e: Exception) {
@@ -402,15 +428,20 @@ private data class AxeResolveResult(
     val url: String? = null,
     val title: String? = null,
     val artist: String? = null,
+    /** Seconds, per the plugin track shape. */
     val duration: Long? = null,
     val sourceType: String? = null,
     val spotifyUri: String? = null,
     val spotifyId: String? = null,
+    val spotifyUrl: String? = null,
     val soundcloudId: String? = null,
+    val soundcloudUrl: String? = null,
     val appleMusicId: String? = null,
+    val appleMusicUrl: String? = null,
     val isrc: String? = null,
     val mbid: String? = null,
     val recordingMbid: String? = null,
+    val albumArt: String? = null,
 )
 
 // ── iTunes API Response Models ──────────────────────────────────────

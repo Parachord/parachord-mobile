@@ -36,6 +36,7 @@ class JsBridge constructor(
     private val httpClient: OkHttpClient,
     private val dataStore: DataStore<Preferences>,
     private val mbidEnrichment: MbidEnrichmentService,
+    private val appleMusicCatalog: com.parachord.shared.api.AppleMusicCatalog,
 ) : JsRuntime {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -56,7 +57,7 @@ class JsBridge constructor(
         if (webView != null) return@withContext
 
         val pageLoaded = CompletableDeferred<Unit>()
-        val nativeBridge = NativeBridge(httpClient, scope, dataStore, mbidEnrichment)
+        val nativeBridge = NativeBridge(httpClient, scope, dataStore, mbidEnrichment, appleMusicCatalog)
 
         val wv = WebView(context).apply {
             settings.javaScriptEnabled = true
