@@ -590,6 +590,17 @@ val androidModule = module {
                 activeResolverIds = { settingsStore.getActiveResolvers() },
                 resolverOrder = { settingsStore.getResolverOrder() },
             ),
+            // Artist-photo chain (desktop parachord#1141): the active resolvers
+            // with capabilities.artistImage, then Deezer's public search.
+            artistImageResolvers = {
+                get<com.parachord.shared.plugin.PluginManager>().artistImageResolverIds(
+                    active = settingsStore.getActiveResolvers(),
+                    disabled = settingsStore.getDisabledPlugins(),
+                    order = settingsStore.getResolverOrder(),
+                )
+            },
+            pluginArtistImage = { id, name -> get<com.parachord.shared.plugin.PluginManager>().searchArtistImage(id, name) },
+            deezer = com.parachord.shared.metadata.DeezerArtistSearch(get()),
         )
     }
     singleOf(::MusicBrainzProvider)

@@ -186,6 +186,13 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   (`appleMusicId`, `spotifyUri`); Bandcamp returns only `bandcampUrl`. Hosts read
   `url`, then the plugin's own `<resolverId>Url` (`pluginServiceUrl`), then the
   service URL/id fields — never require `url`.
+- **Artist photos are a chain with a plugin step** (desktop parachord#1141).
+  `MetadataService.getArtistImage` asks Apple Music, Spotify, then the active resolvers
+  declaring `capabilities.artistImage` (resolver-loader `getArtistImageResolvers` /
+  `searchArtistImage`, via `PluginManager`), then Deezer's public search, Wikipedia,
+  Discogs, Last.fm and MusicBrainz. First usable photo wins (`ArtistImageChain.isUsableUrl`
+  refuses credential-bearing URLs and Last.fm's placeholder); a miss is remembered 6 h only
+  when every step answered, so image steps must THROW on failure, not return null.
 
 **Key files:** `shared/.../deeplink/ProviderPlaylistResolver.kt` (registry fallback),
 `shared/.../plugin/PluginManager.kt#lookupPlaylist` (Android poll), `shared/iosMain/.../IosResolverRuntime.kt#lookupPlaylist` (iOS poll), `parachord-plugins/<service>.axe` (the per-service capability source of truth).

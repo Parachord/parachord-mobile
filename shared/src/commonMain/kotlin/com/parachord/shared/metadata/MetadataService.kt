@@ -1,5 +1,6 @@
 package com.parachord.shared.metadata
 
+import com.parachord.shared.platform.Log
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -68,6 +69,17 @@ class MetadataService constructor(
     private val albumCatalog: AlbumCatalogLoader? = null,
     /** Artist info found this session, shared by every caller (#429). */
     private val artistInfoCache: ArtistInfoCache = ArtistInfoCache(),
+    /**
+     * The artist-photo chain's plugin step (desktop parachord#1141): the ids of
+     * the active resolvers declaring `capabilities.artistImage`, in priority
+     * order, and a call to one's `searchArtistImage`. Null = no plugin step.
+     */
+    private val artistImageResolvers: (suspend () -> List<String>)? = null,
+    private val pluginArtistImage: (suspend (resolverId: String, artistName: String) -> String?)? = null,
+    /** Deezer's public artist search (no account), the chain's step after the plugins. */
+    private val deezer: DeezerArtistSearch? = null,
+    /** "No source has a photo of this artist", remembered [ArtistImageChain.MISS_TTL_MS]. */
+    private val artistImageMisses: ArtistImageChain.MissCache = ArtistImageChain.MissCache(),
 ) {
 
     private val artistImageMutex = Mutex()
@@ -75,6 +87,8 @@ class MetadataService constructor(
     private val artistImageJson = Json { ignoreUnknownKeys = true }
 
     private companion object {
+        const val TAG = "MetadataService"
+
         /** Desktop: MusicBrainz finding fewer than this many albums adds catalog results. */
         const val CATALOG_SEARCH_BELOW = 3
 
@@ -264,18 +278,34 @@ class MetadataService constructor(
     }
 
     /**
-     * Fast artist-IMAGE lookup, separate from the full [getArtistInfo] cascade.
-     * Apple Music FIRST: its catalog has a real image for virtually every artist,
-     * it's a single call, and it uses a separate dev token that does NOT draw on
-     * the Spotify client_id shared across desktop/iOS/Android — so bulk image
-     * enrichment never bursts Spotify (the account-wide abuse window that
-     * RateLimitGate / #177 guards against). Spotify is only a fallback, then the
-     * encyclopedia sources (Wikipedia/Discogs/Last.fm). SHORT-CIRCUITS at the
-     * first image — no full-cascade awaitAll, and the slow Wikipedia MB→Wikidata
-     * chain never runs once a streaming image is found.
+     * Fast artist-IMAGE lookup, separate from the full [getArtistInfo] cascade:
+     * the photo for every artist card outside the artist page (Home's
+     * suggestions, recommendations, related and top artists, friends, chat
+     * cards). Desktop's #1141 chain, first usable photo wins:
+     *
+     * 1. **Apple Music** — FIRST on mobile (desktop asks Spotify first): its
+     *    catalog has a real image for virtually every artist, it's a single
+     *    call, and it uses a separate dev token that does NOT draw on the
+     *    Spotify client_id shared across desktop/iOS/Android, so bulk image
+     *    enrichment never bursts Spotify (the abuse window RateLimitGate / #177
+     *    guards against).
+     * 2. **Spotify**, when connected.
+     * 3. **The active resolvers declaring `capabilities.artistImage`**, in
+     *    priority order, through the resolver registry (`searchArtistImage`),
+     *    so a new service's plugin adds photos with no feature code.
+     * 4. **Deezer's public artist search** (no account).
+     * 5. **Wikipedia** (via Wikidata), **Discogs**, then Last.fm and
+     *    MusicBrainz as before.
+     *
+     * Each step is bounded at [ArtistImageChain.STEP_TIMEOUT_MS]; a URL with
+     * credentials or a known placeholder is refused ([ArtistImageChain.isUsableUrl]).
+     * A miss is remembered for 6 hours, but only when every step answered: a
+     * step that threw or timed out may have had the photo. Found photos go to
+     * the persistent cache.
      */
     suspend fun getArtistImage(artistName: String, exclude: String? = null): String? {
         val key = artistName.lowercase().trim()
+        if (key.isEmpty()) return null
         // Persistent cache hit (shared, both platforms) — skip the network cascade.
         // [exclude] is an image URL that stopped loading ([BrokenArtRetry]): drop
         // it from the cache and look again, skipping it.
@@ -293,14 +323,23 @@ class MetadataService constructor(
                 return cached
             }
         }
-        val available = availableProviders().associateBy { it.name }
-        val order = listOf("applemusic", "spotify", "wikipedia", "discogs", "lastfm", "musicbrainz")
-        for (name in order) {
-            val provider = available[name] ?: continue
+        if (exclude == null && artistImageMisses.has(artistName)) return null
+
+        var complete = true
+        for ((source, step) in artistImageSteps(artistName)) {
             val img = try {
-                withTimeoutOrNull(PROVIDER_TIMEOUT_MS) { provider.getArtistInfo(artistName)?.imageUrl }
-            } catch (_: Exception) { null }
-            if (!img.isNullOrBlank() && img != exclude) {
+                val answer = withTimeoutOrNull(ArtistImageChain.STEP_TIMEOUT_MS) { Answered(step()) }
+                if (answer == null) complete = false
+                answer?.url
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                complete = false
+                Log.d(TAG, "Artist image for '$artistName': $source failed: ${e.message}")
+                null
+            }
+            if (img != null && img != exclude && ArtistImageChain.isUsableUrl(img)) {
+                if (source != "applemusic") Log.d(TAG, "Artist image for '$artistName' from $source")
                 artistImageMutex.withLock {
                     artistImageMap!![key] = img
                     artistImageCacheWrite?.invoke(artistImageJson.encodeToString(artistImageMap!!.toMap()))
@@ -308,7 +347,30 @@ class MetadataService constructor(
                 return img
             }
         }
+        if (complete) artistImageMisses.add(artistName)
         return null
+    }
+
+    private class Answered(val url: String?)
+
+    /** The chain's steps for [artistName], in order: `(source, lookup)`. */
+    private suspend fun artistImageSteps(artistName: String): List<Pair<String, suspend () -> String?>> {
+        val available = availableProviders().associateBy { it.name }
+        fun provider(name: String): Pair<String, suspend () -> String?>? =
+            available[name]?.let { p -> name to suspend { p.getArtistInfo(artistName)?.imageUrl } }
+        return buildList {
+            provider("applemusic")?.let(::add)
+            provider("spotify")?.let(::add)
+            val plugins = pluginArtistImage?.let { search ->
+                try { artistImageResolvers?.invoke().orEmpty() } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    emptyList()
+                }.map { id -> id to suspend { search(id, artistName) } }
+            }.orEmpty()
+            addAll(plugins)
+            deezer?.let { d -> add("deezer" to suspend { d.artistImage(artistName) }) }
+            listOf("wikipedia", "discogs", "lastfm", "musicbrainz").forEach { name -> provider(name)?.let(::add) }
+        }
     }
 
     /** Get an artist's top tracks from all available providers, merged and deduplicated. */

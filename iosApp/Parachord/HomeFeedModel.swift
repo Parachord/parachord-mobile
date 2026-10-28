@@ -85,6 +85,16 @@ final class HomeFeedModel {
         if let cached = (try? await container.aiSuggestionsCached()) ?? nil {
             aiAlbums = cached.albums
             aiArtists = cached.artists
+            // Look up artwork the saved set is missing while the fresh answer
+            // (30-60s) is on its way, as desktop does. Skipped if that answer
+            // has already replaced the set.
+            Task { [weak self] in
+                guard let self, let filled = (try? await self.container.fillAiSuggestionArtwork()) ?? nil else { return }
+                if self.aiArtists.map(\.name) == cached.artists.map(\.name) {
+                    self.aiAlbums = filled.albums
+                    self.aiArtists = filled.artists
+                }
+            }
         }
         aiLoading = aiAlbums.isEmpty && aiArtists.isEmpty
         aiError = nil
