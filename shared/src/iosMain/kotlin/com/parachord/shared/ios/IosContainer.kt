@@ -8,6 +8,7 @@ import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.api.MusicBrainzClient
 import com.parachord.shared.api.createHttpClient
 import com.parachord.shared.config.AppConfig
+import com.parachord.shared.config.parachordUserAgent
 import com.parachord.shared.plugin.IosJsRuntime
 import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
@@ -282,7 +283,7 @@ class IosContainer private constructor() {
         fun plist(key: String): String =
             (NSBundle.mainBundle.objectForInfoDictionaryKey(key) as? String ?: "").trim()
         AppConfig(
-            userAgent = "Parachord/0.1 (iOS; https://parachord.com)",
+            userAgent = parachordUserAgent(appVersionString(), "iOS"),
             parachordClient = "ios",
             appVersion = appVersionString(),
             isDebug = true,
