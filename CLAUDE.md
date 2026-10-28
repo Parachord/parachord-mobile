@@ -171,6 +171,22 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `.axe` had `lookupPlaylist`; SoundCloud needed it added (v1.1.0, #281). Many resolvers
   also need credentials (SoundCloud OAuth `config.token`) and return null without them.
 
+- **The host supplies the hooks plugins expect.** `applemusic.axe` asks the host for
+  `appleMusicSearchWithMusicKit` (search → resolve), `appleMusicLookupSong`,
+  `appleMusicLookupAlbum` (URL lookups + the #424 album fallback) and
+  `appleMusicLookupPlaylist` before its own iTunes Search / Lookup. Desktop answers them
+  through MusicKit; Android's `bootstrap.html` ports them onto
+  `NativeBridge.appleMusicCatalogGet` → shared `AppleMusicCatalog` (developer-token
+  catalog GET, `/v1/catalog/` paths only, the app-wide `MusicKitCatalogLimiter`), falling
+  back to iTunes like desktop. iTunes Search lags new releases by days or weeks, so
+  without the hooks a just-released song never resolved to Apple Music. Android's native
+  Apple Music resolver uses the plugin's `resolve` as its fallback when MusicKit isn't
+  configured yet (it usually isn't when Home resolves at launch).
+- **Plugin results don't all carry `url`.** ID-based resolvers return a catalog id
+  (`appleMusicId`, `spotifyUri`); Bandcamp returns only `bandcampUrl`. Hosts read
+  `url`, then the plugin's own `<resolverId>Url` (`pluginServiceUrl`), then the
+  service URL/id fields — never require `url`.
+
 **Key files:** `shared/.../deeplink/ProviderPlaylistResolver.kt` (registry fallback),
 `shared/.../plugin/PluginManager.kt#lookupPlaylist` (Android poll), `shared/iosMain/.../IosResolverRuntime.kt#lookupPlaylist` (iOS poll), `parachord-plugins/<service>.axe` (the per-service capability source of truth).
 

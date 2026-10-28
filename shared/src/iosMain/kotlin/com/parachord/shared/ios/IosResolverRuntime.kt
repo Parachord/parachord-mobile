@@ -198,6 +198,9 @@ class IosResolverRuntime(
                 // url-based .axe like bandcamp/youtube — applemusic.axe.resolve
                 // never executes there.)
                 val playableUrl = parsed.url
+                    // The plugin's own `<resolverId>Url` (Bandcamp returns
+                    // only `bandcampUrl`).
+                    ?: com.parachord.shared.resolver.pluginServiceUrl(raw, resolverId)
                     ?: parsed.previewUrl
                     ?: parsed.soundcloudUrl
                     ?: parsed.appleMusicUrl

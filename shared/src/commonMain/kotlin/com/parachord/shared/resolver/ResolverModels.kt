@@ -348,3 +348,19 @@ fun pickTrackIsrc(topLevelIsrc: String?, sources: List<ResolvedSource>): String?
     }
     return null
 }
+
+/**
+ * A resolver plugin's link to the track on its own service, by the
+ * `<resolverId>Url` convention of the plugin track shape (`bandcampUrl`,
+ * `appleMusicUrl`, `soundcloudUrl`…). Plugins that open in the browser, like
+ * Bandcamp, return only this and no top-level `url`, so a host that required
+ * `url` dropped every match they found. Null when absent or unreadable.
+ */
+fun pluginServiceUrl(resultJson: String, resolverId: String): String? = try {
+    val key = resolverId.replace(Regex("[^A-Za-z0-9]"), "") + "Url"
+    val obj = kotlinx.serialization.json.Json.parseToJsonElement(resultJson) as? kotlinx.serialization.json.JsonObject
+    (obj?.get(key) as? kotlinx.serialization.json.JsonPrimitive)
+        ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+} catch (_: Exception) {
+    null
+}

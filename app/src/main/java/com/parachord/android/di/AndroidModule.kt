@@ -489,6 +489,16 @@ val androidModule = module {
     singleOf(::SpotifyPlaybackHandler)
     singleOf(::AppleMusicPlaybackHandler)
     singleOf(::SoundCloudPlaybackHandler)
+    // One Apple Music catalog limiter app-wide (Apple throttles per token):
+    // MusicKit JS's catalog calls and the plugin host's catalog reads share it.
+    single { com.parachord.shared.api.MusicKitCatalogLimiter() }
+    single {
+        com.parachord.shared.api.AppleMusicCatalog(
+            httpClient = get(),
+            developerToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
+            limiter = get(),
+        )
+    }
     singleOf(::MusicKitWebBridge)
 
     // ── Scrobblers (as set) ──────────────────────────────────────────
