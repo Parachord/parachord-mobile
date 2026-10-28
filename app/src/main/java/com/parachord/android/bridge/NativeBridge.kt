@@ -46,6 +46,7 @@ class NativeBridge(
     private val scope: CoroutineScope,
     private val dataStore: DataStore<Preferences>,
     private val mbidEnrichment: MbidEnrichmentService,
+    private val appleMusicCatalog: com.parachord.shared.api.AppleMusicCatalog,
 ) {
     /** WebView reference for async fetch callbacks. Set by JsBridge after creation. */
     var webView: android.webkit.WebView? = null
@@ -228,6 +229,35 @@ class NativeBridge(
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 webView?.evaluateJavascript(
                     "window.__resolveMbidCallbacks && window.__resolveMbidCallbacks['$callbackId'] && window.__resolveMbidCallbacks['$callbackId']($payload)",
+                    null,
+                )
+            }
+        }
+    }
+
+    /**
+     * A read from Apple Music's catalog API with the app's developer token
+     * ([com.parachord.shared.api.AppleMusicCatalog]: `/v1/catalog/` paths only,
+     * throttled). Backs the Apple Music hooks in bootstrap.html that
+     * `applemusic.axe` calls, the way desktop backs them with MusicKit's
+     * `api.music(path)`. Same callback-id harness as [resolveMbidForLove];
+     * delivers the response body, or `null` so the hook falls back to iTunes.
+     */
+    @JavascriptInterface
+    fun appleMusicCatalogGet(callbackId: String, path: String) {
+        scope.launch {
+            val body = try {
+                appleMusicCatalog.get(path)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "appleMusicCatalogGet($callbackId) failed: ${e.message}")
+                null
+            }
+            // The body is JSON, so it goes in as a JS expression.
+            val payload = body ?: "null"
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                webView?.evaluateJavascript(
+                    "window.__amCatalogCallbacks && window.__amCatalogCallbacks['$callbackId'] && window.__amCatalogCallbacks['$callbackId']($payload)",
                     null,
                 )
             }

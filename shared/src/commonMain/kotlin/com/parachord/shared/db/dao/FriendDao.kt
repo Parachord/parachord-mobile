@@ -35,6 +35,7 @@ class FriendDao(private val db: ParachordDb) {
         cachedTrackArtworkUrl = cachedTrackArtworkUrl,
         pinnedToSidebar = pinnedToSidebar != 0L,
         autoPinned = autoPinned != 0L,
+        hidesListening = hidesListening != 0L,
     )
 
     /* ---- Queries returning Flow ---- */
@@ -83,7 +84,12 @@ class FriendDao(private val db: ParachordDb) {
             cachedTrackArtworkUrl = friend.cachedTrackArtworkUrl,
             pinnedToSidebar = if (friend.pinnedToSidebar) 1L else 0L,
             autoPinned = if (friend.autoPinned) 1L else 0L,
+            hidesListening = if (friend.hidesListening) 1L else 0L,
         )
+    }
+
+    suspend fun setHidesListening(id: String, hides: Boolean): Unit = withContext(Dispatchers.Default) {
+        queries.setHidesListening(hidesListening = if (hides) 1L else 0L, id = id)
     }
 
     suspend fun delete(id: String): Unit = withContext(Dispatchers.Default) {

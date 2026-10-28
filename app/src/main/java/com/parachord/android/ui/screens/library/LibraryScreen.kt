@@ -702,6 +702,15 @@ private fun FriendsTab(
                                         artistName = friend.cachedTrackArtist,
                                         artworkUrl = friend.cachedTrackArtworkUrl,
                                     )
+                                } else if (friend.hidesListening) {
+                                    // A Last.fm profile that hides its recent listening is
+                                    // never on-air; say why instead of a stale track
+                                    // (desktop parachord#1140).
+                                    Text(
+                                        text = "Listening hidden",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    )
                                 } else if (friend.cachedTrackName != null) {
                                     Text(
                                         text = buildString {

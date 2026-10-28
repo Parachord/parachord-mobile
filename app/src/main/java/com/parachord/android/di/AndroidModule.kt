@@ -318,6 +318,13 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // A friend's Last.fm profile hides its recent listening (desktop
+        // parachord#1140). New installs get it from Friend.sq's CREATE.
+        try {
+            driver.execute(null, "ALTER TABLE friends ADD COLUMN hidesListening INTEGER NOT NULL DEFAULT 0", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // N-way multimaster sync (Phase 1): the 3-way-merge baseline (ancestor)
         // per playlist + per-(playlist, provider) change-token/edit-time state.
         // New tables, isolated from the live canonical-source engine. New
@@ -489,6 +496,16 @@ val androidModule = module {
     singleOf(::SpotifyPlaybackHandler)
     singleOf(::AppleMusicPlaybackHandler)
     singleOf(::SoundCloudPlaybackHandler)
+    // One Apple Music catalog limiter app-wide (Apple throttles per token):
+    // MusicKit JS's catalog calls and the plugin host's catalog reads share it.
+    single { com.parachord.shared.api.MusicKitCatalogLimiter() }
+    single {
+        com.parachord.shared.api.AppleMusicCatalog(
+            httpClient = get(),
+            developerToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
+            limiter = get(),
+        )
+    }
     singleOf(::MusicKitWebBridge)
 
     // ── Scrobblers (as set) ──────────────────────────────────────────

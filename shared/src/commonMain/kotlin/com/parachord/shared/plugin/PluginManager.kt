@@ -260,19 +260,25 @@ class PluginManager constructor(
         """.trimIndent())?.unquote()
     }
 
+    /**
+     * A resolver plugin's `resolve(artist, title, album)`: the raw result JSON,
+     * or null. Uses the unique-key poll: a bare `(async () => …)()` evaluates
+     * to the unresolved Promise (`{}` on Android) as soon as the plugin awaits
+     * a real fetch, so every plugin resolve that searched came back empty.
+     */
     suspend fun resolve(resolverId: String, artist: String, title: String, album: String?): String? {
         ensureInitialized()
+        val idEsc = escapeForJs(resolverId)
         val artistEsc = escapeForJs(artist)
         val titleEsc = escapeForJs(title)
         val albumEsc = if (album != null) "'${escapeForJs(album)}'" else "null"
-        return jsRuntime.evaluate("""
-            (async () => {
-                const r = window.__resolverLoader.getResolver('$resolverId');
-                if (!r || !r.resolve) return null;
-                const result = await r.resolve('$artistEsc', '$titleEsc', $albumEsc, r.config || {});
-                return result ? JSON.stringify(result) : null;
-            })()
-        """.trimIndent())?.unquote()
+        return pollAsync(
+            "res",
+            "await (async () => { const r = window.__resolverLoader.getResolver('$idEsc'); " +
+                "if (!r || !r.resolve) return null; " +
+                "return await r.resolve('$artistEsc', '$titleEsc', $albumEsc, r.config || {}); })()",
+            attempts = LOOKUP_POLL_ATTEMPTS,
+        )
     }
 
     suspend fun lookupUrl(url: String): String? {

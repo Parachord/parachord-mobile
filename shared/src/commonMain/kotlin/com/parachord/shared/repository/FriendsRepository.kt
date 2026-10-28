@@ -1,6 +1,7 @@
 package com.parachord.shared.repository
 
 import com.parachord.shared.api.LastFmClient
+import com.parachord.shared.api.LastFmHiddenListeningException
 import com.parachord.shared.api.LastFmRateLimitedException
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.api.bestImageUrl
@@ -477,6 +478,12 @@ class FriendsRepository(
         updateAutoPins()
     }
 
+    /** Write [hides] to the friend only when it changed. */
+    private suspend fun recordHidesListening(friend: Friend, hides: Boolean) {
+        if (friend.transient || friend.hidesListening == hides) return
+        friendDao.setHidesListening(friend.id, hides)
+    }
+
     private suspend fun refreshLastFmActivity(friend: Friend) {
         // Fetch 2 tracks so we can sanity-check the `attr.nowplaying`
         // flag against an actual scrobble timestamp. Last.fm leaves the
@@ -484,11 +491,19 @@ class FriendsRepository(
         // actually stopped playing — without a backing recent scrobble
         // we'd keep treating them as on-air indefinitely. Two tracks is
         // also cheap (~one extra row in the response).
-        val response = lastFmClient.getUserRecentTracks(
-            user = friend.username,
-            limit = 2,
-            apiKey = lastFmApiKey,
-        )
+        val response = try {
+            lastFmClient.getUserRecentTracks(
+                user = friend.username,
+                limit = 2,
+                apiKey = lastFmApiKey,
+            )
+        } catch (e: LastFmHiddenListeningException) {
+            // Not a failure: say "Listening hidden" instead of letting the
+            // card go quietly stale. The cached track is left as it was.
+            recordHidesListening(friend, true)
+            return
+        }
+        recordHidesListening(friend, false)
         val tracks = response.recenttracks?.track.orEmpty()
         val track = tracks.firstOrNull()
         // The most recent track with a real scrobble timestamp. When
@@ -711,11 +726,21 @@ class FriendsRepository(
         try {
             val tracks = when (service) {
                 "lastfm" -> {
-                    val response = lastFmClient.getUserRecentTracks(
-                        user = username,
-                        limit = 50,
-                        apiKey = lastFmApiKey,
-                    )
+                    val stored = friendDao.findByServiceAndUsername("lastfm", username)
+                    val response = try {
+                        lastFmClient.getUserRecentTracks(
+                            user = username,
+                            limit = 50,
+                            apiKey = lastFmApiKey,
+                        )
+                    } catch (e: LastFmHiddenListeningException) {
+                        // The Recent tab says the profile hides its listening
+                        // (from the friend's flag); the other tabs still load.
+                        stored?.let { recordHidesListening(it, true) }
+                        emit(Resource.Success(emptyList()))
+                        return@flow
+                    }
+                    stored?.let { recordHidesListening(it, false) }
                     response.recenttracks?.track?.map { track ->
                         RecentTrack(
                             title = track.name,

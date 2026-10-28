@@ -8,6 +8,9 @@ import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -82,7 +85,9 @@ class DiscogsProvider(
     private suspend fun fetchArtistProfile(artistId: Long): Triple<String?, String?, String?> {
         val root = getJson("$BASE_URL/artists/$artistId") ?: return Triple(null, null, null)
         val rawProfile = root["profile"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-        val bio = if (rawProfile.isNotBlank()) cleanDiscogsMarkup(rawProfile) else null
+        val bio = if (rawProfile.isNotBlank()) {
+            DiscogsMarkup.normalizeProfile(rawProfile, refNames(root, rawProfile)).ifBlank { null }
+        } else null
 
         var imageUrl: String? = null
         val images = root["images"]?.jsonArray
@@ -113,13 +118,37 @@ class DiscogsProvider(
         null
     }
 
-    /** Strip Discogs markup: [a=Artist] [l=Label] [m=Master] [r=Release],
-     *  [url=...]...[/url] links, and stray [tag]s. */
-    private fun cleanDiscogsMarkup(text: String): String =
-        text.replace(Regex("""\[([almr])=([^\]]*)\]"""), "$2")
-            .replace(Regex("""\[url=[^\]]*](.*?)\[/url]"""), "$1")
-            .replace(Regex("""\[/?[a-z]+]"""), "")
-            .trim()
+    /**
+     * Names for the profile's id references (`[a17632854]`), as desktop does
+     * (parachord#1124): the artist record's own member / group / alias lists
+     * cover most; the rest are looked up, at most [DiscogsMarkup.MAX_REF_LOOKUPS].
+     * A reference that can't be named is dropped from the bio.
+     */
+    private suspend fun refNames(root: JsonObject, profile: String): Map<String, String> {
+        val names = mutableMapOf<String, String>()
+        for (list in listOf("members", "groups", "aliases")) {
+            root[list]?.jsonArray?.forEach { el ->
+                val o = el as? JsonObject ?: return@forEach
+                val id = o["id"]?.jsonPrimitive?.contentOrNull
+                val name = o["name"]?.jsonPrimitive?.contentOrNull
+                if (!id.isNullOrBlank() && !name.isNullOrBlank()) names["a$id"] = name
+            }
+        }
+        val missing = DiscogsMarkup.refIds(profile)
+            .filter { it.key !in names }
+            .take(DiscogsMarkup.MAX_REF_LOOKUPS)
+        coroutineScope {
+            missing.map { ref ->
+                async {
+                    val data = getJson("$BASE_URL/${DiscogsMarkup.REF_PATH.getValue(ref.type)}/${ref.id}")
+                    val name = data?.get("name")?.jsonPrimitive?.contentOrNull
+                        ?: data?.get("title")?.jsonPrimitive?.contentOrNull
+                    name?.let { ref.key to it }
+                }
+            }.awaitAll().filterNotNull().forEach { (k, v) -> names[k] = v }
+        }
+        return names
+    }
 
     companion object {
         private const val TAG = "DiscogsProvider"

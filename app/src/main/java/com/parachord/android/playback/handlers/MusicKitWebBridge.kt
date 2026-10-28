@@ -51,7 +51,6 @@ class MusicKitWebBridge constructor(
     private val context: Context,
     private val settingsStore: SettingsStore,
     private val json: Json,
-) {
     /**
      * Throttle gate for Apple Music catalog API calls. All three call sites
      * ([search], [getPlaylist], [preload]) wrap their JS evaluate() in
@@ -59,8 +58,12 @@ class MusicKitWebBridge constructor(
      * searches (large library import / hosted-XSPF refresh) can't trip
      * Apple's per-token throttle and cascade into `MusicDataRequest.Error 1`
      * on the active play path. Mirrors desktop's `nativeMusicKitLimiter`.
+     * One instance app-wide: the plugin host's catalog search
+     * ([com.parachord.shared.api.AppleMusicCatalog]) shares it, since
+     * Apple throttles per token, not per caller.
      */
-    private val catalogLimiter = MusicKitCatalogLimiter()
+    private val catalogLimiter: MusicKitCatalogLimiter,
+) {
     companion object {
         private const val TAG = "MusicKitWebBridge"
         /** Served via WebViewAssetLoader so the bridge has an https:// origin,

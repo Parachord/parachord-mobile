@@ -98,6 +98,11 @@ final class FriendProfileModel {
                 let e = r.map { Self.track($0.title, $0.artist, $0.album, $0.artworkUrl) }
                 recentCache = (r, e); recent = r; recentEntities = e
             }
+            // The fetch records whether the Last.fm profile hides its recent
+            // listening (desktop parachord#1140); re-read so the tab can say so.
+            if friend?.transient != true {
+                friend = (try? await container.getFriend(friendId: friendId)) ?? friend
+            }
         }
         lastLoad[key] = Date(); loading = false
     }
@@ -362,7 +367,13 @@ struct FriendProfileScreen: View {
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })
             }
-            emptyIfNeeded(model.recent.isEmpty)
+            if model.recent.isEmpty, model.friend?.hidesListening == true {
+                Text("\(model.name) hides their recent listening on Last.fm. Their top tracks, albums and artists are in the other tabs.")
+                    .font(.system(size: 14)).foregroundStyle(PC.fg2).multilineTextAlignment(.center)
+                    .padding(.horizontal, 40).padding(.top, 60)
+            } else {
+                emptyIfNeeded(model.recent.isEmpty)
+            }
         }
         .padding(.vertical, 4).padding(.bottom, 120)
     }

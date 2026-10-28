@@ -171,6 +171,21 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `.axe` had `lookupPlaylist`; SoundCloud needed it added (v1.1.0, #281). Many resolvers
   also need credentials (SoundCloud OAuth `config.token`) and return null without them.
 
+- **The host supplies the hooks plugins expect.** `applemusic.axe` asks the host for
+  `appleMusicSearchWithMusicKit` (search → resolve), `appleMusicLookupSong`,
+  `appleMusicLookupAlbum` (URL lookups + the #424 album fallback) and
+  `appleMusicLookupPlaylist` before its own iTunes Search / Lookup. Desktop answers them
+  through MusicKit; Android's `bootstrap.html` ports them onto
+  `NativeBridge.appleMusicCatalogGet` → shared `AppleMusicCatalog` (developer-token
+  catalog GET, `/v1/catalog/` paths only, the app-wide `MusicKitCatalogLimiter`), falling
+  back to iTunes like desktop. iTunes Search lags new releases by days or weeks, so
+  without the hooks a just-released song never resolved to Apple Music. Android's native
+  Apple Music resolver uses the plugin's `resolve` as its fallback when MusicKit isn't
+  configured yet (it usually isn't when Home resolves at launch).
+- **Plugin results don't all carry `url`.** ID-based resolvers return a catalog id
+  (`appleMusicId`, `spotifyUri`); Bandcamp returns only `bandcampUrl`. Hosts read
+  `url`, then the plugin's own `<resolverId>Url` (`pluginServiceUrl`), then the
+  service URL/id fields — never require `url`.
 - **Artist photos are a chain with a plugin step** (desktop parachord#1141).
   `MetadataService.getArtistImage` asks Apple Music, Spotify, then the active resolvers
   declaring `capabilities.artistImage` (resolver-loader `getArtistImageResolvers` /
@@ -606,6 +621,8 @@ When the user adds a track to their collection (a "love"), Parachord can mirror 
 **Last.fm has no follow API.** Last.fm deprecated `user.addFriend` / `user.deleteFriend` in 2018 (returns `Method "user.addFriend" is deprecated`). Local-only add / remove. The Last.fm-side state is whatever's already in the user's Last.fm follows; we can't change it via the API.
 
 **Removal stickiness — `deletedFriendKeys` allowlist.** Last.fm has no unfollow API, so a removed Last.fm friend would re-appear on the next `syncFriendsFromServices` cycle from the user's still-active Last.fm follows. `SettingsStore.deletedFriendKeys` (CSV-encoded `Set<String>` in `KvStore` under `DELETED_FRIEND_KEYS`) carries the allowlist. `removeFriend` adds `"<service>:<username.lowercase>"` to the set; `addFriend` removes it; `syncFriendsFromServices` checks before re-inserting. Applied to **BOTH services** (LB too — even though LB has a working unfollow, a user-removed friend shouldn't sneak back through any periodic re-sync path).
+
+**A hidden Last.fm profile is a state, not an error (desktop parachord#1140).** With "Hide recent listening information" on, `user.getRecentTracks` answers 403 + error 17 to everyone but the owner (signing doesn't help; top tracks/artists/loved still answer). `LastFmClient.getUserRecentTracks` throws `LastFmHiddenListeningException` for it; `FriendsRepository` records `Friend.hidesListening` (the `friends.hidesListening` column, set on 403/17, cleared by the next successful fetch, written only on change). Friend cards show "Listening hidden" instead of a stale track, and the friend's Recent tab says why instead of "No recent listening activity".
 
 **Last.fm refresh log-spam guard.** Every 2-minute `refreshAllActivity` cycle fans out one `getUserRecentTracks` call per friend. With 60+ Last.fm friends, the rate-limit gate trips after a handful of calls and every remaining call throws `LastFmRateLimitedException` synchronously. The catch in `refreshFriendActivity` demotes that specific exception to debug, and `refreshAllActivity` tracks a per-cycle flag so subsequent Last.fm calls skip without launching coroutines that immediately throw. ListenBrainz friends are unaffected (separate API + separate gate).
 
