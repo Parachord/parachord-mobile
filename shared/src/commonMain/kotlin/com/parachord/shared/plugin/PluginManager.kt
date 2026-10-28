@@ -281,15 +281,19 @@ class PluginManager constructor(
         )
     }
 
+    /**
+     * Registry-driven track URL lookup: the resolver whose `urlPatterns` claim
+     * [url] runs its `lookupUrl`. Raw `{track, resolverId}` JSON, or null. Polled
+     * like [lookupPlaylist]: the bare async IIFE this used to evaluate returned
+     * the unresolved Promise (`[object Promise]` on iOS, `{}` on Android).
+     */
     suspend fun lookupUrl(url: String): String? {
         ensureInitialized()
-        val escaped = escapeForJs(url)
-        return jsRuntime.evaluate("""
-            (async () => {
-                const result = await window.__resolverLoader.lookupUrl('$escaped');
-                return result ? JSON.stringify(result) : null;
-            })()
-        """.trimIndent())?.unquote()
+        return pollAsync(
+            "lur",
+            "await window.__resolverLoader.lookupUrl('${escapeForJs(url)}')",
+            attempts = LOOKUP_POLL_ATTEMPTS,
+        )
     }
 
     private var lookupCounter = 0

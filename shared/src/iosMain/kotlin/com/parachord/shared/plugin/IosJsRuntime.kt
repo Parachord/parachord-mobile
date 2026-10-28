@@ -337,6 +337,204 @@ class IosJsRuntime : JsRuntime {
                     });
                 };
 
+                // ── Apple Music hooks ────────────────────────────────────────
+                // applemusic.axe asks the host for these before its own iTunes
+                // Search / Lookup: appleMusicSearchWithMusicKit (search, and so
+                // resolve), appleMusicLookupSong (song URLs),
+                // appleMusicLookupAlbum (album URLs and the album-page catalog
+                // fallback, #424) and appleMusicLookupPlaylist. Desktop answers
+                // them through MusicKit's `api.music(path)` (app.js
+                // ~L719-1080); here NativeBridge.appleMusicCatalogGet makes the
+                // same catalog read with the app's developer token (shared
+                // AppleMusicCatalog, throttled with the native catalog resolve).
+                // Ported from Android's bootstrap.html; only __amCatalog
+                // differs (JSC hands back the body as a string). iTunes Search
+                // lags new releases by days or weeks, so without these a
+                // just-released album or song only resolved through iTunes.
+                window.__amCatalogCallbacks = {};
+                var __amCatalogIdCounter = 0;
+
+                // GET a /v1/catalog/ path; the parsed response, or null (no
+                // token, throttled, failed) so the caller falls back to iTunes.
+                function __amCatalog(path) {
+                    return new Promise(function(resolve) {
+                        var callbackId = 'am_' + (++__amCatalogIdCounter);
+                        window.__amCatalogCallbacks[callbackId] = function(body) {
+                            delete window.__amCatalogCallbacks[callbackId];
+                            if (!body) { resolve(null); return; }
+                            try { resolve(JSON.parse(body)); } catch (e) { resolve(null); }
+                        };
+                        try {
+                            NativeBridge.appleMusicCatalogGet(callbackId, path);
+                        } catch (e) {
+                            delete window.__amCatalogCallbacks[callbackId];
+                            resolve(null);
+                        }
+                    });
+                }
+
+                function __amArt(artwork) {
+                    return artwork && artwork.url ? artwork.url.replace('{w}', '500').replace('{h}', '500') : null;
+                }
+
+                function __amSong(song, storefront, albumOverride) {
+                    var a = song.attributes || {};
+                    return {
+                        id: 'applemusic-' + song.id,
+                        title: a.name,
+                        artist: a.artistName,
+                        album: albumOverride || a.albumName || 'Unknown Album',
+                        duration: Math.floor((a.durationInMillis || 0) / 1000),
+                        sources: ['applemusic'],
+                        appleMusicId: String(song.id),
+                        appleMusicUrl: a.url || ('https://music.apple.com/' + storefront + '/song/' + song.id),
+                        albumArt: __amArt(a.artwork),
+                        previewUrl: (a.previews && a.previews[0] && a.previews[0].url) || null,
+                        isrc: a.isrc || null,
+                        audioTraits: a.audioTraits || [],
+                    };
+                }
+
+                function __itunesTrack(track) {
+                    return {
+                        id: 'applemusic-' + track.trackId,
+                        title: track.trackName,
+                        artist: track.artistName,
+                        album: track.collectionName || 'Single',
+                        duration: Math.floor((track.trackTimeMillis || 0) / 1000),
+                        sources: ['applemusic'],
+                        appleMusicId: String(track.trackId),
+                        appleMusicUrl: track.trackViewUrl,
+                        albumArt: track.artworkUrl100 ? track.artworkUrl100.replace('100x100', '500x500') : null,
+                        previewUrl: track.previewUrl,
+                        genre: track.primaryGenreName,
+                        trackNumber: track.trackNumber,
+                        discNumber: track.discNumber,
+                    };
+                }
+
+                function __byDiscAndTrack(a, b) {
+                    return a.discNumber !== b.discNumber ? a.discNumber - b.discNumber : a.trackNumber - b.trackNumber;
+                }
+
+                window.appleMusicSearchWithMusicKit = async function(query, storefront, limit) {
+                    storefront = storefront || 'us';
+                    limit = limit || 20;
+                    var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) +
+                        '/search?types=songs&limit=' + Math.min(limit, 25) + '&term=' + encodeURIComponent(query));
+                    if (data) {
+                        var songs = (data.results && data.results.songs && data.results.songs.data) || [];
+                        return songs.map(function(s) { return __amSong(s, storefront); });
+                    }
+                    var response = await window.iTunesRateLimiter.fetch(
+                        'https://itunes.apple.com/search?term=' + encodeURIComponent(query) +
+                        '&media=music&entity=song&limit=' + limit + '&country=' + storefront);
+                    if (!response.ok) return [];
+                    var json = await response.json();
+                    return ((json && json.results) || []).map(__itunesTrack);
+                };
+
+                window.appleMusicLookupSong = async function(songId, storefront) {
+                    storefront = storefront || 'us';
+                    var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) + '/songs/' + encodeURIComponent(songId));
+                    var song = data && data.data && data.data[0];
+                    if (song) {
+                        var t = __amSong(song, storefront);
+                        t.album = (song.attributes && song.attributes.albumName) || 'Single';
+                        t.genre = song.attributes && song.attributes.genreNames && song.attributes.genreNames[0];
+                        return t;
+                    }
+                    var response = await window.iTunesRateLimiter.fetch(
+                        'https://itunes.apple.com/lookup?id=' + songId + '&entity=song&country=' + storefront);
+                    if (!response.ok) return null;
+                    var json = await response.json();
+                    var results = (json && json.results) || [];
+                    var track = results.find(function(r) { return r.wrapperType === 'track'; }) || results[0];
+                    return track ? __itunesTrack(track) : null;
+                };
+
+                window.appleMusicLookupAlbum = async function(albumId, storefront) {
+                    storefront = storefront || 'us';
+                    var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) +
+                        '/albums/' + encodeURIComponent(albumId) + '?include=tracks');
+                    var album = data && data.data && data.data[0];
+                    if (album) {
+                        var a = album.attributes || {};
+                        var albumArt = __amArt(a.artwork);
+                        var songs = (album.relationships && album.relationships.tracks && album.relationships.tracks.data) || [];
+                        var tracks = songs.map(function(song, idx) {
+                            var t = __amSong(song, storefront, a.name);
+                            t.albumArt = albumArt;
+                            t.trackNumber = (song.attributes && song.attributes.trackNumber) || (idx + 1);
+                            t.discNumber = (song.attributes && song.attributes.discNumber) || 1;
+                            if (!t.audioTraits.length) t.audioTraits = a.audioTraits || [];
+                            return t;
+                        });
+                        tracks.sort(__byDiscAndTrack);
+                        return {
+                            id: 'applemusic-album-' + albumId,
+                            name: a.name,
+                            artist: a.artistName,
+                            albumArt: albumArt,
+                            releaseDate: a.releaseDate,
+                            trackCount: a.trackCount || tracks.length,
+                            tracks: tracks,
+                            url: a.url,
+                        };
+                    }
+                    var response = await window.iTunesRateLimiter.fetch(
+                        'https://itunes.apple.com/lookup?id=' + albumId + '&entity=song&limit=200&country=' + storefront);
+                    if (!response.ok) return null;
+                    var json = await response.json();
+                    var results = (json && json.results) || [];
+                    if (!results.length) return null;
+                    var info = results.find(function(r) { return r.wrapperType === 'collection'; });
+                    var itunesTracks = results.filter(function(r) { return r.wrapperType === 'track'; }).map(__itunesTrack);
+                    itunesTracks.sort(__byDiscAndTrack);
+                    return {
+                        id: 'applemusic-album-' + albumId,
+                        name: info ? info.collectionName : 'Unknown Album',
+                        artist: info ? info.artistName : (itunesTracks[0] ? itunesTracks[0].artist : 'Unknown Artist'),
+                        albumArt: info && info.artworkUrl100 ? info.artworkUrl100.replace('100x100', '500x500') : null,
+                        releaseDate: info ? info.releaseDate : null,
+                        trackCount: info ? info.trackCount : itunesTracks.length,
+                        tracks: itunesTracks,
+                    };
+                };
+
+                window.appleMusicLookupPlaylist = async function(playlistId, storefront) {
+                    storefront = storefront || 'us';
+                    var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) +
+                        '/playlists/' + encodeURIComponent(playlistId) + '?include=tracks');
+                    var playlist = data && data.data && data.data[0];
+                    if (!playlist) return null;
+                    var p = playlist.attributes || {};
+                    var playlistArt = __amArt(p.artwork);
+                    var rel = (playlist.relationships && playlist.relationships.tracks) || {};
+                    var all = rel.data || [];
+                    var next = rel.next;
+                    while (next) {
+                        var page = await __amCatalog(next);
+                        if (!page) break;
+                        all = all.concat(page.data || []);
+                        next = page.next || null;
+                    }
+                    var tracks = all.map(function(song) {
+                        var t = __amSong(song, storefront);
+                        t.albumArt = t.albumArt || playlistArt;
+                        return t;
+                    });
+                    return {
+                        id: 'applemusic-playlist-' + playlistId,
+                        name: p.name,
+                        owner: p.curatorName || '',
+                        albumArt: playlistArt,
+                        trackCount: tracks.length,
+                        tracks: tracks,
+                        url: p.url,
+                    };
+                };
+
                 window.__parachordClient = 'ios';
             })();
         """.trimIndent()

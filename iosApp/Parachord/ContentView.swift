@@ -2765,8 +2765,35 @@ enum JsPolyfills {
         bridge.setObject(storageGet, forKeyedSubscript: "storageGet" as NSString)
         bridge.setObject(storageSet, forKeyedSubscript: "storageSet" as NSString)
         bridge.setObject(fetchAsync, forKeyedSubscript: "fetchAsync" as NSString)
+        // Apple Music hooks (`appleMusicSearchWithMusicKit`, `appleMusicLookup*`
+        // in IosJsRuntime's bootstrap): a catalog GET with the developer token,
+        // done by the shared AppleMusicCatalog so the token stays out of JS.
+        // Resumes `window.__amCatalogCallbacks[callbackId]` with the body, or
+        // nothing so the hook falls back to iTunes. Android parity:
+        // NativeBridge.appleMusicCatalogGet.
+        let appleMusicCatalogGet: @convention(block) (String, String) -> Void = { callbackId, path in
+            Task {
+                let body = (try? await IosContainer.companion.shared.appleMusicCatalogGet(path: path)) ?? nil
+                await MainActor.run {
+                    fireAmCatalogCallback(context: context, callbackId: callbackId, body: body)
+                }
+            }
+        }
+
         bridge.setObject(resolveMbidForLove, forKeyedSubscript: "resolveMbidForLove" as NSString)
+        bridge.setObject(appleMusicCatalogGet, forKeyedSubscript: "appleMusicCatalogGet" as NSString)
         context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
+    }
+
+    /// Resume an Apple Music catalog read. Passes the response body as a
+    /// string (the bootstrap's `__amCatalog` parses it), or no args when the
+    /// read failed. Must run on the JSContext's thread (main).
+    private static func fireAmCatalogCallback(context: JSContext, callbackId: String, body: String?) {
+        let callbacks = context.objectForKeyedSubscript("__amCatalogCallbacks")
+        let callback = callbacks?.objectForKeyedSubscript(callbackId)
+        if let callback, !callback.isUndefined {
+            callback.call(withArguments: body != nil ? [body!] : [])
+        }
     }
 
     /// Resume the `window.resolveMbidForLove` promise (#215). Mirrors
