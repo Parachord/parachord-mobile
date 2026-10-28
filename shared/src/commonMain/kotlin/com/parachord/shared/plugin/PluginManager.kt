@@ -10,6 +10,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -368,6 +370,34 @@ class PluginManager constructor(
             "lal",
             "window.__resolverLoader.lookupAlbumFrom ? await window.__resolverLoader.lookupAlbumFrom('${escapeForJs(resolverId)}', '${escapeForJs(url)}') : null",
         )
+    }
+
+    /**
+     * The active resolvers that can supply an artist photo
+     * (`capabilities.artistImage`, desktop parachord#1141), in priority order:
+     * not disabled, in [active] when the user narrowed it (an empty list means
+     * all), ordered by [order]. The artist-photo chain asks them in turn.
+     */
+    suspend fun artistImageResolverIds(active: List<String>, disabled: Set<String>, order: List<String>): List<String> {
+        ensureInitialized()
+        return plugins.value
+            .filter { it.capabilities["artistImage"] == true }
+            .map { it.id }
+            .filter { it !in disabled && (active.isEmpty() || it in active) }
+            .sortedBy { id -> order.indexOf(id).let { if (it < 0) Int.MAX_VALUE else it } }
+    }
+
+    /** One resolver's `searchArtistImage`: an image URL, or null on a miss or error. */
+    suspend fun searchArtistImage(resolverId: String, artistName: String): String? {
+        ensureInitialized()
+        val raw = pollAsync(
+            "sai",
+            "window.__resolverLoader.searchArtistImage ? await window.__resolverLoader.searchArtistImage(" +
+                "'${escapeForJs(resolverId)}', '${escapeForJs(artistName)}') : null",
+        ) ?: return null
+        // The poll returns the JSON-stringified answer: a quoted URL.
+        return runCatching { Json.parseToJsonElement(raw).jsonPrimitive.contentOrNull }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
     }
 
     /**

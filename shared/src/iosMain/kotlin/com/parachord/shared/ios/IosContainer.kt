@@ -595,6 +595,18 @@ class IosContainer private constructor() {
             null
         }
 
+    /**
+     * The saved suggestions with the artwork they were missing filled in
+     * (desktop does this when it loads them), or null when there was nothing
+     * to fill. Never throws.
+     */
+    suspend fun fillAiSuggestionArtwork(): IosAiSuggestions? =
+        try { aiRecommendationService.fillMissingArtwork()?.toIos() }
+        catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            null
+        }
+
     private fun AiRecommendations.toIos() = IosAiSuggestions(
         albums = albums.map { IosAiAlbumSuggestion(it.title, it.artist, it.reason, it.artworkUrl) },
         artists = artists.map { IosAiArtistSuggestion(it.name, it.reason, it.imageUrl) },
@@ -1717,6 +1729,9 @@ class IosContainer private constructor() {
                 activeResolverIds = { settingsStore.getActiveResolvers() },
                 resolverOrder = { settingsStore.getResolverOrder() },
             ),
+            artistImageResolvers = ::artistImageResolverIds,
+            pluginArtistImage = { id, name -> pluginManager.searchArtistImage(id, name) },
+            deezer = deezerArtistSearch,
         )
     }
 
@@ -1880,8 +1895,20 @@ class IosContainer private constructor() {
             // curated-list art) is the heaviest caller of getAlbumTracks.
             albumTracksCache = albumTracksCache,
             artistAlbumsCache = artistAlbumsCache,
+            artistImageResolvers = ::artistImageResolverIds,
+            pluginArtistImage = { id, name -> pluginManager.searchArtistImage(id, name) },
+            deezer = deezerArtistSearch,
         )
     }
+
+    // Artist-photo chain (desktop parachord#1141): the active resolvers with
+    // capabilities.artistImage, then Deezer's public search.
+    private val deezerArtistSearch by lazy { com.parachord.shared.metadata.DeezerArtistSearch(httpClient) }
+    private suspend fun artistImageResolverIds(): List<String> = pluginManager.artistImageResolverIds(
+        active = settingsStore.getActiveResolvers(),
+        disabled = settingsStore.getDisabledPlugins(),
+        order = settingsStore.getResolverOrder(),
+    )
 
     private val mosaicComposer: com.parachord.shared.metadata.IosMosaicComposer by lazy {
         com.parachord.shared.metadata.IosMosaicComposer(httpClient)

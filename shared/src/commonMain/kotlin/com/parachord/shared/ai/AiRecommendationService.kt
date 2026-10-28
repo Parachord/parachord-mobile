@@ -347,15 +347,22 @@ Variety guidance: $theme Be creative and surprising — avoid defaulting to the 
     /**
      * Enrich album and artist suggestions with artwork from MetadataService.
      * Looks up album art and artist images concurrently, matching desktop's
-     * pre-fetch pattern.
+     * pre-fetch pattern. Only suggestions without artwork are looked up.
+     *
+     * Artist photos come from [MetadataService.getArtistImage], the artist-photo
+     * chain desktop uses for these cards (parachord#1141): Apple Music first,
+     * one call each, with a persistent cache. This used the full
+     * [MetadataService.getArtistInfo] cascade (every provider, bios included),
+     * which is slower and was the step that left whole suggestion sets
+     * without photos.
      */
     private suspend fun enrichWithArtwork(
         albums: List<AiAlbumSuggestion>,
         artists: List<AiArtistSuggestion>,
     ): AiRecommendations = coroutineScope {
-        // Enrich albums with artwork
         val enrichedAlbums = albums.map { album ->
             async {
+                if (album.artworkUrl != null) return@async album
                 try {
                     val results = metadataService.searchAlbums(
                         "${album.artist} ${album.title}",
@@ -363,26 +370,48 @@ Variety guidance: $theme Be creative and surprising — avoid defaulting to the 
                     )
                     val artworkUrl = results.firstOrNull()?.artworkUrl
                     if (artworkUrl != null) album.copy(artworkUrl = artworkUrl) else album
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     album
                 }
             }
         }.awaitAll()
 
-        // Enrich artists with images
         val enrichedArtists = artists.map { artist ->
             async {
+                if (artist.imageUrl != null) return@async artist
                 try {
-                    val info = metadataService.getArtistInfo(artist.name)
-                    val imageUrl = info?.imageUrl
-                    if (imageUrl != null) artist.copy(imageUrl = imageUrl) else artist
-                } catch (_: Exception) {
+                    metadataService.getArtistImage(artist.name)
+                        ?.let { artist.copy(imageUrl = it) } ?: artist
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     artist
                 }
             }
         }.awaitAll()
 
         AiRecommendations(albums = enrichedAlbums, artists = enrichedArtists)
+    }
+
+    /**
+     * Fill in artwork the saved suggestions are missing, as desktop does when it
+     * loads them (app.js "Resolve artist images for cached suggestions missing
+     * them"). A set saved while the image lookups were failing kept its
+     * placeholders until the next AI answer replaced it; now they're looked up
+     * again on load. Returns the updated set (also saved), or null when nothing
+     * was missing or nothing new was found.
+     */
+    suspend fun fillMissingArtwork(): AiRecommendations? {
+        val cached = getCachedRecommendations() ?: return null
+        val missing = cached.albums.any { it.artworkUrl == null } || cached.artists.any { it.imageUrl == null }
+        if (!missing) return null
+        val filled = enrichWithArtwork(cached.albums, cached.artists)
+        if (filled == cached) return null
+        // A fresh answer may have landed meanwhile; don't overwrite it.
+        if (cachedRecommendations !== cached) return null
+        cachedRecommendations = filled
+        saveDiskCache(filled)
+        return filled
     }
 
     /**

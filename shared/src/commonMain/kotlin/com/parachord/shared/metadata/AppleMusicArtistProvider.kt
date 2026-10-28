@@ -7,6 +7,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.encodeURLParameter
+import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -59,8 +60,12 @@ class AppleMusicArtistProvider(
         try {
             val url = "https://api.music.apple.com/v1/catalog/$storefront/search" +
                 "?types=artists&limit=5&term=${artistName.encodeURLParameter()}"
-            val body = httpClient.get(url) { header("Authorization", "Bearer $developerToken") }.bodyAsText()
-            if (body.isBlank()) return@withContext null
+            val response = httpClient.get(url) { header("Authorization", "Bearer $developerToken") }
+            // A failed request isn't "no image": throw, so the artist-photo chain
+            // doesn't remember it as a miss (MetadataService.getArtistImage).
+            if (!response.status.isSuccess()) error("Apple Music artist search failed: HTTP ${response.status.value}")
+            val body = response.bodyAsText()
+            if (body.isBlank()) error("Apple Music artist search returned an empty body")
 
             val data = json.parseToJsonElement(body).jsonObject["results"]?.jsonObject
                 ?.get("artists")?.jsonObject?.get("data")?.jsonArray ?: return@withContext null
@@ -86,7 +91,9 @@ class AppleMusicArtistProvider(
             // withTimeoutOrNull, and no stack trace reached logcat.
             val ms = currentTimeMillis() - startedAt
             Log.w(TAG, "Apple Music artist lookup failed for '$artistName' after ${ms}ms: ${e::class.simpleName}: ${e.message}", e)
-            null
+            // Rethrown (cancellation included): callers catch per provider, and
+            // the artist-photo chain must see a failure as a failure.
+            throw e
         }
     }
 

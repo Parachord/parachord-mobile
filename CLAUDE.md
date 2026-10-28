@@ -171,6 +171,14 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `.axe` had `lookupPlaylist`; SoundCloud needed it added (v1.1.0, #281). Many resolvers
   also need credentials (SoundCloud OAuth `config.token`) and return null without them.
 
+- **Artist photos are a chain with a plugin step** (desktop parachord#1141).
+  `MetadataService.getArtistImage` asks Apple Music, Spotify, then the active resolvers
+  declaring `capabilities.artistImage` (resolver-loader `getArtistImageResolvers` /
+  `searchArtistImage`, via `PluginManager`), then Deezer's public search, Wikipedia,
+  Discogs, Last.fm and MusicBrainz. First usable photo wins (`ArtistImageChain.isUsableUrl`
+  refuses credential-bearing URLs and Last.fm's placeholder); a miss is remembered 6 h only
+  when every step answered, so image steps must THROW on failure, not return null.
+
 **Key files:** `shared/.../deeplink/ProviderPlaylistResolver.kt` (registry fallback),
 `shared/.../plugin/PluginManager.kt#lookupPlaylist` (Android poll), `shared/iosMain/.../IosResolverRuntime.kt#lookupPlaylist` (iOS poll), `parachord-plugins/<service>.axe` (the per-service capability source of truth).
 

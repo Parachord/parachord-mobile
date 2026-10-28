@@ -204,6 +204,12 @@ class HomeViewModel constructor(
             // the user tapped refresh.
             aiRecommendationService.getCachedRecommendations()?.let { cached ->
                 _aiRecommendations.value = cached
+                // Look up artwork the saved set is missing while the fresh
+                // answer (30-60s) is on its way, as desktop does.
+                launch {
+                    val filled = aiRecommendationService.fillMissingArtwork() ?: return@launch
+                    if (_aiRecommendations.value === cached) _aiRecommendations.value = filled
+                }
             }
             _aiLoading.value = true
             _aiError.value = null
