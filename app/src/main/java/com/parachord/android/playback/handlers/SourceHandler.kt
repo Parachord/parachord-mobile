@@ -65,3 +65,11 @@ class LocalFileHandler : SourceHandler {
             .setUri(track.sourceUrl ?: "")
             .build()
 }
+
+/**
+ * A handler's play didn't start within its time limit: usually the network
+ * dropped mid-start. [com.parachord.android.playback.PlaybackController]
+ * catches it, stops the spinner and says so, instead of holding the playback
+ * lock until the app is killed.
+ */
+class PlaybackStartTimeoutException(message: String) : Exception(message)

@@ -62,6 +62,12 @@ class AppleMusicPlaybackHandler constructor(
             }
         }
         var success = musicKitBridge.play(songId)
+        if (!success && musicKitBridge.lastPlayTimedOut) {
+            // A hang (typically the network dropping mid-start), not a DRM
+            // handshake or an expired token: retrying or prompting sign-in
+            // can't help. MusicKit was reset; the next play starts fresh.
+            throw PlaybackStartTimeoutException("Apple Music didn't start playing")
+        }
         if (!success) {
             // Widevine DRM license negotiation can take a moment after auth.
             // Retry a few times with a short delay before falling back to re-auth.
