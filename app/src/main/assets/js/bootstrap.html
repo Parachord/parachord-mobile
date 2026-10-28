@@ -408,6 +408,30 @@
         };
     };
 
+    window.appleMusicSearchAlbumsWithMusicKit = async function(term, storefront, limit) {
+        storefront = storefront || 'us';
+        limit = limit || 10;
+        var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) +
+            '/search?types=albums&limit=' + Math.min(limit, 25) + '&term=' + encodeURIComponent(term));
+        // null: catalog unreachable, so the plugin asks iTunes itself.
+        if (!data) return null;
+        var albums = (data.results && data.results.albums && data.results.albums.data) || [];
+        return albums
+            .filter(function(a) { return a.attributes && a.attributes.name && a.attributes.url; })
+            .map(function(a) {
+                var at = a.attributes;
+                return {
+                    id: 'applemusic-album-' + a.id,
+                    name: at.name,
+                    artist: at.artistName || '',
+                    albumArt: __amArt(at.artwork),
+                    releaseDate: at.releaseDate || null,
+                    trackCount: at.trackCount || null,
+                    url: at.url,
+                };
+            });
+    };
+
     window.appleMusicLookupPlaylist = async function(playlistId, storefront) {
         storefront = storefront || 'us';
         var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) +

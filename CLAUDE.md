@@ -181,9 +181,12 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `MusicKitCatalogLimiter`), falling back to iTunes like desktop. On iOS the callable is
   attached from Swift (`JsPolyfills.installNativeBridge`) and forwards to
   `IosContainer.appleMusicCatalogGet`; the limiter is shared with `IosResolverRuntime`'s
-  native catalog resolve. **Not covered:** the plugin's `searchAlbums` (album-page
-  fallback search) still uses iTunes Search on every platform, desktop included, so an
-  album iTunes hasn't indexed yet isn't found there. iTunes Search lags new releases by days or weeks, so
+  native catalog resolve. A fifth hook, `appleMusicSearchAlbumsWithMusicKit(term,
+  storefront, limit)`, backs the plugin's `searchAlbums` (the album page's catalog
+  fallback search, `applemusic.axe` ≥ 1.2.0). Unlike the other four, it does NOT fall
+  back to iTunes itself: it returns the catalog's albums (an empty array is a real miss),
+  or `null` when the catalog can't be reached, and the plugin then asks iTunes. iTunes
+  album search missed "Mount Zero" (Swapmeet) for over three months after release. iTunes Search lags new releases by days or weeks, so
   without the hooks a just-released song never resolved to Apple Music. Android's native
   Apple Music resolver uses the plugin's `resolve` as its fallback when MusicKit isn't
   configured yet (it usually isn't when Home resolves at launch).
