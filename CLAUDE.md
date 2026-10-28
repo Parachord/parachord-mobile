@@ -175,10 +175,15 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `appleMusicSearchWithMusicKit` (search → resolve), `appleMusicLookupSong`,
   `appleMusicLookupAlbum` (URL lookups + the #424 album fallback) and
   `appleMusicLookupPlaylist` before its own iTunes Search / Lookup. Desktop answers them
-  through MusicKit; Android's `bootstrap.html` ports them onto
-  `NativeBridge.appleMusicCatalogGet` → shared `AppleMusicCatalog` (developer-token
-  catalog GET, `/v1/catalog/` paths only, the app-wide `MusicKitCatalogLimiter`), falling
-  back to iTunes like desktop. iTunes Search lags new releases by days or weeks, so
+  through MusicKit; Android's `bootstrap.html` and iOS's `IosJsRuntime.BOOTSTRAP_JS` port
+  them onto `NativeBridge.appleMusicCatalogGet` → shared `AppleMusicCatalog`
+  (developer-token catalog GET, `/v1/catalog/` paths only, the app-wide
+  `MusicKitCatalogLimiter`), falling back to iTunes like desktop. On iOS the callable is
+  attached from Swift (`JsPolyfills.installNativeBridge`) and forwards to
+  `IosContainer.appleMusicCatalogGet`; the limiter is shared with `IosResolverRuntime`'s
+  native catalog resolve. **Not covered:** the plugin's `searchAlbums` (album-page
+  fallback search) still uses iTunes Search on every platform, desktop included, so an
+  album iTunes hasn't indexed yet isn't found there. iTunes Search lags new releases by days or weeks, so
   without the hooks a just-released song never resolved to Apple Music. Android's native
   Apple Music resolver uses the plugin's `resolve` as its fallback when MusicKit isn't
   configured yet (it usually isn't when Home resolves at launch).

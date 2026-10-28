@@ -260,6 +260,14 @@ there**, so several gaps only surface on iOS:
   passthrough — JSC has no `setTimeout` for a real throttle gap, so throttle a
   layer up in `IosTrackResolverCache`). If a `.axe` errors with "undefined is
   not an object (evaluating 'window.X')", X is a missing host global — add it.
+- **The Apple Music hooks are host globals too.** `applemusic.axe` calls
+  `window.appleMusicSearchWithMusicKit` / `appleMusicLookupSong` /
+  `appleMusicLookupAlbum` / `appleMusicLookupPlaylist` before iTunes (whose
+  Search lags new releases). `BOOTSTRAP_JS` defines them (ported from
+  Android's `bootstrap.html`) on `NativeBridge.appleMusicCatalogGet`, which
+  Swift attaches and forwards to `IosContainer.appleMusicCatalogGet` → shared
+  `AppleMusicCatalog`. The developer token never enters JS; the callback gets
+  the body as a string and `__amCatalog` parses it.
 - **ID-based resolvers return NO top-level `url`.** `applemusic.axe` returns
   `{appleMusicId, previewUrl, appleMusicUrl}`; `spotify.axe` a URI. Android's
   `AxeResolveResult` required `url` (it only runs url-based bandcamp/youtube

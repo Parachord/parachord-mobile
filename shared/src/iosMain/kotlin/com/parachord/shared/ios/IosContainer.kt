@@ -2605,6 +2605,24 @@ class IosContainer private constructor() {
             httpClient = httpClient,
             appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
             trackDao = trackDao,
+            catalogLimiter = appleMusicCatalogLimiter,
+        )
+    }
+
+    /**
+     * One Apple Music catalog limiter app-wide (Apple throttles per token): the
+     * native catalog resolve above and the plugin host's catalog reads
+     * ([appleMusicCatalog]) share it, as on Android.
+     */
+    private val appleMusicCatalogLimiter: com.parachord.shared.api.MusicKitCatalogLimiter by lazy {
+        com.parachord.shared.api.MusicKitCatalogLimiter()
+    }
+
+    private val appleMusicCatalog: com.parachord.shared.api.AppleMusicCatalog by lazy {
+        com.parachord.shared.api.AppleMusicCatalog(
+            httpClient = httpClient,
+            developerToken = appConfig.appleMusicDeveloperToken,
+            limiter = appleMusicCatalogLimiter,
         )
     }
 
@@ -2760,6 +2778,24 @@ class IosContainer private constructor() {
             Log.w("IosContainer", "resolveMbidForLove failed: ${e.message}")
             null
         }
+    }
+
+    /**
+     * A read from Apple Music's catalog API with the app's developer token, for
+     * the plugin host's Apple Music hooks (`appleMusicSearchWithMusicKit`,
+     * `appleMusicLookupSong` / `Album` / `Playlist` in `IosJsRuntime`'s
+     * bootstrap). The Swift `NativeBridge.appleMusicCatalogGet` forwards the
+     * path here and resumes the JS promise with the body, or null so the hook
+     * falls back to iTunes. Android parity: `NativeBridge.appleMusicCatalogGet`.
+     * `/v1/catalog/` paths only; the token never reaches JavaScript.
+     */
+    suspend fun appleMusicCatalogGet(path: String): String? = try {
+        appleMusicCatalog.get(path)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "appleMusicCatalogGet failed: ${e.message}")
+        null
     }
 
     private val MBID_REGEX =
