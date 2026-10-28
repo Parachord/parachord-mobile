@@ -48,6 +48,8 @@ import kotlinx.coroutines.coroutineScope
  *
  * @param resolveSpotify resolves Spotify for a query; returns null when Spotify
  *   is off / has no token / errored (the platform binding owns that gate+search).
+ *   The [MatchTarget] lets it pick the requested track among the search results
+ *   rather than taking the first.
  */
 class ResolverCoordinator(
     private val runtime: ResolverRuntime,
@@ -55,7 +57,7 @@ class ResolverCoordinator(
     private val getActive: suspend () -> List<String>,
     private val getDisabled: suspend () -> Set<String>,
     private val getPlugins: () -> List<PluginManager.PluginInfo>,
-    private val resolveSpotify: suspend (query: String) -> ResolvedSource?,
+    private val resolveSpotify: suspend (query: String, target: MatchTarget) -> ResolvedSource?,
 ) {
     /**
      * Fan out across spotify + natives + axe, returning the union re-scored
@@ -89,7 +91,7 @@ class ResolverCoordinator(
 
         val tasks = buildList {
             if (isActive("spotify")) {
-                add(async { resolveSpotify(query) })
+                add(async { resolveSpotify(query, MatchTarget(targetTitle, targetArtist, targetIsrc, targetMbid)) })
             }
             for (id in runtime.nativeResolverIds) {
                 if (isActive(id)) {
@@ -250,7 +252,7 @@ class ResolverCoordinator(
         targetMbid: String? = null,
     ): ResolvedSource? {
         val raw = when {
-            resolverId == "spotify" -> resolveSpotify(query)
+            resolverId == "spotify" -> resolveSpotify(query, MatchTarget(targetTitle, targetArtist, targetIsrc, targetMbid))
             resolverId in runtime.nativeResolverIds ->
                 runtime.resolveNative(resolverId, query, targetTitle, targetArtist, album, targetIsrc, targetMbid)
             getPlugins().any { it.id == resolverId } ->

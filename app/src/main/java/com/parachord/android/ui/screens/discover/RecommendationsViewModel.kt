@@ -303,10 +303,15 @@ data class SourceCounts(
 
 /**
  * The repository emits its cached list first, then an error if the refresh
- * fails (network, both services empty). A failed refresh must not replace a
- * list the user is already looking at with the error screen — keep the data
- * and only surface an error when there's nothing to show. iOS already drops
- * error emissions the same way.
+ * fails. A failed refresh must not replace a list the user is already looking
+ * at with the error screen — keep the data and only surface an error when
+ * there's nothing to show. iOS already drops error emissions the same way.
+ *
+ * When no service has anything to recommend, the repository emits an empty
+ * list and then the reason. The empty list replaces what was shown (it may be
+ * stale), so the reason that follows it is shown, not swallowed.
  */
 internal fun <T> keepDataOnError(current: Resource<T>, next: Resource<T>): Resource<T> =
-    if (next is Resource.Error && current is Resource.Success) current else next
+    if (next is Resource.Error && current is Resource.Success && !current.isEmptyList()) current else next
+
+private fun <T> Resource.Success<T>.isEmptyList(): Boolean = (data as? Collection<*>)?.isEmpty() == true

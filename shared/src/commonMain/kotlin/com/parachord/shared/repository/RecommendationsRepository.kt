@@ -71,8 +71,10 @@ class RecommendationsRepository(
         try {
             val json = cacheRead() ?: return
             val wrapper = diskJson.decodeFromString<RecommendationsDiskCache>(json)
-            cachedTracks = wrapper.tracks
-            cachedArtists = wrapper.artists
+            // An empty list means nothing was saved (see clearForEmptyAnswer),
+            // not a cached empty answer, so the next load asks again.
+            cachedTracks = wrapper.tracks.takeIf { it.isNotEmpty() }
+            cachedArtists = wrapper.artists.takeIf { it.isNotEmpty() }
             Log.d(TAG, "Loaded ${wrapper.tracks.size} tracks, ${wrapper.artists.size} artists from disk cache")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to load disk cache", e)
@@ -112,24 +114,19 @@ class RecommendationsRepository(
                 return@flow
             }
 
-            val allTracks = mutableListOf<RecommendedTrack>()
-
-            coroutineScope {
-                // Fetch from both services in parallel
-                val lastFmDeferred = async {
-                    if (lastFmUsername != null) fetchLastFmRecommendations(lastFmUsername) else emptyList()
-                }
-                val lbDeferred = async {
-                    if (lbUsername != null) fetchListenBrainzRecommendations(lbUsername) else emptyList()
-                }
-
-                // ListenBrainz first (higher priority in merge, matching desktop)
-                allTracks.addAll(lbDeferred.await())
-                allTracks.addAll(lastFmDeferred.await())
-            }
-
+            val fetched = fetchAll(lastFmUsername, lbUsername)
+            val allTracks = fetched.tracks
             if (allTracks.isEmpty()) {
-                emit(Resource.Error("No recommendations available yet.\nListen to more music to get personalized suggestions!"))
+                if (fetched.anyFailed) {
+                    // A request failed: that isn't "nothing to recommend", so keep
+                    // what's shown.
+                    emit(Resource.Error("Failed to load recommendations"))
+                } else {
+                    cachedTracks = null
+                    saveDiskCache()
+                    emit(Resource.Success(emptyList()))
+                    emit(Resource.Error(emptyRecommendationsMessage(lbUsername != null, lastFmUsername != null)))
+                }
                 return@flow
             }
 
@@ -173,21 +170,17 @@ class RecommendationsRepository(
                 return@flow
             }
 
-            val allTracks = mutableListOf<RecommendedTrack>()
-
-            coroutineScope {
-                val lastFmDeferred = async {
-                    if (lastFmUsername != null) fetchLastFmRecommendations(lastFmUsername) else emptyList()
-                }
-                val lbDeferred = async {
-                    if (lbUsername != null) fetchListenBrainzRecommendations(lbUsername) else emptyList()
-                }
-                allTracks.addAll(lbDeferred.await())
-                allTracks.addAll(lastFmDeferred.await())
-            }
-
+            val fetched = fetchAll(lastFmUsername, lbUsername)
+            val allTracks = fetched.tracks
             if (allTracks.isEmpty()) {
-                emit(Resource.Error("No recommendations available yet.\nListen to more music to get personalized suggestions!"))
+                if (fetched.anyFailed) {
+                    emit(Resource.Error("Failed to load recommendations"))
+                } else {
+                    cachedArtists = null
+                    saveDiskCache()
+                    emit(Resource.Success(emptyList()))
+                    emit(Resource.Error(emptyRecommendationsMessage(lbUsername != null, lastFmUsername != null)))
+                }
                 return@flow
             }
 
@@ -239,12 +232,30 @@ class RecommendationsRepository(
         }
     }
 
+    private class Fetched(val tracks: List<RecommendedTrack>, val anyFailed: Boolean)
+
+    /**
+     * Both services in parallel, ListenBrainz first (higher priority in the
+     * merge, matching desktop). [Fetched.anyFailed] tells a failed request
+     * apart from a service with nothing to recommend.
+     */
+    private suspend fun fetchAll(lastFmUsername: String?, lbUsername: String?): Fetched = coroutineScope {
+        val lastFm = async { lastFmUsername?.let { fetchLastFmRecommendations(it) } }
+        val lb = async { lbUsername?.let { fetchListenBrainzRecommendations(it) } }
+        val lbTracks = lb.await()
+        val lastFmTracks = lastFm.await()
+        Fetched(
+            tracks = lbTracks.orEmpty() + lastFmTracks.orEmpty(),
+            anyFailed = (lbUsername != null && lbTracks == null) || (lastFmUsername != null && lastFmTracks == null),
+        )
+    }
+
     /**
      * Fetch recommendations from Last.fm's web endpoint.
      * Endpoint: https://www.last.fm/player/station/user/{username}/recommended
      * This is a web API, not the official Last.fm API v2.
      */
-    private suspend fun fetchLastFmRecommendations(username: String): List<RecommendedTrack> {
+    private suspend fun fetchLastFmRecommendations(username: String): List<RecommendedTrack>? {
         return try {
             val url = "https://www.last.fm/player/station/user/$username/recommended"
             val response = httpClient.get(url) {
@@ -253,7 +264,7 @@ class RecommendationsRepository(
 
             if (!response.status.isSuccess()) {
                 Log.w(TAG, "Last.fm recommendations failed: ${response.status.value}")
-                return emptyList()
+                return null
             }
 
             val body = response.bodyAsText()
@@ -283,49 +294,55 @@ class RecommendationsRepository(
             Log.d(TAG, "Fetched ${tracks.size} Last.fm recommendations for $username")
             tracks
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "Last.fm recommendations failed", e)
-            emptyList()
+            null
         }
     }
 
     /**
-     * Fetch recommendations from ListenBrainz.
-     * Primary: curated recommendation playlists.
-     * Fallback: user's top recordings from the past month.
+     * Fetch recommendations from ListenBrainz's recommendation playlists.
+     *
+     * With no playlist yet (a new account, or before ListenBrainz has generated
+     * one) this returns nothing. It used to fall back to the user's own top
+     * recordings of the month, shown as recommendations: the opposite of what
+     * the page promises (desktop parachord#1121). The page says why instead.
+     * Null when the request failed.
      */
-    private suspend fun fetchListenBrainzRecommendations(username: String): List<RecommendedTrack> {
+    private suspend fun fetchListenBrainzRecommendations(username: String): List<RecommendedTrack>? {
         return try {
-            // Try recommendation playlists first
             val playlistTracks = listenBrainzClient.getRecommendationPlaylistTracks(username)
-            if (playlistTracks.isNotEmpty()) {
-                Log.d(TAG, "Fetched ${playlistTracks.size} ListenBrainz playlist recommendations for $username")
-                return playlistTracks.map { track ->
-                    RecommendedTrack(
-                        title = track.title,
-                        artist = track.artist,
-                        album = track.album,
-                        duration = track.durationMs, // ms, like Track.duration (#349)
-                        source = "listenbrainz",
-                    )
-                }
-            }
-
-            // Fallback: top recordings from past month
-            Log.d(TAG, "No LB playlists, falling back to top recordings for $username")
-            val topRecordings = listenBrainzClient.getUserTopRecordings(username, "month", 50)
-            topRecordings.map { rec ->
+            Log.d(TAG, "Fetched ${playlistTracks.size} ListenBrainz playlist recommendations for $username")
+            playlistTracks.map { track ->
                 RecommendedTrack(
-                    title = rec.trackName,
-                    artist = rec.artistName,
-                    album = rec.releaseName,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    duration = track.durationMs, // ms, like Track.duration (#349)
                     source = "listenbrainz",
                 )
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "ListenBrainz recommendations failed for $username", e)
-            emptyList()
+            null
         }
     }
+}
+
+/**
+ * What the Recommendations page says when no connected service has anything
+ * to recommend. Port of desktop's `recommendations-empty.js` (parachord#1121).
+ * ListenBrainz builds its recommendation playlist from a few weeks of listens,
+ * so a new account has none.
+ */
+fun emptyRecommendationsMessage(hasListenBrainz: Boolean, hasLastFm: Boolean): String = when {
+    hasListenBrainz && !hasLastFm ->
+        "ListenBrainz hasn't made recommendations for you yet. It builds them from a few weeks of listens, so check back later, or connect Last.fm in Settings for recommendations now."
+    hasListenBrainz && hasLastFm ->
+        "Neither ListenBrainz nor Last.fm has recommendations for you yet. ListenBrainz builds them from a few weeks of listens, so check back later."
+    else ->
+        "Last.fm doesn't have recommendations for you yet. Check back once it has more of your listening history."
 }
 
 /** Disk cache wrapper for JSON serialization. */

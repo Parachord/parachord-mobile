@@ -88,6 +88,14 @@ class FreshDropsRepository(
      */
     private val imageEnrichmentService: ImageEnrichmentService,
     private val lastFmApiKey: String,
+    /**
+     * Artist IDs found by MusicBrainz search (step 4 of [resolveArtistMbid]),
+     * kept across launches. Without it every Last.fm/ListenBrainz-only artist
+     * (no library track for the mapper) was searched again on every launch, at
+     * MusicBrainz's 1 request/second. Desktop keeps the same ID-only entries
+     * for 30 days (parachord#1127). Null = session-only, as before.
+     */
+    private val artistIdCache: com.parachord.shared.cache.PersistentJsonCache<String>? = null,
 ) {
     companion object {
         private const val TAG = "FreshDropsRepo"
@@ -216,6 +224,12 @@ class FreshDropsRepository(
             return MbidResolution(mbid, usedMbSearch = false)
         }
 
+        // 2b. An ID an earlier launch found by MusicBrainz search (30-day TTL).
+        artistIdCache?.get(key)?.let { mbid ->
+            mbidCache[key] = mbid
+            return MbidResolution(mbid, usedMbSearch = false)
+        }
+
         // 3. Try MBID Mapper via enrichment service using a library track
         val trackByArtist = libraryTracks.firstOrNull { it.artist.lowercase().trim() == key }
         if (trackByArtist != null) {
@@ -233,6 +247,7 @@ class FreshDropsRepository(
             val artist = results.artists.firstOrNull()
             if (artist != null) {
                 mbidCache[key] = artist.id
+                artistIdCache?.put(key, artist.id)
                 Log.d(TAG, "MB search resolved '$artistName' → ${artist.id}")
                 return MbidResolution(artist.id, usedMbSearch = true)
             }
