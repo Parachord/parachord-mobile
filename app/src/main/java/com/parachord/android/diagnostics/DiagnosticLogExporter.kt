@@ -25,9 +25,13 @@ import java.util.TimeZone
  * (#327).
  *
  * The logs can be 100s of KB, which won't fit in a GitHub new-issue URL (~8 KB
- * before a 414). So the flow is: copy the FULL text to the clipboard, then open a
- * prefilled issue whose body tells the user to paste. No tokens are ever
- * included — logcat lines run through [redact] as defence-in-depth.
+ * before a 414). So the issue body itself carries what fits: recent app exits
+ * (with the main-thread stack of the last ANR, the evidence a freeze report
+ * needs) and the most recent log lines, filled up to the URL budget. The FULL
+ * text still goes to the clipboard for anyone who wants to paste more. Reports
+ * used to rely on that paste alone, and in practice it never happened, so
+ * issues arrived with no logs at all. No tokens are ever included: logcat lines
+ * run through [redact] as defence-in-depth.
  */
 class DiagnosticLogExporter(
     private val context: Context,
@@ -43,9 +47,19 @@ class DiagnosticLogExporter(
     suspend fun prepareBugReport(): Report? = withContext(Dispatchers.IO) {
         try {
             val header = buildHeader()
-            val full = header + "\n\n" + redact(captureLogcat())
+            val exits = recentExits()
+            val log = redact(captureLogcat())
+            val full = buildString {
+                append(header)
+                if (exits != null) append("\n\n").append(exits.full)
+                append("\n\n").append(log)
+            }
             copyToClipboard(full)
-            Report(issueUrl = buildIssueUrl(header), clipboardChars = full.length)
+            val title = "Bug report — Parachord ${BuildConfig.VERSION_NAME} (${Build.MODEL})"
+            Report(
+                issueUrl = buildIssueUrl(title, header, exits?.brief, log),
+                clipboardChars = full.length,
+            )
         } catch (e: Exception) {
             com.parachord.shared.platform.Log.e(TAG, "diagnostics prepare failed: ${e.message}", e)
             null
@@ -57,33 +71,64 @@ class DiagnosticLogExporter(
         cm.setPrimaryClip(ClipData.newPlainText("Parachord diagnostics", text))
     }
 
+    /** Recent app exits: [brief] for the issue body, [full] for the clipboard. */
+    data class Exits(val brief: String, val full: String)
+
     /**
-     * Prefilled issue: title + a template body. The header is small enough to
-     * embed directly (so the issue always carries version/device even if the
-     * user forgets to paste); the full log rides the clipboard.
+     * The app's recent exits from [android.app.ApplicationExitInfo] (API 30+):
+     * when and why each process died, and for the newest ANR within
+     * [EXIT_WINDOW_MS] the main thread's stack from its trace. A freeze kills
+     * the process, so by the time the user files the report the evidence is
+     * here, not in logcat. Null when there's nothing recent or the API is
+     * unavailable.
      */
-    private fun buildIssueUrl(header: String): String {
-        val title = "Bug report — Parachord ${BuildConfig.VERSION_NAME} (${Build.MODEL})"
-        val body = buildString {
-            appendLine("## What happened?")
-            appendLine("<!-- Describe the problem: what you tapped, what you expected, what happened. -->")
-            appendLine()
-            appendLine("## Diagnostics")
-            appendLine("<!-- Your full logs are on the clipboard — long-press below and Paste. -->")
-            appendLine()
-            appendLine("<details><summary>Environment</summary>")
-            appendLine()
-            appendLine("```")
-            append(header)
-            appendLine()
-            appendLine("```")
-            append("</details>")
+    private fun recentExits(): Exits? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            val cutoff = System.currentTimeMillis() - EXIT_WINDOW_MS
+            val exits = am.getHistoricalProcessExitReasons(context.packageName, 0, MAX_EXITS)
+                .filter { it.timestamp >= cutoff }
+            if (exits.isEmpty()) return null
+            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+            val lines = exits.map { e ->
+                "${fmt.format(Date(e.timestamp))}  ${exitReasonName(e.reason)}" +
+                    (e.description?.takeIf { it.isNotBlank() }?.let { " — $it" } ?: "")
+            }
+            val anrStack = exits.firstOrNull { it.reason == android.app.ApplicationExitInfo.REASON_ANR }
+                ?.traceInputStream?.bufferedReader()?.use { it.readText() }
+                ?.let { mainThreadStack(it) }
+            fun render(stackLines: Int) = buildString {
+                appendLine("Recent exits (newest first):")
+                lines.forEach { appendLine(it) }
+                if (anrStack != null) {
+                    appendLine()
+                    appendLine("Last ANR, main thread:")
+                    anrStack.lineSequence().take(stackLines).forEach { appendLine(it) }
+                }
+            }.trimEnd()
+            Exits(brief = render(BRIEF_STACK_LINES), full = render(Int.MAX_VALUE))
+        } catch (e: Exception) {
+            com.parachord.shared.platform.Log.w(TAG, "exit-info read failed: ${e.message}")
+            null
         }
-        return "https://github.com/Parachord/parachord-mobile/issues/new" +
-            "?labels=bug&title=" + encode(title) + "&body=" + encode(body)
     }
 
-    private fun encode(s: String): String = java.net.URLEncoder.encode(s, "UTF-8")
+    private fun exitReasonName(reason: Int): String = when (reason) {
+        android.app.ApplicationExitInfo.REASON_ANR -> "ANR (app froze)"
+        android.app.ApplicationExitInfo.REASON_CRASH -> "crash"
+        android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "native crash"
+        android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "killed for low memory"
+        android.app.ApplicationExitInfo.REASON_EXIT_SELF -> "exited"
+        android.app.ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+        android.app.ApplicationExitInfo.REASON_USER_REQUESTED -> "stopped by user"
+        android.app.ApplicationExitInfo.REASON_USER_STOPPED -> "force-stopped"
+        android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive resource use"
+        android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initialization failure"
+        android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency died"
+        android.app.ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission change"
+        else -> "other ($reason)"
+    }
 
     private suspend fun buildHeader(): String {
         val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss z", Locale.US)
@@ -133,6 +178,93 @@ class DiagnosticLogExporter(
 
     companion object {
         private const val TAG = "DiagnosticLogExporter"
+
+        private const val ISSUE_BASE = "https://github.com/Parachord/parachord-mobile/issues/new"
+        // GitHub answers 414 a little past 8 KB of URL; stay well under it.
+        internal const val MAX_URL_CHARS = 7_600
+        private const val EXIT_WINDOW_MS = 3L * 24 * 60 * 60 * 1000
+        private const val MAX_EXITS = 5
+        private const val BRIEF_STACK_LINES = 30
+        private const val MAX_EXITS_CHARS = 2_500
+
+        private fun encode(s: String): String = java.net.URLEncoder.encode(s, "UTF-8")
+
+        /**
+         * The prefilled new-issue URL: the template, the environment [header],
+         * the [exits] summary, and as many of the most RECENT [log] lines as fit
+         * in [maxUrlChars] (a just-happened bug's evidence is at the tail). The
+         * header and exits always go in; only the log is trimmed.
+         */
+        internal fun buildIssueUrl(
+            title: String,
+            header: String,
+            exits: String?,
+            log: String,
+            maxUrlChars: Int = MAX_URL_CHARS,
+        ): String {
+            // A long ANR stack must not crowd out the log or overflow the URL.
+            val exits = exits?.let { if (it.length > MAX_EXITS_CHARS) it.take(MAX_EXITS_CHARS) + "\n…" else it }
+            fun body(logTail: String?) = buildString {
+                appendLine("## What happened?")
+                appendLine("<!-- Describe the problem: what you tapped, what you expected, what happened. -->")
+                appendLine()
+                appendLine("## Diagnostics")
+                appendLine("<!-- The full log is on your clipboard if you want to paste more below. -->")
+                appendLine()
+                appendLine("<details><summary>Environment</summary>")
+                appendLine()
+                appendLine("```")
+                appendLine(header)
+                appendLine("```")
+                appendLine("</details>")
+                if (exits != null) {
+                    appendLine()
+                    appendLine("<details><summary>Recent app exits</summary>")
+                    appendLine()
+                    appendLine("```")
+                    appendLine(exits)
+                    appendLine("```")
+                    appendLine("</details>")
+                }
+                if (logTail != null) {
+                    appendLine()
+                    appendLine("<details><summary>Recent log</summary>")
+                    appendLine()
+                    appendLine("```")
+                    appendLine(logTail)
+                    appendLine("```")
+                    append("</details>")
+                }
+            }
+            fun url(b: String) = "$ISSUE_BASE?labels=bug&title=${encode(title)}&body=${encode(b)}"
+
+            val withoutLog = url(body(null))
+            // Room for the log section: what's left after the fixed parts and
+            // the section's own wrapper.
+            val wrapperCost = url(body("")).length - withoutLog.length
+            var room = maxUrlChars - withoutLog.length - wrapperCost
+            if (room <= 0) return withoutLog
+            val kept = ArrayDeque<String>()
+            for (line in log.trimEnd().lines().asReversed()) {
+                val cost = encode(line + "\n").length
+                if (cost > room) break
+                kept.addFirst(line)
+                room -= cost
+            }
+            return if (kept.isEmpty()) withoutLog else url(body(kept.joinToString("\n")))
+        }
+
+        /**
+         * The `"main"` thread's block from an ANR trace: from its header line to
+         * the blank line that ends it. The whole trace if the block isn't found.
+         */
+        internal fun mainThreadStack(trace: String): String {
+            val lines = trace.lines()
+            val start = lines.indexOfFirst { it.startsWith("\"main\"") }
+            if (start < 0) return trace.trim()
+            val end = (start until lines.size).firstOrNull { it > start && lines[it].isBlank() } ?: lines.size
+            return lines.subList(start, end).joinToString("\n")
+        }
         // Cap so the copied text pastes into a GitHub issue (~64 KB body limit)
         // and Slack / other apps without being rejected or silently truncated.
         // Keep the most RECENT slice — a just-happened bug's evidence is at the tail.

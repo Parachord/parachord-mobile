@@ -1745,6 +1745,7 @@ class PlaybackService : MediaLibraryService() {
                 }
                 val newTimeline = QueueTimeline(items, durationsUs)
                 val previousMediaId = queueSnapshot.currentMediaId
+                val previousMetadata = queueSnapshot.items.firstOrNull()?.mediaMetadata
                 val newCurrentId = currentTrack?.id
                 queueSnapshot = QueueSnapshotState(
                     items = items,
@@ -1776,6 +1777,16 @@ class PlaybackService : MediaLibraryService() {
                         // onMediaItemTransition alone won't refresh the card.
                         // Without this, Auto keeps the stale delegate metadata
                         // (the cold-start placeholder) on the first track.
+                        listener.onMediaMetadataChanged(newMetadata)
+                    }
+                } else if (items.isNotEmpty() && items[0].mediaMetadata != previousMetadata) {
+                    // Same track, new metadata: usually its artwork, which
+                    // PlaybackController.enrichArtworkIfMissing fills in after
+                    // the track starts. Auto's card only refreshes on this
+                    // event, so without it the cover stayed blank unless a
+                    // later refresh (the duration one) happened to fire (#448).
+                    val newMetadata = items[0].mediaMetadata
+                    for (listener in externalListeners) {
                         listener.onMediaMetadataChanged(newMetadata)
                     }
                 }

@@ -209,6 +209,45 @@ class ForwardingPlayerSnapshotTest {
     }
 
     /**
+     * Artwork often lands after the track starts (PlaybackController's
+     * enrichArtworkIfMissing updates currentTrack in place, same id). The card
+     * only refreshes on onMediaMetadataChanged, so a metadata-only change must
+     * fire it, or Auto shows the track with no cover until the next track (#448).
+     */
+    @Test fun `artwork arriving for the current track fires onMediaMetadataChanged`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        val listener = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(listener)
+
+        wrapper.updateQueueSnapshot(track("c"), emptyList())
+        wrapper.updateQueueSnapshot(track("c").copy(artworkUrl = "https://example.com/cover.jpg"), emptyList())
+
+        verify(exactly = 1) { listener.onMediaItemTransition(any(), any()) }
+        verify { listener.onMediaMetadataChanged(match { it.artworkUri?.toString() == "https://example.com/cover.jpg" }) }
+    }
+
+    @Test fun `an upNext-only change does not fire onMediaMetadataChanged`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        val listener = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(listener)
+
+        wrapper.updateQueueSnapshot(track("c"), emptyList())
+        wrapper.updateQueueSnapshot(track("c"), listOf(track("u1")))
+
+        verify(exactly = 1) { listener.onMediaMetadataChanged(any()) }
+    }
+
+    /**
      * publishMetadataRefresh re-fires onMediaMetadataChanged without a track
      * change, so Auto re-reads getDuration() when external polling reports the
      * real duration ~1s after a track starts.
