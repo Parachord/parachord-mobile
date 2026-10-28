@@ -209,6 +209,74 @@ class ForwardingPlayerSnapshotTest {
     }
 
     /**
+     * Artwork often lands after the track starts (PlaybackController's
+     * enrichArtworkIfMissing updates currentTrack in place, same id). The card
+     * only refreshes on onMediaMetadataChanged, so a metadata-only change must
+     * fire it, or Auto shows the track with no cover until the next track (#448).
+     */
+    @Test fun `artwork arriving for the current track fires onMediaMetadataChanged`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        val listener = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(listener)
+
+        wrapper.updateQueueSnapshot(track("c"), emptyList())
+        wrapper.updateQueueSnapshot(track("c").copy(artworkUrl = "https://example.com/cover.jpg"), emptyList())
+
+        verify(exactly = 1) { listener.onMediaItemTransition(any(), any()) }
+        verify { listener.onMediaMetadataChanged(match { it.artworkUri?.toString() == "https://example.com/cover.jpg" }) }
+    }
+
+    /**
+     * A track that couldn't start (#446: Spotify can't be opened from the
+     * background) is reported as the player's error, so Android Auto shows the
+     * message instead of spinning; clearing it restores the normal state.
+     */
+    @Test fun `publishPlayerError reports the error to Auto and clears it`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        every { delegate.playerError } returns null
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        stateHolder.update { copy(currentTrack = track("c")) }
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+        wrapper.externalMode = true
+        wrapper.updateQueueSnapshot(track("c"), emptyList())
+        val listener = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(listener)
+
+        wrapper.publishPlayerError("Open Spotify on your phone to play this")
+        assertEquals("Open Spotify on your phone to play this", wrapper.playerError?.message)
+        assertEquals(Player.STATE_IDLE, wrapper.playbackState)
+        verify { listener.onPlayerError(match { it.message == "Open Spotify on your phone to play this" }) }
+
+        wrapper.publishPlayerError(null)
+        assertNull(wrapper.playerError)
+        assertEquals(Player.STATE_READY, wrapper.playbackState)
+        verify { listener.onPlayerErrorChanged(null) }
+    }
+
+    @Test fun `an upNext-only change does not fire onMediaMetadataChanged`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val stateHolder = PlaybackStateHolder()
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
+
+        val listener = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(listener)
+
+        wrapper.updateQueueSnapshot(track("c"), emptyList())
+        wrapper.updateQueueSnapshot(track("c"), listOf(track("u1")))
+
+        verify(exactly = 1) { listener.onMediaMetadataChanged(any()) }
+    }
+
+    /**
      * publishMetadataRefresh re-fires onMediaMetadataChanged without a track
      * change, so Auto re-reads getDuration() when external polling reports the
      * real duration ~1s after a track starts.

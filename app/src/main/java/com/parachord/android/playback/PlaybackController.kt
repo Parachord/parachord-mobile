@@ -647,6 +647,9 @@ class PlaybackController constructor(
     private suspend fun playTrackInternalUnsafe(track: TrackEntity, skipReselect: Boolean = false) {
         // Cancel any idle timeout — we're actively playing now
         cancelIdleTimeout()
+        if (stateHolder.state.value.playbackError != null) {
+            stateHolder.update { copy(playbackError = null) }
+        }
 
         // Re-select the best resolver from cached sources before routing.
         // Stored tracks may have a stale `resolver` field from when they were first
@@ -665,6 +668,17 @@ class PlaybackController constructor(
         ) {
             Log.d(TAG, "Track '${routedTrack.title}' has no source, resolving on-the-fly")
             routedTrack = resolveOnTheFly(routedTrack)
+        }
+
+        // Spotify already couldn't be woken from the background this session:
+        // skip the ~3s wake attempt per track until a Parachord screen shows.
+        if (routedTrack.resolver == "spotify" && spotifyBlockedInBackground) {
+            if (isAppVisible()) {
+                spotifyBlockedInBackground = false
+            } else {
+                playWithoutSpotify(routedTrack)
+                return
+            }
         }
 
         val action = router.route(routedTrack)
@@ -833,7 +847,13 @@ class PlaybackController constructor(
                 // gap, Android can kill the process between songs.
                 sendExternalPlaybackStart(routedTrack)
 
-                action.handler.play(routedTrack)
+                try {
+                    action.handler.play(routedTrack)
+                } catch (e: com.parachord.android.playback.handlers.SpotifyWakeBlockedException) {
+                    spotifyBlockedInBackground = true
+                    playWithoutSpotify(routedTrack)
+                    return
+                }
 
                 // Start the appropriate state polling based on the handler type
                 when (action.handler) {
@@ -1987,6 +2007,70 @@ class PlaybackController constructor(
             // reselectBestSource() override it back to the auto-selected best.
             playTrackInternal(switched, skipReselect = true)
         }
+    }
+
+    /**
+     * Set when Spotify couldn't be woken because no Parachord screen was
+     * visible (Android Auto, a locked phone; #446). While it's set and the app
+     * stays in the background, Spotify tracks go straight to [playWithoutSpotify].
+     */
+    private var spotifyBlockedInBackground = false
+
+    private fun isAppVisible(): Boolean = com.parachord.android.app.CurrentActivityHolder.current != null
+
+    /**
+     * Play [track] from its best non-Spotify source: Spotify isn't running and
+     * Android won't let us open it from the background. Uses the cached sources,
+     * or resolves on the spot without Spotify (an Android Auto cold start has
+     * none cached). With no other source, the track stops with a message the
+     * car shows: open Spotify on the phone.
+     */
+    private suspend fun playWithoutSpotify(track: TrackEntity) {
+        val key = trackKey(track.title, track.artist)
+        var sources = trackResolverCache.trackSources.value[key].orEmpty().filter { it.resolver != "spotify" }
+        if (resolverScoring.selectBest(sources) == null) {
+            sources = try {
+                resolverManager.resolve(
+                    "${track.title} ${track.artist}",
+                    targetTitle = track.title,
+                    targetArtist = track.artist,
+                    excludeResolvers = setOf("spotify"),
+                    targetIsrc = track.isrc,
+                    targetMbid = track.recordingMbid,
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Resolving '${track.title}' without Spotify failed: ${e.message}")
+                emptyList()
+            }
+        }
+        val best = resolverScoring.selectBest(sources)
+        if (best == null) {
+            Log.w(TAG, "'${track.title}': Spotify can't start in the background and there's no other source")
+            stateHolder.update {
+                copy(
+                    currentTrack = track,
+                    isPlaying = false,
+                    isBuffering = false,
+                    playbackError = "Open Spotify on your phone to play this",
+                )
+            }
+            return
+        }
+        Log.d(TAG, "'${track.title}': Spotify can't start in the background, playing from ${best.resolver}")
+        playTrackInternalUnsafe(
+            track.copy(
+                resolver = best.resolver,
+                sourceType = best.sourceType,
+                sourceUrl = best.url,
+                spotifyUri = null,
+                spotifyId = null,
+                soundcloudId = best.soundcloudId,
+                appleMusicId = best.appleMusicId,
+                isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, sources),
+            ),
+            skipReselect = true,
+        )
     }
 
     /**

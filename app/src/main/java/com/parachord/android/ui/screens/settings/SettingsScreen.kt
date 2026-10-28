@@ -3682,11 +3682,11 @@ private fun AboutTab() {
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Report a bug with logs — copies the app's own logs to the
-                // clipboard and opens a prefilled GitHub issue for the user to
-                // paste them into, so reporters don't need adb (#327 follow-up).
-                // Logs are too big for a new-issue URL, hence clipboard. No
-                // tokens are included.
+                // Report a bug with logs — opens a prefilled GitHub issue that
+                // carries the recent app exits and the newest log lines, so
+                // reporters don't need adb (#327 follow-up). The full log is
+                // too big for a new-issue URL, so it also goes to the clipboard.
+                // No tokens are included.
                 OutlinedButton(
                     onClick = {
                         if (exportingLogs) return@OutlinedButton
@@ -3697,7 +3697,7 @@ private fun AboutTab() {
                             if (report != null) {
                                 android.widget.Toast.makeText(
                                     context,
-                                    "Logs copied — paste them into the issue",
+                                    "Recent logs are in the issue. The full log is on your clipboard.",
                                     android.widget.Toast.LENGTH_LONG,
                                 ).show()
                                 try {

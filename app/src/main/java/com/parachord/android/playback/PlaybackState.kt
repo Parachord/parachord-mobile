@@ -34,6 +34,12 @@ data class PlaybackState(
      * always matches, or when the streaming source confirms the queued track.
      */
     val streamingMetadata: StreamingMetadata? = null,
+    /**
+     * Why the current track couldn't start, for surfaces that can't show a
+     * toast (Android Auto shows it on the car screen). Null while playing or
+     * idle; cleared when the next track starts.
+     */
+    val playbackError: String? = null,
 )
 
 /**

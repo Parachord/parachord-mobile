@@ -246,6 +246,13 @@ class PlaybackService : MediaLibraryService() {
         // either side triggers a re-emit. Runs on Dispatchers.Main per
         // Media3 main-thread invariant — wrapper.updateQueueSnapshot fires
         // listeners synchronously.
+        // A track that couldn't start (#446) → the car screen's error message.
+        serviceScope.launch {
+            stateHolder.state.map { it.playbackError }.distinctUntilChanged().collect { message ->
+                wrapper.publishPlayerError(message)
+            }
+        }
+
         queueSnapshotJob = serviceScope.launch {
             combine(
                 queueManager.snapshot,
@@ -1483,9 +1490,10 @@ class PlaybackService : MediaLibraryService() {
         override fun getPlaybackState(): Int {
             if (externalMode) {
                 // Map external state → Player state. We only ever report
-                // READY (whether playing or paused) or IDLE (no track).
-                // External handlers don't expose buffering/ended states
-                // distinctly enough to map here.
+                // READY (whether playing or paused) or IDLE (no track, or the
+                // track failed to start). External handlers don't expose
+                // buffering/ended states distinctly enough to map here.
+                if (playerErrorOverride != null) return Player.STATE_IDLE
                 return if (stateHolder.state.value.currentTrack != null) {
                     Player.STATE_READY
                 } else {
@@ -1745,6 +1753,7 @@ class PlaybackService : MediaLibraryService() {
                 }
                 val newTimeline = QueueTimeline(items, durationsUs)
                 val previousMediaId = queueSnapshot.currentMediaId
+                val previousMetadata = queueSnapshot.items.firstOrNull()?.mediaMetadata
                 val newCurrentId = currentTrack?.id
                 queueSnapshot = QueueSnapshotState(
                     items = items,
@@ -1778,6 +1787,16 @@ class PlaybackService : MediaLibraryService() {
                         // (the cold-start placeholder) on the first track.
                         listener.onMediaMetadataChanged(newMetadata)
                     }
+                } else if (items.isNotEmpty() && items[0].mediaMetadata != previousMetadata) {
+                    // Same track, new metadata: usually its artwork, which
+                    // PlaybackController.enrichArtworkIfMissing fills in after
+                    // the track starts. Auto's card only refreshes on this
+                    // event, so without it the cover stayed blank unless a
+                    // later refresh (the duration one) happened to fire (#448).
+                    val newMetadata = items[0].mediaMetadata
+                    for (listener in externalListeners) {
+                        listener.onMediaMetadataChanged(newMetadata)
+                    }
                 }
             } finally {
                 dispatching = false
@@ -1801,6 +1820,32 @@ class PlaybackService : MediaLibraryService() {
             val metadata = getMediaMetadata()
             for (listener in externalListeners) {
                 listener.onMediaMetadataChanged(metadata)
+            }
+        }
+
+        /**
+         * A track that couldn't start, reported as the player's error so
+         * Android Auto shows [message] on the car screen instead of an
+         * endless spinner (#446: Spotify not running, and it can't be opened
+         * from the background). Null clears it.
+         */
+        @Volatile
+        private var playerErrorOverride: PlaybackException? = null
+
+        override fun getPlayerError(): PlaybackException? = playerErrorOverride ?: super.getPlayerError()
+
+        fun publishPlayerError(message: String?) {
+            val error = message?.let {
+                PlaybackException(it, /* cause = */ null, PlaybackException.ERROR_CODE_REMOTE_ERROR)
+            }
+            if (error == null && playerErrorOverride == null) return
+            playerErrorOverride = error
+            val state = playbackState
+            for (listener in externalListeners) {
+                listener.onPlayerErrorChanged(error)
+                if (error != null) listener.onPlayerError(error)
+                listener.onPlaybackStateChanged(state)
+                listener.onIsPlayingChanged(isPlaying)
             }
         }
 
