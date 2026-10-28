@@ -42,6 +42,35 @@ class LastFmRateLimitedException(val retryAfterSeconds: Long? = null) : Exceptio
 )
 
 /**
+ * The Last.fm profile hides its recent listening. With "Hide recent listening
+ * information" on, `user.getRecentTracks` answers 403 with error 17 to everyone
+ * but the account's owner; signing the request doesn't get past it, while the
+ * profile's top tracks, artists and loved tracks still answer. A state, not a
+ * failure (desktop parachord#1140).
+ */
+class LastFmHiddenListeningException(val user: String) : Exception(
+    "Last.fm user $user hides their recent listening"
+)
+
+/** Last.fm error 17, "Login: User required to be logged in". */
+internal const val LASTFM_LOGIN_REQUIRED = 17
+
+/**
+ * True when a `user.getRecentTracks` response (HTTP status + body) means the
+ * profile hides its recent listening. Port of desktop's
+ * `isLastfmHiddenListening` (`lib/lastfm-hidden-listening.js`).
+ */
+fun isLastFmHiddenListening(status: Int, body: String?): Boolean {
+    if (status != 403 || body.isNullOrBlank()) return false
+    val error = try {
+        Json.parseToJsonElement(body).jsonObject["error"]?.jsonPrimitive?.content?.toIntOrNull()
+    } catch (_: Exception) {
+        null
+    }
+    return error == LASTFM_LOGIN_REQUIRED
+}
+
+/**
  * Last.fm API client.
  * Base URL: https://ws.audioscrobbler.com/2.0/
  * Auth: API key as query parameter.
@@ -87,6 +116,7 @@ class LastFmClient(private val httpClient: HttpClient) {
      */
     private suspend inline fun <T> guardedGet(
         deserializer: KSerializer<T>,
+        crossinline inspect: (status: Int, body: String) -> Unit = { _, _ -> },
         crossinline build: HttpRequestBuilder.() -> Unit,
     ): T = gate.withPermit(exceptionFactory = { LastFmRateLimitedException(it) }) {
         val response: HttpResponse = httpClient.get(BASE_URL) {
@@ -97,7 +127,9 @@ class LastFmClient(private val httpClient: HttpClient) {
             parameter("format", "json")
         }
         gate.handleResponse(response) { LastFmRateLimitedException(it) }
-        json.decodeFromString(deserializer, response.bodyAsText())
+        val body = response.bodyAsText()
+        inspect(response.status.value, body)
+        json.decodeFromString(deserializer, body)
     }
 
     // ── Scrobbling (#193, shared so iOS scrobbles too) ──────────────────────
@@ -291,8 +323,12 @@ class LastFmClient(private val httpClient: HttpClient) {
     suspend fun getUserTopArtists(user: String, apiKey: String, period: String = "overall", limit: Int = 50): LfmUserTopArtistsResponse =
         guardedGet(LfmUserTopArtistsResponse.serializer()) { parameter("method", "user.gettopartists"); parameter("user", user); parameter("period", period); parameter("limit", limit); parameter("api_key", apiKey) }
 
+    /** @throws LastFmHiddenListeningException when the profile hides its recent listening. */
     suspend fun getUserRecentTracks(user: String, apiKey: String, limit: Int = 50): LfmUserRecentTracksResponse =
-        guardedGet(LfmUserRecentTracksResponse.serializer()) { parameter("method", "user.getrecenttracks"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }
+        guardedGet(
+            LfmUserRecentTracksResponse.serializer(),
+            inspect = { status, body -> if (isLastFmHiddenListening(status, body)) throw LastFmHiddenListeningException(user) },
+        ) { parameter("method", "user.getrecenttracks"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }
 
     suspend fun getUserFriends(user: String, apiKey: String, limit: Int = 200): LfmUserFriendsResponse =
         guardedGet(LfmUserFriendsResponse.serializer()) { parameter("method", "user.getfriends"); parameter("user", user); parameter("limit", limit); parameter("api_key", apiKey) }

@@ -43,6 +43,7 @@ actual class DriverFactory {
         addColumnIfMissing(driver, table = "tracks", column = "isrc", type = "TEXT")
         addColumnIfMissing(driver, table = "track_provider_id_cache", column = "missingStreak", type = "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing(driver, table = "track_provider_id_cache", column = "lastSeenAt", type = "INTEGER")
+        addColumnIfMissing(driver, table = "friends", column = "hidesListening", type = "INTEGER NOT NULL DEFAULT 0")
         return driver
     }
 

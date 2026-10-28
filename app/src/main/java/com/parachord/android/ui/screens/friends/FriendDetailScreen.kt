@@ -178,6 +178,10 @@ fun FriendDetailScreen(
             when (page) {
                 0 -> FriendRecentTab(
                     recentTracks = recentTracks,
+                    hiddenMessage = friend?.takeIf { it.hidesListening }?.let {
+                        "${it.displayName} hides their recent listening on Last.fm. " +
+                            "Their top tracks, albums and artists are in the other tabs."
+                    },
                     onPlayTrack = viewModel::playRecentTrack,
                     onRetry = viewModel::refresh,
                     trackResolvers = trackResolvers,
@@ -248,6 +252,7 @@ private fun PeriodFilter(
 @Composable
 private fun FriendRecentTab(
     recentTracks: Resource<List<RecentTrack>>,
+    hiddenMessage: String? = null,
     onPlayTrack: (Int) -> Unit,
     onRetry: () -> Unit = {},
     trackResolvers: Map<String, List<String>> = emptyMap(),
@@ -262,7 +267,7 @@ private fun FriendRecentTab(
         is Resource.Error -> ErrorState(recentTracks.message, onRetry)
         is Resource.Success -> {
             if (recentTracks.data.isEmpty()) {
-                EmptyState("No recent listening activity")
+                EmptyState(hiddenMessage ?: "No recent listening activity")
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(recentTracks.data.size) { index ->
@@ -663,6 +668,8 @@ private fun EmptyState(message: String) {
             text = message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = 32.dp),
         )
     }
 }

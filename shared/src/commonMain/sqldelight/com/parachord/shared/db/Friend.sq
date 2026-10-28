@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS friends (
     cachedTrackTimestamp INTEGER NOT NULL DEFAULT 0,
     cachedTrackArtworkUrl TEXT,
     pinnedToSidebar INTEGER NOT NULL DEFAULT 0,
-    autoPinned INTEGER NOT NULL DEFAULT 0
+    autoPinned INTEGER NOT NULL DEFAULT 0,
+    hidesListening INTEGER NOT NULL DEFAULT 0
 );
 
 getAll:
@@ -28,8 +29,11 @@ findByServiceAndUsername:
 SELECT * FROM friends WHERE service = ? AND lower(username) = lower(?) LIMIT 1;
 
 upsert:
-INSERT OR REPLACE INTO friends (id, username, service, displayName, avatarUrl, addedAt, lastFetchedAt, cachedTrackName, cachedTrackArtist, cachedTrackAlbum, cachedTrackTimestamp, cachedTrackArtworkUrl, pinnedToSidebar, autoPinned)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO friends (id, username, service, displayName, avatarUrl, addedAt, lastFetchedAt, cachedTrackName, cachedTrackArtist, cachedTrackAlbum, cachedTrackTimestamp, cachedTrackArtworkUrl, pinnedToSidebar, autoPinned, hidesListening)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+setHidesListening:
+UPDATE friends SET hidesListening = ? WHERE id = ?;
 
 setPinned:
 UPDATE friends SET pinnedToSidebar = ?, autoPinned = ? WHERE id = ?;

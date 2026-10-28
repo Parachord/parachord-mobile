@@ -443,6 +443,10 @@ final class AlbumDetailModel {
     let title: String
     let artist: String
     var detail: AlbumDetail?
+    /// The header cover: the first one any answer supplies, kept after that, so
+    /// the next provider's URL for the same album doesn't swap it mid-load
+    /// (desktop parachord#1146). pcCover retries a cover that fails to load.
+    var coverUrl: String?
     var entities: [Track] = []
     var isLoading = false
     var loaded = false
@@ -474,7 +478,7 @@ final class AlbumDetailModel {
     func load() async {
         guard !loaded else { return }
         if let c = AlbumDetailCache.shared.get(cacheKey) {
-            detail = c.detail; entities = c.entities; loaded = true
+            detail = c.detail; coverUrl = c.detail?.artworkUrl; entities = c.entities; loaded = true
             if Date().timeIntervalSince(c.ts) > ttl { Task { await refresh() } }
             return
         }
@@ -494,6 +498,7 @@ final class AlbumDetailModel {
             onEach: { [weak self] v in
                 guard let self, let d = v as? AlbumDetail else { return }
                 self.detail = d
+                if self.coverUrl == nil, let art = d.artworkUrl, !art.isEmpty { self.coverUrl = art }
                 self.entities = d.tracks.map { pcTrack(from: $0) }
                 if !d.tracks.isEmpty { self.isLoading = false; self.loaded = true }
                 // Only the providers' list is reused on reopen; a catalog
@@ -596,7 +601,7 @@ struct AlbumScreen: View {
                 if model.isLoading && !model.loaded {
                     PCSkeletonBox(radius: 12).frame(width: 132, height: 132)
                 } else {
-                    pcCover(model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12,
+                    pcCover(model.coverUrl ?? model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12,
                             artist: model.artist, album: model.title)
                 }
             }
