@@ -164,9 +164,14 @@ class SpotifyPlaybackHandler constructor(
         }
         Log.d(TAG, "play() via Web API for '${track.title}' uri=$uri")
         _playbackError.value = null // Clear any previous error
+        wakeBlockedInBackground = false
         val flowStart = System.currentTimeMillis()
 
         val success = withAuth { attemptPlay(uri, flowStart) } == true
+        if (!success && wakeBlockedInBackground) {
+            Log.w(TAG, "Spotify isn't running and can't be launched from the background (${System.currentTimeMillis() - flowStart}ms)")
+            throw SpotifyWakeBlockedException()
+        }
 
         if (success) {
             _isConnected = true
@@ -254,6 +259,10 @@ class SpotifyPlaybackHandler constructor(
         val devices = ensureDevice()
         Log.d(TAG, "ensureDevice took ${System.currentTimeMillis() - ensureStart}ms, found ${devices.size} device(s)")
         Log.d(TAG, "Devices: ${devices.map { "${it.name}(active=${it.isActive}, type=${it.type})" }}")
+
+        // Spotify didn't wake and can't be launched from the background: a
+        // second wake attempt in resolveLocalDevice would only repeat the wait.
+        if (devices.isEmpty() && wakeBlockedInBackground) return false
 
         // ── Phase 5: Pick device ─────────────────────────────────────
         val pickStart = System.currentTimeMillis()
@@ -493,6 +502,10 @@ class SpotifyPlaybackHandler constructor(
                 if (pollCount % 10 == 0) Log.d(TAG, "Device poll #$pollCount failed: ${e.message}")
             }
             if (!fallbackFired && System.currentTimeMillis() > fallbackTime) {
+                if (!isAppVisible()) {
+                    wakeBlockedInBackground = true
+                    break
+                }
                 fallbackFired = true
                 Log.d(TAG, "Broadcast didn't wake Spotify after 2s, trying launch intent fallback")
                 launchSpotifyFallback()
@@ -561,6 +574,10 @@ class SpotifyPlaybackHandler constructor(
             } catch (_: Exception) {}
             // Fallback to launch intent if broadcast didn't wake Spotify
             if (!fallbackFired && System.currentTimeMillis() > fallbackTime) {
+                if (!isAppVisible()) {
+                    wakeBlockedInBackground = true
+                    break
+                }
                 fallbackFired = true
                 Log.d(TAG, "Broadcast didn't wake local Spotify after 2s, trying launch intent")
                 launchSpotifyFallback()
@@ -619,6 +636,24 @@ class SpotifyPlaybackHandler constructor(
             Log.w(TAG, "Media button broadcast failed: ${e.message}")
         }
     }
+
+    /**
+     * Whether a Parachord screen is showing. The launch-intent fallback only
+     * works then: Android 10+ silently blocks activity starts from the
+     * background, and that's the case for every Android Auto tap and for a
+     * locked phone (#446). There's no exception, so without this check the
+     * play just waited ~20s for a Spotify that never started. A settable
+     * property, not a constructor parameter, because Koin's `singleOf` ignores
+     * defaulted parameters.
+     */
+    var isAppVisible: () -> Boolean = { com.parachord.android.app.CurrentActivityHolder.current != null }
+
+    /**
+     * Set by [ensureDevice] / [resolveLocalDevice] when Spotify didn't wake from
+     * the broadcast and the launch fallback was skipped because the app is in
+     * the background. [play] then throws [SpotifyWakeBlockedException].
+     */
+    private var wakeBlockedInBackground = false
 
     /**
      * Last-resort Spotify wake: launch the activity, then immediately bring
@@ -1066,3 +1101,12 @@ class SpotifyPlaybackHandler constructor(
         }
     }
 }
+
+/**
+ * Spotify isn't running as a Connect device, its wake broadcast didn't start
+ * it, and it can't be launched because no Parachord screen is visible (Android
+ * Auto, a locked phone). [PlaybackController] catches this and plays the track
+ * from another source, or tells the user to open Spotify (#446).
+ */
+class SpotifyWakeBlockedException :
+    Exception("Spotify isn't running and can't be opened while Parachord is in the background")
