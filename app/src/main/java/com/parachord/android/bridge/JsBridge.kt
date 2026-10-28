@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 private const val TAG = "JsBridge"
+private const val EVAL_TIMEOUT_MS = 20_000L
 
 /**
  * Android [JsRuntime] implementation using a headless WebView.
@@ -103,7 +104,14 @@ class JsBridge constructor(
             // evaluateJavascript returns "null" (string) for null/undefined results
             deferred.complete(if (result == "null" || result == null) null else result)
         }
-        deferred.await()
+        // The callback fires once the script returns (async work is polled
+        // separately), so a missing answer means the renderer is gone. Don't
+        // wait on it forever.
+        kotlinx.coroutines.withTimeoutOrNull(EVAL_TIMEOUT_MS) { deferred.await() }
+            ?: run {
+                if (!deferred.isCompleted) Log.w(TAG, "evaluate() got no answer in ${EVAL_TIMEOUT_MS}ms: ${script.take(60)}")
+                null
+            }
     }
 
     override fun teardown() {

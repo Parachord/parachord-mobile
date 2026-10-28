@@ -72,6 +72,12 @@ class PlaybackController constructor(
         private const val SPINOFF_SIMILAR_LIMIT = 20
         /** Pool size below which Mode C triggers a refill (matches desktop's < 3). */
         private const val POOL_REFILL_THRESHOLD = 3
+        /**
+         * Longest a handler's play may take before the track is given up on.
+         * Above Spotify's slowest legitimate cold start (broadcast wait, launch,
+         * ~18s for the Connect device to register, a second local-device wake).
+         */
+        internal const val PLAY_START_TIMEOUT_MS = 75_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -848,10 +854,30 @@ class PlaybackController constructor(
                 sendExternalPlaybackStart(routedTrack)
 
                 try {
-                    action.handler.play(routedTrack)
+                    // Every play and skip waits on playMutex, so a handler
+                    // that never returns freezes playback for the session: a
+                    // spinner, and no track, prev or next will start (#449,
+                    // MusicKit after the network dropped mid-start). Each
+                    // handler bounds its own waits; this is the backstop.
+                    kotlinx.coroutines.withTimeoutOrNull(PLAY_START_TIMEOUT_MS) {
+                        action.handler.play(routedTrack)
+                        true
+                    } ?: throw com.parachord.android.playback.handlers.PlaybackStartTimeoutException(
+                        "${action.handler::class.simpleName} didn't start within ${PLAY_START_TIMEOUT_MS}ms",
+                    )
                 } catch (e: com.parachord.android.playback.handlers.SpotifyWakeBlockedException) {
                     spotifyBlockedInBackground = true
                     playWithoutSpotify(routedTrack)
+                    return
+                } catch (e: com.parachord.android.playback.handlers.PlaybackStartTimeoutException) {
+                    Log.w(TAG, "'${routedTrack.title}': ${e.message}")
+                    stateHolder.update {
+                        copy(
+                            isPlaying = false,
+                            isBuffering = false,
+                            playbackError = "Couldn't start playing. Check your connection and try again.",
+                        )
+                    }
                     return
                 }
 

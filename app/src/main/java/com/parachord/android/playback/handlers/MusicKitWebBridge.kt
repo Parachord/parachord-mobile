@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.lang.ref.WeakReference
@@ -70,6 +71,13 @@ class MusicKitWebBridge constructor(
          *  which is required for cross-origin postMessage with Apple's auth page. */
         private const val BRIDGE_URL = "https://appassets.androidplatform.net/assets/js/musickit-bridge.html"
         private const val APP_NAME = "Parachord"
+
+        /** A JS call that hasn't answered by now never will. */
+        private const val EVAL_TIMEOUT_MS = 20_000L
+        /** setQueue + start of audio; generous for a slow connection. */
+        private const val PLAY_TIMEOUT_MS = 30_000L
+        /** Page + MusicKit JS library load. */
+        private const val READY_TIMEOUT_MS = 20_000L
 
         /**
          * Hosts allowed to load in the MusicKit WebView and auth popup.
@@ -471,6 +479,9 @@ class MusicKitWebBridge constructor(
         authDialog = null
         webView?.destroy()
         webView = null
+        // Release anything still waiting on the destroyed page.
+        evalCallbacks.values.forEach { it.complete(null) }
+        evalCallbacks.clear()
         pageLoaded = CompletableDeferred()
         musicKitReady = CompletableDeferred()
         _ready.value = false
@@ -521,9 +532,15 @@ class MusicKitWebBridge constructor(
      */
     suspend fun configure(): Boolean {
         if (webView == null) initialize()
-        pageLoaded.await()
-        Log.d(TAG, "Page loaded, waiting for MusicKit JS library...")
-        musicKitReady.await()
+        if (withTimeoutOrNull(READY_TIMEOUT_MS) { pageLoaded.await() } == null ||
+            withTimeoutOrNull(READY_TIMEOUT_MS) { musicKitReady.await() } == null
+        ) {
+            // Offline when the bridge loaded: MusicKit JS never arrived, and
+            // this WebView will never become ready. Start over next time.
+            Log.w(TAG, "MusicKit didn't load within ${READY_TIMEOUT_MS}ms — resetting the bridge")
+            withContext(Dispatchers.Main) { teardown() }
+            return false
+        }
         Log.d(TAG, "MusicKit JS ready, configuring...")
         val token = settingsStore.getAppleMusicDeveloperToken()
         if (token.isNullOrBlank()) {
@@ -593,8 +610,8 @@ class MusicKitWebBridge constructor(
             }
         }
 
-        musicKitReady.await()
-        val result = evaluate("authorize()") ?: return false
+        if (!awaitMusicKitReady()) return false
+        val result = evaluate("authorize()", timeoutMs = null) ?: return false
         Log.d(TAG, "authorize() JS result: $result")
         return try {
             val parsed = json.decodeFromString<AuthorizeResponse>(cleanJsString(result))
@@ -622,7 +639,7 @@ class MusicKitWebBridge constructor(
      * Returns a list of search results, or empty on failure.
      */
     suspend fun search(query: String, limit: Int = 10): List<AppleMusicSearchResult> {
-        musicKitReady.await()
+        if (!awaitMusicKitReady()) return emptyList()
         val storefront = settingsStore.getAppleMusicStorefront() ?: "us"
         return catalogLimiter.runThrottled {
             val result = evaluate("search(atob('${b64(query)}'), $limit, atob('${b64(storefront)}'))")
@@ -661,7 +678,7 @@ class MusicKitWebBridge constructor(
      * Returns null if MusicKit is not configured or the playlist can't be found.
      */
     suspend fun getPlaylist(playlistId: String): AppleMusicPlaylistResult? {
-        musicKitReady.await()
+        if (!awaitMusicKitReady()) return null
         val storefront = settingsStore.getAppleMusicStorefront() ?: "us"
         return catalogLimiter.runThrottled {
             val result = evaluate("getPlaylist(atob('${b64(playlistId)}'), atob('${b64(storefront)}'))")
@@ -718,7 +735,8 @@ class MusicKitWebBridge constructor(
 
     /** Play a song by Apple Music catalog ID. Returns true on success. */
     suspend fun play(songId: String): Boolean {
-        musicKitReady.await()
+        lastPlayTimedOut = false
+        if (!awaitMusicKitReady()) return false
         // Ensure the WebView is active before playing. When the screen is off,
         // Android pauses WebViews (JS timers, audio, network). If we try to play
         // a new track without waking the WebView first, MusicKit starts playback
@@ -730,7 +748,21 @@ class MusicKitWebBridge constructor(
         actualArtist = null
         actualAlbum = null
         actualArtworkUrl = null
-        val result = evaluate("play(atob('${b64(songId)}'))") ?: return false
+        val outcome = evaluateBounded("play(atob('${b64(songId)}'))", PLAY_TIMEOUT_MS)
+        if (outcome is EvalOutcome.TimedOut) {
+            // setQueue({startPlaying: true}) settles only once audio starts.
+            // A request MusicKit was waiting on when the network dropped can
+            // stall for good, so the promise never settles, even once coverage
+            // is back. That held the playback lock forever: a spinner, and no
+            // track or prev/next would start. Drop this MusicKit instance; the
+            // next play configures a fresh one (the saved user token restores
+            // the sign-in).
+            Log.w(TAG, "play($songId) didn't start within ${PLAY_TIMEOUT_MS}ms — resetting MusicKit")
+            lastPlayTimedOut = true
+            withContext(Dispatchers.Main) { teardown() }
+            return false
+        }
+        val result = (outcome as EvalOutcome.Result).value ?: return false
         return parseSuccessResponse(result)
     }
 
@@ -740,25 +772,25 @@ class MusicKitWebBridge constructor(
 
     /** Pause playback. */
     suspend fun pause() {
-        musicKitReady.await()
+        if (!awaitMusicKitReady()) return
         evaluate("pause()")
     }
 
     /** Resume playback. */
     suspend fun resume() {
-        musicKitReady.await()
+        if (!awaitMusicKitReady()) return
         evaluate("resume()")
     }
 
     /** Stop playback. */
     suspend fun stop() {
-        musicKitReady.await()
+        if (!awaitMusicKitReady()) return
         evaluate("stop()")
     }
 
     /** Seek to position in milliseconds. */
     suspend fun seekTo(positionMs: Long) {
-        musicKitReady.await()
+        if (!awaitMusicKitReady()) return
         evaluate("seekTo($positionMs)")
     }
 
@@ -924,10 +956,24 @@ class MusicKitWebBridge constructor(
      * the Promise object itself ({}) — so we route the resolved value through
      * [MusicKitJsInterface.onEvalResult] instead.
      */
-    private suspend fun evaluate(script: String): String? = withContext(Dispatchers.Main) {
+    private suspend fun evaluate(script: String, timeoutMs: Long? = EVAL_TIMEOUT_MS): String? =
+        (evaluateBounded(script, timeoutMs) as? EvalOutcome.Result)?.value
+
+    private sealed interface EvalOutcome {
+        data class Result(val value: String?) : EvalOutcome
+        data object TimedOut : EvalOutcome
+    }
+
+    /**
+     * [evaluate] that says whether it timed out. A JS promise that never
+     * settles (a fetch stalled by a dropped connection, a renderer that died)
+     * would otherwise suspend the caller forever. [timeoutMs] null waits
+     * without limit (the sign-in popup).
+     */
+    private suspend fun evaluateBounded(script: String, timeoutMs: Long?): EvalOutcome = withContext(Dispatchers.Main) {
         val wv = webView ?: run {
             Log.e(TAG, "WebView not initialized")
-            return@withContext null
+            return@withContext EvalOutcome.Result(null)
         }
         val callId = "eval_${evalCounter.incrementAndGet()}"
         val deferred = CompletableDeferred<String?>()
@@ -948,8 +994,28 @@ class MusicKitWebBridge constructor(
             })()
         """.trimIndent()
         wv.evaluateJavascript(wrapped) { /* ignore direct result */ }
-        deferred.await()
+        if (timeoutMs == null) return@withContext EvalOutcome.Result(deferred.await())
+        val value = withTimeoutOrNull(timeoutMs) { deferred.await() }
+        if (value == null && !deferred.isCompleted) {
+            evalCallbacks.remove(callId)
+            Log.w(TAG, "evaluate timed out after ${timeoutMs}ms: ${script.take(60)}")
+            EvalOutcome.TimedOut
+        } else {
+            EvalOutcome.Result(value)
+        }
     }
+
+    /** Wait for MusicKit JS, at most [READY_TIMEOUT_MS]. False if it never loaded. */
+    private suspend fun awaitMusicKitReady(): Boolean {
+        if (withTimeoutOrNull(READY_TIMEOUT_MS) { musicKitReady.await() } != null) return true
+        Log.w(TAG, "MusicKit JS not ready after ${READY_TIMEOUT_MS}ms")
+        return false
+    }
+
+    /** True when the last [play] call hung and MusicKit was reset. */
+    @Volatile
+    var lastPlayTimedOut = false
+        private set
 
     /**
      * Strip the outer quotes that evaluateJavascript wraps around string results.
