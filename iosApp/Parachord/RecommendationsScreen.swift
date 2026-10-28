@@ -18,6 +18,8 @@ final class RecommendationsModel {
     var artists: [RecommendedArtist] = []
     var isLoading = false
     var loaded = false
+    /// Why the page is empty, naming the services the user connected.
+    var emptyMessage: String?
 
     // Watch the shared recommendation flows (cached-first → fresh); the repo owns
     // its disk cache (architecture realignment). The repo has no TTL (it always
@@ -28,9 +30,15 @@ final class RecommendationsModel {
             isLoading = true
             return watcher.watchUntilDone(flow: container.recommendedTracksFlow(), onEach: { [weak self] v in
                 guard let self else { return }
-                if let t = v as? [RecommendedTrack], !t.isEmpty {
+                // An empty list is a real answer (no service has anything to
+                // recommend), so it replaces what was shown. Failed refreshes
+                // never arrive here: the flow carries successes only.
+                if let t = v as? [RecommendedTrack] {
                     self.tracks = t
                     self.entities = t.map { Self.makeTrack($0) }
+                    if t.isEmpty {
+                        Task { self.emptyMessage = try? await self.container.recommendationsEmptyMessage() }
+                    }
                 }
                 self.isLoading = false
                 self.loaded = true
@@ -39,7 +47,7 @@ final class RecommendationsModel {
         refreshArtists.run { watcher, done in
             watcher.watchUntilDone(flow: container.recommendedArtistsFlow(), onEach: { [weak self] v in
                 guard let self else { return }
-                if let a = v as? [RecommendedArtist], !a.isEmpty { self.artists = a }
+                if let a = v as? [RecommendedArtist] { self.artists = a }
                 self.loaded = true
             }, onDone: done)
         }
@@ -117,7 +125,7 @@ struct RecommendationsScreen: View {
                 ScrollView { PCSkeletonGrid(count: 9, columns: 3) }
             } else if model.loaded && model.tracks.isEmpty && model.artists.isEmpty {
                 Spacer()
-                Text("No recommendations yet — connect ListenBrainz and listen to a few tracks.")
+                Text(model.emptyMessage ?? "No recommendations yet — connect ListenBrainz and listen to a few tracks.")
                     .font(.system(size: 14)).foregroundStyle(PC.fg2)
                     .multilineTextAlignment(.center).padding(40)
                 Spacer()

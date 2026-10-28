@@ -690,7 +690,7 @@ val androidModule = module {
             getActive = { settingsStore.getActiveResolvers() },
             getDisabled = { settingsStore.getDisabledPlugins() },
             getPlugins = { pluginManager.plugins.value },
-            resolveSpotify = { query ->
+            resolveSpotify = { query, target ->
                 val token = settingsStore.getSpotifyAccessToken()
                 if (token.isNullOrBlank()) {
                     com.parachord.shared.platform.Log.d(
@@ -700,7 +700,7 @@ val androidModule = module {
                     null
                 } else {
                     try {
-                        spotifyClient.searchTrack(query)
+                        spotifyClient.searchTrack(query, target)
                     } catch (e: com.parachord.shared.api.auth.ReauthRequiredException) {
                         com.parachord.shared.platform.Log.w(
                             "ResolverManager",
@@ -861,6 +861,7 @@ val androidModule = module {
         val context = androidContext()
         val cacheFile = java.io.File(context.filesDir, "fresh_drops_cache.json")
         val rotationFile = java.io.File(context.filesDir, "fresh_drops_rotation.json")
+        val artistIdFile = java.io.File(context.filesDir, "fresh_drops_artist_ids.json")
         val mbidEnrichment: com.parachord.android.data.metadata.MbidEnrichmentService = get()
         com.parachord.shared.repository.FreshDropsRepository(
             musicBrainzClient = get(),
@@ -884,6 +885,12 @@ val androidModule = module {
             mbidLookupViaMapper = { artist, title -> mbidEnrichment.getArtistMbid(artist, title) },
             imageEnrichmentService = get(),
             lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
+            artistIdCache = com.parachord.shared.cache.PersistentJsonCache(
+                kotlinx.serialization.serializer<String>(),
+                read = { com.parachord.android.data.cache.CacheFiles.read(artistIdFile) },
+                write = { com.parachord.android.data.cache.CacheFiles.write(artistIdFile, it) },
+                ttlMs = 30L * 24 * 60 * 60 * 1000, maxEntries = 500, name = "fresh drops artist ids",
+            ),
         )
     }
     // CriticalDarlingsRepository takes file I/O as suspend lambdas + a Ktor

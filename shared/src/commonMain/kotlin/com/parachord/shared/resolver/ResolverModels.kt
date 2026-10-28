@@ -123,8 +123,10 @@ private fun stringsMatch(a: String, b: String): Boolean {
 }
 
 /**
- * Pick the best-matching result for a target track: the first whose title AND
- * artist BOTH bidirectionally substring-match — the SAME [stringsMatch] gate
+ * Pick the best-matching result for a target track, in desktop `findBestMatch`'s
+ * order: exact recording MBID, exact ISRC, exact normalized title + artist, a
+ * containment match that isn't another version ([isOtherVersion]), then any
+ * containment match. Name matches use the SAME bidirectional [stringsMatch] gate
  * [scoreConfidence] uses, so a selected candidate is guaranteed to score 0.95
  * rather than 0.50. Returns null when nothing matches; callers decide whether
  * to fall back to the raw first result.
@@ -163,14 +165,66 @@ fun <T> selectBestMatch(
         val ti = targetIsrc.trim().uppercase()
         results.firstOrNull { isrcOf(it)?.trim()?.uppercase() == ti }?.let { return it }
     }
-    // Name tiers: the bidirectional containment gate below.
     val nt = normalizeStr(targetTitle)
     val na = normalizeStr(targetArtist)
     if (nt.isEmpty() || na.isEmpty()) return null
-    return results.firstOrNull {
+    // Tier 3: exact normalized title and artist.
+    results.firstOrNull {
+        normalizeStr(titleOf(it)) == nt && normalizeStr(artistOf(it)) == na
+    }?.let { return it }
+    // Tier 4: a containment match that isn't another version (a live cut, remix
+    // or cover the target doesn't name). Tier 5: any containment match, so
+    // "Song - Remastered"-style catalog titles and variant-only results still
+    // resolve (desktop parachord#1115).
+    val contains: (T) -> Boolean = {
         stringsMatch(nt, normalizeStr(titleOf(it))) && stringsMatch(na, normalizeStr(artistOf(it)))
     }
+    results.firstOrNull {
+        contains(it) && !isOtherVersion(titleOf(it), artistOf(it), targetTitle, targetArtist)
+    }?.let { return it }
+    return results.firstOrNull(contains)
 }
+
+/**
+ * The track a resolve is for, so a resolver that gets several search results
+ * can pick the right one with [selectBestMatch]. Null fields mean "unknown".
+ */
+data class MatchTarget(
+    val title: String? = null,
+    val artist: String? = null,
+    val isrc: String? = null,
+    val mbid: String? = null,
+)
+
+/**
+ * Version words: a result carrying one the requested name lacks is another
+ * version of the track (a live cut, remix, cover, karaoke…). Byte-aligned with
+ * desktop's `VARIANT_WORDS` (`src/renderer/lib/track-variants.js`), which the
+ * Bandcamp plugin also copies; keep the lists the same.
+ */
+private val VARIANT_WORDS = Regex(
+    "\\b(live|remix(es|ed)?|rmx|cover(s|ed)?|covering|tribute|karaoke|instrumental|acoustic|demo|unplugged|rework|bootleg|mashup|reprise|edit|jam track|sped up|slowed|in the style of)\\b",
+    RegexOption.IGNORE_CASE,
+)
+
+private fun hasVariantWord(name: String?, target: String?): Boolean {
+    if (name.isNullOrEmpty()) return false
+    val t = target.orEmpty().lowercase()
+    return VARIANT_WORDS.findAll(name).any { !t.contains(it.value.lowercase()) }
+}
+
+/**
+ * Is a search result another version of the requested track? A version word
+ * counts only when the requested name lacks it, so "Live Forever" and
+ * "Take Me Out (Live)" still match themselves. Port of desktop's
+ * `isOtherVersion` (parachord#1115).
+ */
+fun isOtherVersion(
+    resultTitle: String?,
+    resultArtist: String?,
+    targetTitle: String?,
+    targetArtist: String?,
+): Boolean = hasVariantWord(resultTitle, targetTitle) || hasVariantWord(resultArtist, targetArtist)
 
 /**
  * Calculate match confidence by comparing the resolver's result against the

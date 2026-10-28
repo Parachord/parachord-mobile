@@ -3,7 +3,9 @@ package com.parachord.shared.api
 import com.parachord.shared.api.auth.AuthCredential
 import com.parachord.shared.api.auth.AuthRealm
 import com.parachord.shared.api.auth.AuthTokenProvider
+import com.parachord.shared.resolver.MatchTarget
 import com.parachord.shared.resolver.ResolvedSource
+import com.parachord.shared.resolver.selectBestMatch
 import com.parachord.shared.resolver.validateIsrc
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -257,13 +259,27 @@ class SpotifyClient(
      * `ResolverManager.searchSpotifyTrack` so both platforms share one impl.
      *
      * Filters to tracks that are actually playable in the user's market
-     * (`market=from_token` sets `is_playable`). Returns the first such track,
-     * or null if none. `confidence` defaults to 0.9 — overridden by
+     * (`market=from_token` sets `is_playable`). With a [target], picks among
+     * them with [selectBestMatch], so the studio track wins over a live cut,
+     * remix or cover ranked above it (desktop parachord#1115 / #1122);
+     * otherwise, or when nothing matches, returns the first playable track.
+     * Null if none is playable. `confidence` defaults to 0.9 — overridden by
      * `scoreConfidence()` in the resolver pipeline.
      */
-    suspend fun searchTrack(query: String): ResolvedSource? {
+    suspend fun searchTrack(query: String, target: MatchTarget? = null): ResolvedSource? {
         val response = search(query = query, type = "track", limit = 5)
-        val track = response.tracks?.items?.firstOrNull { it.isPlayable != false } ?: return null
+        val playable = response.tracks?.items?.filter { it.isPlayable != false }.orEmpty()
+        val track = target?.let { t ->
+            selectBestMatch(
+                playable,
+                targetTitle = t.title.orEmpty(),
+                targetArtist = t.artist.orEmpty(),
+                titleOf = { it.name },
+                artistOf = { it.artistName },
+                targetIsrc = t.isrc,
+                isrcOf = { it.externalIds?.isrc },
+            )
+        } ?: playable.firstOrNull() ?: return null
         val albumArt = track.album?.images?.firstOrNull()?.url
         return ResolvedSource(
             url = "spotify:track:${track.id}",

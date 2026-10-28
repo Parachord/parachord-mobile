@@ -5,6 +5,7 @@ import com.parachord.shared.api.auth.AuthRealm
 import com.parachord.shared.api.auth.AuthTokenProvider
 import com.parachord.shared.api.auth.OAuthTokenRefresher
 import com.parachord.shared.config.AppConfig
+import com.parachord.shared.resolver.MatchTarget
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -155,5 +156,45 @@ class SpotifyClientSearchTest {
         val source = client.searchTrack("The Good One B")
         assertNotNull(source)
         assertEquals("def", source.spotifyId)
+    }
+
+    private fun searchReturning(vararg items: Pair<String, String>): MockEngine = MockEngine {
+        val body = items.mapIndexed { i, (artist, title) ->
+            """{ "id": "t$i", "name": "$title", "artists": [ { "name": "$artist" } ], "is_playable": true }"""
+        }.joinToString(",")
+        respond(
+            content = """{ "tracks": { "items": [ $body ] } }""",
+            status = HttpStatusCode.OK,
+            headers = headersOf(HttpHeaders.ContentType, "application/json"),
+        )
+    }
+
+    // Desktop parachord#1115 / #1122: prefer the requested recording over a live
+    // cut or remix that Spotify ranks above it.
+    @Test
+    fun searchTrack_withTarget_prefersTheStudioTrackOverALiveCutRankedFirst() = runTest {
+        val client = buildClient(searchReturning(
+            "The Lumineers" to "Cleopatra (Live from Wrigley Field)",
+            "The Lumineers" to "Cleopatra",
+        ))
+        val source = client.searchTrack("The Lumineers Cleopatra", MatchTarget("Cleopatra", "The Lumineers"))
+        assertEquals("t1", source?.spotifyId)
+    }
+
+    @Test
+    fun searchTrack_withTarget_keepsAVersionTheTargetAsksFor() = runTest {
+        val client = buildClient(searchReturning(
+            "Franz Ferdinand" to "Take Me Out",
+            "Franz Ferdinand" to "Take Me Out (Live)",
+        ))
+        val source = client.searchTrack("x", MatchTarget("Take Me Out (Live)", "Franz Ferdinand"))
+        assertEquals("t1", source?.spotifyId)
+    }
+
+    @Test
+    fun searchTrack_withTarget_fallsBackToTheFirstPlayableWhenNothingMatches() = runTest {
+        val client = buildClient(searchReturning("Someone Else" to "Other Song"))
+        val source = client.searchTrack("x", MatchTarget("Cleopatra", "The Lumineers"))
+        assertEquals("t0", source?.spotifyId)
     }
 }

@@ -158,7 +158,7 @@ class IdentityTierScoringTest {
         getActive = { emptyList() },
         getDisabled = { emptySet() },
         getPlugins = { emptyList() },
-        resolveSpotify = { null },
+        resolveSpotify = { _, _ -> null },
     )
 
     /** A rip tagged "Various Artists / Track 1": fails the name gate, carries the right ids. */

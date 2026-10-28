@@ -1821,6 +1821,25 @@ class IosContainer private constructor() {
         return out
     }
 
+    /**
+     * What For You says when no service has anything to recommend, naming the
+     * services the user connected (desktop parachord#1121). Never throws.
+     */
+    @Throws(Throwable::class)
+    suspend fun recommendationsEmptyMessage(): String = try {
+        val lb = settingsStore.getListenBrainzUsername()
+        val lastFm = settingsStore.getLastFmUsername()
+        if (lb == null && lastFm == null) {
+            "Connect Last.fm or ListenBrainz in Settings to get recommendations"
+        } else {
+            com.parachord.shared.repository.emptyRecommendationsMessage(lb != null, lastFm != null)
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        "No recommendations yet."
+    }
+
     suspend fun loadRecommendedArtists(): List<RecommendedArtist> {
         var out = emptyList<RecommendedArtist>()
         recommendationsRepository.getRecommendedArtists().collect { res ->
@@ -2218,10 +2237,18 @@ class IosContainer private constructor() {
             cacheWrite = { IosFileCache.write("fresh_drops_cache.json", it) },
             rotationRead = { IosFileCache.read("fresh_drops_rotation.json") },
             rotationWrite = { IosFileCache.write("fresh_drops_rotation.json", it) },
-            mbidLookupCached = { null },
-            mbidLookupViaMapper = { artist, title -> listenBrainzClient.mbidMapperLookup(artist, title)?.artistMbid },
+            // The same MBID cache Android uses: it was `{ null }` plus an
+            // uncached mapper call, so every artist was looked up again.
+            mbidLookupCached = { artistName -> mbidEnrichmentService.getCachedArtistMbid(artistName) },
+            mbidLookupViaMapper = { artist, title -> mbidEnrichmentService.getArtistMbid(artist, title) },
             imageEnrichmentService = imageEnrichmentService,
             lastFmApiKey = appConfig.lastFmApiKey,
+            artistIdCache = com.parachord.shared.cache.PersistentJsonCache(
+                kotlinx.serialization.serializer<String>(),
+                read = { IosFileCache.read("fresh_drops_artist_ids.json") },
+                write = { IosFileCache.write("fresh_drops_artist_ids.json", it) },
+                ttlMs = 30L * 24 * 60 * 60 * 1000, maxEntries = 500, name = "fresh drops artist ids",
+            ),
         )
     }
 
@@ -2562,12 +2589,12 @@ class IosContainer private constructor() {
      * Wired once here; reused by the shared coordinator AND
      * [IosResolverCoordinator.resolveSingle].
      */
-    private val resolveSpotify: suspend (String) -> ResolvedSource? = { query ->
+    private val resolveSpotify: suspend (String, com.parachord.shared.resolver.MatchTarget) -> ResolvedSource? = { query, target ->
         if (settingsStore.getSpotifyAccessToken() == null) {
             null
         } else {
             try {
-                spotifyClient.searchTrack(query)
+                spotifyClient.searchTrack(query, target)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {

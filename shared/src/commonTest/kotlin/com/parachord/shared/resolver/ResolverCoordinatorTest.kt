@@ -96,13 +96,14 @@ class ResolverCoordinatorTest {
         active: List<String> = emptyList(),
         disabled: Set<String> = emptySet(),
         spotify: suspend (String) -> ResolvedSource? = { null },
+        onSpotifyTarget: (MatchTarget) -> Unit = {},
     ) = ResolverCoordinator(
         runtime = runtime,
         scoring = scoring(active),
         getActive = { active },
         getDisabled = { disabled },
         getPlugins = { plugins },
-        resolveSpotify = spotify,
+        resolveSpotify = { q, target -> onSpotifyTarget(target); spotify(q) },
     )
 
     @Test
@@ -221,6 +222,22 @@ class ResolverCoordinatorTest {
         val coord = coordinator(runtime, spotify = { null })
         assertEquals(emptyList(), coord.resolveScored("q", "Clover", "Tundra 212"))
         assertEquals(emptyList(), coord.resolveRanked("q", "Clover", "Tundra 212"))
+    }
+
+    @Test
+    fun spotify_receivesTheTargetTrack_onBothPaths() = runTest {
+        val runtime = FakeRuntime(nativeResolverIds = emptySet())
+        val targets = mutableListOf<MatchTarget>()
+        val coord = coordinator(runtime, onSpotifyTarget = { targets += it })
+        coord.resolveScored("Tundra 212 Clover", "Clover", "Tundra 212", targetIsrc = "USRC17607839")
+        coord.resolveSingle("spotify", "Tundra 212 Clover", "Clover", "Tundra 212", null, targetMbid = "m-1")
+        assertEquals(
+            listOf(
+                MatchTarget("Clover", "Tundra 212", isrc = "USRC17607839"),
+                MatchTarget("Clover", "Tundra 212", mbid = "m-1"),
+            ),
+            targets,
+        )
     }
 
     // --- resolveSingle (additive single-resolver re-resolution, #210 Task 6) ---

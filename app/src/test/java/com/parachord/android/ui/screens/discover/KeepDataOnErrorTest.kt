@@ -21,4 +21,11 @@ class KeepDataOnErrorTest {
         val fresh = Resource.Success(listOf("fresh"))
         assertEquals(fresh, keepDataOnError(cached, fresh))
     }
+
+    @Test fun `an empty answer replaces the cache and its reason shows`() {
+        val empty: Resource<List<String>> = Resource.Success(emptyList())
+        assertEquals(empty, keepDataOnError(cached, empty))
+        val reason = Resource.Error("ListenBrainz hasn't made recommendations for you yet.")
+        assertEquals(reason, keepDataOnError(empty, reason))
+    }
 }
