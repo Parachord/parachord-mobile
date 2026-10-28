@@ -228,7 +228,7 @@ git push && git push origin v0.4.0-beta.3
 
 The `v*` push triggers the release workflow. It signs the APK and AAB, attaches both to a GitHub Release, and uploads the AAB to the Play Console internal track. Prerelease version names (a hyphen in the semver) always go to `internal`, whatever the track flag says.
 
-**iOS** builds are archived locally in Xcode and uploaded to App Store Connect, then released to the TestFlight groups.
+**iOS** builds are archived with `iosApp/scripts/testflight.sh` (`--upload` sends them to App Store Connect), then added to the TestFlight groups. See [iosApp/README.md](iosApp/README.md).
 
 ## Architecture
 
