@@ -1,5 +1,7 @@
 # KMP Migration Plan: Parachord Android → Kotlin Multiplatform
 
+> **Historical document.** This migration is complete: all business logic lives in `shared/`, and the iOS app (`iosApp/`) shipped on top of it. The plan is kept for its reasoning. For the current architecture see the [README](../README.md) and the "KMP Shared Module" section of [CLAUDE.md](../CLAUDE.md).
+
 ## Context
 
 The Android app (191 files, ~51K lines) needs to share ~73% of its code with a future iOS app. The .axe plugin system is already KMP-ready (`JsRuntime` interface). This plan migrates the existing `parachord-mobile` repo in-place to a KMP project with a `:shared` module, keeping Android shipping at every step.

@@ -181,7 +181,7 @@ cp local.properties.example local.properties
 | `APPLE_MUSIC_DEVELOPER_TOKEN` | Optional | Generated from the AuthKey above, or set by hand (`scripts/apple-music-token.py`) |
 | `ACHORDION_BEARER_TOKEN` | Optional | Pre-warms Achordion's track-links cache on share and scrobble. Blank turns the submit off. |
 
-AI provider keys (ChatGPT / Claude / Gemini) and concert-service keys (Ticketmaster / SeatGeek) are entered per user in Settings, not at build time, which keeps them out of the open-source build config.
+AI provider keys (ChatGPT / Claude / Gemini) are entered per user in Settings, not at build time, which keeps them out of the open-source build config. Concert-service keys are also entered in Settings; optionally, `TICKETMASTER_API_KEY` and `SEATGEEK_CLIENT_ID` in `local.properties` supply fallback keys for users who haven't added their own.
 
 ```bash
 # Build + install debug APK on connected device

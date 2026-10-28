@@ -1,5 +1,7 @@
 # Cross-Platform Mobile Strategy for Parachord
 
+> **Historical document.** This was the decision record for how to support iOS. Kotlin Multiplatform was chosen: the shared core lives in `shared/`, and the native SwiftUI iOS app (`iosApp/`) has shipped. Statements below such as "iOS: Not yet built" describe the situation at the time. For the current architecture see the [README](../README.md).
+
 ## Context
 
 Parachord exists as three codebases today:
