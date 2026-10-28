@@ -269,6 +269,9 @@ class FriendDetailViewModel constructor(
                     _recentTracks.value = it
                     if (it is Resource.Success) resolveRecentTracksInBackground(it.data)
                 }
+            // The fetch records whether the profile hides its recent listening
+            // (desktop parachord#1140); re-read so the Recent tab can say so.
+            friendsRepository.getFriendById(friend.id)?.let { _friend.value = it }
         }
     }
 

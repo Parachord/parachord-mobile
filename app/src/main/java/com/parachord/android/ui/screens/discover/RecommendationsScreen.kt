@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -55,6 +57,7 @@ import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.ShimmerTrackRow
+import com.parachord.android.ui.components.shimmerBrush
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.components.TrackRow
 
@@ -226,20 +229,28 @@ private fun ArtistsTab(
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(12) {
+                    // Sized like RecommendedArtistItem (a 96dp square cover with
+                    // 12dp corners, then the name), and shimmering: the boxes
+                    // used to have no fill, so the tab looked blank while it
+                    // loaded (desktop parachord#1104).
+                    val brush = shimmerBrush()
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(96.dp)
-                                .clip(RoundedCornerShape(12.dp)),
+                                .size(96.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(brush),
                         )
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "",
-                            style = MaterialTheme.typography.bodySmall,
+                        Box(
+                            modifier = Modifier
+                                .width(64.dp)
+                                .height(12.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(brush),
                         )
                     }
                 }

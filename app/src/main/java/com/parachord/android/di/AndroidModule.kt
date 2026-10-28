@@ -318,6 +318,13 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // A friend's Last.fm profile hides its recent listening (desktop
+        // parachord#1140). New installs get it from Friend.sq's CREATE.
+        try {
+            driver.execute(null, "ALTER TABLE friends ADD COLUMN hidesListening INTEGER NOT NULL DEFAULT 0", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // N-way multimaster sync (Phase 1): the 3-way-merge baseline (ancestor)
         // per playlist + per-(playlist, provider) change-token/edit-time state.
         // New tables, isolated from the live canonical-source engine. New

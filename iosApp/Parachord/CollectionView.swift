@@ -504,6 +504,10 @@ struct CollectionView: View {
                 if f.isOnAir, let track = f.cachedTrackName {
                     Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
                         .font(.system(size: 13)).foregroundStyle(Color(uiColor: UIColor(hex: 0x10B981))).lineLimit(1)
+                } else if f.hidesListening {
+                    // A Last.fm profile that hides its recent listening is never
+                    // on-air; say why instead of a stale track (desktop parachord#1140).
+                    Text("Listening hidden").font(.system(size: 13)).foregroundStyle(PC.fg3)
                 } else if let track = f.cachedTrackName {
                     // Offline: last track + when they were last active (Android parity).
                     let ago = f.cachedTrackTimestamp > 0 ? " · \(pcTimeAgo(f.cachedTrackTimestamp))" : ""

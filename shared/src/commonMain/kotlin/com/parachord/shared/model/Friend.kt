@@ -26,6 +26,12 @@ data class Friend(
      * — DB hydration, sync, friend-add — untouched.
      */
     val transient: Boolean = false,
+    /**
+     * The friend's Last.fm profile hides its recent listening (desktop
+     * parachord#1140): set by a 403/error-17 answer, cleared by the next
+     * successful fetch. Always false for ListenBrainz.
+     */
+    val hidesListening: Boolean = false,
 ) {
     /** Friend is "on air" if their cached track was played within the last 10 minutes. */
     val isOnAir: Boolean

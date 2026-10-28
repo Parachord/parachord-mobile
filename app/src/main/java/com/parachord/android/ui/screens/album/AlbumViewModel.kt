@@ -99,9 +99,14 @@ class AlbumViewModel constructor(
             _isLoading.value = true
             try {
                 metadataService.getAlbumTracksWithCatalogFallback(albumTitle, artistName).collect { detail ->
-                    // Preserve local DB artwork if providers didn't return any
+                    // Keep the cover already on screen: a provider's cover only
+                    // fills an empty one. Swapping it for another URL of the same
+                    // album (the library's art, then MusicBrainz's, then whichever
+                    // provider answer has more tracks) blanked and faded the
+                    // header back in mid-load (desktop parachord#1146). A cover
+                    // that fails to load is replaced by AlbumArtCard's own retry.
                     val current = _albumDetail.value
-                    val enriched = if (detail.artworkUrl == null && current?.artworkUrl != null) {
+                    val enriched = if (current?.artworkUrl != null) {
                         detail.copy(artworkUrl = current.artworkUrl)
                     } else {
                         detail
