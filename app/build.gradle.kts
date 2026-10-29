@@ -249,6 +249,8 @@ dependencies {
     testImplementation(libs.sqlite.jdbc)
     testImplementation(libs.multiplatform.settings.test) // in-memory KvStore (MapSettings)
     testImplementation(libs.ktor.client.mock)
+    testImplementation(libs.ktor.client.content.negotiation)
+    testImplementation(libs.ktor.serialization.kotlinx.json)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.robolectric)
     androidTestImplementation(libs.androidx.test.ext)
