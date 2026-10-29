@@ -49,6 +49,9 @@ class SpotifyPlaybackHandler constructor(
 
     companion object {
         private const val TAG = "SpotifyPlayback"
+        /** How long [confirmPlaybackStarted] waits per attempt for Spotify to start. */
+        private const val CONFIRM_WINDOW_MS = 4_000L
+        private const val CONFIRM_POLL_MS = 500L
         // Raised from 10 → 30 to tolerate Doze mode network delays.
         // At ~1s polling interval, 30 failures ≈ 30s of API unreachability.
         // Doze can delay network for 15+ seconds; the old threshold of 10
@@ -165,12 +168,17 @@ class SpotifyPlaybackHandler constructor(
         Log.d(TAG, "play() via Web API for '${track.title}' uri=$uri")
         _playbackError.value = null // Clear any previous error
         wakeBlockedInBackground = false
+        playbackNeverStarted = false
         val flowStart = System.currentTimeMillis()
 
         val success = withAuth { attemptPlay(uri, flowStart) } == true
         if (!success && wakeBlockedInBackground) {
             Log.w(TAG, "Spotify isn't running and can't be launched from the background (${System.currentTimeMillis() - flowStart}ms)")
             throw SpotifyWakeBlockedException()
+        }
+        if (!success && playbackNeverStarted) {
+            Log.w(TAG, "Spotify accepted '${track.title}' but never started it (${System.currentTimeMillis() - flowStart}ms)")
+            throw SpotifyPlaybackNotStartedException()
         }
 
         if (success) {
@@ -304,12 +312,20 @@ class SpotifyPlaybackHandler constructor(
                     applyConnectVolume(targetDevice.id)
                     stickyDefaultLocalIfUnset(targetDevice)
 
-                    // Quick verification on cold devices only
-                    if (!deviceVerified) {
-                        val verified = verifyPlaybackStarted()
+                    // Confirm Spotify actually started when it might not have:
+                    // the device had to be activated, wasn't verified yet, or
+                    // Parachord is in the background (Android Auto, a locked
+                    // phone). Spotify accepts the command even when its player
+                    // can't start — e.g. its process was only bound by Android
+                    // Auto as a media browser — and /me/player then answers 204
+                    // forever. Proceeding optimistically left the car on 0:01
+                    // with no audio and nothing to fall back from (#452).
+                    if (!targetDevice.isActive || !deviceVerified || !isAppVisible()) {
+                        val started = confirmPlaybackStarted(uri, targetDevice.id)
                         deviceVerified = true
-                        if (!verified) {
-                            Log.w(TAG, "Playback not verified but proceeding optimistically")
+                        if (!started) {
+                            playbackNeverStarted = true
+                            return false
                         }
                     }
                     return true
@@ -387,18 +403,39 @@ class SpotifyPlaybackHandler constructor(
         }
     }
 
-    private suspend fun verifyPlaybackStarted(): Boolean {
-        for (poll in 1..2) {
-            delay(500)
+    /**
+     * Wait for Spotify to report the play as started. Polls `/me/player` every
+     * 500 ms for up to [CONFIRM_WINDOW_MS]; if it still isn't playing, re-sends
+     * the play once (to [deviceId]) and waits again. A 204 ("nothing playing")
+     * is a real answer, not a failure: Spotify accepted the command but its
+     * player didn't start.
+     */
+    private suspend fun confirmPlaybackStarted(uri: String, deviceId: String?): Boolean {
+        val started = System.currentTimeMillis()
+        if (pollUntilPlaying()) {
+            Log.d(TAG, "confirmPlayback: playing after ${System.currentTimeMillis() - started}ms")
+            return true
+        }
+        Log.w(TAG, "confirmPlayback: not playing after ${CONFIRM_WINDOW_MS}ms, sending the play again")
+        try {
+            spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = deviceId)
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "confirmPlayback: re-send failed: ${e.message}")
+        }
+        val ok = pollUntilPlaying()
+        Log.d(TAG, "confirmPlayback: ${if (ok) "playing" else "still not playing"} after ${System.currentTimeMillis() - started}ms")
+        return ok
+    }
+
+    private suspend fun pollUntilPlaying(): Boolean {
+        repeat((CONFIRM_WINDOW_MS / CONFIRM_POLL_MS).toInt()) {
+            delay(CONFIRM_POLL_MS)
             try {
-                val state = spotifyClient.getPlaybackState()
-                val body = if (state.status.isSuccess()) state.body<SpPlaybackState>() else null
-                if (body != null && body.isPlaying) {
-                    Log.d(TAG, "verifyPlayback: confirmed playing after ${poll * 500}ms")
-                    return true
-                }
+                if (fetchPlaybackState()?.isPlaying == true) return true
             } catch (e: Exception) {
-                Log.d(TAG, "verifyPlayback poll $poll failed: ${e.message}")
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.d(TAG, "confirmPlayback poll failed: ${e.message}")
             }
         }
         return false
@@ -654,6 +691,13 @@ class SpotifyPlaybackHandler constructor(
      * the background. [play] then throws [SpotifyWakeBlockedException].
      */
     private var wakeBlockedInBackground = false
+
+    /**
+     * Set by [attemptPlay] when Spotify accepted the play but never started it
+     * ([confirmPlaybackStarted]). [play] then throws
+     * [SpotifyPlaybackNotStartedException] so the controller falls back.
+     */
+    private var playbackNeverStarted = false
 
     /**
      * Last-resort Spotify wake: launch the activity, then immediately bring
@@ -1071,10 +1115,21 @@ class SpotifyPlaybackHandler constructor(
         statePollingJob?.cancel()
     }
 
+    /**
+     * Spotify's playback state, or null when the poll failed. A 204 means no
+     * active playback: that's an answer (nothing is playing), returned as an
+     * idle state. Parsing it as JSON threw, so every such poll counted as a
+     * failure, and the stale-position watchdog — which deliberately ignores
+     * stalls while polls fail (Doze) — never caught a play that didn't start.
+     */
     private suspend fun fetchPlaybackState(): SpPlaybackState? =
         withAuth {
             val response = spotifyClient.getPlaybackState()
-            if (response.status.isSuccess()) response.body<SpPlaybackState>() else null
+            when {
+                response.status.value == 204 -> SpPlaybackState(isPlaying = false)
+                response.status.isSuccess() -> response.body<SpPlaybackState>()
+                else -> null
+            }
         }
 
     /**
@@ -1110,3 +1165,12 @@ class SpotifyPlaybackHandler constructor(
  */
 class SpotifyWakeBlockedException :
     Exception("Spotify isn't running and can't be opened while Parachord is in the background")
+
+/**
+ * Spotify accepted the play command but its player never started, even after
+ * the play was sent again (#452: Spotify's process only bound by Android Auto
+ * as a media browser, `/me/player` answering 204). [PlaybackController] falls
+ * back to the track's next source, as for [SpotifyWakeBlockedException].
+ */
+class SpotifyPlaybackNotStartedException :
+    Exception("Spotify accepted the play but didn't start playing")

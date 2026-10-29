@@ -869,6 +869,13 @@ class PlaybackController constructor(
                     spotifyBlockedInBackground = true
                     playWithoutSpotify(routedTrack)
                     return
+                } catch (e: com.parachord.android.playback.handlers.SpotifyPlaybackNotStartedException) {
+                    // Spotify accepted the play but never started (#452). In
+                    // the background that keeps happening, so later Spotify
+                    // tracks skip straight to the fallback too.
+                    if (!isAppVisible()) spotifyBlockedInBackground = true
+                    playWithoutSpotify(routedTrack)
+                    return
                 } catch (e: com.parachord.android.playback.handlers.PlaybackStartTimeoutException) {
                     Log.w(TAG, "'${routedTrack.title}': ${e.message}")
                     stateHolder.update {
@@ -1976,7 +1983,14 @@ class PlaybackController constructor(
         // A cold start (Android Auto) routes by the sources saved last session.
         trackResolverCache.awaitLoaded()
         val cachedSources = trackResolverCache.trackSources.value[key]
-        if (cachedSources.isNullOrEmpty()) return track
+        if (cachedSources.isNullOrEmpty()) {
+            // Nothing resolved yet (a cold start — Android Auto, a widget, a
+            // restored queue). Resolve in the background so the source icons
+            // show and later plays have every source, and meanwhile route by
+            // the IDs the track already carries, in the user's priority order.
+            trackResolverCache.resolveInBackground(listOf(track))
+            return routeByStoredIds(track)
+        }
 
         val best = resolverScoring.selectBest(cachedSources) ?: return track
 
@@ -2000,6 +2014,36 @@ class PlaybackController constructor(
             soundcloudId = best.soundcloudId ?: track.soundcloudId,
             appleMusicId = best.appleMusicId ?: track.appleMusicId,
             isrc = isrc,
+        )
+    }
+
+    /**
+     * Route a track with nothing resolved yet by the streaming IDs it already
+     * carries, in the user's resolver order, among services that are connected.
+     * Its stored `resolver` is just whichever service first played or synced it:
+     * a Daily Brew track pulled from Spotify keeps `resolver = "spotify"` even
+     * with an Apple Music ID stored and Apple Music first in the order, and an
+     * Android Auto cold start then went to Spotify, which couldn't start from
+     * the background (#452). Same trust as [ResolverManager.resolveWithHints]:
+     * a stored ID was validated when it was written.
+     */
+    private suspend fun routeByStoredIds(track: TrackEntity): TrackEntity {
+        val candidates = storedIdSources(
+            track,
+            spotifyConnected = !settingsStore.getSpotifyAccessToken().isNullOrBlank(),
+            appleMusicConnected = !settingsStore.getAppleMusicUserToken().isNullOrBlank(),
+        )
+        if (candidates.isEmpty()) return track
+        val best = resolverScoring.selectBest(candidates) ?: return track
+        if (!shouldRerouteToStoredId(track.resolver, best.resolver, settingsStore.getResolverOrder())) return track
+        Log.d(TAG, "Routed '${track.title}' by stored IDs: ${track.resolver} → ${best.resolver} (user priority, nothing resolved yet)")
+        return track.copy(
+            resolver = best.resolver,
+            sourceType = best.sourceType,
+            sourceUrl = best.url,
+            spotifyUri = best.spotifyUri ?: track.spotifyUri,
+            spotifyId = best.spotifyId ?: track.spotifyId,
+            appleMusicId = best.appleMusicId ?: track.appleMusicId,
         )
     }
 
@@ -2223,3 +2267,41 @@ class PlaybackController constructor(
     }
 }
 
+/**
+ * The sources a track's stored streaming IDs stand for, among connected
+ * services: Spotify (URI or ID) and Apple Music (a catalog ID only, #265).
+ * Trusted like [com.parachord.android.resolver.ResolverManager.resolveWithHints]
+ * trusts them: a stored ID was validated when it was written.
+ */
+internal fun storedIdSources(
+    track: TrackEntity,
+    spotifyConnected: Boolean,
+    appleMusicConnected: Boolean,
+): List<com.parachord.shared.resolver.ResolvedSource> = buildList {
+    val spotifyUri = track.spotifyUri ?: track.spotifyId?.let { "spotify:track:$it" }
+    if (spotifyUri != null && spotifyConnected) {
+        add(com.parachord.shared.resolver.ResolvedSource(
+            url = spotifyUri, sourceType = "spotify", resolver = "spotify",
+            spotifyUri = spotifyUri, spotifyId = track.spotifyId ?: spotifyUri.substringAfterLast(':'),
+            confidence = 1.0,
+        ))
+    }
+    if (appleMusicConnected && com.parachord.shared.resolver.isAppleMusicCatalogId(track.appleMusicId)) {
+        add(com.parachord.shared.resolver.ResolvedSource(
+            url = "applemusic:song:${track.appleMusicId}", sourceType = "applemusic", resolver = "applemusic",
+            appleMusicId = track.appleMusicId, confidence = 1.0,
+        ))
+    }
+}
+
+/**
+ * Whether to move a track from its stored [current] resolver to [best], the
+ * top stored-ID source. A resolver the stored IDs don't cover (a local file,
+ * SoundCloud, Bandcamp) keeps the track unless [best] ranks above it in [order].
+ */
+internal fun shouldRerouteToStoredId(current: String?, best: String, order: List<String>): Boolean {
+    if (best == current) return false
+    if (current == null || current == "spotify" || current == "applemusic") return true
+    val rank = { id: String -> order.indexOf(id).let { if (it < 0) Int.MAX_VALUE else it } }
+    return rank(best) < rank(current)
+}

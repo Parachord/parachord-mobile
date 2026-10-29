@@ -91,6 +91,10 @@ Spotify playback uses the **Web API** (not the App Remote SDK). The `SpotifyPlay
 3. `startPlayback()` with `device_id` — single retry on 502 after 1s
 4. Quick verification on cold devices only (2 polls × 500ms)
 
+**An accepted play is not a started play (#452).** Spotify can answer `startPlayback` with success and never start (its process only bound by Android Auto as a media browser), and `/v1/me/player` then answers **204** — "nothing playing", a real answer, not a failed poll (`fetchPlaybackState` returns an idle state for it). When the device had to be activated, wasn't verified, or Parachord is in the background, `confirmPlaybackStarted` polls ~4 s, re-sends the play once, polls again, and on failure `play()` throws `SpotifyPlaybackNotStartedException`; `PlaybackController` falls back to the next source like `SpotifyWakeBlockedException`. Never "proceed optimistically" — the stale-position watchdog ignores stalls while polls fail, so a play that never started hung forever.
+
+**Cold-start routing uses stored IDs (#452).** With nothing in the resolver cache, `reselectBestSource` routes by the IDs the track carries (`storedIdSources` / `shouldRerouteToStoredId`), in the user's resolver order, and resolves the track in the background so its source icons appear. A track's stored `resolver` is only whichever service first played or synced it.
+
 **Warm-path optimization:** When `deviceVerified && preferredDeviceId != null`, fires `startPlayback` directly without any device fetch (~200ms).
 
 **"This device" resolution:** When the user picks the synthetic local device, `resolveLocalDevice()` wakes Spotify (broadcast → fallback launch intent) and polls for a Smartphone-type device matching `Build.MODEL` or `Build.MANUFACTURER`. Remote devices (TVs, computers) appear in the API even when local Spotify isn't running — `deviceVerified` being true does NOT mean Spotify is running locally.
