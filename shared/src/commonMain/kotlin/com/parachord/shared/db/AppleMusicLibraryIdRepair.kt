@@ -34,10 +34,42 @@ object AppleMusicLibraryIdRepair {
 
     /** Runs the repair unless it already ran. Returns true when it ran. */
     suspend fun runOnce(driver: SqlDriver, kvStore: KvStore): Boolean {
-        if (kvStore.getBoolean(DONE_KEY)) return false
-        run(driver)
-        kvStore.setBoolean(DONE_KEY, true)
-        return true
+        val ran = if (kvStore.getBoolean(DONE_KEY)) false else {
+            run(driver)
+            kvStore.setBoolean(DONE_KEY, true)
+            true
+        }
+        if (!kvStore.getBoolean(REFETCH_DONE_KEY)) {
+            refetchPulledPlaylists(driver)
+            kvStore.setBoolean(REFETCH_DONE_KEY, true)
+        }
+        return ran
+    }
+
+    const val REFETCH_DONE_KEY = "migration_am_playlist_refetch_v1"
+
+    /**
+     * The repair left the cleared rows without an Apple Music id until the
+     * resolver backfilled them, and that only happens for a list on screen: an
+     * Apple Music-synced playlist nobody opened kept no Apple Music ids at all
+     * (370 of 370 rows on one install). With Apple Music first in the resolver
+     * order, those tracks couldn't route to it on a cold start (#452).
+     *
+     * Forget the change token of every playlist Apple Music is the pull source
+     * for that still has rows without an Apple Music id, so the next sync
+     * re-fetches those playlists — and sync now stores the catalog id. Push
+     * mirrors and other providers' playlists are untouched.
+     */
+    suspend fun refetchPulledPlaylists(driver: SqlDriver) = withContext(Dispatchers.Default) {
+        driver.execute(
+            null,
+            "UPDATE sync_playlist_link SET snapshotId = NULL " +
+                "WHERE providerId = 'applemusic' AND localPlaylistId IN (" +
+                "SELECT s.localPlaylistId FROM sync_playlist_source s " +
+                "WHERE s.providerId = 'applemusic' AND EXISTS (" +
+                "SELECT 1 FROM playlist_tracks t WHERE t.playlistId = s.localPlaylistId AND t.trackAppleMusicId IS NULL))",
+            0,
+        )
     }
 
     /** The two UPDATEs. Safe to call repeatedly. */

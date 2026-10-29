@@ -40,6 +40,15 @@ class TrackResolverCache constructor(
     private val settingsStore: SettingsStore,
     private val mbidEnrichment: MbidEnrichmentService,
     private val playlistTrackDao: com.parachord.android.data.db.dao.PlaylistTrackDao,
+    /**
+     * Every resolved source, kept across restarts (desktop keeps its track
+     * sources 7 days). Without it the cache started empty on every cold start:
+     * an Android Auto play had only the track's stored IDs to route by, and
+     * every list re-resolved from scratch (#452). All resolvers' sources are
+     * kept — Spotify, Apple Music, SoundCloud, Bandcamp, local files, any
+     * plugin's — not just the ones with a DB column. Null = memory only.
+     */
+    private val persisted: com.parachord.shared.cache.PersistentJsonCache<List<ResolvedSource>>? = null,
 ) {
     companion object {
         private const val TAG = "TrackResolverCache"
@@ -80,6 +89,39 @@ class TrackResolverCache constructor(
     /** All cached resolved sources, keyed by "title|artist" */
     private val _trackSources = MutableStateFlow<Map<String, List<ResolvedSource>>>(emptyMap())
     val trackSources: StateFlow<Map<String, List<ResolvedSource>>> = _trackSources.asStateFlow()
+
+    /** Completes once the saved sources are in [_trackSources]. */
+    private val loaded = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    init {
+        scope.launch {
+            try {
+                val saved = persisted?.all().orEmpty().filterValues { it.isNotEmpty() }
+                // Anything resolved while loading wins over the saved copy.
+                if (saved.isNotEmpty()) _trackSources.update { saved + it }
+                Log.d(TAG, "Loaded ${saved.size} saved track sources")
+            } catch (e: Exception) {
+                Log.w(TAG, "Couldn't load saved track sources: ${e.message}")
+            } finally {
+                loaded.complete(Unit)
+            }
+        }
+    }
+
+    /**
+     * Wait (briefly) for the saved sources to load, so a cold start routes by
+     * what was resolved before instead of an empty cache.
+     */
+    suspend fun awaitLoaded() {
+        kotlinx.coroutines.withTimeoutOrNull(3_000) { loaded.await() }
+    }
+
+    /** Record [sources] for [key] in memory and on disk. Empty answers stay in memory only. */
+    private fun store(key: String, sources: List<ResolvedSource>) {
+        _trackSources.update { it + (key to sources) }
+        val p = persisted ?: return
+        if (sources.isNotEmpty()) scope.launch { p.put(key, sources) }
+    }
 
     /**
      * Resolver badge names for UI display, sorted by user-configured priority order.
@@ -191,6 +233,8 @@ class TrackResolverCache constructor(
     ): Job = scope.launch {
         // Fire MBID mapper lookups in parallel with resolver resolution
         enrichTracksWithMbids(tracks)
+        // Tracks resolved in an earlier session are skipped below.
+        awaitLoaded()
 
         // Pick the lane based on whether the caller marks this batch as
         // user-visible. Priority lane gets dedicated permits so a 200-
@@ -223,7 +267,7 @@ class TrackResolverCache constructor(
                             targetMbid = track.recordingMbid,
                         )
                         if (sources.isNotEmpty()) {
-                            _trackSources.update { it + (key to sources) }
+                            store(key, sources)
                             if (backfillDb) {
                                 backfillResolverIds(track, sources)
                             }
@@ -254,6 +298,7 @@ class TrackResolverCache constructor(
         tracks: List<PlaylistTrackInfo>,
         priority: Boolean = true,
     ): Job = scope.launch {
+        awaitLoaded()
         val sem = if (priority) prioritySemaphore else backgroundSemaphore
         for (track in tracks) {
             val key = trackKey(track.title, track.artist)
@@ -277,7 +322,7 @@ class TrackResolverCache constructor(
                             targetMbid = track.recordingMbid,
                         )
                         if (sources.isNotEmpty()) {
-                            _trackSources.update { it + (key to sources) }
+                            store(key, sources)
                             backfillPlaylistTrackResolverIds(track, sources)
                         }
                     }
@@ -361,8 +406,7 @@ class TrackResolverCache constructor(
     /** Store pre-resolved sources into the shared cache (e.g. from ViewModel-local resolution). */
     fun putSources(title: String, artist: String, sources: List<ResolvedSource>) {
         if (sources.isEmpty()) return
-        val key = trackKey(title, artist)
-        _trackSources.update { it + (key to sources) }
+        store(trackKey(title, artist), sources)
     }
 
     /** Get cached resolvers for a track, or null if not yet resolved. */

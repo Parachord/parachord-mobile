@@ -73,6 +73,12 @@ class PersistentJsonCache<V>(
         }
     }
 
+    /** Every entry still within the TTL (for hydrating an in-memory view at startup). */
+    suspend fun all(): Map<String, V> = mutex.withLock {
+        val now = nowMs()
+        loaded().filterValues { now - it.cachedAt < ttlMs }.mapValues { it.value.value }
+    }
+
     suspend fun put(key: String, value: V) {
         mutex.withLock {
             val map = loaded()
