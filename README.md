@@ -149,6 +149,17 @@ Plugin types: content resolvers, AI providers, meta-services (Last.fm, MusicBrai
 ### Background resilience (Android)
 External playback (Apple Music, Spotify Connect) survives screen-off, Doze mode and Android's foreground-service killer. A silent 1-second WAV loops on ExoPlayer, which keeps `MediaSessionService` happy while the DRM audio flows through MusicKit or Spotify. See [CLAUDE.md](CLAUDE.md), "External Playback Background Survival", for the rationale.
 
+## Subscriptions and copy protection
+
+Parachord is a player for people who already subscribe to the services it plays from, plus their own files and servers. It brings those services together in one app. It is not a way to get music without paying for it, or to keep copies of it.
+
+- **Your account, the service's own streams.** Each service plays through your own account, using that service's own player, its official API, or the same endpoints its own web player uses. Either way, the stream, its license and its quality come from the service. On the subscription services (Spotify, Apple Music, and any other subscription service a resolver plays from), your plays are reported to the service the way its own player reports them, so they count. Where a service needs a subscription for full tracks, so does Parachord.
+- **No ripping.** Parachord doesn't decrypt, record, download or save protected streams. It doesn't extract decryption keys, and it doesn't unlock tiers or content your subscription doesn't include.
+- **Decryption stays with the service.** On Android and iOS, Spotify plays in Spotify's own app through Spotify Connect. Apple Music on iOS plays through Apple's MusicKit. Apple Music on Android plays through Apple's MusicKit JS player and is decrypted inside Google's Widevine module, using a license Apple issues to your account. Parachord never sees the decryption keys and never saves the audio.
+- **Plug-ins follow the same rules.** A plug-in that tries to get around a service's protections isn't accepted into the Parachord marketplace, and is removed if one slips through (see the [plug-in guidelines](https://github.com/Parachord/parachord-plugins#guidelines)). Plug-ins installed from anywhere else aren't reviewed, so Parachord can't vouch for them.
+
+If you work for a music service and have a concern about how Parachord plays your catalog, please [open an issue](https://github.com/Parachord/parachord-mobile/issues).
+
 ## Requirements
 
 | | Android | iOS |
