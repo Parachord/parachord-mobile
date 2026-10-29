@@ -56,4 +56,15 @@ class PersistentJsonCacheTest {
         disk = "{not json"
         assertNull(cache().get("a"))
     }
+
+    @Test
+    fun allReturnsTheLiveEntriesAfterARestart() = runTest {
+        val first = cache(ttl = 10_000L)
+        first.put("old", "O")
+        now += 6_000L
+        first.put("new", "N")
+        first.flush()
+        now += 5_000L
+        assertEquals(mapOf("new" to "N"), cache(ttl = 10_000L).all())
+    }
 }

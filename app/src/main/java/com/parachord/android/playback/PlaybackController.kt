@@ -1980,6 +1980,8 @@ class PlaybackController constructor(
      */
     private suspend fun reselectBestSource(track: TrackEntity): TrackEntity {
         val key = trackKey(track.title, track.artist)
+        // A cold start (Android Auto) routes by the sources saved last session.
+        trackResolverCache.awaitLoaded()
         val cachedSources = trackResolverCache.trackSources.value[key]
         if (cachedSources.isNullOrEmpty()) {
             // Nothing resolved yet (a cold start — Android Auto, a widget, a
@@ -2097,6 +2099,7 @@ class PlaybackController constructor(
      */
     private suspend fun playWithoutSpotify(track: TrackEntity) {
         val key = trackKey(track.title, track.artist)
+        trackResolverCache.awaitLoaded()
         var sources = trackResolverCache.trackSources.value[key].orEmpty().filter { it.resolver != "spotify" }
         if (resolverScoring.selectBest(sources) == null) {
             sources = try {

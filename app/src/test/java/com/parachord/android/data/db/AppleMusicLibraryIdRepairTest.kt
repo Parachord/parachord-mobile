@@ -54,4 +54,31 @@ class AppleMusicLibraryIdRepairTest {
         assertTrue(AppleMusicLibraryIdRepair.runOnce(driver, kv))
         assertFalse(AppleMusicLibraryIdRepair.runOnce(driver, kv))
     }
+
+    private fun snapshot(local: String, provider: String): String? =
+        driver.executeQuery(null, "SELECT snapshotId FROM sync_playlist_link WHERE localPlaylistId = '$local' AND providerId = '$provider'", { c ->
+            app.cash.sqldelight.db.QueryResult.Value(if (c.next().value) c.getString(0) else "<no row>")
+        }, 0).value
+
+    @Test
+    fun playlistsPulledFromAppleMusicWithMissingIdsAreRefetched() = runBlocking {
+        // Starred: pulled from Apple Music, its rows lost their ids in the repair.
+        driver.execute(null, "INSERT INTO sync_playlist_source VALUES ('applemusic-p.starred','applemusic','p.starred','2026-01-01',NULL,1)", 0)
+        driver.execute(null, "INSERT INTO sync_playlist_link VALUES ('applemusic-p.starred','applemusic','p.starred','2026-01-01',NULL,1)", 0)
+        playlistTrackDao.insertAll(listOf(pt(0, null).copy(playlistId = "applemusic-p.starred")))
+        // Complete: pulled from Apple Music, every row has its catalog id.
+        driver.execute(null, "INSERT INTO sync_playlist_source VALUES ('applemusic-p.done','applemusic','p.done','2026-01-02',NULL,1)", 0)
+        driver.execute(null, "INSERT INTO sync_playlist_link VALUES ('applemusic-p.done','applemusic','p.done','2026-01-02',NULL,1)", 0)
+        playlistTrackDao.insertAll(listOf(pt(0, "1440857781").copy(playlistId = "applemusic-p.done")))
+        // A Spotify playlist mirrored to Apple Music: not ours to re-pull.
+        driver.execute(null, "INSERT INTO sync_playlist_source VALUES ('spotify-x','spotify','x','snap',NULL,1)", 0)
+        driver.execute(null, "INSERT INTO sync_playlist_link VALUES ('spotify-x','applemusic','p.mirror','2026-01-03',NULL,1)", 0)
+        playlistTrackDao.insertAll(listOf(pt(0, null).copy(playlistId = "spotify-x")))
+
+        AppleMusicLibraryIdRepair.refetchPulledPlaylists(driver)
+
+        assertNull(snapshot("applemusic-p.starred", "applemusic"))
+        assertEquals("2026-01-02", snapshot("applemusic-p.done", "applemusic"))
+        assertEquals("2026-01-03", snapshot("spotify-x", "applemusic"))
+    }
 }

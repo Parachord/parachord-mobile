@@ -753,7 +753,27 @@ val androidModule = module {
 
     singleOf(::ResolverManager)
     singleOf(::ResolverScoring)
-    singleOf(::TrackResolverCache)
+    // Explicit binding: singleOf ignores the defaulted `persisted` parameter.
+    single {
+        val file = java.io.File(androidContext().filesDir, "track_sources_cache.json")
+        TrackResolverCache(
+            resolverManager = get(),
+            resolverScoring = get(),
+            libraryRepository = get(),
+            settingsStore = get(),
+            mbidEnrichment = get(),
+            playlistTrackDao = get(),
+            // Desktop keeps track sources 7 days.
+            persisted = com.parachord.shared.cache.PersistentJsonCache(
+                kotlinx.serialization.builtins.ListSerializer(com.parachord.shared.resolver.ResolvedSource.serializer()),
+                read = { com.parachord.android.data.cache.CacheFiles.read(file) },
+                write = { com.parachord.android.data.cache.CacheFiles.write(file, it) },
+                ttlMs = 7L * 24 * 60 * 60 * 1000,
+                maxEntries = 8_000,
+                name = "track sources",
+            ),
+        )
+    }
 
     // ── Slow-trickle cross-resolver enrichment (#150) ────────────────
     // The service itself lives in shared/commonMain; the Android Koin
