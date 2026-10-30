@@ -16,6 +16,7 @@ actual fun createHttpClient(
 ): HttpClient = HttpClient(Darwin) {
     installSharedPlugins(json, appConfig, authProvider, tokenRefresher, lbTokenProvider)
     engine {
+        useResponseTypeGuard()
         configureRequest {
             setAllowsCellularAccess(true)
         }

@@ -902,6 +902,33 @@ the warm path so the advance succeeds silently.
 
 ---
 
+## Ktor Darwin response-type guard (#368, KTOR-9807)
+
+Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`
+(`shared/src/iosMain/.../api/DarwinResponseGuard.kt`). Ktor's `DarwinTaskHandler`
+casts the task's response `as NSHTTPURLResponse` in the `didReceiveData` and
+`didCompleteWithError` callbacks, unchecked. A null or non-HTTP response throws
+there, on a CFNetwork thread nothing can catch, and the app aborts (SIGABRT) —
+TestFlight testers hit it opening the app after it sat locked overnight.
+
+The guard runs the engine on our own `NSURLSession` whose delegate
+(`ResponseTypeGuardDelegate`) checks the response type and forwards everything
+else to Ktor's `KtorNSURLSessionDelegate` (Ktor's documented custom-delegate
+path). A non-HTTP response cancels the task, or completes it with
+`NSURLErrorBadServerResponse`, so the request fails like any network error.
+`DarwinResponseGuardTest` (iosTest) reproduces the crash with a `file://` URL:
+without the guard the test process dies with `NSURLResponse cannot be cast to
+NSHTTPURLResponse`.
+
+- **A new Darwin client without the guard brings the crash back.** Both today's
+  clients have it (`createHttpClient`, `IosContainer.authHttpClient`).
+- **`configureSession` and `handleChallenge` are ignored** with a
+  preconfigured session; set session options inside `useResponseTypeGuard`.
+- **Remove the guard** once a Ktor release checks the cast. KTOR-9807 is open
+  (triaged 2026-10-26); 3.6.1 still has both casts.
+
+---
+
 ## What's intentionally deferred (don't "fix")
 
 - Full Koin DI graph — `IosContainer` is hand-rolled on purpose until

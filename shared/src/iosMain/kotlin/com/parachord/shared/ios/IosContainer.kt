@@ -127,6 +127,7 @@ import com.parachord.shared.store.IosSecureTokenStore
 import com.parachord.shared.store.KvStoreFactory
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.darwin.Darwin
+import com.parachord.shared.api.useResponseTypeGuard
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
@@ -311,6 +312,7 @@ class IosContainer private constructor() {
      */
     val authHttpClient: HttpClient by lazy {
         HttpClient(Darwin) {
+            engine { useResponseTypeGuard() }
             install(ContentNegotiation) {
                 json(Json { ignoreUnknownKeys = true; isLenient = true })
             }
