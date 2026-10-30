@@ -10,6 +10,7 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
@@ -116,8 +117,10 @@ class ListenBrainzClient(
     /** Validate a ListenBrainz user token; returns username if valid, null otherwise. */
     suspend fun validateToken(token: String): String? {
         return try {
-            val response = httpClient.get("$BASE_URL/1/validate-token") {
-                header("Authorization", "Token $token")
+            val response = executeWithRetry {
+                httpClient.get("$BASE_URL/1/validate-token") {
+                    header("Authorization", "Token $token")
+                }
             }
             if (!response.status.isSuccess()) {
                 Log.w(TAG, "Token validation failed: ${response.status.value}")
@@ -367,7 +370,7 @@ class ListenBrainzClient(
         }
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
-            throw Exception("createPlaylist failed: HTTP ${response.status.value} $text")
+            throw ListenBrainzHttpException(response.status.value, "createPlaylist failed: HTTP ${response.status.value} $text")
         }
         val parsed = json.decodeFromString<CreatePlaylistWire>(response.bodyAsText())
         return parsed.playlistMbid
@@ -414,7 +417,7 @@ class ListenBrainzClient(
         }
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
-            throw Exception("editPlaylist($playlistMbid) failed: HTTP ${response.status.value} $text")
+            throw ListenBrainzHttpException(response.status.value, "editPlaylist($playlistMbid) failed: HTTP ${response.status.value} $text")
         }
     }
 
@@ -438,7 +441,7 @@ class ListenBrainzClient(
         }
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
-            throw Exception("deletePlaylist($playlistMbid) failed: HTTP ${response.status.value} $text")
+            throw ListenBrainzHttpException(response.status.value, "deletePlaylist($playlistMbid) failed: HTTP ${response.status.value} $text")
         }
     }
 
@@ -499,7 +502,7 @@ class ListenBrainzClient(
             }
             if (!response.status.isSuccess()) {
                 val text = response.bodyAsText().take(200)
-                throw Exception("addPlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
+                throw ListenBrainzHttpException(response.status.value, "addPlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
             }
         }
     }
@@ -541,7 +544,7 @@ class ListenBrainzClient(
         }
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
-            throw Exception("deletePlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
+            throw ListenBrainzHttpException(response.status.value, "deletePlaylistItems($playlistMbid) failed: HTTP ${response.status.value} $text")
         }
     }
 
@@ -562,11 +565,11 @@ class ListenBrainzClient(
      * other than 404 propagate as [Exception].
      */
     suspend fun getPlaylistLastModified(playlistMbid: String): String? {
-        val response = httpClient.get("$BASE_URL/1/playlist/$playlistMbid")
+        val response = executeWithRetry { httpClient.get("$BASE_URL/1/playlist/$playlistMbid") }
         if (response.status == HttpStatusCode.NotFound) return null
         if (!response.status.isSuccess()) {
             val text = response.bodyAsText().take(200)
-            throw Exception("getPlaylistLastModified($playlistMbid) failed: HTTP ${response.status.value} $text")
+            throw ListenBrainzHttpException(response.status.value, "getPlaylistLastModified($playlistMbid) failed: HTTP ${response.status.value} $text")
         }
         return try {
             val root = Json.parseToJsonElement(response.bodyAsText()).jsonObject
@@ -1107,30 +1110,52 @@ class ListenBrainzClient(
     }
 
     /**
-     * Retry on 429/503 with exponential backoff (matches desktop's fetchListenBrainz).
-     * Up to 3 attempts: 1.5s, 3s, 6s delays before retries.
+     * Retry a ListenBrainz call through rate limits and gateway errors —
+     * desktop's `lbRequest` (sync-providers/listenbrainz.js, parachord#942):
+     * - **429:** wait `Retry-After` seconds (5 if absent or unparseable), retry.
+     * - **502 / 503 / 504:** wait `min(1000 · 2^retry, 30000)` ms, retry.
+     * - **Anything else** (2xx, 401, 404, other 4xx/5xx): return at once.
+     *
+     * At most [LB_MAX_RETRIES] retries (4 attempts), then the last response is
+     * returned, so callers keep their own non-2xx handling (404 → deleted,
+     * 401 → reauth). Retries only absorb transient blips.
+     *
+     * Two deliberate differences from desktop: network errors aren't retried
+     * here (the shared client's `HttpRequestRetry` already retries transport
+     * failures; a second layer would multiply attempts), and a `Retry-After`
+     * above [LB_MAX_RETRY_AFTER_S] returns the 429 instead of holding the sync
+     * open for it.
      */
-    private suspend fun executeWithRetry(
-        maxRetries: Int = 3,
-        block: suspend () -> HttpResponse,
-    ): HttpResponse {
-        var lastResponse: HttpResponse? = null
-        for (attempt in 0 until maxRetries) {
+    internal suspend fun executeWithRetry(block: suspend () -> HttpResponse): HttpResponse {
+        var retry = 0
+        while (true) {
             val response = block()
-            if (response.status.isSuccess()) return response
-            if (response.status == HttpStatusCode.TooManyRequests ||
-                response.status == HttpStatusCode.ServiceUnavailable
-            ) {
-                lastResponse = response
-                val delayMs = 1500L * (1L shl attempt) // 1500, 3000, 6000
-                delay(delayMs)
-                continue
+            val status = response.status.value
+            if (retry >= LB_MAX_RETRIES) return response
+            val waitMs = when (status) {
+                429 -> {
+                    val seconds = response.headers[HttpHeaders.RetryAfter]?.trim()?.toLongOrNull() ?: 5L
+                    if (seconds > LB_MAX_RETRY_AFTER_S) {
+                        Log.w(TAG, "429 with Retry-After ${seconds}s; not waiting that long")
+                        return response
+                    }
+                    seconds.coerceAtLeast(0) * 1000
+                }
+                502, 503, 504 -> minOf(1000L shl retry, 30_000L)
+                else -> return response
             }
-            return response
+            Log.d(TAG, "HTTP $status; retry ${retry + 1}/$LB_MAX_RETRIES in ${waitMs}ms")
+            delay(waitMs)
+            retry++
         }
-        return lastResponse ?: block()
     }
 }
+
+/** Retries after the first attempt in [ListenBrainzClient.executeWithRetry] (desktop: 3). */
+internal const val LB_MAX_RETRIES = 3
+
+/** The longest `Retry-After` the client waits out mid-sync. */
+internal const val LB_MAX_RETRY_AFTER_S = 60L
 
 // ── Wire-format models (private, @Serializable) ──────────────────────────────
 

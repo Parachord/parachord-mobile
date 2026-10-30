@@ -128,3 +128,11 @@ sealed class MbidLookupOutcome {
 /** Thrown by the labs gate if a cooldown is ever armed; surfaces as [MbidLookupOutcome.Unreachable]. */
 class ListenBrainzLabsRateLimitedException(val retryAfterSeconds: Long?) :
     Exception("ListenBrainz labs rate-limited (retry after ${retryAfterSeconds ?: "?"}s)")
+
+/**
+ * A ListenBrainz API call answered with a non-2xx [status] (after the
+ * client's retries). Typed so callers can tell a definitive 404 (the playlist
+ * was deleted on LB) from a rate limit or outage: the push loop's circuit
+ * breaker doesn't count a 404 (#291).
+ */
+class ListenBrainzHttpException(val status: Int, message: String) : Exception(message)
