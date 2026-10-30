@@ -10,6 +10,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -44,15 +46,18 @@ class QueuePersistence constructor(
         observeJob = scope.launch {
             combine(
                 queueManager.snapshot,
-                stateHolder.state,
+                // Only the current track is saved. The full playback state
+                // changes every 500 ms while a song plays (position), which
+                // kept re-saving the whole queue about once a second.
+                stateHolder.state.map { it.currentTrack }.distinctUntilChanged(),
                 settingsStore.persistQueue,
-            ) { snapshot, playbackState, enabled ->
-                Triple(snapshot, playbackState, enabled)
+            ) { snapshot, currentTrack, enabled ->
+                Triple(snapshot, currentTrack, enabled)
             }
                 .debounce(500)
-                .collectLatest { (snapshot, playbackState, enabled) ->
+                .collectLatest { (snapshot, currentTrack, enabled) ->
                     if (!enabled) return@collectLatest
-                    save(playbackState.currentTrack, snapshot)
+                    save(currentTrack, snapshot)
                 }
         }
     }
