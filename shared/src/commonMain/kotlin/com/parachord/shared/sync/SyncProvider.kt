@@ -158,6 +158,18 @@ interface SyncProvider {
     suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean = true
 
     /**
+     * Fetch one playlist by id, in [fetchPlaylists]' shape. Used for a
+     * playlist this provider is the pull source of that [fetchPlaylists] left
+     * out: Apple Music's library list omits some playlists that still exist,
+     * and those were never refreshed. [knownName] (the local row's name) is
+     * used when the provider's answer has none: Apple returns some of these
+     * playlists without a name, which is likely why its list skips them. Null
+     * when the playlist is gone, the fetch failed, or the provider doesn't
+     * support it (the default).
+     */
+    suspend fun fetchPlaylist(externalPlaylistId: String, knownName: String? = null): SyncedPlaylist? = null
+
+    /**
      * Catalog-search-based ID hydration (un-defers Decision D1).
      *
      * Search the provider's catalog for a track matching the given

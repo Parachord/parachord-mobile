@@ -337,6 +337,70 @@ class DeadMirrorReconcileIntegrationTest {
         )
     }
 
+    // ── D1 — a pull source the provider's LIST left out is fetched by id and pulled ──
+    @Test
+    fun `D1 unlisted pull source — fetched by id and refreshed, not probed`() = runBlocking {
+        val am = FakeProvider("applemusic")
+        val h = Harness(listOf(am))
+        // A pulled Apple Music playlist whose tracks predate the catalog-id fix.
+        h.seed("applemusic-unlisted", "Ruled By Women", sourceUrl = null)
+        h.seedSource("applemusic-unlisted", "applemusic", "unlisted")
+        h.playlistTrackDao.insertAll(listOf(track("applemusic-unlisted", 0, appleMusicId = null)))
+        // Apple's library list leaves it out, but it exists and answers by id.
+        am.remotePlaylistsList = emptyList()
+        am.byId = mapOf("unlisted" to synced("applemusic-unlisted", "unlisted", "Ruled By Women", "2026-10-30T00:00:00Z"))
+        am.tracksById = mapOf("unlisted" to listOf(track("applemusic-unlisted", 0, appleMusicId = "1440000001")))
+
+        h.engine.syncAll()
+
+        assertEquals(
+            "the playlist is re-pulled: its tracks now carry the Apple Music id",
+            listOf("1440000001"),
+            h.playlistTrackDao.getByPlaylistIdSync("applemusic-unlisted").map { it.trackAppleMusicId },
+        )
+        assertEquals(
+            "the link records the fetched snapshot",
+            "2026-10-30T00:00:00Z",
+            h.linkDao.selectForLink("applemusic-unlisted", "applemusic")?.snapshotId,
+        )
+        assertEquals("a playlist fetched by id needs no existence probe", 0, am.probeCount)
+        assertEquals("the local name is passed for a nameless answer", "Ruled By Women", am.lastKnownName)
+        assertNotNull(h.playlistDao.getById("applemusic-unlisted"))
+    }
+
+    // ── D2 — fetchPlaylist only runs for this provider's OWN pull sources ──
+    @Test
+    fun `D2 unlisted — a push mirror missing from the list is not fetched by id`() = runBlocking {
+        val am = FakeProvider("applemusic")
+        val h = Harness(listOf(am))
+        // Pulled from Spotify, mirrored to Apple Music (link only, no AM sync_source).
+        h.seed("spotify-x", "Mirrored", sourceUrl = null)
+        h.seedSource("spotify-x", "spotify", "sp-x")
+        h.linkMirror("spotify-x", "applemusic", "am-x")
+        am.remotePlaylistsList = emptyList()
+        am.byId = mapOf("am-x" to synced("spotify-x", "am-x", "Mirrored", "s1"))
+
+        h.engine.syncAll()
+
+        assertEquals("fetchPlaylist isn't called for a push mirror", 0, am.fetchByIdCount)
+    }
+
+    private fun synced(localId: String, externalId: String, name: String, snapshot: String) = SyncedPlaylist(
+        entity = Playlist(
+            id = localId, name = name, trackCount = 1, createdAt = 1_000L, updatedAt = 1_000L,
+            lastModified = 1_000L, locallyModified = false,
+        ),
+        spotifyId = externalId,
+        snapshotId = snapshot,
+        trackCount = 1,
+        isOwned = true,
+    )
+
+    private fun track(playlistId: String, position: Int, appleMusicId: String?) = PlaylistTrack(
+        playlistId = playlistId, position = position, trackTitle = "Thinning", trackArtist = "Snail Mail",
+        trackResolver = "applemusic", trackAppleMusicId = appleMusicId,
+    )
+
     // ──────────────────────────────────────────────────────────────────────
     // Harness
     // ──────────────────────────────────────────────────────────────────────
@@ -348,11 +412,12 @@ class DeadMirrorReconcileIntegrationTest {
         val linkDao = SyncPlaylistLinkDao(db)
         val sourceDao = SyncPlaylistSourceDao(db)
         val syncSourceDao = SyncSourceDao(db)
+        val playlistTrackDao = PlaylistTrackDao(db)
         val settings = ChannelStoringSettings(providers.map { it.id }.toSet())
 
         val engine = SyncEngine(
             db = db, driver = driver, trackDao = TrackDao(db, driver), albumDao = AlbumDao(db),
-            artistDao = ArtistDao(db), playlistDao = playlistDao, playlistTrackDao = PlaylistTrackDao(db),
+            artistDao = ArtistDao(db), playlistDao = playlistDao, playlistTrackDao = playlistTrackDao,
             syncSourceDao = syncSourceDao, syncPlaylistLinkDao = linkDao, syncPlaylistSourceDao = sourceDao,
             syncPlaylistBaselineDao = SyncPlaylistBaselineDao(db), syncPlaylistNwayDao = SyncPlaylistNwayDao(db),
             trackProviderIdCacheDao = TrackProviderIdCacheDao(db),
@@ -432,15 +497,30 @@ class DeadMirrorReconcileIntegrationTest {
         var probeCount = 0
             private set
 
+        var byId: Map<String, SyncedPlaylist> = emptyMap()
+        var tracksById: Map<String, List<PlaylistTrack>> = emptyMap()
+        var fetchByIdCount = 0
+            private set
+
         override suspend fun fetchPlaylists(onProgress: ((current: Int, total: Int) -> Unit)?): List<SyncedPlaylist> =
             remotePlaylistsList
+
+        var lastKnownName: String? = null
+            private set
+
+        override suspend fun fetchPlaylist(externalPlaylistId: String, knownName: String?): SyncedPlaylist? {
+            fetchByIdCount++
+            lastKnownName = knownName
+            return byId[externalPlaylistId]
+        }
 
         override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean {
             probeCount++
             return externalPlaylistId !in goneExternalIds
         }
 
-        override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> = emptyList()
+        override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> =
+            tracksById[externalPlaylistId].orEmpty()
         override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
         override suspend fun createPlaylist(name: String, description: String?): RemoteCreated {
             createCount++

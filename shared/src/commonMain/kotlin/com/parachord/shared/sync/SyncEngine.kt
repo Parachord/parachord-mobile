@@ -2760,14 +2760,30 @@ class SyncEngine constructor(
         // playlist is NOT auto-deleted here — the picker's keep/remove prompt
         // handles deselection explicitly (detach to keep, delete to remove).
         val pullAllow = settingsStore.getPullPlaylists(providerId)
-        val importPlaylists = remotePlaylists.filter {
-            val override = settingsStore.getPlaylistChannels("$providerId-${it.spotifyId}")
-            if (override != null) providerId in override
-            else pullAllow.isEmpty() || it.spotifyId in pullAllow
+        suspend fun pullable(remote: SyncedPlaylist): Boolean {
+            val override = settingsStore.getPlaylistChannels("$providerId-${remote.spotifyId}")
+            return if (override != null) providerId in override
+            else pullAllow.isEmpty() || remote.spotifyId in pullAllow
         }
 
         val localSources = syncSourceDao.getByProvider(providerId, "playlist")
         val localByExternalId = localSources.associateBy { it.externalId }
+
+        // Playlists we pull from this provider that its list left out.
+        // Apple Music's library list omits some playlists that still exist,
+        // so they were never refreshed (one stayed at its June contents, its
+        // tracks without Apple Music ids). Fetch each by id and handle it like
+        // a listed one; a null answer leaves it to the removal probe below.
+        val listedIds = remotePlaylists.map { it.spotifyId }.toSet()
+        val unlisted = localSources.mapNotNull { source ->
+            val externalId = source.externalId ?: return@mapNotNull null
+            if (externalId in listedIds) return@mapNotNull null
+            if (syncPlaylistSourceDao.selectForLocal(source.itemId)?.providerId != providerId) return@mapNotNull null
+            provider.fetchPlaylist(externalId, knownName = playlistDao.getById(source.itemId)?.name)?.also {
+                Log.d(TAG, "Pull: ${provider.displayName} list left out '${it.entity.name}'; fetched it by id")
+            }
+        }
+        val importPlaylists = (remotePlaylists + unlisted).filter { pullable(it) }
 
         for ((index, remote) in importPlaylists.withIndex()) {
             _syncPhase.value = "playlists · $providerId pull ${index + 1}/${importPlaylists.size}"
@@ -3032,7 +3048,7 @@ class SyncEngine constructor(
         // Probe-gated (workstream B): a source absent from the fetched list is
         // removed ONLY when remotePlaylistExists confirms a 404, so a partial
         // fetch can't mass-delete live playlists.
-        val fullRemoteIds = remotePlaylists.map { it.spotifyId }.toSet()
+        val fullRemoteIds = (remotePlaylists + unlisted).map { it.spotifyId }.toSet()
         val goneIds = confirmedGoneMirrors(provider, localSources.mapNotNull { it.externalId }.toSet(), fullRemoteIds)
         val removedSources = localSources.filter { it.externalId != null && it.externalId in goneIds }
         removedSources.forEach { source ->
