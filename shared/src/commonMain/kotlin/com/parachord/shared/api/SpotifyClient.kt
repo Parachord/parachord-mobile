@@ -353,6 +353,13 @@ class SpotifyClient(
     suspend fun pausePlayback(): HttpResponse =
         httpClient.put("$BASE/v1/me/player/pause") { applyAuth(this) }
 
+    /** Pause one Connect device, rather than whichever device is active. */
+    @Throws(Throwable::class)
+    suspend fun pauseDevice(deviceId: String): HttpResponse =
+        httpClient.put("$BASE/v1/me/player/pause") {
+            applyAuth(this); parameter("device_id", deviceId)
+        }
+
     @Throws(Throwable::class)
     suspend fun seekPlayback(positionMs: Long): HttpResponse =
         httpClient.put("$BASE/v1/me/player/seek") {

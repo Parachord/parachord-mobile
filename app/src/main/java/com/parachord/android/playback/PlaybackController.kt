@@ -205,6 +205,9 @@ class PlaybackController constructor(
                     // track when nothing is actually playing. Our own mini
                     // player reads from stateHolder, not ExoPlayer.
                     pendingRestoredTrack = restoredTrack
+                    // Play is the likely next tap: have Spotify ready if
+                    // that's where this track plays.
+                    prewarmSpotifyFor(restoredTrack)
                 }
                 queuePersistence.startObserving()
                 scrobbleManager.startObserving()
@@ -1074,11 +1077,11 @@ class PlaybackController constructor(
             while (isActive) {
                 val ctrl = controller
                 if (ctrl != null && ctrl.isPlaying && !isExternalPlayback) {
-                    stateHolder.update {
-                        copy(
-                            position = ctrl.currentPosition.coerceAtLeast(0L),
-                            duration = ctrl.duration.coerceAtLeast(0L),
-                        )
+                    val position = ctrl.currentPosition.coerceAtLeast(0L)
+                    val duration = ctrl.duration.coerceAtLeast(0L)
+                    stateHolder.update { copy(position = position, duration = duration) }
+                    if (duration > 0 && duration - position in 1..30_000) {
+                        prewarmSpotifyFor(queueManager.snapshot.value.upNext.firstOrNull())
                     }
                 }
                 delay(500)
@@ -1353,6 +1356,9 @@ class PlaybackController constructor(
                     // state flipping to "unknown"/isPlaying:false mid-song).
                     // The resolver pre-resolution is enough: setQueue() in play()
                     // is fast when the WebView is already warm.
+                    if (duration > 0 && duration - position in 1..30_000) {
+                        prewarmSpotifyFor(queueManager.snapshot.value.upNext.firstOrNull())
+                    }
                     if (!nextTrackPreloaded && duration > 0 && duration - position in 1..30_000) {
                         val nextTrack = queueManager.snapshot.value.upNext.firstOrNull()
                         if (nextTrack != null) {
@@ -2089,6 +2095,31 @@ class PlaybackController constructor(
     private var spotifyBlockedInBackground = false
 
     private fun isAppVisible(): Boolean = com.parachord.android.app.CurrentActivityHolder.current != null
+
+    /** The track [prewarmSpotifyFor] last checked, so each is checked once. */
+    @Volatile private var spotifyPrewarmCheckedId: String? = null
+
+    /**
+     * If [track] will play from Spotify, get Spotify ready for it now
+     * ([SpotifyPlaybackHandler.prewarm]) so its play starts on the warm path
+     * instead of waiting 5–8 s for Spotify to register. Called while the
+     * current song is in its last 30 s, with the next track, and for a
+     * restored queue. Skipped while Spotify is already playing (it's warm) and
+     * while it's known not to start in the background.
+     */
+    private fun prewarmSpotifyFor(track: TrackEntity?) {
+        if (track == null || track.id == spotifyPrewarmCheckedId) return
+        spotifyPrewarmCheckedId = track.id
+        if (isExternalPlayback && router.activeExternalHandler is com.parachord.android.playback.handlers.SpotifyPlaybackHandler) return
+        scope.launch(Dispatchers.Main) {
+            if (spotifyBlockedInBackground && !isAppVisible()) return@launch
+            val routed = reselectBestSource(track)
+            if (routed.resolver == "spotify" && routed.spotifyUri != null) {
+                Log.d(TAG, "'${track.title}' will play from Spotify — prewarming")
+                router.getSpotifyHandler().prewarm()
+            }
+        }
+    }
 
     /**
      * Play [track] from its best non-Spotify source: Spotify isn't running and

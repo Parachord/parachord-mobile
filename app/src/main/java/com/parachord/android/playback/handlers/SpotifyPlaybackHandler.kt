@@ -52,6 +52,10 @@ class SpotifyPlaybackHandler constructor(
         /** How long [confirmPlaybackStarted] waits per attempt for Spotify to start. */
         private const val CONFIRM_WINDOW_MS = 4_000L
         private const val CONFIRM_POLL_MS = 500L
+        /** How long [prewarm] waits for Spotify's device to appear. */
+        private const val PREWARM_TIMEOUT_MS = 8_000L
+        /** Device-list poll interval for [prewarm]: nothing is waiting on it. */
+        private const val PREWARM_POLL_MS = 1_000L
         // Raised from 10 → 30 to tolerate Doze mode network delays.
         // At ~1s polling interval, 30 failures ≈ 30s of API unreachability.
         // Doze can delay network for 15+ seconds; the old threshold of 10
@@ -240,13 +244,22 @@ class SpotifyPlaybackHandler constructor(
         if (deviceVerified && warmDeviceId != null) {
             try {
                 val currentDevices = spotifyClient.getDevices().devices
-                val stillAlive = currentDevices.any { it.id == warmDeviceId }
-                if (stillAlive) {
+                val warmDevice = currentDevices.firstOrNull { it.id == warmDeviceId }
+                if (warmDevice != null) {
                     Log.d(TAG, "Warm path: firing startPlayback directly on device=$warmDeviceId")
                     val resp = spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = warmDeviceId)
                     if (resp.status.isSuccess() || resp.status.value == 204) {
-                        Log.d(TAG, "Warm path succeeded in ${System.currentTimeMillis() - flowStart}ms")
+                        Log.d(TAG, "Warm path accepted in ${System.currentTimeMillis() - flowStart}ms")
                         applyConnectVolume(warmDeviceId)
+                        // A device found by [prewarm] is present but idle, and
+                        // may be one that accepts a play without starting it
+                        // (#452), so confirm as the full flow does.
+                        if (!warmDevice.isActive || !isAppVisible()) {
+                            if (!confirmPlaybackStarted(uri, warmDeviceId)) {
+                                playbackNeverStarted = true
+                                return false
+                            }
+                        }
                         return true
                     }
                     Log.d(TAG, "Warm path startPlayback failed (${resp.status.value}), falling through")
@@ -405,10 +418,18 @@ class SpotifyPlaybackHandler constructor(
 
     /**
      * Wait for Spotify to report the play as started. Polls `/me/player` every
-     * 500 ms for up to [CONFIRM_WINDOW_MS]; if it still isn't playing, re-sends
-     * the play once (to [deviceId]) and waits again. A 204 ("nothing playing")
-     * is a real answer, not a failure: Spotify accepted the command but its
-     * player didn't start.
+     * 500 ms for up to [CONFIRM_WINDOW_MS]. A 204 ("nothing playing") is a real
+     * answer, not a failure: Spotify accepted the command but its player didn't
+     * start.
+     *
+     * With a Parachord screen showing, a play that hasn't started is sent once
+     * more and given a second window. In the background (Android Auto, a locked
+     * phone) it isn't: there the play that doesn't start is Spotify's process
+     * only bound as a media browser (#452), which a re-send never fixed, and the
+     * second window only kept the car silent ~4 s longer before the fallback.
+     *
+     * On giving up, pauses [deviceId] so a play that starts late doesn't sound
+     * over the source the controller falls back to.
      */
     private suspend fun confirmPlaybackStarted(uri: String, deviceId: String?): Boolean {
         val started = System.currentTimeMillis()
@@ -416,16 +437,29 @@ class SpotifyPlaybackHandler constructor(
             Log.d(TAG, "confirmPlayback: playing after ${System.currentTimeMillis() - started}ms")
             return true
         }
-        Log.w(TAG, "confirmPlayback: not playing after ${CONFIRM_WINDOW_MS}ms, sending the play again")
-        try {
-            spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = deviceId)
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.w(TAG, "confirmPlayback: re-send failed: ${e.message}")
+        if (isAppVisible()) {
+            Log.w(TAG, "confirmPlayback: not playing after ${CONFIRM_WINDOW_MS}ms, sending the play again")
+            try {
+                spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = deviceId)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "confirmPlayback: re-send failed: ${e.message}")
+            }
+            if (pollUntilPlaying()) {
+                Log.d(TAG, "confirmPlayback: playing after ${System.currentTimeMillis() - started}ms")
+                return true
+            }
         }
-        val ok = pollUntilPlaying()
-        Log.d(TAG, "confirmPlayback: ${if (ok) "playing" else "still not playing"} after ${System.currentTimeMillis() - started}ms")
-        return ok
+        Log.w(TAG, "confirmPlayback: still not playing after ${System.currentTimeMillis() - started}ms, giving up")
+        if (deviceId != null) {
+            try {
+                spotifyClient.pauseDevice(deviceId)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.d(TAG, "confirmPlayback: pause after giving up failed (harmless): ${e.message}")
+            }
+        }
+        return false
     }
 
     private suspend fun pollUntilPlaying(): Boolean {
@@ -671,6 +705,87 @@ class SpotifyPlaybackHandler constructor(
             Log.d(TAG, "Nudged Spotify awake via media button broadcast")
         } catch (e: Exception) {
             Log.w(TAG, "Media button broadcast failed: ${e.message}")
+        }
+    }
+
+    private var prewarmJob: Job? = null
+
+    /**
+     * Get Spotify ready before a Spotify track is due: the next track in the
+     * queue, or a restored one the user is likely to play. Finds the Connect
+     * device the play will use, waking Spotify if it isn't registered yet, and
+     * remembers it, so the play takes the warm path instead of waking, polling
+     * and confirming while the user waits. Spotify needs 5–8 s to register;
+     * this spends them while the current song plays.
+     *
+     * Silent and invisible: it wakes Spotify with a PAUSE key, never PLAY (a
+     * play key resumes Spotify's own last track and takes audio focus from
+     * whatever is playing now, which pauses ExoPlayer and MusicKit), and never
+     * opens Spotify. A preferred remote device can't be woken, so it's only
+     * looked up. Skipped during a rate-limit cooldown and while one is running.
+     */
+    fun prewarm() {
+        if (prewarmJob?.isActive == true) return
+        prewarmJob = scope.launch { withAuth { runPrewarm() } }
+    }
+
+    internal suspend fun runPrewarm() {
+        if (spotifyClient.rateLimitRemainingMs() > 0) return
+        val preferredId = settingsStore.getPreferredSpotifyDeviceId()
+        val remotePreferred = preferredId != null && preferredId != LOCAL_DEVICE_ID
+        val start = System.currentTimeMillis()
+        var woke = false
+        while (true) {
+            val devices = spotifyClient.getDevices().devices
+            val target = prewarmTarget(devices, preferredId)
+            if (target != null) {
+                deviceVerified = true
+                if (!remotePreferred) lastResolvedLocalId = target.id
+                Log.d(TAG, "Prewarm: '${target.name}' ready (active=${target.isActive}) after ${System.currentTimeMillis() - start}ms${if (woke) ", woken" else ""}")
+                return
+            }
+            if (remotePreferred) {
+                Log.d(TAG, "Prewarm: preferred device $preferredId isn't online; nothing to wake")
+                return
+            }
+            if (System.currentTimeMillis() - start > PREWARM_TIMEOUT_MS) {
+                Log.d(TAG, "Prewarm: Spotify didn't register within ${PREWARM_TIMEOUT_MS}ms; the play will wake it")
+                return
+            }
+            if (!woke) {
+                woke = true
+                sendSpotifyMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+            }
+            delay(PREWARM_POLL_MS)
+        }
+    }
+
+    /**
+     * The device [prewarm] looks for: the preferred remote device, or this
+     * phone (by name, else the only smartphone, as [pickDevice] decides).
+     */
+    internal fun prewarmTarget(devices: List<SpDevice>, preferredId: String?): SpDevice? {
+        if (preferredId != null && preferredId != LOCAL_DEVICE_ID) {
+            return devices.firstOrNull { it.id == preferredId }
+        }
+        return devices.firstOrNull { isLocalRealDevice(it) }
+            ?: devices.filter { it.type == "Smartphone" }.singleOrNull()
+    }
+
+    /** Send a media key straight to Spotify, as [ensureSpotifyRunning] does. */
+    private fun sendSpotifyMediaKey(keyCode: Int) {
+        try {
+            for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                context.sendBroadcast(
+                    Intent(Intent.ACTION_MEDIA_BUTTON).apply {
+                        setPackage(SPOTIFY_PACKAGE)
+                        putExtra(Intent.EXTRA_KEY_EVENT, KeyEvent(action, keyCode))
+                    },
+                )
+            }
+            Log.d(TAG, "Sent ${KeyEvent.keyCodeToString(keyCode)} to Spotify")
+        } catch (e: Exception) {
+            Log.w(TAG, "Media key to Spotify failed: ${e.message}")
         }
     }
 
