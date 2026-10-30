@@ -21,6 +21,10 @@ import okhttp3.OkHttpClient
 
 private const val TAG = "JsBridge"
 private const val EVAL_TIMEOUT_MS = 20_000L
+/** How long [JsBridge.initialize] waits for the bootstrap page to load. */
+private const val INIT_TIMEOUT_MS = 15_000L
+/** After a timed-out initialize, how long before trying again. */
+private const val INIT_RETRY_MS = 60_000L
 
 /**
  * Android [JsRuntime] implementation using a headless WebView.
@@ -56,6 +60,7 @@ class JsBridge constructor(
     @SuppressLint("SetJavaScriptEnabled")
     override suspend fun initialize() = withContext(Dispatchers.Main) {
         if (webView != null) return@withContext
+        if (System.currentTimeMillis() - initFailedAt < INIT_RETRY_MS) return@withContext
 
         val pageLoaded = CompletableDeferred<Unit>()
         val nativeBridge = NativeBridge(httpClient, scope, dataStore, mbidEnrichment, appleMusicCatalog)
@@ -80,10 +85,24 @@ class JsBridge constructor(
         // Wait for the page to actually finish loading before marking ready.
         // The old code set _ready = true immediately after loadUrl(), which
         // meant evaluate() calls could fire before resolver-loader.js was available.
-        pageLoaded.await()
+        // Bounded: PluginManager initializes under its init lock, so a page
+        // that never loads (a stalled renderer) held every plugin call and the
+        // Apple Music fallback resolve for the rest of the session (#447, #449).
+        // On a timeout the WebView is dropped, ready stays false, and the next
+        // initialize() starts over once the retry wait has passed.
+        if (kotlinx.coroutines.withTimeoutOrNull(INIT_TIMEOUT_MS) { pageLoaded.await() } == null) {
+            Log.w(TAG, "Bootstrap page didn't load in ${INIT_TIMEOUT_MS}ms; plugins unavailable until a retry")
+            wv.destroy()
+            webView = null
+            initFailedAt = System.currentTimeMillis()
+            return@withContext
+        }
         _ready.value = true
         Log.d(TAG, "JS runtime ready")
     }
+
+    /** When [initialize] last timed out, so callers don't each wait it out again. */
+    private var initFailedAt = 0L
 
     /**
      * Evaluate a JavaScript expression and return the string result.

@@ -5,7 +5,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -72,9 +71,16 @@ class PluginManager constructor(
         initMutex.withLock {
             if (initialized) return@withLock
 
-            // Initialize JS runtime (waits for bootstrap + resolver-loader.js to load)
+            // Initialize JS runtime (waits for bootstrap + resolver-loader.js to load).
+            // initialize() returns once the runtime is ready or has given up; if
+            // it gave up, don't wait on `ready` (that waited forever, holding
+            // this lock), leave `initialized` false so a later call retries,
+            // and let plugin calls answer empty meanwhile.
             jsRuntime.initialize()
-            jsRuntime.ready.first { it }
+            if (!jsRuntime.ready.value) {
+                Log.w(TAG, "JS runtime isn't ready; plugins unavailable for now")
+                return@withLock
+            }
 
             loadPlugins()
             initialized = true
