@@ -2344,6 +2344,30 @@ class IosContainer private constructor() {
      */
     fun getSpotifyReauthRequiredFlow(): Flow<Boolean> = _spotifyReauthRequired
 
+    /**
+     * The pre-expiry warning for Home (#352), or null when there's none to show:
+     * in the last 7 days of the Spotify grant's 6-month life, not dismissed in
+     * the last day, Spotify connected, and the grant not already dead (the
+     * reauth banner covers that). Same rules as Android's Home
+     * ([com.parachord.shared.api.auth.SpotifyGrantExpiry]).
+     */
+    suspend fun spotifyExpiryWarning(): String? {
+        if (_spotifyReauthRequired.value) return null
+        if (settingsStore.getSpotifyRefreshToken().isNullOrBlank()) return null
+        val now = com.parachord.shared.platform.currentTimeMillis()
+        val authorizedAt = settingsStore.getSpotifyAuthorizedAt()
+        val dismissedAt = settingsStore.getSpotifyExpiryWarningDismissedAt()
+        if (!com.parachord.shared.api.auth.SpotifyGrantExpiry.shouldWarn(authorizedAt, dismissedAt, now)) return null
+        return com.parachord.shared.api.auth.SpotifyGrantExpiry.message(
+            com.parachord.shared.api.auth.SpotifyGrantExpiry.daysLeft(authorizedAt, now),
+        )
+    }
+
+    /** Hide the pre-expiry warning for a day. */
+    suspend fun dismissSpotifyExpiryWarning() {
+        settingsStore.setSpotifyExpiryWarningDismissedAt(com.parachord.shared.platform.currentTimeMillis())
+    }
+
     // ── Libre.fm (auth.getMobileSession via the shared LibreFmClient) ───
     val libreFmClient: com.parachord.shared.api.LibreFmClient by lazy {
         com.parachord.shared.api.LibreFmClient(httpClient)
