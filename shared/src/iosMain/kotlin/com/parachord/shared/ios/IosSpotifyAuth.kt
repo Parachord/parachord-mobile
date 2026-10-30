@@ -64,6 +64,8 @@ class IosSpotifyAuth(
         token.expiresIn?.let { expiresIn ->
             settingsStore.setSpotifyAccessTokenExpiresAt(currentTimeMillis() + expiresIn * 1000L)
         }
+        // A new grant: its 6-month clock starts now (#352).
+        settingsStore.markSpotifyAuthorized(currentTimeMillis())
         Log.d(TAG, "Spotify auth successful")
     }
 
