@@ -104,6 +104,7 @@ struct HomeScreen: View {
     private let container = IosContainer.companion.shared
     private let resolverCache = IosTrackResolverCache.shared
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -123,6 +124,13 @@ struct HomeScreen: View {
                             PCSpotifyReauthBanner(connecting: reauth.connecting) {
                                 reauth.reconnect(onNeedsSetup: onOpenSettings)
                             }
+                        } else if let message = reauth.expiryMessage {
+                            PCSpotifyExpiryBanner(
+                                message: message,
+                                connecting: reauth.connecting,
+                                onReconnect: { reauth.reconnect(onNeedsSetup: onOpenSettings) },
+                                onDismiss: { reauth.dismissExpiry() }
+                            )
                         }
 
                         // Empty-library prompt (no saved tracks/albums/playlists yet).
@@ -184,6 +192,10 @@ struct HomeScreen: View {
         }
         .task { model.start(); await model.load() }
         .task { reauth.start() }
+        .onAppear { Task { await reauth.refreshExpiry() } }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await reauth.refreshExpiry() } }
+        }
         .task { feed.start(); amReauth.start() }
         .onDisappear { feed.stop(); amReauth.stop() }
     }

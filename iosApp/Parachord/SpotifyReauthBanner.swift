@@ -22,13 +22,29 @@ final class SpotifyReauthModel {
 
     var required = false
     var connecting = false
+    /// The pre-expiry warning (#352), or nil. Re-checked when Home appears and
+    /// when the app returns to the foreground.
+    var expiryMessage: String?
 
     func start() {
         guard sub == nil else { return }
         sub = watcher.watch(flow: container.getSpotifyReauthRequiredFlow()) { [weak self] v in
             let req = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
-            Task { @MainActor in self?.required = req }
+            Task { @MainActor in
+                self?.required = req
+                await self?.refreshExpiry()
+            }
         }
+    }
+
+    func refreshExpiry() async {
+        expiryMessage = (try? await container.spotifyExpiryWarning()) ?? nil
+    }
+
+    /// Hide the warning for a day.
+    func dismissExpiry() {
+        expiryMessage = nil
+        Task { try? await container.dismissSpotifyExpiryWarning() }
     }
 
     func stop() { sub?.cancel(); sub = nil }
@@ -54,6 +70,7 @@ final class SpotifyReauthModel {
             do {
                 let r = try await m.authorize(cfg)
                 try await container.connectSpotify(code: r.code, codeVerifier: r.codeVerifier)
+                await refreshExpiry() // a new grant restarts the 6-month clock
             } catch {
                 // Leave the banner up; the user can tap Reconnect again.
             }
@@ -84,6 +101,53 @@ struct PCSpotifyReauthBanner: View {
             .buttonStyle(.plain)
             .disabled(connecting)
             .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background(PC.accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+    }
+}
+
+/// Warns before Spotify's 6-month sign-in expiry (#352), in the last 7 days of
+/// the grant. Low urgency, so it can be dismissed; it comes back at most once a
+/// day. Same look as `PCSpotifyReauthBanner`, which takes over if the grant does
+/// expire. Mirrors Android's `SpotifyExpiryWarningBanner`.
+struct PCSpotifyExpiryBanner: View {
+    let message: String
+    let connecting: Bool
+    let onReconnect: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(message)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(PC.fg1)
+                Button(action: onReconnect) {
+                    HStack(spacing: 6) {
+                        if connecting { ProgressView().controlSize(.small) }
+                        Text(connecting ? "Reconnecting…" : "Reconnect Spotify")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(PC.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(connecting)
+                .padding(.top, 2)
+            }
+            Spacer(minLength: 0)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(PC.fg2)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
