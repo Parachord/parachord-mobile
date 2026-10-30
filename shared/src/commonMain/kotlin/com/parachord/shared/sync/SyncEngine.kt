@@ -134,6 +134,12 @@ class SyncEngine constructor(
          *  complete-fetch omissions — a single transient omission stays protected. */
         private const val MISSING_STREAK_THRESHOLD = 2
 
+        /** Change token stored for a provider while the reconcile HOLDS keys on it
+         *  (an omission whose streak is building). It never equals a real snapshot,
+         *  and change-detection treats it as changed, so the provider is fetched
+         *  again next cycle even when its trackCount happens to match the baseline. */
+        private const val NWAY_HELD_TOKEN = "nway-held"
+
         /** Sentinel for the cross-provider local-row dedup migration
          *  ([migrateMergeCrossProviderDuplicates]). Lives above
          *  [SYNC_DATA_VERSION] so it doesn't piggyback on the v3→v4
@@ -1418,6 +1424,7 @@ class SyncEngine constructor(
             val storedToken = storedTokens[providerId]?.changeToken
             val changed = when {
                 listEntry == null -> false // not in the owned list (deleted/unowned) — skip
+                storedToken == NWAY_HELD_TOKEN -> true // re-check a held omission
                 listEntry.snapshotId != null -> listEntry.snapshotId != storedToken
                 else -> listEntry.trackCount != baseline.tracks.size
             }
@@ -1712,11 +1719,14 @@ class SyncEngine constructor(
      * `unifyTrackKeys`/`canonicalTrackKey` already document. The harm is bounded
      * (rare within a single playlist; never drops a present track via this path).
      *
-     * PENDING (return true) = cache entry ABSENT, its `resolvedId` is null, OR it
-     * is materialized but its absence has NOT yet streak-escalated. The conservative
-     * SAFE default: without positive evidence the provider ever materialized this
-     * track (a non-null `resolvedId`) we must NOT let its absence drive a deletion —
-     * AND even a materialized track stays protected until it has been omitted from
+     * PENDING (return true) = cache entry ABSENT, no fetch has ever SEEN the track
+     * on this provider (`lastSeenAt` null), OR it is materialized but its absence
+     * has NOT yet streak-escalated. The conservative SAFE default: without positive
+     * evidence the provider ever held this track we must NOT let its absence drive a
+     * deletion. A non-null `resolvedId` is NOT that evidence — it only proves the id
+     * was found, and an add that resolved but never landed would otherwise escalate
+     * into deleting the user's own track everywhere. Even a materialized track stays
+     * protected until it has been omitted from
      * the provider's COMPLETE fetch for [MISSING_STREAK_THRESHOLD] consecutive cycles
      * (the missingStreak gate). A single transient complete-fetch omission (a region-
      * filtered, or silently-short-but-count-matching fetch) is NOT a deletion; only a
@@ -1731,9 +1741,26 @@ class SyncEngine constructor(
         val track = keyToTrack[representativeKey] ?: return true
         val cacheKey = canonicalTrackKey(track)
         val entry = trackProviderIdCacheDao.select(cacheKey, providerId) ?: return true
-        if (entry.resolvedId.isNullOrBlank()) return true // never materialized → pending
+        if (entry.lastSeenAt == null) return true // never seen there → pending
         // Materialized: still PENDING (protected) until its absence streak-escalates.
         return entry.missingStreak < MISSING_STREAK_THRESHOLD
+    }
+
+    /**
+     * True when a fetch has SEEN the track behind [representativeKey] on
+     * [providerId] — it was materialized there, so an omission is counting toward
+     * the missingStreak gate. While the streak builds, the reconcile HOLDS the key:
+     * it stays in canonical but is not pushed back to that provider. Pushing it back
+     * would make the next fetch see it again and reset the streak, so a deletion
+     * there could never reach the threshold.
+     */
+    private suspend fun seenOnProvider(
+        providerId: String,
+        representativeKey: String,
+        keyToTrack: Map<String, PlaylistTrack>,
+    ): Boolean {
+        val track = keyToTrack[representativeKey] ?: return false
+        return trackProviderIdCacheDao.select(canonicalTrackKey(track), providerId)?.lastSeenAt != null
     }
 
     /**
@@ -1750,8 +1777,35 @@ class SyncEngine constructor(
         val track = keyToTrack[representativeKey] ?: return false
         val cacheKey = canonicalTrackKey(track)
         val entry = trackProviderIdCacheDao.select(cacheKey, providerId) ?: return false
-        if (entry.resolvedId.isNullOrBlank()) return false // never materialized → never a deletion
+        if (entry.lastSeenAt == null) return false // never seen there → never a deletion
         return entry.missingStreak >= MISSING_STREAK_THRESHOLD
+    }
+
+    /**
+     * Mark every [canonical] track the provider's remote holds as SEEN there. With
+     * [reread] the remote is fetched again (the materialize just added tracks);
+     * otherwise [remote] — the copy fetched before materializing — is used. A failed
+     * re-read records nothing: unseen tracks stay pending, the safe direction.
+     */
+    private suspend fun recordCanonicalOnRemote(
+        provider: SyncProvider,
+        externalId: String,
+        canonical: List<PlaylistTrack>,
+        remote: List<PlaylistTrack>,
+        reread: Boolean,
+        now: Long,
+    ) {
+        val observed = if (!reread) remote else try {
+            provider.fetchPlaylistTracks(externalId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.d(TAG, "N-way PROPAGATE: ${provider.id} re-read after materialize failed (${e.message})")
+            return
+        }
+        for ((track, nativeId) in canonicalTracksOnRemote(provider, canonical, observed)) {
+            trackProviderIdCacheDao.recordPresent(canonicalTrackKey(track), provider.id, nativeId, now)
+        }
     }
 
     private suspend fun propagateReconcilePlaylist(
@@ -1783,6 +1837,7 @@ class SyncEngine constructor(
             val storedToken = storedTokens[providerId]?.changeToken
             val changed = when {
                 listEntry == null -> false // not in the owned list (deleted/unowned) — skip
+                storedToken == NWAY_HELD_TOKEN -> true // re-check a held omission
                 listEntry.snapshotId != null -> listEntry.snapshotId != storedToken
                 else -> listEntry.trackCount != baseline.tracks.size
             }
@@ -1878,15 +1933,24 @@ class SyncEngine constructor(
         // CRITICAL: never remove the !dryRun guard — shadow must not mutate the
         // production cache, or a preview run would falsely escalate streaks and
         // surface phantom deletes the next REAL cycle.
+        // A shown track is recorded even with no cache entry yet (recordPresent
+        // creates it): a track whose native id was already on the row never gets a
+        // hydration entry, and without one its later omission could never count.
         if (!dryRun) {
-            for (copy in copies) {
+            for ((i, copy) in copies.withIndex()) {
                 if (copy.id == "local" || !copy.changed) continue
+                val provider = providers.firstOrNull { it.id == copy.id } ?: continue
+                val fetched = inputs[i].tracks
                 val present = copy.keys.toSet()
-                for (k in baselineRepr) {
+                for ((j, k) in copy.keys.withIndex()) {
                     val track = keyToTrack[k] ?: continue
-                    val cacheKey = canonicalTrackKey(track)
-                    if (k in present) trackProviderIdCacheDao.recordSeen(cacheKey, copy.id, now)
-                    else trackProviderIdCacheDao.recordMissing(cacheKey, copy.id)
+                    val nativeId = fetched.getOrNull(j)?.let { provider.nativeIdOf(it) }?.takeIf { it.isNotBlank() }
+                    trackProviderIdCacheDao.recordPresent(canonicalTrackKey(track), copy.id, nativeId, now)
+                }
+                for (k in baselineRepr) {
+                    if (k in present) continue
+                    val track = keyToTrack[k] ?: continue
+                    trackProviderIdCacheDao.recordMissing(canonicalTrackKey(track), copy.id)
                 }
             }
         }
@@ -1917,6 +1981,12 @@ class SyncEngine constructor(
             playlist.sourceUrl != null -> "local"   // hosted XSPF — local copy is the truth
             else -> null                            // local-authored multimaster — augment all
         }
+        // Refinement A (desktop playlist-reconcile.js addOnlyPullSourceId): a pull
+        // source that can't remove tracks (Apple Music) can never prove a deletion,
+        // so its copy re-adds EVERY lacked key below, with no missingStreak gate —
+        // otherwise a track it omits for two cycles would delete-win everywhere.
+        val addOnlyPullSourceId: String? =
+            pullSource?.providerId?.takeIf { authoritativeCopyId == null }
 
         // The baseline keys the AUTHORITATIVE copy itself dropped this cycle — these
         // must NEVER be re-augmented onto ANY copy (a source deletion is final).
@@ -1965,15 +2035,35 @@ class SyncEngine constructor(
         //   • other mirrors: re-add a lacked key only if the source didn't drop it AND
         //     it's pending for this provider (never-materialized, OR materialized but
         //     not yet missing ≥ MISSING_STREAK_THRESHOLD consecutive complete fetches).
+        //   • an add-only pull source: re-add every lacked key (Refinement A above).
+        //   • a mirror of a ONE-WAY playlist: re-add every lacked key the source
+        //     didn't drop — the mirror is restored, its omission never counts.
+        //
+        // HOLD: a re-added key the provider was SEEN holding is an omission the
+        // streak is counting. It stays in canonical (protected everywhere else) but
+        // is NOT materialized back onto that provider — see [heldByCopy] below.
+        // A ONE-WAY playlist (hosted XSPF, followed source, user-flagged mirrorOnly)
+        // takes no edits back from its mirrors: a mirror's omission is restored
+        // from the source, never gated toward a deletion.
+        val oneWay = immediateAuthority && (authoritativeCopyId != null || addOnlyPullSourceId != null)
+        val heldByCopy = mutableMapOf<String, Set<String>>()
         val augmentedCopies = copies.map { copy ->
             if (copy.id == "local" || !copy.changed) return@map copy
             val present = copy.keys.toSet()
             val lacked = baselineRepr.filter { it !in present }
             if (lacked.isEmpty()) return@map copy
-            val toReadd = if (copy.id == authoritativeCopyId) {
-                lacked.filter { it !in authoritativeDropped }
-            } else {
-                lacked.filter { it !in authoritativeDropped && isProviderPendingForKey(copy.id, it, keyToTrack) }
+            // gated = these re-adds wait on the missingStreak gate, so the seen ones are HELD
+            val (toReadd, gated) = when {
+                copy.id == authoritativeCopyId -> lacked.filter { it !in authoritativeDropped } to !immediateAuthority
+                copy.id == addOnlyPullSourceId -> lacked to false
+                oneWay -> lacked.filter { it !in authoritativeDropped } to false
+                else -> lacked.filter {
+                    it !in authoritativeDropped && isProviderPendingForKey(copy.id, it, keyToTrack)
+                } to true
+            }
+            if (gated) {
+                val held = toReadd.filter { seenOnProvider(copy.id, it, keyToTrack) }.toSet()
+                if (held.isNotEmpty()) heldByCopy[copy.id] = held
             }
             if (toReadd.isEmpty()) copy else copy.copy(keys = copy.keys + toReadd)
         }
@@ -2004,10 +2094,31 @@ class SyncEngine constructor(
         // un-augmented keys recovers it so the executor re-attempts the fill. The
         // executor fetches each mirror's ACTUAL remote and diffs, so a converged
         // mirror no-ops and an un-findable add stays pending (coordinator cooldown).
-        val mergedReprSet = mergedRepr.toSet()
+        // A copy's target list is the canonical minus the keys HELD for it, so a
+        // provider lagging only by a held key isn't a target at all.
+        fun reprFor(copyId: String): List<String> =
+            heldByCopy[copyId]?.let { held -> mergedRepr.filter { it !in held } } ?: mergedRepr
         val pushTargets = copies.filter { c ->
-            writableById[c.id] != false && (c.keys.toSet() != mergedReprSet || c.keys.size != mergedRepr.size)
+            val expected = reprFor(c.id)
+            writableById[c.id] != false && (c.keys.toSet() != expected.toSet() || c.keys.size != expected.size)
         }.map { c -> c.id }
+
+        // Held providers get the sentinel token so next cycle fetches them again and
+        // the streak can grow (or reset). A provider that held keys last cycle but
+        // holds none now, and isn't a push target (whose token the push loop
+        // refreshes), gets the snapshot this cycle observed instead. Written before
+        // the converged short-circuit, since a cycle that only holds returns there.
+        if (!dryRun) {
+            for (c in copies) {
+                if (c.id == "local") continue
+                if (!heldByCopy[c.id].isNullOrEmpty()) {
+                    syncPlaylistNwayDao.upsert(localId, c.id, NWAY_HELD_TOKEN, now, now)
+                } else if (storedTokens[c.id]?.changeToken == NWAY_HELD_TOKEN && c.changed && c.id !in pushTargets) {
+                    val snapshot = mirrors[c.id]?.let { remoteLists[c.id]?.get(it)?.snapshotId }
+                    syncPlaylistNwayDao.upsert(localId, c.id, snapshot, now, now)
+                }
+            }
+        }
 
         // TRULY-CONVERGED SHORT-CIRCUIT — no merge delta AND no writable mirror
         // lags ⇒ idempotent no-op: don't fetch, don't materialize, don't advance.
@@ -2028,6 +2139,11 @@ class SyncEngine constructor(
             // hydration's /isrc/ fallback works during a mapper outage.
             t.copy(playlistId = localId, position = idx, trackIsrc = t.trackIsrc ?: keyToIsrc[key])
         }
+        // The migration preview's view of one provider: the canonical minus its held
+        // keys, so it doesn't list a held track as an add the real run won't make.
+        fun canonicalFor(providerId: String): List<PlaylistTrack> =
+            heldByCopy[providerId]?.let { held -> mergedTracks.filterIndexed { i, _ -> mergedRepr[i] !in held } }
+                ?: mergedTracks
 
         if (dryRun) {
             // Per-target named diff for the migration preview (#289 brick #5). For
@@ -2051,7 +2167,7 @@ class SyncEngine constructor(
                     externalId = ext,
                     fetch = fetchRemote,
                 ) ?: return@mapNotNull null
-                buildMigrationPerTarget(tid, mergedTracks, remoteTracks)
+                buildMigrationPerTarget(tid, canonicalFor(tid), remoteTracks)
             }.filter { it.addTracks.isNotEmpty() || it.removeTracks.isNotEmpty() }
             Log.d(TAG, "N-way PROPAGATE (DRY-RUN) [${playlist.name}]: would push ${mergedTracks.size} " +
                 "track(s) to $pushTargets [no write]")
@@ -2096,25 +2212,40 @@ class SyncEngine constructor(
             // deletion), so it's safely retried and the baseline can still advance.
             try {
                 val remote = provider.fetchPlaylistTracks(externalId)
+                // The diff runs against the FULL canonical, so a held track the user
+                // put back in the meantime is never removed; a held track only has its
+                // ADD suppressed (it counts as pending while its streak builds).
+                val heldCacheKeys = heldByCopy[targetId].orEmpty()
+                    .mapNotNull { k -> keyToTrack[k]?.let { canonicalTrackKey(it) } }.toSet()
                 val res = materializeToProvider(
                     provider = provider,
                     externalId = externalId,
                     canonical = mergedTracks,
                     remote = remote,
-                    resolveNativeId = { track -> coordinator.resolve(provider, track) },
+                    resolveNativeId = { track ->
+                        if (canonicalTrackKey(track) in heldCacheKeys) null else coordinator.resolve(provider, track)
+                    },
                 )
                 added += res.added
                 removed += res.removed
                 pendingAdds += res.pendingAdds
                 unsupportedRemoves += res.unsupportedRemoves
+                // Record what the provider now holds, so a later removal there can
+                // count toward the missingStreak gate. When something was added, re-read
+                // the remote: a resolved id is not proof the add landed.
+                recordCanonicalOnRemote(provider, externalId, mergedTracks, remote, reread = res.added > 0, now = now)
                 // Refresh the per-provider change token for echo suppression. A snapshot
                 // provider (Spotify/AM) returns its fresh token; a snapshot-less provider
                 // (LB) returns null → next-cycle detection falls back to trackCount, which
                 // now equals the merged size → no re-detect. On a fetch failure here we
                 // leave the old token; the next cycle re-detects and re-materializes
                 // (idempotent — the diff yields no ops once converged).
-                val token = runCatching { provider.getPlaylistSnapshotId(externalId) }.getOrNull()
-                syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
+                // A provider with HELD keys keeps the NWAY_HELD_TOKEN written above, so
+                // the next cycle fetches it again and the omission's streak can grow (or reset).
+                if (heldByCopy[targetId].isNullOrEmpty()) {
+                    val token = runCatching { provider.getPlaylistSnapshotId(externalId) }.getOrNull()
+                    syncPlaylistNwayDao.upsert(localId, provider.id, token, now, now)
+                }
                 pushedTo.add(provider.id)
                 Log.d(TAG, "N-way PROPAGATE [${playlist.name}]: ${provider.id} materialized " +
                     "+$added/-$removed (pending $pendingAdds, unsupported-remove $unsupportedRemoves)")
