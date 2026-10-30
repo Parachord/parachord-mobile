@@ -65,6 +65,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
@@ -101,6 +102,7 @@ import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.AnnouncementBanner
 import com.parachord.android.ui.components.AppleMusicReauthBanner
+import com.parachord.android.ui.components.SpotifyExpiryWarningBanner
 import com.parachord.android.ui.components.SpotifyReauthBanner
 import android.content.Intent
 import android.net.Uri
@@ -336,6 +338,32 @@ fun HomeScreen(
             val settingsStore: com.parachord.android.data.store.SettingsStore =
                 org.koin.compose.koinInject()
             val reauthScope = androidx.compose.runtime.rememberCoroutineScope()
+            // ── Spotify pre-expiry warning (#352) ────────────────────────
+            // Checked each time Home resumes (no timer of its own). Hidden
+            // once the grant has actually failed: the reauth banner says so.
+            var spotifyExpiryMessage by remember { mutableStateOf<String?>(null) }
+            val homeLifecycleState by androidx.lifecycle.compose.LocalLifecycleOwner.current
+                .lifecycle.currentStateFlow.collectAsState()
+            val homeResumed = homeLifecycleState == androidx.lifecycle.Lifecycle.State.RESUMED
+            LaunchedEffect(homeResumed, spotifyReauthRequired) {
+                if (!homeResumed) return@LaunchedEffect
+                val now = System.currentTimeMillis()
+                val authorizedAt = settingsStore.getSpotifyAuthorizedAt()
+                val warn = !spotifyReauthRequired &&
+                    !settingsStore.getSpotifyRefreshToken().isNullOrBlank() &&
+                    com.parachord.shared.api.auth.SpotifyGrantExpiry.shouldWarn(
+                        authorizedAt,
+                        settingsStore.getSpotifyExpiryWarningDismissedAt(),
+                        now,
+                    )
+                spotifyExpiryMessage = if (warn) {
+                    com.parachord.shared.api.auth.SpotifyGrantExpiry.message(
+                        com.parachord.shared.api.auth.SpotifyGrantExpiry.daysLeft(authorizedAt, now),
+                    )
+                } else {
+                    null
+                }
+            }
 
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -348,6 +376,34 @@ fun HomeScreen(
                                 reauthScope.launch {
                                     runCatching { musicKitBridge.authorize() }
                                     syncEngine.clearAppleMusicReauth()
+                                }
+                            },
+                            modifier = Modifier.padding(
+                                horizontal = 16.dp,
+                                vertical = 8.dp,
+                            ),
+                        )
+                    }
+                }
+                spotifyExpiryMessage?.let { message ->
+                    item(key = "spotify-expiry-warning") {
+                        SpotifyExpiryWarningBanner(
+                            message = message,
+                            onReconnect = {
+                                reauthScope.launch {
+                                    val clientId =
+                                        settingsStore.getSpotifyClientId()?.trim().orEmpty()
+                                    if (clientId.isNotBlank()) {
+                                        oAuthManager.launchSpotifyAuth(clientId)
+                                    }
+                                }
+                            },
+                            onDismiss = {
+                                spotifyExpiryMessage = null
+                                reauthScope.launch {
+                                    settingsStore.setSpotifyExpiryWarningDismissedAt(
+                                        System.currentTimeMillis(),
+                                    )
                                 }
                             },
                             modifier = Modifier.padding(

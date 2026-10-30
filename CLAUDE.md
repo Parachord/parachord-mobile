@@ -97,6 +97,8 @@ Spotify playback uses the **Web API** (not the App Remote SDK). The `SpotifyPlay
 
 **Cold-start routing uses stored IDs (#452).** With nothing in the resolver cache, `reselectBestSource` routes by the IDs the track carries (`storedIdSources` / `shouldRerouteToStoredId`), in the user's resolver order, and resolves the track in the background so its source icons appear. A track's stored `resolver` is only whichever service first played or synced it.
 
+**Spotify sign-in expiry (#352, desktop parachord#967).** A Spotify grant dies 6 months after the original authorization; refreshing doesn't extend it. Every successful authorization-code exchange records `spotify_authorized_at` (`SettingsStore.markSpotifyAuthorized`, Android `OAuthManager` + iOS `IosSpotifyAuth`), and Android Home shows a dismissible warning in the last 7 days (`SpotifyGrantExpiry` in shared, `SpotifyExpiryWarningBanner`), back at most once a day. No recorded time means no warning: an older connection can't know its grant's age, and gets the reactive "session expired" banner once. iOS records the time but has no banner yet.
+
 **Warm-path optimization:** When `deviceVerified && preferredDeviceId != null`, fires `startPlayback` directly without any device fetch (~200ms).
 
 **"This device" resolution:** When the user picks the synthetic local device, `resolveLocalDevice()` wakes Spotify (broadcast → fallback launch intent) and polls for a Smartphone-type device matching `Build.MODEL` or `Build.MANUFACTURER`. Remote devices (TVs, computers) appear in the API even when local Spotify isn't running — `deviceVerified` being true does NOT mean Spotify is running locally.

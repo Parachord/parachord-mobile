@@ -349,6 +349,8 @@ class OAuthManager constructor(
                     System.currentTimeMillis() + expiresIn * 1000L,
                 )
             }
+            // A new grant: its 6-month clock starts now (#352).
+            settingsStore.markSpotifyAuthorized(System.currentTimeMillis())
             // Fresh credentials — clear the session kill-switch so refresh
             // works again without needing a process restart.
             spotifyRefreshTerminallyFailedForSession = false

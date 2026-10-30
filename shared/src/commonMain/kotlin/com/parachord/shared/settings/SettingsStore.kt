@@ -84,6 +84,12 @@ class SettingsStore(
         const val LAST_PLUGIN_SYNC = "last_plugin_sync_timestamp"
         const val DISABLED_PLUGINS = "disabled_plugins"
         const val SPOTIFY_ACCESS_TOKEN_EXPIRES_AT = "spotify_access_token_expires_at"
+        /** When the current Spotify grant was authorized (epoch ms), the start
+         *  of its 6-month clock (#352). Same key as desktop; per-device by
+         *  design, since each client has its own grant. */
+        const val SPOTIFY_AUTHORIZED_AT = "spotify_authorized_at"
+        /** When the user last dismissed the pre-expiry warning (epoch ms). */
+        const val SPOTIFY_EXPIRY_WARNING_DISMISSED_AT = "spotify_expiry_warning_dismissed_at"
 
         /** Per-service opt-in toggle for the loved-tracks push. Mirrors
          *  desktop's `scrobbler_love_push_enabled` shape from the design
@@ -280,6 +286,33 @@ class SettingsStore(
         secureStore.remove("spotify_access_token")
         secureStore.remove("spotify_refresh_token")
         ensureMigrated(); kv.remove(SPOTIFY_ACCESS_TOKEN_EXPIRES_AT)
+        kv.remove(SPOTIFY_AUTHORIZED_AT)
+        kv.remove(SPOTIFY_EXPIRY_WARNING_DISMISSED_AT)
+    }
+
+    /**
+     * Start the Spotify grant's 6-month clock: call on every successful
+     * authorization-code exchange (not on a refresh, which doesn't extend the
+     * grant). Also clears a dismissed pre-expiry warning, so the new grant's
+     * warning shows in full when its time comes.
+     */
+    suspend fun markSpotifyAuthorized(nowMs: Long) {
+        ensureMigrated()
+        kv.setLong(SPOTIFY_AUTHORIZED_AT, nowMs)
+        kv.remove(SPOTIFY_EXPIRY_WARNING_DISMISSED_AT)
+    }
+
+    /** When the current grant was authorized, or 0 when not recorded. */
+    suspend fun getSpotifyAuthorizedAt(): Long {
+        ensureMigrated(); return kv.getLong(SPOTIFY_AUTHORIZED_AT, default = 0L)
+    }
+
+    suspend fun getSpotifyExpiryWarningDismissedAt(): Long {
+        ensureMigrated(); return kv.getLong(SPOTIFY_EXPIRY_WARNING_DISMISSED_AT, default = 0L)
+    }
+
+    suspend fun setSpotifyExpiryWarningDismissedAt(nowMs: Long) {
+        ensureMigrated(); kv.setLong(SPOTIFY_EXPIRY_WARNING_DISMISSED_AT, nowMs)
     }
 
     /**
