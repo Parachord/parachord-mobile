@@ -162,6 +162,26 @@ suspend fun materializeToProvider(
     )
 }
 
+/**
+ * The [canonical] tracks a fetched [remote] actually holds, each paired with the
+ * provider's native id read off the remote copy. Matched in the same unified
+ * keyspace [materializeToProvider] diffs in, so a remote track that carries an MBID
+ * still matches a canonical row that only has artist|title. The reconcile records
+ * these as SEEN on the provider (the missingStreak gate's proof of materialization).
+ */
+fun canonicalTracksOnRemote(
+    provider: SyncProvider,
+    canonical: List<PlaylistTrack>,
+    remote: List<PlaylistTrack>,
+): List<Pair<PlaylistTrack, String?>> {
+    val diff = computeMaterializeDiff(canonical, remote)
+    val keyToRemote = HashMap<String, PlaylistTrack>()
+    diff.remoteKeys.forEachIndexed { i, key -> keyToRemote.getOrPut(key) { remote[i] } }
+    return diff.canonicalKeys.mapIndexedNotNull { i, key ->
+        keyToRemote[key]?.let { r -> canonical[i] to provider.nativeIdOf(r)?.takeIf { it.isNotBlank() } }
+    }
+}
+
 /** Resolved adds: the native ids that hydrated, plus a count of the ones that didn't. */
 private data class ResolvedAdds(val ids: List<String>, val pending: Int)
 

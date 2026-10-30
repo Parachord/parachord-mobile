@@ -96,6 +96,25 @@ class TrackProviderIdCacheDao(private val db: ParachordDb) {
         }
 
     /**
+     * A fetch of the provider's playlist SHOWED this track: create the entry if
+     * there is none, reset the streak, stamp [now] as lastSeenAt and fill a
+     * missing resolvedId with [nativeId]. lastSeenAt is what makes a later
+     * omission count toward a deletion, so only call this for a track a fetch
+     * actually returned (any fetch — a truncated one still only shows real tracks).
+     */
+    suspend fun recordPresent(
+        identityKey: String,
+        providerId: String,
+        nativeId: String?,
+        now: Long = currentTimeMillis(),
+    ): Unit = withContext(Dispatchers.Default) {
+        db.transaction {
+            queries.insertPresentIfAbsent(identityKey = identityKey, providerId = providerId, resolvedId = nativeId, now = now)
+            queries.markPresent(now = now, resolvedId = nativeId, identityKey = identityKey, providerId = providerId)
+        }
+    }
+
+    /**
      * Presence vote. A COMPLETE provider fetch OMITTED this track → step the
      * streak. No-op when there's no entry.
      */

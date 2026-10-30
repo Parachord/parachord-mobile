@@ -19,13 +19,16 @@
 --                   before it ever reads attempts/the cooldown. Drives the 2-step
 --                   cooldown cliff (≤1 miss → 7d, then 30d).
 --   missingStreak — consecutive COMPLETE-fetch omissions of an already-materialized
---                   track (resolvedId set). The missingStreak gate: a single
+--                   track (lastSeenAt set). The missingStreak gate: a single
 --                   transient omission (region-filtered, or silently-short-but-
 --                   count-matching) is NOT a deletion; absence only escalates to a
 --                   real delete at MISSING_STREAK_THRESHOLD (2) consecutive complete-
---                   fetch misses. recordSeen resets it; recordMissing steps it.
---                   (parachord/parachord#911 shared-root; mirrors desktop.)
---   lastSeenAt    — epoch-ms a complete fetch last HELD this track (debug/telemetry).
+--                   fetch misses. recordSeen/markPresent reset it; recordMissing
+--                   steps it. (parachord/parachord#911 shared-root; mirrors desktop.)
+--   lastSeenAt    — epoch-ms a fetch last HELD this track. Non-null is the
+--                   reconcile's proof the track is MATERIALIZED on the provider: a
+--                   resolvedId only proves the id was found, not that the add landed,
+--                   so the deletion gate keys off lastSeenAt, never resolvedId.
 CREATE TABLE IF NOT EXISTS track_provider_id_cache (
     identityKey   TEXT NOT NULL,
     providerId    TEXT NOT NULL,
@@ -62,6 +65,21 @@ WHERE identityKey = ? AND providerId = ?;
 recordMissing:
 UPDATE track_provider_id_cache SET missingStreak = missingStreak + 1
 WHERE identityKey = ? AND providerId = ?;
+
+-- Presence evidence that can CREATE the entry: a fetch of the provider's playlist
+-- showed this track, so it is on the provider (lastSeenAt is the reconcile's proof
+-- of materialization — a resolvedId only proves the id was found). Insert-if-absent
+-- with lastAttemptAt = 0 so the row never puts a hydration search in cooldown,
+-- then reset the streak, stamp lastSeenAt and fill a missing resolvedId.
+insertPresentIfAbsent:
+INSERT OR IGNORE INTO track_provider_id_cache
+    (identityKey, providerId, resolvedId, lastAttemptAt, attempts, missingStreak, lastSeenAt)
+VALUES (:identityKey, :providerId, :resolvedId, 0, 0, 0, :now);
+
+markPresent:
+UPDATE track_provider_id_cache
+SET missingStreak = 0, lastSeenAt = :now, resolvedId = COALESCE(resolvedId, :resolvedId)
+WHERE identityKey = :identityKey AND providerId = :providerId;
 
 -- Carry every provider's entry from one identity key to another, keeping any
 -- entry the new key already has. Used when a row gains an MBID and its

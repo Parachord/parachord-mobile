@@ -126,9 +126,14 @@ class NwaySourceAuthorityTest {
             return if (id == ListenBrainzSyncProvider.PROVIDER_ID) mbid else nidFor(mbid)
         }
 
+        /** Recording mbids whose add the provider ACCEPTS but never stores — models an
+         *  add that resolved to a native id yet never landed (a hydrated id is not
+         *  proof the track is on the playlist). */
+        var dropAddsFor: Set<String> = emptySet()
+
         override suspend fun addPlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? {
             addCalls.add(externalPlaylistId to externalTrackIds)
-            remote[externalPlaylistId]?.tracks?.addAll(externalTrackIds)
+            remote[externalPlaylistId]?.tracks?.addAll(externalTrackIds.filter { mbidOf(it) !in dropAddsFor })
             return null
         }
 
@@ -178,8 +183,15 @@ class NwaySourceAuthorityTest {
                 )
             }
 
-        override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> =
-            remote[externalPlaylistId]?.tracks?.let { t -> truncateFetchTo?.let { t.take(it) } ?: t }?.mapIndexed { i, nid ->
+        /** Runs before every fetchPlaylistTracks with its 1-based call number — lets a
+         *  test change the remote between the reconcile's fetches (a user edit landing
+         *  mid-cycle). */
+        var beforeFetch: ((call: Int) -> Unit)? = null
+        private var fetchCount = 0
+
+        override suspend fun fetchPlaylistTracks(externalPlaylistId: String): List<PlaylistTrack> {
+            beforeFetch?.invoke(++fetchCount)
+            return remote[externalPlaylistId]?.tracks?.let { t -> truncateFetchTo?.let { t.take(it) } ?: t }?.mapIndexed { i, nid ->
                 val mbid = mbidOf(nid)
                 val base = PlaylistTrack(
                     playlistId = "$id-$externalPlaylistId",
@@ -194,6 +206,7 @@ class NwaySourceAuthorityTest {
                     else -> base
                 }
             } ?: emptyList()
+        }
 
         override suspend fun getPlaylistSnapshotId(externalPlaylistId: String): String? = null
         override suspend fun updatePlaylistDetails(externalPlaylistId: String, name: String?, description: String?) {}
@@ -284,11 +297,11 @@ class NwaySourceAuthorityTest {
             playlistTrackDao.insertAll((0 until count).map { i -> pt(id, i, "mbid-$id-$i") })
         }
 
-        /** Mark a baseline track (by its mbid) MATERIALIZED on [providerId] in the
-         *  hydration cache with [missingStreak] consecutive complete-fetch omissions
-         *  already recorded — so the missingStreak gate can escalate its drop. A
-         *  source/native-id track is NOT auto-cached (HydrationCoordinator.resolve
-         *  short-circuits a known id), so a test must warm it to make it droppable.
+        /** Mark a baseline track (by its mbid) MATERIALIZED on [providerId] — a fetch
+         *  has SEEN it there (lastSeenAt) — with [missingStreak] consecutive
+         *  complete-fetch omissions already recorded, so the missingStreak gate can
+         *  escalate its drop. Models a track a past cycle observed on the provider;
+         *  a test that starts from a fresh link must warm it to make it droppable.
          *  Mirrors desktop's Harness.warmCache. */
         suspend fun warmCache(providerId: String, mbid: String, missingStreak: Int = 0) {
             // mbid in all key positions mirrors the seed fixture (pt() sets
@@ -297,6 +310,7 @@ class NwaySourceAuthorityTest {
             // with matching values.
             val key = canonicalTrackKey(isrc = null, recordingMbid = mbid, artist = mbid, title = mbid)
             cacheDao.upsert(key, providerId, resolvedId = "nid:$mbid", lastAttemptAt = 1_000L, attempts = 1)
+            cacheDao.recordSeen(key, providerId, now = 1_000L)
             repeat(missingStreak) { cacheDao.recordMissing(key, providerId) }
         }
 
@@ -525,6 +539,247 @@ class NwaySourceAuthorityTest {
         assertEquals("the drop propagated to the LB mirror (now 2)", 2, lb.remote[lbExt]!!.tracks.size)
     }
 
+    // ── missingStreak gate reaches its threshold (the cycle that counts an omission
+    //    must NOT put the track back on that provider, or the streak never grows) ──
+
+    @Test
+    fun `mirror deletion is held one cycle then propagates — never re-added`() = runBlocking {
+        // Local multimaster playlist mirrored to Spotify + LB. The user deletes m2
+        // directly on Spotify. Cycle 1 counts the omission (streak 1): m2 stays in
+        // canonical (protected) but is NOT pushed back to Spotify. Cycle 2 sees it
+        // missing again (streak 2) → a real deletion → dropped everywhere.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Mixtape", 3)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2")
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        sp.resetCallRecorders(); lb.resetCallRecorders()
+
+        h.engine.runNwayPropagation()
+        assertEquals("cycle 1: m2 NOT re-added to Spotify (held while its streak builds)",
+            setOf("mbid-local-0-0", "mbid-local-0-1"), remoteMbids(sp, spExt))
+        assertTrue("cycle 1: no add issued to Spotify", sp.addCalls.isEmpty())
+        assertEquals("cycle 1: m2 still protected locally", 3, h.localMbids("local-0").size)
+        assertEquals("cycle 1: LB untouched", 3, lb.remote[lbExt]!!.tracks.size)
+        assertEquals("cycle 1: streak 1", 1L, h.cacheStreak(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2"))
+
+        h.engine.runNwayPropagation()
+        assertEquals("cycle 2: m2 dropped from canonical",
+            setOf("mbid-local-0-0", "mbid-local-0-1"), h.localMbids("local-0").toSet())
+        assertEquals("cycle 2: the deletion reached LB", setOf("mbid-local-0-0", "mbid-local-0-1"), remoteMbids(lb, lbExt))
+        assertEquals("cycle 2: Spotify still without m2", setOf("mbid-local-0-0", "mbid-local-0-1"), remoteMbids(sp, spExt))
+
+        repeat(2) { h.engine.runNwayPropagation() }
+        assertEquals("stable afterwards — nothing resurrects m2", 2, h.localMbids("local-0").size)
+        assertEquals(2, sp.remote[spExt]!!.tracks.size)
+        assertEquals(2, lb.remote[lbExt]!!.tracks.size)
+    }
+
+    @Test
+    fun `a held track put back mid-cycle is never removed by the materialize`() = runBlocking {
+        // Spotify omits m2 (held) while a local add makes Spotify a push target the
+        // same cycle. Between the reconcile's change fetch and the push-loop fetch the
+        // user puts m2 back on Spotify. The executor must not remove it.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val h = Harness(listOf(sp))
+        h.seed("local-0", "Mixtape", 3)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2")
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        h.addLocalTrack("local-0", 3, mbid = "mbid-x", title = "mbid-x", artist = "mbid-x")
+        h.markModified("local-0", 4, 2_000L)
+        sp.beforeFetch = { call ->
+            if (call == 2) sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-2"))
+        }
+        sp.resetCallRecorders()
+        h.engine.runNwayPropagation()
+
+        assertTrue("nothing removed from Spotify", sp.removeByNativeIdCalls.isEmpty())
+        assertEquals("Spotify holds m2 (put back) and x (added)",
+            setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-2", "mbid-x"), remoteMbids(sp, spExt))
+        assertEquals("canonical keeps all 4", 4, h.localMbids("local-0").size)
+    }
+
+    @Test
+    fun `transient mirror omission that recovers next cycle drops nothing`() = runBlocking {
+        // Same setup, but m2 is back on Spotify by cycle 2 (a region filter / API
+        // hiccup, not a delete). The streak resets and nothing is removed anywhere.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Mixtape", 3)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2")
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        h.engine.runNwayPropagation()
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-2"))
+        repeat(2) { h.engine.runNwayPropagation() }
+
+        assertEquals("nothing dropped", 3, h.localMbids("local-0").size)
+        assertEquals("LB keeps all 3", 3, lb.remote[lbExt]!!.tracks.size)
+        assertEquals("Spotify holds m2 exactly once (no duplicate re-add)", 3, sp.remote[spExt]!!.tracks.size)
+        assertEquals("streak reset", 0L, h.cacheStreak(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2"))
+    }
+
+    @Test
+    fun `owned pull source deletion propagates once the source copy has been observed`() = runBlocking {
+        // An OWNED Spotify pull source, no pre-warmed cache. The user first ADDS m3
+        // on Spotify — that complete fetch is the reconcile's first look at the
+        // source and records every track it holds. Later the user removes m2 on
+        // Spotify: held one cycle, then dropped everywhere.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Mine", 3)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-2", "mbid-new-3"))
+        h.engine.runNwayPropagation()
+        assertEquals("the Spotify add was pulled", 4, h.localMbids("local-0").size)
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1", "mbid-new-3"))
+        sp.resetCallRecorders()
+        h.engine.runNwayPropagation()
+        assertTrue("held: m2 not pushed back to the source", sp.addCalls.isEmpty())
+        assertEquals("held: m2 still in canonical", 4, h.localMbids("local-0").size)
+
+        h.engine.runNwayPropagation()
+        assertEquals("the source deletion propagated",
+            setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-new-3"), h.localMbids("local-0").toSet())
+        assertEquals("LB lost m2 too", setOf("mbid-local-0-0", "mbid-local-0-1", "mbid-new-3"), remoteMbids(lb, lbExt))
+        assertEquals("Spotify stays without m2", 3, sp.remote[spExt]!!.tracks.size)
+    }
+
+    @Test
+    fun `a track Parachord added to a mirror can later be deleted there`() = runBlocking {
+        // The user adds m3 in Parachord; the reconcile hydrates + adds it to Spotify
+        // and LB. Later the user removes it on Spotify. It must propagate (held one
+        // cycle, then dropped) — not be re-added forever.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Mixtape", 3)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+
+        h.addLocalTrack("local-0", 3, mbid = "mbid-x", title = "mbid-x", artist = "mbid-x")
+        h.markModified("local-0", 4, 2_000L)
+        h.engine.runNwayPropagation()
+        assertEquals("m3 landed on Spotify", 4, sp.remote[spExt]!!.tracks.size)
+        assertEquals("m3 landed on LB", 4, lb.remote[lbExt]!!.tracks.size)
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1", "mbid-local-0-2"))
+        repeat(3) { h.engine.runNwayPropagation() }
+
+        assertEquals("the Spotify-side removal propagated", 3, h.localMbids("local-0").size)
+        assertTrue("x gone locally", "mbid-x" !in h.localMbids("local-0"))
+        assertEquals("x gone from LB", 3, lb.remote[lbExt]!!.tracks.size)
+        assertEquals("x not re-added to Spotify", 3, sp.remote[spExt]!!.tracks.size)
+    }
+
+    @Test
+    fun `an add that resolved but never landed is never treated as a deletion`() = runBlocking {
+        // A hydrated native id is NOT proof the track is on the playlist. Spotify
+        // resolves x but the add never sticks. Its absence on later complete fetches
+        // must stay PENDING (re-attempted), never escalate into deleting the user's
+        // own local add from canonical + LB.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Mixtape", 3)
+        h.linkMirrors("local-0")
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        sp.dropAddsFor = setOf("mbid-x")
+
+        h.addLocalTrack("local-0", 3, mbid = "mbid-x", title = "mbid-x", artist = "mbid-x")
+        h.markModified("local-0", 4, 2_000L)
+        repeat(4) { h.engine.runNwayPropagation() }
+
+        assertTrue("x survives locally", "mbid-x" in h.localMbids("local-0"))
+        assertEquals("canonical keeps 4", 4, h.localMbids("local-0").size)
+        assertEquals("LB keeps x", 4, lb.remote[lbExt]!!.tracks.size)
+    }
+
+    @Test
+    fun `add-only pull source omission never deletes (augment-all, desktop Refinement A)`() = runBlocking {
+        // Apple Music can't prove a deletion through the API, so an AM PULL SOURCE
+        // re-adds every lacked key (desktop playlist-reconcile.js addOnlyPullSourceId).
+        // Even a track SEEN on AM and omitted for many cycles stays.
+        val am = FakeProvider(AppleMusicSyncProvider.PROVIDER_ID, TrackRemoveMode.Unsupported)
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val h = Harness(listOf(am, sp))
+        h.seed("local-0", "AmSource", 3)
+        h.linkMirrors("local-0")
+        val amExt = ext(h, "local-0", AppleMusicSyncProvider.PROVIDER_ID)
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", AppleMusicSyncProvider.PROVIDER_ID, amExt)
+        h.warmCache(AppleMusicSyncProvider.PROVIDER_ID, "mbid-local-0-2")
+
+        repeat(4) {
+            am.setRemoteMbids(amExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+            h.engine.runNwayPropagation()
+        }
+
+        assertEquals("nothing dropped", 3, h.localMbids("local-0").size)
+        assertEquals("Spotify keeps all 3", 3, sp.remote[spExt]!!.tracks.size)
+    }
+
+    @Test
+    fun `hosted XSPF mirror deletion is restored from the XSPF, never propagated`() = runBlocking {
+        // The XSPF is canonical: a track removed on the Spotify mirror comes back
+        // and stays in the local playlist, however many cycles it's missing.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Hosted", 3, sourceUrl = "https://example.com/p.xspf")
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.warmCache(SpotifySyncProvider.PROVIDER_ID, "mbid-local-0-2")
+
+        sp.setRemoteMbids(spExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        repeat(3) { h.engine.runNwayPropagation() }
+
+        assertEquals("local keeps all 3", 3, h.localMbids("local-0").size)
+        assertEquals("LB keeps all 3", 3, lb.remote[lbExt]!!.tracks.size)
+        assertEquals("Spotify mirror restored", 3, sp.remote[spExt]!!.tracks.size)
+    }
+
+    @Test
+    fun `followed source mirror deletion is restored, never propagated`() = runBlocking {
+        // A followed (read-only) Spotify source mirrored to LB is one-way: a track
+        // removed on the LB mirror is put back, not deleted from the playlist.
+        val sp = FakeProvider(SpotifySyncProvider.PROVIDER_ID, TrackRemoveMode.ByNativeId)
+        val lb = FakeProvider(ListenBrainzSyncProvider.PROVIDER_ID, TrackRemoveMode.ByPosition)
+        val h = Harness(listOf(sp, lb))
+        h.seed("local-0", "Brew", 3, writable = false)
+        h.linkMirrors("local-0")
+        val spExt = ext(h, "local-0", SpotifySyncProvider.PROVIDER_ID)
+        val lbExt = ext(h, "local-0", ListenBrainzSyncProvider.PROVIDER_ID)
+        h.linkPullSource("local-0", SpotifySyncProvider.PROVIDER_ID, spExt)
+        h.warmCache(ListenBrainzSyncProvider.PROVIDER_ID, "mbid-local-0-2")
+
+        lb.setRemoteMbids(lbExt, listOf("mbid-local-0-0", "mbid-local-0-1"))
+        repeat(3) { h.engine.runNwayPropagation() }
+
+        assertEquals("local keeps all 3", 3, h.localMbids("local-0").size)
+        assertEquals("LB mirror restored", 3, lb.remote[lbExt]!!.tracks.size)
+    }
+
     // ── DAO — presence-vote primitives + upsert-preserve (parachord/parachord#911) ──
     @Test
     fun `hydration cache — recordSeen resets, recordMissing steps, upsert preserves the streak`() = runBlocking {
@@ -552,6 +807,31 @@ class NwaySourceAuthorityTest {
         cache.recordSeen("mbid-x", "spotify", now = 9L)
         assertEquals("recordSeen resets the streak", 0L, cache.select("mbid-x", "spotify")!!.missingStreak)
         assertEquals("recordSeen stamps lastSeenAt", 9L, cache.select("mbid-x", "spotify")!!.lastSeenAt)
+    }
+
+    @Test
+    fun `hydration cache — recordPresent creates a seen entry and fills a missing id`() = runBlocking {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { ParachordDb.Schema.create(it) }
+        val cache = TrackProviderIdCacheDao(ParachordDb(driver))
+
+        cache.recordPresent("mbid-new", "spotify", nativeId = "sp:new", now = 7L)
+        val created = cache.select("mbid-new", "spotify")!!
+        assertEquals("seen", 7L, created.lastSeenAt)
+        assertEquals("native id recorded", "sp:new", created.resolvedId)
+        assertEquals("no hydration cooldown from a presence row", 0L, created.lastAttemptAt)
+
+        // A prior hydration MISS (null id, streak stepped) that a fetch now shows.
+        cache.upsert("mbid-miss", "spotify", resolvedId = null, lastAttemptAt = 5L, attempts = 2)
+        cache.recordMissing("mbid-miss", "spotify")
+        cache.recordPresent("mbid-miss", "spotify", nativeId = "sp:miss", now = 9L)
+        val healed = cache.select("mbid-miss", "spotify")!!
+        assertEquals("id filled", "sp:miss", healed.resolvedId)
+        assertEquals("streak reset", 0L, healed.missingStreak)
+        assertEquals("seen", 9L, healed.lastSeenAt)
+
+        // An existing id is never overwritten.
+        cache.recordPresent("mbid-new", "spotify", nativeId = "sp:other", now = 11L)
+        assertEquals("sp:new", cache.select("mbid-new", "spotify")!!.resolvedId)
     }
 
     // ── dryRun shadow — the presence vote never advances a streak (side-effect-free) ──
