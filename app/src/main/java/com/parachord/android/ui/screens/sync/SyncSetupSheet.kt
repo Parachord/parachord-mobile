@@ -678,6 +678,14 @@ private fun CompleteStep(viewModel: SyncViewModel, onDismiss: () -> Unit, accent
                 SyncStatRow("Albums", r.albums, accent)
                 SyncStatRow("Artists", r.artists, accent)
                 SyncStatRow("Playlists", r.playlists, accent)
+                r.notices.forEach { notice ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             } else {
                 Spacer(Modifier.height(8.dp))
                 Text(

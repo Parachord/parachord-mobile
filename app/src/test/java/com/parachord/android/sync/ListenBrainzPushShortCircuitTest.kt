@@ -161,7 +161,15 @@ class ListenBrainzPushShortCircuitTest {
         /** Records each hydration search so a test can assert the per-sync budget. */
         val searchCalls = mutableListOf<String>()
 
+        /** Every create call, including failed ones. */
+        var createAttempts = 0
+            private set
+        /** When set, decides per attempt (1-based) whether a create throws, and what. */
+        var createFailure: ((attempt: Int) -> Exception?)? = null
+
         override suspend fun createPlaylist(name: String, description: String?): RemoteCreated {
+            createAttempts++
+            createFailure?.invoke(createAttempts)?.let { throw it }
             createCount++
             val mbid = "mbid-$createCount-$name"
             remote[mbid] = RemoteEntry(mbid, name)
@@ -260,6 +268,47 @@ class ListenBrainzPushShortCircuitTest {
     }
 
     // ── Tests ───────────────────────────────────────────────────────
+
+    // ── #291 circuit breaker: stop the LB push after 3 failures in a row ──
+
+    @Test
+    fun `three failed pushes in a row stop the ListenBrainz push for this run`() = runBlocking {
+        val h = Harness()
+        (0 until 5).forEach { h.seedLocalPlaylist("local-$it", "Mix $it") }
+        h.provider.createFailure = { Exception("createPlaylist failed: HTTP 429") }
+
+        val result = h.engine.syncAll()
+
+        assertEquals("stops after the third failure", 3, h.provider.createAttempts)
+        assertEquals(listOf(SyncEngine.LB_PUSH_BREAKER_NOTICE), result.notices)
+    }
+
+    @Test
+    fun `a 404 does not count toward the breaker`() = runBlocking {
+        val h = Harness()
+        (0 until 5).forEach { h.seedLocalPlaylist("local-$it", "Mix $it") }
+        h.provider.createFailure = {
+            com.parachord.shared.api.ListenBrainzHttpException(404, "createPlaylist failed: HTTP 404")
+        }
+
+        val result = h.engine.syncAll()
+
+        assertEquals("every playlist is tried", 5, h.provider.createAttempts)
+        assertEquals(emptyList<String>(), result.notices)
+    }
+
+    @Test
+    fun `a success resets the breaker`() = runBlocking {
+        val h = Harness()
+        (0 until 6).forEach { h.seedLocalPlaylist("local-$it", "Mix $it") }
+        // fail, fail, ok, fail, fail, ok: never three in a row.
+        h.provider.createFailure = { attempt -> if (attempt % 3 == 0) null else Exception("HTTP 503") }
+
+        val result = h.engine.syncAll()
+
+        assertEquals(6, h.provider.createAttempts)
+        assertEquals(emptyList<String>(), result.notices)
+    }
 
     /**
      * THE skip-unchanged guard. First sync creates + pushes tracks once;

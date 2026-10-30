@@ -122,6 +122,13 @@ class SyncEngine constructor(
          *  fetch and skip the reconcile rather than probe-storm / mass-act. */
         private const val DEAD_MIRROR_MASS_FLOOR = 30
 
+        /** Consecutive failed ListenBrainz pushes that stop a run's LB push (#291). */
+        internal const val LB_PUSH_BREAKER_FAILURES = 3
+
+        /** Desktop's wording (parachord#942). */
+        const val LB_PUSH_BREAKER_NOTICE =
+            "ListenBrainz rate-limited or unreachable; will resume next sync cycle"
+
         /** missingStreak gate (parachord/parachord#911): a materialized track's
          *  absence escalates to a real deletion only after this many CONSECUTIVE
          *  complete-fetch omissions — a single transient omission stays protected. */
@@ -308,6 +315,9 @@ class SyncEngine constructor(
 
     private val syncMutex = Mutex()
 
+    /** Notices for the current [syncAll] run; guarded by [syncMutex]. */
+    private val runNotices = mutableListOf<String>()
+
     // True while a syncAll is running (any trigger: manual, the in-app timer,
     // WorkManager). UIs observe this to show a "Syncing…" state regardless of
     // who started it, and to treat a tryLock skip as benign, not a failure.
@@ -363,6 +373,9 @@ class SyncEngine constructor(
         val playlists: TypeSyncResult = TypeSyncResult(),
         val success: Boolean = true,
         val error: String? = null,
+        /** Non-fatal things the user should know (a provider skipped part of
+         *  the run). Shown after a manual sync; logged otherwise. */
+        val notices: List<String> = emptyList(),
     )
 
     enum class SyncPhase {
@@ -395,6 +408,7 @@ class SyncEngine constructor(
             return FullSyncResult(success = false, error = SYNC_IN_PROGRESS)
         }
         _syncing.value = true
+        runNotices.clear()
 
         // When called from a single-provider wizard, filter the enabled
         // providers down to just the one being configured. Otherwise
@@ -463,6 +477,7 @@ class SyncEngine constructor(
                 albums = albumResult,
                 artists = artistResult,
                 playlists = playlistResult,
+                notices = runNotices.toList(),
             )
             emit(SyncProgress(SyncPhase.COMPLETE, message = "Sync complete"))
             Log.d(TAG, "Sync complete: $result")
@@ -3129,6 +3144,13 @@ class SyncEngine constructor(
     ): Int {
         val providerId = provider.id
         var added = 0
+        // ListenBrainz circuit breaker (#291, desktop parachord#942): after
+        // LB_PUSH_BREAKER_FAILURES consecutive failed pushes, stop this run's
+        // LB push instead of grinding through every playlist against a rate
+        // limit or outage. A success resets it; a 404 (deleted on LB) is a
+        // real answer, not a failure.
+        val breaker = providerId == ListenBrainzSyncProvider.PROVIDER_ID
+        var consecutiveFailures = 0
 
         // A playlist is pushed to [providerId] when it's type-eligible
         // ([isPushCandidate]) AND the provider is in its EFFECTIVE channels (see
@@ -3423,8 +3445,16 @@ class SyncEngine constructor(
                     syncedAt = currentTimeMillis(),
                 ))
                 added++
+                consecutiveFailures = 0
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Failed to push playlist ${playlist.name} to $providerId", e)
+                val remoteDeleted = e is com.parachord.shared.api.ListenBrainzHttpException && e.status == 404
+                if (breaker && !remoteDeleted && ++consecutiveFailures >= LB_PUSH_BREAKER_FAILURES) {
+                    Log.w(TAG, "ListenBrainz push: $consecutiveFailures failures in a row; stopping until the next sync")
+                    runNotices += LB_PUSH_BREAKER_NOTICE
+                    break
+                }
             }
         }
         return added
