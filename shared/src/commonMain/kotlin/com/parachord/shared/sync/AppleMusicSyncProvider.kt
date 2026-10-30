@@ -503,6 +503,42 @@ class AppleMusicSyncProvider(
      * playlist as a duplicate). Bias hard toward "exists"; a wrongly-cleared link
      * is the corruption we're trying to undo.
      */
+    /**
+     * One library playlist by id. `/me/library/playlists` leaves out some
+     * playlists that still exist (seen on a real library: 6 of ~190), and a
+     * pulled playlist missing from it was never refreshed.
+     */
+    override suspend fun fetchPlaylist(externalPlaylistId: String, knownName: String?): SyncedPlaylist? {
+        delay(INTER_REQUEST_DELAY_MS)
+        return try {
+            val detail = api.getLibraryPlaylistWithTracks(externalPlaylistId).data.firstOrNull()
+            if (detail == null) {
+                Log.w(TAG, "fetchPlaylist: AM playlist $externalPlaylistId answered with no data")
+                return null
+            }
+            // Apple answers some library playlists by id without a name (seen:
+            // a 50-track playlist the list also left out); keep the local name.
+            val attributes = if (detail.attributes.name.isNullOrBlank() && !knownName.isNullOrBlank()) {
+                detail.attributes.copy(name = knownName)
+            } else {
+                detail.attributes
+            }
+            AmPlaylist(id = detail.id, type = detail.type, attributes = attributes)
+                .toSyncedPlaylistOrNull()
+                ?: run {
+                    Log.w(TAG, "fetchPlaylist: AM playlist $externalPlaylistId has no name; skipped")
+                    null
+                }
+        } catch (e: AppleMusicReauthRequiredException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchPlaylist: AM playlist $externalPlaylistId failed: ${e::class.simpleName}: ${e.message}")
+            null
+        }
+    }
+
     override suspend fun remotePlaylistExists(externalPlaylistId: String): Boolean {
         delay(INTER_REQUEST_DELAY_MS)
         return try {
