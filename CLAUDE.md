@@ -8,6 +8,8 @@
 
 Desktop app structure: single `app.js` (~57,700 lines), `.axe` resolver plugins, `index.html` with CSS design tokens.
 
+**When a fix or behavior change may apply to desktop too, ask whether to file a desktop ticket.** Parity runs both ways: a bug fixed here often exists in the same code path on desktop, and a behavior change here leaves the platforms apart unless desktop follows. Whenever you fix a bug or change behavior, check whether desktop has the same code or the same gap (read `app.js`, not memory). If it might, ask the user whether to write a ticket on [Parachord/parachord](https://github.com/Parachord/parachord/issues) before you finish. Don't file one without asking. A good ticket names the desktop code path, what mobile changed and why, and links the mobile PR. Examples: the N-way missingStreak gate (#469 → desktop parachord#1163), and the ListenBrainz friend Top Albums artwork, where desktop runs one MusicBrainz search per album but the stats payload already carries `caa_release_mbid`.
+
 ## Architecture Patterns (from Desktop)
 
 ### Metadata Providers — Cascading Lookup
