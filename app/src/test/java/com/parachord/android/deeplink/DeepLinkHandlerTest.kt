@@ -3,6 +3,7 @@ package com.parachord.android.deeplink
 import android.app.Application
 import android.net.Uri
 import com.parachord.shared.deeplink.DeepLinkAction
+import com.parachord.shared.deeplink.HistoryLinkTab
 import com.parachord.shared.deeplink.RadioMode
 import org.junit.Assert.*
 import org.junit.Test
@@ -469,8 +470,33 @@ class DeepLinkHandlerHttpsParachordTest {
     @Test fun navigate_history() =
         assertRoundTrip("/history", "//history")
 
+    @Test fun navigate_history_withTabAndPeriod() {
+        assertRoundTrip("/history/top-albums?period=3month", "//history/top-albums?period=3month")
+        assertEquals(
+            DeepLinkAction.NavigateHistory(HistoryLinkTab.TOP_ALBUMS, "3month"),
+            handler.parse(Uri.parse("parachord://history/top-albums?period=3month")),
+        )
+    }
+
     @Test fun navigate_friend() =
-        assertRoundTrip("/friend/jherskow?tab=top-tracks", "//friend/jherskow?tab=top-tracks")
+        assertRoundTrip("/friend/jherskow", "//friend/jherskow")
+
+    @Test fun navigate_friend_withTabAndPeriod() {
+        assertRoundTrip("/friend/jane123/top-albums?period=1month", "//friend/jane123/top-albums?period=1month")
+        assertEquals(
+            DeepLinkAction.NavigateFriend("jane123", HistoryLinkTab.TOP_ALBUMS, "1month"),
+            handler.parse(Uri.parse("parachord://friend/jane123/top-albums?period=1month")),
+        )
+        // Recent takes no period, and an unknown period is dropped.
+        assertEquals(
+            DeepLinkAction.NavigateFriend("jane123", HistoryLinkTab.RECENT, null),
+            handler.parse(Uri.parse("parachord://friend/jane123/recent?period=1month")),
+        )
+        assertEquals(
+            DeepLinkAction.NavigateFriend("jane123", HistoryLinkTab.TOP_TRACKS, null),
+            handler.parse(Uri.parse("parachord://friend/jane123/top-tracks?period=2weeks")),
+        )
+    }
 
     @Test fun navigate_recommendations() =
         assertRoundTrip("/recommendations", "//recommendations")

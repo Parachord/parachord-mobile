@@ -22,6 +22,8 @@ import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.deeplink.HistoryLinkTab
+import com.parachord.shared.deeplink.parseFriendLink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -42,10 +44,21 @@ class FriendDetailViewModel constructor(
 
     private val friendId: String = savedStateHandle["friendId"] ?: ""
 
+    /** A deep link's tab and period (#470); null fields leave the defaults. */
+    private val link = parseFriendLink(savedStateHandle["tab"], savedStateHandle["period"])
+
+    /** Pager page to open on: Recent, Top Songs, Top Albums, Top Artists. */
+    val initialPage: Int = when (link.tab) {
+        HistoryLinkTab.TOP_TRACKS -> 1
+        HistoryLinkTab.TOP_ALBUMS -> 2
+        HistoryLinkTab.TOP_ARTISTS -> 3
+        HistoryLinkTab.RECENT, null -> 0
+    }
+
     private val _friend = MutableStateFlow<FriendEntity?>(null)
     val friend: StateFlow<FriendEntity?> = _friend
 
-    val selectedPeriod = MutableStateFlow("1month")
+    val selectedPeriod = MutableStateFlow(link.period ?: "1month")
 
     private val _recentTracks = MutableStateFlow<Resource<List<RecentTrack>>>(Resource.Loading)
     val recentTracks: StateFlow<Resource<List<RecentTrack>>> = _recentTracks

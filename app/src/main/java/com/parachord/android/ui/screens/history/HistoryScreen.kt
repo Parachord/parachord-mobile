@@ -126,7 +126,7 @@ fun HistoryScreen(
             },
             windowInsets = WindowInsets(0),
         )
-        SwipeableTabLayout(tabs = historyTabs) { page ->
+        SwipeableTabLayout(tabs = historyTabs, initialPage = viewModel.initialPage) { page ->
             when (page) {
                 0 -> TopSongsTab(
                     tracks = topTracks,

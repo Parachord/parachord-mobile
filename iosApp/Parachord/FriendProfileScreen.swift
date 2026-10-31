@@ -145,8 +145,12 @@ struct FriendProfileScreen: View {
     /// Observed so the Listen Along button's label flips Start↔Stop reactively.
     @State private var listenAlong = ListenAlongController.shared
 
-    init(friendId: String, username: String, service: String, name: String) {
+    /// `tab` and `period` come from a deep link (#470), already validated by
+    /// the shared parser; nil keeps the defaults.
+    init(friendId: String, username: String, service: String, name: String, tab: String? = nil, period: String? = nil) {
         _model = State(initialValue: FriendProfileModel(friendId: friendId, username: username, service: service, name: name))
+        if let index = historyTabIndex(tab) { _tabIndex = State(initialValue: index) }
+        if let period { _period = State(initialValue: period) }
     }
 
     var body: some View {

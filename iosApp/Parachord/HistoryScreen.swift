@@ -99,6 +99,18 @@ private let historyPeriods: [(key: String, label: String)] = [
     ("6month", "6 Months"), ("12month", "Year"), ("overall", "All Time"),
 ]
 
+/// The `PCTabs` index of a history or friend link's tab segment (#470), in
+/// the order both screens use: Top Songs, Top Albums, Top Artists, Recent.
+func historyTabIndex(_ segment: String?) -> Int? {
+    switch segment {
+    case "top-tracks":  return 0
+    case "top-albums":  return 1
+    case "top-artists": return 2
+    case "recent":      return 3
+    default:            return nil
+    }
+}
+
 struct HistoryScreen: View {
     @State private var model = HistoryModel.shared
     @State private var tabIndex = 0
@@ -108,6 +120,13 @@ struct HistoryScreen: View {
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     private var resolverCache = IosTrackResolverCache.shared
+
+    /// `tab` and `period` come from a deep link (#470), already validated by
+    /// the shared parser; nil keeps the defaults.
+    init(tab: String? = nil, period: String? = nil) {
+        if let index = historyTabIndex(tab) { _tabIndex = State(initialValue: index) }
+        if let period { _period = State(initialValue: period) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {

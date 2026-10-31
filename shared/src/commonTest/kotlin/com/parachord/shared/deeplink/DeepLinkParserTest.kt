@@ -69,6 +69,32 @@ class DeepLinkParserTest {
     }
 
     @Test
+    fun friend_link_reads_the_tab_segment_and_period() {
+        assertEquals(
+            DeepLinkAction.NavigateFriend("jane123", HistoryLinkTab.TOP_ALBUMS, "1month"),
+            DeepLinkParser.parse(uri("friend", path = listOf("jane123", "top-albums"), params = mapOf("period" to "1month"))),
+        )
+        // Recent has no period; an unknown tab falls back to the default.
+        assertEquals(
+            DeepLinkAction.NavigateFriend("jane123", HistoryLinkTab.RECENT, null),
+            DeepLinkParser.parse(uri("friend", path = listOf("jane123", "recent"), params = mapOf("period" to "1month"))),
+        )
+        assertEquals(
+            DeepLinkAction.NavigateFriend("jane123", null, null),
+            DeepLinkParser.parse(uri("friend", path = listOf("jane123", "loved"))),
+        )
+    }
+
+    @Test
+    fun history_link_reads_the_tab_segment_and_period() {
+        assertEquals(
+            DeepLinkAction.NavigateHistory(HistoryLinkTab.TOP_ARTISTS, "1month"),
+            DeepLinkParser.parse(uri("history", path = listOf("top-artists"), params = mapOf("period" to "1month"))),
+        )
+        assertEquals(DeepLinkAction.NavigateHistory(null, null), DeepLinkParser.parse(uri("history")))
+    }
+
+    @Test
     fun protocol_play_is_parsed() {
         // play/album|playlist|radio now parse to their actions (parachord#256/#930).
         assertIs<DeepLinkAction.PlayAlbum>(DeepLinkParser.parse(uri("play", path = listOf("album"), params = mapOf("mbid" to "x"))))

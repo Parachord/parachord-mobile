@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.history
 
 import android.util.Log
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.data.db.entity.AlbumEntity
@@ -20,6 +21,8 @@ import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.deeplink.HistoryLinkTab
+import com.parachord.shared.deeplink.parseHistoryLink
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -32,6 +35,7 @@ import kotlinx.coroutines.launch
  * Supports track resolution and playback via the resolver pipeline.
  */
 class HistoryViewModel constructor(
+    savedStateHandle: SavedStateHandle,
     private val historyRepository: HistoryRepository,
     private val resolverManager: ResolverManager,
     private val resolverScoring: ResolverScoring,
@@ -45,8 +49,19 @@ class HistoryViewModel constructor(
         private const val TAG = "HistoryViewModel"
     }
 
+    /** A deep link's tab and period (#470); null fields leave the defaults. */
+    private val link = parseHistoryLink(savedStateHandle["tab"], savedStateHandle["period"])
+
+    /** Pager page to open on: Top Songs, Top Albums, Top Artists, Recently Played. */
+    val initialPage: Int = when (link.tab) {
+        HistoryLinkTab.TOP_ALBUMS -> 1
+        HistoryLinkTab.TOP_ARTISTS -> 2
+        HistoryLinkTab.RECENT -> 3
+        HistoryLinkTab.TOP_TRACKS, null -> 0
+    }
+
     // Period filter for top charts
-    val selectedPeriod = MutableStateFlow("1month")
+    val selectedPeriod = MutableStateFlow(link.period ?: "1month")
 
     // Top charts data
     private val _topTracks = MutableStateFlow<Resource<List<HistoryTrack>>>(Resource.Loading)
