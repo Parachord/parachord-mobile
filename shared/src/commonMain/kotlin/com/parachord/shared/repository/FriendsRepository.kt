@@ -567,7 +567,9 @@ class FriendsRepository(
             artist = listen?.artistName,
             album = listen?.releaseName,
             timestamp = listen?.listenedAt ?: 0,
-            artworkUrl = null, // ListenBrainz doesn't provide artwork
+            // The listen's own Cover Art Archive cover. No metadata-search
+            // fallback here: this runs for every friend every 2 minutes.
+            artworkUrl = listen?.artworkUrl,
             fetchedAt = currentTimeMillis(),
         )
     }
@@ -626,10 +628,8 @@ class FriendsRepository(
             emit(Resource.Success(tracks))
 
             // Enrich tracks missing artwork
-            val tracksNeedingArt = tracks.filter { it.artworkUrl == null }
-            if (tracksNeedingArt.isNotEmpty()) {
-                val enriched = enrichTrackArtwork(tracks)
-                emit(Resource.Success(enriched))
+            if (tracks.any { it.artworkUrl == null }) {
+                emit(Resource.Success(metadataService.fillTrackArtwork(tracks)))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch friend top tracks", e)
@@ -677,6 +677,12 @@ class FriendsRepository(
                 else -> emptyList()
             }
             emit(Resource.Success(albums))
+
+            // Albums the payload gave no cover (a ListenBrainz release with no
+            // Cover Art Archive image, a Last.fm album with a blank image)
+            if (albums.any { it.artworkUrl == null }) {
+                emit(Resource.Success(metadataService.fillAlbumArtwork(albums)))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch friend top albums", e)
             emit(Resource.Error("Failed to load top albums"))
@@ -772,6 +778,7 @@ class FriendsRepository(
                             title = listen.trackName,
                             artist = listen.artistName,
                             album = listen.releaseName,
+                            artworkUrl = listen.artworkUrl,
                             timestamp = listen.listenedAt,
                             source = "ListenBrainz",
                         )
@@ -791,30 +798,6 @@ class FriendsRepository(
     // `synchronized(map) { ... }` is JVM-only — replaced with `Mutex` for KMP.
     // Lock scope is just the put-or-get window, so contention is negligible
     // compared to the network call itself.
-
-    private suspend fun enrichTrackArtwork(tracks: List<HistoryTrack>): List<HistoryTrack> = coroutineScope {
-        val artworkCache = mutableMapOf<String, String>()
-        val cacheMutex = Mutex()
-        tracks.filter { it.artworkUrl == null }.take(15).map { track ->
-            async {
-                try {
-                    val results = metadataService.searchTracks("${track.artist} ${track.title}", limit = 1)
-                    val artwork = results.firstOrNull()?.artworkUrl
-                    if (artwork != null) {
-                        val key = "${track.artist.lowercase()}|${track.title.lowercase()}"
-                        cacheMutex.withLock { artworkCache[key] = artwork }
-                    }
-                } catch (_: Exception) { /* skip */ }
-            }
-        }.awaitAll()
-
-        tracks.map { track ->
-            if (track.artworkUrl != null) return@map track
-            val key = "${track.artist.lowercase()}|${track.title.lowercase()}"
-            val enrichedUrl = artworkCache[key]
-            if (enrichedUrl != null) track.copy(artworkUrl = enrichedUrl) else track
-        }
-    }
 
     private suspend fun enrichArtistImages(artists: List<HistoryArtist>): List<HistoryArtist> = coroutineScope {
         val imageCache = mutableMapOf<String, String>()

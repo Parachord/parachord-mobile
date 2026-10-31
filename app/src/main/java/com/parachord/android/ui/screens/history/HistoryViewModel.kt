@@ -90,6 +90,8 @@ class HistoryViewModel constructor(
     /** Resolver badge names for UI display from shared cache */
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
+    /** Resolved-source art per track key, for rows whose payload had none (#188 / #190). */
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
 
     /** Filtered and sorted recent tracks. */
     val filteredRecentTracks: StateFlow<Resource<List<RecentTrack>>> = combine(
