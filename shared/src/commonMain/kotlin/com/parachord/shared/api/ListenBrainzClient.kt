@@ -870,6 +870,7 @@ class ListenBrainzClient(
                     releaseName = rel.releaseName.orEmpty(),
                     artistName = rel.artistName.orEmpty(),
                     listenCount = rel.listenCount ?: 0,
+                    artworkUrl = caaFrontCoverUrl(rel.caaReleaseMbid),
                 )
             }
         } catch (e: CancellationException) {
@@ -968,8 +969,7 @@ class ListenBrainzClient(
                 try {
                     val ext = track.extension?.jspfTrack
                     val addl = ext?.additionalMetadata
-                    val caaMbid = addl?.caaReleaseMbid?.ifBlank { null }
-                    val albumArt = caaMbid?.let { "https://coverartarchive.org/release/$it/front-250" }
+                    val albumArt = caaFrontCoverUrl(addl?.caaReleaseMbid)
                     val recordingMbid = track.identifier?.firstOrNull()?.substringAfterLast("/")?.ifBlank { null }
                     LbPlaylistTrack(
                         id = recordingMbid ?: "lb-track-$playlistMbid-$i",
@@ -1232,7 +1232,12 @@ private data class ReleaseStatWire(
     @SerialName("release_name") val releaseName: String? = null,
     @SerialName("artist_name") val artistName: String? = null,
     @SerialName("listen_count") val listenCount: Int? = null,
+    @SerialName("caa_release_mbid") val caaReleaseMbid: String? = null,
 )
+
+/** Cover Art Archive 250px front cover for a release MBID; null when the MBID is missing or blank. */
+private fun caaFrontCoverUrl(releaseMbid: String?): String? =
+    releaseMbid?.trim()?.ifBlank { null }?.let { "https://coverartarchive.org/release/$it/front-250" }
 
 @Serializable
 private data class CreatedForListWire(

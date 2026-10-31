@@ -33,6 +33,8 @@ data class LbReleaseStat(
     val releaseName: String,
     val artistName: String,
     val listenCount: Int = 0,
+    /** Cover Art Archive front cover, from the payload's `caa_release_mbid`. */
+    val artworkUrl: String? = null,
 )
 
 /** A recommended track from a ListenBrainz recommendation playlist. */
