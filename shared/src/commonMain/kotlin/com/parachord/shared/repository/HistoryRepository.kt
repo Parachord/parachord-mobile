@@ -75,49 +75,12 @@ class HistoryRepository(
             emit(Resource.Success(tracks))
 
             // Enrich tracks missing artwork via MetadataService (Cover Art Archive → Last.fm → Spotify)
-            val tracksNeedingArt = tracks.filter { it.artworkUrl == null }
-            if (tracksNeedingArt.isNotEmpty()) {
-                val enriched = enrichTrackArtwork(tracks)
-                emit(Resource.Success(enriched))
+            if (tracks.any { it.artworkUrl == null }) {
+                emit(Resource.Success(metadataService.fillTrackArtwork(tracks)))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch top tracks", e)
             emit(Resource.Error("Failed to load top tracks"))
-        }
-    }
-
-    /**
-     * Enrich tracks missing artwork by searching via MetadataService.
-     * Groups by artist+title and looks up artwork concurrently.
-     */
-    private suspend fun enrichTrackArtwork(tracks: List<HistoryTrack>): List<HistoryTrack> = coroutineScope {
-        // Build a cache of artwork URLs from search results — guarded by Mutex
-        // (KMP-safe replacement for the JVM-only `synchronized` block this used
-        // to use; lock scope is tiny so contention is negligible).
-        val artworkCache = mutableMapOf<String, String>()
-        val cacheMutex = Mutex()
-
-        // Batch-lookup missing artwork concurrently (limit to 15 concurrent)
-        val tracksNeedingArt = tracks.filter { it.artworkUrl == null }.take(15)
-        tracksNeedingArt.map { track ->
-            async {
-                try {
-                    val results = metadataService.searchTracks("${track.artist} ${track.title}", limit = 1)
-                    val artwork = results.firstOrNull()?.artworkUrl
-                    if (artwork != null) {
-                        val key = "${track.artist.lowercase()}|${track.title.lowercase()}"
-                        cacheMutex.withLock { artworkCache[key] = artwork }
-                    }
-                } catch (_: Exception) { /* skip */ }
-            }
-        }.awaitAll()
-
-        // Apply cached artwork to tracks
-        tracks.map { track ->
-            if (track.artworkUrl != null) return@map track
-            val key = "${track.artist.lowercase()}|${track.title.lowercase()}"
-            val enrichedUrl = artworkCache[key]
-            if (enrichedUrl != null) track.copy(artworkUrl = enrichedUrl) else track
         }
     }
 
@@ -151,6 +114,10 @@ class HistoryRepository(
             } ?: emptyList()
 
             emit(Resource.Success(albums))
+
+            if (albums.any { it.artworkUrl == null }) {
+                emit(Resource.Success(metadataService.fillAlbumArtwork(albums)))
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch top albums", e)
             emit(Resource.Error("Failed to load top albums"))
@@ -303,6 +270,7 @@ class HistoryRepository(
                     title = listen.trackName,
                     artist = listen.artistName,
                     album = listen.releaseName,
+                    artworkUrl = listen.artworkUrl,
                     timestamp = listen.listenedAt,
                     source = "ListenBrainz",
                 )
@@ -315,19 +283,21 @@ class HistoryRepository(
 
     /**
      * Deduplicate tracks by normalized artist+title within 5-minute windows.
-     * Prefers Last.fm entries (they have artwork).
+     * The newer entry is kept; it takes the dropped one's artwork when it has none.
      */
     private fun deduplicateRecentTracks(tracks: List<RecentTrack>): List<RecentTrack> {
         val result = mutableListOf<RecentTrack>()
 
         for (track in tracks.sortedByDescending { it.timestamp }) {
             val key = "${track.artist.lowercase().trim()}|${track.title.lowercase().trim()}"
-            val isDupe = result.any { existing ->
+            val dupeIndex = result.indexOfFirst { existing ->
                 val existingKey = "${existing.artist.lowercase().trim()}|${existing.title.lowercase().trim()}"
                 existingKey == key && abs(existing.timestamp - track.timestamp) < DEDUPE_WINDOW_SECONDS
             }
-            if (!isDupe) {
+            if (dupeIndex < 0) {
                 result.add(track)
+            } else if (result[dupeIndex].artworkUrl == null && track.artworkUrl != null) {
+                result[dupeIndex] = result[dupeIndex].copy(artworkUrl = track.artworkUrl)
             }
         }
 

@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.history
 
 import androidx.compose.foundation.background
+import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.AlbumContextMenu
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
@@ -107,6 +108,7 @@ fun HistoryScreen(
     val recentSearch by viewModel.recentSearch.collectAsState()
     val trackResolvers by viewModel.trackResolvers.collectAsState()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsState()
+    val trackArtwork by viewModel.trackArtwork.collectAsState()
 
     Column(modifier = modifier.fillMaxSize()) {
         TopAppBar(
@@ -135,6 +137,7 @@ fun HistoryScreen(
                     onPlayTrack = viewModel::playTopTrack,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
+                    trackArtwork = trackArtwork,
                 )
                 1 -> TopAlbumsTab(
                     albums = topAlbums,
@@ -165,6 +168,7 @@ fun HistoryScreen(
                     onPlayTrack = viewModel::playRecentTrack,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
+                    trackArtwork = trackArtwork,
                 )
             }
         }
@@ -208,6 +212,7 @@ private fun TopSongsTab(
     onPlayTrack: (Int) -> Unit,
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
+    trackArtwork: Map<String, String> = emptyMap(),
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         PeriodFilter(selectedPeriod = selectedPeriod, onPeriodChanged = onPeriodChanged)
@@ -228,7 +233,7 @@ private fun TopSongsTab(
                             TrackRow(
                                 title = track.title,
                                 artist = "${track.artist}  •  ${formatPlayCount(track.playCount)}",
-                                artworkUrl = track.artworkUrl,
+                                artworkUrl = track.artworkUrl ?: trackArtwork[trackKey(track.title, track.artist)],
                                 trackNumber = track.rank,
                                 resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]?.ifEmpty { null },
                                 resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
@@ -515,6 +520,7 @@ private fun RecentlyPlayedTab(
     onPlayTrack: (Int) -> Unit,
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
+    trackArtwork: Map<String, String> = emptyMap(),
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         when (recentTracks) {
@@ -549,6 +555,7 @@ private fun RecentlyPlayedTab(
                                     track = recentTracks.data[index],
                                     resolvers = trackResolvers["${recentTracks.data[index].title.lowercase().trim()}|${recentTracks.data[index].artist.lowercase().trim()}"]?.ifEmpty { null },
                                     resolverConfidences = trackResolverConfidences["${recentTracks.data[index].title.lowercase().trim()}|${recentTracks.data[index].artist.lowercase().trim()}"],
+                                    artworkUrl = recentTracks.data[index].let { it.artworkUrl ?: trackArtwork[trackKey(it.title, it.artist)] },
                                     onClick = { onPlayTrack(index) },
                                 )
                             }
@@ -561,7 +568,13 @@ private fun RecentlyPlayedTab(
 }
 
 @Composable
-private fun RecentTrackRow(track: RecentTrack, resolvers: List<String>? = null, resolverConfidences: Map<String, Float>? = null, onClick: () -> Unit = {}) {
+private fun RecentTrackRow(
+    track: RecentTrack,
+    resolvers: List<String>? = null,
+    resolverConfidences: Map<String, Float>? = null,
+    artworkUrl: String? = track.artworkUrl,
+    onClick: () -> Unit = {},
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -570,11 +583,13 @@ private fun RecentTrackRow(track: RecentTrack, resolvers: List<String>? = null, 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumArtCard(
-            artworkUrl = track.artworkUrl,
+            artworkUrl = artworkUrl,
             size = 44.dp,
             cornerRadius = 4.dp,
             elevation = 1.dp,
             placeholderName = track.title,
+            artist = track.artist,
+            album = track.album,
         )
 
         Spacer(modifier = Modifier.width(12.dp))

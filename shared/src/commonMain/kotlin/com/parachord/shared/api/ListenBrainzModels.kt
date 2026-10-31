@@ -12,6 +12,8 @@ data class LbListen(
     val trackName: String,
     val releaseName: String? = null,
     val listenedAt: Long = 0,
+    /** Cover Art Archive front cover, from the listen's `mbid_mapping`. */
+    val artworkUrl: String? = null,
 )
 
 /** Artist stat from ListenBrainz stats API. */
@@ -33,7 +35,7 @@ data class LbReleaseStat(
     val releaseName: String,
     val artistName: String,
     val listenCount: Int = 0,
-    /** Cover Art Archive front cover, from the payload's `caa_release_mbid`. */
+    /** Cover Art Archive front cover, from the payload's `caa_release_mbid` + `caa_id`. */
     val artworkUrl: String? = null,
 )
 

@@ -742,6 +742,7 @@ class ListenBrainzClient(
                     trackName = md.trackName.orEmpty(),
                     releaseName = md.releaseName?.ifBlank { null },
                     listenedAt = listen.listenedAt ?: 0L,
+                    artworkUrl = md.mbidMapping?.let { caaFrontCoverUrl(it.caaReleaseMbid, it.caaId) },
                 )
             }
         } catch (e: CancellationException) {
@@ -870,7 +871,7 @@ class ListenBrainzClient(
                     releaseName = rel.releaseName.orEmpty(),
                     artistName = rel.artistName.orEmpty(),
                     listenCount = rel.listenCount ?: 0,
-                    artworkUrl = caaFrontCoverUrl(rel.caaReleaseMbid),
+                    artworkUrl = caaFrontCoverUrl(rel.caaReleaseMbid, rel.caaId),
                 )
             }
         } catch (e: CancellationException) {
@@ -969,7 +970,7 @@ class ListenBrainzClient(
                 try {
                     val ext = track.extension?.jspfTrack
                     val addl = ext?.additionalMetadata
-                    val albumArt = caaFrontCoverUrl(addl?.caaReleaseMbid)
+                    val albumArt = caaFrontCoverUrl(addl?.caaReleaseMbid, addl?.caaId)
                     val recordingMbid = track.identifier?.firstOrNull()?.substringAfterLast("/")?.ifBlank { null }
                     LbPlaylistTrack(
                         id = recordingMbid ?: "lb-track-$playlistMbid-$i",
@@ -1193,6 +1194,14 @@ private data class TrackMetadataWire(
     @SerialName("artist_name") val artistName: String? = null,
     @SerialName("track_name") val trackName: String? = null,
     @SerialName("release_name") val releaseName: String? = null,
+    @SerialName("mbid_mapping") val mbidMapping: CaaCoverWire? = null,
+)
+
+/** The cover fields ListenBrainz attaches to a listen's `mbid_mapping`. */
+@Serializable
+private data class CaaCoverWire(
+    @SerialName("caa_release_mbid") val caaReleaseMbid: String? = null,
+    @SerialName("caa_id") val caaId: Long? = null,
 )
 
 @Serializable
@@ -1233,11 +1242,20 @@ private data class ReleaseStatWire(
     @SerialName("artist_name") val artistName: String? = null,
     @SerialName("listen_count") val listenCount: Int? = null,
     @SerialName("caa_release_mbid") val caaReleaseMbid: String? = null,
+    @SerialName("caa_id") val caaId: Long? = null,
 )
 
-/** Cover Art Archive 250px front cover for a release MBID; null when the MBID is missing or blank. */
-private fun caaFrontCoverUrl(releaseMbid: String?): String? =
-    releaseMbid?.trim()?.ifBlank { null }?.let { "https://coverartarchive.org/release/$it/front-250" }
+/**
+ * Cover Art Archive 250px front cover for a release MBID. ListenBrainz sets
+ * `caa_id` only when the archive holds a front image for that release, so a
+ * release MBID without it has no cover to point at (desktop
+ * `listenBrainzStatsCoverUrl`, parachord#1181). Null then, so the list's
+ * artwork fallback can look one up.
+ */
+private fun caaFrontCoverUrl(releaseMbid: String?, caaId: Long?): String? {
+    if (caaId == null) return null
+    return releaseMbid?.trim()?.ifBlank { null }?.let { "https://coverartarchive.org/release/$it/front-250" }
+}
 
 @Serializable
 private data class CreatedForListWire(
@@ -1303,6 +1321,7 @@ private data class JspfTrackExtensionWire(
 @Serializable
 private data class AdditionalMetadataWire(
     @SerialName("caa_release_mbid") val caaReleaseMbid: String? = null,
+    @SerialName("caa_id") val caaId: Long? = null,
     @SerialName("release_name") val releaseName: String? = null,
 )
 
