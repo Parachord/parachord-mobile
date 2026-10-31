@@ -669,6 +669,7 @@ class FriendsRepository(
                             name = rel.releaseName,
                             artist = rel.artistName,
                             playCount = rel.listenCount,
+                            artworkUrl = rel.artworkUrl,
                             rank = index + 1,
                         )
                     }
