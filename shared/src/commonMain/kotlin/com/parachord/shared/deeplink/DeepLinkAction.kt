@@ -56,8 +56,10 @@ sealed class DeepLinkAction {
     data class NavigateArtist(val name: String, val tab: String? = null) : DeepLinkAction()
     data class NavigateAlbum(val artist: String, val title: String) : DeepLinkAction()
     data class NavigateLibrary(val tab: String? = null) : DeepLinkAction()
-    data class NavigateHistory(val tab: String? = null, val period: String? = null) : DeepLinkAction()
-    data class NavigateFriend(val id: String, val tab: String? = null) : DeepLinkAction()
+    /** [tab] and [period] are already validated ([parseHistoryLink]); null means the view's default. */
+    data class NavigateHistory(val tab: HistoryLinkTab? = null, val period: String? = null) : DeepLinkAction()
+    /** [id] is a friend id, username or display name; [tab] and [period] are validated ([parseFriendLink]). */
+    data class NavigateFriend(val id: String, val tab: HistoryLinkTab? = null, val period: String? = null) : DeepLinkAction()
     data class NavigateRecommendations(val tab: String? = null) : DeepLinkAction()
     data object NavigateCharts : DeepLinkAction()
     data object NavigateCriticalDarlings : DeepLinkAction()

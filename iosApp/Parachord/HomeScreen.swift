@@ -12,7 +12,9 @@ import Shared
 /// Discover tiles and the sidebar, so the sidebar navigates with the tab bar
 /// still visible (a push, not a modal).
 enum PCRoute: Hashable {
-    case recommendations, pop, critical, fresh, concerts, history
+    case recommendations, pop, critical, fresh, concerts
+    /// History, optionally opened on a deep link's tab and period (#470).
+    case history(tab: String? = nil, period: String? = nil)
     case artist(String)
     /// Artist page opened straight to the On Tour tab (Now Playing on-tour dot, #201).
     case artistOnTour(String)
@@ -23,8 +25,8 @@ enum PCRoute: Hashable {
     /// Distinct from `.playlist` (which loads weekly/ephemeral tracks and would
     /// show empty for a saved row).
     case savedPlaylist(id: String)
-    /// A friend's listening profile (#235 / #196).
-    case friend(id: String, username: String, service: String, name: String)
+    /// A friend's listening profile (#235 / #196); `tab`/`period` from a deep link (#470).
+    case friend(id: String, username: String, service: String, name: String, tab: String? = nil, period: String? = nil)
 }
 
 /// Single source of truth for every pushed destination. Used by EVERY tab's
@@ -44,7 +46,7 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
     case "artist":          return .artist(ctx.name)
     case "charts":          return .pop
     case "recommendations": return .recommendations
-    case "history":         return .history
+    case "history":         return .history()
     case "listen-along":
         // id encodes "friendId|username|service" (set in ListenAlongController) so
         // the listen-along banner links to the friend's profile (#235).
@@ -70,14 +72,14 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .critical:                    CriticalDarlingsScreen()
     case .fresh:                       FreshDropsScreen()
     case .concerts:                    ConcertsScreen()
-    case .history:                     HistoryScreen()
+    case .history(let tab, let period): HistoryScreen(tab: tab, period: period)
     case .artist(let name):            ArtistScreen(artistName: name)
     case .artistOnTour(let name):      ArtistScreen(artistName: name, initialTab: .onTour)
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
     case .savedPlaylist(let id):       SavedPlaylistDetailView(playlistId: id)
-    case .friend(let id, let username, let service, let name):
-        FriendProfileScreen(friendId: id, username: username, service: service, name: name)
+    case .friend(let id, let username, let service, let name, let tab, let period):
+        FriendProfileScreen(friendId: id, username: username, service: service, name: name, tab: tab, period: period)
     }
 }
 

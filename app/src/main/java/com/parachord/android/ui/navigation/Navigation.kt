@@ -35,13 +35,15 @@ object Routes {
 
     // Drawer destinations
     const val HISTORY = "history"
+    /** [HISTORY] with a deep link's tab segment and period (#470). */
+    const val HISTORY_WITH_ARGS = "history?tab={tab}&period={period}"
     const val FRESH_DROPS = "fresh_drops"
     const val RECOMMENDATIONS = "recommendations"
     const val POP_OF_THE_TOPS = "pop_of_the_tops"
     const val CRITICAL_DARLINGS = "critical_darlings"
     const val CONCERTS = "concerts"
     const val FRIENDS = "friends"
-    const val FRIEND_DETAIL = "friend/{friendId}"
+    const val FRIEND_DETAIL = "friend/{friendId}?tab={tab}&period={period}"
     const val WEEKLY_PLAYLIST = "weekly_playlist/{playlistId}/{contextType}"
 
     fun weeklyPlaylist(playlistId: String, contextType: String): String =
@@ -60,8 +62,14 @@ object Routes {
     fun playlistEdit(playlistId: String): String =
         "playlist/${Uri.encode(playlistId)}/edit"
 
-    fun friendDetail(friendId: String): String =
-        "friend/${Uri.encode(friendId)}"
+    fun friendDetail(friendId: String, tab: String? = null, period: String? = null): String =
+        "friend/${Uri.encode(friendId)}" + linkArgs(tab, period)
+
+    fun history(tab: String? = null, period: String? = null): String = HISTORY + linkArgs(tab, period)
+
+    private fun linkArgs(tab: String?, period: String?): String =
+        listOfNotNull(tab?.let { "tab=${Uri.encode(it)}" }, period?.let { "period=${Uri.encode(it)}" })
+            .joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
 
     fun collection(tab: Int = 0): String =
         if (tab > 0) "collection?tab=$tab" else "collection"
@@ -329,7 +337,10 @@ fun ParachordNavHost(
         }
 
         // ── Drawer Destinations ─────────────────────────────────────────
-        composable(Routes.HISTORY) {
+        composable(
+            route = Routes.HISTORY_WITH_ARGS,
+            arguments = linkArguments,
+        ) {
             com.parachord.android.ui.screens.history.HistoryScreen(
                 onBack = { navController.popBackStack() },
                 onNavigateToAlbum = { albumTitle, artistName ->
@@ -399,7 +410,7 @@ fun ParachordNavHost(
         }
         composable(
             route = Routes.FRIEND_DETAIL,
-            arguments = listOf(navArgument("friendId") { type = NavType.StringType }),
+            arguments = listOf(navArgument("friendId") { type = NavType.StringType }) + linkArguments,
         ) {
             com.parachord.android.ui.screens.friends.FriendDetailScreen(
                 onBack = { navController.popBackStack() },
@@ -413,3 +424,9 @@ fun ParachordNavHost(
         }
     }
 }
+
+/** The optional `tab` and `period` a history or friend deep link carries (#470). */
+private val linkArguments = listOf(
+    navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null },
+    navArgument("period") { type = NavType.StringType; nullable = true; defaultValue = null },
+)

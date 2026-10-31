@@ -351,9 +351,9 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                 is DeepLinkNavEvent.Library ->
                     navController.navigate(Routes.collection(event.tab)) { launchSingleTop = true }
                 is DeepLinkNavEvent.History ->
-                    navController.navigate(Routes.HISTORY) { launchSingleTop = true }
+                    navController.navigate(Routes.history(event.tab, event.period)) { launchSingleTop = true }
                 is DeepLinkNavEvent.Friend ->
-                    navController.navigate(Routes.friendDetail(event.id)) { launchSingleTop = true }
+                    navController.navigate(Routes.friendDetail(event.id, event.tab, event.period)) { launchSingleTop = true }
                 is DeepLinkNavEvent.Recommendations ->
                     navController.navigate(Routes.RECOMMENDATIONS) { launchSingleTop = true }
                 is DeepLinkNavEvent.Charts ->
@@ -508,7 +508,8 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
             drawerContent = {
                 ModalDrawerSheet {
                     DrawerContent(
-                        currentRoute = currentDestination?.route,
+                        // Without optional args, so "history?tab={tab}&period={period}" matches the History item.
+                        currentRoute = currentDestination?.route?.substringBefore('?'),
                         friends = friends,
                         onItemClick = { route ->
                             scope.launch { drawerState.close() }

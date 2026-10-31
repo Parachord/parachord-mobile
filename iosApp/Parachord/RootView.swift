@@ -489,8 +489,8 @@ struct ContentView: View {
         case "navArtist": if let n = cmd.name { tab = .home; homePendingRoute = .artist(n) }
         case "navAlbum": if let a = cmd.artist, let t = cmd.title { tab = .home; homePendingRoute = .album(title: t, artist: a) }
         case "navLibrary": tab = .collection; collectionPendingTab = libraryTab(cmd.tab)
-        case "navHistory": tab = .home; homePendingRoute = .history
-        case "navFriend": if let id = cmd.id { navigateToFriend(id) }
+        case "navHistory": tab = .home; homePendingRoute = .history(tab: cmd.tab, period: cmd.period)
+        case "navFriend": if let id = cmd.id { navigateToFriend(id, tab: cmd.tab, period: cmd.period) }
         case "navRecommendations": tab = .home; homePendingRoute = .recommendations
         case "navCharts": tab = .home; homePendingRoute = .pop
         case "navCritical": tab = .home; homePendingRoute = .critical
@@ -526,11 +526,13 @@ struct ContentView: View {
         }
     }
 
-    private func navigateToFriend(_ id: String) {
+    /// `id` is whatever the link carried: desktop writes the username (#470).
+    private func navigateToFriend(_ id: String, tab linkTab: String?, period: String?) {
         Task { @MainActor in
-            if let f = (try? await IosContainer.companion.shared.getFriend(friendId: id)) ?? nil {
+            if let f = (try? await IosContainer.companion.shared.findFriendForLink(key: id)) ?? nil {
                 tab = .home
-                homePendingRoute = .friend(id: f.id, username: f.username, service: f.service, name: f.displayName)
+                homePendingRoute = .friend(id: f.id, username: f.username, service: f.service, name: f.displayName,
+                                           tab: linkTab, period: period)
             } else {
                 dlAck("Friend not found")
             }
@@ -566,7 +568,7 @@ struct ContentView: View {
         case "critical":        .critical
         case "fresh":           .fresh
         case "concerts":        .concerts
-        case "history":         .history
+        case "history":         .history()
         default:                nil
         }
         if let route {

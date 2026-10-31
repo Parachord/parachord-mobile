@@ -1159,6 +1159,9 @@ class IosContainer private constructor() {
 
     suspend fun getFriend(friendId: String): Friend? = friendsRepository.getFriendById(friendId)
 
+    /** The friend a `parachord://friend/{id}` link names: id, username or name (#470). */
+    suspend fun findFriendForLink(key: String): Friend? = friendsRepository.findFriendForLink(key)
+
     // ── Deep links (#228) ───────────────────────────────────────────────
     /**
      * Parse a `parachord://` URL into a flat [IosDeepLinkCommand] for Swift to
@@ -1190,8 +1193,8 @@ class IosContainer private constructor() {
             is DeepLinkAction.NavigateArtist -> IosDeepLinkCommand("navArtist", name = action.name, tab = action.tab)
             is DeepLinkAction.NavigateAlbum -> IosDeepLinkCommand("navAlbum", artist = action.artist, title = action.title)
             is DeepLinkAction.NavigateLibrary -> IosDeepLinkCommand("navLibrary", tab = action.tab)
-            is DeepLinkAction.NavigateHistory -> IosDeepLinkCommand("navHistory", tab = action.tab, period = action.period)
-            is DeepLinkAction.NavigateFriend -> IosDeepLinkCommand("navFriend", id = action.id, tab = action.tab)
+            is DeepLinkAction.NavigateHistory -> IosDeepLinkCommand("navHistory", tab = action.tab?.segment, period = action.period)
+            is DeepLinkAction.NavigateFriend -> IosDeepLinkCommand("navFriend", id = action.id, tab = action.tab?.segment, period = action.period)
             is DeepLinkAction.NavigateRecommendations -> IosDeepLinkCommand("navRecommendations", tab = action.tab)
             is DeepLinkAction.NavigateCharts -> IosDeepLinkCommand("navCharts")
             is DeepLinkAction.NavigateCriticalDarlings -> IosDeepLinkCommand("navCritical")

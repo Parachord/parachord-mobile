@@ -174,7 +174,7 @@ fun FriendDetailScreen(
         }
 
         // Tabs
-        SwipeableTabLayout(tabs = friendDetailTabs) { page ->
+        SwipeableTabLayout(tabs = friendDetailTabs, initialPage = viewModel.initialPage) { page ->
             when (page) {
                 0 -> FriendRecentTab(
                     recentTracks = recentTracks,

@@ -57,6 +57,17 @@ class FriendsRepository(
     suspend fun getFriendById(id: String): Friend? = friendDao.getFriendById(id)
 
     /**
+     * The friend a `parachord://friend/{id}` link names. Desktop writes the
+     * username there (else the id, else the name) and its handler accepts any
+     * of the three, the names case-insensitively (#470).
+     */
+    suspend fun findFriendForLink(key: String): Friend? =
+        friendDao.getFriendById(key) ?: friendDao.getAllFriendsSync().let { all ->
+            all.firstOrNull { it.username.equals(key, ignoreCase = true) }
+                ?: all.firstOrNull { it.displayName.equals(key, ignoreCase = true) }
+        }
+
+    /**
      * Look up a saved friend by `(service, username)`. Case-insensitive
      * on the username so the deeplink user `?user=mrmonkey` finds a
      * stored "MrMonkey".

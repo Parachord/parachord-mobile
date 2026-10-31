@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.ai.AiChatService
 import com.parachord.android.data.db.entity.TrackEntity
+import com.parachord.android.data.repository.FriendsRepository
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.QueueManager
 import com.parachord.android.playlist.PlaylistImportManager
@@ -31,8 +32,10 @@ sealed class DeepLinkNavEvent {
     data class Playlist(val id: String) : DeepLinkNavEvent()
     data object Home : DeepLinkNavEvent()
     data class Library(val tab: Int) : DeepLinkNavEvent()
-    data object History : DeepLinkNavEvent()
-    data class Friend(val id: String) : DeepLinkNavEvent()
+    /** [tab] is a [com.parachord.shared.deeplink.HistoryLinkTab] segment; both are validated. */
+    data class History(val tab: String? = null, val period: String? = null) : DeepLinkNavEvent()
+    /** [id] is the saved friend's id; [tab] and [period] as for [History]. */
+    data class Friend(val id: String, val tab: String? = null, val period: String? = null) : DeepLinkNavEvent()
     data object Recommendations : DeepLinkNavEvent()
     data object Charts : DeepLinkNavEvent()
     data object CriticalDarlings : DeepLinkNavEvent()
@@ -89,6 +92,7 @@ class DeepLinkViewModel constructor(
     private val protocolPlayTeardown: com.parachord.shared.deeplink.ProtocolPlayTeardown,
     private val playRadioDispatcher: PlayRadioDispatcher,
     private val listenAlongDispatcher: ListenAlongDispatcher,
+    private val friendsRepository: FriendsRepository,
 ) : ViewModel() {
 
     private val _navEvents = MutableSharedFlow<DeepLinkNavEvent>()
@@ -277,9 +281,17 @@ class DeepLinkViewModel constructor(
                     _navEvents.emit(DeepLinkNavEvent.Library(tab))
                 }
 
-                is DeepLinkAction.NavigateHistory -> _navEvents.emit(DeepLinkNavEvent.History)
+                is DeepLinkAction.NavigateHistory ->
+                    _navEvents.emit(DeepLinkNavEvent.History(action.tab?.segment, action.period))
 
-                is DeepLinkAction.NavigateFriend -> _navEvents.emit(DeepLinkNavEvent.Friend(action.id))
+                // A desktop link names the friend by username (#470).
+                is DeepLinkAction.NavigateFriend -> {
+                    val friend = friendsRepository.findFriendForLink(action.id)
+                    _navEvents.emit(
+                        if (friend == null) DeepLinkNavEvent.Toast("Friend not found: ${action.id}")
+                        else DeepLinkNavEvent.Friend(friend.id, action.tab?.segment, action.period)
+                    )
+                }
 
                 is DeepLinkAction.NavigateRecommendations -> _navEvents.emit(DeepLinkNavEvent.Recommendations)
 

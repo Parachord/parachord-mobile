@@ -8,6 +8,8 @@ import com.parachord.shared.deeplink.ProtocolPlayInput
 import com.parachord.shared.deeplink.ProtocolTrack
 import com.parachord.shared.deeplink.RadioMode
 import com.parachord.shared.deeplink.decodeBase64Utf8Json
+import com.parachord.shared.deeplink.parseFriendLink
+import com.parachord.shared.deeplink.parseHistoryLink
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -123,14 +125,13 @@ class DeepLinkHandler constructor() {
                 DeepLinkAction.NavigateLibrary(tab)
             }
             "history" -> {
-                val tab = pathSegments.firstOrNull()
-                val period = uri.clampedParam("period")
-                DeepLinkAction.NavigateHistory(tab, period)
+                val link = parseHistoryLink(pathSegments.firstOrNull(), uri.clampedParam("period"))
+                DeepLinkAction.NavigateHistory(link.tab, link.period)
             }
             "friend" -> {
                 val id = pathSegments.firstOrNull() ?: return DeepLinkAction.Unknown(uri.toString())
-                val tab = pathSegments.getOrNull(1)
-                DeepLinkAction.NavigateFriend(id, tab)
+                val link = parseFriendLink(pathSegments.getOrNull(1), uri.clampedParam("period"))
+                DeepLinkAction.NavigateFriend(id, link.tab, link.period)
             }
             "recommendations" -> {
                 val tab = pathSegments.firstOrNull()

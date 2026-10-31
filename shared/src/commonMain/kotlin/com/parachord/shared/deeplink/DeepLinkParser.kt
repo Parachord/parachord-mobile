@@ -70,9 +70,13 @@ object DeepLinkParser {
             "album" -> if (path.size >= 2) DeepLinkAction.NavigateAlbum(path[0], path[1])
                 else DeepLinkAction.Unknown(raw(uri))
             "library" -> DeepLinkAction.NavigateLibrary(q("tab"))
-            "history" -> DeepLinkAction.NavigateHistory(q("tab"), q("period"))
-            "friend" -> path.firstOrNull()?.let { DeepLinkAction.NavigateFriend(it, q("tab")) }
-                ?: DeepLinkAction.Unknown(raw(uri))
+            // The tab is a path segment (desktop protocol-schema), not ?tab=.
+            "history" -> parseHistoryLink(path.firstOrNull(), q("period"))
+                .let { DeepLinkAction.NavigateHistory(it.tab, it.period) }
+            "friend" -> path.firstOrNull()?.let { id ->
+                val link = parseFriendLink(path.getOrNull(1), q("period"))
+                DeepLinkAction.NavigateFriend(id, link.tab, link.period)
+            } ?: DeepLinkAction.Unknown(raw(uri))
             "recommendations" -> DeepLinkAction.NavigateRecommendations(q("tab"))
             "charts" -> DeepLinkAction.NavigateCharts
             "critics-picks" -> DeepLinkAction.NavigateCriticalDarlings
