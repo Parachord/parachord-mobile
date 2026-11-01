@@ -139,7 +139,11 @@ fun AlbumScreen(
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        if (isLoading) {
+        // The whole-page skeleton stands in only until there's something to show:
+        // the library's cover, or the first provider's answer. It used to stay
+        // until every provider had answered (MusicBrainz's gated lookups) and
+        // the last-resort cover search, hiding both.
+        if (isLoading && albumDetail == null) {
             // Shimmer loading skeleton — header + track rows
             val brush = shimmerBrush()
             Column(modifier = Modifier.fillMaxSize()) {
@@ -348,6 +352,11 @@ fun AlbumScreen(
                                 }
                             },
                         )
+                    }
+
+                    // Rows still to come: the cover arrived before any track list.
+                    if (isLoading && detail.tracks.isEmpty()) {
+                        items(6) { ShimmerTrackRow() }
                     }
 
                     // Provider attribution
