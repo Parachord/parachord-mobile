@@ -78,6 +78,11 @@ class AlbumViewModel constructor(
     }
 
     private fun loadAlbum() {
+        // The cover the user just tapped, already in Coil's cache, shows the
+        // header at once. Set before any provider can answer, so it stays.
+        com.parachord.android.ui.components.ShownAlbumCovers.get(artistName, albumTitle)?.let {
+            _albumDetail.value = AlbumDetail(title = albumTitle, artist = artistName, artworkUrl = it)
+        }
         // Check local DB for cached artwork (available instantly from collection)
         viewModelScope.launch {
             val cachedArtwork = libraryRepository.getAlbumByTitleAndArtist(albumTitle, artistName)
@@ -115,6 +120,9 @@ class AlbumViewModel constructor(
                     // Kick off resolver resolution on each update (idempotent — already-resolved tracks are skipped)
                     resolveTracksInBackground(enriched.tracks)
                 }
+                // Every provider has answered. The cover search below can take
+                // a while and mustn't keep the page in its loading state.
+                _isLoading.value = false
 
                 // Final fallback: if every metadata provider missed art
                 // for this album (e.g. obscure singles like one-off

@@ -99,6 +99,8 @@ fun AlbumArtCard(
                 contentDescription = contentDescription,
                 modifier = Modifier.size(size),
                 contentScale = ContentScale.Crop,
+                // The album page opens with this cover ([ShownAlbumCovers]).
+                onSuccess = { ShownAlbumCovers.remember(artist, album, url) },
                 onError = {
                     scope.launch { retryBrokenAlbumArt(url, artist, album)?.let { replacement = it } }
                 },
@@ -210,6 +212,8 @@ fun AlbumArtCardFill(
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                // The album page opens with this cover ([ShownAlbumCovers]).
+                onSuccess = { ShownAlbumCovers.remember(artist, album, url) },
                 // The first URL is shown without a prefetch, so its failure lands here.
                 onError = {
                     scope.launch { retryBrokenAlbumArt(url, artist, album)?.let { wantedUrl = it } }
