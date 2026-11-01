@@ -1072,7 +1072,12 @@ val androidModule = module {
 
     singleOf(::JsBridge)
     single { PluginFileAccess(androidContext()) }
-    single { com.parachord.shared.plugin.PluginManager(get<PluginFileAccess>(), get<JsBridge>()) }
+    single {
+        com.parachord.shared.plugin.PluginManager(
+            get<PluginFileAccess>(), get<JsBridge>(),
+            appVersion = com.parachord.android.BuildConfig.VERSION_NAME, platform = "android",
+        )
+    }
     single {
         val settingsStore: com.parachord.android.data.store.SettingsStore = get()
         com.parachord.shared.plugin.PluginSyncService(
@@ -1081,6 +1086,8 @@ val androidModule = module {
             fileAccess = get(),
             getLastSyncTimestamp = { settingsStore.getLastPluginSyncTimestamp() },
             setLastSyncTimestamp = { settingsStore.setLastPluginSyncTimestamp(it) },
+            appVersion = com.parachord.android.BuildConfig.VERSION_NAME,
+            platform = "android",
         )
     }
 

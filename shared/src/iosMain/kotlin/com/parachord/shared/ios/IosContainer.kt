@@ -2543,7 +2543,7 @@ class IosContainer private constructor() {
      * them through [pluginJsRuntime].
      */
     val pluginManager: PluginManager by lazy {
-        PluginManager(PluginFileAccess(), pluginJsRuntime)
+        PluginManager(PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios")
     }
 
     /**
@@ -2628,6 +2628,8 @@ class IosContainer private constructor() {
             httpClient, pluginManager, PluginFileAccess(),
             getLastSyncTimestamp = { settingsStore.getLastPluginSyncTimestamp() },
             setLastSyncTimestamp = { settingsStore.setLastPluginSyncTimestamp(it) },
+            appVersion = appVersionString(),
+            platform = "ios",
         )
     }
     suspend fun syncPluginsNow(): PluginSyncService.SyncResult = pluginSyncService.sync()

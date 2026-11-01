@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
@@ -35,6 +36,9 @@ private const val ALBUM_POLL_ATTEMPTS = 85
 class PluginManager constructor(
     private val fileAccess: PluginFileAccess,
     private val jsRuntime: JsRuntime,
+    /** This app's version and platform key (`android`/`ios`), for [PluginCompat]. */
+    private val appVersion: String = "",
+    private val platform: String = "",
 ) {
     @Serializable
     data class PluginInfo(
@@ -227,7 +231,14 @@ class PluginManager constructor(
                 try {
                     val axeJson = fileAccess.readCachedPlugin(filename)
                     val info = parsePluginInfo(axeJson)
-                    if (info != null) {
+                    // A downloaded copy that needs a newer app is skipped, so the
+                    // bundled copy stays in use (#484). It can be on disk after an
+                    // app downgrade, or from before sync checked the floor. The
+                    // bundled copy is never checked: it was built with this app.
+                    val requires = info?.let { requiredAppVersion(axeJson) }
+                    if (requires != null) {
+                        Log.d(TAG, "Skipping cached ${info.id} v${info.version}: needs Parachord $requires, this is $appVersion")
+                    } else if (info != null) {
                         entries.add(PluginEntry(info.id, info.version, axeJson))
                     }
                 } catch (e: Exception) {
@@ -532,6 +543,17 @@ class PluginManager constructor(
         }
     }
 
+    /**
+     * The app version an `.axe`'s `manifest.minAppVersion` asks of this
+     * platform when this app is below it, else null ([PluginCompat]).
+     */
+    fun requiredAppVersion(axeJson: String): String? = try {
+        val manifest = json.decodeFromString<AxeFile>(axeJson).manifest
+        PluginCompat.requiredAppVersion(manifest.minAppVersion, appVersion, platform)
+    } catch (_: Exception) {
+        null
+    }
+
     /** Compare two semver strings. Returns >0 if a > b, <0 if a < b, 0 if equal. */
     fun compareSemver(a: String, b: String): Int {
         val pa = a.split(".").map { it.toIntOrNull() ?: 0 }
@@ -579,5 +601,6 @@ class PluginManager constructor(
         val type: String? = null,
         val icon: String? = null,
         val color: String? = null,
+        val minAppVersion: JsonElement? = null,
     )
 }
