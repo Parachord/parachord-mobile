@@ -289,8 +289,22 @@ class MetadataService constructor(
      * Tries each provider in priority order, merging fields so that
      * later providers fill in gaps left by earlier ones.
      */
-    suspend fun getArtistInfo(artistName: String): ArtistInfo? =
-        artistInfoCache.load(artistName) { fetchArtistInfo(artistName) }
+    suspend fun getArtistInfo(artistName: String, mbid: String? = null): ArtistInfo? {
+        val known = useArtistMbid(artistName, mbid)
+        // Keyed by the id too when there is one, so a namesake's cached bio isn't served.
+        val key = if (known != null) "$artistName\u0000$known" else artistName
+        return artistInfoCache.load(key) { fetchArtistInfo(artistName) }
+    }
+
+    /**
+     * Tells the providers [artistName]'s MusicBrainz id, when the caller has one
+     * ([MetadataProvider.useArtistMbid], #478). Returns the id if it's valid.
+     */
+    private suspend fun useArtistMbid(artistName: String, mbid: String?): String? {
+        val known = mbid?.trim()?.lowercase()?.takeIf { com.parachord.shared.deeplink.isValidMbid(it) } ?: return null
+        availableProviders().forEach { it.useArtistMbid(artistName, known) }
+        return known
+    }
 
     private suspend fun fetchArtistInfo(artistName: String): ArtistInfo? = coroutineScope {
         // Per-provider timeout so one SLOW provider can't stall the awaitAll
@@ -455,43 +469,80 @@ class MetadataService constructor(
     }
 
     /** Get an artist's discography from all available providers. */
-    suspend fun getArtistAlbums(artistName: String, limit: Int = 50): List<AlbumSearchResult> = coroutineScope {
+    suspend fun getArtistAlbums(artistName: String, limit: Int = 50, mbid: String? = null): List<AlbumSearchResult> =
+        getArtistAlbumsProgressively(artistName, limit, mbid).last()
+
+    /**
+     * [getArtistAlbums], emitting the merged discography so far each time a
+     * provider answers (#478, desktop parachord#1188). Spotify and Last.fm
+     * answer quickly; MusicBrainz's browse waits its turn in the 1 req/s gate.
+     *
+     * - Empty partial lists aren't emitted. The deduped list always comes once
+     *   every provider has answered, before the artwork enrichment runs; the
+     *   enriched list follows if the enrichment changed anything. The last
+     *   emission is what [getArtistAlbums] returns.
+     * - When every provider has answered, the list is empty and a provider
+     *   failed, the flow throws [DiscographyUnavailableException].
+     * - Only a complete answer is cached, as before. A cached one is emitted
+     *   alone, with no provider calls.
+     * - [mbid], when the caller knows it, skips MusicBrainz's artist name
+     *   search ([useArtistMbid]) and keys the cache, so a namesake's
+     *   discography isn't served.
+     */
+    fun getArtistAlbumsProgressively(
+        artistName: String,
+        limit: Int = 50,
+        mbid: String? = null,
+    ): Flow<List<AlbumSearchResult>> = flow {
+        val known = useArtistMbid(artistName, mbid)
         val active = availableProviders()
-        val cacheKey = cacheKey(active, artistName, limit.toString())
-        artistAlbumsCache?.get(cacheKey)?.let { return@coroutineScope it }
-        val perProvider: List<Result<List<AlbumSearchResult>>> = active
-            .map { provider -> async {
-                try {
-                    Result.success(provider.getArtistAlbums(artistName, limit))
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e   // never swallow cancellation (CLAUDE.md)
-                } catch (e: Exception) {
-                    Result.failure(e)
+        val cacheKey = if (known == null) cacheKey(active, artistName, limit.toString())
+        else cacheKey(active, artistName, limit.toString(), known)
+        artistAlbumsCache?.get(cacheKey)?.let {
+            emit(it)
+            return@flow
+        }
+        val perProvider = MutableList<Result<List<AlbumSearchResult>>?>(active.size) { null }
+        channelFlow {
+            val lock = Mutex()
+            active.forEachIndexed { i, provider ->
+                launch {
+                    val result = try {
+                        Result.success(provider.getArtistAlbums(artistName, limit))
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e   // never swallow cancellation (CLAUDE.md)
+                    } catch (e: Exception) {
+                        Result.failure(e)
+                    }
+                    lock.withLock {
+                        perProvider[i] = result
+                        send(perProvider.toList())
+                    }
                 }
-            } }
-            .awaitAll()
-
-        val results = perProvider.mapNotNull { it.getOrNull() }.flatten()
-        val deduped = deduplicateAlbums(results).take(limit)
-
-        // Distinguish "this artist genuinely has no discography" (empty, no
-        // failures) from "we couldn't reach the discography providers" (empty,
-        // but a provider threw — typically a MusicBrainz 503/429/network error).
-        // The UI shows a friendly retry message for the latter instead of a bare
-        // "No discography" empty state.
-        if (deduped.isEmpty() && perProvider.any { it.isFailure }) {
-            throw DiscographyUnavailableException()
+            }
+        }.collect { answered ->
+            val deduped = deduplicateAlbums(answered.mapNotNull { it?.getOrNull() }.flatten()).take(limit)
+            if (answered.any { it == null }) {
+                if (deduped.isNotEmpty()) emit(deduped)
+                return@collect
+            }
+            // Distinguish "this artist genuinely has no discography" (empty, no
+            // failures) from "we couldn't reach the discography providers" (empty,
+            // but a provider threw — typically a MusicBrainz 503/429/network error).
+            // The UI shows a friendly retry message for the latter instead of a bare
+            // "No discography" empty state.
+            val failed = answered.any { it!!.isFailure }
+            if (deduped.isEmpty() && failed) throw DiscographyUnavailableException()
+            emit(deduped)
+            // Enrich albums that only have Cover Art Archive URLs (which may 404).
+            // The list is already showing, so this no longer holds it back.
+            val enriched = enrichAlbumArtwork?.invoke(artistName, deduped) ?: deduped
+            if (enriched != deduped) emit(enriched)
+            // Cache only a complete answer: every provider responded and found
+            // something. A partial discography (one provider failed) or an empty
+            // one would otherwise be served as the whole thing for 30 days.
+            if (enriched.isNotEmpty() && !failed) artistAlbumsCache?.put(cacheKey, enriched)
         }
-
-        // Enrich albums that only have Cover Art Archive URLs (which may 404)
-        val enriched = enrichAlbumArtwork?.invoke(artistName, deduped) ?: deduped
-        // Cache only a complete answer: every provider responded and found
-        // something. A partial discography (one provider failed) or an empty
-        // one would otherwise be served as the whole thing for 30 days.
-        if (enriched.isNotEmpty() && perProvider.none { it.isFailure }) {
-            artistAlbumsCache?.put(cacheKey, enriched)
-        }
-        enriched
     }
 
     /** Cache key: the request plus which providers answered it, so enabling a

@@ -25,6 +25,10 @@ extension Collection {
 /// "Go to Album").
 struct PCAlbumRef: Hashable { let title: String; let artist: String }
 
+/// An artist to open, with its MusicBrainz id when the opener has one (#478):
+/// the page then skips MusicBrainz's artist name search.
+struct PCArtistRef: Hashable { let name: String; var mbid: String? = nil }
+
 /// Stable identity for a discography cell — keyed off the MBID when present,
 /// else title+artist. Used so `ForEach`/`.id` recreate cells per album (not per
 /// array slot) when the filter changes, refreshing the artwork (bug 7).
@@ -703,6 +707,8 @@ final class ArtistDetailCache {
 final class ArtistDetailModel {
     private let container = IosContainer.companion.shared
     let name: String
+    /// The artist's MusicBrainz id when the opener had one (#478).
+    let mbid: String?
     var info: ArtistInfo?
     var topTracks: [TrackSearchResult] = []
     var topEntities: [Track] = []
@@ -717,11 +723,17 @@ final class ArtistDetailModel {
     /// — errored) vs. the artist genuinely having no releases. Drives the friendly
     /// "couldn't load, try again" state instead of a bare empty grid.
     var albumsError = false
+    /// True until every provider has answered for the discography. Its skeleton
+    /// shows only while this is true and no album has arrived (#478).
+    var albumsLoading = false
+    private var discographyWatch: Cancellable?
+    /// A known MBID keys the cache too, so a namesake's page isn't reused.
+    private var cacheKey: String { mbid.map { "\(name)|\($0)" } ?? name }
     /// Reactive in-collection state (#195 M4) backing the header heart toggle.
     var inCollection = false
     private var collectionSub: Cancellable?
 
-    init(name: String) { self.name = name }
+    init(name: String, mbid: String? = nil) { self.name = name; self.mbid = mbid }
 
     /// Subscribe to the collection flow once (idempotent). Cancel on disappear.
     func watchCollection() {
@@ -742,7 +754,7 @@ final class ArtistDetailModel {
     func load() async {
         guard !loaded else { return }
         // Reuse a previously-loaded artist INSTANTLY (no skeleton on reopen).
-        if let c = ArtistDetailCache.shared.get(name) {
+        if let c = ArtistDetailCache.shared.get(cacheKey) {
             info = c.info; topTracks = c.topTracks; topEntities = c.topEntities
             albums = c.albums; albumsError = c.albumsError
             loaded = true
@@ -754,14 +766,19 @@ final class ArtistDetailModel {
             return
         }
         isLoading = true
-        info = try? await container.getArtistInfo(artistName: name)
-        ArtistImageCache.shared.fetch(name)   // header image (#187)
-        topTracks = (try? await container.getArtistTopTracks(artistName: name)) ?? []
-        topEntities = topTracks.map { pcTrack(from: $0) }
         loadTourDates()   // fire-and-forget so it doesn't delay the page (#201)
-        await loadDiscography()
+        // The discography, bio and top tracks load at once (#478). The
+        // discography used to start only after the other two had finished.
+        loadDiscography()
+        async let infoCall = container.getArtistInfo(artistName: name, mbid: mbid)
+        async let topCall = container.getArtistTopTracks(artistName: name)
+        info = try? await infoCall
+        ArtistImageCache.shared.fetch(name)   // header image (#187)
+        topTracks = (try? await topCall) ?? []
+        topEntities = topTracks.map { pcTrack(from: $0) }
         isLoading = false
         loaded = true
+        saveToCache()
     }
 
     /// Fetch the unfiltered tour schedule and toggle the On Tour tab on/off.
@@ -775,53 +792,68 @@ final class ArtistDetailModel {
     }
 
     private func saveToCache() {
-        ArtistDetailCache.shared.put(name, .init(
+        ArtistDetailCache.shared.put(cacheKey, .init(
             info: info, topTracks: topTracks, topEntities: topEntities,
             albums: albums, albumsError: albumsError, ts: Date()))
     }
 
     /// Background revalidation (stale-while-revalidate) — updates in place.
     private func refresh() async {
-        if let fresh = try? await container.getArtistInfo(artistName: name) { info = fresh }
+        if let fresh = try? await container.getArtistInfo(artistName: name, mbid: mbid) { info = fresh }
         let freshTop = (try? await container.getArtistTopTracks(artistName: name)) ?? []
         if !freshTop.isEmpty { topTracks = freshTop; topEntities = freshTop.map { pcTrack(from: $0) } }
-        if let fresh = try? await container.getArtistAlbums(artistName: name), !fresh.isEmpty {
+        if let fresh = try? await container.getArtistAlbums(artistName: name, mbid: mbid), !fresh.isEmpty {
             albums = sortedByYearDesc(fresh); albumsError = false
         }
         loadTourDates()   // refresh tour dates too (#201)
         saveToCache()
     }
 
-    /// Fetch the discography, distinguishing a provider FAILURE (→ friendly error)
-    /// from a genuinely-empty discography. `getArtistAlbums` throws
-    /// DiscographyUnavailableException only when empty BECAUSE a provider errored.
-    func loadDiscography() async {
-        do {
-            albums = sortedByYearDesc(try await container.getArtistAlbums(artistName: name))
-            albumsError = false
-        } catch {
-            albumsError = true
-            saveToCache()
-            return
-        }
-        // Android parity (ArtistViewModel.retryDiscography): the first fetch can
-        // come back without year/releaseType when MusicBrainz was rate-limited in
-        // the parallel burst — so compilations/live get no type and can't bucket.
-        // Re-fetch once after a short delay and adopt the typed result.
-        if !albums.isEmpty && albums.allSatisfy({ $0.year == nil }) {
+    /// The discography, shown as each provider answers (#478, desktop
+    /// parachord#1188) instead of after the slowest one and the artwork
+    /// enrichment. Distinguishes a provider FAILURE (→ friendly error) from a
+    /// genuinely-empty discography: the watcher reports `failed` only when the
+    /// list is empty BECAUSE a provider errored.
+    func loadDiscography() {
+        discographyWatch?.cancel()
+        albumsLoading = true
+        discographyWatch = container.watchArtistAlbums(
+            artistName: name, mbid: mbid,
+            onAlbums: { [weak self] found in
+                guard let self else { return }
+                albums = sortedByYearDesc(found)
+                albumsError = false
+            },
+            onDone: { [weak self] failed in
+                guard let self else { return }
+                albumsLoading = false
+                albumsError = failed.boolValue
+                saveToCache()
+                retryUntypedDiscography()
+            }
+        )
+    }
+
+    /// Android parity (ArtistViewModel.retryDiscography): the first fetch can
+    /// come back without year/releaseType when MusicBrainz was rate-limited in
+    /// the parallel burst — so compilations/live get no type and can't bucket.
+    /// Re-fetch once after a short delay and adopt the typed result.
+    private func retryUntypedDiscography() {
+        guard !albums.isEmpty && albums.allSatisfy({ $0.year == nil }) else { return }
+        Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if let retry = try? await container.getArtistAlbums(artistName: name),
+            if let retry = try? await container.getArtistAlbums(artistName: name, mbid: mbid),
                retry.contains(where: { $0.year != nil }) {
                 albums = sortedByYearDesc(retry)
+                saveToCache()
             }
         }
-        saveToCache()
     }
 
     /// User-triggered retry from the discography error state.
     func retryDiscography() async {
         albumsError = false
-        await loadDiscography()
+        loadDiscography()
     }
 
     /// Most-recent-first by release year (Android: `.sortedByDescending { it.year ?: 0 }`).
@@ -877,8 +909,8 @@ struct ArtistScreen: View {
 
     /// `initialTab` lets the Now Playing on-tour dot deep-link straight to the
     /// On Tour tab (#201). Defaults to Discography for every existing caller.
-    init(artistName: String, initialTab: ArtistTab = .discography) {
-        _model = State(initialValue: ArtistDetailModel(name: artistName))
+    init(artistName: String, mbid: String? = nil, initialTab: ArtistTab = .discography) {
+        _model = State(initialValue: ArtistDetailModel(name: artistName, mbid: mbid))
         _tab = State(initialValue: initialTab)
     }
 
@@ -1123,7 +1155,7 @@ struct ArtistScreen: View {
 
     private var discographyTab: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if model.isLoading && !model.loaded {
+            if model.albums.isEmpty && (model.albumsLoading || !model.loaded) {
                 discoFilterSkeleton
                 PCSkeletonGrid(count: 6, columns: 2)
             } else if model.albumsError && model.albums.isEmpty {

@@ -1782,8 +1782,9 @@ class IosContainer private constructor() {
     fun albumDetailFlow(albumTitle: String, artistName: String): Flow<AlbumDetail> =
         metadataService.getAlbumTracksWithCatalogFallback(albumTitle, artistName)
 
-    suspend fun getArtistInfo(artistName: String): ArtistInfo? =
-        metadataService.getArtistInfo(artistName)
+    /** [mbid]: the artist's MusicBrainz id when the caller has one (#478). */
+    suspend fun getArtistInfo(artistName: String, mbid: String? = null): ArtistInfo? =
+        metadataService.getArtistInfo(artistName, mbid)
 
     /** Fast artist-IMAGE lookup (Apple-Music-first, short-circuit) for the iOS
      *  ArtistImageCache — header + related-artist images (#187). */
@@ -1793,8 +1794,37 @@ class IosContainer private constructor() {
     suspend fun getArtistTopTracks(artistName: String): List<TrackSearchResult> =
         metadataService.getArtistTopTracks(artistName, 10)
 
-    suspend fun getArtistAlbums(artistName: String): List<AlbumSearchResult> =
-        metadataService.getArtistAlbums(artistName, 50)
+    suspend fun getArtistAlbums(artistName: String, mbid: String? = null): List<AlbumSearchResult> =
+        metadataService.getArtistAlbums(artistName, 50, mbid)
+
+    /**
+     * The discography as each provider answers (#478, desktop parachord#1188),
+     * so MusicBrainz's gated browse doesn't hold back Spotify's and Last.fm's
+     * albums. [onAlbums] fires on the main thread with the list so far.
+     * [onDone] fires once everything has answered, with `failed = true` when the
+     * list is empty because a provider failed ([DiscographyUnavailableException]);
+     * not after [Cancellable.cancel].
+     */
+    fun watchArtistAlbums(
+        artistName: String,
+        mbid: String?,
+        onAlbums: (List<AlbumSearchResult>) -> Unit,
+        onDone: (failed: Boolean) -> Unit,
+    ): Cancellable {
+        val job = appScope.launch {
+            val failed = try {
+                metadataService.getArtistAlbumsProgressively(artistName, 50, mbid).collect { onAlbums(it) }
+                false
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("IosContainer", "discography for '$artistName' failed: ${e.message}")
+                true
+            }
+            onDone(failed)
+        }
+        return Cancellable { job.cancel() }
+    }
 
     /** Artist's upcoming tour dates (unfiltered) for the On Tour tab (#201). Collects
      *  the cached-first Resource flow to its terminal list. */

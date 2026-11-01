@@ -76,6 +76,25 @@ class MusicBrainzProvider(
         }
     }
 
+    /**
+     * Answers [resolveArtist] for [artistName] with [mbid] without a search, so
+     * the artist page's discography, bio and Wikipedia lookups all skip it
+     * (#478, desktop parachord#1188). The record has no tags; the bio's tags
+     * then come from Last.fm. Replaces a cached search answer naming a
+     * different artist: the caller's id says which one is meant.
+     */
+    override suspend fun useArtistMbid(artistName: String, mbid: String) {
+        val key = artistName.lowercase().trim()
+        cacheMutex.withLock {
+            val existing = artistSearchCache[key]
+            @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            if (existing != null && existing.isCompleted &&
+                existing.getCompletionExceptionOrNull() == null && existing.getCompleted()?.id == mbid
+            ) return
+            artistSearchCache[key] = CompletableDeferred(MbArtist(id = mbid, name = artistName))
+        }
+    }
+
     override val name = "musicbrainz"
     override val priority = 0
 
