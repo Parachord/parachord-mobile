@@ -386,7 +386,11 @@ class MetadataService constructor(
      * step that threw or timed out may have had the photo. Found photos go to
      * the persistent cache.
      */
-    suspend fun getArtistImage(artistName: String, exclude: String? = null): String? {
+    suspend fun getArtistImage(artistName: String, exclude: String? = null): String? =
+        // Artist photos are decoration: background lane, behind taps (#480).
+        com.parachord.shared.api.inBackgroundLane { lookupArtistImage(artistName, exclude) }
+
+    private suspend fun lookupArtistImage(artistName: String, exclude: String?): String? {
         val key = artistName.lowercase().trim()
         if (key.isEmpty()) return null
         // Persistent cache hit (shared, both platforms) — skip the network cascade.

@@ -27,8 +27,9 @@ internal suspend fun <T> fillMissingArtwork(
         .distinctBy(keyOf)
         .take(limit)
     if (needed.isEmpty()) return@coroutineScope items
+    // Decoration: the lookups use the background lane, behind taps (#480).
     val found = needed.map { item ->
-        async {
+        async(com.parachord.shared.api.BackgroundRequests) {
             val url = try {
                 lookup(item)
             } catch (e: CancellationException) {

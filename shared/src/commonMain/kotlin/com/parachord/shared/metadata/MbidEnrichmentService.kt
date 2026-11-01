@@ -259,7 +259,9 @@ class MbidEnrichmentService(
         // needs the bare MBID for this play.
         if (!isrc.isNullOrBlank() && musicBrainzClient != null) {
             try {
-                musicBrainzClient.lookupRecordingMbidByIsrc(isrc)?.let { return RecordingMbidLookup.Found(it) }
+                // Enrichment: background lane, behind taps (#480).
+                com.parachord.shared.api.inBackgroundLane { musicBrainzClient.lookupRecordingMbidByIsrc(isrc) }
+                    ?.let { return RecordingMbidLookup.Found(it) }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "ISRC MBID fallback failed for isrc=$isrc: ${e.message}")
@@ -287,7 +289,7 @@ class MbidEnrichmentService(
         val client = musicBrainzClient ?: return null
         return try {
             val query = "recording:\"$title\" AND artist:\"$artist\""
-            val response = client.searchRecordings(query, limit = 5)
+            val response = com.parachord.shared.api.inBackgroundLane { client.searchRecordings(query, limit = 5) }
             val match = response.recordings.firstOrNull { rec ->
                 com.parachord.shared.resolver.scoreConfidence(
                     targetTitle = title,

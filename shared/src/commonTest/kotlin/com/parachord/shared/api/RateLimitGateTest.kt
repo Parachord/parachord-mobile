@@ -327,4 +327,54 @@ class RateLimitGateTest {
         // Still one gap after the request that was actually sent, not 500 + 1000.
         assertEquals(listOf(-1L, 1_000L), startedAt)
     }
+
+    // ── background lane (#480) ────────────────────────────────────────
+
+    @Test
+    fun foreground_waiters_run_before_background_ones_queued_earlier() = runTest {
+        val g = gappedGate(0L)
+        val order = mutableListOf<String>()
+        val holding = kotlinx.coroutines.CompletableDeferred<Unit>()
+        launch { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { holding.await() } }
+        testScheduler.runCurrent()
+        for (i in 1..3) launch {
+            inBackgroundLane { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { order += "bg$i" } }
+        }
+        for (i in 1..2) launch { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { order += "fg$i" } }
+        testScheduler.runCurrent()
+        assertTrue(order.isEmpty())
+
+        holding.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(listOf("fg1", "fg2", "bg1", "bg2", "bg3"), order)
+    }
+
+    @Test
+    fun a_background_caller_with_nobody_waiting_goes_at_once() = runTest {
+        val g = gappedGate(0L)
+        val ran = inBackgroundLane { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { "ran" } }
+        assertEquals("ran", ran)
+    }
+
+    @Test
+    fun a_cancelled_waiter_gives_up_its_place_without_using_a_permit() = runTest {
+        val g = gappedGate(0L)
+        val order = mutableListOf<String>()
+        val holding = kotlinx.coroutines.CompletableDeferred<Unit>()
+        launch { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { holding.await() } }
+        testScheduler.runCurrent()
+        val superseded = launch { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { order += "cancelled" } }
+        launch { inBackgroundLane { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { order += "bg" } } }
+        launch { g.withPermit(exceptionFactory = { TestRateLimited(it) }) { order += "fg" } }
+        testScheduler.runCurrent()
+        superseded.cancel()
+
+        holding.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(listOf("fg", "bg"), order)
+        // Every permit came back: a fresh call still runs.
+        assertEquals("ok", g.withPermit(exceptionFactory = { TestRateLimited(it) }) { "ok" })
+    }
 }
