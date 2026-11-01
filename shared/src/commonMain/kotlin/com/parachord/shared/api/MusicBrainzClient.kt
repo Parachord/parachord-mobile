@@ -312,6 +312,8 @@ data class MbRecording(
     val length: Long? = null,
     @SerialName("artist-credit") val artistCredit: List<MbArtistCredit> = emptyList(),
     val releases: List<MbReleaseRef> = emptyList(),
+    /** Search relevance, 0–100; present only on search results. */
+    val score: Int? = null,
 ) {
     val artistName: String get() = artistCredit.joinToString(", ") { it.name }
     val albumTitle: String? get() = releases.firstOrNull()?.title
@@ -348,6 +350,8 @@ data class MbRelease(
     val date: String? = null,
     @SerialName("track-count") val trackCount: Int? = null,
     @SerialName("release-group") val releaseGroup: MbReleaseGroup? = null,
+    /** Search relevance, 0–100; present only on search results. */
+    val score: Int? = null,
 ) {
     val artistName: String get() = artistCredit.joinToString(", ") { it.name }
     val year: Int? get() = date?.take(4)?.toIntOrNull()
@@ -370,6 +374,8 @@ data class MbArtist(
     val name: String,
     val disambiguation: String? = null,
     val tags: List<MbTag> = emptyList(),
+    /** Search relevance, 0–100; present only on search results. */
+    val score: Int? = null,
 )
 
 @Serializable

@@ -63,6 +63,22 @@ class ProgressiveSearchTest {
     }
 
     @Test
+    fun rowsCarryDesktopSourceScores() = runTest {
+        val tracks = service(
+            Provider("musicbrainz", delayMs = 0, titles = listOf("Angel", "Teardrop")),
+            Provider("lastfm", delayMs = 0, titles = listOf("X", "Y")),
+            Provider("spotify", delayMs = 0, titles = listOf("Angel", "Z")),
+        ).searchTracks("q").associate { it.title to it.score }
+
+        assertEquals(null, tracks["Teardrop"]) // MusicBrainz's own score; this fake gives none
+        assertEquals(100, tracks["X"]) // Last.fm: first provider after MusicBrainz, top hit
+        assertEquals(95, tracks["Y"])
+        assertEquals(90, tracks["Z"]) // Spotify: one provider ahead, second hit
+        // Spotify agreeing with MusicBrainz: max(50, 95) + the agreement bonus.
+        assertEquals(100, tracks["Angel"])
+    }
+
+    @Test
     fun theOneShotSearchReturnsTheFinalEmission() = runTest {
         val svc = service(
             Provider("musicbrainz", delayMs = 3_000, titles = listOf("Angel", "Teardrop")),

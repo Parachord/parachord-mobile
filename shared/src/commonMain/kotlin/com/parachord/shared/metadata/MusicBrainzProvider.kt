@@ -91,6 +91,7 @@ class MusicBrainzProvider(
                     duration = rec.length,
                     mbid = rec.id,
                     provider = name,
+                    score = rec.score,
                 )
             }
         } catch (_: Exception) {
@@ -109,6 +110,7 @@ class MusicBrainzProvider(
                     mbid = rel.id,
                     releaseType = normalizeReleaseType(rel.releaseGroup),
                     provider = name,
+                    score = rel.score,
                 )
             }
         } catch (_: Exception) {
@@ -123,6 +125,7 @@ class MusicBrainzProvider(
                     mbid = a.id,
                     tags = a.tags.sortedByDescending { it.count }.take(5).map { it.name },
                     provider = name,
+                    score = a.score,
                 )
             }
         } catch (_: Exception) {
