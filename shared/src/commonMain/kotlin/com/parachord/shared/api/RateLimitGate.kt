@@ -24,9 +24,12 @@ import kotlinx.coroutines.sync.withPermit
  *      conservative number (default 2). This prevents the post-cooldown
  *      burst that would otherwise re-trip the throttle as soon as queued
  *      tasks all fire at once.
- *   3. **Inter-request delay** — a 150ms sleep before each call (after
- *      acquiring the permit). Same pacing AM uses in
- *      `AppleMusicSyncProvider.searchForTrackId` (commit `16884d1`).
+ *   3. **Inter-request delay** — each call starts at least 150ms after the
+ *      previous one finished (after acquiring the permit). Same pacing AM uses
+ *      in `AppleMusicSyncProvider.searchForTrackId` (commit `16884d1`). A
+ *      call after an idle spell starts at once (#475): the gap used to be a
+ *      sleep before every call, so each search's first MusicBrainz request
+ *      waited 1.1s for nothing.
  *
  * **Why this exists.** The KMP migration's Phase 9E.1.* cutovers (Apr 28,
  * 2026) swapped Retrofit/OkHttp for Ktor across SpotifyClient,
@@ -56,8 +59,8 @@ import kotlinx.coroutines.sync.withPermit
  * @param maxConcurrent simultaneous in-flight permit count. Lower for
  *   stricter providers (MusicBrainz publishes 1 RPS; we use 1 + a longer
  *   delay there).
- * @param interRequestDelayMs sleep between successive calls inside the
- *   permit. Helps stagger bursts.
+ * @param interRequestDelayMs minimum time from one call finishing to the next
+ *   one starting, waited inside the permit. Helps stagger bursts.
  * @param defaultCooldownSec used when the response has no `Retry-After`.
  * @param maxCooldownMs hard cap (defense against misbehaving servers).
  * @param loadCooldownEpochMs optional callback invoked once at construction
@@ -195,9 +198,28 @@ class RateLimitGate(
         return limiter.withPermit {
             checkCooldown(exceptionFactory)
             awaitWindowSlot()
-            delay(interRequestDelayMs)
-            block()
+            awaitRequestGap()
+            try {
+                block()
+            } finally {
+                // Stamped only once the request was sent (finished, failed or
+                // cancelled mid-flight). A caller cancelled while still waiting
+                // its turn never gets here, so it can't push the next request
+                // back a whole gap (#475, desktop parachord#1186).
+                lastFinishedAtMs = nowMs()
+            }
         }
+    }
+
+    /** When the most recent call finished, or null before the first one. */
+    @Volatile
+    private var lastFinishedAtMs: Long? = null
+
+    /** Wait out what's left of [interRequestDelayMs] since the last call finished. */
+    private suspend fun awaitRequestGap() {
+        val last = lastFinishedAtMs ?: return
+        val waitMs = last + interRequestDelayMs - nowMs()
+        if (waitMs > 0) delay(waitMs)
     }
 
     /**

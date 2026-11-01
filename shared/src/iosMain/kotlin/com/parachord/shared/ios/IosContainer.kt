@@ -25,6 +25,7 @@ import com.parachord.shared.metadata.DiscogsProvider
 import com.parachord.shared.metadata.LastFmProvider
 import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.shared.metadata.MetadataService
+import com.parachord.shared.metadata.SearchRanking
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Album
@@ -3379,16 +3380,59 @@ class IosContainer private constructor() {
     suspend fun searchLocalTracks(query: String): List<Track> =
         if (query.isBlank()) emptyList() else try { trackDao.searchOnce(query) } catch (e: Exception) { emptyList() }
 
-    suspend fun searchTracksRemote(query: String, limit: Int = 20): List<TrackSearchResult> =
-        if (query.isBlank()) emptyList() else try { metadataService.searchTracks(query, limit) } catch (e: Exception) { emptyList() }
-
-    suspend fun searchAlbumsRemote(query: String, limit: Int = 10): List<AlbumSearchResult> =
-        if (query.isBlank()) emptyList() else try { metadataService.searchAlbums(query, limit) } catch (e: Exception) { emptyList() }
-
-    suspend fun searchArtistsRemote(query: String, limit: Int = 10): List<IosArtistResult> =
-        if (query.isBlank()) emptyList() else try {
-            metadataService.searchArtists(query, limit).map { IosArtistResult(it.name, it.imageUrl, it.mbid) }
-        } catch (e: Exception) { emptyList() }
+    /**
+     * The remote half of Search (#475, desktop parachord#1186): artists, tracks
+     * and albums run at once, and each callback fires (on the main thread) every
+     * time that category's providers add rows, so Spotify's and Last.fm's show
+     * before MusicBrainz's 1 req/s gate lets its requests through. Each list
+     * is ranked like Android's ([SearchRanking]). [onDone]
+     * fires once all three have finished, but not after [Cancellable.cancel].
+     *
+     * Cancel the handle when the query changes. Cancelling a Swift `Task` does
+     * not cancel the coroutine behind a Kotlin suspend call, so the old
+     * `async let` searches stayed queued at the MusicBrainz gate after the user
+     * had typed on, in front of the query they wanted.
+     */
+    fun searchRemote(
+        query: String,
+        onArtists: (List<IosArtistResult>) -> Unit,
+        onTracks: (List<TrackSearchResult>) -> Unit,
+        onAlbums: (List<AlbumSearchResult>) -> Unit,
+        onDone: () -> Unit,
+    ): Cancellable {
+        val job = appScope.launch {
+            if (query.isNotBlank()) {
+                try {
+                    coroutineScope {
+                        launch {
+                            metadataService.searchArtistsProgressively(query, 10).collect { artists ->
+                                onArtists(
+                                    SearchRanking.rankArtists(query, artists)
+                                        .map { IosArtistResult(it.name, it.imageUrl, it.mbid) },
+                                )
+                            }
+                        }
+                        launch {
+                            metadataService.searchTracksProgressively(query, 20).collect {
+                                onTracks(SearchRanking.rankTracks(query, it))
+                            }
+                        }
+                        launch {
+                            metadataService.searchAlbumsProgressively(query, 10).collect {
+                                onAlbums(SearchRanking.rankAlbums(query, it))
+                            }
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("IosContainer", "search failed: ${e.message}")
+                }
+            }
+            onDone()
+        }
+        return Cancellable { job.cancel() }
+    }
 
     // Search history (shared SearchHistoryDao; mirrors Android's save-on-select +
     // dedup-by-query + trim-to-limit).

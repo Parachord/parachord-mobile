@@ -7,6 +7,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -102,16 +105,20 @@ class MetadataService constructor(
     }
 
     /** Search tracks across all available providers in parallel, merge and deduplicate. */
-    suspend fun searchTracks(query: String, limit: Int = 20): List<TrackSearchResult> = coroutineScope {
-        val results = availableProviders()
-            .map { provider -> async {
-                try { provider.searchTracks(query, limit) } catch (_: Exception) { emptyList() }
-            } }
-            .awaitAll()
-            .flatten()
+    suspend fun searchTracks(query: String, limit: Int = 20): List<TrackSearchResult> =
+        searchTracksProgressively(query, limit).last()
 
-        deduplicateTracks(results).take(limit)
-    }
+    /**
+     * [searchTracks], emitting the merged list each time a provider answers (#475,
+     * desktop parachord#1186). Spotify and Last.fm answer in a few hundred ms;
+     * MusicBrainz waits its turn in the 1 req/s gate, so its rows join seconds
+     * later. Empty partial lists aren't emitted. The last emission always comes,
+     * once every provider has answered, and is what [searchTracks] returns.
+     */
+    fun searchTracksProgressively(query: String, limit: Int = 20): Flow<List<TrackSearchResult>> =
+        providerAnswers { it.searchTracks(query, limit) }.mapNotNull { answers ->
+            deduplicateTracks(answers.results).take(limit).takeIf { it.isNotEmpty() || answers.complete }
+        }
 
     /**
      * Search albums across all available providers in parallel, merge and
@@ -119,24 +126,71 @@ class MetadataService constructor(
      * plugins' album catalogs are searched too (desktop parachord#1129), so a
      * MusicBrainz outage doesn't empty the results.
      */
-    suspend fun searchAlbums(query: String, limit: Int = 10): List<AlbumSearchResult> = coroutineScope {
-        val active = availableProviders()
-        val perProvider = active
-            .map { provider -> async {
-                provider.name to try { provider.searchAlbums(query, limit) } catch (_: Exception) { null }
-            } }
-            .awaitAll()
-        val results = perProvider.flatMap { it.second.orEmpty() }
+    suspend fun searchAlbums(query: String, limit: Int = 10): List<AlbumSearchResult> =
+        searchAlbumsProgressively(query, limit).last()
 
-        val mbFound = perProvider.firstOrNull { it.first == "musicbrainz" }?.second?.size ?: 0
-        val catalogResults = if (albumCatalog != null && mbFound < CATALOG_SEARCH_BELOW) {
-            try { albumCatalog.search(query) } catch (e: Exception) {
+    /**
+     * [searchAlbums], emitting as each provider answers (see
+     * [searchTracksProgressively]). The catalog search, when MusicBrainz found
+     * fewer than three albums, runs after every provider has answered and adds
+     * the last emission.
+     */
+    fun searchAlbumsProgressively(query: String, limit: Int = 10): Flow<List<AlbumSearchResult>> = flow {
+        providerAnswers { it.searchAlbums(query, limit) }.collect { answers ->
+            val merged = deduplicateAlbums(answers.results).take(limit)
+            if (!answers.complete) {
+                if (merged.isNotEmpty()) emit(merged)
+                return@collect
+            }
+            val mbFound = answers.byProvider.firstOrNull { it.first == "musicbrainz" }?.second?.size ?: 0
+            if (albumCatalog == null || mbFound >= CATALOG_SEARCH_BELOW) {
+                emit(merged)
+                return@collect
+            }
+            if (merged.isNotEmpty()) emit(merged)
+            val catalogResults = try { albumCatalog.search(query) } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 emptyList()
             }
-        } else emptyList()
+            emit(deduplicateAlbums(answers.results + catalogResults).take(limit))
+        }
+    }
 
-        deduplicateAlbums(results + catalogResults).take(limit)
+    /** What the providers have answered so far, in provider order. */
+    private class ProviderAnswers<T>(
+        val byProvider: List<Pair<String, List<T>>>,
+        val complete: Boolean,
+    ) {
+        val results: List<T> get() = byProvider.flatMap { it.second }
+    }
+
+    /**
+     * Runs [search] on every available provider at once and emits after each
+     * answer. A failed provider counts as an empty answer. Answers are kept in
+     * provider order, not arrival order, so the final merge matches what one
+     * `awaitAll` over the providers produced.
+     */
+    private fun <T> providerAnswers(search: suspend (MetadataProvider) -> List<T>): Flow<ProviderAnswers<T>> = channelFlow {
+        val active = availableProviders()
+        if (active.isEmpty()) {
+            send(ProviderAnswers(emptyList(), complete = true))
+            return@channelFlow
+        }
+        val lock = Mutex()
+        val answered = MutableList<List<T>?>(active.size) { null }
+        active.forEachIndexed { i, provider ->
+            launch {
+                val result = try { search(provider) } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    emptyList()
+                }
+                lock.withLock {
+                    answered[i] = result
+                    val byProvider = active.indices.mapNotNull { j -> answered[j]?.let { active[j].name to it } }
+                    send(ProviderAnswers(byProvider, complete = byProvider.size == active.size))
+                }
+            }
+        }
     }
 
     /**
@@ -204,16 +258,14 @@ class MetadataService constructor(
     }
 
     /** Search artists across all available providers in parallel, merge and deduplicate. */
-    suspend fun searchArtists(query: String, limit: Int = 10): List<ArtistInfo> = coroutineScope {
-        val results = availableProviders()
-            .map { provider -> async {
-                try { provider.searchArtists(query, limit) } catch (_: Exception) { emptyList() }
-            } }
-            .awaitAll()
-            .flatten()
+    suspend fun searchArtists(query: String, limit: Int = 10): List<ArtistInfo> =
+        searchArtistsProgressively(query, limit).last()
 
-        deduplicateArtists(results).take(limit)
-    }
+    /** [searchArtists], emitting as each provider answers (see [searchTracksProgressively]). */
+    fun searchArtistsProgressively(query: String, limit: Int = 10): Flow<List<ArtistInfo>> =
+        providerAnswers { it.searchArtists(query, limit) }.mapNotNull { answers ->
+            deduplicateArtists(answers.results).take(limit).takeIf { it.isNotEmpty() || answers.complete }
+        }
 
     /**
      * Get detailed artist info using cascading fallback.

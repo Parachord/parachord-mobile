@@ -30,6 +30,9 @@ final class SearchViewModel {
     var history: [SearchHistory] = []
 
     private var searchTask: Task<Void, Never>?
+    /// The remote search runs in Kotlin's scope, so cancelling `searchTask`
+    /// doesn't stop it; this handle does (#475).
+    private var remoteSearch: Cancellable?
     private var historyWatcher: Cancellable?
 
     /// Start watching search history (idempotent). Called from the view's
@@ -51,6 +54,8 @@ final class SearchViewModel {
     func onQueryChange(_ newValue: String) {
         query = newValue
         searchTask?.cancel()
+        remoteSearch?.cancel()
+        remoteSearch = nil
         let q = newValue.trimmingCharacters(in: .whitespaces)
         guard q.count > 1 else {
             localTracks = []; artists = []; remoteTracks = []; remoteAlbums = []
@@ -64,25 +69,29 @@ final class SearchViewModel {
         }
     }
 
+    /// The local DB search plus the three remote categories, all at once. Each
+    /// remote category shows as its providers answer (#475): Spotify's and
+    /// Last.fm's rows in a few hundred ms, MusicBrainz's seconds later.
     private func run(_ q: String) async {
         isSearching = true
-        // Fan out the four searches concurrently (local DB + the three remote
-        // MetadataService cascades), like Android's parallel collectors.
-        async let local = container.searchLocalTracks(query: q)
-        async let arts = container.searchArtistsRemote(query: q, limit: 10)
-        async let trks = container.searchTracksRemote(query: q, limit: 20)
-        async let albs = container.searchAlbumsRemote(query: q, limit: 10)
-        let l = (try? await local) ?? []
-        let a = (try? await arts) ?? []
-        let t = (try? await trks) ?? []
-        let b = (try? await albs) ?? []
+        // A callback from a search the user has typed past is dropped.
+        let isCurrent: () -> Bool = { [weak self] in
+            self?.query.trimmingCharacters(in: .whitespaces) == q
+        }
+        remoteSearch = container.searchRemote(
+            query: q,
+            onArtists: { [weak self] a in if isCurrent() { self?.artists = a } },
+            onTracks: { [weak self] t in if isCurrent() { self?.remoteTracks = t } },
+            onAlbums: { [weak self] b in if isCurrent() { self?.remoteAlbums = b } },
+            onDone: { [weak self] in
+                guard isCurrent() else { return }
+                self?.hasSearched = true
+                self?.isSearching = false
+            }
+        )
+        let l = (try? await container.searchLocalTracks(query: q)) ?? []
         if Task.isCancelled { return }
         localTracks = l
-        artists = a
-        remoteTracks = t
-        remoteAlbums = b
-        hasSearched = true
-        isSearching = false
     }
 
     /// Metadata-only shared `Track` from a remote search hit (the 19-param
