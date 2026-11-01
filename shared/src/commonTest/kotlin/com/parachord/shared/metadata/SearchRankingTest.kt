@@ -44,18 +44,56 @@ class SearchRankingTest {
     }
 
     @Test
-    fun aMatchFromAHigherPriorityProviderWinsATie() {
+    fun spotifysExactTopHitBeatsALooseMusicBrainzMatch() {
+        // MusicBrainz's own scores for "portishead roads" put covers first; the
+        // flat +0.4 MusicBrainz bonus used to keep them above Spotify's "Roads".
+        val ranked = SearchRanking.rankTracks(
+            "portishead roads",
+            listOf(
+                TrackSearchResult("Portishead - Roads", "The Otamatone Songbook", provider = "musicbrainz", score = 100),
+                TrackSearchResult("Roads (Portishead Cover)", "The Last Embrace", provider = "musicbrainz", score = 89),
+                TrackSearchResult("Roads", "Portishead", provider = "spotify", score = SearchRanking.rankScore(0, 1)),
+            ),
+        )
+        assertEquals("Portishead", ranked.first().artist)
+    }
+
+    @Test
+    fun theSourceScoreBreaksAFuzzyTie() {
         val ranked = SearchRanking.rankArtists(
             "massive attack",
-            listOf(ArtistInfo("Massive Attack", provider = "spotify"), ArtistInfo("Massive Attack", provider = "musicbrainz")),
+            listOf(
+                ArtistInfo("Massive Attack", provider = "spotify", score = 80),
+                ArtistInfo("Massive Attack", provider = "musicbrainz", score = 100),
+            ),
         )
         assertEquals(listOf("musicbrainz", "spotify"), ranked.map { it.provider })
     }
 
     @Test
-    fun unmatchedSpotifyRowsAreDropped() {
-        // Spotify's source score is 0, so a row with no fuzzy match scores 0.
-        val ranked = SearchRanking.rankAlbums("qqqq", listOf(AlbumSearchResult("Mezzanine", "Massive Attack", provider = "spotify")))
-        assertTrue(ranked.isEmpty())
+    fun aRowWithNoFuzzyMatchStaysLast() {
+        val ranked = SearchRanking.rankAlbums(
+            "mezzanine",
+            listOf(
+                AlbumSearchResult("Qqqq", "Nobody", provider = "spotify", score = 100),
+                AlbumSearchResult("Mezzanine", "Massive Attack", provider = "spotify", score = 95),
+            ),
+        )
+        assertEquals(listOf("Mezzanine", "Qqqq"), ranked.map { it.title })
+    }
+
+    @Test
+    fun rankScoreDropsFivePerPlaceAndPerProviderAhead() {
+        assertEquals(100, SearchRanking.rankScore(0, 0))
+        assertEquals(85, SearchRanking.rankScore(2, 1))
+        assertEquals(0, SearchRanking.rankScore(30, 0))
+    }
+
+    @Test
+    fun agreementBetweenProvidersAddsTheBonus_aSecondRecordingDoesNot() {
+        assertEquals(105, mergedSearchScore(100, "musicbrainz", 95, "spotify"))
+        assertEquals(100, mergedSearchScore(80, "musicbrainz", 100, "musicbrainz"))
+        assertEquals(100, mergedSearchScore(100, "musicbrainz+spotify", 90, "spotify"))
+        assertEquals(null, mergedSearchScore(null, "lastfm", null, "wikipedia"))
     }
 }

@@ -92,6 +92,8 @@ class MetadataService constructor(
     private companion object {
         const val TAG = "MetadataService"
 
+        const val MUSICBRAINZ = "musicbrainz"
+
         /** Desktop: MusicBrainz finding fewer than this many albums adds catalog results. */
         const val CATALOG_SEARCH_BELOW = 3
 
@@ -116,7 +118,7 @@ class MetadataService constructor(
      * once every provider has answered, and is what [searchTracks] returns.
      */
     fun searchTracksProgressively(query: String, limit: Int = 20): Flow<List<TrackSearchResult>> =
-        providerAnswers { it.searchTracks(query, limit) }.mapNotNull { answers ->
+        providerAnswers({ it.searchTracks(query, limit) }, { t, score -> t.copy(score = t.score ?: score) }).mapNotNull { answers ->
             deduplicateTracks(answers.results).take(limit).takeIf { it.isNotEmpty() || answers.complete }
         }
 
@@ -136,13 +138,13 @@ class MetadataService constructor(
      * the last emission.
      */
     fun searchAlbumsProgressively(query: String, limit: Int = 10): Flow<List<AlbumSearchResult>> = flow {
-        providerAnswers { it.searchAlbums(query, limit) }.collect { answers ->
+        providerAnswers({ it.searchAlbums(query, limit) }, albumWithScore).collect { answers ->
             val merged = deduplicateAlbums(answers.results).take(limit)
             if (!answers.complete) {
                 if (merged.isNotEmpty()) emit(merged)
                 return@collect
             }
-            val mbFound = answers.byProvider.firstOrNull { it.first == "musicbrainz" }?.second?.size ?: 0
+            val mbFound = answers.byProvider.firstOrNull { it.first == MUSICBRAINZ }?.second?.size ?: 0
             if (albumCatalog == null || mbFound >= CATALOG_SEARCH_BELOW) {
                 emit(merged)
                 return@collect
@@ -151,10 +153,13 @@ class MetadataService constructor(
             val catalogResults = try { albumCatalog.search(query) } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 emptyList()
-            }
+            }.rankScored(answers.byProvider.count { it.first != MUSICBRAINZ }, albumWithScore)
             emit(deduplicateAlbums(answers.results + catalogResults).take(limit))
         }
     }
+
+    private val albumWithScore: (AlbumSearchResult, Int) -> AlbumSearchResult =
+        { a, score -> a.copy(score = a.score ?: score) }
 
     /** What the providers have answered so far, in provider order. */
     private class ProviderAnswers<T>(
@@ -164,14 +169,23 @@ class MetadataService constructor(
         val results: List<T> get() = byProvider.flatMap { it.second }
     }
 
+    /** Gives each row without a score its [SearchRanking.rankScore] at [position]. */
+    private fun <T> List<T>.rankScored(position: Int, withScore: (T, Int) -> T): List<T> =
+        mapIndexed { rank, row -> withScore(row, SearchRanking.rankScore(rank, position)) }
+
     /**
      * Runs [search] on every available provider at once and emits after each
      * answer. A failed provider counts as an empty answer. Answers are kept in
      * provider order, not arrival order, so the final merge matches what one
-     * `awaitAll` over the providers produced.
+     * `awaitAll` over the providers produced. Rows other than MusicBrainz's get
+     * a rank score through [withScore] ([SearchRanking.rankScore]).
      */
-    private fun <T> providerAnswers(search: suspend (MetadataProvider) -> List<T>): Flow<ProviderAnswers<T>> = channelFlow {
+    private fun <T> providerAnswers(
+        search: suspend (MetadataProvider) -> List<T>,
+        withScore: (T, Int) -> T,
+    ): Flow<ProviderAnswers<T>> = channelFlow {
         val active = availableProviders()
+        val others = active.filter { it.name != MUSICBRAINZ }
         if (active.isEmpty()) {
             send(ProviderAnswers(emptyList(), complete = true))
             return@channelFlow
@@ -180,10 +194,13 @@ class MetadataService constructor(
         val answered = MutableList<List<T>?>(active.size) { null }
         active.forEachIndexed { i, provider ->
             launch {
-                val result = try { search(provider) } catch (e: Exception) {
+                val found = try { search(provider) } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     emptyList()
                 }
+                // MusicBrainz scores its own results; the others score by rank.
+                val result = if (provider.name == MUSICBRAINZ) found
+                else found.rankScored(others.indexOf(provider), withScore)
                 lock.withLock {
                     answered[i] = result
                     val byProvider = active.indices.mapNotNull { j -> answered[j]?.let { active[j].name to it } }
@@ -263,7 +280,7 @@ class MetadataService constructor(
 
     /** [searchArtists], emitting as each provider answers (see [searchTracksProgressively]). */
     fun searchArtistsProgressively(query: String, limit: Int = 10): Flow<List<ArtistInfo>> =
-        providerAnswers { it.searchArtists(query, limit) }.mapNotNull { answers ->
+        providerAnswers({ it.searchArtists(query, limit) }, { a, score -> a.copy(score = a.score ?: score) }).mapNotNull { answers ->
             deduplicateArtists(answers.results).take(limit).takeIf { it.isNotEmpty() || answers.complete }
         }
 
@@ -659,6 +676,7 @@ fun ArtistInfo.mergeWith(other: ArtistInfo) = ArtistInfo(
     tags = tags.ifEmpty { other.tags },
     similarArtists = if (similarArtists.isNotEmpty()) similarArtists else other.similarArtists,
     provider = "$provider+${other.provider}",
+    score = mergedSearchScore(score, provider, other.score, other.provider),
 )
 
 fun TrackSearchResult.mergeWith(other: TrackSearchResult) = TrackSearchResult(
@@ -671,6 +689,7 @@ fun TrackSearchResult.mergeWith(other: TrackSearchResult) = TrackSearchResult(
     spotifyId = spotifyId ?: other.spotifyId,
     mbid = mbid ?: other.mbid,
     provider = "$provider+${other.provider}",
+    score = mergedSearchScore(score, provider, other.score, other.provider),
 )
 
 fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
@@ -684,4 +703,20 @@ fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
     releaseType = releaseType ?: other.releaseType,
     secondaryTypes = secondaryTypes.ifEmpty { other.secondaryTypes },
     provider = "$provider+${other.provider}",
+    score = mergedSearchScore(score, provider, other.score, other.provider),
 )
+
+/**
+ * A merged search row's relevance (desktop `mergeTrackResults`, #475): the
+ * better of the two, plus [SearchRanking.AGREEMENT_BONUS] when [otherProvider]
+ * adds a provider the row didn't have. Providers agreeing is the best sign a
+ * row is the track the user means, not a cover titled after it. A second
+ * recording from the same provider gets no bonus. Null when neither has a score.
+ */
+internal fun mergedSearchScore(score: Int?, provider: String, otherScore: Int?, otherProvider: String): Int? {
+    if (score == null && otherScore == null) return null
+    val known = provider.split('+')
+    val addsProvider = otherProvider.split('+').any { it.isNotEmpty() && it !in known }
+    if (addsProvider) return maxOf(score ?: 50, otherScore ?: 50) + SearchRanking.AGREEMENT_BONUS
+    return maxOf(score ?: otherScore!!, otherScore ?: score!!)
+}

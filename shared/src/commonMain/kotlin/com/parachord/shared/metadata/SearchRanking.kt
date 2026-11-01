@@ -4,10 +4,7 @@ import kotlin.math.min
 
 /**
  * Lightweight fuzzy matching inspired by Fuse.js, matching the desktop's search ranking approach.
- *
- * Desktop formula: finalScore = (fuzzyScore × 0.6) + (mbScore × 0.4)
- * Since we don't have MusicBrainz popularity scores on mobile, we use provider priority
- * as a proxy for the second factor: MusicBrainz results (priority 0) get the highest boost.
+ * [SearchRanking] blends it with each row's source score.
  */
 object FuzzyMatch {
 
@@ -57,17 +54,14 @@ object FuzzyMatch {
         maxOf(score(query, title), score(query, artist) * 0.9, score(query, "$artist $title"))
 
     /**
-     * Compute the combined search score matching the desktop formula:
-     * finalScore = (fuzzyScore × 0.6) + (sourceScore × 0.4)
+     * The desktop blend (`reRankResults`): 60% fuzzy relevance, 40% the row's
+     * source score.
      *
      * @param fuzzyScore The fuzzy relevance score (0.0-1.0)
-     * @param providerPriority The metadata provider priority (0 = MusicBrainz, 10 = LastFm, 20 = Spotify)
+     * @param sourceScore The row's [TrackSearchResult.score] and the like, 0-100
      */
-    fun combinedScore(fuzzyScore: Double, providerPriority: Int = 0): Double {
-        // Normalize provider priority to 0.0-1.0 (lower priority number = higher score)
-        val sourceScore = 1.0 - (providerPriority.coerceIn(0, 20) / 20.0)
-        return (fuzzyScore * 0.6) + (sourceScore * 0.4)
-    }
+    fun combinedScore(fuzzyScore: Double, sourceScore: Int): Double =
+        (fuzzyScore * 0.6) + (sourceScore / 100.0 * 0.4)
 
     private fun levenshtein(a: String, b: String): Int {
         val m = a.length
@@ -89,34 +83,47 @@ object FuzzyMatch {
 }
 
 /**
- * Re-ranks [MetadataService] search hits by fuzzy relevance blended with the
- * provider (desktop: 60% fuzzy, 40% source score). Shared so Android Search,
- * Android Auto search and iOS Search order results the same way; iOS used to
- * show them in merge order.
+ * Re-ranks [MetadataService] search hits by fuzzy relevance blended with each
+ * row's source score (desktop `reRankResults`: 60% fuzzy, 40% source). Shared
+ * so Android Search, Android Auto search and iOS Search order results the same
+ * way.
+ *
+ * The source score is desktop's (#475, parachord#1186):
+ * - A MusicBrainz row has MusicBrainz's own relevance, 0–100.
+ * - Every other provider's row has [rankScore]: its place in that provider's
+ *   list and the provider's place in the order.
+ * - Each further provider returning the same row adds [AGREEMENT_BONUS]
+ *   (`mergedSearchScore`).
+ * - No score counts as 50.
+ *
+ * Mobile used to give every MusicBrainz row a flat +0.4 and every Spotify
+ * row nothing, so a loose MusicBrainz match outranked Spotify's exact top hit.
  */
 object SearchRanking {
 
+    /** Added per further provider returning the same row (desktop AGREEMENT_BONUS). */
+    const val AGREEMENT_BONUS = 5
+
+    /**
+     * A non-MusicBrainz row's source score (desktop `rankScore`): 100 for a
+     * provider's top hit, less 5 per place down its list and 5 per provider
+     * ahead of it, never below 0.
+     */
+    fun rankScore(rank: Int, providerPosition: Int): Int =
+        maxOf(0, 100 - 5 * rank - 5 * providerPosition)
+
     fun rankTracks(query: String, tracks: List<TrackSearchResult>): List<TrackSearchResult> =
-        rank(tracks, { FuzzyMatch.trackScore(query, it.title, it.artist) }, { it.provider })
+        rank(tracks, { FuzzyMatch.trackScore(query, it.title, it.artist) }, { it.score })
 
     fun rankAlbums(query: String, albums: List<AlbumSearchResult>): List<AlbumSearchResult> =
-        rank(albums, { maxOf(FuzzyMatch.score(query, it.title), FuzzyMatch.score(query, it.artist) * 0.9) }, { it.provider })
+        rank(albums, { maxOf(FuzzyMatch.score(query, it.title), FuzzyMatch.score(query, it.artist) * 0.9) }, { it.score })
 
     fun rankArtists(query: String, artists: List<ArtistInfo>): List<ArtistInfo> =
-        rank(artists, { FuzzyMatch.score(query, it.name) }, { it.provider })
+        rank(artists, { FuzzyMatch.score(query, it.name) }, { it.score })
 
-    /** Map provider name to priority value for scoring. */
-    fun providerPriority(provider: String): Int = when {
-        "musicbrainz" in provider -> 0
-        "lastfm" in provider -> 10
-        "spotify" in provider -> 20
-        else -> 10
-    }
-
-    /** Drops items scoring 0, then sorts best first (stable for ties). */
-    private fun <T> rank(items: List<T>, fuzzy: (T) -> Double, provider: (T) -> String): List<T> =
-        items.map { it to FuzzyMatch.combinedScore(fuzzy(it), providerPriority(provider(it))) }
-            .filter { it.second > 0.0 }
+    /** Sorts best first, stable for ties. Like desktop, a row with no fuzzy match stays, last. */
+    private fun <T> rank(items: List<T>, fuzzy: (T) -> Double, score: (T) -> Int?): List<T> =
+        items.map { it to FuzzyMatch.combinedScore(fuzzy(it), score(it) ?: 50) }
             .sortedByDescending { it.second }
             .map { it.first }
 }

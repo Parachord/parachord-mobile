@@ -19,6 +19,12 @@ data class ArtistInfo(
     val tags: List<String> = emptyList(),
     val similarArtists: List<SimilarArtist> = emptyList(),
     val provider: String = "",
+    /**
+     * Search relevance from the source, 0–100 (desktop's `score`): MusicBrainz's
+     * own for its rows, rank in the list for the other providers'. Null outside
+     * search, or when the source gave none; [SearchRanking] reads null as 50.
+     */
+    val score: Int? = null,
 )
 
 @Serializable
@@ -32,6 +38,12 @@ data class TrackSearchResult(
     val spotifyId: String? = null,
     val mbid: String? = null,
     val provider: String = "",
+    /**
+     * Search relevance from the source, 0–100 (desktop's `score`): MusicBrainz's
+     * own for its rows, rank in the list for the other providers'. Null outside
+     * search, or when the source gave none; [SearchRanking] reads null as 50.
+     */
+    val score: Int? = null,
 )
 
 @Serializable
@@ -49,6 +61,12 @@ data class AlbumSearchResult(
      *  of lumping them under Studio Albums. */
     val secondaryTypes: List<String> = emptyList(),
     val provider: String = "",
+    /**
+     * Search relevance from the source, 0–100 (desktop's `score`): MusicBrainz's
+     * own for its rows, rank in the list for the other providers'. Null outside
+     * search, or when the source gave none; [SearchRanking] reads null as 50.
+     */
+    val score: Int? = null,
 )
 
 @Serializable
