@@ -4,24 +4,45 @@ import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import io.ktor.client.statement.HttpResponse
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.CoroutineContext
 import kotlin.math.max
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+
+/**
+ * Marks a coroutine's gated requests as background work (#480, desktop
+ * parachord#1190): covers, bios, artist photos, enrichment, list refreshes.
+ * A [RateLimitGate] serves a background caller only when no foreground caller
+ * is waiting, so that work never queues ahead of what the user just tapped.
+ * MusicBrainz is where it matters: at 1 req/s, ten queued cover lookups put an
+ * artist page ten seconds behind. Inherited by child coroutines.
+ */
+object BackgroundRequests : CoroutineContext.Element, CoroutineContext.Key<BackgroundRequests> {
+    override val key: CoroutineContext.Key<*> get() = this
+}
+
+/** Runs [block] with its gated requests in the background lane ([BackgroundRequests]). */
+suspend fun <T> inBackgroundLane(block: suspend CoroutineScope.() -> T): T =
+    withContext(BackgroundRequests, block)
 
 /**
  * Per-client rate-limit gate. Provides a single source of truth for
  *   1. **Cooldown** — when the upstream service has signaled a 429 (or 503
  *      for some APIs), all in-flight callers fail fast against this gate
  *      until the suggested `Retry-After` window elapses.
- *   2. **Concurrency limit** — a [Semaphore] caps simultaneous calls to a
- *      conservative number (default 2). This prevents the post-cooldown
+ *   2. **Concurrency limit** — at most [maxConcurrent] calls in flight
+ *      (default 2), with two lanes: a caller in [BackgroundRequests] gets a
+ *      permit only when no foreground caller is waiting (#480). Each lane is
+ *      first come, first served. This prevents the post-cooldown
  *      burst that would otherwise re-trip the throttle as soon as queued
  *      tasks all fire at once.
  *   3. **Inter-request delay** — each call starts at least 150ms after the
@@ -144,7 +165,13 @@ class RateLimitGate(
      */
     private val nowMs: () -> Long = { currentTimeMillis() },
 ) {
-    private val limiter = Semaphore(maxConcurrent)
+    /** Permits by lane, guarded by [permitLock]. A released permit goes straight
+     *  to the next waiter (foreground first), so [freePermits] is 0 whenever
+     *  anyone waits. */
+    private val permitLock = Mutex()
+    private var freePermits = maxConcurrent
+    private val foregroundWaiters = mutableListOf<CompletableDeferred<Unit>>()
+    private val backgroundWaiters = mutableListOf<CompletableDeferred<Unit>>()
 
     /** Sliding window of recent request epoch-ms timestamps for the proactive
      *  [maxRequestsPerWindow] cap. Guarded by [windowMutex] — reserving a slot
@@ -195,12 +222,13 @@ class RateLimitGate(
         block: suspend () -> T,
     ): T {
         checkCooldown(exceptionFactory)
-        return limiter.withPermit {
+        acquirePermit(background = currentCoroutineContext()[BackgroundRequests] != null)
+        try {
             checkCooldown(exceptionFactory)
             awaitWindowSlot()
             awaitRequestGap()
             try {
-                block()
+                return block()
             } finally {
                 // Stamped only once the request was sent (finished, failed or
                 // cancelled mid-flight). A caller cancelled while still waiting
@@ -208,7 +236,48 @@ class RateLimitGate(
                 // back a whole gap (#475, desktop parachord#1186).
                 lastFinishedAtMs = nowMs()
             }
+        } finally {
+            releasePermit()
         }
+    }
+
+    /**
+     * Takes a permit, or waits in [background]'s lane for one. A caller
+     * cancelled while waiting leaves without taking a turn; one cancelled just
+     * as it was handed a permit passes the permit on.
+     */
+    private suspend fun acquirePermit(background: Boolean) {
+        val ticket = permitLock.withLock {
+            if (freePermits > 0) {
+                freePermits--
+                return
+            }
+            CompletableDeferred<Unit>().also { (if (background) backgroundWaiters else foregroundWaiters).add(it) }
+        }
+        try {
+            ticket.await()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            withContext(NonCancellable) {
+                permitLock.withLock {
+                    if (!foregroundWaiters.remove(ticket) && !backgroundWaiters.remove(ticket)) handOnPermit()
+                }
+            }
+            throw e
+        }
+    }
+
+    private suspend fun releasePermit() = withContext(NonCancellable) {
+        permitLock.withLock { handOnPermit() }
+    }
+
+    /** Gives the permit to the next waiter, foreground first. Call under [permitLock]. */
+    private fun handOnPermit() {
+        val next = when {
+            foregroundWaiters.isNotEmpty() -> foregroundWaiters.removeAt(0)
+            backgroundWaiters.isNotEmpty() -> backgroundWaiters.removeAt(0)
+            else -> null
+        }
+        if (next != null) next.complete(Unit) else freePermits++
     }
 
     /** When the most recent call finished, or null before the first one. */

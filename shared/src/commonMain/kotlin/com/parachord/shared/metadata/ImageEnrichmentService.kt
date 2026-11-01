@@ -62,7 +62,11 @@ class ImageEnrichmentService(
      */
     private val composeMosaic: suspend (playlistId: String, urls: List<String>) -> String?,
 ) {
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    /** Cover and photo lookups are decoration: their gated requests (MusicBrainz
+     *  above all) use the background lane, behind anything the user tapped (#480). */
+    private val scope = CoroutineScope(
+        Dispatchers.Default + SupervisorJob() + com.parachord.shared.api.BackgroundRequests,
+    )
 
     private companion object {
         /** Bounded concurrency for the per-track search fallback in

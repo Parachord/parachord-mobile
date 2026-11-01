@@ -421,7 +421,8 @@ class CriticalDarlingsRepository(
     private suspend fun fetchAlbumArt(albumTitle: String, artistName: String): String? {
         val caaUrl: String? = try {
             val query = "\"$albumTitle\" AND artist:\"$artistName\""
-            val results = musicBrainzClient.searchReleases(query, limit = 1)
+            // A cover for a list row: background lane, behind taps (#480).
+            val results = com.parachord.shared.api.inBackgroundLane { musicBrainzClient.searchReleases(query, limit = 1) }
             results.releases.firstOrNull()?.let { MusicBrainzProvider.coverArtUrl(it.id) }
         } catch (e: Exception) {
             Log.w(TAG, "MB search failed for '$albumTitle' by '$artistName': ${e.message}")

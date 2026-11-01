@@ -243,7 +243,8 @@ class FreshDropsRepository(
 
         // 4. Fall back to MusicBrainz artist search (rate-limited)
         try {
-            val results = musicBrainzClient.searchArtists(artistName, limit = 1)
+            // List refreshes use the background lane, behind taps (#480).
+            val results = com.parachord.shared.api.inBackgroundLane { musicBrainzClient.searchArtists(artistName, limit = 1) }
             val artist = results.artists.firstOrNull()
             if (artist != null) {
                 mbidCache[key] = artist.id
@@ -568,7 +569,9 @@ class FreshDropsRepository(
         var lastPageSize: Int
         val pageSize = 100
         do {
-            val response = musicBrainzClient.browseReleaseGroups(mbid, limit = pageSize, offset = offset)
+            val response = com.parachord.shared.api.inBackgroundLane {
+                musicBrainzClient.browseReleaseGroups(mbid, limit = pageSize, offset = offset)
+            }
             allReleaseGroups.addAll(response.releaseGroups)
             totalCount = response.releaseGroupCount
             lastPageSize = response.releaseGroups.size

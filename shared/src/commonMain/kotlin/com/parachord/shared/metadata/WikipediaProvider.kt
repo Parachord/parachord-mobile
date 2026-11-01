@@ -45,8 +45,9 @@ class WikipediaProvider(
     private val knownArtistMbid: suspend (artistName: String) -> String? = { null },
 ) : MetadataProvider {
 
+    // A bio's lookup: background lane, behind anything the user tapped (#480).
     private val wikidataIds = WikidataIdLookup(httpClient, musicBrainzWikidataUrl = { mbid ->
-        musicBrainzClient.getArtist(mbid).relations
+        com.parachord.shared.api.inBackgroundLane { musicBrainzClient.getArtist(mbid) }.relations
             .firstOrNull { it.type == "wikidata" }?.url?.resource
     })
 
