@@ -17,12 +17,16 @@ import com.parachord.android.resolver.ResolvedSource
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.metadata.SearchRanking
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -92,9 +96,12 @@ class SearchViewModel constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
-        // Launch remote search whenever the debounced query changes
+        // Launch remote search whenever the debounced query changes. collectLatest
+        // cancels the running search when a newer query arrives, so its
+        // MusicBrainz requests leave the 1 req/s queue instead of holding up the
+        // query the user wants (#475).
         viewModelScope.launch {
-            debouncedQuery.collect { q ->
+            debouncedQuery.collectLatest { q ->
                 if (q.isBlank()) {
                     _remoteTrackResults.value = emptyList()
                     _remoteAlbumResults.value = emptyList()
@@ -191,64 +198,41 @@ class SearchViewModel constructor(
         }
     }
 
+    /**
+     * The three categories run at once, and each one's rows show as its
+     * providers answer (#475, desktop parachord#1186): Spotify and Last.fm in a
+     * few hundred ms, MusicBrainz seconds later through its 1 req/s gate. Each
+     * list is re-ranked using fuzzy matching (desktop formula: 60% fuzzy + 40%
+     * source) every time it grows.
+     */
     private suspend fun searchRemote(query: String) {
         _isSearchingRemote.value = true
         try {
-            val tracks = metadataService.searchTracks(query)
-            val albums = metadataService.searchAlbums(query)
-            val artists = metadataService.searchArtists(query)
-
-            // Re-rank results using fuzzy matching (desktop formula: 60% fuzzy + 40% source)
-            _remoteTrackResults.value = rankTracks(query, tracks)
-            resolveTracksInBackground(_remoteTrackResults.value)
-            _remoteAlbumResults.value = rankAlbums(query, albums)
-            _artistResults.value = rankArtists(query, artists)
-        } catch (_: Exception) {
+            coroutineScope {
+                launch {
+                    var ranked = emptyList<TrackSearchResult>()
+                    metadataService.searchTracksProgressively(query).collect { tracks ->
+                        ranked = SearchRanking.rankTracks(query, tracks)
+                        _remoteTrackResults.value = ranked
+                    }
+                    resolveTracksInBackground(ranked)
+                }
+                launch {
+                    metadataService.searchAlbumsProgressively(query).collect { albums ->
+                        _remoteAlbumResults.value = SearchRanking.rankAlbums(query, albums)
+                    }
+                }
+                launch {
+                    metadataService.searchArtistsProgressively(query).collect { artists ->
+                        _artistResults.value = SearchRanking.rankArtists(query, artists)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
             // Silently fail — local results still available
         } finally {
             _isSearchingRemote.value = false
         }
-    }
-
-    private fun rankTracks(query: String, tracks: List<TrackSearchResult>): List<TrackSearchResult> =
-        tracks.map { track ->
-            val titleScore = FuzzyMatch.score(query, track.title)
-            val artistScore = FuzzyMatch.score(query, track.artist)
-            val fuzzy = maxOf(titleScore, artistScore * 0.9)
-            val priority = providerPriority(track.provider)
-            track to FuzzyMatch.combinedScore(fuzzy, priority)
-        }
-            .filter { it.second > 0.0 }
-            .sortedByDescending { it.second }
-            .map { it.first }
-
-    private fun rankAlbums(query: String, albums: List<AlbumSearchResult>): List<AlbumSearchResult> =
-        albums.map { album ->
-            val titleScore = FuzzyMatch.score(query, album.title)
-            val artistScore = FuzzyMatch.score(query, album.artist)
-            val fuzzy = maxOf(titleScore, artistScore * 0.9)
-            val priority = providerPriority(album.provider)
-            album to FuzzyMatch.combinedScore(fuzzy, priority)
-        }
-            .filter { it.second > 0.0 }
-            .sortedByDescending { it.second }
-            .map { it.first }
-
-    private fun rankArtists(query: String, artists: List<ArtistInfo>): List<ArtistInfo> =
-        artists.map { artist ->
-            val fuzzy = FuzzyMatch.score(query, artist.name)
-            val priority = providerPriority(artist.provider)
-            artist to FuzzyMatch.combinedScore(fuzzy, priority)
-        }
-            .filter { it.second > 0.0 }
-            .sortedByDescending { it.second }
-            .map { it.first }
-
-    /** Map provider name to priority value for scoring. */
-    private fun providerPriority(provider: String): Int = when {
-        "musicbrainz" in provider -> 0
-        "lastfm" in provider -> 10
-        "spotify" in provider -> 20
-        else -> 10
     }
 }

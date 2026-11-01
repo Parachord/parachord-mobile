@@ -1,4 +1,4 @@
-package com.parachord.android.ui.screens.search
+package com.parachord.shared.metadata
 
 import kotlin.math.min
 
@@ -6,7 +6,7 @@ import kotlin.math.min
  * Lightweight fuzzy matching inspired by Fuse.js, matching the desktop's search ranking approach.
  *
  * Desktop formula: finalScore = (fuzzyScore × 0.6) + (mbScore × 0.4)
- * Since we don't have MusicBrainz popularity scores on Android, we use provider priority
+ * Since we don't have MusicBrainz popularity scores on mobile, we use provider priority
  * as a proxy for the second factor: MusicBrainz results (priority 0) get the highest boost.
  */
 object FuzzyMatch {
@@ -47,6 +47,16 @@ object FuzzyMatch {
     }
 
     /**
+     * A track's fuzzy score: the best of its title, its artist (× 0.9), and
+     * "artist title" (desktop parachord#1186's TRACK_RANK_KEY, #475). The last
+     * is what ranks Portishead's "Roads" above a cover titled
+     * "Portishead - Roads" for the query "portishead roads": scored field by
+     * field, a query naming both matches neither of the real track's fields well.
+     */
+    fun trackScore(query: String, title: String, artist: String): Double =
+        maxOf(score(query, title), score(query, artist) * 0.9, score(query, "$artist $title"))
+
+    /**
      * Compute the combined search score matching the desktop formula:
      * finalScore = (fuzzyScore × 0.6) + (sourceScore × 0.4)
      *
@@ -76,4 +86,37 @@ object FuzzyMatch {
         }
         return dp[m][n]
     }
+}
+
+/**
+ * Re-ranks [MetadataService] search hits by fuzzy relevance blended with the
+ * provider (desktop: 60% fuzzy, 40% source score). Shared so Android Search,
+ * Android Auto search and iOS Search order results the same way; iOS used to
+ * show them in merge order.
+ */
+object SearchRanking {
+
+    fun rankTracks(query: String, tracks: List<TrackSearchResult>): List<TrackSearchResult> =
+        rank(tracks, { FuzzyMatch.trackScore(query, it.title, it.artist) }, { it.provider })
+
+    fun rankAlbums(query: String, albums: List<AlbumSearchResult>): List<AlbumSearchResult> =
+        rank(albums, { maxOf(FuzzyMatch.score(query, it.title), FuzzyMatch.score(query, it.artist) * 0.9) }, { it.provider })
+
+    fun rankArtists(query: String, artists: List<ArtistInfo>): List<ArtistInfo> =
+        rank(artists, { FuzzyMatch.score(query, it.name) }, { it.provider })
+
+    /** Map provider name to priority value for scoring. */
+    fun providerPriority(provider: String): Int = when {
+        "musicbrainz" in provider -> 0
+        "lastfm" in provider -> 10
+        "spotify" in provider -> 20
+        else -> 10
+    }
+
+    /** Drops items scoring 0, then sorts best first (stable for ties). */
+    private fun <T> rank(items: List<T>, fuzzy: (T) -> Double, provider: (T) -> String): List<T> =
+        items.map { it to FuzzyMatch.combinedScore(fuzzy(it), providerPriority(provider(it))) }
+            .filter { it.second > 0.0 }
+            .sortedByDescending { it.second }
+            .map { it.first }
 }

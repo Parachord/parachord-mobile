@@ -7,6 +7,7 @@ import io.ktor.client.request.get
 import io.ktor.client.statement.HttpResponse
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -277,5 +278,53 @@ class RateLimitGateTest {
         }
         assertEquals(6L * 60L * 60L * 1000L, seen.last())
         assertTrue(seen.all { it <= 6L * 60L * 60L * 1000L })
+    }
+
+    // ── inter-request gap (#475) ──────────────────────────────────────
+
+    private fun kotlinx.coroutines.test.TestScope.gappedGate(gapMs: Long) = RateLimitGate(
+        tag = "test",
+        maxConcurrent = 1,
+        interRequestDelayMs = gapMs,
+        nowMs = { testScheduler.currentTime },
+    )
+
+    @Test
+    fun first_request_after_an_idle_spell_starts_at_once() = runTest {
+        val g = gappedGate(1_100L)
+        val startedAt = mutableListOf<Long>()
+        g.withPermit(exceptionFactory = { TestRateLimited(it) }) { startedAt += testScheduler.currentTime }
+        kotlinx.coroutines.delay(5_000L)
+        g.withPermit(exceptionFactory = { TestRateLimited(it) }) { startedAt += testScheduler.currentTime }
+        // The gap counts from the previous request, not from each call.
+        assertEquals(listOf(0L, 5_000L), startedAt)
+    }
+
+    @Test
+    fun back_to_back_requests_wait_the_gap_after_the_previous_one_finishes() = runTest {
+        val g = gappedGate(1_100L)
+        val startedAt = mutableListOf<Long>()
+        g.withPermit(exceptionFactory = { TestRateLimited(it) }) {
+            startedAt += testScheduler.currentTime
+            kotlinx.coroutines.delay(400L) // the request's own latency
+        }
+        g.withPermit(exceptionFactory = { TestRateLimited(it) }) { startedAt += testScheduler.currentTime }
+        assertEquals(listOf(0L, 1_500L), startedAt)
+    }
+
+    @Test
+    fun a_request_cancelled_while_waiting_its_turn_does_not_delay_the_next_one() = runTest {
+        val g = gappedGate(1_000L)
+        val startedAt = mutableListOf<Long>()
+        g.withPermit(exceptionFactory = { TestRateLimited(it) }) { startedAt += -1L } // finishes at t=0
+        // A superseded search: admitted, waiting out the gap, then cancelled.
+        val superseded = launch {
+            g.withPermit(exceptionFactory = { TestRateLimited(it) }) { startedAt += -2L }
+        }
+        kotlinx.coroutines.delay(500L)
+        superseded.cancel()
+        g.withPermit(exceptionFactory = { TestRateLimited(it) }) { startedAt += testScheduler.currentTime }
+        // Still one gap after the request that was actually sent, not 500 + 1000.
+        assertEquals(listOf(-1L, 1_000L), startedAt)
     }
 }

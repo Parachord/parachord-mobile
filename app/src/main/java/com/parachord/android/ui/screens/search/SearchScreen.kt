@@ -123,8 +123,11 @@ fun SearchScreen(
 
         // Results inline (no expanding overlay)
         if (query.isNotBlank()) {
-            // Shimmer loading when searching remote
-            if (isSearchingRemote && localTracks.isEmpty() && artists.isEmpty()) {
+            val hasAnyResults = localTracks.isNotEmpty() || localAlbums.isNotEmpty() ||
+                remoteTracks.isNotEmpty() || remoteAlbums.isNotEmpty() || artists.isNotEmpty()
+            // Shimmer only while nothing has arrived: categories now land one at a
+            // time (#475), and a shimmer over arrived songs read as "still empty".
+            if (isSearchingRemote && !hasAnyResults) {
                 repeat(4) { ShimmerTrackRow() }
             }
 
@@ -293,8 +296,6 @@ fun SearchScreen(
                 }
 
                 // ---- No results ----
-                val hasAnyResults = localTracks.isNotEmpty() || localAlbums.isNotEmpty() ||
-                    remoteTracks.isNotEmpty() || remoteAlbums.isNotEmpty() || artists.isNotEmpty()
                 if (query.isNotBlank() && !hasAnyResults && !isSearchingRemote) {
                     item {
                         Text(

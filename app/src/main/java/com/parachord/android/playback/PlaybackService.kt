@@ -697,36 +697,12 @@ class PlaybackService : MediaLibraryService() {
             return Futures.immediateFuture(LibraryResult.ofVoid(params))
         }
 
-        /**
-         * Re-rank raw [MetadataService] hits using the desktop's combined
-         * score: 60% fuzzy title/artist match + 40% provider-priority weighting
-         * (MusicBrainz 0, Last.fm 10, Spotify 20 — lower priority number =
-         * heavier "popularity" weight, since MB's canonical recordings are
-         * the most-trustworthy matches). Mirrors `SearchViewModel.rankTracks`
-         * — keep both in sync if either changes.
-         */
+        /** Re-rank raw [MetadataService] hits the way Search does ([SearchRanking]). */
         private fun rankSearchResults(
             query: String,
             results: List<com.parachord.shared.metadata.TrackSearchResult>,
         ): List<com.parachord.shared.metadata.TrackSearchResult> =
-            results.map { track ->
-                val titleScore = com.parachord.android.ui.screens.search.FuzzyMatch.score(query, track.title)
-                val artistScore = com.parachord.android.ui.screens.search.FuzzyMatch.score(query, track.artist)
-                val fuzzy = maxOf(titleScore, artistScore * 0.9)
-                val priority = providerPriority(track.provider)
-                track to com.parachord.android.ui.screens.search.FuzzyMatch.combinedScore(fuzzy, priority)
-            }
-                .filter { it.second > 0.0 }
-                .sortedByDescending { it.second }
-                .map { it.first }
-
-        /** Provider-priority weights — kept in sync with SearchViewModel. */
-        private fun providerPriority(provider: String): Int = when {
-            "musicbrainz" in provider -> 0
-            "lastfm" in provider -> 10
-            "spotify" in provider -> 20
-            else -> 10
-        }
+            com.parachord.shared.metadata.SearchRanking.rankTracks(query, results)
 
         /**
          * Returns the cached results from the most-recent [onSearch] call,
