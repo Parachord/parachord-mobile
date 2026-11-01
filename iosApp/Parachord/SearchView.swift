@@ -123,7 +123,7 @@ final class SearchViewModel {
 
 struct SearchView: View {
     @State private var model = SearchViewModel()
-    @State private var navArtist: String?
+    @State private var navArtist: PCArtistRef?
     @State private var navAlbum: PCAlbumRef?
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     /// Observed so badge rows re-render as background resolution lands.
@@ -153,7 +153,7 @@ struct SearchView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
+            .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0.name, mbid: $0.mbid) }
             .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
             .task {
                 model.start()
@@ -326,14 +326,16 @@ struct SearchView: View {
         .onAppear { resolverCache.resolve(ResolveRequest(artist: track.artist, title: track.title, album: track.album), order: index) }
         .pcTrackContextMenu(
             track, coordinator: coordinator,
-            onGoToArtist: { navArtist = track.artist },
+            onGoToArtist: { navArtist = PCArtistRef(name: track.artist) },
             onGoToAlbum: track.album.map { album in { navAlbum = PCAlbumRef(title: album, artist: track.artist) } })
     }
 
     private func artistRow(_ artist: IosArtistResult) -> some View {
         Button {
             model.saveHistory(type: "artist", name: artist.name, artist: nil, artwork: artist.imageUrl)
-            navArtist = artist.name
+            // MusicBrainz rows carry the artist's id, so the page skips
+            // MusicBrainz's name search (#478).
+            navArtist = PCArtistRef(name: artist.name, mbid: artist.mbid)
         } label: {
             HStack(spacing: 12) {
                 pcCover(artist.imageUrl, seed: artist.name, size: 44, radius: 22)

@@ -28,7 +28,8 @@ object Routes {
     const val PLAYLIST_EDIT = "playlist/{playlistId}/edit"
     const val NOW_PLAYING = "now_playing"
     const val SETTINGS = "settings"
-    const val ARTIST = "artist/{artistName}?tab={tab}"
+    /** `mbid`: the artist's MusicBrainz id when the caller has one (#478). */
+    const val ARTIST = "artist/{artistName}?tab={tab}&mbid={mbid}"
     const val ALBUM = "album/{albumTitle}/{artistName}"
 
     const val CHAT = "chat"
@@ -49,9 +50,13 @@ object Routes {
     fun weeklyPlaylist(playlistId: String, contextType: String): String =
         "weekly_playlist/${Uri.encode(playlistId)}/${Uri.encode(contextType)}"
 
-    fun artist(name: String, tab: String? = null): String =
-        if (tab != null) "artist/${Uri.encode(name)}?tab=${Uri.encode(tab)}"
-        else "artist/${Uri.encode(name)}"
+    fun artist(name: String, tab: String? = null, mbid: String? = null): String {
+        val args = listOfNotNull(
+            tab?.let { "tab=${Uri.encode(it)}" },
+            mbid?.let { "mbid=${Uri.encode(it)}" },
+        )
+        return "artist/${Uri.encode(name)}" + if (args.isEmpty()) "" else args.joinToString("&", prefix = "?")
+    }
 
     fun album(albumTitle: String, artistName: String): String =
         "album/${Uri.encode(albumTitle)}/${Uri.encode(artistName)}"
@@ -214,7 +219,7 @@ fun ParachordNavHost(
         }
         composable(Routes.SEARCH) {
             com.parachord.android.ui.screens.search.SearchScreen(
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name, mbid -> navController.navigate(Routes.artist(name, mbid = mbid)) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
@@ -275,6 +280,7 @@ fun ParachordNavHost(
             arguments = listOf(
                 navArgument("artistName") { type = NavType.StringType },
                 navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("mbid") { type = NavType.StringType; nullable = true; defaultValue = null },
             ),
         ) { backStackEntry ->
             val initialTab = backStackEntry.arguments?.getString("tab")

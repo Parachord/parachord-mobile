@@ -48,6 +48,10 @@ class ArtistViewModel constructor(
 
     val artistName: String = savedStateHandle.get<String>("artistName") ?: ""
 
+    /** The artist's MusicBrainz id, when the screen that opened this page had it
+     *  (#478): MusicBrainz's artist name search is skipped. */
+    private val artistMbid: String? = savedStateHandle.get<String>("mbid")
+
     private val _artistInfo = MutableStateFlow<ArtistInfo?>(null)
     val artistInfo: StateFlow<ArtistInfo?> = _artistInfo.asStateFlow()
 
@@ -137,7 +141,7 @@ class ArtistViewModel constructor(
         // Artist info (bio, image, tags, similar artists)
         viewModelScope.launch {
             try {
-                val info = metadataService.getArtistInfo(artistName)
+                val info = metadataService.getArtistInfo(artistName, artistMbid)
                 _artistInfo.value = info
                 _isLoading.value = false
                 if (info != null) {
@@ -161,12 +165,12 @@ class ArtistViewModel constructor(
             }
         }
 
-        // Discography
+        // Discography: shown as each provider answers (#478), so Spotify's and
+        // Last.fm's albums don't wait for MusicBrainz's gated browse or the
+        // artwork enrichment. albumsLoading stays true until all have answered.
         viewModelScope.launch {
             try {
-                val albums = metadataService.getArtistAlbums(artistName)
-                    .sortedByDescending { it.year ?: 0 }
-                _albums.value = albums
+                val albums = collectDiscography { _isLoading.value = false }
                 _albumsError.value = false
                 _isLoading.value = false
                 if (albums.isNotEmpty() && albums.none { it.year != null }) {
@@ -192,6 +196,20 @@ class ArtistViewModel constructor(
     }
 
     /**
+     * Publishes the discography newest-first as it grows ([MetadataService.getArtistAlbumsProgressively])
+     * and returns the final list. [onFirst] runs when the first albums show.
+     */
+    private suspend fun collectDiscography(onFirst: () -> Unit = {}): List<AlbumSearchResult> {
+        var albums = emptyList<AlbumSearchResult>()
+        metadataService.getArtistAlbumsProgressively(artistName, mbid = artistMbid).collect { found ->
+            albums = found.sortedByDescending { it.year ?: 0 }
+            if (_albums.value.isEmpty() && albums.isNotEmpty()) onFirst()
+            _albums.value = albums
+        }
+        return albums
+    }
+
+    /**
      * User-triggered retry from the discography error state (the "Try again"
      * button shown when a provider failed). Re-runs ONLY the discography fetch.
      */
@@ -200,9 +218,7 @@ class ArtistViewModel constructor(
         _albumsLoading.value = true
         viewModelScope.launch {
             try {
-                val albums = metadataService.getArtistAlbums(artistName)
-                    .sortedByDescending { it.year ?: 0 }
-                _albums.value = albums
+                collectDiscography()
                 _albumsError.value = false
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -224,7 +240,7 @@ class ArtistViewModel constructor(
         viewModelScope.launch {
             delay(2_000) // Wait for MusicBrainz rate limit to reset
             try {
-                val albums = metadataService.getArtistAlbums(artistName)
+                val albums = metadataService.getArtistAlbums(artistName, mbid = artistMbid)
                     .sortedByDescending { it.year ?: 0 }
                 if (albums.any { it.year != null }) {
                     _albums.value = albums

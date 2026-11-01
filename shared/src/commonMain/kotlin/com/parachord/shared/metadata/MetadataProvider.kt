@@ -41,4 +41,12 @@ interface MetadataProvider {
 
     /** Get the tracklist for a specific album. */
     suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? = null
+
+    /**
+     * The caller already knows [artistName]'s MusicBrainz id (#478), e.g. from a
+     * MusicBrainz search result. A provider that would search MusicBrainz by
+     * name uses it instead: a turn of the 1 req/s queue saved, and no namesake.
+     * Ignored by default.
+     */
+    suspend fun useArtistMbid(artistName: String, mbid: String) {}
 }

@@ -57,7 +57,8 @@ import com.parachord.android.ui.components.TrackRow
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchScreen(
-    onNavigateToArtist: (String) -> Unit = {},
+    /** Artist name, and its MusicBrainz id when the row has one (#478). */
+    onNavigateToArtist: (name: String, mbid: String?) -> Unit = { _, _ -> },
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onOpenDrawer: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -174,7 +175,9 @@ fun SearchScreen(
                                         resultName = artist.name,
                                         artworkUrl = artist.imageUrl,
                                     )
-                                    onNavigateToArtist(artist.name)
+                                    // MusicBrainz rows carry the artist's id, so the
+                                    // page can skip MusicBrainz's name search (#478).
+                                    onNavigateToArtist(artist.name, artist.mbid)
                                 }
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -321,7 +324,7 @@ fun SearchScreen(
                 history = searchHistory,
                 onEntryClick = { entry ->
                     when (entry.resultType) {
-                        "artist" -> entry.resultName?.let { onNavigateToArtist(it) }
+                        "artist" -> entry.resultName?.let { onNavigateToArtist(it, null) }
                         "album" -> {
                             val name = entry.resultName
                             val artist = entry.resultArtist
