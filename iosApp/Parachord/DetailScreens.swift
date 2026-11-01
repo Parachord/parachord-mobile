@@ -178,6 +178,33 @@ enum PCImageStore {
     }
 }
 
+/// The covers album art has actually displayed this session, by artist and
+/// album. The album page opens with the one the user just tapped instead of
+/// waiting for a provider to name a cover; the image is already in
+/// `PCImageStore`, so it shows at once. Android's `ShownAlbumCovers` (#482).
+/// Filled by `PCCachedImage` when a cover with a known artist and album
+/// loads. Most recent wins; bounded, in memory only.
+@MainActor
+enum PCShownCovers {
+    private static let maxEntries = 500
+    private static var covers: [String: String] = [:]
+    private static var order: [String] = []
+
+    private static func key(_ artist: String, _ album: String) -> String {
+        "\(artist.trimmingCharacters(in: .whitespaces).lowercased())|\(album.trimmingCharacters(in: .whitespaces).lowercased())"
+    }
+
+    static func remember(artist: String?, album: String?, url: String) {
+        guard let artist, !artist.isEmpty, let album, !album.isEmpty, !url.isEmpty else { return }
+        let k = key(artist, album)
+        if covers.updateValue(url, forKey: k) != nil { order.removeAll { $0 == k } }
+        order.append(k)
+        if order.count > maxEntries { covers[order.removeFirst()] = nil }
+    }
+
+    static func get(artist: String, album: String) -> String? { covers[key(artist, album)] }
+}
+
 struct PCCachedImage<Content: View, Placeholder: View>: View {
     private let givenUrl: URL?
     private let retryArtist: String?
@@ -248,7 +275,11 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
         // Always (re)load for the CURRENT url so a reused view whose url changed
         // (mini player / Now Playing on track change) swaps to the new art instead
         // of keeping the stale image. `.task(id: url)` only fires on a url change.
-        if let cached = PCImageStore.load(url) { loaded = cached; return }   // memory or disk — no network
+        if let cached = PCImageStore.load(url) {   // memory or disk — no network
+            loaded = cached
+            PCShownCovers.remember(artist: retryArtist, album: retryAlbum, url: url.absoluteString)
+            return
+        }
         failed = false
         // file:// (e.g. the ImageEnrichmentService 2×2 playlist mosaic) must be
         // read locally — URLSession.data(from:) rejects file URLs.
@@ -265,6 +296,7 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
         }
         PCImageStore.store(url, data, ui)
         loaded = ui
+        PCShownCovers.remember(artist: retryArtist, album: retryAlbum, url: url.absoluteString)
     }
 
     /// The cover at `dead` didn't load. If the album is known, look it up again;
@@ -460,7 +492,12 @@ final class AlbumDetailModel {
     private let ttl: TimeInterval = 6 * 3600
     private var cacheKey: String { "\(title)|\(artist)".lowercased() }
 
-    init(title: String, artist: String) { self.title = title; self.artist = artist }
+    init(title: String, artist: String) {
+        self.title = title; self.artist = artist
+        // The cover the user just tapped, already in PCImageStore: the header
+        // shows it at once and keeps it.
+        coverUrl = PCShownCovers.get(artist: artist, album: title)
+    }
 
     /// Subscribe to the collection flow once (idempotent). Cancel on disappear.
     func watchCollection() {
@@ -482,7 +519,7 @@ final class AlbumDetailModel {
     func load() async {
         guard !loaded else { return }
         if let c = AlbumDetailCache.shared.get(cacheKey) {
-            detail = c.detail; coverUrl = c.detail?.artworkUrl; entities = c.entities; loaded = true
+            detail = c.detail; coverUrl = coverUrl ?? c.detail?.artworkUrl; entities = c.entities; loaded = true
             if Date().timeIntervalSince(c.ts) > ttl { Task { await refresh() } }
             return
         }
@@ -602,7 +639,7 @@ struct AlbumScreen: View {
             // otherwise show the gradient placeholder, not a skeleton). Once
             // detail lands, pcCover's cached-image path handles skeleton→art.
             Group {
-                if model.isLoading && !model.loaded {
+                if model.coverUrl == nil && model.isLoading && !model.loaded {
                     PCSkeletonBox(radius: 12).frame(width: 132, height: 132)
                 } else {
                     pcCover(model.coverUrl ?? model.detail?.artworkUrl, seed: model.title + model.artist, size: 132, radius: 12,
