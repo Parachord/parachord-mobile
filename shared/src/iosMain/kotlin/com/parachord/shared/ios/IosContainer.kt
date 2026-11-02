@@ -25,6 +25,7 @@ import com.parachord.shared.metadata.DiscogsProvider
 import com.parachord.shared.metadata.LastFmProvider
 import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.shared.metadata.MetadataService
+import com.parachord.shared.metadata.SearchArtistList
 import com.parachord.shared.metadata.SearchPopularity
 import com.parachord.shared.metadata.SearchRanking
 import com.parachord.shared.metadata.ImageEnrichmentService
@@ -3442,24 +3443,29 @@ class IosContainer private constructor() {
     ): Cancellable {
         val job = appScope.launch {
             if (query.isNotBlank()) {
+                // MusicBrainz's artists plus those the services' rows name (desktop).
+                val artistList = SearchArtistList(query)
+                fun showArtists(ranked: List<ArtistInfo>) =
+                    onArtists(ranked.map { IosArtistResult(it.name, it.imageUrl, it.mbid) })
                 try {
                     coroutineScope {
                         launch {
                             metadataService.searchArtistsProgressively(query, 10).collect { artists ->
-                                onArtists(
-                                    SearchRanking.rankArtists(query, artists)
-                                        .map { IosArtistResult(it.name, it.imageUrl, it.mbid) },
-                                )
+                                showArtists(artistList.withMusicBrainz(artists))
                             }
                         }
                         launch {
                             metadataService.searchTracksProgressively(query, 20).collect {
-                                onTracks(SearchRanking.rankTracks(query, it))
+                                val ranked = SearchRanking.rankTracks(query, it)
+                                onTracks(ranked)
+                                showArtists(artistList.withTracks(ranked))
                             }
                         }
                         launch {
                             metadataService.searchAlbumsProgressively(query, 10).collect {
-                                onAlbums(SearchRanking.rankAlbums(query, it))
+                                val ranked = SearchRanking.rankAlbums(query, it)
+                                onAlbums(ranked)
+                                showArtists(artistList.withAlbums(ranked))
                             }
                         }
                     }
