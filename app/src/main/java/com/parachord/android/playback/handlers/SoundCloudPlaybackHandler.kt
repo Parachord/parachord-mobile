@@ -2,6 +2,7 @@ package com.parachord.android.playback.handlers
 
 import com.parachord.shared.platform.Log
 import com.parachord.android.data.db.entity.TrackEntity
+import com.parachord.shared.playback.SoundCloudWidget
 
 /**
  * Plays SoundCloud tracks through SoundCloud's embeddable widget
@@ -24,27 +25,15 @@ class SoundCloudPlaybackHandler constructor(
 
     companion object {
         private const val TAG = "SoundCloudPlayback"
-        const val SERVICE_NAME = "SoundCloud"
+        const val SERVICE_NAME = SoundCloudWidget.SERVICE_NAME
 
-        /**
-         * What the widget loads: the track's soundcloud.com page when the
-         * source carries it, else its API URL (the form SoundCloud's own embed
-         * code uses), built from the id.
-         */
-        fun widgetLink(track: TrackEntity): String? {
-            val url = track.sourceUrl
-            if (url != null && isSoundCloudUrl(url)) return url
-            return track.soundcloudId?.takeIf { it.isNotBlank() }?.let { "https://api.soundcloud.com/tracks/$it" }
-        }
+        /** What the widget loads ([SoundCloudWidget.widgetLink]). */
+        fun widgetLink(track: TrackEntity): String? =
+            SoundCloudWidget.widgetLink(url = track.sourceUrl, soundcloudUrl = null, soundcloudId = track.soundcloudId)
 
-        /** The track's page on soundcloud.com, for "Open in SoundCloud"; null when unknown. */
+        /** The track's soundcloud.com page, for "Open in SoundCloud" ([SoundCloudWidget.pageLink]). */
         fun pageLink(track: TrackEntity): String? =
-            track.sourceUrl?.takeIf { isSoundCloudUrl(it) && !it.contains("api.soundcloud.com") }
-
-        private fun isSoundCloudUrl(url: String): Boolean {
-            val host = runCatching { java.net.URI(url).host }.getOrNull()?.lowercase() ?: return false
-            return url.startsWith("https://") && (host == "soundcloud.com" || host.endsWith(".soundcloud.com"))
-        }
+            SoundCloudWidget.pageLink(url = track.sourceUrl, soundcloudUrl = null)
     }
 
     /** Gain (0..1) for the next [play]: the resolver's dB offset, set by the controller. */
@@ -60,14 +49,15 @@ class SoundCloudPlaybackHandler constructor(
     override suspend fun play(track: TrackEntity) {
         val link = widgetLink(track)
             ?: throw EmbedPlaybackRefusedException(SERVICE_NAME, null, "no track link")
+        val startedAt = System.currentTimeMillis()
         when (val result = widget.load(link, volumeFraction)) {
             is SoundCloudWidgetBridge.LoadResult.Started ->
-                Log.d(TAG, "Playing '${track.title}' in the widget")
+                Log.d(TAG, "Playing '${track.title}' in the widget (started in ${System.currentTimeMillis() - startedAt} ms)")
             is SoundCloudWidgetBridge.LoadResult.Refused -> {
                 // 'superseded' means another play took over; the controller
                 // has moved on, so this is no failure of the track's.
                 if (result.reason == "superseded") return
-                Log.w(TAG, "The widget won't play '${track.title}' (${result.reason})")
+                Log.w(TAG, "The widget won't play '${track.title}' (${result.reason}, after ${System.currentTimeMillis() - startedAt} ms)")
                 throw EmbedPlaybackRefusedException(SERVICE_NAME, pageLink(track), result.reason)
             }
         }

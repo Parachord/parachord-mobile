@@ -13,12 +13,13 @@ import Shared
 // ranked source, not below a lower-confidence one.
 //
 // Engine routing mirrors CLAUDE.md "Playback Routing":
-//   soundcloud / localfiles / direct (a playable URL) → AVPlayer
-//   applemusic (catalog ID)                           → MusicKit
-//   spotify (track URI)                               → Spotify Connect
+//   localfiles / direct (a playable URL) → AVPlayer
+//   soundcloud                           → SoundCloud's widget (#495)
+//   applemusic (catalog ID)              → MusicKit
+//   spotify (track URI)                  → Spotify Connect
 
 enum PlaybackEngineKind: String {
-    case avPlayer, musicKit, spotify, browser
+    case avPlayer, musicKit, spotify, soundCloud, browser
 }
 
 enum RouteResult: Equatable {
@@ -42,6 +43,11 @@ struct PlaybackRouter {
     let avPlayer: IosAVPlayer
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
+    let soundCloud: IosSoundCloudWidget
+    /// Called when an embedded player refuses a source (SoundCloud's widget
+    /// can't play, or only previews, the track) with the service's name and
+    /// the track's page on it. The walk then moves on to the next source.
+    var onRefused: ((_ service: String, _ pageUrl: String?) -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -55,7 +61,25 @@ struct PlaybackRouter {
                 return .openBrowser(source.url)
             }
             switch source.resolver {
-            case "soundcloud", "localfiles", "direct":
+            case "soundcloud":
+                // SoundCloud's widget (#495, desktop parachord#1209): the API
+                // no longer gives full tracks. A refused track falls through
+                // to the next ranked source, like Android's fallback.
+                let widget = SoundCloudWidget.shared
+                guard let link = widget.widgetLink(url: source.url, soundcloudUrl: source.soundcloudUrl,
+                                                   soundcloudId: source.soundcloudId) else { continue }
+                let result = await soundCloud.load(link: link,
+                                                   volume: IosVolumeOffsets.shared.fraction(for: "soundcloud"),
+                                                   title: title, artist: artist)
+                switch result {
+                case .started:
+                    return .played(.soundCloud, resolver: source.resolver)
+                case .refused(let reason):
+                    if reason == "superseded" { return .noPlayableSource }
+                    onRefused?(widget.SERVICE_NAME, widget.pageLink(url: source.url, soundcloudUrl: source.soundcloudUrl))
+                }
+
+            case "localfiles", "direct":
                 guard !source.url.isEmpty else { continue }
                 avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver)
                 return .played(.avPlayer, resolver: source.resolver)

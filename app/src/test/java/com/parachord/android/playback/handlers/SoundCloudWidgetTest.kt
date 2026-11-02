@@ -87,6 +87,18 @@ class SoundCloudWidgetTest {
     }
 
     @Test
+    fun `Android and iOS carry the same widget page and module`() {
+        // Gradle runs unit tests from the app module's directory.
+        for (name in listOf("soundcloud-widget.html", "soundcloud-widget-player.js")) {
+            val android = java.io.File("src/main/assets/js/$name")
+            val ios = java.io.File("../iosApp/Parachord/Resources/$name")
+            assertTrue("missing $android", android.isFile)
+            assertTrue("missing $ios", ios.isFile)
+            assertEquals("$name differs between the apps", android.readText(), ios.readText())
+        }
+    }
+
+    @Test
     fun `only our page and SoundCloud may load in the widget's WebView`() {
         assertTrue(SoundCloudWidgetBridge.isAllowedHost("w.soundcloud.com"))
         assertTrue(SoundCloudWidgetBridge.isAllowedHost("cf-media.sndcdn.com"))

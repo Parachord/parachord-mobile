@@ -11,7 +11,7 @@ import AVKit
 
 private let pcKnownResolvers = ["spotify", "applemusic", "bandcamp", "soundcloud", "youtube", "localfiles"]
 
-private func pcResolverName(_ r: String) -> String {
+func pcResolverName(_ r: String) -> String {
     switch r.lowercased() {
     case "spotify": return "Spotify"
     case "applemusic": return "Apple Music"

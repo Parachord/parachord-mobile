@@ -69,7 +69,7 @@ soundcloud:  0    bandcamp:   -3    youtube:    -6
 Each resolver type routes to a specific playback mechanism:
 
 - **Spotify** → Web API (Spotify Connect, controls Spotify app on-device via HTTP)
-- **SoundCloud** → SoundCloud's embeddable widget in a hidden WebView (external playback, like Apple Music)
+- **SoundCloud** → SoundCloud's embeddable widget in a hidden WebView (external playback, like Apple Music); iOS the same in a `WKWebView`
 - **Local files** → ExoPlayer with content:// URI
 - **Direct streams** → ExoPlayer with HTTP URL
 
@@ -81,7 +81,8 @@ The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/s
 - **Background playback rides on the Apple Music setup**: a WebView never added to a window, `LAYER_TYPE_NONE`, `mediaPlaybackRequiresUserGesture = false`, `keepAlive()` before each track, and the controller's silent ExoPlayer loop for the foreground service and MediaSession. Chromium owns audio focus.
 - **Previews count as refused.** A track SoundCloud lets the widget only preview (a Go+ release: `getCurrentSound` reports `policy: "SNIP"`, `duration` 30000 against `full_duration`) still starts, fades out at 0:30 and fires `finish`, while `getDuration` reports the full length. The host page asks `getCurrentSound` once the track starts and reports a preview as refused (reason `preview`). Desktop's module counts "the position moved" as playable, so it misses this.
 - **A refused track is a failed source** (`EmbedPlaybackRefusedException`): another source plays (with a "Playing via X" toast), else the queue moves on when it was advancing or in a spinoff, else a snackbar offers "Open in SoundCloud" when the track has a soundcloud.com page. The browser never opens by itself.
-- **Link:** the source's soundcloud.com permalink, else `https://api.soundcloud.com/tracks/<id>` (the form SoundCloud's own embed code uses).
+- **Link:** the source's soundcloud.com permalink, else `https://api.soundcloud.com/tracks/<id>` (the form SoundCloud's own embed code uses). Shared: `SoundCloudWidget.widgetLink` / `pageLink` (`shared/.../playback/SoundCloudWidget.kt`).
+- **iOS does the same** in a hidden `WKWebView` (`iosApp/Parachord/SoundCloudWidget.swift`) with byte-identical copies of the page and module in `iosApp/Parachord/Resources/` (an Android unit test fails if they drift — edit Android's, copy). iOS has one extra trap — WebKit's own audio session can't be re-activated with the screen locked, so the page's `scHoldAudio` keeps it in use between tracks; see `iosApp/AGENTS.md` → "SoundCloud through its widget".
 
 ### Spotify Connect — Device Wake & Playback
 
@@ -1019,7 +1020,7 @@ The Edit/Write tools take absolute paths. If you're working in a worktree, every
 ### iOS Playback Routing
 
 - **Spotify** → Spotify iOS SDK (`SPTAppRemote`). Requires Spotify app installed. Auth via `SPTConfiguration` with redirect URI.
-- **SoundCloud** → Fetch stream URL from API, play via `AVPlayer` with `AVPlayerItem(url:)`
+- **SoundCloud** → SoundCloud's widget in a hidden `WKWebView` (`IosSoundCloudWidget`, #495); the API no longer gives full tracks
 - **Local files** → `AVPlayer` with local file URL from Files app or imported media
 - **Direct streams** → `AVPlayer` with HTTP(S) URL
 - **Apple Music** → Use MusicKit framework (`ApplicationMusicPlayer.shared`). Requires MusicKit entitlement + user authorization.

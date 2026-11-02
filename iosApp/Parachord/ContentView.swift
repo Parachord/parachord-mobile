@@ -50,6 +50,12 @@ enum IosAudioSession {
     /// Spotify dropping out when Parachord returns to the foreground.
     static func configureForSpotify() { apply(options: [.mixWithOthers]) }
 
+    /// **SoundCloud's widget → mixable `.playback`**, as Apple Music: WebKit
+    /// renders the widget's audio out of process, so the app needs the silent
+    /// keepalive to stay alive in the background, and the keepalive must not
+    /// fight the real audio (#495).
+    static func configureForSoundCloud() { apply(options: [.mixWithOthers]) }
+
     private static func apply(options: AVAudioSession.CategoryOptions) {
         let session = AVAudioSession.sharedInstance()
         do {
@@ -1437,6 +1443,17 @@ final class IosAVPlayer {
     /// coordinator (phase 4.6) sets this to auto-advance. Nil by
     /// default, so standalone single-track use just stops at the end.
     var onTrackEnded: (() -> Void)?
+    /// Where the lock-screen / Control Center transport goes while another
+    /// in-app engine owns playback (SoundCloud's widget, #495). The commands
+    /// are registered here once; nil sends them to this AVPlayer as before.
+    struct RemoteTransport {
+        let play: () -> Void
+        let pause: () -> Void
+        let toggle: () -> Void
+        let seek: (Double) -> Void
+    }
+    var remoteTransport: RemoteTransport?
+
     /// The last keys we pushed to MPNowPlayingInfoCenter — displayed in
     /// the smoke-test card so the lock-screen wiring is observable in
     /// the simulator (where photographing the actual lock screen is
@@ -1659,22 +1676,22 @@ final class IosAVPlayer {
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.addTarget { [weak self] _ in
-            self?.play()
+            if let t = self?.remoteTransport { t.play() } else { self?.play() }
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            self?.pause()
+            if let t = self?.remoteTransport { t.pause() } else { self?.pause() }
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            self?.togglePlayPause()
+            if let t = self?.remoteTransport { t.toggle() } else { self?.togglePlayPause() }
             return .success
         }
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let self,
                   let e = event as? MPChangePlaybackPositionCommandEvent
             else { return .commandFailed }
-            self.seek(to: e.positionTime)
+            if let t = self.remoteTransport { t.seek(e.positionTime) } else { self.seek(to: e.positionTime) }
             return .success
         }
         // Skip ±15s — stand-ins until queue management (phase 4.6)
@@ -1761,13 +1778,31 @@ final class QueuePlaybackCoordinator {
     let player: IosAVPlayer
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
+    let soundCloud: IosSoundCloudWidget
     private let resolverCache: IosTrackResolverCache
     private let container = IosContainer.companion.shared
     private let queueManager = QueueManager()
 
     private var router: PlaybackRouter {
-        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify,
+        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify, soundCloud: soundCloud,
                        nonStreamingResolvers: nonStreamingResolvers)
+    }
+
+    /// A playback message for the shell to show as a banner, with an optional
+    /// action that opens `actionUrl` ("Open in SoundCloud" for a track its
+    /// widget won't play). Android's snackbar / toast equivalent (#495).
+    struct Notice: Equatable, Identifiable {
+        let id = UUID()
+        let message: String
+        var actionLabel: String? = nil
+        var actionUrl: String? = nil
+    }
+    var notice: Notice?
+
+    /// The first source an embedded player refused during one route.
+    private final class EmbedRefusal {
+        var service: String?
+        var pageUrl: String?
     }
 
     /// Resolver ids that open in the browser instead of streaming (stream:false,
@@ -1879,7 +1914,7 @@ final class QueuePlaybackCoordinator {
         guard spinoffMode else { return false }
         if spinoffPool.count <= 1 { refillSpinoffIfNeeded() }   // top up a draining radio
         if !spinoffPool.isEmpty {
-            playTrack(spinoffPool.removeFirst())
+            playTrack(spinoffPool.removeFirst(), advancing: true)
             return true
         }
         exitSpinoff()
@@ -1969,6 +2004,7 @@ final class QueuePlaybackCoordinator {
         case .avPlayer: return player.isPlaying
         case .musicKit: return musicKit.isPlaying
         case .spotify: return spotifyPlaying
+        case .soundCloud: return soundCloud.isPlaying
         case .browser: return false   // external — we don't manage its playback
         }
     }
@@ -1977,6 +2013,7 @@ final class QueuePlaybackCoordinator {
         case .avPlayer: return player.currentTime
         case .musicKit: return musicKit.currentTime
         case .spotify: return spotifyPositionSec
+        case .soundCloud: return soundCloud.currentTime
         case .browser: return 0
         }
     }
@@ -1985,6 +2022,7 @@ final class QueuePlaybackCoordinator {
         case .avPlayer: return player.duration
         case .musicKit: return musicKit.duration
         case .spotify: return spotifyDurationSec
+        case .soundCloud: return soundCloud.duration
         case .browser: return 0
         }
     }
@@ -2000,6 +2038,8 @@ final class QueuePlaybackCoordinator {
         case .spotify:
             spotifyPositionSec = seconds // optimistic; resync corrects drift
             Task { @MainActor in await spotify.seek(toSec: seconds) }
+        case .soundCloud:
+            Task { @MainActor in soundCloud.seek(to: seconds) }
         case .browser:
             break   // external playback — nothing to seek
         }
@@ -2019,13 +2059,14 @@ final class QueuePlaybackCoordinator {
         switch activeEngine {
         case .spotify: return "spotify"
         case .musicKit: return "applemusic"
+        case .soundCloud: return "soundcloud"
         case .avPlayer:
             // AVPlayer plays soundcloud / localfiles / direct — surface the
             // best cached URL-based source for the current track.
             guard let t = currentTrack,
                   let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
             else { return "localfiles" }
-            return srcs.first(where: { ["soundcloud", "bandcamp", "localfiles", "direct"].contains($0.resolver) })?.resolver ?? "localfiles"
+            return srcs.first(where: { ["bandcamp", "localfiles", "direct"].contains($0.resolver) })?.resolver ?? "localfiles"
         case .browser:
             // The stream:false source we opened (Bandcamp et al).
             guard let t = currentTrack,
@@ -2056,6 +2097,8 @@ final class QueuePlaybackCoordinator {
     @MainActor
     private func applyEngineHandoff(from previousEngine: PlaybackEngineKind, to kind: PlaybackEngineKind) async {
         guard previousEngine != kind else { return }
+        // Leaving SoundCloud halts the widget (it's never left paused).
+        if previousEngine == .soundCloud { soundCloud.stop() }
         switch kind {
         case .avPlayer:
             // Our own audio — drop the external keepalive; player.play()
@@ -2085,9 +2128,33 @@ final class QueuePlaybackCoordinator {
             if previousEngine == .musicKit { musicKit.pause() }
             IosAudioSession.configureForSpotify()
             keepAlive.start()
+        case .soundCloud:
+            // SoundCloud's widget (#495): WebKit plays it out of process, so as
+            // for Apple Music, a mixable session + the silent keepalive keep the
+            // app alive in the background for the widget's events and
+            // auto-advance.
+            player.haltAudio()
+            if previousEngine == .musicKit { musicKit.pause() }
+            if previousEngine == .spotify { await spotify.pause() }
+            IosAudioSession.configureForSoundCloud()
+            keepAlive.start()
+            player.remoteTransport = soundCloudTransport
         case .browser:
             keepAlive.stop()
         }
+        if kind != .soundCloud { player.remoteTransport = nil }
+    }
+
+    /// Lock-screen / Control Center play-pause-seek while SoundCloud's widget
+    /// plays: the commands are registered on `IosAVPlayer`, which forwards
+    /// them here instead of to its own (idle) player.
+    private var soundCloudTransport: IosAVPlayer.RemoteTransport {
+        IosAVPlayer.RemoteTransport(
+            play: { [weak self] in Task { @MainActor in self?.soundCloud.play() } },
+            pause: { [weak self] in Task { @MainActor in self?.soundCloud.pause() } },
+            toggle: { [weak self] in self?.togglePlayPause() },
+            seek: { [weak self] seconds in self?.seek(to: seconds) }
+        )
     }
 
     /// Resume the currently-active engine after a resumable audio-session
@@ -2111,6 +2178,10 @@ final class QueuePlaybackCoordinator {
                 await spotify.resume()
                 spotifyPlaying = spotify.isPlaying
             }
+        case .soundCloud:
+            IosAudioSession.configureForSoundCloud()
+            keepAlive.restart()
+            soundCloud.play()
         case .browser:
             break
         }
@@ -2139,12 +2210,14 @@ final class QueuePlaybackCoordinator {
         player: IosAVPlayer,
         musicKit: IosMusicKitPlayer,
         spotify: IosSpotifyConnect,
+        soundCloud: IosSoundCloudWidget = IosSoundCloudWidget(),
         resolverCache: IosTrackResolverCache,
         installLifecycleMonitor: Bool = true
     ) {
         self.player = player
         self.musicKit = musicKit
         self.spotify = spotify
+        self.soundCloud = soundCloud
         self.resolverCache = resolverCache
         // Auto-advance: both engines pull the next queued track when the
         // current one ends. AVPlayer fires onTrackEnded from its end
@@ -2154,6 +2227,9 @@ final class QueuePlaybackCoordinator {
             self?.autoAdvance()
         }
         self.musicKit.onTrackEnded = { [weak self] in
+            self?.autoAdvance()
+        }
+        self.soundCloud.onTrackEnded = { [weak self] in
             self?.autoAdvance()
         }
         // Lock-screen / Control-Center next & previous drive the QUEUE
@@ -2275,6 +2351,10 @@ final class QueuePlaybackCoordinator {
                 if spotify.isPlaying { await spotify.pause() } else { await spotify.resume() }
                 spotifyPlaying = spotify.isPlaying
             }
+        case .soundCloud:
+            Task { @MainActor in
+                if soundCloud.isPlaying { soundCloud.pause() } else { soundCloud.play() }
+            }
         case .browser:
             // Re-open the Bandcamp page (playback happens in the browser).
             if let url = browserUrl, let u = URL(string: url) {
@@ -2316,6 +2396,7 @@ final class QueuePlaybackCoordinator {
                 switch engine {
                 case .musicKit: musicKit.pause()
                 case .spotify: await spotify.pause()
+                case .soundCloud: soundCloud.stop()
                 case .avPlayer, .browser: break
                 }
             }
@@ -2326,18 +2407,18 @@ final class QueuePlaybackCoordinator {
             return
         }
         syncSnapshot()
-        playTrack(next)
+        playTrack(next, advancing: true)
     }
 
     func skipPrevious() {
         // Match desktop/Android: if we're more than ~3s into the track,
         // "previous" restarts the current track instead of going back.
-        if player.currentTime > 3, currentTrack != nil {
-            player.seek(to: 0)
+        if currentTime > 3, currentTrack != nil {
+            seek(to: 0)
             return
         }
         guard let prev = queueManager.skipPrevious(currentTrack: currentTrack) else {
-            player.seek(to: 0)
+            seek(to: 0)
             return
         }
         syncSnapshot()
@@ -2382,11 +2463,11 @@ final class QueuePlaybackCoordinator {
         switch repeatMode {
         case .one:
             // Replay the just-finished track.
-            if let cur = currentTrack { playTrack(cur) } else { skipNext() }
+            if let cur = currentTrack { playTrack(cur, advancing: true) } else { skipNext() }
         case .all:
             if let next = queueManager.skipNext(currentTrack: currentTrack) {
                 syncSnapshot()
-                playTrack(next)
+                playTrack(next, advancing: true)
             } else if !originalQueue.isEmpty {
                 setQueue(originalQueue, startIndex: 0)   // wrap to the top
             } else {
@@ -2395,6 +2476,7 @@ final class QueuePlaybackCoordinator {
                     switch engine {
                     case .musicKit: musicKit.pause()
                     case .spotify: await spotify.pause()
+                    case .soundCloud: soundCloud.stop()
                     case .avPlayer, .browser: break
                     }
                 }
@@ -2445,7 +2527,10 @@ final class QueuePlaybackCoordinator {
     /// this path (not a bespoke router call) guarantees the switch stops the old
     /// engine, restarts the song from 0:00 on the chosen source, shows the
     /// buffering spinner, and runs the engine handoff.
-    private func playTrack(_ track: Track, forcedResolver: String? = nil) {
+    ///
+    /// [advancing]: the queue (or a spinoff) is moving on, so a track no source
+    /// can play is skipped rather than reported (desktop `autoSkipIfAdvancing`).
+    private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false) {
         currentTrack = track
         // New track → re-arm the next-track Apple Music pre-fetch (#322).
         prefetchedNextForCurrentTrack = false
@@ -2517,6 +2602,13 @@ final class QueuePlaybackCoordinator {
             // route a stale track over the one the user actually wants.
             if Task.isCancelled { return }
 
+            // An embedded player (SoundCloud's widget) refusing a source is a
+            // failed source: the router moves on to the next one (#495).
+            let refusal = EmbedRefusal()
+            var router = self.router
+            router.onRefused = { service, pageUrl in
+                if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl }
+            }
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist)
             // Superseded while the engine was starting — skip the stale UI
             // state updates (the newer start owns activeEngine now).
@@ -2538,6 +2630,9 @@ final class QueuePlaybackCoordinator {
                 // native Achordion submit sends EVERY high-confidence per-service link
                 // (incl. Bandcamp), not just the flat-field trio (#276).
                 container.updateScrobbleSources(trackId: track.id, sources: ranked ?? [])
+                if let service = refusal.service, playedResolver != "soundcloud" {
+                    notice = Notice(message: "\(service) can't play this track here. Playing via \(pcResolverName(playedResolver)).")
+                }
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
                     spotifyPlaying = spotify.isPlaying
@@ -2554,6 +2649,7 @@ final class QueuePlaybackCoordinator {
                 case .avPlayer: player.pause()
                 case .musicKit: musicKit.pause()
                 case .spotify: await spotify.pause()
+                case .soundCloud: soundCloud.stop()
                 case .browser: break
                 }
                 activeEngine = .browser
@@ -2561,6 +2657,20 @@ final class QueuePlaybackCoordinator {
                 if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
 
             case .noPlayableSource:
+                if let service = refusal.service, !(advancing || spinoffMode) {
+                    // A track SoundCloud's widget won't play, and nothing else
+                    // can: say so, with its page on the service (desktop
+                    // parachord#1209, Android's snackbar). Halt what was
+                    // playing; never open the browser by itself.
+                    await haltActiveEngine()
+                    notice = Notice(
+                        message: "\(service) only plays \"\(track.title)\" on its own site.",
+                        actionLabel: refusal.pageUrl == nil ? nil : "Open in \(service)",
+                        actionUrl: refusal.pageUrl
+                    )
+                    isStarting = false
+                    return
+                }
                 // Resolved but no engine could play it (e.g. Apple-Music-only
                 // match with no subscription) — advance to the next track. On a
                 // forced deck switch, DON'T skip: the user asked to change source,
@@ -2569,6 +2679,20 @@ final class QueuePlaybackCoordinator {
             }
             isStarting = false
         }
+    }
+
+    /// Stop whichever engine is playing and drop the keepalive, keeping the
+    /// current track on screen (not playing).
+    @MainActor
+    private func haltActiveEngine() async {
+        switch activeEngine {
+        case .avPlayer: player.pause()
+        case .musicKit: musicKit.pause()
+        case .spotify: await spotify.pause(); spotifyPlaying = false
+        case .soundCloud: soundCloud.stop()
+        case .browser: break
+        }
+        keepAlive.stop()
     }
 
     /// Slow Spotify Connect state loop for the scrubber + auto-advance.

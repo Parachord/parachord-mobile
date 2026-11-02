@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Parachord SoundCloud</title>
+</head>
+<body>
+<!--
+  Hosts SoundCloud's embeddable widget for Android's SoundCloudWidgetBridge.kt
+  and iOS's IosSoundCloudWidget (SoundCloudWidget.swift). The two apps carry
+  identical copies (app/src/main/assets/js/ and iosApp/Parachord/Resources/;
+  a test keeps them equal). soundcloud-widget-player.js is desktop's module
+  (parachord src/renderer/lib/soundcloud-widget-player.js), copied unchanged:
+  it builds the hidden iframe and speaks the widget's postMessage protocol.
+  This page relays between it and the app, and refuses previews (below).
+  Every event carries the load's generation so the app can drop ones from a
+  track it has moved past. iOS inlines the module in place of the script tag.
+-->
+<script>var module = { exports: {} };</script>
+<script src="soundcloud-widget-player.js"></script>
+<script>
+(function () {
+    var player = module.exports.createSoundCloudWidgetPlayer({ win: window });
+    var WIDGET_ORIGIN = module.exports.WIDGET_ORIGIN;
+
+    // Whether the widget is playing the whole track or SoundCloud's 30-second
+    // preview. A track the widget may only preview (a Go+ release: `policy`
+    // SNIP, `duration` 30000 against `full_duration`) still starts, so the
+    // module counts it as playing; it then fades out and reports `finish` at
+    // 0:30 while getDuration answers the full length. The widget's
+    // getCurrentSound reply says which. No reply in time counts as whole.
+    var soundCheck = null;
+    window.addEventListener('message', function (event) {
+        var frame = document.querySelector('iframe');
+        if (!soundCheck || event.origin !== WIDGET_ORIGIN || !frame || event.source !== frame.contentWindow) return;
+        var msg;
+        try { msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch (e) { return; }
+        if (!msg || msg.method !== 'getCurrentSound') return;
+        var done = soundCheck;
+        soundCheck = null;
+        done(msg.value || {});
+    });
+
+    function isPreview(sound) {
+        if (sound.policy === 'SNIP') return true;
+        return typeof sound.duration === 'number' && typeof sound.full_duration === 'number' &&
+            sound.full_duration - sound.duration > 1000;
+    }
+
+    function checkWholeTrack(onAnswer) {
+        var frame = document.querySelector('iframe');
+        if (!frame || !frame.contentWindow) { onAnswer(true); return; }
+        var answered = false;
+        function answer(whole) { if (!answered) { answered = true; onAnswer(whole); } }
+        soundCheck = function (sound) { answer(!isPreview(sound)); };
+        setTimeout(function () { soundCheck = null; answer(true); }, 2000);
+        frame.contentWindow.postMessage(JSON.stringify({ method: 'getCurrentSound' }), WIDGET_ORIGIN);
+    }
+
+    // Android relays through a @JavascriptInterface, iOS through a
+    // WKScriptMessageHandler; the page is the same file in both apps.
+    function send(gen, type, value) {
+        var payload = JSON.stringify({ gen: gen, type: type, value: value === undefined ? null : value });
+        if (window.SoundCloudBridge) {
+            SoundCloudBridge.onEvent(payload);
+        } else if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.soundCloudBridge) {
+            window.webkit.messageHandlers.soundCloudBridge.postMessage(payload);
+        }
+    }
+
+    window.scLoad = function (gen, link, volume) {
+        player.element.volume = volume;
+        player.load(link, {
+            onProgress: function (s) { send(gen, 'progress', s); },
+            onDuration: function (s) { send(gen, 'duration', s); },
+            onPlay: function () { send(gen, 'play'); },
+            onPause: function () { send(gen, 'pause'); },
+            onFinish: function () { send(gen, 'finish'); }
+        }).then(function (started) {
+            checkWholeTrack(function (whole) {
+                if (whole) {
+                    send(gen, 'started', started && started.durationSeconds);
+                } else {
+                    player.stop();
+                    send(gen, 'failed', 'preview');
+                }
+            });
+        }, function (err) {
+            send(gen, 'failed', (err && err.reason) || 'unplayable');
+        });
+        return true;
+    };
+    // iOS only: WebKit plays the widget under its own audio session and
+    // releases it when a track ends; with the screen locked, iOS then refuses
+    // to start it again ("can't stop others because it is in the background"),
+    // so the next track would start silent. A silent looping <audio> keeps
+    // that session in use between tracks. Android never calls this.
+    var holdAudio = null;
+    function silentWavUrl() {
+        var rate = 8000, n = rate, bytes = new Uint8Array(44 + n);
+        var view = new DataView(bytes.buffer);
+        function str(at, s) { for (var i = 0; i < s.length; i++) view.setUint8(at + i, s.charCodeAt(i)); }
+        str(0, 'RIFF'); view.setUint32(4, 36 + n, true); str(8, 'WAVE');
+        str(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+        view.setUint32(24, rate, true); view.setUint32(28, rate, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true);
+        str(36, 'data'); view.setUint32(40, n, true);
+        for (var i = 44; i < bytes.length; i++) bytes[i] = 128; // 8-bit PCM silence
+        return URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    }
+    window.scHoldAudio = function (on) {
+        if (on) {
+            if (!holdAudio) {
+                holdAudio = new Audio(silentWavUrl());
+                holdAudio.loop = true;
+            }
+            var p = holdAudio.play();
+            if (p && p.catch) p.catch(function () {});
+        } else if (holdAudio) {
+            holdAudio.pause();
+        }
+        return true;
+    };
+    window.scStop = function () { player.stop(); return true; };
+    window.scPlay = function () { player.element.play(); return true; };
+    window.scPause = function () { player.element.pause(); return true; };
+    window.scSeek = function (seconds) { player.element.currentTime = seconds; return true; };
+    window.scVolume = function (volume) { player.element.volume = volume; return true; };
+
+    send(0, 'pageReady');
+})();
+</script>
+</body>
+</html>
