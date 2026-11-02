@@ -70,6 +70,8 @@ fun SearchScreen(
     val remoteTracks by viewModel.remoteTrackResults.collectAsStateWithLifecycle()
     val remoteAlbums by viewModel.remoteAlbumResults.collectAsStateWithLifecycle()
     val artists by viewModel.artistResults.collectAsStateWithLifecycle()
+    val searchArt by viewModel.searchArt.collectAsStateWithLifecycle()
+    val trackArtwork by viewModel.trackArtwork.collectAsStateWithLifecycle()
     val isSearchingRemote by viewModel.isSearchingRemote.collectAsStateWithLifecycle()
     val mbRateLimited by viewModel.musicBrainzRateLimited.collectAsStateWithLifecycle()
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
@@ -166,6 +168,7 @@ fun SearchScreen(
                         SectionHeader("Artists")
                     }
                     items(artists, key = { "artist-${it.name}" }) { artist ->
+                        val image = artist.imageUrl ?: searchArt[SearchViewModel.artKey("artist", artist.name)]
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -173,7 +176,7 @@ fun SearchScreen(
                                     viewModel.saveHistoryEntry(
                                         resultType = "artist",
                                         resultName = artist.name,
-                                        artworkUrl = artist.imageUrl,
+                                        artworkUrl = image,
                                     )
                                     // MusicBrainz rows carry the artist's id, so the
                                     // page can skip MusicBrainz's name search (#478).
@@ -182,10 +185,14 @@ fun SearchScreen(
                                 .padding(horizontal = 16.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            if (artist.imageUrl != null) {
+                            if (image != null) {
+                                // A photo that doesn't load shows the same icon as no photo.
+                                val noPhoto = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Default.Person)
                                 AsyncImage(
-                                    model = artist.imageUrl,
+                                    model = image,
                                     contentDescription = null,
+                                    error = noPhoto,
+                                    fallback = noPhoto,
                                     modifier = Modifier
                                         .size(40.dp)
                                         .clip(CircleShape),
@@ -228,11 +235,16 @@ fun SearchScreen(
                         SectionHeader("Tracks")
                     }
                     items(remoteTracks, key = { "remote-track-${it.title}-${it.artist}" }) { track ->
+                        // Its own cover, the one found for it, or (any row, as History
+                        // does) the cover of the source it resolved to.
+                        val art = track.artworkUrl
+                            ?: searchArt[SearchViewModel.artKey("track", track.title, track.artist)]
+                            ?: trackArtwork[com.parachord.android.resolver.trackKey(track.title, track.artist)]
                         TrackRow(
                             title = track.title,
                             artist = track.artist,
                             album = track.album,
-                            artworkUrl = track.artworkUrl,
+                            artworkUrl = art,
                             resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]?.ifEmpty { null },
                             resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
                             onClick = {
@@ -240,7 +252,7 @@ fun SearchScreen(
                                     resultType = "track",
                                     resultName = track.title,
                                     resultArtist = track.artist,
-                                    artworkUrl = track.artworkUrl,
+                                    artworkUrl = art,
                                 )
                             },
                         )
@@ -254,6 +266,9 @@ fun SearchScreen(
                         SectionHeader("Albums")
                     }
                     items(remoteAlbums, key = { "remote-album-${it.title}-${it.artist}" }) { album ->
+                        // A checked cover once there is one; until then (and past the
+                        // first rows) the row's own, which may not load.
+                        val art = searchArt[SearchViewModel.artKey("album", album.title, album.artist)] ?: album.artworkUrl
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -262,7 +277,7 @@ fun SearchScreen(
                                         resultType = "album",
                                         resultName = album.title,
                                         resultArtist = album.artist,
-                                        artworkUrl = album.artworkUrl,
+                                        artworkUrl = art,
                                     )
                                     onNavigateToAlbum(album.title, album.artist)
                                 }
@@ -270,7 +285,7 @@ fun SearchScreen(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             AlbumArtCard(
-                                artworkUrl = album.artworkUrl,
+                                artworkUrl = art,
                                 size = 48.dp,
                                 cornerRadius = 4.dp,
                                 elevation = 1.dp,

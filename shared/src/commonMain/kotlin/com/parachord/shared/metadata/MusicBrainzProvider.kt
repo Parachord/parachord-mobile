@@ -122,6 +122,7 @@ class MusicBrainzProvider(
     override suspend fun searchTracks(query: String, limit: Int): List<TrackSearchResult> =
         try {
             api.searchRecordings(query, limit).recordings.map { rec ->
+                val release = rec.releases.firstOrNull()
                 TrackSearchResult(
                     title = rec.title,
                     artist = rec.artistName,
@@ -131,6 +132,11 @@ class MusicBrainzProvider(
                     provider = name,
                     score = rec.score,
                     artistMbid = rec.artistCredit.firstOrNull()?.artist?.id,
+                    // Its album's cover, if one was uploaded (desktop fetchCoverArtByIds).
+                    artworkCandidates = listOfNotNull(
+                        release?.releaseGroup?.id?.let(::releaseGroupArtUrl),
+                        release?.id?.let(::coverArtUrl),
+                    ),
                 )
             }
         } catch (_: Exception) {
@@ -147,10 +153,14 @@ class MusicBrainzProvider(
                 },
             )
             releases.map { rel ->
+                // The release group's cover first: any edition's upload counts,
+                // where this one release often has none (desktop uses the group).
+                val groupArt = rel.releaseGroup?.id?.let(::releaseGroupArtUrl)
                 AlbumSearchResult(
                     title = rel.title,
                     artist = rel.artistName,
-                    artworkUrl = coverArtUrl(rel.id),
+                    artworkUrl = groupArt ?: coverArtUrl(rel.id),
+                    artworkCandidates = if (groupArt != null) listOf(coverArtUrl(rel.id)) else emptyList(),
                     year = rel.year,
                     trackCount = rel.trackCount,
                     mbid = rel.id,

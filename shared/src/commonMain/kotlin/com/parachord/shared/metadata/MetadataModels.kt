@@ -52,6 +52,13 @@ data class TrackSearchResult(
      * [SearchRanking] blends it in; null outside search or when unknown.
      */
     val popularity: Double? = null,
+    /**
+     * Other covers this row might show, in order, when [artworkUrl] is missing
+     * or doesn't load: Cover Art Archive URLs MusicBrainz builds whether or not
+     * a cover was uploaded (check before showing), and the covers of other
+     * providers' rows merged into this one. Search tries them ([SearchArtwork]).
+     */
+    val artworkCandidates: List<String> = emptyList(),
 )
 
 @Serializable
@@ -82,6 +89,13 @@ data class AlbumSearchResult(
      * MusicBrainz's rows ([SearchPopularity]). Null outside search or when unknown.
      */
     val popularity: Double? = null,
+    /**
+     * Other covers this row might show, in order, when [artworkUrl] is missing
+     * or doesn't load: Cover Art Archive URLs MusicBrainz builds whether or not
+     * a cover was uploaded (check before showing), and the covers of other
+     * providers' rows merged into this one. Search tries them ([SearchArtwork]).
+     */
+    val artworkCandidates: List<String> = emptyList(),
 )
 
 @Serializable

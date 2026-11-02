@@ -655,6 +655,14 @@ val androidModule = module {
             },
         )
     }
+    // Search covers for rows without one (desktop fetchSearchAlbumArt): Cover
+    // Art Archive URLs are HEAD-checked before they show. One instance, so the
+    // checks are remembered across queries.
+    single {
+        com.parachord.shared.metadata.SearchArtwork(
+            servesImage = { url -> get<com.parachord.shared.metadata.ImageEnrichmentService>().verifyArtUrl(url) },
+        )
+    }
     // BrokenArtRetry — an image view whose cover fails to load asks for the art
     // again (once per album/artist per session) and every stored copy of the
     // dead URL is patched: library rows plus the curated list caches.
