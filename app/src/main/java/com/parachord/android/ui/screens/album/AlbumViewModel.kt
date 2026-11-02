@@ -61,6 +61,14 @@ class AlbumViewModel constructor(
     private val _trackSources = MutableStateFlow<Map<String, List<ResolvedSource>>>(emptyMap())
 
     /**
+     * Track keys a [resolveTracksInBackground] pass is resolving. A catalog list
+     * and MusicBrainz's matching list a moment later (#486) each start a pass;
+     * without this the second would search every track again while the first
+     * is still running. Touched on the main thread only.
+     */
+    private val resolving = mutableSetOf<String>()
+
+    /**
      * Resolver badge names for UI display — sorted by user priority.
      * Uses shared cache (already sorted) merged with local album-specific results.
      */
@@ -153,13 +161,14 @@ class AlbumViewModel constructor(
         viewModelScope.launch {
             for (track in tracks) {
                 val key = trackKey(track.title, track.artist)
-                if (_trackSources.value.containsKey(key)) continue
+                if (_trackSources.value.containsKey(key) || key in resolving) continue
                 // Check shared cache first (cross-context dedup)
                 val cached = trackResolverCache.getSources(track.title, track.artist)
                 if (cached != null) {
                     _trackSources.value = _trackSources.value + (key to cached)
                     continue
                 }
+                if (!resolving.add(key)) continue
                 try {
                     val sources = resolverManager.resolveWithHints(
                         query = "${track.title} ${track.artist}",
@@ -172,7 +181,9 @@ class AlbumViewModel constructor(
                         // Feed into shared cache for cross-context display + priority sorting
                         trackResolverCache.putSources(track.title, track.artist, sources)
                     }
-                } catch (_: Exception) { /* skip */ }
+                } catch (_: Exception) { /* skip */ } finally {
+                    resolving.remove(key)
+                }
             }
         }
     }

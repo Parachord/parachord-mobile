@@ -97,9 +97,6 @@ class MetadataService constructor(
         /** Desktop: MusicBrainz finding fewer than this many albums adds catalog results. */
         const val CATALOG_SEARCH_BELOW = 3
 
-        /** Desktop MB_SLOW_FALLBACK_MS (parachord#1132). */
-        const val CATALOG_SLOW_AFTER_MS = 5_000L
-
         /** Max time any single provider may take inside the getArtistInfo merge
          *  before it's dropped (null) — keeps a slow/hung provider from stalling
          *  the whole awaitAll. Fast providers return in <1s; this only cuts hangs. */
@@ -212,48 +209,45 @@ class MetadataService constructor(
 
     /**
      * The album page's track list (#424): [getAlbumTracksProgressively], plus the
-     * plugins' album catalogs when the providers can't supply one.
+     * plugins' album catalogs.
      *
+     * - A cached track list is the whole answer; the catalogs aren't asked.
+     * - Otherwise the catalogs are asked at once, alongside the providers
+     *   (#486, desktop parachord#1199). A catalog usually answers in well under
+     *   a second, while MusicBrainz is 1 req/s and backs up behind everything
+     *   else loading. The catalog's list shows if it lands first.
      * - The providers' lists always win. Any provider answer with tracks is
-     *   shown, and replaces a catalog list already on screen.
-     * - If no provider has produced tracks after [slowAfterMs], the catalog's
-     *   list is shown meanwhile (desktop parachord#1132: MusicBrainz is 1 req/s
-     *   and backs up during an outage).
-     * - If every provider finishes with nothing, the catalog is asked right away.
+     *   shown, and replaces a catalog list already on screen, so MusicBrainz
+     *   stays canonical for track identity and recording ids.
      * - Once a catalog list is showing, an empty provider answer doesn't blank it.
      *
      * A catalog list is never written to the tracklist cache — it carries
      * [AlbumDetail.catalogSource] for the "Track list from …" label instead.
      */
-    fun getAlbumTracksWithCatalogFallback(
-        albumTitle: String,
-        artistName: String,
-        slowAfterMs: Long = CATALOG_SLOW_AFTER_MS,
-    ): Flow<AlbumDetail> = channelFlow {
+    fun getAlbumTracksWithCatalogFallback(albumTitle: String, artistName: String): Flow<AlbumDetail> = channelFlow {
+        cachedAlbumTracks(albumTitle, artistName)?.let {
+            send(it)
+            return@channelFlow
+        }
         val catalog = albumCatalog
         val lock = Mutex()
         var providerHasTracks = false
         var catalogShown = false
 
-        suspend fun showCatalog() {
-            if (catalog == null || lock.withLock { providerHasTracks || catalogShown }) return
+        val catalogRace = launch {
+            if (catalog == null) return@launch
             val found = try { catalog.load(artistName, albumTitle) } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 null
-            } ?: return
+            } ?: return@launch
             val detail = AlbumCatalog.toAlbumDetail(found.album, found.resolverName, albumTitle, artistName)
-            if (detail.tracks.isEmpty()) return
+            if (detail.tracks.isEmpty()) return@launch
             lock.withLock {
-                if (!providerHasTracks && !catalogShown) {
+                if (!providerHasTracks) {
                     catalogShown = true
                     send(detail)
                 }
             }
-        }
-
-        val slowTimer = launch {
-            kotlinx.coroutines.delay(slowAfterMs)
-            showCatalog()
         }
         getAlbumTracksProgressively(albumTitle, artistName).collect { detail ->
             lock.withLock {
@@ -265,13 +259,9 @@ class MetadataService constructor(
                 }
             }
         }
-        if (lock.withLock { providerHasTracks }) {
-            slowTimer.cancel()
-        } else {
-            // Every provider is done and none had the album: don't wait out the timer.
-            slowTimer.cancel()
-            showCatalog()
-        }
+        // A provider's list is showing: the catalog's can no longer be. Otherwise
+        // the catalog is the only list left to wait for.
+        if (lock.withLock { providerHasTracks }) catalogRace.cancel()
     }
 
     /** Search artists across all available providers in parallel, merge and deduplicate. */
@@ -627,27 +617,46 @@ class MetadataService constructor(
      * Progressive version of [getAlbumTracks] — emits an updated [AlbumDetail] as each
      * provider completes, so the UI can show the tracklist from the fastest provider
      * immediately and enrich it as slower providers respond.
+     *
+     * Once every provider has answered, a complete list is cached as
+     * [getAlbumTracks] caches it, so the next open of the album is served from
+     * the cache (and doesn't ask the catalogs, #486).
      */
     fun getAlbumTracksProgressively(albumTitle: String, artistName: String): Flow<AlbumDetail> = channelFlow {
         val mutex = Mutex()
         var merged: AlbumDetail? = null
+        var anyFailed = false
         val active = availableProviders()
+        val cacheKey = cacheKey(active, artistName, albumTitle)
         // A cached tracklist is the whole answer: show it, no provider calls.
-        albumTracksCache?.get(cacheKey(active, artistName, albumTitle))?.let {
+        albumTracksCache?.get(cacheKey)?.let {
             send(it)
             return@channelFlow
         }
-        for (provider in active) {
-            launch {
-                try {
-                    val result = provider.getAlbumTracks(albumTitle, artistName) ?: return@launch
-                    mutex.withLock {
-                        merged = merged?.let { mergeAlbumDetails(it, result) } ?: result
-                        send(merged!!)
+        coroutineScope {
+            for (provider in active) {
+                launch {
+                    try {
+                        val result = provider.getAlbumTracks(albumTitle, artistName) ?: return@launch
+                        mutex.withLock {
+                            merged = merged?.let { mergeAlbumDetails(it, result) } ?: result
+                            send(merged!!)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        mutex.withLock { anyFailed = true }
                     }
-                } catch (_: Exception) { /* skip failed provider */ }
+                }
             }
         }
+        // Cache only a complete answer (every provider answered, with tracks).
+        val complete = mutex.withLock { merged?.takeIf { !anyFailed && it.tracks.isNotEmpty() } }
+        complete?.let { albumTracksCache?.put(cacheKey, it) }
+    }
+
+    private suspend fun cachedAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
+        val cache = albumTracksCache ?: return null
+        return cache.get(cacheKey(availableProviders(), artistName, albumTitle))
     }
 
     /**
