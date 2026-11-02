@@ -11,7 +11,7 @@ import com.parachord.android.data.db.entity.TrackEntity
  * - DirectStreamHandler: ExoPlayer with URL + headers
  * - LocalFileHandler: ExoPlayer with content:// URI
  * - SpotifyPlaybackHandler: Spotify Web API (Spotify Connect)
- * - SoundCloudPlaybackHandler: SoundCloud stream API + ExoPlayer
+ * - SoundCloudPlaybackHandler: SoundCloud's embeddable widget (hidden WebView)
  */
 interface SourceHandler {
     /** Whether this handler can play the given source type or resolver. */
@@ -42,6 +42,12 @@ interface ExternalPlaybackHandler {
     suspend fun seekTo(positionMs: Long)
     suspend fun stop()
     val isConnected: Boolean
+
+    /** Position of the current track, in ms. */
+    fun getPosition(): Long
+
+    /** Whether the service reports the current track playing. */
+    fun isPlaying(): Boolean
 }
 
 class DirectStreamHandler : SourceHandler {
@@ -73,3 +79,17 @@ class LocalFileHandler : SourceHandler {
  * lock until the app is killed.
  */
 class PlaybackStartTimeoutException(message: String) : Exception(message)
+
+/**
+ * A service's embedded player won't play this track here (SoundCloud's widget
+ * loads a track SoundCloud won't let it embed and never starts it; desktop
+ * parachord#1209). [com.parachord.android.playback.PlaybackController] treats
+ * it as a failed source: another source plays, the queue moves on, or the user
+ * is offered [pageUrl].
+ */
+class EmbedPlaybackRefusedException(
+    val serviceName: String,
+    /** The track's page on the service, for "Open in …"; null when unknown. */
+    val pageUrl: String?,
+    reason: String,
+) : Exception("$serviceName won't play this track here ($reason)")

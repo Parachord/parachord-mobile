@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Parachord SoundCloud</title>
+</head>
+<body>
+<!--
+  Hosts SoundCloud's embeddable widget for SoundCloudWidgetBridge.kt.
+  soundcloud-widget-player.js is desktop's module (parachord
+  src/renderer/lib/soundcloud-widget-player.js), copied unchanged: it builds
+  the hidden iframe and speaks the widget's postMessage protocol. This page
+  only relays between it and Kotlin. Every event carries the load's
+  generation so Kotlin can drop ones from a track it has moved past.
+-->
+<script>var module = { exports: {} };</script>
+<script src="soundcloud-widget-player.js"></script>
+<script>
+(function () {
+    var player = module.exports.createSoundCloudWidgetPlayer({ win: window });
+    var WIDGET_ORIGIN = module.exports.WIDGET_ORIGIN;
+
+    // Whether the widget is playing the whole track or SoundCloud's 30-second
+    // preview. A track the widget may only preview (a Go+ release: `policy`
+    // SNIP, `duration` 30000 against `full_duration`) still starts, so the
+    // module counts it as playing; it then fades out and reports `finish` at
+    // 0:30 while getDuration answers the full length. The widget's
+    // getCurrentSound reply says which. No reply in time counts as whole.
+    var soundCheck = null;
+    window.addEventListener('message', function (event) {
+        var frame = document.querySelector('iframe');
+        if (!soundCheck || event.origin !== WIDGET_ORIGIN || !frame || event.source !== frame.contentWindow) return;
+        var msg;
+        try { msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data; } catch (e) { return; }
+        if (!msg || msg.method !== 'getCurrentSound') return;
+        var done = soundCheck;
+        soundCheck = null;
+        done(msg.value || {});
+    });
+
+    function isPreview(sound) {
+        if (sound.policy === 'SNIP') return true;
+        return typeof sound.duration === 'number' && typeof sound.full_duration === 'number' &&
+            sound.full_duration - sound.duration > 1000;
+    }
+
+    function checkWholeTrack(onAnswer) {
+        var frame = document.querySelector('iframe');
+        if (!frame || !frame.contentWindow) { onAnswer(true); return; }
+        var answered = false;
+        function answer(whole) { if (!answered) { answered = true; onAnswer(whole); } }
+        soundCheck = function (sound) { answer(!isPreview(sound)); };
+        setTimeout(function () { soundCheck = null; answer(true); }, 2000);
+        frame.contentWindow.postMessage(JSON.stringify({ method: 'getCurrentSound' }), WIDGET_ORIGIN);
+    }
+
+    function send(gen, type, value) {
+        if (!window.SoundCloudBridge) return;
+        SoundCloudBridge.onEvent(JSON.stringify({
+            gen: gen,
+            type: type,
+            value: value === undefined ? null : value
+        }));
+    }
+
+    window.scLoad = function (gen, link, volume) {
+        player.element.volume = volume;
+        player.load(link, {
+            onProgress: function (s) { send(gen, 'progress', s); },
+            onDuration: function (s) { send(gen, 'duration', s); },
+            onPlay: function () { send(gen, 'play'); },
+            onPause: function () { send(gen, 'pause'); },
+            onFinish: function () { send(gen, 'finish'); }
+        }).then(function (started) {
+            checkWholeTrack(function (whole) {
+                if (whole) {
+                    send(gen, 'started', started && started.durationSeconds);
+                } else {
+                    player.stop();
+                    send(gen, 'failed', 'preview');
+                }
+            });
+        }, function (err) {
+            send(gen, 'failed', (err && err.reason) || 'unplayable');
+        });
+        return true;
+    };
+    window.scStop = function () { player.stop(); return true; };
+    window.scPlay = function () { player.element.play(); return true; };
+    window.scPause = function () { player.element.pause(); return true; };
+    window.scSeek = function (seconds) { player.element.currentTime = seconds; return true; };
+    window.scVolume = function (volume) { player.element.volume = volume; return true; };
+
+    send(0, 'pageReady');
+})();
+</script>
+</body>
+</html>

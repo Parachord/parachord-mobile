@@ -295,6 +295,35 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         }
     }
 
+    // Playback messages with an action ("Open in SoundCloud" for a track its
+    // widget won't play).
+    val snackbarHostState = remember { androidx.compose.material3.SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        mainViewModel.playbackNotices.collect { notice ->
+            val result = snackbarHostState.showSnackbar(
+                message = notice.message,
+                actionLabel = notice.actionLabel,
+                withDismissAction = notice.actionLabel == null,
+                duration = if (notice.actionLabel != null) {
+                    androidx.compose.material3.SnackbarDuration.Long
+                } else {
+                    androidx.compose.material3.SnackbarDuration.Short
+                },
+            )
+            val url = notice.actionUrl
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed && url != null) {
+                try {
+                    context.startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Couldn't open $url", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     // Navigate to Settings when Apple Music sign-in is required
     LaunchedEffect(Unit) {
         mainViewModel.navigateToSettings.collect {
@@ -541,6 +570,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
             },
         ) {
             Scaffold(
+                snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
                 bottomBar = {
                     if (showBottomBar) {
                         Column {

@@ -1,110 +1,86 @@
 package com.parachord.android.playback.handlers
 
 import com.parachord.shared.platform.Log
-import androidx.media3.common.MediaItem
 import com.parachord.android.data.db.entity.TrackEntity
-import com.parachord.android.data.store.SettingsStore
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
-import okhttp3.OkHttpClient
-import okhttp3.Request
 
 /**
- * Handles SoundCloud playback by fetching stream URLs from the SoundCloud API
- * and routing them through ExoPlayer.
+ * Plays SoundCloud tracks through SoundCloud's embeddable widget
+ * ([SoundCloudWidgetBridge]), matching desktop (parachord#1209).
  *
- * Mirrors the desktop app's approach: fetch audio via /tracks/{id}/stream or
- * /tracks/{id}/streams, then play the MP3 URL through the native audio engine.
- * Unlike the desktop (which needs a proxy fetch + blob URL for CORS), Android
- * can play the stream URLs directly via ExoPlayer.
+ * This used to fetch a stream URL from the API and hand it to ExoPlayer, the
+ * port of desktop's old path. The API no longer gives full tracks (see
+ * [SoundCloudWidgetBridge]), so that ended on a preview URL that answers
+ * 403/429. Playing needs no sign-in now; search and resolution still use the
+ * API and the user's SoundCloud connection.
+ *
+ * A track the widget won't play throws [EmbedPlaybackRefusedException], which
+ * [com.parachord.android.playback.PlaybackController] treats as a failed
+ * source: another source plays, or the queue moves on, or the user is offered
+ * the track on SoundCloud.
  */
 class SoundCloudPlaybackHandler constructor(
-    private val settingsStore: SettingsStore,
-    private val okHttpClient: OkHttpClient,
-    private val json: Json,
-) : SourceHandler {
+    private val widget: SoundCloudWidgetBridge,
+) : SourceHandler, ExternalPlaybackHandler {
 
     companion object {
         private const val TAG = "SoundCloudPlayback"
-        private const val SC_API_BASE = "https://api.soundcloud.com"
+        const val SERVICE_NAME = "SoundCloud"
+
+        /**
+         * What the widget loads: the track's soundcloud.com page when the
+         * source carries it, else its API URL (the form SoundCloud's own embed
+         * code uses), built from the id.
+         */
+        fun widgetLink(track: TrackEntity): String? {
+            val url = track.sourceUrl
+            if (url != null && isSoundCloudUrl(url)) return url
+            return track.soundcloudId?.takeIf { it.isNotBlank() }?.let { "https://api.soundcloud.com/tracks/$it" }
+        }
+
+        /** The track's page on soundcloud.com, for "Open in SoundCloud"; null when unknown. */
+        fun pageLink(track: TrackEntity): String? =
+            track.sourceUrl?.takeIf { isSoundCloudUrl(it) && !it.contains("api.soundcloud.com") }
+
+        private fun isSoundCloudUrl(url: String): Boolean {
+            val host = runCatching { java.net.URI(url).host }.getOrNull()?.lowercase() ?: return false
+            return url.startsWith("https://") && (host == "soundcloud.com" || host.endsWith(".soundcloud.com"))
+        }
     }
+
+    /** Gain (0..1) for the next [play]: the resolver's dB offset, set by the controller. */
+    @Volatile var volumeFraction: Float = 1f
+
+    val bridge: SoundCloudWidgetBridge get() = widget
 
     override fun canHandle(track: TrackEntity): Boolean =
-        track.resolver == "soundcloud" && track.soundcloudId != null
+        track.resolver == "soundcloud" && widgetLink(track) != null
 
-    override suspend fun createMediaItem(track: TrackEntity): MediaItem? {
-        val scId = track.soundcloudId ?: return null
-        val token = settingsStore.getSoundCloudToken()
-        if (token.isNullOrBlank()) {
-            Log.e(TAG, "No SoundCloud token available")
-            return null
-        }
+    override suspend fun createMediaItem(track: TrackEntity) = null // External playback
 
-        val streamUrl = resolveStreamUrl(scId, token) ?: return null
-
-        Log.d(TAG, "Resolved SoundCloud stream for track ${track.title}")
-        return MediaItem.Builder()
-            .setMediaId(track.id)
-            .setUri(streamUrl)
-            .build()
-    }
-
-    /**
-     * Resolve a direct stream URL for a SoundCloud track.
-     * Tries the /stream endpoint first, then falls back to /streams.
-     */
-    private fun resolveStreamUrl(trackId: String, token: String): String? {
-        // Try direct /stream endpoint (older API, returns redirect to MP3)
-        val directUrl = "$SC_API_BASE/tracks/$trackId/stream?oauth_token=$token"
-        try {
-            val request = Request.Builder()
-                .url(directUrl)
-                .head()
-                .build()
-            val response = okHttpClient.newCall(request).execute()
-            if (response.isSuccessful) {
-                Log.d(TAG, "Direct stream URL available")
-                return directUrl
+    override suspend fun play(track: TrackEntity) {
+        val link = widgetLink(track)
+            ?: throw EmbedPlaybackRefusedException(SERVICE_NAME, null, "no track link")
+        when (val result = widget.load(link, volumeFraction)) {
+            is SoundCloudWidgetBridge.LoadResult.Started ->
+                Log.d(TAG, "Playing '${track.title}' in the widget")
+            is SoundCloudWidgetBridge.LoadResult.Refused -> {
+                // 'superseded' means another play took over; the controller
+                // has moved on, so this is no failure of the track's.
+                if (result.reason == "superseded") return
+                Log.w(TAG, "The widget won't play '${track.title}' (${result.reason})")
+                throw EmbedPlaybackRefusedException(SERVICE_NAME, pageLink(track), result.reason)
             }
-            val status = response.code
-            Log.d(TAG, "Direct stream returned $status, trying /streams endpoint")
-        } catch (e: Exception) {
-            Log.d(TAG, "Direct stream test failed: ${e.message}")
-        }
-
-        // Fall back to /streams endpoint which returns pre-signed URLs
-        try {
-            val request = Request.Builder()
-                .url("$SC_API_BASE/tracks/$trackId/streams")
-                .header("Authorization", "OAuth $token")
-                .get()
-                .build()
-            val response = okHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e(TAG, "Streams endpoint failed with ${response.code}")
-                return null
-            }
-
-            val body = response.body?.string() ?: return null
-            val streams = json.decodeFromString<SoundCloudStreams>(body)
-
-            // Prefer direct HTTP MP3 over HLS or preview
-            val streamUrl = streams.httpMp3128Url ?: streams.previewMp3128Url
-            if (streamUrl != null) {
-                Log.d(TAG, "Using pre-signed stream URL from /streams")
-            }
-            return streamUrl
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to resolve stream URL", e)
-            return null
         }
     }
+
+    override suspend fun pause() = widget.pause()
+    override suspend fun resume() = widget.play()
+    override suspend fun seekTo(positionMs: Long) = widget.seekTo(positionMs)
+    override suspend fun stop() = widget.stop()
+
+    override val isConnected: Boolean get() = true
+
+    override fun getPosition(): Long = widget.positionMs
+    override fun isPlaying(): Boolean = widget.isPlaying
+    fun getDuration(): Long = widget.durationMs
 }
-
-@Serializable
-private data class SoundCloudStreams(
-    @SerialName("http_mp3_128_url") val httpMp3128Url: String? = null,
-    @SerialName("hls_mp3_128_url") val hlsMp3128Url: String? = null,
-    @SerialName("preview_mp3_128_url") val previewMp3128Url: String? = null,
-)

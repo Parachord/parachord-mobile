@@ -587,7 +587,7 @@ fun ResolverIconRow(
 }
 
 /** Human-readable display names for resolvers. */
-private fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) {
+fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) {
     "spotify" -> "Spotify"
     "applemusic" -> "Apple Music"
     "soundcloud" -> "SoundCloud"

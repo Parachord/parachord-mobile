@@ -69,11 +69,19 @@ soundcloud:  0    bandcamp:   -3    youtube:    -6
 Each resolver type routes to a specific playback mechanism:
 
 - **Spotify** → Web API (Spotify Connect, controls Spotify app on-device via HTTP)
-- **SoundCloud** → Fetch stream URL from API, play inline via ExoPlayer (no CORS issues on Android unlike desktop)
+- **SoundCloud** → SoundCloud's embeddable widget in a hidden WebView (external playback, like Apple Music)
 - **Local files** → ExoPlayer with content:// URI
 - **Direct streams** → ExoPlayer with HTTP URL
 
-The desktop plays SoundCloud natively via HTML5 Audio (not externally). The Android equivalent is ExoPlayer.
+### SoundCloud — the Widget (#495, desktop parachord#1209)
+
+The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/stream` 429s with the token in the query and redirects to a 30-second preview with it in a header, and the full streams (HLS only) answer 403 "An active Artist Pro subscription is required". So SoundCloud plays through SoundCloud's own widget (`w.soundcloud.com/player`), which needs no sign-in. Search and resolution still use the API and the user's SoundCloud credentials.
+
+- **Desktop's module, unchanged.** `assets/js/soundcloud-widget-player.js` is a byte-for-byte copy of desktop's `src/renderer/lib/soundcloud-widget-player.js` (the widget's postMessage protocol, no SoundCloud `api.js`). `assets/js/soundcloud-widget.html` hosts it and relays its callbacks, tagged with a load generation, to `SoundCloudWidgetBridge` through a `@JavascriptInterface`. Update the module by copying desktop's again, not by editing it.
+- **Background playback rides on the Apple Music setup**: a WebView never added to a window, `LAYER_TYPE_NONE`, `mediaPlaybackRequiresUserGesture = false`, `keepAlive()` before each track, and the controller's silent ExoPlayer loop for the foreground service and MediaSession. Chromium owns audio focus.
+- **Previews count as refused.** A track SoundCloud lets the widget only preview (a Go+ release: `getCurrentSound` reports `policy: "SNIP"`, `duration` 30000 against `full_duration`) still starts, fades out at 0:30 and fires `finish`, while `getDuration` reports the full length. The host page asks `getCurrentSound` once the track starts and reports a preview as refused (reason `preview`). Desktop's module counts "the position moved" as playable, so it misses this.
+- **A refused track is a failed source** (`EmbedPlaybackRefusedException`): another source plays (with a "Playing via X" toast), else the queue moves on when it was advancing or in a spinoff, else a snackbar offers "Open in SoundCloud" when the track has a soundcloud.com page. The browser never opens by itself.
+- **Link:** the source's soundcloud.com permalink, else `https://api.soundcloud.com/tracks/<id>` (the form SoundCloud's own embed code uses).
 
 ### Spotify Connect — Device Wake & Playback
 
@@ -1074,7 +1082,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda |
 | Scrobbling | `shared/.../playback/scrobbler/{ScrobbleManager,Scrobbler,ListenBrainzScrobbler,LastFmScrobbler,LibreFmScrobbler,LbSourceEnrichment,ScrobblePluginDispatch}.kt` (KMP-shared, #193; app-side `playback/scrobbler/*` are typealias shims). Android JS dispatch: `playback/JsScrobblePluginDispatcher.kt`. Last.fm signing: `shared/.../api/LastFmSigning.kt` |
 | Local file scanning | `data/scanner/MediaScanner.kt` |
-| Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` |
+| Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` + `SoundCloudWidgetBridge.kt` (`assets/js/soundcloud-widget.html`) |
 | Apple Music bridge | `playback/handlers/MusicKitWebBridge.kt`, `assets/js/musickit-bridge.html` |
 | Settings/defaults | `shared/.../settings/SettingsStore.kt` (typealias shim in `data/store/`); `shared/.../store/KvStore.kt` + `KvStoreFactory` (Android: SharedPreferences, iOS: NSUserDefaults) |
 | Theme | `ui/theme/Theme.kt` |

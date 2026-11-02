@@ -17,7 +17,7 @@ import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
  * The routing order matches the desktop app's logic:
  * 1. Spotify tracks → Web API / Spotify Connect (external playback)
  * 2. Apple Music tracks → MusicKit JS WebView (external playback)
- * 3. SoundCloud tracks → Stream URL resolution + ExoPlayer
+ * 3. SoundCloud tracks → SoundCloud's embeddable widget (hidden WebView)
  * 4. Local files → ExoPlayer with content:// URI
  * 5. Direct streams → ExoPlayer with HTTP URL
  */
@@ -64,7 +64,7 @@ class PlaybackRouter constructor(
 
             Log.d(TAG, "Routing '${track.title}' to ${handler::class.simpleName}")
 
-            // External playback handlers manage their own lifecycle (Spotify, Apple Music)
+            // External playback handlers manage their own lifecycle (Spotify, Apple Music, SoundCloud)
             if (handler is ExternalPlaybackHandler) {
                 stopExternalPlayback()
                 activeExternalHandler = handler
@@ -94,4 +94,7 @@ class PlaybackRouter constructor(
 
     /** Get the Apple Music handler for state observation. */
     fun getAppleMusicHandler(): AppleMusicPlaybackHandler = appleMusicHandler
+
+    /** Get the SoundCloud handler for state observation. */
+    fun getSoundCloudHandler(): SoundCloudPlaybackHandler = soundCloudHandler
 }
