@@ -272,7 +272,7 @@ private struct PCAlbumMenuItems: View {
 
     private func play(queue: Bool) {
         Task {
-            guard let detail = try? await container.getAlbumDetail(albumTitle: title, artistName: artist) else { return }
+            guard let detail = try? await container.albumTrackList(albumTitle: title, artistName: artist) else { return }
             let entities = detail.tracks.map { pcTrack(from: $0) }
             guard !entities.isEmpty else { return }
             let ctx = PlaybackContext(type: "album", name: title, id: "\(title)|\(artist)")

@@ -411,7 +411,7 @@ class ArtistViewModel constructor(
     fun queueAlbumByName(albumTitle: String, albumArtist: String) {
         viewModelScope.launch {
             try {
-                val detail = metadataService.getAlbumTracks(albumTitle, albumArtist)
+                val detail = metadataService.loadAlbumTrackList(albumTitle, albumArtist)
                 if (detail == null || detail.tracks.isEmpty()) {
                     Log.w("ArtistVM", "No tracks found for album '$albumTitle'")
                     return@launch

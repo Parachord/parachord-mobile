@@ -95,6 +95,25 @@ class MusicBrainzProvider(
         }
     }
 
+    /**
+     * The release group or release each album seen in a discography or a search
+     * stands for, so opening it costs one request instead of a search plus a
+     * lookup (#1199 / #1202 on desktop). Keyed by [albumKey]; the oldest
+     * entries go past [ALBUM_HINT_LIMIT].
+     */
+    private class AlbumHint(val releaseGroupId: String?, val releaseId: String?, val releaseType: String?)
+    private val albumHints = LinkedHashMap<String, AlbumHint>()
+
+    private suspend fun rememberAlbums(hints: List<Pair<String, AlbumHint>>) = cacheMutex.withLock {
+        for ((key, hint) in hints) {
+            // A release group (from a discography) beats a release (from a search).
+            if (hint.releaseGroupId == null && albumHints[key]?.releaseGroupId != null) continue
+            albumHints.remove(key)
+            albumHints[key] = hint
+        }
+        while (albumHints.size > ALBUM_HINT_LIMIT) albumHints.remove(albumHints.keys.first())
+    }
+
     override val name = "musicbrainz"
     override val priority = 0
 
@@ -119,7 +138,14 @@ class MusicBrainzProvider(
 
     override suspend fun searchAlbums(query: String, limit: Int): List<AlbumSearchResult> =
         try {
-            api.searchReleases(query, limit).releases.map { rel ->
+            val releases = api.searchReleases(query, limit).releases
+            // The best-scored release per album, first seen wins.
+            rememberAlbums(
+                releases.distinctBy { albumKey(it.artistName, it.title) }.map {
+                    albumKey(it.artistName, it.title) to AlbumHint(null, it.id, normalizeReleaseType(it.releaseGroup))
+                },
+            )
+            releases.map { rel ->
                 AlbumSearchResult(
                     title = rel.title,
                     artist = rel.artistName,
@@ -164,15 +190,35 @@ class MusicBrainzProvider(
             null
         }
 
+    /**
+     * An album's track list. One request when a discography or search has shown
+     * this album (desktop `fetchReleaseGroupDetails`, parachord#1199): a release
+     * group's first official release with its tracks, or the release itself.
+     * Otherwise a search for the release, then its lookup.
+     */
     override suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
         return try {
-            // Search for the release to get its MBID
-            val query = "release:\"$albumTitle\" AND artist:\"$artistName\""
-            val results = api.searchReleases(query, limit = 1)
-            val release = results.releases.firstOrNull() ?: return null
-
-            // Look up the release with recordings included
-            val detail = api.getRelease(release.id)
+            val hint = cacheMutex.withLock { albumHints[albumKey(artistName, albumTitle)] }
+            val fromGroup = hint?.releaseGroupId?.let { id ->
+                api.browseReleasesByReleaseGroup(id, status = "official").releases.firstOrNull()
+            }
+            val releaseType: String?
+            val releaseId = hint?.releaseId
+            val detail = if (fromGroup != null) {
+                releaseType = hint?.releaseType
+                fromGroup
+            } else if (releaseId != null) {
+                releaseType = hint?.releaseType
+                api.getRelease(releaseId)
+            } else {
+                // Search for the release to get its MBID
+                val query = "release:\"$albumTitle\" AND artist:\"$artistName\""
+                val results = api.searchReleases(query, limit = 1)
+                val release = results.releases.firstOrNull() ?: return null
+                releaseType = normalizeReleaseType(release.releaseGroup)
+                // Look up the release with recordings included
+                api.getRelease(release.id)
+            }
             val tracks = detail.media.flatMap { it.tracks }
             if (tracks.isEmpty()) return null
 
@@ -183,7 +229,7 @@ class MusicBrainzProvider(
                 artist = detail.artistName,
                 artworkUrl = artwork,
                 year = detail.year,
-                releaseType = normalizeReleaseType(release.releaseGroup),
+                releaseType = releaseType,
                 tracks = tracks.map { t ->
                     TrackSearchResult(
                         title = t.recording?.title ?: t.title,
@@ -219,7 +265,7 @@ class MusicBrainzProvider(
             val artistMbid = resolveArtistMbid(artistName) ?: return emptyList()
             val response = api.browseReleaseGroups(artistId = artistMbid, limit = limit)
             val artistLower = artistName.lowercase()
-            return response.releaseGroups
+            val albums = response.releaseGroups
                 // Filter out releases where the artist credit doesn't match
                 // (e.g. "Various Artists" compilations the artist merely appears on)
                 .filter { rg ->
@@ -247,6 +293,8 @@ class MusicBrainzProvider(
                         provider = name,
                     )
                 }
+            rememberAlbums(albums.map { albumKey(it.artist, it.title) to AlbumHint(it.mbid, null, it.releaseType) })
+            return albums
     }
 
     /** Resolve an artist name to their MusicBrainz MBID (uses cached search). */
@@ -254,6 +302,11 @@ class MusicBrainzProvider(
         resolveArtist(artistName)?.id
 
     companion object {
+        /** How many albums [albumHints] remembers. */
+        private const val ALBUM_HINT_LIMIT = 1000
+
+        private fun albumKey(artist: String, title: String) = "${artist.lowercase().trim()}\u0000${title.lowercase().trim()}"
+
         /** Cover Art Archive front cover URL for a release. */
         fun coverArtUrl(mbid: String): String =
             "https://coverartarchive.org/release/$mbid/front-250"

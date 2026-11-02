@@ -3,6 +3,7 @@ package com.parachord.shared.metadata
 import com.parachord.shared.platform.Log
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
@@ -262,6 +263,56 @@ class MetadataService constructor(
         // A provider's list is showing: the catalog's can no longer be. Otherwise
         // the catalog is the only list left to wait for.
         if (lock.withLock { providerHasTracks }) catalogRace.cancel()
+    }
+
+    /**
+     * An album's track list for an action that needs it now: Play, Queue, a
+     * deep link, DJ chat (desktop `loadAlbumTrackList`, parachord#1202). The
+     * providers ([getAlbumTracks]) race the plugins' album catalogs, and the
+     * first list with tracks wins; the other side is cancelled.
+     *
+     * - A cached track list is the whole answer, with no race.
+     * - There's no page to settle afterwards, so the track list doesn't have to
+     *   be MusicBrainz's; each track is resolved on the user's services either
+     *   way. A catalog list carries [AlbumDetail.catalogSource] and isn't cached.
+     * - Null when neither side has a list.
+     *
+     * The album page keeps [getAlbumTracksWithCatalogFallback], where the
+     * providers' list replaces a catalog list once it arrives.
+     */
+    suspend fun loadAlbumTrackList(albumTitle: String, artistName: String): AlbumDetail? {
+        cachedAlbumTracks(albumTitle, artistName)?.let { return it }
+        val catalog = albumCatalog ?: return getAlbumTracks(albumTitle, artistName)
+        return coroutineScope {
+            val answers = Channel<AlbumDetail?>(capacity = 2)
+            val racers = listOf(
+                launch {
+                    answers.send(
+                        try { getAlbumTracks(albumTitle, artistName) } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null
+                        },
+                    )
+                },
+                launch {
+                    val found = try { catalog.load(artistName, albumTitle) } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        null
+                    }
+                    answers.send(found?.let { AlbumCatalog.toAlbumDetail(it.album, it.resolverName, albumTitle, artistName) })
+                },
+            )
+            var winner: AlbumDetail? = null
+            for (i in racers.indices) {
+                val answer = answers.receive()
+                if (answer != null && answer.tracks.isNotEmpty()) {
+                    winner = answer
+                    break
+                }
+            }
+            racers.forEach { it.cancel() }
+            winner
+        }
     }
 
     /** Search artists across all available providers in parallel, merge and deduplicate. */

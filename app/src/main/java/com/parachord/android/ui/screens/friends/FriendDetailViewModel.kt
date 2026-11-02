@@ -404,7 +404,7 @@ class FriendDetailViewModel constructor(
     fun queueAlbumByName(albumTitle: String, albumArtist: String) {
         viewModelScope.launch {
             try {
-                val detail = metadataService.getAlbumTracks(albumTitle, albumArtist)
+                val detail = metadataService.loadAlbumTrackList(albumTitle, albumArtist)
                 if (detail == null || detail.tracks.isEmpty()) return@launch
                 val entities = detail.tracks.mapNotNull { track ->
                     val sources = resolverManager.resolveWithHints(

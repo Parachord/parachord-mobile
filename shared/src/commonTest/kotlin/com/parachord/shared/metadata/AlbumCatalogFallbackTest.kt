@@ -34,6 +34,7 @@ class AlbumCatalogFallbackTest {
 
     private var catalogSearches = 0
     private var catalogDelayMs = 0L
+    private var catalogEmpty = false
     private val searchJson = """[{"name":"Dulling the Horns","artist":"Wild Pink","url":"https://music.apple.com/us/album/x/1"}]"""
     private val lookupJson = """{"album":{"name":"Dulling the Horns","artist":"Wild Pink","url":"u","tracks":[""" +
         """{"title":"Q. Corinthians","duration":200,"trackNumber":1}]},"resolverId":"applemusic"}"""
@@ -41,7 +42,7 @@ class AlbumCatalogFallbackTest {
     // The loader runs on the test's scheduler so virtual time doesn't race past it.
     private fun kotlinx.coroutines.test.TestScope.loader() = AlbumCatalogLoader(
         resolvers = { listOf("applemusic" to "Apple Music") },
-        searchAlbums = { _, _, _, _ -> catalogSearches++; delay(catalogDelayMs); searchJson },
+        searchAlbums = { _, _, _, _ -> catalogSearches++; delay(catalogDelayMs); if (catalogEmpty) "[]" else searchJson },
         lookupAlbumFrom = { _, _ -> lookupJson },
         scope = backgroundScope,
     )
@@ -139,5 +140,48 @@ class AlbumCatalogFallbackTest {
         val searchesAfterSearch = catalogSearches
         assertEquals("Apple Music", l.load("Wild Pink", "Dulling the Horns")?.resolverName)
         assertEquals(searchesAfterSearch, catalogSearches)
+    }
+
+    // ── Album actions: the first list wins (desktop parachord#1202) ──
+
+    @Test
+    fun anActionTakesTheCatalogsListWhenMusicBrainzIsSlow() = runTest {
+        val detail = service(Provider("musicbrainz", delayMs = 6_000, tracks = listOf("Q. Corinthians", "The Wind Was Like")))
+            .loadAlbumTrackList("Dulling the Horns", "Wild Pink")!!
+        assertEquals("Apple Music", detail.catalogSource)
+        assertEquals(listOf("Q. Corinthians"), detail.tracks.map { it.title })
+        assertTrue(testScheduler.currentTime < 6_000, "didn't wait for MusicBrainz: ${testScheduler.currentTime}")
+    }
+
+    @Test
+    fun anActionTakesTheProvidersListWhenItComesFirst_andStopsWaitingForTheCatalog() = runTest {
+        catalogDelayMs = 2_000
+        val detail = service(Provider("musicbrainz", delayMs = 500, tracks = listOf("Q. Corinthians", "The Wind Was Like")))
+            .loadAlbumTrackList("Dulling the Horns", "Wild Pink")!!
+        assertNull(detail.catalogSource)
+        assertEquals(2, detail.tracks.size)
+        assertEquals(500, testScheduler.currentTime)
+    }
+
+    @Test
+    fun anEmptyProviderAnswerLetsTheCatalogWin() = runTest {
+        catalogDelayMs = 2_000
+        val detail = service(Provider("musicbrainz", delayMs = 100)).loadAlbumTrackList("Dulling the Horns", "Wild Pink")!!
+        assertEquals("Apple Music", detail.catalogSource)
+    }
+
+    @Test
+    fun anActionOnACachedAlbumDoesNotRace() = runTest {
+        val s = service(Provider("musicbrainz", delayMs = 500, tracks = listOf("Q. Corinthians")), cached = true)
+        s.getAlbumTracks("Dulling the Horns", "Wild Pink")
+        catalogSearches = 0
+        assertNull(s.loadAlbumTrackList("Dulling the Horns", "Wild Pink")!!.catalogSource)
+        assertEquals(0, catalogSearches)
+    }
+
+    @Test
+    fun anActionGetsNullWhenNeitherSideHasAList() = runTest {
+        catalogEmpty = true
+        assertNull(service(Provider("musicbrainz", delayMs = 100)).loadAlbumTrackList("Dulling the Horns", "Wild Pink"))
     }
 }

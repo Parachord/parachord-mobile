@@ -204,7 +204,7 @@ class AndroidProtocolInputResolver constructor(
         // through the standard MetadataService cascade.
         val albumTitle = title ?: album ?: return null
         return try {
-            val detail = metadataService.getAlbumTracks(albumTitle, artist) ?: return null
+            val detail = metadataService.loadAlbumTrackList(albumTitle, artist) ?: return null
             if (detail.tracks.isEmpty()) return null
             ResolvedProtocolPlay(
                 displayName = detail.title,
