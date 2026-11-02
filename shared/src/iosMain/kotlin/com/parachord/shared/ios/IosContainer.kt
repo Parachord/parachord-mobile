@@ -25,6 +25,7 @@ import com.parachord.shared.metadata.DiscogsProvider
 import com.parachord.shared.metadata.LastFmProvider
 import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.shared.metadata.MetadataService
+import com.parachord.shared.metadata.SearchPopularity
 import com.parachord.shared.metadata.SearchRanking
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
@@ -1738,6 +1739,8 @@ class IosContainer private constructor() {
             artistImageResolvers = ::artistImageResolverIds,
             pluginArtistImage = { id, name -> pluginManager.searchArtistImage(id, name) },
             deezer = deezerArtistSearch,
+            // #488: ListenBrainz listen counts rank originals above covers in Search.
+            searchPopularity = SearchPopularity(fetchListens = { kind, mbids -> listenBrainzClient.getPopularity(kind, mbids) }),
         )
     }
 

@@ -130,6 +130,7 @@ class MusicBrainzProvider(
                     mbid = rec.id,
                     provider = name,
                     score = rec.score,
+                    artistMbid = rec.artistCredit.firstOrNull()?.artist?.id,
                 )
             }
         } catch (_: Exception) {
@@ -156,6 +157,7 @@ class MusicBrainzProvider(
                     releaseType = normalizeReleaseType(rel.releaseGroup),
                     provider = name,
                     score = rel.score,
+                    releaseGroupMbid = rel.releaseGroup?.id,
                 )
             }
         } catch (_: Exception) {
