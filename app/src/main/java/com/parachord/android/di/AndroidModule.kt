@@ -601,6 +601,10 @@ val androidModule = module {
             },
             pluginArtistImage = { id, name -> get<com.parachord.shared.plugin.PluginManager>().searchArtistImage(id, name) },
             deezer = com.parachord.shared.metadata.DeezerArtistSearch(get()),
+            // #488: ListenBrainz listen counts rank originals above covers in Search.
+            searchPopularity = com.parachord.shared.metadata.SearchPopularity(
+                fetchListens = { kind, mbids -> get<com.parachord.shared.api.ListenBrainzClient>().getPopularity(kind, mbids) },
+            ),
         )
     }
     singleOf(::MusicBrainzProvider)

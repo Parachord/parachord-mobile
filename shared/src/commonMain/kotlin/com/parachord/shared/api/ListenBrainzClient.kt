@@ -21,6 +21,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -925,6 +926,32 @@ class ListenBrainzClient(
                 durationMs = track.duration?.takeIf { it > 0 },
             )
         }
+    }
+
+    /**
+     * POST `/1/popularity/{kind}` (`artist`, `release-group`, `recording`): the
+     * total listen count for each id, null when ListenBrainz has none. One
+     * batched request, no account needed. Search ranks with it (desktop
+     * parachord#1204). Throws on a failed request, so the caller doesn't
+     * remember a failure as "no count". Not retried: Search waits on it.
+     */
+    suspend fun getPopularity(kind: String, mbids: List<String>): Map<String, Long?> {
+        if (mbids.isEmpty()) return emptyMap()
+        val field = "${kind.replace('-', '_')}_mbid"
+        val response = httpClient.post("$BASE_URL/1/popularity/$kind") {
+            contentType(io.ktor.http.ContentType.Application.Json)
+            setBody(buildJsonObject { putJsonArray("${field}s") { mbids.forEach { add(it) } } })
+        }
+        if (!response.status.isSuccess()) throw IllegalStateException("popularity/$kind: HTTP ${response.status.value}")
+        val entries = json.parseToJsonElement(response.bodyAsText()) as? kotlinx.serialization.json.JsonArray
+            ?: return emptyMap()
+        val out = mutableMapOf<String, Long?>()
+        for (entry in entries) {
+            val obj = entry as? kotlinx.serialization.json.JsonObject ?: continue
+            val id = obj[field]?.jsonPrimitive?.contentOrNull ?: continue
+            out[id] = obj["total_listen_count"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toLong()
+        }
+        return out
     }
 
     /** Fetch playlist metadata "createdfor" a user (Weekly Jams, Weekly Exploration). */

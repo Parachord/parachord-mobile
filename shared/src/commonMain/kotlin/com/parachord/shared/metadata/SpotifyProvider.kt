@@ -44,6 +44,7 @@ class SpotifyProvider(
                     artworkUrl = t.album?.images?.bestImageUrl(),
                     previewUrl = t.previewUrl,
                     provider = name,
+                    popularity = t.popularity?.toDouble(),
                 )
             } ?: emptyList()
         } ?: emptyList()

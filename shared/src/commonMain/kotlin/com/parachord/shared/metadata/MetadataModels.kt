@@ -44,6 +44,14 @@ data class TrackSearchResult(
      * search, or when the source gave none; [SearchRanking] reads null as 50.
      */
     val score: Int? = null,
+    /** The first credited artist's MusicBrainz id: what its search popularity is looked up by ([SearchPopularity]). */
+    val artistMbid: String? = null,
+    /**
+     * Popularity, 0–100, when a source has it: Spotify's own for its rows, the
+     * artist's ListenBrainz listens for MusicBrainz's ([SearchPopularity]).
+     * [SearchRanking] blends it in; null outside search or when unknown.
+     */
+    val popularity: Double? = null,
 )
 
 @Serializable
@@ -67,6 +75,13 @@ data class AlbumSearchResult(
      * search, or when the source gave none; [SearchRanking] reads null as 50.
      */
     val score: Int? = null,
+    /** MusicBrainz release-group id ([mbid] is the release): what its search popularity is looked up by. */
+    val releaseGroupMbid: String? = null,
+    /**
+     * Popularity, 0–100: the release group's ListenBrainz listens, for
+     * MusicBrainz's rows ([SearchPopularity]). Null outside search or when unknown.
+     */
+    val popularity: Double? = null,
 )
 
 @Serializable

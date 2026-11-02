@@ -83,6 +83,12 @@ class MetadataService constructor(
     private val deezer: DeezerArtistSearch? = null,
     /** "No source has a photo of this artist", remembered [ArtistImageChain.MISS_TTL_MS]. */
     private val artistImageMisses: ArtistImageChain.MissCache = ArtistImageChain.MissCache(),
+    /**
+     * ListenBrainz popularity for MusicBrainz's track and album search rows
+     * (#488, desktop parachord#1204), so originals rank above covers. Null =
+     * rank without it.
+     */
+    private val searchPopularity: SearchPopularity? = null,
 ) {
 
     private val artistImageMutex = Mutex()
@@ -115,7 +121,11 @@ class MetadataService constructor(
      * once every provider has answered, and is what [searchTracks] returns.
      */
     fun searchTracksProgressively(query: String, limit: Int = 20): Flow<List<TrackSearchResult>> =
-        providerAnswers({ it.searchTracks(query, limit) }, { t, score -> t.copy(score = t.score ?: score) }).mapNotNull { answers ->
+        providerAnswers(
+            { it.searchTracks(query, limit) },
+            { t, score -> t.copy(score = t.score ?: score) },
+            withPopularity = { rows -> searchPopularity?.tracks(rows) ?: rows },
+        ).mapNotNull { answers ->
             deduplicateTracks(answers.results).take(limit).takeIf { it.isNotEmpty() || answers.complete }
         }
 
@@ -135,7 +145,11 @@ class MetadataService constructor(
      * the last emission.
      */
     fun searchAlbumsProgressively(query: String, limit: Int = 10): Flow<List<AlbumSearchResult>> = flow {
-        providerAnswers({ it.searchAlbums(query, limit) }, albumWithScore).collect { answers ->
+        providerAnswers(
+            { it.searchAlbums(query, limit) },
+            albumWithScore,
+            withPopularity = { rows -> searchPopularity?.albums(rows) ?: rows },
+        ).collect { answers ->
             val merged = deduplicateAlbums(answers.results).take(limit)
             if (!answers.complete) {
                 if (merged.isNotEmpty()) emit(merged)
@@ -176,10 +190,13 @@ class MetadataService constructor(
      * provider order, not arrival order, so the final merge matches what one
      * `awaitAll` over the providers produced. Rows other than MusicBrainz's get
      * a rank score through [withScore] ([SearchRanking.rankScore]).
+     * MusicBrainz's rows get [withPopularity] before they're emitted
+     * ([SearchPopularity], capped at 800 ms; desktop waits for it too).
      */
     private fun <T> providerAnswers(
         search: suspend (MetadataProvider) -> List<T>,
         withScore: (T, Int) -> T,
+        withPopularity: suspend (List<T>) -> List<T> = { it },
     ): Flow<ProviderAnswers<T>> = channelFlow {
         val active = availableProviders()
         val others = active.filter { it.name != MUSICBRAINZ }
@@ -196,7 +213,7 @@ class MetadataService constructor(
                     emptyList()
                 }
                 // MusicBrainz scores its own results; the others score by rank.
-                val result = if (provider.name == MUSICBRAINZ) found
+                val result = if (provider.name == MUSICBRAINZ) withPopularity(found)
                 else found.rankScored(others.indexOf(provider), withScore)
                 lock.withLock {
                     answered[i] = result
@@ -754,6 +771,8 @@ fun TrackSearchResult.mergeWith(other: TrackSearchResult) = TrackSearchResult(
     mbid = mbid ?: other.mbid,
     provider = "$provider+${other.provider}",
     score = mergedSearchScore(score, provider, other.score, other.provider),
+    artistMbid = artistMbid ?: other.artistMbid,
+    popularity = popularity ?: other.popularity,
 )
 
 fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
@@ -768,6 +787,8 @@ fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
     secondaryTypes = secondaryTypes.ifEmpty { other.secondaryTypes },
     provider = "$provider+${other.provider}",
     score = mergedSearchScore(score, provider, other.score, other.provider),
+    releaseGroupMbid = releaseGroupMbid ?: other.releaseGroupMbid,
+    popularity = popularity ?: other.popularity,
 )
 
 /**

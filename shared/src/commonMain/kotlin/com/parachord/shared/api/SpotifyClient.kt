@@ -573,6 +573,8 @@ data class SpTrack(
     @SerialName("preview_url") val previewUrl: String? = null,
     @SerialName("is_playable") val isPlayable: Boolean? = null,
     @SerialName("external_ids") val externalIds: SpExternalIds? = null,
+    /** Spotify's own 0–100 popularity; Search ranks with it (`SearchRanking`). */
+    val popularity: Int? = null,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name.orEmpty() }
 }

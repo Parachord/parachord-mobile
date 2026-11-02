@@ -359,6 +359,7 @@ data class MbRelease(
 
 @Serializable
 data class MbReleaseGroup(
+    val id: String? = null,
     @SerialName("primary-type") val primaryType: String? = null,
     @SerialName("secondary-types") val secondaryTypes: List<String> = emptyList(),
 )
