@@ -331,20 +331,25 @@ struct SearchView: View {
     }
 
     private func artistRow(_ artist: IosArtistResult) -> some View {
-        Button {
-            model.saveHistory(type: "artist", name: artist.name, artist: nil, artwork: artist.imageUrl)
+        // A row without a photo asks the artist-photo chain, as desktop's
+        // search artist cards do.
+        let image = artist.imageUrl ?? ArtistImageCache.shared.image(for: artist.name)
+        return Button {
+            model.saveHistory(type: "artist", name: artist.name, artist: nil, artwork: image)
             // MusicBrainz rows carry the artist's id, so the page skips
             // MusicBrainz's name search (#478).
             navArtist = PCArtistRef(name: artist.name, mbid: artist.mbid)
         } label: {
             HStack(spacing: 12) {
-                pcCover(artist.imageUrl, seed: artist.name, size: 44, radius: 22)
+                pcCover(image, seed: artist.name, size: 44, radius: 22)
                 Text(artist.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PC.fg3)
             }
             .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
-        }.buttonStyle(.plain)
+        }
+        .buttonStyle(.plain)
+        .onAppear { if artist.imageUrl == nil { ArtistImageCache.shared.fetch(artist.name) } }
     }
 
     private func albumRow(_ album: AlbumSearchResult) -> some View {

@@ -824,6 +824,7 @@ fun TrackSearchResult.mergeWith(other: TrackSearchResult) = TrackSearchResult(
     score = mergedSearchScore(score, provider, other.score, other.provider),
     artistMbid = artistMbid ?: other.artistMbid,
     popularity = popularity ?: other.popularity,
+    artworkCandidates = mergedArtworkCandidates(artworkUrl ?: other.artworkUrl, artworkCandidates, other.artworkUrl, other.artworkCandidates),
 )
 
 fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
@@ -840,7 +841,21 @@ fun AlbumSearchResult.mergeWith(other: AlbumSearchResult) = AlbumSearchResult(
     score = mergedSearchScore(score, provider, other.score, other.provider),
     releaseGroupMbid = releaseGroupMbid ?: other.releaseGroupMbid,
     popularity = popularity ?: other.popularity,
+    artworkCandidates = mergedArtworkCandidates(artworkUrl ?: other.artworkUrl, artworkCandidates, other.artworkUrl, other.artworkCandidates),
 )
+
+/**
+ * A merged row's [TrackSearchResult.artworkCandidates]: its own, then the other
+ * row's cover and candidates, minus the cover it shows. A Spotify cover that
+ * lost the merge to MusicBrainz's unchecked Cover Art Archive URL stays as a
+ * fallback (desktop `_serviceArt`, search-catalog.js).
+ */
+internal fun mergedArtworkCandidates(
+    shown: String?,
+    own: List<String>,
+    otherArtwork: String?,
+    otherCandidates: List<String>,
+): List<String> = (own + listOfNotNull(otherArtwork) + otherCandidates).distinct().filter { it != shown }
 
 /**
  * A merged search row's relevance (desktop `mergeTrackResults`, #475): the

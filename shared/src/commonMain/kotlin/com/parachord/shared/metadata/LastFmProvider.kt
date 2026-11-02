@@ -63,7 +63,12 @@ class LastFmProvider(
         try {
             val artists = api.searchArtists(artist = query, apiKey = apiKey, limit = limit)
                 .results?.artistmatches?.artist ?: emptyList()
-            artists.map { a ->
+            // Only artists Last.fm knows the MusicBrainz id of. The rest are
+            // pages scrobblers made from bad tags: misspellings ("Pörtishead",
+            // "portıshead"), YouTube channels ("Mazzy Star - Topic"), playlist
+            // titles ("Mazzy Star • Lossless"), duets ("Portishead & Moloko").
+            // Desktop doesn't list Last.fm's artist search at all.
+            artists.filter { !it.mbid.isNullOrBlank() }.map { a ->
                 ArtistInfo(
                     name = a.name,
                     mbid = a.mbid?.takeIf { it.isNotBlank() },

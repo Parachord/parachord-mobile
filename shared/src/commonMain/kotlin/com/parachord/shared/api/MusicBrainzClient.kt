@@ -338,6 +338,7 @@ data class MbArtistRef(
 data class MbReleaseRef(
     val id: String,
     val title: String,
+    @SerialName("release-group") val releaseGroup: MbReleaseGroup? = null,
 )
 
 @Serializable

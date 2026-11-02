@@ -17,6 +17,7 @@ import com.parachord.android.resolver.ResolvedSource
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.metadata.SearchArtwork
 import com.parachord.shared.metadata.SearchRanking
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -32,6 +33,9 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 class SearchViewModel constructor(
     private val repository: LibraryRepository,
@@ -42,6 +46,7 @@ class SearchViewModel constructor(
     private val settingsStore: SettingsStore,
     private val trackResolverCache: TrackResolverCache,
     private val musicBrainzClient: com.parachord.shared.api.MusicBrainzClient,
+    private val searchArtwork: SearchArtwork,
 ) : ViewModel() {
 
     /** User-configured resolver priority order, used to sort resolver icons on track rows. */
@@ -91,6 +96,20 @@ class SearchViewModel constructor(
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
 
+    /** Each resolved track's cover (its playing source's), keyed by [trackKey]: any row's last resort. */
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
+
+    /**
+     * Covers found for rows that came without a usable one ([SearchArtwork]),
+     * keyed by [artKey]. A row keeps the first cover found for it.
+     */
+    private val _searchArt = MutableStateFlow<Map<String, String>>(emptyMap())
+    val searchArt: StateFlow<Map<String, String>> = _searchArt.asStateFlow()
+
+    /** The current query's cover lookups; cancelled when the query changes. */
+    private var artJob = kotlinx.coroutines.SupervisorJob()
+    private val artRequested = mutableSetOf<String>()
+
     // Search history
     val searchHistory: StateFlow<List<SearchHistoryEntity>> = searchHistoryDao.getRecent()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -102,6 +121,7 @@ class SearchViewModel constructor(
         // query the user wants (#475).
         viewModelScope.launch {
             debouncedQuery.collectLatest { q ->
+                resetSearchArt()
                 if (q.isBlank()) {
                     _remoteTrackResults.value = emptyList()
                     _remoteAlbumResults.value = emptyList()
@@ -214,17 +234,22 @@ class SearchViewModel constructor(
                     metadataService.searchTracksProgressively(query).collect { tracks ->
                         ranked = SearchRanking.rankTracks(query, tracks)
                         _remoteTrackResults.value = ranked
+                        ranked.take(SearchArtwork.LIMIT).forEach(::findTrackArt)
                     }
                     resolveTracksInBackground(ranked)
                 }
                 launch {
                     metadataService.searchAlbumsProgressively(query).collect { albums ->
-                        _remoteAlbumResults.value = SearchRanking.rankAlbums(query, albums)
+                        val ranked = SearchRanking.rankAlbums(query, albums)
+                        _remoteAlbumResults.value = ranked
+                        ranked.take(SearchArtwork.LIMIT).forEach(::findAlbumArt)
                     }
                 }
                 launch {
                     metadataService.searchArtistsProgressively(query).collect { artists ->
-                        _artistResults.value = SearchRanking.rankArtists(query, artists)
+                        val ranked = SearchRanking.rankArtists(query, artists)
+                        _artistResults.value = ranked
+                        ranked.take(SearchArtwork.LIMIT).forEach(::findArtistImage)
                     }
                 }
             }
@@ -234,5 +259,77 @@ class SearchViewModel constructor(
         } finally {
             _isSearchingRemote.value = false
         }
+    }
+
+    // ── Covers for rows without one (desktop fetchSearchAlbumArt) ──────
+
+    private fun resetSearchArt() {
+        artJob.cancel()
+        artJob = kotlinx.coroutines.SupervisorJob()
+        artRequested.clear()
+        _searchArt.value = emptyMap()
+    }
+
+    /**
+     * A track's cover: its album's Cover Art Archive cover (MusicBrainz's
+     * rows), else, after [SearchArtwork.FALLBACK_MS], a merged provider row's
+     * cover or the art of the source the track resolved to (search rows are
+     * resolved in the background, which is where their badges come from).
+     */
+    private fun findTrackArt(track: TrackSearchResult) {
+        if (!track.artworkUrl.isNullOrBlank()) return
+        val toCheck = track.artworkCandidates.filter(SearchArtwork::needsCheck)
+        val service = track.artworkCandidates.firstOrNull { !SearchArtwork.needsCheck(it) }
+        val resolved = trackKey(track.title, track.artist)
+        lookUpArt(artKey("track", track.title, track.artist)) {
+            searchArtwork.settle(toCheck) {
+                service ?: trackResolverCache.trackArtwork.map { it[resolved] }.filterNotNull().first()
+            }
+        }
+    }
+
+    /**
+     * An album's cover: MusicBrainz's Cover Art Archive covers once checked,
+     * else a merged provider row's cover.
+     */
+    private fun findAlbumArt(album: AlbumSearchResult) {
+        val all = listOfNotNull(album.artworkUrl) + album.artworkCandidates
+        // A provider's own cover shows as it is.
+        if (all.isEmpty() || !SearchArtwork.needsCheck(all.first())) return
+        lookUpArt(artKey("album", album.title, album.artist)) {
+            searchArtwork.settle(all.filter(SearchArtwork::needsCheck)) {
+                all.firstOrNull { !SearchArtwork.needsCheck(it) }
+            }
+        }
+    }
+
+    /** An artist's photo when the search row had none (desktop SearchArtistCard). */
+    private fun findArtistImage(artist: ArtistInfo) {
+        if (!artist.imageUrl.isNullOrBlank()) return
+        lookUpArt(artKey("artist", artist.name)) { searchArtwork.lookup { metadataService.getArtistImage(artist.name) } }
+    }
+
+    private fun lookUpArt(key: String, find: suspend () -> String?) {
+        if (!artRequested.add(key)) return
+        viewModelScope.launch(artJob) {
+            val url = try {
+                find()
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                null
+            } ?: return@launch
+            _searchArt.value = _searchArt.value + (key to url)
+        }
+    }
+
+    override fun onCleared() {
+        artJob.cancel()
+        super.onCleared()
+    }
+
+    companion object {
+        /** [searchArt]'s key for a row: `kind` is track, album or artist. */
+        fun artKey(kind: String, name: String, artist: String = ""): String =
+            "$kind|${name.lowercase().trim()}|${artist.lowercase().trim()}"
     }
 }
