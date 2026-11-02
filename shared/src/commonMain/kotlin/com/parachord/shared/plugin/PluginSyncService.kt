@@ -9,6 +9,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 private const val TAG = "PluginSync"
 
@@ -29,6 +30,9 @@ class PluginSyncService constructor(
     private val fileAccess: PluginFileAccess,
     private val getLastSyncTimestamp: suspend () -> Long,
     private val setLastSyncTimestamp: suspend (Long) -> Unit,
+    /** This app's version and platform key (`android`/`ios`), for [PluginCompat]. */
+    private val appVersion: String = "",
+    private val platform: String = "",
 ) {
     companion object {
         private const val MANIFEST_URL =
@@ -48,6 +52,8 @@ class PluginSyncService constructor(
         val updated: List<String> = emptyList(),
         val failed: List<String> = emptyList(),
         val unchanged: Int = 0,
+        /** Versions this app is too old for, not downloaded (#484). */
+        val skipped: List<Skipped> = emptyList(),
     ) {
         val hasChanges get() = added.isNotEmpty() || updated.isNotEmpty()
     }
@@ -91,6 +97,7 @@ class PluginSyncService constructor(
         val added = mutableListOf<String>()
         val updated = mutableListOf<String>()
         val failed = mutableListOf<String>()
+        val skipped = mutableListOf<Skipped>()
         var unchanged = 0
 
         for (remote in manifest.plugins) {
@@ -112,9 +119,25 @@ class PluginSyncService constructor(
                 continue
             }
 
+            // A version that needs a newer app isn't downloaded; whatever copy
+            // this app has keeps running (#484).
+            val entryRequires = PluginCompat.requiredAppVersion(remote.minAppVersion, appVersion, platform)
+            if (entryRequires != null) {
+                skipped += Skipped(remote.id, remoteVersion, entryRequires)
+                Log.d(TAG, "${remote.id} v$remoteVersion needs Parachord $entryRequires (this is $appVersion), not downloading")
+                continue
+            }
+
             // Download updated plugin
             try {
                 val axeContent = fetchPlugin(remote.id)
+                // The .axe itself is the authority: the catalog entry can lag it.
+                val requires = axeRequiredAppVersion(axeContent)
+                if (requires != null) {
+                    skipped += Skipped(remote.id, remoteVersion, requires)
+                    Log.d(TAG, "${remote.id} v$remoteVersion needs Parachord $requires (this is $appVersion), not saving")
+                    continue
+                }
                 fileAccess.writeCachedPlugin("${remote.id}.axe", axeContent)
 
                 if (local == null) {
@@ -130,13 +153,13 @@ class PluginSyncService constructor(
             }
         }
 
-        val result = SyncResult(added, updated, failed, unchanged)
+        val result = SyncResult(added, updated, failed, unchanged, skipped)
 
         if (result.hasChanges) {
-            Log.d(TAG, "Sync complete: ${added.size} added, ${updated.size} updated, ${failed.size} failed, $unchanged unchanged")
+            Log.d(TAG, "Sync complete: ${added.size} added, ${updated.size} updated, ${failed.size} failed, $unchanged unchanged, ${skipped.size} need a newer app")
             pluginManager.reloadPlugins()
         } else {
-            Log.d(TAG, "Sync complete: all plugins up to date ($unchanged unchanged)")
+            Log.d(TAG, "Sync complete: all plugins up to date ($unchanged unchanged, ${skipped.size} need a newer app)")
         }
 
         // Only a complete sync starts the 24h wait. If any download failed, the
@@ -180,7 +203,24 @@ class PluginSyncService constructor(
         return bodyAsText()
     }
 
+    /** The floor a downloaded `.axe`'s manifest sets that this app is below, else null. */
+    private fun axeRequiredAppVersion(axeContent: String): String? = try {
+        val axe = json.decodeFromString<AxeShell>(axeContent)
+        PluginCompat.requiredAppVersion(axe.manifest.minAppVersion, appVersion, platform)
+    } catch (_: Exception) {
+        null
+    }
+
     // ── Manifest model ───────────────────────────────────────────────
+
+    /** A plugin version this app is below the floor for. */
+    data class Skipped(val id: String, val version: String, val requires: String)
+
+    @Serializable
+    private data class AxeShell(val manifest: AxeShellManifest = AxeShellManifest())
+
+    @Serializable
+    private data class AxeShellManifest(val minAppVersion: JsonElement? = null)
 
     @Serializable
     private data class PluginManifest(
@@ -195,5 +235,6 @@ class PluginSyncService constructor(
         val version: String = "0.0.0",
         val type: String = "",
         val description: String = "",
+        val minAppVersion: JsonElement? = null,
     )
 }
