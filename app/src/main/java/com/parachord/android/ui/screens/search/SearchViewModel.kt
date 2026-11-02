@@ -17,6 +17,7 @@ import com.parachord.android.resolver.ResolvedSource
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.metadata.SearchArtistList
 import com.parachord.shared.metadata.SearchArtwork
 import com.parachord.shared.metadata.SearchRanking
 import kotlinx.coroutines.CancellationException
@@ -227,6 +228,8 @@ class SearchViewModel constructor(
      */
     private suspend fun searchRemote(query: String) {
         _isSearchingRemote.value = true
+        // MusicBrainz's artists plus those the services' rows name (desktop).
+        val artistList = SearchArtistList(query)
         try {
             coroutineScope {
                 launch {
@@ -235,6 +238,7 @@ class SearchViewModel constructor(
                         ranked = SearchRanking.rankTracks(query, tracks)
                         _remoteTrackResults.value = ranked
                         ranked.take(SearchArtwork.LIMIT).forEach(::findTrackArt)
+                        showArtists(artistList.withTracks(ranked))
                     }
                     resolveTracksInBackground(ranked)
                 }
@@ -243,13 +247,12 @@ class SearchViewModel constructor(
                         val ranked = SearchRanking.rankAlbums(query, albums)
                         _remoteAlbumResults.value = ranked
                         ranked.take(SearchArtwork.LIMIT).forEach(::findAlbumArt)
+                        showArtists(artistList.withAlbums(ranked))
                     }
                 }
                 launch {
                     metadataService.searchArtistsProgressively(query).collect { artists ->
-                        val ranked = SearchRanking.rankArtists(query, artists)
-                        _artistResults.value = ranked
-                        ranked.take(SearchArtwork.LIMIT).forEach(::findArtistImage)
+                        showArtists(artistList.withMusicBrainz(artists))
                     }
                 }
             }
@@ -259,6 +262,11 @@ class SearchViewModel constructor(
         } finally {
             _isSearchingRemote.value = false
         }
+    }
+
+    private fun showArtists(ranked: List<ArtistInfo>) {
+        _artistResults.value = ranked
+        ranked.take(SearchArtwork.LIMIT).forEach(::findArtistImage)
     }
 
     // ── Covers for rows without one (desktop fetchSearchAlbumArt) ──────

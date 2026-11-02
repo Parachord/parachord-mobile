@@ -198,8 +198,10 @@ class MetadataService constructor(
         search: suspend (MetadataProvider) -> List<T>,
         withScore: (T, Int) -> T,
         withPopularity: suspend (List<T>) -> List<T> = { it },
+        /** Which providers to ask; the rest don't count. */
+        asked: (MetadataProvider) -> Boolean = { true },
     ): Flow<ProviderAnswers<T>> = channelFlow {
-        val active = availableProviders()
+        val active = availableProviders().filter(asked)
         val others = active.filter { it.name != MUSICBRAINZ }
         if (active.isEmpty()) {
             send(ProviderAnswers(emptyList(), complete = true))
@@ -332,13 +334,23 @@ class MetadataService constructor(
         }
     }
 
-    /** Search artists across all available providers in parallel, merge and deduplicate. */
+    /** Search's artist search: MusicBrainz's, deduplicated (see [searchArtistsProgressively]). */
     suspend fun searchArtists(query: String, limit: Int = 10): List<ArtistInfo> =
         searchArtistsProgressively(query, limit).last()
 
-    /** [searchArtists], emitting as each provider answers (see [searchTracksProgressively]). */
+    /**
+     * [searchArtists], emitting as it answers. Only MusicBrainz is asked, as on
+     * desktop (`performSearch`): the services have no artist search there, and
+     * Last.fm's listed pages scrobblers made from bad tags ("Mazzy Star -
+     * Topic", "Pörtishead"). Search adds the artists the services' track and
+     * album rows name ([SearchArtistList]).
+     */
     fun searchArtistsProgressively(query: String, limit: Int = 10): Flow<List<ArtistInfo>> =
-        providerAnswers({ it.searchArtists(query, limit) }, { a, score -> a.copy(score = a.score ?: score) }).mapNotNull { answers ->
+        providerAnswers(
+            { it.searchArtists(query, limit) },
+            { a, score -> a.copy(score = a.score ?: score) },
+            asked = { it.name == MUSICBRAINZ },
+        ).mapNotNull { answers ->
             deduplicateArtists(answers.results).take(limit).takeIf { it.isNotEmpty() || answers.complete }
         }
 
