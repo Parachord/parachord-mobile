@@ -601,7 +601,7 @@ class HomeViewModel constructor(
     fun queueAlbumByName(albumTitle: String, artistName: String) {
         viewModelScope.launch {
             try {
-                val detail = metadataService.getAlbumTracks(albumTitle, artistName)
+                val detail = metadataService.loadAlbumTrackList(albumTitle, artistName)
                 if (detail == null || detail.tracks.isEmpty()) {
                     Log.w("HomeVM", "No tracks found for album '$albumTitle' by '$artistName'")
                     return@launch

@@ -1777,6 +1777,11 @@ class IosContainer private constructor() {
     suspend fun getAlbumDetail(albumTitle: String, artistName: String): AlbumDetail? =
         metadataService.getAlbumTracks(albumTitle, artistName)
 
+    /** An album's track list for Play / Queue: the providers race the plugins'
+     *  catalogs, first list wins ([MetadataService.loadAlbumTrackList], desktop #1202). */
+    suspend fun albumTrackList(albumTitle: String, artistName: String): AlbumDetail? =
+        metadataService.loadAlbumTrackList(albumTitle, artistName)
+
     /** The album page's track list as it loads: each provider's answer, and a
      *  plugin catalog's list when the providers can't supply one (#424). */
     fun albumDetailFlow(albumTitle: String, artistName: String): Flow<AlbumDetail> =
@@ -3360,7 +3365,7 @@ class IosContainer private constructor() {
         chatPlaybackBridge.onPlayTrack(chatTrack(title, artist, album))
     }
     suspend fun chatPlayAlbum(title: String, artist: String) {
-        val tracks = (metadataService.getAlbumTracks(title, artist)?.tracks ?: emptyList())
+        val tracks = (metadataService.loadAlbumTrackList(title, artist)?.tracks ?: emptyList())
             .map { chatTrack(it.title, it.artist, it.album) }
         if (tracks.isEmpty()) return
         chatPlaybackBridge.onClearQueue()

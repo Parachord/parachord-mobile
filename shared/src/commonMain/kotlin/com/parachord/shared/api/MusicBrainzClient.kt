@@ -263,9 +263,12 @@ class MusicBrainzClient(
         releaseGroupMbid: String,
         inc: String = "recordings+artist-credits",
         limit: Int = 1,
+        /** e.g. `"official"`, so a bootleg isn't picked as the album (desktop #1199). */
+        status: String? = null,
     ): MbReleaseBrowseResponse =
         guardedGet("$BASE_URL/release") {
             parameter("release-group", releaseGroupMbid)
+            status?.let { parameter("status", it) }
             parameter("inc", inc)
             parameter("limit", limit)
         }
