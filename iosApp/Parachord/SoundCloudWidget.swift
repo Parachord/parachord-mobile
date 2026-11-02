@@ -1,7 +1,6 @@
 import Foundation
 import WebKit
 import UIKit
-import MediaPlayer
 import Shared
 
 // MARK: - SoundCloud widget engine (#495, desktop parachord#1209)
@@ -48,8 +47,11 @@ final class IosSoundCloudWidget {
     @ObservationIgnored private var pageReady = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var pendingResult: LoadResult?
-    @ObservationIgnored private var nowPlayingTitle = ""
-    @ObservationIgnored private var nowPlayingArtist = ""
+    /// Lock-screen / Control Center buttons, relayed from the page's Media
+    /// Session handlers: "play", "pause", "next", "previous".
+    @ObservationIgnored var onRemoteCommand: ((String) -> Void)?
+    /// Lock-screen scrubber, in seconds.
+    @ObservationIgnored var onRemoteSeek: ((Double) -> Void)?
 
     private static let baseURL = URL(string: "https://parachord.com/soundcloud-widget/")
     /// The module's own limit is 10 s; this backstop covers a throttled page.
@@ -60,7 +62,7 @@ final class IosSoundCloudWidget {
     /// and start it at `volume` (0...1). Returns once the position has moved,
     /// or `.refused` when the widget won't play it here.
     @MainActor
-    func load(link: String, volume: Float, title: String, artist: String) async -> LoadResult {
+    func load(link: String, volume: Float, title: String, artist: String, artworkUrl: String?) async -> LoadResult {
         guard await ensurePage() else { return .refused("page") }
         generation += 1
         let gen = generation
@@ -68,14 +70,17 @@ final class IosSoundCloudWidget {
         isPlaying = false
         currentTime = 0
         duration = 0
-        nowPlayingTitle = title
-        nowPlayingArtist = artist
-        let linkJson = (try? String(data: JSONEncoder().encode(link), encoding: .utf8)) ?? "\"\""
+        let linkJson = Self.json(link)
         // Keep WebKit's audio session in use between tracks (see the page's
         // scHoldAudio): released and re-requested with the screen locked, iOS
         // refuses it and the next track plays silent.
         webView?.evaluateJavaScript("scHoldAudio(true)", completionHandler: nil)
         webView?.evaluateJavaScript("scLoad(\(gen), \(linkJson), \(min(max(volume, 0), 1)))", completionHandler: nil)
+        // The lock screen / Control Center: WebKit shows the playing page's
+        // Media Session (else the page's title), and routes its buttons to it.
+        webView?.evaluateJavaScript(
+            "scNowPlaying(\(gen), \(Self.json(title)), \(Self.json(artist)), \(Self.json(artworkUrl ?? "")))",
+            completionHandler: nil)
 
         let started = Date()
         let deadline = Date().addingTimeInterval(Self.loadTimeoutSec)
@@ -217,6 +222,10 @@ final class IosSoundCloudWidget {
         case "pause":
             isPlaying = false
             updateNowPlaying()
+        case "remote":
+            if let command = text { onRemoteCommand?(command) }
+        case "remoteSeek":
+            if let s = number { onRemoteSeek?(s) }
         case "finish":
             isPlaying = false
             NSLog("SoundCloudWidget: finish at \(currentTime)s of \(duration)s")
@@ -226,18 +235,16 @@ final class IosSoundCloudWidget {
         }
     }
 
-    /// Lock screen / Control Center for this engine: WebKit's own media
-    /// session would show the page, not the track.
+    /// Keep the lock screen's position and play state current (the page's
+    /// Media Session; WebKit owns the now-playing info for this engine).
     @MainActor
     private func updateNowPlaying() {
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: nowPlayingTitle,
-            MPMediaItemPropertyArtist: nowPlayingArtist,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: currentTime,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
-        ]
-        if duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        webView?.evaluateJavaScript(
+            "scPositionState(\(duration), \(currentTime), \(isPlaying))", completionHandler: nil)
+    }
+
+    private static func json(_ s: String) -> String {
+        (try? String(data: JSONEncoder().encode(s), encoding: .utf8)) ?? "\"\""
     }
 
     // MARK: WebKit delegate (separate object: WebKit retains its handlers)

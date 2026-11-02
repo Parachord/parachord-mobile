@@ -53,7 +53,7 @@ struct PlaybackRouter {
     var nonStreamingResolvers: Set<String> = []
 
     /// Walk the ranked sources; start the first engine-available one.
-    func play(ranked: [ResolvedSource], title: String, artist: String) async -> RouteResult {
+    func play(ranked: [ResolvedSource], title: String, artist: String, artworkUrl: String? = nil) async -> RouteResult {
         for source in ranked {
             // Non-streaming resolver (Bandcamp) — hand its URL back to open in
             // the browser, before trying any audio engine for this source.
@@ -70,7 +70,7 @@ struct PlaybackRouter {
                                                    soundcloudId: source.soundcloudId) else { continue }
                 let result = await soundCloud.load(link: link,
                                                    volume: IosVolumeOffsets.shared.fraction(for: "soundcloud"),
-                                                   title: title, artist: artist)
+                                                   title: title, artist: artist, artworkUrl: artworkUrl)
                 switch result {
                 case .started:
                     return .played(.soundCloud, resolver: source.resolver)

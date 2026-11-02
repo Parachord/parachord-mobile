@@ -1443,17 +1443,6 @@ final class IosAVPlayer {
     /// coordinator (phase 4.6) sets this to auto-advance. Nil by
     /// default, so standalone single-track use just stops at the end.
     var onTrackEnded: (() -> Void)?
-    /// Where the lock-screen / Control Center transport goes while another
-    /// in-app engine owns playback (SoundCloud's widget, #495). The commands
-    /// are registered here once; nil sends them to this AVPlayer as before.
-    struct RemoteTransport {
-        let play: () -> Void
-        let pause: () -> Void
-        let toggle: () -> Void
-        let seek: (Double) -> Void
-    }
-    var remoteTransport: RemoteTransport?
-
     /// The last keys we pushed to MPNowPlayingInfoCenter — displayed in
     /// the smoke-test card so the lock-screen wiring is observable in
     /// the simulator (where photographing the actual lock screen is
@@ -1676,22 +1665,22 @@ final class IosAVPlayer {
         let center = MPRemoteCommandCenter.shared()
 
         center.playCommand.addTarget { [weak self] _ in
-            if let t = self?.remoteTransport { t.play() } else { self?.play() }
+            self?.play()
             return .success
         }
         center.pauseCommand.addTarget { [weak self] _ in
-            if let t = self?.remoteTransport { t.pause() } else { self?.pause() }
+            self?.pause()
             return .success
         }
         center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            if let t = self?.remoteTransport { t.toggle() } else { self?.togglePlayPause() }
+            self?.togglePlayPause()
             return .success
         }
         center.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let self,
                   let e = event as? MPChangePlaybackPositionCommandEvent
             else { return .commandFailed }
-            if let t = self.remoteTransport { t.seek(e.positionTime) } else { self.seek(to: e.positionTime) }
+            self.seek(to: e.positionTime)
             return .success
         }
         // Skip ±15s — stand-ins until queue management (phase 4.6)
@@ -2138,23 +2127,9 @@ final class QueuePlaybackCoordinator {
             if previousEngine == .spotify { await spotify.pause() }
             IosAudioSession.configureForSoundCloud()
             keepAlive.start()
-            player.remoteTransport = soundCloudTransport
         case .browser:
             keepAlive.stop()
         }
-        if kind != .soundCloud { player.remoteTransport = nil }
-    }
-
-    /// Lock-screen / Control Center play-pause-seek while SoundCloud's widget
-    /// plays: the commands are registered on `IosAVPlayer`, which forwards
-    /// them here instead of to its own (idle) player.
-    private var soundCloudTransport: IosAVPlayer.RemoteTransport {
-        IosAVPlayer.RemoteTransport(
-            play: { [weak self] in Task { @MainActor in self?.soundCloud.play() } },
-            pause: { [weak self] in Task { @MainActor in self?.soundCloud.pause() } },
-            toggle: { [weak self] in self?.togglePlayPause() },
-            seek: { [weak self] seconds in self?.seek(to: seconds) }
-        )
     }
 
     /// Resume the currently-active engine after a resumable audio-session
@@ -2232,6 +2207,19 @@ final class QueuePlaybackCoordinator {
         self.soundCloud.onTrackEnded = { [weak self] in
             self?.autoAdvance()
         }
+        // SoundCloud's lock-screen buttons arrive through WebKit's Media
+        // Session (the page), not MPRemoteCommandCenter.
+        self.soundCloud.onRemoteCommand = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case "play": Task { @MainActor in self.soundCloud.play() }
+            case "pause": Task { @MainActor in self.soundCloud.pause() }
+            case "next": self.skipNext()
+            case "previous": self.skipPrevious()
+            default: break
+            }
+        }
+        self.soundCloud.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
         // Lock-screen / Control-Center next & previous drive the QUEUE
         // (engine-agnostic), not a single player — the "real next/previous"
         // the AVPlayer's skip±15s stand-ins anticipated.
@@ -2609,7 +2597,8 @@ final class QueuePlaybackCoordinator {
             router.onRefused = { service, pageUrl in
                 if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl }
             }
-            let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist)
+            let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist,
+                                           artworkUrl: track.artworkUrl)
             // Superseded while the engine was starting — skip the stale UI
             // state updates (the newer start owns activeEngine now).
             if Task.isCancelled { return }

@@ -120,6 +120,43 @@
         }
         return true;
     };
+    // iOS only: WebKit publishes the lock screen / Control Center info for the
+    // page that's playing (otherwise this page's <title>), and its buttons act
+    // on the page. The Media Session API gives it the track and sends the
+    // buttons to the app (event 'remote'). Android never calls this.
+    var remoteGen = 0;
+    window.scNowPlaying = function (gen, title, artist, artworkUrl) {
+        remoteGen = gen;
+        document.title = title || 'Parachord';
+        var ms = navigator.mediaSession;
+        if (!ms || typeof MediaMetadata === 'undefined') return false;
+        ms.metadata = new MediaMetadata({
+            title: title || '',
+            artist: artist || '',
+            artwork: artworkUrl ? [{ src: artworkUrl, sizes: '512x512' }] : []
+        });
+        var actions = { play: 'play', pause: 'pause', nexttrack: 'next', previoustrack: 'previous' };
+        Object.keys(actions).forEach(function (action) {
+            try { ms.setActionHandler(action, function () { send(remoteGen, 'remote', actions[action]); }); } catch (e) {}
+        });
+        try {
+            ms.setActionHandler('seekto', function (details) {
+                if (details && typeof details.seekTime === 'number') send(remoteGen, 'remoteSeek', details.seekTime);
+            });
+        } catch (e) {}
+        return true;
+    };
+    window.scPositionState = function (duration, position, playing) {
+        var ms = navigator.mediaSession;
+        if (!ms) return false;
+        try { ms.playbackState = playing ? 'playing' : 'paused'; } catch (e) {}
+        if (ms.setPositionState && duration > 0) {
+            try {
+                ms.setPositionState({ duration: duration, position: Math.min(Math.max(position, 0), duration), playbackRate: 1 });
+            } catch (e) {}
+        }
+        return true;
+    };
     window.scStop = function () { player.stop(); return true; };
     window.scPlay = function () { player.element.play(); return true; };
     window.scPause = function () { player.element.pause(); return true; };

@@ -935,9 +935,18 @@ shared page, desktop's module, previews counted as refused) are in the root
   lack `com.apple.runningboard.assertions.webkit`; logged at every play). The
   keepalive + `scHoldAudio` were enough on-device; if locked playback ever stops
   mid-track, look there first.
-- **Lock screen:** `IosSoundCloudWidget` publishes `MPNowPlayingInfoCenter`
-  itself, and `IosAVPlayer.remoteTransport` sends the lock-screen play/pause/
-  seek to the coordinator while this engine plays.
+- **Lock screen = WebKit's, driven by the page's Media Session.** WebKit
+  publishes the now-playing info for the page that's playing (otherwise the
+  page's `<title>`, "Parachord SoundCloud", no artwork) and takes the buttons
+  itself: `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter` from Swift are
+  ignored for this engine (verified on an iPad: only the Media Session handlers
+  fire). So `scNowPlaying` sets `navigator.mediaSession.metadata` (title,
+  artist, artwork) + action handlers that relay play / pause / seek / next /
+  previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`), and
+  `scPositionState` keeps the scrubber current. **Known gap:** WebKit shows
+  ±10 s skip buttons instead of next / previous; nulling the page's
+  `seekforward`/`seekbackward` handlers and disabling the skip commands on
+  `MPRemoteCommandCenter` both had no effect.
 - **A refused source falls through** to the next ranked one in `PlaybackRouter`
   (`onRefused`); `playTrack(advancing:)` decides between "Playing via X", a
   silent skip (queue advancing or spinoff), and the `Notice` banner with
