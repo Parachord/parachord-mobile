@@ -444,6 +444,10 @@ struct ContentView: View {
         case "play":
             listenAlong.stop()
             coordinator.exitSpinoff()
+            // A plugin-looked-up link (#502) brings its sources; keep them.
+            if let first = r.tracks.first, !r.sources.isEmpty {
+                IosTrackResolverCache.shared.seed(artist: first.artist, title: first.title, album: first.album, sources: r.sources)
+            }
             coordinator.setQueue(r.tracks, startIndex: 0,
                                  context: PlaybackContext(type: "playlist", name: r.name, id: nil))
             dlAck("Playing \(r.name)")

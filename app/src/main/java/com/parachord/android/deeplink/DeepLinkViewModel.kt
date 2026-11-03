@@ -93,6 +93,8 @@ class DeepLinkViewModel constructor(
     private val playRadioDispatcher: PlayRadioDispatcher,
     private val listenAlongDispatcher: ListenAlongDispatcher,
     private val friendsRepository: FriendsRepository,
+    private val pluginManager: com.parachord.android.plugin.PluginManager,
+    private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache,
 ) : ViewModel() {
 
     private val _navEvents = MutableSharedFlow<DeepLinkNavEvent>()
@@ -345,7 +347,7 @@ class DeepLinkViewModel constructor(
                     }
                 }
 
-                is DeepLinkAction.Unknown -> Log.w(TAG, "Unknown deep link: ${action.uri}")
+                is DeepLinkAction.Unknown -> playPluginLink(action.uri)
 
                 // ── Protocol play surface (#120 Phase 2) ──
                 is DeepLinkAction.PlayAlbum -> dispatchProtocolPlay(action)
@@ -454,6 +456,41 @@ class DeepLinkViewModel constructor(
     }
 
     // ── External URL resolution ──────────────────────────────────────
+
+    /**
+     * A web link no built-in parser knows: the plugin whose `urlPatterns`
+     * claim it looks it up (#502, desktop parachord#1219), so a new service
+     * needs only its `.axe`. The link's own source is kept (for SoundCloud,
+     * the only one it gets without a sign-in), the other resolvers resolve the
+     * track as usual, and the user's source order picks what plays.
+     */
+    private suspend fun playPluginLink(uri: String) {
+        val linked = if (uri.startsWith("https://") || uri.startsWith("http://")) {
+            com.parachord.shared.deeplink.PluginTrackLink.lookup(pluginManager, uri)
+        } else {
+            null
+        }
+        if (linked == null) {
+            Log.w(TAG, "Unknown deep link: $uri")
+            return
+        }
+        val track = linked.track
+        val others = try {
+            resolverManager.resolve(
+                "${track.title} ${track.artist}",
+                targetTitle = track.title,
+                targetArtist = track.artist,
+            )
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "Resolving the linked track '${track.title}' failed: ${e.message}")
+            emptyList()
+        }
+        val sources = others.filter { it.resolver != linked.source?.resolver } + listOfNotNull(linked.source)
+        if (sources.isNotEmpty()) trackResolverCache.putSources(track.title, track.artist, sources)
+        Log.d(TAG, "Linked track '${track.title}' by ${track.artist} from ${linked.source?.resolver}; sources ${sources.map { it.resolver }}")
+        playbackController.playTrack(track)
+    }
 
     private suspend fun resolveAndPlaySpotifyTrack(trackId: String) {
         val result = externalLinkResolver.resolveSpotifyTrack(trackId)
