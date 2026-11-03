@@ -129,7 +129,9 @@ class LibraryRepository(
      * loves on tracks the user never touched.
      */
     suspend fun addToCollection(track: Track) {
-        addTrack(track)
+        val existing = trackDao.getById(track.id)
+            ?: trackDao.getByTitleAndArtist(track.title, track.artist)
+        addTrack(collectionTrack(track, existing, currentTimeMillis()))
         // Fire-and-forget; LovesPushService handles its own coroutine + idempotency.
         pushLovedTrack(track)
     }
@@ -426,3 +428,14 @@ class LibraryRepository(
             appleMusicId = pt.trackAppleMusicId,
         )
 }
+
+/**
+ * The row [LibraryRepository.addToCollection] writes. A track already in the
+ * collection ([existing], by id or title+artist) keeps the date it was added;
+ * a new one is dated [nowMs], as desktop's `addTrackToCollection` does
+ * (`addedAt: Date.now()`). A playing or queued track carries `addedAt = 0`, so
+ * keeping its own value dated new loves 1970 and sank them to the bottom of
+ * the collection and Recent Loves, which sort newest first.
+ */
+internal fun collectionTrack(track: Track, existing: Track?, nowMs: Long): Track =
+    track.copy(addedAt = existing?.addedAt ?: nowMs)
