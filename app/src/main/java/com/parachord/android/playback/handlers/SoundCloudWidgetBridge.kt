@@ -42,7 +42,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * and art and never starts, so [load] reports [LoadResult.Refused] when the
  * position hasn't moved within the module's 10 s. One SoundCloud only lets it
  * preview (a Go+ release) starts, fades out at 0:30 and reports `finish`; the
- * page asks the widget's `getCurrentSound` and refuses those too (reason
+ * module asks the widget's `getCurrentSound` and refuses those too (reason
  * `preview`).
  *
  * Background playback rides on the same setup as Apple Music's MusicKit

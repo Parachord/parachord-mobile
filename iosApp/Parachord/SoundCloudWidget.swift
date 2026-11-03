@@ -20,8 +20,8 @@ import Shared
 //
 // A track the widget won't play never starts (the module reports it after
 // 10 s), and one SoundCloud only lets it preview (a Go+ release) is refused by
-// the page; `load` returns `.refused` for both, and the router falls through
-// to the next ranked source.
+// the module (reason `preview`); `load` returns `.refused` for both, and the
+// router falls through to the next ranked source.
 //
 // Background: WebKit renders the audio out of process, like Apple Music's
 // RemotePlayerService, so the coordinator runs the silent keepalive on a
