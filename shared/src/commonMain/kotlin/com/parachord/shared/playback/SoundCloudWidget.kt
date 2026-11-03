@@ -28,6 +28,16 @@ object SoundCloudWidget {
     fun pageLink(url: String?, soundcloudUrl: String?): String? =
         listOf(soundcloudUrl, url).firstOrNull { it != null && isSoundCloudUrl(it) && host(it) != "api.soundcloud.com" }
 
+    /**
+     * What the app says when the widget refused a track and nothing else can
+     * play it (desktop's wording): reason `preview` is a track SoundCloud lets
+     * the widget play only a 30-second preview of; anything else, one it won't
+     * play at all.
+     */
+    fun refusedMessage(serviceName: String, title: String, reason: String): String =
+        if (reason == "preview") "$serviceName only lets Parachord play a preview of \"$title\"."
+        else "$serviceName only plays \"$title\" on its own site."
+
     private fun isSoundCloudUrl(url: String): Boolean {
         val host = host(url) ?: return false
         return url.startsWith("https://") && (host == "soundcloud.com" || host.endsWith(".soundcloud.com"))

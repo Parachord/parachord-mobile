@@ -1792,6 +1792,7 @@ final class QueuePlaybackCoordinator {
     private final class EmbedRefusal {
         var service: String?
         var pageUrl: String?
+        var reason = "unplayable"
     }
 
     /// Resolver ids that open in the browser instead of streaming (stream:false,
@@ -2594,8 +2595,8 @@ final class QueuePlaybackCoordinator {
             // failed source: the router moves on to the next one (#495).
             let refusal = EmbedRefusal()
             var router = self.router
-            router.onRefused = { service, pageUrl in
-                if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl }
+            router.onRefused = { service, pageUrl, reason in
+                if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl; refusal.reason = reason }
             }
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist,
                                            artworkUrl: track.artworkUrl)
@@ -2653,7 +2654,7 @@ final class QueuePlaybackCoordinator {
                     // playing; never open the browser by itself.
                     await haltActiveEngine()
                     notice = Notice(
-                        message: "\(service) only plays \"\(track.title)\" on its own site.",
+                        message: SoundCloudWidget.shared.refusedMessage(serviceName: service, title: track.title, reason: refusal.reason),
                         actionLabel: refusal.pageUrl == nil ? nil : "Open in \(service)",
                         actionUrl: refusal.pageUrl
                     )

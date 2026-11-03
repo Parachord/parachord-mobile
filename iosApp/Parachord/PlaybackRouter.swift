@@ -47,7 +47,7 @@ struct PlaybackRouter {
     /// Called when an embedded player refuses a source (SoundCloud's widget
     /// can't play, or only previews, the track) with the service's name and
     /// the track's page on it. The walk then moves on to the next source.
-    var onRefused: ((_ service: String, _ pageUrl: String?) -> Void)? = nil
+    var onRefused: ((_ service: String, _ pageUrl: String?, _ reason: String) -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -76,7 +76,7 @@ struct PlaybackRouter {
                     return .played(.soundCloud, resolver: source.resolver)
                 case .refused(let reason):
                     if reason == "superseded" { return .noPlayableSource }
-                    onRefused?(widget.SERVICE_NAME, widget.pageLink(url: source.url, soundcloudUrl: source.soundcloudUrl))
+                    onRefused?(widget.SERVICE_NAME, widget.pageLink(url: source.url, soundcloudUrl: source.soundcloudUrl), reason)
                 }
 
             case "localfiles", "direct":

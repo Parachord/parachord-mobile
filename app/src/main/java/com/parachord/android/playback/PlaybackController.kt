@@ -2314,7 +2314,7 @@ class PlaybackController constructor(
             }
             return
         }
-        val message = "${e.serviceName} only plays \"${track.title}\" on its own site."
+        val message = com.parachord.shared.playback.SoundCloudWidget.refusedMessage(e.serviceName, track.title, e.reason)
         stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = message) }
         _notices.tryEmit(
             PlaybackNotice(

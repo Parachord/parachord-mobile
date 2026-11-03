@@ -91,5 +91,6 @@ class EmbedPlaybackRefusedException(
     val serviceName: String,
     /** The track's page on the service, for "Open in …"; null when unknown. */
     val pageUrl: String?,
-    reason: String,
+    /** `preview` (only a 30-second preview plays), or why it won't play at all. */
+    val reason: String,
 ) : Exception("$serviceName won't play this track here ($reason)")

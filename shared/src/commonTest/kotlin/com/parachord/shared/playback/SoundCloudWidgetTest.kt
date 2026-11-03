@@ -24,6 +24,18 @@ class SoundCloudWidgetTest {
     }
 
     @Test
+    fun aPreviewSaysSo_otherRefusalsPointToSoundCloud() {
+        assertEquals(
+            "SoundCloud only lets Parachord play a preview of \"Shake It Off\".",
+            SoundCloudWidget.refusedMessage("SoundCloud", "Shake It Off", "preview"),
+        )
+        assertEquals(
+            "SoundCloud only plays \"Roads\" on its own site.",
+            SoundCloudWidget.refusedMessage("SoundCloud", "Roads", "unplayable"),
+        )
+    }
+
+    @Test
     fun openInSoundCloudOffersOnlyARealPage() {
         assertEquals(page, SoundCloudWidget.pageLink(url = "https://api.soundcloud.com/tracks/293", soundcloudUrl = page))
         assertNull(SoundCloudWidget.pageLink(url = "https://api.soundcloud.com/tracks/293", soundcloudUrl = null))
