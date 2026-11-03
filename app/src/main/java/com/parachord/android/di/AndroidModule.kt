@@ -466,7 +466,10 @@ val androidModule = module {
             },
         )
     }
-    singleOf(::OAuthManager)
+    // SoundCloudAuth is passed lazily: it needs the HttpClient, whose token
+    // refresher needs OAuthManager (an eager get() is a cycle that crashed
+    // every launch, #500).
+    single { OAuthManager(get(), get(), get(), get(), lazy { get<com.parachord.shared.api.auth.SoundCloudAuth>() }) }
     singleOf(::NetworkMonitor)
 
     // Auth providers for the shared Ktor HTTP client (OAuthRefreshPlugin, etc.)

@@ -30,7 +30,10 @@ import org.robolectric.annotation.Config
  * (bc47c23, #305). Unit tests build classes directly and never see it. This
  * fails on any missing definition anywhere in a resolution's cause chain.
  *
- * Only missing definitions fail the test. A definition that throws for
+ * Missing definitions and dependency cycles fail the test. A cycle (A needs
+ * B needs … needs A) recurses until the stack overflows: #500 shipped
+ * HttpClient → OAuthTokenRefresher → OAuthManager → SoundCloudAuth →
+ * HttpClient, and every Android launch crashed. A definition that throws for
  * another reason in Robolectric is reported but tolerated, so the test
  * tracks wiring, not the test environment.
  *
@@ -57,12 +60,20 @@ class KoinModuleVerifyTest {
         assertTrue("expected the Function0 parameter to be reported: $missing", missing.single().contains("Function0"))
     }
 
+    @Test fun `a dependency cycle is caught`() {
+        val missing = missingDefinitions(module { singleOf(::CycleA); singleOf(::CycleB) })
+        assertTrue("expected a cycle to be reported: $missing", missing.any { it.contains("dependency cycle") })
+    }
+
+    class CycleA(val b: CycleB)
+    class CycleB(val a: CycleA)
+
     /** The bc47c23 shape: an injectable clock with a default `singleOf` ignores. */
     class ClockedThing(val nowMs: () -> Long = { 0L })
 
     /**
      * Resolve every definition in [modules]; return one line per definition
-     * that failed because some definition is missing. ViewModels get a
+     * that failed because some definition is missing or a cycle overflowed. ViewModels get a
      * [SavedStateHandle], which their screen supplies at runtime.
      */
     @OptIn(KoinInternalApi::class)
@@ -77,9 +88,12 @@ class KoinModuleVerifyTest {
             try {
                 koin.get<Any>(def.primaryType, def.qualifier) { parametersOf(SavedStateHandle()) }
             } catch (t: Throwable) {
-                val noDefinition = generateSequence(t) { it.cause }.firstOrNull { it is NoDefinitionFoundException }
+                val chain = generateSequence(t) { it.cause }
+                val noDefinition = chain.firstOrNull { it is NoDefinitionFoundException }
                 if (noDefinition != null) {
                     missing += "${def.primaryType.qualifiedName}: ${noDefinition.message}"
+                } else if (chain.any { it is StackOverflowError }) {
+                    missing += "${def.primaryType.qualifiedName}: dependency cycle (StackOverflowError while resolving)"
                 } else {
                     println("KoinModuleVerifyTest: ${def.primaryType.qualifiedName} didn't build in Robolectric (tolerated): $t")
                 }
