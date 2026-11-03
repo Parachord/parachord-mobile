@@ -54,6 +54,19 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Robolectric downloads its Android runtime jar (android-all-instrumented,
+      # ~150 MB) from Maven Central into ~/.m2 the first time a test needs it,
+      # outside Gradle's cache. Without this every run re-downloads it, and a
+      # failed download fails whichever Robolectric test asked first (run
+      # 41669563642: an IOException in MavenArtifactFetcher, no code change).
+      # Keyed on the versions file (Robolectric's version) and the SDK it runs.
+      - name: Cache Robolectric runtime jars
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('gradle/libs.versions.toml', 'app/src/test/resources/robolectric.properties') }}
+          restore-keys: robolectric-${{ runner.os }}-
+
       # --continue: a failure in one module still runs (and reports) the other.
       - name: Run unit tests (shared + app)
         run: ./gradlew :shared:testDebugUnitTest :app:testDebugUnitTest --continue --stacktrace
