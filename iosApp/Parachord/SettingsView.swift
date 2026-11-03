@@ -1069,7 +1069,7 @@ private struct PluginConfigSheet: View {
                 Label("Get a Client ID — developer.spotify.com →", systemImage: "key.fill").font(.system(size: 14))
             }
         } header: { Text("Spotify Developer Client ID") } footer: {
-            Text("Parachord ships no Spotify key. Create a free app at developer.spotify.com/dashboard, add the redirect URI parachord://auth/callback/spotify, then paste the Client ID. Spotify Premium is required for playback.")
+            Text("Parachord ships no Spotify key. Create a free app at developer.spotify.com/dashboard, add the redirect URI parachord://auth/callback/spotify, then paste the Client ID. The Spotify account that creates the app needs Spotify Premium, and the app stops working if that Premium lapses.")
         }
 
         Section("Connection") {

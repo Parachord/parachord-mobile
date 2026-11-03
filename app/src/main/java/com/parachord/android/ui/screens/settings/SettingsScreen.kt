@@ -1555,7 +1555,10 @@ private fun SpotifyConfig(
         text = "Parachord ships no Spotify key. Create a free app at " +
             "developer.spotify.com/dashboard, add the redirect URI " +
             "parachord://auth/callback/spotify, then paste the Client ID. " +
-            "Spotify Premium is required for playback.",
+            // Since February 2026 Spotify runs a Development Mode app only while its
+            // owner has Premium (desktop parachord#1222, #506).
+            "The Spotify account that creates the app needs Spotify Premium, " +
+            "and the app stops working if that Premium lapses.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
