@@ -924,7 +924,8 @@ class AppleMusicSyncProvider(
         //   the app uses: playback, the ISRC lookup, add-to-playlist.
         val libraryId = attrs.playParams?.id ?: id
         val catalogId = attrs.playParams.catalogIdOr(libraryId)
-        val addedAt = attrs.dateAdded?.let { parseIso(it) } ?: 0L
+        // No dateAdded → the sync time, as desktop (sync-providers/applemusic.js). 0 dated it 1970.
+        val addedAt = attrs.dateAdded?.let { parseIso(it) } ?: currentTimeMillis()
         return SyncedTrack(
             entity = Track(
                 id = "applemusic-$libraryId",
@@ -949,7 +950,7 @@ class AppleMusicSyncProvider(
     /** Library album → cross-provider [SyncedAlbum]. */
     private fun AmLibraryAlbum.toSyncedAlbum(): SyncedAlbum {
         val catalogId = attributes.playParams?.id ?: id
-        val addedAt = attributes.dateAdded?.let { parseIso(it) } ?: 0L
+        val addedAt = attributes.dateAdded?.let { parseIso(it) } ?: currentTimeMillis()
         return SyncedAlbum(
             entity = Album(
                 id = "applemusic-$catalogId",

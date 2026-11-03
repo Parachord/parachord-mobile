@@ -772,6 +772,8 @@ class IosContainer private constructor() {
      *  belongs (#265, Android parity). Idempotent; never throws to Swift. */
     suspend fun repairAppleMusicLibraryIdsOnLaunch() {
         try { com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
+        // One-time redate of collection tracks saved as 1970 (#508); same launch hook.
+        try { com.parachord.shared.db.TrackAddedAtRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
     }
 
     /** Persist the Apple Music Music User Token (acquired Swift-side via
