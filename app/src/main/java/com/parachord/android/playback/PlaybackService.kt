@@ -36,6 +36,8 @@ import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -53,6 +55,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
@@ -202,8 +206,58 @@ class PlaybackService : MediaLibraryService() {
         const val ACTION_PLAY_PAUSE = "com.parachord.android.ACTION_PLAY_PAUSE"
         const val ACTION_SKIP_NEXT = "com.parachord.android.ACTION_SKIP_NEXT"
         const val ACTION_SKIP_PREVIOUS = "com.parachord.android.ACTION_SKIP_PREVIOUS"
+
+        /** Session command behind the heart on Android Auto's now-playing screen. */
+        const val COMMAND_TOGGLE_LOVE = "com.parachord.android.TOGGLE_LOVE"
     }
 
+    private val toggleLoveCommand = SessionCommand(COMMAND_TOGGLE_LOVE, Bundle.EMPTY)
+
+    /**
+     * Whether the playing track is in the collection, or null when nothing is
+     * playing (no heart then). Same title+artist match as the app's heart.
+     */
+    @Volatile private var currentTrackLoved: Boolean? = null
+
+    /**
+     * The heart for Android Auto and the system media controls: filled when the
+     * playing track is in the collection. Tapping it toggles, like the heart in
+     * the app's mini player. Auto and the platform controls read the custom
+     * icon resource; Media3 controllers use the heart icon constant.
+     */
+    private fun customLayoutFor(loved: Boolean?): List<CommandButton> {
+        if (loved == null) return emptyList()
+        val button = CommandButton.Builder(
+            if (loved) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED,
+        )
+            .setCustomIconResId(if (loved) R.drawable.ic_auto_heart_filled else R.drawable.ic_auto_heart_outline)
+            .setDisplayName(if (loved) "Remove from Collection" else "Add to Collection")
+            .setSessionCommand(toggleLoveCommand)
+            .build()
+        return listOf(button)
+    }
+
+    /**
+     * Add the playing track to the collection, or remove it, as the mini
+     * player's heart does ([com.parachord.android.ui.MainViewModel.toggleCurrentTrackFavorite]):
+     * the effective track, so a Spotify/Apple Music play saves what's actually
+     * playing, and a sync-aware removal of the library row.
+     */
+    private fun toggleCurrentTrackLove() {
+        val track = stateHolder.state.value.effectiveTrack ?: return
+        serviceScope.launch {
+            try {
+                val loved = libraryRepository.isTrackInCollection(track.title, track.artist).first()
+                if (loved) libraryRepository.removeFromCollection(track)
+                else libraryRepository.addToCollection(track)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Heart from media controls failed: ${e.message}")
+            }
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     override fun onCreate() {
         super.onCreate()
 
@@ -251,6 +305,23 @@ class PlaybackService : MediaLibraryService() {
             stateHolder.state.map { it.playbackError }.distinctUntilChanged().collect { message ->
                 wrapper.publishPlayerError(message)
             }
+        }
+
+        // Keep the heart in step with the playing track and the collection,
+        // whichever changes (a heart tapped in the app updates the car too).
+        serviceScope.launch {
+            stateHolder.state
+                .map { it.effectiveTrack?.let { t -> t.title to t.artist } }
+                .distinctUntilChanged()
+                .flatMapLatest { key ->
+                    if (key == null) flowOf(null)
+                    else libraryRepository.isTrackInCollection(key.first, key.second)
+                }
+                .distinctUntilChanged()
+                .collect { loved ->
+                    currentTrackLoved = loved
+                    mediaSession?.setCustomLayout(customLayoutFor(loved))
+                }
         }
 
         queueSnapshotJob = serviceScope.launch {
@@ -337,6 +408,34 @@ class PlaybackService : MediaLibraryService() {
      * role in Auto is purely the remote-control UI.
      */
     private inner class LibraryCallback : MediaLibrarySession.Callback {
+        /** Offer the heart's command and current layout to every controller (Auto, system UI). */
+        override fun onConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
+                .buildUpon()
+                .add(toggleLoveCommand)
+                .build()
+            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(commands)
+                .setCustomLayout(customLayoutFor(currentTrackLoved))
+                .build()
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            customCommand: SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction == COMMAND_TOGGLE_LOVE) {
+                toggleCurrentTrackLove()
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            return super.onCustomCommand(session, controller, customCommand, args)
+        }
+
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
