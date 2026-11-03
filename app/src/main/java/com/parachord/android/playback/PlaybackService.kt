@@ -175,6 +175,12 @@ class PlaybackService : MediaLibraryService() {
         private const val ACTION_COLLECTION_RADIO_ID = "action:collection-radio"
         private const val PLAYLIST_ITEM_PREFIX = "playlist:"
 
+        /** A playlist tile opens its tracklist (a browsable folder, `playlist:<id>`).
+         *  Its first child shuffles the playlist (`playlist-shuffle:<id>`); each
+         *  track (`playlist-track:<position>:<id>`, see [playlistTrackMediaId])
+         *  plays the playlist from that track. */
+        private const val PLAYLIST_SHUFFLE_PREFIX = "playlist-shuffle:"
+
         /** MediaId prefix for an individual loved song in the "Loved Songs"
          *  Auto folder. Suffix is the track's stable id (`loved-track:<id>`) —
          *  id-keyed, not index-keyed, so it survives the collection changing
@@ -463,7 +469,11 @@ class PlaybackService : MediaLibraryService() {
                 }
                 BROWSE_PLAYLISTS_ID -> loadPlaylistChildrenAsync(params, browser.packageName)
                 BROWSE_LOVED_ID -> loadLovedChildrenAsync(params, browser.packageName)
-                else -> Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.of(), params))
+                else -> if (parentId.startsWith(PLAYLIST_ITEM_PREFIX)) {
+                    loadPlaylistTracksAsync(parentId.removePrefix(PLAYLIST_ITEM_PREFIX), page, pageSize, params, browser.packageName)
+                } else {
+                    Futures.immediateFuture(LibraryResult.ofItemList(ImmutableList.of(), params))
+                }
             }
         }
 
@@ -626,6 +636,44 @@ class PlaybackService : MediaLibraryService() {
             return future
         }
 
+        /**
+         * A playlist's tracklist: "Shuffle" first, then the tracks in order.
+         * Paged when Auto asks for pages; capped at [PLAYLIST_BROWSE_CAP] so a
+         * huge playlist stays responsive on the head unit (tapping any track
+         * still queues the whole playlist).
+         */
+        private fun loadPlaylistTracksAsync(
+            playlistId: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+            browserPackage: String,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            val future = SettableFuture.create<LibraryResult<ImmutableList<MediaItem>>>()
+            serviceScope.launch {
+                try {
+                    val playlist = playlistDao.getById(playlistId)
+                    val rows = playlistTrackDao.getByPlaylistIdSync(playlistId).take(PLAYLIST_BROWSE_CAP)
+                    val tiles = buildList {
+                        if (rows.isNotEmpty()) {
+                            add(playableAction(
+                                "$PLAYLIST_SHUFFLE_PREFIX$playlistId", "Shuffle",
+                                subtitle = playlist?.name ?: "${rows.size} tracks",
+                            ))
+                        }
+                        rows.forEach { add(playlistTrackToMediaItem(it)) }
+                    }
+                    val paged = pageOf(tiles, page, pageSize)
+                    grantArtworkUriPermissions(paged, browserPackage)
+                    future.set(LibraryResult.ofItemList(ImmutableList.copyOf(paged), params))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Browse: failed to load tracks of playlist $playlistId", e)
+                    future.set(LibraryResult.ofItemList(ImmutableList.of(), params))
+                }
+            }
+            return future
+        }
+
         /** Async loader for the "Loved Songs" folder — the most-recently-loved
          *  tracks (capped, see [lovedSongsForAutoBrowse]). */
         private fun loadLovedChildrenAsync(
@@ -700,16 +748,15 @@ class PlaybackService : MediaLibraryService() {
                         Log.d(TAG, "Loved Songs: tap at index $idx of ${loved.size}")
                         playbackController.playQueue(loved, startIndex = idx)
                     }
-                    mediaId.startsWith(PLAYLIST_ITEM_PREFIX) -> {
-                        val playlistId = mediaId.removePrefix(PLAYLIST_ITEM_PREFIX)
-                        val rows = playlistTrackDao.getByPlaylistIdSync(playlistId)
-                        if (rows.isEmpty()) {
-                            Log.w(TAG, "Browse: playlist $playlistId has no tracks")
-                            return
-                        }
-                        val tracks = rows.map { libraryRepository.playlistTrackToTrackEntity(it) }
-                        Log.d(TAG, "Browse: starting playlist $playlistId (${tracks.size} tracks)")
-                        playbackController.playQueue(tracks, startIndex = 0)
+                    // A whole playlist: Auto can still send the folder's id itself
+                    // (e.g. "play <playlist>" by voice).
+                    mediaId.startsWith(PLAYLIST_ITEM_PREFIX) ->
+                        playPlaylist(mediaId.removePrefix(PLAYLIST_ITEM_PREFIX), startPosition = null, shuffle = false)
+                    mediaId.startsWith(PLAYLIST_SHUFFLE_PREFIX) ->
+                        playPlaylist(mediaId.removePrefix(PLAYLIST_SHUFFLE_PREFIX), startPosition = null, shuffle = true)
+                    parsePlaylistTrackMediaId(mediaId) != null -> {
+                        val (playlistId, position) = parsePlaylistTrackMediaId(mediaId)!!
+                        playPlaylist(playlistId, startPosition = position, shuffle = false)
                     }
                     mediaId.startsWith(SEARCH_TRACK_PREFIX) -> {
                         val idx = mediaId.removePrefix(SEARCH_TRACK_PREFIX).toIntOrNull()
@@ -733,9 +780,25 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        /** Play [playlistId]'s tracks from the track at [startPosition] (its
+         *  stored position; the first track when null or no longer there). */
+        private suspend fun playPlaylist(playlistId: String, startPosition: Int?, shuffle: Boolean) {
+            val rows = playlistTrackDao.getByPlaylistIdSync(playlistId)
+            if (rows.isEmpty()) {
+                Log.w(TAG, "Browse: playlist $playlistId has no tracks")
+                return
+            }
+            val tracks = rows.map { libraryRepository.playlistTrackToTrackEntity(it) }
+            val startIndex = startPosition?.let { p -> rows.indexOfFirst { it.position == p } }?.takeIf { it >= 0 } ?: 0
+            Log.d(TAG, "Browse: playlist $playlistId (${tracks.size} tracks) from index $startIndex, shuffle=$shuffle")
+            playbackController.playQueue(tracks, startIndex = startIndex, shuffle = shuffle)
+        }
+
         private fun isBrowseTreeMediaId(mediaId: String): Boolean =
             mediaId == ACTION_COLLECTION_RADIO_ID ||
                 mediaId.startsWith(PLAYLIST_ITEM_PREFIX) ||
+                mediaId.startsWith(PLAYLIST_SHUFFLE_PREFIX) ||
+                parsePlaylistTrackMediaId(mediaId) != null ||
                 mediaId.startsWith(LOVED_TRACK_PREFIX) ||
                 mediaId.startsWith(SEARCH_TRACK_PREFIX)
 
@@ -961,13 +1024,34 @@ class PlaybackService : MediaLibraryService() {
                 .setTitle(p.name)
                 .setSubtitle(p.ownerName ?: "Parachord")
                 .setArtist(p.ownerName ?: "Parachord")
-                .setIsBrowsable(false)
-                .setIsPlayable(true)
+                // Opens the tracklist (onGetChildren) rather than playing at once.
+                .setIsBrowsable(true)
+                .setIsPlayable(false)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_PLAYLIST)
                 .apply { autoArtworkUri(p.artworkUrl)?.let { setArtworkUri(it) } }
                 .build()
             val mediaId = "$PLAYLIST_ITEM_PREFIX${p.id}"
             browseTileMetadata[mediaId] = p.name to (p.ownerName ?: "Parachord")
+            return MediaItem.Builder()
+                .setMediaId(mediaId)
+                .setMediaMetadata(md)
+                .build()
+        }
+
+        /** A track in a playlist's tracklist. */
+        private fun playlistTrackToMediaItem(t: com.parachord.shared.model.PlaylistTrack): MediaItem {
+            val md = MediaMetadata.Builder()
+                .setTitle(t.trackTitle)
+                .setSubtitle(t.trackArtist)
+                .setArtist(t.trackArtist)
+                .apply { t.trackAlbum?.let { setAlbumTitle(it) } }
+                .setIsBrowsable(false)
+                .setIsPlayable(true)
+                .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                .apply { autoArtworkUri(t.trackArtworkUrl)?.let { setArtworkUri(it) } }
+                .build()
+            val mediaId = playlistTrackMediaId(t.playlistId, t.position)
+            browseTileMetadata[mediaId] = t.trackTitle to t.trackArtist
             return MediaItem.Builder()
                 .setMediaId(mediaId)
                 .setMediaMetadata(md)
@@ -1951,6 +2035,33 @@ class PlaybackService : MediaLibraryService() {
  */
 /** Max loved songs shown in the Android Auto "Loved Songs" browse folder. */
 internal const val LOVED_BROWSE_CAP = 100
+
+/** Max tracks listed when a playlist is opened in Android Auto. */
+internal const val PLAYLIST_BROWSE_CAP = 500
+
+private const val PLAYLIST_TRACK_PREFIX = "playlist-track:"
+
+/** Media id of a track in an Android Auto playlist tracklist: its position
+ *  first, so a playlist id containing ':' still parses. */
+internal fun playlistTrackMediaId(playlistId: String, position: Int): String =
+    "$PLAYLIST_TRACK_PREFIX$position:$playlistId"
+
+/** (playlistId, position) from [playlistTrackMediaId], or null for any other id. */
+internal fun parsePlaylistTrackMediaId(mediaId: String): Pair<String, Int>? {
+    if (!mediaId.startsWith(PLAYLIST_TRACK_PREFIX)) return null
+    val rest = mediaId.removePrefix(PLAYLIST_TRACK_PREFIX)
+    val position = rest.substringBefore(':').toIntOrNull() ?: return null
+    val playlistId = rest.substringAfter(':', missingDelimiterValue = "").ifEmpty { return null }
+    return playlistId to position
+}
+
+/** The [page] of [items] Auto asked for; everything when it didn't page. */
+internal fun <T> pageOf(items: List<T>, page: Int, pageSize: Int): List<T> {
+    if (pageSize <= 0 || pageSize == Int.MAX_VALUE) return items
+    val start = page.toLong() * pageSize
+    if (start >= items.size) return emptyList()
+    return items.subList(start.toInt(), minOf(start.toInt() + pageSize, items.size))
+}
 
 /**
  * If [stored] is a local playlist-mosaic artwork URL — a file URI into our
