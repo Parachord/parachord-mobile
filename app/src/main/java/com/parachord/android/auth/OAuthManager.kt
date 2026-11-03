@@ -32,8 +32,16 @@ class OAuthManager constructor(
     private val settingsStore: SettingsStore,
     private val okHttpClient: OkHttpClient,
     private val json: Json,
-    private val soundCloudAuth: SoundCloudAuth,
+    /**
+     * Lazy on purpose: SoundCloudAuth needs the shared HttpClient, whose
+     * token refresher needs this class. Resolving it eagerly made a Koin
+     * cycle that crashed every launch (#500). It's only needed for a
+     * SoundCloud sign-in or token refresh, long after startup.
+     */
+    soundCloudAuthLazy: Lazy<SoundCloudAuth>,
 ) {
+    private val soundCloudAuth: SoundCloudAuth by soundCloudAuthLazy
+
     companion object {
         private const val TAG = "OAuthManager"
         private const val REDIRECT_URI = "parachord://auth/callback"
