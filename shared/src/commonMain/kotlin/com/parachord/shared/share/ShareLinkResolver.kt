@@ -3,12 +3,12 @@ package com.parachord.shared.share
 import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.EntityType
 import com.parachord.shared.api.SubmitTrackLinksRequest
-import com.parachord.shared.api.TrackLink
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.SyncPlaylistLinkDao
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
+import com.parachord.shared.resolver.ResolvedSource
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -44,13 +44,17 @@ class ShareLinkResolver(
 
     data class ShareResult(val url: String, val subject: String, val isSmartLink: Boolean)
 
-    suspend fun shareTrack(track: Track): ShareResult = coroutineScope {
+    /**
+     * [sources]: the track's resolved sources, so the submit carries every
+     * service's link with its real page address (desktop's `buildLinks`).
+     */
+    suspend fun shareTrack(track: Track, sources: List<ResolvedSource> = emptyList()): ShareResult = coroutineScope {
         val subject = "${track.artist} – ${track.title}"
         val mbid = track.recordingMbid
         // Entity-link + submit in parallel; both awaited so the recipient's first
         // click sees a warmed Achordion page (desktop publishSmartLink parity).
         val entityLinkJob = async { tryFetchEntityLink(EntityType.Track, mbid) }
-        val submitJob = async { trySubmitForTrack(track, mbid) }
+        val submitJob = async { trySubmitForTrack(track, mbid, sources) }
         val entityUrl = entityLinkJob.await()
         submitJob.await()
         val url = entityUrl ?: lookupUrl("recording", artist = track.artist, title = track.title)
@@ -103,19 +107,9 @@ class ShareLinkResolver(
         }
     }
 
-    private suspend fun trySubmitForTrack(track: Track, mbid: String?) {
+    private suspend fun trySubmitForTrack(track: Track, mbid: String?, sources: List<ResolvedSource>) {
         val key = mbid?.takeIf { it.isNotBlank() } ?: track.isrc?.takeIf { it.isNotBlank() } ?: return
-        val links = buildList {
-            track.spotifyId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
-            }
-            track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://music.apple.com/us/song/$it", host = "music.apple.com", label = "Apple Music"))
-            }
-            track.soundcloudId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
-            }
-        }
+        val links = com.parachord.shared.playback.scrobbler.achordionLinksForTrack(track, sources)
         if (links.isEmpty()) return
         try {
             withTimeout(TIMEOUT_MS) {

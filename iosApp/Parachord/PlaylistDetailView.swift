@@ -389,7 +389,8 @@ final class ShareCoordinator {
     var sharing = false
 
     func shareTrack(_ track: Track) {
-        run { try await IosContainer.companion.shared.shareTrack(track: track) }
+        let sources = IosTrackResolverCache.shared.cached(artist: track.artist, title: track.title, album: track.album) ?? []
+        run { try await IosContainer.companion.shared.shareTrack(track: track, sources: sources) }
     }
     func shareAlbum(title: String, artist: String, releaseGroupMbid: String?) {
         run { try await IosContainer.companion.shared.shareAlbum(title: title, artist: artist, releaseGroupMbid: releaseGroupMbid) }
