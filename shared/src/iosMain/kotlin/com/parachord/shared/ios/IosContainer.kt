@@ -772,6 +772,8 @@ class IosContainer private constructor() {
      *  belongs (#265, Android parity). Idempotent; never throws to Swift. */
     suspend fun repairAppleMusicLibraryIdsOnLaunch() {
         try { com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
+        // One-time redate of collection items saved as 1970 (#508); same launch hook.
+        try { com.parachord.shared.db.CollectionAddedAtRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
     }
 
     /** Persist the Apple Music Music User Token (acquired Swift-side via
@@ -1589,8 +1591,8 @@ class IosContainer private constructor() {
     // re-add clears the track's remove-tombstones (#194) and fires MBID
     // enrichment. Sync push happens on the next sync cycle.
     suspend fun addTrackToCollection(track: Track) { libraryRepository.addToCollection(track) }
-    suspend fun addAlbumToCollection(album: Album) { libraryRepository.addAlbum(album) }
-    suspend fun addArtistToCollection(artist: Artist) { libraryRepository.addArtist(artist) }
+    suspend fun addAlbumToCollection(album: Album) { libraryRepository.addAlbumToCollection(album) }
+    suspend fun addArtistToCollection(artist: Artist) { libraryRepository.addArtistToCollection(artist) }
 
     /**
      * Persist a batch of scanned device-library tracks (#219). Upserts by the
@@ -1666,7 +1668,7 @@ class IosContainer private constructor() {
     suspend fun toggleAlbumCollection(title: String, artist: String, artworkUrl: String?, year: Int, trackCount: Int) {
         val existing = albumDao.getByTitleAndArtist(title, artist)
         if (existing != null) { libraryRepository.deleteAlbumWithSync(existing); return }
-        libraryRepository.addAlbum(Album(
+        libraryRepository.addAlbumToCollection(Album(
             id = "album-${title.hashCode()}-${artist.hashCode()}",
             title = title, artist = artist, artworkUrl = artworkUrl,
             year = year.takeIf { it > 0 }, trackCount = trackCount.takeIf { it > 0 },
@@ -1676,7 +1678,7 @@ class IosContainer private constructor() {
     suspend fun toggleArtistCollection(name: String, imageUrl: String?) {
         val existing = artistDao.getByName(name).first()
         if (existing != null) { libraryRepository.deleteArtistWithSync(existing); return }
-        libraryRepository.addArtist(Artist(id = "manual-${randomUUID()}", name = name, imageUrl = imageUrl))
+        libraryRepository.addArtistToCollection(Artist(id = "manual-${randomUUID()}", name = name, imageUrl = imageUrl))
     }
 
     // ── Charts (Pop of the Tops) ───────────────────────────────────────

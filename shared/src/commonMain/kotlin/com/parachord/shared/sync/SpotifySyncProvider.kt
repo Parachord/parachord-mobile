@@ -241,6 +241,9 @@ class SpotifySyncProvider(
                         imageUrl = artist.images.bestImageUrl(),
                         spotifyId = artistId,
                         genres = artist.genres.joinToString(","),
+                        // Spotify gives no follow date: the sync time, as desktop
+                        // (sync-providers/spotify.js). 0 dated the artist 1970.
+                        addedAt = currentTimeMillis(),
                     ),
                     spotifyId = artistId,
                 ))

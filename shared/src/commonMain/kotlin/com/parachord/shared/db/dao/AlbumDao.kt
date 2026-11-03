@@ -51,6 +51,13 @@ class AlbumDao(private val db: ParachordDb) {
         queries.getById(id).executeAsOneOrNull()?.toAlbum()
     }
 
+    suspend fun getByIds(ids: List<String>): List<Album> = withContext(Dispatchers.Default) {
+        if (ids.isEmpty()) return@withContext emptyList()
+        ids.distinct().chunked(900).flatMap { chunk ->
+            queries.getByIds(chunk).executeAsList().map { it.toAlbum() }
+        }
+    }
+
     /** Total album count. Used by SyncEngine to detect entity-table wipes
      *  where `sync_sources` rows survived but the `albums` table is empty —
      *  forces a full refetch instead of trusting the provider's

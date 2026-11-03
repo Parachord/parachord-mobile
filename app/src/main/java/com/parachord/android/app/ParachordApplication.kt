@@ -84,6 +84,17 @@ class ParachordApplication : Application() {
             }
         }
 
+        // One-time redate of collection items saved as 1970 (#508). Never fail startup on it.
+        appScope.launch {
+            try {
+                if (com.parachord.shared.db.CollectionAddedAtRepair.runOnce(sqlDriver, kvStore)) {
+                    com.parachord.shared.platform.Log.d("ParachordApplication", "Redated collection items saved with addedAt = 0")
+                }
+            } catch (_: Exception) {
+                // Retried next launch (the flag is only set on success).
+            }
+        }
+
         // BYO Spotify Client ID migration: Parachord no longer ships a
         // built-in Spotify key, so a token minted under the old built-in
         // client is unusable. If no Client ID is set but a stale Spotify

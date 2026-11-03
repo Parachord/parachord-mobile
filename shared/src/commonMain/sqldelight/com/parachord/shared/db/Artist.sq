@@ -19,6 +19,9 @@ SELECT COUNT(*) FROM artists WHERE id LIKE ? || '%';
 getById:
 SELECT * FROM artists WHERE id = ?;
 
+getByIds:
+SELECT * FROM artists WHERE id IN ?;
+
 getByName:
 SELECT * FROM artists WHERE name = ? LIMIT 1;
 

@@ -941,7 +941,8 @@ class SyncEngine constructor(
 
         run {
             if (toAdd.isNotEmpty()) {
-                albumDao.insertAll(toAdd.map { it.entity })
+                val existingAdd = albumDao.getByIds(toAdd.map { it.entity.id }).associate { it.id to it.addedAt }
+                albumDao.insertAll(toAdd.map { it.entity.copy(addedAt = keptAddedAt(existingAdd[it.entity.id], it.entity.addedAt)) })
                 syncSourceDao.insertAll(toAdd.map { synced ->
                     SyncSource(
                         itemId = synced.entity.id,
@@ -963,7 +964,8 @@ class SyncEngine constructor(
             }
 
             if (unchanged.isNotEmpty()) {
-                albumDao.insertAll(unchanged.map { it.entity })
+                val existing = albumDao.getByIds(unchanged.map { it.entity.id }).associate { it.id to it.addedAt }
+                albumDao.insertAll(unchanged.map { it.entity.copy(addedAt = keptAddedAt(existing[it.entity.id], it.entity.addedAt)) })
                 syncSourceDao.insertAll(unchanged.mapNotNull { synced ->
                     localByExternalId[synced.spotifyId]?.copy(syncedAt = now)
                 })
@@ -1038,7 +1040,8 @@ class SyncEngine constructor(
 
         run {
             if (toAdd.isNotEmpty()) {
-                artistDao.insertAll(toAdd.map { it.entity })
+                val existingAdd = artistDao.getByIds(toAdd.map { it.entity.id }).associate { it.id to it.addedAt }
+                artistDao.insertAll(toAdd.map { it.entity.copy(addedAt = keptAddedAt(existingAdd[it.entity.id], it.entity.addedAt)) })
                 syncSourceDao.insertAll(toAdd.map { synced ->
                     SyncSource(
                         itemId = synced.entity.id,
@@ -1059,7 +1062,8 @@ class SyncEngine constructor(
             }
 
             if (unchanged.isNotEmpty()) {
-                artistDao.insertAll(unchanged.map { it.entity })
+                val existing = artistDao.getByIds(unchanged.map { it.entity.id }).associate { it.id to it.addedAt }
+                artistDao.insertAll(unchanged.map { it.entity.copy(addedAt = keptAddedAt(existing[it.entity.id], it.entity.addedAt)) })
                 syncSourceDao.insertAll(unchanged.mapNotNull { synced ->
                     localByExternalId[synced.spotifyId]?.copy(syncedAt = now)
                 })
@@ -4657,3 +4661,13 @@ class SyncEngine constructor(
         return candidates.maxByOrNull { it.trackCount }
     }
 }
+
+/**
+ * The date a re-synced album or artist row keeps (#508). Sync rewrites every
+ * row it pulls, and a provider with no date of its own (Spotify follows,
+ * Apple Music artists, undated library albums) dates it the sync time, so
+ * without this every artist would read "added today" after each sync. An
+ * existing non-zero date wins; a 0 left by older builds takes the incoming one.
+ */
+internal fun keptAddedAt(existing: Long?, incoming: Long): Long =
+    if (existing != null && existing > 0) existing else incoming

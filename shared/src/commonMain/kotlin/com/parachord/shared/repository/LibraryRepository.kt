@@ -17,6 +17,7 @@ import com.parachord.shared.platform.randomUUID
 import com.parachord.shared.sync.SyncEngine
 import com.parachord.shared.sync.TrackTombstoneService
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 /**
  * Library repository — Room/SQLDelight CRUD for tracks, albums, artists,
@@ -129,7 +130,9 @@ class LibraryRepository(
      * loves on tracks the user never touched.
      */
     suspend fun addToCollection(track: Track) {
-        addTrack(track)
+        val existing = trackDao.getById(track.id)
+            ?: trackDao.getByTitleAndArtist(track.title, track.artist)
+        addTrack(collectionTrack(track, existing, currentTimeMillis()))
         // Fire-and-forget; LovesPushService handles its own coroutine + idempotency.
         pushLovedTrack(track)
     }
@@ -168,6 +171,26 @@ class LibraryRepository(
     suspend fun addAlbum(album: Album) = albumDao.insert(album)
     suspend fun addAlbums(albums: List<Album>) = albumDao.insertAll(albums)
     suspend fun addArtist(artist: Artist) = artistDao.insert(artist)
+
+    /**
+     * User-intent album add (an album card's menu, the album page). Like
+     * desktop's `addAlbumToCollection`: an album already in the collection
+     * (same id, or same title+artist, e.g. a synced copy) is left as it is,
+     * and a new one is dated now. [Album.addedAt] defaults to 0, which dated
+     * these adds 1970 (#508). Sync and local-file scans use [addAlbum]/[addAlbums].
+     */
+    suspend fun addAlbumToCollection(album: Album) {
+        if (albumDao.getById(album.id) != null ||
+            albumDao.getByTitleAndArtist(album.title, album.artist) != null
+        ) return
+        albumDao.insert(album.copy(addedAt = currentTimeMillis()))
+    }
+
+    /** User-intent artist add, as [addAlbumToCollection] (desktop's `addArtistToCollection`). */
+    suspend fun addArtistToCollection(artist: Artist) {
+        if (artistDao.getById(artist.id) != null || artistDao.getByName(artist.name).first() != null) return
+        artistDao.insert(artist.copy(addedAt = currentTimeMillis()))
+    }
     suspend fun addArtists(artists: List<Artist>) = artistDao.insertAll(artists)
     suspend fun addPlaylist(playlist: Playlist) =
         playlistDao.insert(playlist.withInsertTimestamps())
@@ -426,3 +449,14 @@ class LibraryRepository(
             appleMusicId = pt.trackAppleMusicId,
         )
 }
+
+/**
+ * The row [LibraryRepository.addToCollection] writes. A track already in the
+ * collection ([existing], by id or title+artist) keeps the date it was added;
+ * a new one is dated [nowMs], as desktop's `addTrackToCollection` does
+ * (`addedAt: Date.now()`). A playing or queued track carries `addedAt = 0`, so
+ * keeping its own value dated new loves 1970 and sank them to the bottom of
+ * the collection and Recent Loves, which sort newest first.
+ */
+internal fun collectionTrack(track: Track, existing: Track?, nowMs: Long): Track =
+    track.copy(addedAt = existing?.addedAt ?: nowMs)

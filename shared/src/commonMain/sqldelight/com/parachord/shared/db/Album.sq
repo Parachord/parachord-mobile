@@ -21,6 +21,9 @@ SELECT COUNT(*) FROM albums WHERE id LIKE ? || '%';
 getById:
 SELECT * FROM albums WHERE id = ?;
 
+getByIds:
+SELECT * FROM albums WHERE id IN ?;
+
 search:
 SELECT * FROM albums WHERE title LIKE '%' || ? || '%' OR artist LIKE '%' || ? || '%';
 

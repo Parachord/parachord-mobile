@@ -255,7 +255,7 @@ class RecommendationsViewModel constructor(
             if (isInCollection) {
                 libraryRepository.deleteArtistByName(artistName)
             } else {
-                libraryRepository.addArtist(
+                libraryRepository.addArtistToCollection(
                     ArtistEntity(
                         id = "manual-${UUID.randomUUID()}",
                         name = artistName,

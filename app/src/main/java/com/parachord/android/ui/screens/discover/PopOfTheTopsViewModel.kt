@@ -212,7 +212,7 @@ class PopOfTheTopsViewModel constructor(
 
     fun addAlbumToCollection(title: String, artist: String, artworkUrl: String?) {
         viewModelScope.launch {
-            libraryRepository.addAlbum(AlbumEntity(
+            libraryRepository.addAlbumToCollection(AlbumEntity(
                 id = "album-${title.hashCode()}-${artist.hashCode()}",
                 title = title,
                 artist = artist,
