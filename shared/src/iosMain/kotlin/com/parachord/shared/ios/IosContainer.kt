@@ -3143,7 +3143,10 @@ class IosContainer private constructor() {
 
     /** Achordion/smart-link share URL for a track/album/artist/playlist (#222) —
      *  the same path Android shares through, exposed flat for the iOS share sheet. */
-    suspend fun shareTrack(track: Track): IosShareResult = shareLinkResolver.shareTrack(track).toIos()
+    /** [sources]: the track's resolved sources (Swift's IosTrackResolverCache), so the
+     *  Achordion submit carries every service's link with its real page address. */
+    suspend fun shareTrack(track: Track, sources: List<ResolvedSource>): IosShareResult =
+        shareLinkResolver.shareTrack(track, sources).toIos()
     suspend fun shareAlbum(title: String, artist: String, releaseGroupMbid: String?): IosShareResult =
         shareLinkResolver.shareAlbum(title, artist, releaseGroupMbid).toIos()
     suspend fun shareArtist(name: String, artistMbid: String?): IosShareResult =

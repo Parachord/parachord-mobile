@@ -9,7 +9,6 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.shared.api.AchordionClient
 import com.parachord.shared.api.EntityType
 import com.parachord.shared.api.SubmitTrackLinksRequest
-import com.parachord.shared.api.TrackLink
 import com.parachord.shared.platform.Log
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -44,6 +43,7 @@ class ShareManager constructor(
     private val playlistDao: PlaylistDao,
     private val playlistTrackDao: PlaylistTrackDao,
     private val syncPlaylistLinkDao: com.parachord.shared.db.dao.SyncPlaylistLinkDao,
+    private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache,
 ) {
     companion object {
         private const val TAG = "ShareManager"
@@ -93,17 +93,12 @@ class ShareManager constructor(
         // #216: an ISRC is a valid recording key too — submit even without an MBID
         // (the server derives it from the ISRC). Skip only when we have neither.
         if (key == null) return
-        val links = buildList {
-            track.spotifyId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
-            }
-            track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://music.apple.com/song/$it", host = "music.apple.com", label = "Apple Music"))
-            }
-            track.soundcloudId?.takeIf { it.isNotBlank() }?.let {
-                add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
-            }
-        }
+        // Every resolved source's link with its real page address (desktop's
+        // buildLinks); a SoundCloud link is never built from the numeric id.
+        val links = com.parachord.shared.playback.scrobbler.achordionLinksForTrack(
+            track,
+            trackResolverCache.getSources(track.title, track.artist).orEmpty(),
+        )
         if (links.isEmpty()) return
         try {
             withTimeout(SMART_LINK_TIMEOUT_MS) {

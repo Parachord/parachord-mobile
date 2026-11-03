@@ -9,6 +9,7 @@ import com.parachord.shared.api.EntityType
 import com.parachord.shared.api.SubmitResult
 import com.parachord.shared.api.SubmitTrackLinksRequest
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
@@ -34,13 +35,19 @@ class ShareManagerTest {
         playlistTrackDao = mockk(relaxed = true),
         // No LB link by default → playlist not shareable (Achordion-only, #138).
         syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
+        trackResolverCache = noSources(),
     )
+
+    /** No resolved sources known: the submit falls back to the track's own ids. */
+    private fun noSources(): com.parachord.android.resolver.TrackResolverCache =
+        mockk(relaxed = true) { every { getSources(any(), any()) } returns null }
 
     private fun sampleTrack(
         recordingMbid: String? = "550e8400-e29b-41d4-a716-446655440000",
         spotifyId: String? = "SP123",
         appleMusicId: String? = "AM456",
-        soundcloudId: String? = "user/track",
+        soundcloudId: String? = "242136202",
+        sourceUrl: String? = "https://soundcloud.com/user/track",
     ) = TrackEntity(
         id = "t1",
         title = "Sugar For The Pill",
@@ -50,6 +57,7 @@ class ShareManagerTest {
         spotifyId = spotifyId,
         appleMusicId = appleMusicId,
         soundcloudId = soundcloudId,
+        sourceUrl = sourceUrl,
     )
 
     @Test
@@ -114,6 +122,20 @@ class ShareManagerTest {
         assertEquals("Slowdive", payload.albumName)
         val hosts = payload.links.map { it.host }.toSet()
         assertEquals(setOf("spotify.com", "music.apple.com", "soundcloud.com"), hosts)
+        assertEquals("https://soundcloud.com/user/track", payload.links.single { it.host == "soundcloud.com" }.url)
+    }
+
+    @Test
+    fun shareTrack_neverBuildsASoundCloudLinkFromTheNumericId() = runTest {
+        val achordion = mockk<AchordionClient>()
+        coEvery { achordion.fetchEntityLink(any(), any(), any()) } returns null
+        val payloadSlot = slot<SubmitTrackLinksRequest>()
+        coEvery { achordion.submitTrackLinks(capture(payloadSlot)) } returns SubmitResult.Ok
+
+        // Only the id, no soundcloud.com page: soundcloud.com/242136202 isn't a page (#502).
+        buildManager(achordion = achordion).shareTrack(sampleTrack(sourceUrl = null))
+
+        assertEquals(setOf("spotify.com", "music.apple.com"), payloadSlot.captured.links.map { it.host }.toSet())
     }
 
     @Test
@@ -124,7 +146,7 @@ class ShareManagerTest {
         coEvery { achordion.submitTrackLinks(capture(payloadSlot)) } returns SubmitResult.Ok
 
         val mgr = buildManager(achordion = achordion)
-        mgr.shareTrack(sampleTrack(spotifyId = "SP", appleMusicId = "", soundcloudId = null))
+        mgr.shareTrack(sampleTrack(spotifyId = "SP", appleMusicId = "", soundcloudId = null, sourceUrl = null))
 
         val hosts = payloadSlot.captured.links.map { it.host }
         assertEquals(listOf("spotify.com"), hosts)
@@ -205,7 +227,7 @@ class ShareManagerTest {
         coEvery { achordion.fetchEntityLink(any(), any(), any()) } returns null
 
         val mgr = buildManager(achordion = achordion)
-        mgr.shareTrack(sampleTrack(spotifyId = null, appleMusicId = null, soundcloudId = null))
+        mgr.shareTrack(sampleTrack(spotifyId = null, appleMusicId = null, soundcloudId = null, sourceUrl = null))
 
         // ShareManager filters source-list at build time and skips submit when empty.
         coVerify(exactly = 0) { achordion.submitTrackLinks(any()) }
@@ -226,6 +248,7 @@ class ShareManagerTest {
             playlistDao = playlistDao,
             playlistTrackDao = mockk(relaxed = true) { coEvery { getByPlaylistIdSync(any()) } returns emptyList() },
             syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
+            trackResolverCache = noSources(),
         )
 
         val result = mgr.sharePlaylist("p1")
@@ -250,6 +273,7 @@ class ShareManagerTest {
                         localPlaylistId = "p1", providerId = "listenbrainz", externalId = "lb-mbid-1", syncedAt = 0L,
                     )
             },
+            trackResolverCache = noSources(),
         )
 
         val result = mgr.sharePlaylist("p1")

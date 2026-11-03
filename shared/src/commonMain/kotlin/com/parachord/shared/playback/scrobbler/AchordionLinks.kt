@@ -1,6 +1,8 @@
 package com.parachord.shared.playback.scrobbler
 
 import com.parachord.shared.api.TrackLink
+import com.parachord.shared.model.Track
+import com.parachord.shared.playback.SoundCloudWidget
 import com.parachord.shared.resolver.ResolvedSource
 
 /**
@@ -60,4 +62,27 @@ fun buildAchordionLinks(sources: List<ResolvedSource>): List<TrackLink> {
         if (seen.add(link.url)) out.add(link)
     }
     return out
+}
+
+/**
+ * The links an Achordion submit sends for [track] (on scrobble, and when the
+ * user shares it): every high-confidence source's ([buildAchordionLinks]), or,
+ * with no sources known, the ids the track itself carries. A SoundCloud link is
+ * always the track's soundcloud.com page, never built from its numeric id,
+ * which isn't a page (#502): a track with only the id gets no SoundCloud link,
+ * as on desktop.
+ */
+fun achordionLinksForTrack(track: Track, sources: List<ResolvedSource>): List<TrackLink> {
+    if (sources.isNotEmpty()) return buildAchordionLinks(sources)
+    return buildList {
+        track.spotifyId?.takeIf { it.isNotBlank() }?.let {
+            add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
+        }
+        track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
+            add(TrackLink(url = "https://music.apple.com/us/song/$it", host = "music.apple.com", label = "Apple Music"))
+        }
+        SoundCloudWidget.pageLink(url = track.sourceUrl, soundcloudUrl = null)?.let {
+            add(TrackLink(url = it, host = "soundcloud.com", label = "SoundCloud"))
+        }
+    }
 }

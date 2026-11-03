@@ -281,22 +281,7 @@ class ScrobbleManager(
         // high-confidence per-service link (incl. Bandcamp), matching desktop's
         // buildLinks (#276). The flat single-id fields are only a cache-miss
         // fallback — they can't represent Bandcamp/YouTube or per-source confidence.
-        val sources = resolvedSourcesFor(track)
-        val links = if (sources.isNotEmpty()) {
-            buildAchordionLinks(sources)
-        } else {
-            buildList {
-                track.spotifyId?.takeIf { it.isNotBlank() }?.let {
-                    add(TrackLink(url = "https://open.spotify.com/track/$it", host = "spotify.com", label = "Spotify"))
-                }
-                track.appleMusicId?.takeIf { it.isNotBlank() }?.let {
-                    add(TrackLink(url = "https://music.apple.com/us/song/$it", host = "music.apple.com", label = "Apple Music"))
-                }
-                track.soundcloudId?.takeIf { it.isNotBlank() }?.let {
-                    add(TrackLink(url = "https://soundcloud.com/$it", host = "soundcloud.com", label = "SoundCloud"))
-                }
-            }
-        }
+        val links = achordionLinksForTrack(track, resolvedSourcesFor(track))
         // Boundary instrumentation (#215): one line per scrobble shows the native
         // path was REACHED + WHY it did/didn't submit, so "wired but no links" is
         // distinguishable from "stale build / not wired". Fires before the gates.

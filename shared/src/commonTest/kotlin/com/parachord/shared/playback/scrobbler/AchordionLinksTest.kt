@@ -91,4 +91,29 @@ class AchordionLinksTest {
     fun `empty input yields no links`() {
         assertTrue(buildAchordionLinks(emptyList()).isEmpty())
     }
+
+    // ── achordionLinksForTrack (scrobble + share, #502) ──
+
+    private val flume = "https://soundcloud.com/flume/never-be-like-you-feat-kai"
+
+    @Test
+    fun aTracksSourcesAreUsedWhenKnown() {
+        val track = com.parachord.shared.model.Track(id = "t", title = "T", artist = "A", soundcloudId = "242136202")
+        val links = achordionLinksForTrack(
+            track,
+            listOf(ResolvedSource(url = flume, sourceType = "soundcloud", resolver = "soundcloud", soundcloudId = "242136202", soundcloudUrl = flume, confidence = 1.0)),
+        )
+        assertEquals(listOf(flume), links.map { it.url })
+    }
+
+    @Test
+    fun withoutSources_aSoundCloudLinkIsTheTracksPage_neverItsNumericId() {
+        val idOnly = com.parachord.shared.model.Track(id = "t", title = "T", artist = "A", soundcloudId = "242136202", spotifyId = "sp1")
+        val links = achordionLinksForTrack(idOnly, emptyList())
+        assertEquals(listOf("https://open.spotify.com/track/sp1"), links.map { it.url })
+        assertTrue(links.none { it.url.contains("242136202") })
+
+        val withPage = idOnly.copy(sourceUrl = flume)
+        assertEquals(flume, achordionLinksForTrack(withPage, emptyList()).single { it.label == "SoundCloud" }.url)
+    }
 }
