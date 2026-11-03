@@ -286,7 +286,7 @@ class AndroidResolverRuntime constructor(
             result
         } catch (e: SoundCloudAuthException) {
             // Token expired — try to refresh
-            if (oAuthManager.refreshSoundCloudToken()) {
+            if (oAuthManager.refreshSoundCloudToken(rejectedToken = token)) {
                 val newToken = settingsStore.getSoundCloudToken() ?: return null
                 try {
                     searchSoundCloudTrack(query, newToken)

@@ -76,6 +76,7 @@ class OAuthManagerSpotifyRefreshTest {
             settingsStore = settings,
             okHttpClient = client,
             json = Json { ignoreUnknownKeys = true },
+            soundCloudAuth = mockk(relaxed = true),
         )
     }
 

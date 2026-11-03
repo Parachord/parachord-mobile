@@ -449,6 +449,23 @@ val androidModule = module {
             appleMusicDeveloperTokenFallback = com.parachord.android.BuildConfig.APPLE_MUSIC_DEVELOPER_TOKEN,
         )
     } bind com.parachord.shared.sync.SyncSettingsProvider::class
+    // SoundCloud token exchange + refresh (shared with iOS). The user's own
+    // app credentials win; the build's are the fallback, as before.
+    single {
+        val settingsStore: com.parachord.shared.settings.SettingsStore = get()
+        com.parachord.shared.api.auth.SoundCloudAuth(
+            httpClient = get(),
+            settingsStore = settingsStore,
+            credentials = {
+                val id = settingsStore.getSoundCloudClientId()
+                    ?: com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_ID.ifBlank { null }
+                val secret = settingsStore.getSoundCloudClientSecret()
+                    ?: com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_SECRET.ifBlank { null }
+                if (id == null || secret == null) null
+                else com.parachord.shared.api.auth.SoundCloudCredentials(id, secret)
+            },
+        )
+    }
     singleOf(::OAuthManager)
     singleOf(::NetworkMonitor)
 
@@ -1089,7 +1106,11 @@ val androidModule = module {
         com.parachord.shared.plugin.PluginManager(
             get<PluginFileAccess>(), get<JsBridge>(),
             appVersion = com.parachord.android.BuildConfig.VERSION_NAME, platform = "android",
-        )
+        ).apply {
+            // soundcloud.axe's URL / playlist lookups need the sign-in token.
+            val soundCloudAuth = get<com.parachord.shared.api.auth.SoundCloudAuth>()
+            resolverConfigProvider = { mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) }
+        }
     }
     single {
         val settingsStore: com.parachord.android.data.store.SettingsStore = get()

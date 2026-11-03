@@ -115,6 +115,11 @@ final class SettingsViewModel {
     var lastFmConnected = false
     var lastFmError: String?
     var lastFmBusy = false
+    /// SoundCloud sign-in token present. Finding SoundCloud tracks needs it:
+    /// `soundcloud.axe` returns nothing without `config.token`.
+    var soundCloudConnected = false
+    var soundCloudError: String?
+    var soundCloudBusy = false
     /// Enabled-AND-usable resolvers, in priority order (mirrors desktop's
     /// `resolver_order`, which only holds resolvers that are actually usable).
     var resolverOrder: [String] = []
@@ -243,6 +248,10 @@ final class SettingsViewModel {
             self?.libreFmConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false) })
         subs.append(watcher.watch(flow: container.getLastFmConnectedFlow()) { [weak self] v in
             self?.lastFmConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false) })
+        subs.append(watcher.watch(flow: container.getSoundCloudConnectedFlow()) { [weak self] v in
+            self?.soundCloudConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
+            self?.recomputeResolvers()   // sign-in / sign-out (or a dead refresh token) moves it in/out
+        })
         loadAll()
     }
     func stop() { subs.forEach { $0.cancel() }; subs.removeAll() }
@@ -288,6 +297,7 @@ final class SettingsViewModel {
             // Read Spotify connection up-front so the load-time recompute gates
             // it correctly (the connected-flow watcher only fires later).
             spotifyConnected = (try? await store.getSpotifyAccessToken()) != nil
+            soundCloudConnected = !(((try? await store.getSoundCloudToken()) ?? nil) ?? "").isEmpty
 
             // Resolver intent (active_resolvers): empty stored = all catalogued.
             // Whether each actually reaches the priority list is gated by
@@ -353,6 +363,8 @@ final class SettingsViewModel {
         // A stale token alone (e.g. iCloud-Keychain-synced) isn't a usable
         // connection without the BYO Client ID — both are required.
         case "spotify": return spotifyConnected && !spotifyClientId.isEmpty
+        // Signed in, with the app credentials the token refreshes with.
+        case "soundcloud": return soundCloudConnected && !(values["soundcloud"]?.isEmpty ?? true)
         case "librefm": return libreFmConnected
         // Scrobbling needs the session key (OAuth), not the read-only username.
         case "lastfm": return lastFmConnected
@@ -424,10 +436,7 @@ final class SettingsViewModel {
     // ── BYO key/token writes (routes to the right SettingsStore method) ─
     func setValue(_ id: String, _ value: String, secret: String? = nil) {
         values[id] = value
-        if requiresConnection(id) {            // soundcloud: creds gate usability
-            if !value.isEmpty { activeResolvers.insert(id) }
-            recomputeResolvers()
-        }
+        if requiresConnection(id) { recomputeResolvers() }   // soundcloud: clearing creds disables it
         Task {
             switch id {
             case "lastfm": try? await store.setLastFmUsername(username: value)
@@ -445,7 +454,10 @@ final class SettingsViewModel {
             case "discogs": try? await store.setDiscogsToken(token: value)
             case "ticketmaster": try? await store.setTicketmasterApiKey(key: value)
             case "seatgeek": try? await store.setSeatGeekClientId(id: value)
-            case "soundcloud": try? await store.setSoundCloudCredentials(clientId: value, clientSecret: secret ?? "")
+            case "soundcloud":
+                // Clearing the credentials signs out too (Android parity).
+                if value.isEmpty { try? await store.clearSoundCloudCredentials() }
+                else { try? await store.setSoundCloudCredentials(clientId: value, clientSecret: secret ?? "") }
             case "chatgpt", "claude", "gemini", "bandsintown", "songkick":
                 try? await store.setAiProviderApiKey(providerId: id, apiKey: value)
             default: break
@@ -528,6 +540,39 @@ final class SettingsViewModel {
     func disconnectSpotify() {
         activeResolvers.remove("spotify")   // auth-gated removal (desktop parity)
         Task { try? await container.disconnectSpotify() }
+        recomputeResolvers()
+    }
+
+    // ── SoundCloud OAuth (the user's own app credentials) ─────────────
+    func connectSoundCloud() {
+        let clientId = values["soundcloud"] ?? ""
+        guard !clientId.isEmpty else {
+            soundCloudError = "Save your SoundCloud Client ID and Secret first."; return
+        }
+        soundCloudBusy = true; soundCloudError = nil
+        Task { @MainActor in
+            do {
+                let m = IosOAuthManager(); oauthManager = m
+                let r = try await m.authorize(OAuthConfig.soundCloud(clientId: clientId))
+                try await container.connectSoundCloud(code: r.code, codeVerifier: r.codeVerifier)
+                soundCloudConnected = true             // before recompute, so the prune keeps it
+                activeResolvers.insert("soundcloud")   // connecting enables it (desktop parity)
+                setPluginEnabled("soundcloud", true)
+                recomputeResolvers()
+                // Tracks resolved while signed out cached no SoundCloud source.
+                IosTrackResolverCache.shared.resolverEnabled("soundcloud")
+            } catch {
+                if case OAuthError.cancelled = error { soundCloudError = nil }
+                else { soundCloudError = error.localizedDescription }
+            }
+            oauthManager = nil
+            soundCloudBusy = false
+        }
+    }
+    func disconnectSoundCloud() {
+        activeResolvers.remove("soundcloud")
+        Task { try? await container.disconnectSoundCloud() }
+        soundCloudConnected = false
         recomputeResolvers()
     }
 
@@ -888,6 +933,7 @@ private struct PluginConfigSheet: View {
 
                 switch service.id {
                 case "spotify": spotifySection
+                case "soundcloud": soundCloudSection
                 case "lastfm": lastFmSection
                 case "librefm": libreFmSection
                 case "applemusic": appleMusicSection
@@ -1042,6 +1088,59 @@ private struct PluginConfigSheet: View {
                 }
                 if let e = model.spotifyError { Text(e).font(.caption).foregroundStyle(.red) }
             }
+        }
+    }
+
+    /// SoundCloud: sign-in plus the user's app credentials (Android's
+    /// `SoundCloudConfig`). Playing needs neither (the widget); finding tracks
+    /// needs both.
+    @ViewBuilder private var soundCloudSection: some View {
+        let credsSaved = !(model.values["soundcloud"]?.isEmpty ?? true)
+        Section {
+            if model.soundCloudConnected {
+                Label("SoundCloud connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Button("Disconnect", role: .destructive) { model.disconnectSoundCloud() }
+            } else {
+                Button { model.connectSoundCloud() } label: {
+                    HStack {
+                        if model.soundCloudBusy { ProgressView().controlSize(.small) }
+                        Text("Connect SoundCloud").bold().frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent).tint(Color(uiColor: UIColor(hex: 0xFF5500)))
+                .disabled(!credsSaved || model.soundCloudBusy)
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                if let e = model.soundCloudError { Text(e).font(.caption).foregroundStyle(.red) }
+            }
+        } header: { Text("Connection") } footer: {
+            Text(credsSaved
+                 ? "Sign in through SoundCloud to let Parachord find SoundCloud tracks. Opens SoundCloud in a secure in-app browser; Parachord never sees your password. If SoundCloud's page stays blank, it doesn't recognize the Client ID, or the app's Redirect URI isn't parachord://auth/callback/soundcloud."
+                 : "Add your SoundCloud app credentials below, then connect. SoundCloud restricts who can create API apps, so you may not be able to get credentials. Spotify and Apple Music are easier to set up.")
+        }
+
+        Section {
+            SecureField("Client ID", text: $draft)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            SecureField("Client Secret", text: $secretDraft)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button {
+                model.setValue("soundcloud", draft, secret: secretDraft)
+                secretDraft = ""
+            } label: {
+                Text("Save").bold().frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(PC.accent)
+            .disabled(draft.isEmpty || secretDraft.isEmpty)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            if credsSaved {
+                Button("Clear", role: .destructive) { draft = ""; secretDraft = ""; model.setValue("soundcloud", "") }
+            }
+            Link(destination: URL(string: "https://soundcloud.com/you/apps")!) {
+                Label("Create an app — soundcloud.com/you/apps →", systemImage: "key.fill").font(.system(size: 14))
+            }
+        } header: { Text("SoundCloud app credentials") } footer: {
+            Text("Set the app's Redirect URI to parachord://auth/callback/soundcloud (the same as Android, so one app works for both phones). Clearing the credentials also signs you out.")
         }
     }
 

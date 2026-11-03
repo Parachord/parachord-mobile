@@ -68,10 +68,32 @@ class PluginManager constructor(
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * Per-resolver config the host supplies, keyed by resolver id: the JSON
+     * object a plugin receives as `config` (desktop's `getResolverConfig`).
+     * `soundcloud.axe` needs `{ token }` for every call. Asked before each
+     * plugin call (see [ensureInitialized]), so a refreshed token reaches the
+     * plugin; a provider that refreshes should be cheap while the token is good.
+     */
+    var resolverConfigProvider: (suspend () -> Map<String, String>)? = null
+
+    private val configMutex = Mutex()
+    /** Config JSON last written into each loaded resolver; reset when plugins load. */
+    private val appliedConfigs = mutableMapOf<String, String>()
+
     // ── Initialization ───────────────────────────────────────────────
 
-    /** Initialize the plugin system. Idempotent — safe to call multiple times. */
+    /**
+     * Initialize the plugin system. Idempotent — safe to call multiple times.
+     * Every plugin call goes through here first, so it also brings each
+     * resolver's `config` up to date ([resolverConfigProvider]).
+     */
     suspend fun ensureInitialized() {
+        initPlugins()
+        if (initialized) applyResolverConfigs()
+    }
+
+    private suspend fun initPlugins() {
         initMutex.withLock {
             if (initialized) return@withLock
 
@@ -104,12 +126,44 @@ class PluginManager constructor(
             loadPlugins()
             Log.d(TAG, "Plugins reloaded: ${_plugins.value.size} plugins")
         }
+        applyResolverConfigs()
+    }
+
+    /**
+     * Write the host's config into each resolver it covers (`r.config`, which
+     * every resolver-loader call falls back to). Skips the JS round-trip when
+     * the config hasn't changed since it was last written.
+     */
+    @OptIn(ExperimentalEncodingApi::class)
+    private suspend fun applyResolverConfigs() {
+        val provider = resolverConfigProvider ?: return
+        val configs = try {
+            provider()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Resolver config provider failed: ${e.message}")
+            return
+        }
+        configMutex.withLock {
+            for ((id, configJson) in configs) {
+                if (appliedConfigs[id] == configJson) continue
+                val b64 = Base64.encode(configJson.encodeToByteArray())
+                val result = jsRuntime.evaluate(
+                    "(function() { var r = window.__resolverLoader && window.__resolverLoader.getResolver('${escapeForJs(id)}'); " +
+                        "if (!r) return 'missing'; r.config = JSON.parse(atob('$b64')); return 'ok'; })()",
+                )?.unquote()
+                if (result == "ok") appliedConfigs[id] = configJson
+            }
+        }
     }
 
     // ── Plugin Loading ───────────────────────────────────────────────
 
     @OptIn(ExperimentalEncodingApi::class)
     private suspend fun loadPlugins() {
+        // Freshly loaded resolvers start with an empty config.
+        configMutex.withLock { appliedConfigs.clear() }
         val bundled = readBundledPlugins()
         val cached = readCachedPlugins()
 
