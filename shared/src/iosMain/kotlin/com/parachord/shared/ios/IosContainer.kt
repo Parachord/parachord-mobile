@@ -1219,7 +1219,11 @@ class IosContainer private constructor() {
             appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
             spotifyAccessToken = { settingsStore.getSpotifyAccessToken() },
             // Registry fallback for non-native providers (SoundCloud + future, #281).
-            pluginLookupPlaylistJson = { url -> resolverRuntime.lookupPlaylist(url) },
+            pluginLookupPlaylistJson = { url ->
+                // Brings soundcloud.axe's token up to date before the lookup.
+                pluginManager.ensureInitialized()
+                resolverRuntime.lookupPlaylist(url)
+            },
         )
     }
 
@@ -2442,6 +2446,31 @@ class IosContainer private constructor() {
     fun getLastFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLastFmSessionKeyFlow().map { it != null }
 
+    // ── SoundCloud (OAuth 2.1 + PKCE; the user's own app credentials) ──
+    /** Token exchange + refresh, shared with Android (plain client: no auth plugins). */
+    val soundCloudAuth: com.parachord.shared.api.auth.SoundCloudAuth by lazy {
+        com.parachord.shared.api.auth.SoundCloudAuth(authHttpClient, settingsStore)
+    }
+
+    /** The saved Client ID, or "" when there's none (the sign-in needs it). */
+    suspend fun soundCloudClientId(): String = settingsStore.getSoundCloudClientId() ?: ""
+
+    /**
+     * Finish SoundCloud sign-in: exchange the authorization code (from
+     * `IosOAuthManager.authorize`) for tokens and store them. Throws with a
+     * readable message when the credentials are missing or SoundCloud refuses.
+     */
+    suspend fun connectSoundCloud(code: String, codeVerifier: String) {
+        soundCloudAuth.exchangeCode(code, codeVerifier)
+    }
+
+    /** Sign out of SoundCloud; the Client ID + Secret stay. */
+    suspend fun disconnectSoundCloud() { soundCloudAuth.disconnect() }
+
+    /** Emits true while a SoundCloud access token is stored. */
+    fun getSoundCloudConnectedFlow(): Flow<Boolean> =
+        settingsStore.getSoundCloudTokenFlow().map { !it.isNullOrBlank() }
+
     val listenBrainzClient: ListenBrainzClient by lazy {
         ListenBrainzClient(
             httpClient,
@@ -2552,7 +2581,11 @@ class IosContainer private constructor() {
      * them through [pluginJsRuntime].
      */
     val pluginManager: PluginManager by lazy {
-        PluginManager(PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios")
+        PluginManager(PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios").apply {
+            // soundcloud.axe searches, resolves and looks up URLs only with the
+            // sign-in token in its config (desktop's getResolverConfig).
+            resolverConfigProvider = { mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) }
+        }
     }
 
     /**

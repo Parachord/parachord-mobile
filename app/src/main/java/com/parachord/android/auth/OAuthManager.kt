@@ -7,6 +7,7 @@ import com.parachord.shared.platform.Log
 import androidx.browser.customtabs.CustomTabsIntent
 import com.parachord.android.BuildConfig
 import com.parachord.android.data.store.SettingsStore
+import com.parachord.shared.api.auth.SoundCloudAuth
 import com.parachord.shared.api.auth.SpotifyRefreshOutcome
 import com.parachord.shared.api.auth.classifySpotifyRefresh
 import com.parachord.shared.api.auth.parseSpotifyErrorCode
@@ -31,6 +32,7 @@ class OAuthManager constructor(
     private val settingsStore: SettingsStore,
     private val okHttpClient: OkHttpClient,
     private val json: Json,
+    private val soundCloudAuth: SoundCloudAuth,
 ) {
     companion object {
         private const val TAG = "OAuthManager"
@@ -79,7 +81,6 @@ class OAuthManager constructor(
 
     /** Mutex to prevent concurrent refresh attempts. */
     private val refreshMutex = Mutex()
-    private val scRefreshMutex = Mutex()
 
     /**
      * Session-scoped kill-switch for Spotify refresh. Tripped when the
@@ -379,42 +380,8 @@ class OAuthManager constructor(
         val verifier = flow.codeVerifier
 
         return try {
-            val clientId = settingsStore.getSoundCloudClientId()
-                ?: BuildConfig.SOUNDCLOUD_CLIENT_ID
-            val clientSecret = settingsStore.getSoundCloudClientSecret()
-                ?: BuildConfig.SOUNDCLOUD_CLIENT_SECRET
-
-            withContext(Dispatchers.IO) {
-                val body = FormBody.Builder()
-                    .add("grant_type", "authorization_code")
-                    .add("code", code)
-                    .add("redirect_uri", "$REDIRECT_URI/soundcloud")
-                    .add("client_id", clientId)
-                    .add("client_secret", clientSecret)
-                    .add("code_verifier", verifier)
-                    .build()
-
-                val request = Request.Builder()
-                    .url("https://secure.soundcloud.com/oauth/token")
-                    .post(body)
-                    .build()
-
-                val response = okHttpClient.newCall(request).execute()
-                val responseBody = response.body?.string() ?: return@withContext false
-
-                if (!response.isSuccessful) {
-                    Log.e(TAG, "SoundCloud token exchange failed (${response.code}): $responseBody")
-                    return@withContext false
-                }
-
-                val tokenResponse = json.decodeFromString<SoundCloudTokenResponse>(responseBody)
-                settingsStore.setSoundCloudTokens(
-                    tokenResponse.accessToken,
-                    tokenResponse.refreshToken ?: "",
-                )
-                Log.d(TAG, "SoundCloud auth successful")
-                true
-            }
+            soundCloudAuth.exchangeCode(code, verifier, "$REDIRECT_URI/soundcloud")
+            true
         } catch (e: Exception) {
             Log.e(TAG, "SoundCloud token exchange error", e)
             false
@@ -422,64 +389,13 @@ class OAuthManager constructor(
     }
 
     /**
-     * Refresh the SoundCloud access token using the stored refresh token.
-     * Returns true if the token was refreshed successfully.
+     * Refresh the SoundCloud access token after SoundCloud rejected
+     * [rejectedToken]. Shared with iOS ([SoundCloudAuth]): one refresh at a
+     * time, and a token another caller already replaced is reused. Returns
+     * true when a different token is now stored.
      */
-    suspend fun refreshSoundCloudToken(): Boolean = scRefreshMutex.withLock {
-        val refreshToken = settingsStore.getSoundCloudRefreshToken()
-        if (refreshToken.isNullOrBlank()) {
-            Log.w(TAG, "No SoundCloud refresh token stored — re-auth required")
-            return false
-        }
-        val clientId = settingsStore.getSoundCloudClientId()
-            ?: BuildConfig.SOUNDCLOUD_CLIENT_ID.ifBlank { null }
-        val clientSecret = settingsStore.getSoundCloudClientSecret()
-            ?: BuildConfig.SOUNDCLOUD_CLIENT_SECRET.ifBlank { null }
-        if (clientId == null || clientSecret == null) {
-            Log.w(TAG, "No SoundCloud client credentials configured")
-            return false
-        }
-
-        return try {
-            withContext(Dispatchers.IO) {
-                val body = FormBody.Builder()
-                    .add("grant_type", "refresh_token")
-                    .add("refresh_token", refreshToken)
-                    .add("client_id", clientId)
-                    .add("client_secret", clientSecret)
-                    .build()
-
-                val request = Request.Builder()
-                    .url("https://secure.soundcloud.com/oauth/token")
-                    .post(body)
-                    .build()
-
-                val response = okHttpClient.newCall(request).execute()
-                val responseBody = response.body?.string()
-
-                if (responseBody == null) {
-                    Log.e(TAG, "SoundCloud token refresh: empty response body")
-                    return@withContext false
-                }
-
-                if (!response.isSuccessful) {
-                    Log.e(TAG, "SoundCloud token refresh failed (${response.code}): $responseBody")
-                    return@withContext false
-                }
-
-                val tokenResponse = json.decodeFromString<SoundCloudTokenResponse>(responseBody)
-                settingsStore.setSoundCloudTokens(
-                    tokenResponse.accessToken,
-                    tokenResponse.refreshToken ?: refreshToken, // keep old if not returned
-                )
-                Log.d(TAG, "SoundCloud token refreshed successfully")
-                true
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "SoundCloud token refresh error", e)
-            false
-        }
-    }
+    suspend fun refreshSoundCloudToken(rejectedToken: String? = null): Boolean =
+        soundCloudAuth.refreshAfterRejection(rejectedToken)
 
     private suspend fun handleLastFmCallback(uri: Uri): Boolean {
         val token = uri.getQueryParameter("token") ?: return false
@@ -604,12 +520,6 @@ private data class SpotifyRefreshResponse(
     @SerialName("access_token") val accessToken: String,
     @SerialName("refresh_token") val refreshToken: String? = null,
     @SerialName("expires_in") val expiresIn: Long? = null,
-)
-
-@Serializable
-private data class SoundCloudTokenResponse(
-    @SerialName("access_token") val accessToken: String,
-    @SerialName("refresh_token") val refreshToken: String? = null,
 )
 
 @Serializable

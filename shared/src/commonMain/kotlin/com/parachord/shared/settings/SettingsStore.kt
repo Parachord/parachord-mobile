@@ -410,9 +410,24 @@ class SettingsStore(
 
     suspend fun getSoundCloudRefreshToken(): String? = secureStore.get("soundcloud_refresh_token")
 
+    /** When the access token stops working (epoch ms), or null when unknown. */
+    suspend fun getSoundCloudTokenExpiresAt(): Long? =
+        secureStore.get("soundcloud_token_expiry")?.toLongOrNull()
+
+    /** When the tokens were last minted or refreshed (epoch ms), or null. */
+    suspend fun getSoundCloudLastRefreshAt(): Long? =
+        secureStore.get("soundcloud_last_refresh")?.toLongOrNull()
+
+    suspend fun setSoundCloudTokenTimes(expiresAt: Long, refreshedAt: Long) {
+        secureStore.set("soundcloud_token_expiry", expiresAt.toString())
+        secureStore.set("soundcloud_last_refresh", refreshedAt.toString())
+    }
+
     suspend fun clearSoundCloudToken() {
         secureStore.remove("soundcloud_access_token")
         secureStore.remove("soundcloud_refresh_token")
+        secureStore.remove("soundcloud_token_expiry")
+        secureStore.remove("soundcloud_last_refresh")
     }
 
     // Spotify uses a BYO Developer Client ID (PKCE — no secret). Parachord ships
@@ -436,8 +451,7 @@ class SettingsStore(
     suspend fun clearSoundCloudCredentials() {
         secureStore.remove("soundcloud_client_id")
         secureStore.remove("soundcloud_client_secret")
-        secureStore.remove("soundcloud_access_token")
-        secureStore.remove("soundcloud_refresh_token")
+        clearSoundCloudToken()
     }
 
     // ── Resolver order / active / volume offsets ─────────────────────

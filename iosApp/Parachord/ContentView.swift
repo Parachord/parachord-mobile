@@ -898,6 +898,20 @@ struct OAuthConfig {
             callbackScheme: "parachord"
         )
     }
+
+    /// SoundCloud OAuth 2.1 (PKCE + state), the user's own app — same
+    /// endpoint and redirect as Android's `OAuthManager.launchSoundCloudAuth`.
+    /// SoundCloud takes no scopes.
+    static func soundCloud(clientId: String) -> OAuthConfig {
+        OAuthConfig(
+            service: "soundcloud",
+            authorizeURL: "https://secure.soundcloud.com/authorize",
+            clientId: clientId,
+            scopes: [],
+            redirectURI: "parachord://auth/callback/soundcloud",
+            callbackScheme: "parachord"
+        )
+    }
 }
 
 struct OAuthResult {
@@ -941,7 +955,11 @@ final class IosOAuthManager: NSObject, ASWebAuthenticationPresentationContextPro
             URLQueryItem(name: "client_id", value: config.clientId),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "redirect_uri", value: config.redirectURI),
-            URLQueryItem(name: "scope", value: config.scopes.joined(separator: " ")),
+        ]
+        if !config.scopes.isEmpty {
+            components.queryItems?.append(URLQueryItem(name: "scope", value: config.scopes.joined(separator: " ")))
+        }
+        components.queryItems? += [
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "state", value: state),
