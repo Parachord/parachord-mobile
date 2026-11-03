@@ -254,6 +254,7 @@ fun SearchScreen(
                                     resultArtist = track.artist,
                                     artworkUrl = art,
                                 )
+                                viewModel.playSearchTrack(track)
                             },
                         )
                     }

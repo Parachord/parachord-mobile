@@ -154,6 +154,40 @@ class SearchViewModel constructor(
         playbackController.playQueue(allTracks, startIndex = index)
     }
 
+    /**
+     * Play a track from the search results, with the results after it queued
+     * under a "Search" context (desktop search-page.js; iOS SearchView). A
+     * result nothing has resolved yet resolves the moment it plays
+     * (PlaybackController.resolveOnTheFly), ahead of the rows still resolving
+     * in the background (desktop's priority lane).
+     */
+    fun playSearchTrack(track: TrackSearchResult) {
+        val results = _remoteTrackResults.value
+        val index = results.indexOf(track)
+        if (index < 0) return
+        val queue = results.drop(index).map { it.toPlayable() }
+        playbackController.playQueue(
+            queue,
+            startIndex = 0,
+            context = com.parachord.android.playback.PlaybackContext(type = "search", name = _query.value.trim()),
+        )
+    }
+
+    /** A playable track for a search row, with the cover the row shows. */
+    private fun TrackSearchResult.toPlayable(): TrackEntity = TrackEntity(
+        id = "search-${title.hashCode()}-${artist.hashCode()}",
+        title = title,
+        artist = artist,
+        album = album,
+        duration = duration,
+        artworkUrl = artworkUrl
+            ?: _searchArt.value[artKey("track", title, artist)]
+            ?: trackResolverCache.trackArtwork.value[trackKey(title, artist)],
+        spotifyId = spotifyId,
+        recordingMbid = mbid,
+        artistMbid = artistMbid,
+    )
+
     /** Save a search history entry when user selects a result. */
     fun saveHistoryEntry(
         resultType: String,
