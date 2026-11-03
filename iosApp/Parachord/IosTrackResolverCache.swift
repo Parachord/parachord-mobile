@@ -166,6 +166,15 @@ final class IosTrackResolverCache {
         try? blob.data(using: .utf8)?.write(to: persistURL, options: .atomic)
     }
 
+    /// Store sources found outside the resolvers for a track: a shared link's
+    /// own source plus the others (#502). The play path then reads them from
+    /// here instead of its direct-URL fast path (the link isn't audio).
+    func seed(artist: String, title: String, album: String?, sources: [ResolvedSource]) {
+        guard !sources.isEmpty else { return }
+        cache[ResolveRequest(artist: artist, title: title, album: album).key] = sources
+        scheduleSave()
+    }
+
     func cached(artist: String, title: String, album: String?) -> [ResolvedSource]? {
         cache[ResolveRequest(artist: artist, title: title, album: album).key]
     }

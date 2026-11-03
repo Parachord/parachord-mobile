@@ -215,6 +215,13 @@ data class IosComplexLink(
     val tracks: List<Track> = emptyList(),
     val refillUrl: String? = null,
     val message: String? = null,
+    /**
+     * Sources already known for the first track, best first: a shared link's
+     * own source plus the other resolvers' (#502). The app seeds its resolver
+     * cache with them before playing, so the link's source (for SoundCloud
+     * without a sign-in, the only one) is kept.
+     */
+    val sources: List<ResolvedSource> = emptyList(),
 )
 
 /** Flat share-URL result for the iOS share sheet (#222). */
@@ -1374,7 +1381,7 @@ class IosContainer private constructor() {
             val action: DeepLinkAction = when (host) {
                 "open.spotify.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseSpotifyUrl(host, segs)
                 "music.apple.com" -> com.parachord.shared.deeplink.ExternalUrlParser.parseAppleMusicUrl(segs, u.parameters["i"])
-                else -> return IosComplexLink("failed", message = "That link type isn't supported yet")
+                else -> return resolvePluginTrackLink(rawUrl)
             }
             dispatchExternalAction(action, rawUrl)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1420,6 +1427,29 @@ class IosContainer private constructor() {
         IosComplexLink("play", name = displayName, tracks = protocolTracksToTracks(tracks, albumArt))
 
     private fun failedLink(kind: String) = IosComplexLink("failed", message = "Couldn't open that $kind link")
+
+    /**
+     * A track link no built-in parser knows, looked up by the plugin whose
+     * `urlPatterns` claim it (#502, desktop parachord#1219; Android's
+     * DeepLinkViewModel.playPluginLink). The link's own source is kept, the
+     * other resolvers resolve the track, and the user's order ranks them.
+     */
+    private suspend fun resolvePluginTrackLink(rawUrl: String): IosComplexLink {
+        val linked = com.parachord.shared.deeplink.PluginTrackLink.lookup(pluginManager, rawUrl)
+            ?: return IosComplexLink("failed", message = "That link type isn't supported yet")
+        val track = linked.track
+        val others = try {
+            resolveSources(track.artist, track.title, track.album, null, null, null, null)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            com.parachord.shared.platform.Log.w("ExternalLink", "resolving the linked track failed: ${e.message}")
+            emptyList()
+        }
+        val merged = others.filter { it.resolver != linked.source?.resolver } + listOfNotNull(linked.source)
+        val ranked = rankSources(merged).ifEmpty { merged }
+        return IosComplexLink("play", name = "${track.title} — ${track.artist}", tracks = listOf(track), sources = ranked)
+    }
 
     private fun protocolTracksToTracks(
         tracks: List<com.parachord.shared.deeplink.ProtocolTrack>, art: String?,
