@@ -53,6 +53,32 @@ class SettingsStore(
 ) : com.parachord.shared.sync.SyncSettingsProvider {
 
     companion object {
+        /**
+         * Which Apple Music developer token to use (#498, desktop
+         * parachord#1216 / #1218). The one saved in Settings wins while it's
+         * current: the user's Apple Music sign-in was made with it. An expired
+         * saved token falls through to the build's ([onSkip] is told), which
+         * the build rotates before it lapses. The saved token is kept, not
+         * deleted. When the build has none, the expired saved token is still
+         * returned, so MusicKit reports the expiry instead of "not set up".
+         */
+        fun pickAppleMusicDeveloperToken(
+            saved: String?,
+            build: String?,
+            nowMs: Long = com.parachord.shared.platform.currentTimeMillis(),
+            onSkip: () -> Unit = {},
+        ): String? {
+            val savedToken = saved?.ifBlank { null }
+            val buildToken = build?.ifBlank { null }
+            if (savedToken != null && buildToken != null &&
+                com.parachord.shared.api.AppleMusicTokenExpiry.isExpired(savedToken, nowMs)
+            ) {
+                onSkip()
+                return buildToken
+            }
+            return savedToken ?: buildToken
+        }
+
         const val THEME_MODE = "theme_mode"
         const val SCROBBLING_ENABLED = "scrobbling_enabled"
         const val PERSIST_QUEUE = "persist_queue"
@@ -550,14 +576,32 @@ class SettingsStore(
 
     // ── Apple Music ──────────────────────────────────────────────────
 
+    /**
+     * The developer token in use: the one saved in Settings while it's
+     * current, else the build's ([pickAppleMusicDeveloperToken], #498).
+     */
     fun getAppleMusicDeveloperTokenFlow(): Flow<String?> =
-        secureStore.observe("apple_music_developer_token").map {
-            it?.ifBlank { null } ?: appleMusicDeveloperTokenFallback.ifBlank { null }
+        secureStore.observe("apple_music_developer_token").map { saved ->
+            pickAppleMusicDeveloperToken(saved, appleMusicDeveloperTokenFallback, onSkip = ::logSkippedDeveloperToken)
         }
 
     suspend fun getAppleMusicDeveloperToken(): String? =
-        secureStore.get("apple_music_developer_token")?.ifBlank { null }
-            ?: appleMusicDeveloperTokenFallback.ifBlank { null }
+        pickAppleMusicDeveloperToken(
+            secureStore.get("apple_music_developer_token"),
+            appleMusicDeveloperTokenFallback,
+            onSkip = ::logSkippedDeveloperToken,
+        )
+
+    @Volatile private var loggedSkippedDeveloperToken = false
+
+    private fun logSkippedDeveloperToken() {
+        if (loggedSkippedDeveloperToken) return
+        loggedSkippedDeveloperToken = true
+        com.parachord.shared.platform.Log.w(
+            "SettingsStore",
+            "The Apple Music developer token saved in Settings has expired; using the app's built-in token",
+        )
+    }
 
     suspend fun setAppleMusicDeveloperToken(token: String) {
         secureStore.set("apple_music_developer_token", token)
