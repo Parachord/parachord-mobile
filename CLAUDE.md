@@ -8,6 +8,8 @@
 
 Desktop app structure: single `app.js` (~57,700 lines), `.axe` resolver plugins, `index.html` with CSS design tokens.
 
+**Build every feature for both mobile platforms, as shared code.** When adding a capability or feature, implement it for Android AND iOS in the same change, never one platform only, and never two separate implementations of the same logic. Put the logic in `shared/commonMain` (models, rules, decisions, parsing, API clients) and keep each platform layer to what genuinely can't be shared: UI, the playback engine, OS integration. Where something must exist per platform (a page a WebView hosts, a bundled script), keep one source of truth and check the copies stay identical (e.g. the SoundCloud widget page, #495, guarded by a unit test). If one platform truly can't do it yet, say so in the PR and file the follow-up; don't leave the gap silent.
+
 **When a fix or behavior change may apply to desktop too, ask whether to file a desktop ticket.** Parity runs both ways: a bug fixed here often exists in the same code path on desktop, and a behavior change here leaves the platforms apart unless desktop follows. Whenever you fix a bug or change behavior, check whether desktop has the same code or the same gap (read `app.js`, not memory). If it might, ask the user whether to write a ticket on [Parachord/parachord](https://github.com/Parachord/parachord/issues) before you finish. Don't file one without asking. A good ticket names the desktop code path, what mobile changed and why, and links the mobile PR. Examples: the N-way missingStreak gate (#469 → desktop parachord#1163), and the ListenBrainz friend Top Albums artwork, where desktop runs one MusicBrainz search per album but the stats payload already carries `caa_release_mbid`.
 
 ## Architecture Patterns (from Desktop)
@@ -69,11 +71,20 @@ soundcloud:  0    bandcamp:   -3    youtube:    -6
 Each resolver type routes to a specific playback mechanism:
 
 - **Spotify** → Web API (Spotify Connect, controls Spotify app on-device via HTTP)
-- **SoundCloud** → Fetch stream URL from API, play inline via ExoPlayer (no CORS issues on Android unlike desktop)
+- **SoundCloud** → SoundCloud's embeddable widget in a hidden WebView (external playback, like Apple Music); iOS the same in a `WKWebView`
 - **Local files** → ExoPlayer with content:// URI
 - **Direct streams** → ExoPlayer with HTTP URL
 
-The desktop plays SoundCloud natively via HTML5 Audio (not externally). The Android equivalent is ExoPlayer.
+### SoundCloud — the Widget (#495, desktop parachord#1209)
+
+The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/stream` 429s with the token in the query and redirects to a 30-second preview with it in a header, and the full streams (HLS only) answer 403 "An active Artist Pro subscription is required". So SoundCloud plays through SoundCloud's own widget (`w.soundcloud.com/player`), which needs no sign-in. Search and resolution still use the API and the user's SoundCloud credentials.
+
+- **Desktop's module, unchanged.** `assets/js/soundcloud-widget-player.js` is a byte-for-byte copy of desktop's `src/renderer/lib/soundcloud-widget-player.js` (the widget's postMessage protocol, no SoundCloud `api.js`). `assets/js/soundcloud-widget.html` hosts it and relays its callbacks, tagged with a load generation, to `SoundCloudWidgetBridge` through a `@JavascriptInterface`. Update the module by copying desktop's again, not by editing it.
+- **Background playback rides on the Apple Music setup**: a WebView never added to a window, `LAYER_TYPE_NONE`, `mediaPlaybackRequiresUserGesture = false`, `keepAlive()` before each track, and the controller's silent ExoPlayer loop for the foreground service and MediaSession. Chromium owns audio focus.
+- **Previews count as refused.** A track SoundCloud lets the widget only preview (a Go+ release: `getCurrentSound` reports `policy: "SNIP"`, `duration` 30000 against `full_duration`) still starts, fades out at 0:30 and fires `finish`, while `getDuration` reports the full length. Desktop's module asks `getCurrentSound` once the position moves and rejects such a track with reason `preview` (parachord#1211 / #1212, found by this port); the apps show desktop's "SoundCloud only lets Parachord play a preview of …" for it (`SoundCloudWidget.refusedMessage`).
+- **A refused track is a failed source** (`EmbedPlaybackRefusedException`): another source plays (with a "Playing via X" toast), else the queue moves on when it was advancing or in a spinoff, else a snackbar offers "Open in SoundCloud" when the track has a soundcloud.com page. The browser never opens by itself.
+- **Link:** the source's soundcloud.com permalink, else `https://api.soundcloud.com/tracks/<id>` (the form SoundCloud's own embed code uses). Shared: `SoundCloudWidget.widgetLink` / `pageLink` (`shared/.../playback/SoundCloudWidget.kt`).
+- **iOS does the same** in a hidden `WKWebView` (`iosApp/Parachord/SoundCloudWidget.swift`) with byte-identical copies of the page and module in `iosApp/Parachord/Resources/` (an Android unit test fails if they drift — edit Android's, copy). iOS has one extra trap — WebKit's own audio session can't be re-activated with the screen locked, so the page's `scHoldAudio` keeps it in use between tracks; see `iosApp/AGENTS.md` → "SoundCloud through its widget".
 
 ### Spotify Connect — Device Wake & Playback
 
@@ -1011,7 +1022,7 @@ The Edit/Write tools take absolute paths. If you're working in a worktree, every
 ### iOS Playback Routing
 
 - **Spotify** → Spotify iOS SDK (`SPTAppRemote`). Requires Spotify app installed. Auth via `SPTConfiguration` with redirect URI.
-- **SoundCloud** → Fetch stream URL from API, play via `AVPlayer` with `AVPlayerItem(url:)`
+- **SoundCloud** → SoundCloud's widget in a hidden `WKWebView` (`IosSoundCloudWidget`, #495); the API no longer gives full tracks
 - **Local files** → `AVPlayer` with local file URL from Files app or imported media
 - **Direct streams** → `AVPlayer` with HTTP(S) URL
 - **Apple Music** → Use MusicKit framework (`ApplicationMusicPlayer.shared`). Requires MusicKit entitlement + user authorization.
@@ -1074,7 +1085,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda |
 | Scrobbling | `shared/.../playback/scrobbler/{ScrobbleManager,Scrobbler,ListenBrainzScrobbler,LastFmScrobbler,LibreFmScrobbler,LbSourceEnrichment,ScrobblePluginDispatch}.kt` (KMP-shared, #193; app-side `playback/scrobbler/*` are typealias shims). Android JS dispatch: `playback/JsScrobblePluginDispatcher.kt`. Last.fm signing: `shared/.../api/LastFmSigning.kt` |
 | Local file scanning | `data/scanner/MediaScanner.kt` |
-| Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` |
+| Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` + `SoundCloudWidgetBridge.kt` (`assets/js/soundcloud-widget.html`) |
 | Apple Music bridge | `playback/handlers/MusicKitWebBridge.kt`, `assets/js/musickit-bridge.html` |
 | Settings/defaults | `shared/.../settings/SettingsStore.kt` (typealias shim in `data/store/`); `shared/.../store/KvStore.kt` + `KvStoreFactory` (Android: SharedPreferences, iOS: NSUserDefaults) |
 | Theme | `ui/theme/Theme.kt` |

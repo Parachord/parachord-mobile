@@ -902,6 +902,56 @@ the warm path so the advance succeeds silently.
 
 ---
 
+## SoundCloud through its widget (#495, desktop parachord#1209)
+
+SoundCloud plays in SoundCloud's embeddable widget inside a hidden `WKWebView`
+(`IosSoundCloudWidget`, `SoundCloudWidget.swift`), engine `.soundCloud` in
+`PlaybackRouter` / `QueuePlaybackCoordinator`. The API no longer gives full
+tracks, so this is the only way to play one. Cross-platform details (the
+shared page, desktop's module, previews counted as refused) are in the root
+`CLAUDE.md` → "SoundCloud — the Widget".
+
+- **The page is shared with Android, byte for byte.** `Resources/soundcloud-widget.html`
+  and `Resources/soundcloud-widget-player.js` are copies of
+  `app/src/main/assets/js/`; an Android unit test fails if they differ. Edit
+  Android's and copy. iOS loads the page with `loadHTMLString` (https base URL)
+  and inlines the module in place of its `<script src>`; events come back
+  through the `soundCloudBridge` message handler.
+- **WebKit has its OWN audio session, separate from the app's.** The widget's
+  audio plays under `com.apple.WebKit` (the GPU process). When a track ends,
+  WebKit releases that session, and with the screen locked iOS refuses to
+  activate it again ("can't stop others because it is in the background and not
+  the NowPlaying app"): the next track "starts" (position moves) but is SILENT.
+  Our `IosExternalKeepAlive` can't prevent this — it holds the app's session,
+  not WebKit's. Fix: the page's `scHoldAudio(true)` plays a silent looping
+  `<audio>` so WebKit's session never goes idle between tracks; `stop()`
+  releases it unless `keepAudioSession` (a refused track, where another
+  SoundCloud track may follow). Verified on an iPad: locked auto-advance from
+  one SoundCloud track to the next plays.
+- **Background otherwise rides on the Apple Music setup**: mixable session
+  (`IosAudioSession.configureForSoundCloud`) + the silent keepalive, so the
+  coordinator stays alive for the widget's `finish` and auto-advance.
+- **WebKit can't hold its media-playback process assertion** (third-party apps
+  lack `com.apple.runningboard.assertions.webkit`; logged at every play). The
+  keepalive + `scHoldAudio` were enough on-device; if locked playback ever stops
+  mid-track, look there first.
+- **Lock screen = WebKit's, driven by the page's Media Session.** WebKit
+  publishes the now-playing info for the page that's playing (otherwise the
+  page's `<title>`, "Parachord SoundCloud", no artwork) and takes the buttons
+  itself: `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter` from Swift are
+  ignored for this engine (verified on an iPad: only the Media Session handlers
+  fire). So `scNowPlaying` sets `navigator.mediaSession.metadata` (title,
+  artist, artwork) + action handlers that relay play / pause / seek / next /
+  previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`), and
+  `scPositionState` keeps the scrubber current. **Known gap:** WebKit shows
+  ±10 s skip buttons instead of next / previous; nulling the page's
+  `seekforward`/`seekbackward` handlers and disabling the skip commands on
+  `MPRemoteCommandCenter` both had no effect.
+- **A refused source falls through** to the next ranked one in `PlaybackRouter`
+  (`onRefused`); `playTrack(advancing:)` decides between "Playing via X", a
+  silent skip (queue advancing or spinoff), and the `Notice` banner with
+  "Open in SoundCloud" (`RootView`).
+
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
 Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`

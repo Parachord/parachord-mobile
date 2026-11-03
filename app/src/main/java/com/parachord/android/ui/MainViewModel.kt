@@ -66,6 +66,9 @@ class MainViewModel constructor(
 
     val playbackState: StateFlow<PlaybackState> = playbackStateHolder.state
 
+    /** Playback messages with an action, shown as a snackbar. */
+    val playbackNotices = playbackController.notices
+
     /** Whether the device has an active internet connection. */
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
 

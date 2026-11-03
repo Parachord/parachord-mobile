@@ -100,9 +100,9 @@ class AppleMusicPlaybackHandler constructor(
     override val isConnected: Boolean
         get() = musicKitBridge.configured.value
 
-    fun getPosition(): Long = musicKitBridge.getPosition()
+    override fun getPosition(): Long = musicKitBridge.getPosition()
     fun getDuration(): Long = musicKitBridge.getDuration()
-    fun isPlaying(): Boolean = musicKitBridge.getIsPlaying()
+    override fun isPlaying(): Boolean = musicKitBridge.getIsPlaying()
 
     /**
      * Detect whether the Apple Music track has finished playing.

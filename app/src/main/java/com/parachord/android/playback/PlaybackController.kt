@@ -23,6 +23,9 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.ImageEnrichmentService
 import com.parachord.android.data.metadata.MbidEnrichmentService
 import com.parachord.android.playback.handlers.AppleMusicPlaybackHandler
+import com.parachord.android.playback.handlers.EmbedPlaybackRefusedException
+import com.parachord.android.playback.handlers.ExternalPlaybackHandler
+import com.parachord.android.playback.handlers.SoundCloudPlaybackHandler
 import com.parachord.android.playback.handlers.PlaybackAction
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
@@ -86,6 +89,7 @@ class PlaybackController constructor(
     private var positionUpdateJob: Job? = null
     private var spotifyStateJob: Job? = null
     private var appleMusicPollingJob: Job? = null
+    private var soundCloudPollingJob: Job? = null
     private var idleTimeoutJob: Job? = null
     /** Tracks an in-flight track advance (auto or manual skip).
      *  Prevents concurrent advances from double-skipping and lets
@@ -241,6 +245,7 @@ class PlaybackController constructor(
         positionUpdateJob?.cancel()
         spotifyStateJob?.cancel()
         appleMusicPollingJob?.cancel()
+        soundCloudPollingJob?.cancel()
         idleTimeoutJob?.cancel()
         if (isExternalPlayback) sendExternalPlaybackStop()
         controllerFuture?.let { MediaController.releaseFuture(it) }
@@ -338,7 +343,7 @@ class PlaybackController constructor(
 
                 advanceJob = scope.launch {
                     try {
-                        playTrackInternal(next)
+                        playTrackInternal(next, advancing = true)
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
                         Log.e(TAG, "Spinoff advance to '${next.title}' failed: ${e.message}", e)
@@ -359,6 +364,7 @@ class PlaybackController constructor(
             if (isExternalPlayback) {
                 stopSpotifyStatePolling()
                 stopAppleMusicStatePolling()
+                stopSoundCloudStatePolling()
                 scope.launch { router.stopExternalPlayback() }
                 sendExternalPlaybackStop()
                 isExternalPlayback = false
@@ -376,7 +382,7 @@ class PlaybackController constructor(
                 // playTrackInternal() handles the transition: for external→external,
                 // the new handler.play() replaces the queue directly. For
                 // external→ExoPlayer, the ExoPlayer path sends the stop.
-                playTrackInternal(next)
+                playTrackInternal(next, advancing = true)
                 Log.d(TAG, "skipNext: full transition took ${System.currentTimeMillis() - transitionStart}ms")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -388,10 +394,8 @@ class PlaybackController constructor(
     fun skipPrevious() {
         onUserPlaybackActionListener?.invoke()
         if (isExternalPlayback) {
-            val position = when (val handler = router.activeExternalHandler) {
-                is AppleMusicPlaybackHandler -> handler.getPosition()
-                else -> router.getSpotifyHandler().getPosition()
-            }
+            val position = router.activeExternalHandler?.getPosition()
+                ?: router.getSpotifyHandler().getPosition()
             if (position > 3000) {
                 scope.launch { router.activeExternalHandler?.seekTo(0) }
                 return
@@ -517,13 +521,25 @@ class PlaybackController constructor(
                     // After the advance completes, playback should already be started.
                     // If it's not playing (advance failed), fall through to re-play.
                     val handler = router.activeExternalHandler
-                    val playing = when (handler) {
-                        is AppleMusicPlaybackHandler -> handler.isPlaying()
-                        null -> false
-                        else -> router.getSpotifyHandler().isPlaying()
-                    }
+                    val playing = handler?.isPlaying() ?: false
                     if (playing) return@launch
+                    // The advance hit a track an embedded player refused: it's
+                    // being skipped or reported, and replaying it would only be
+                    // refused again.
+                    if (embedRefusedTrackId == stateHolder.state.value.currentTrack?.id) return@launch
                     // Advance completed but playback didn't start — fall through to re-play
+                }
+
+                // A play still starting (a SoundCloud widget loading, Spotify
+                // waking): its own silent ExoPlayer start comes back through
+                // the MediaSession as a play command. Answering it would
+                // "resume" a track that hasn't started and replay it 1.5 s
+                // later; and when that play fails (a track SoundCloud's widget
+                // refuses), replaying it again would loop. The play in flight
+                // is the answer, whatever its outcome.
+                if (playMutex.isLocked) {
+                    Log.d(TAG, "togglePlayPause: a play is starting, leaving it to that play")
+                    return@launch
                 }
 
                 val handler = router.activeExternalHandler
@@ -534,10 +550,7 @@ class PlaybackController constructor(
                     playTrackInternal(track, skipReselect = true)
                     return@launch
                 }
-                val isCurrentlyPlaying = when (handler) {
-                    is AppleMusicPlaybackHandler -> handler.isPlaying()
-                    else -> router.getSpotifyHandler().isPlaying()
-                }
+                val isCurrentlyPlaying = handler.isPlaying()
                 if (isCurrentlyPlaying) {
                     markUserPaused()
                     handler.pause()
@@ -546,6 +559,7 @@ class PlaybackController constructor(
                     // awake at 500ms intervals while paused.
                     stopSpotifyStatePolling()
                     stopAppleMusicStatePolling()
+                    stopSoundCloudStatePolling()
                     // DON'T demote from foreground — keep the notification visible
                     // (showing paused state) like other music players. The state
                     // observer updates the notification with isPlaying=false.
@@ -565,20 +579,14 @@ class PlaybackController constructor(
                     // Re-promote to foreground and restart state polling
                     val track = stateHolder.state.value.currentTrack
                     if (track != null) sendExternalPlaybackStart(track)
-                    when (handler) {
-                        is AppleMusicPlaybackHandler -> startAppleMusicStatePolling()
-                        else -> startSpotifyStatePolling()
-                    }
+                    startStatePolling(handler)
                     // If resume didn't actually start playback (stale session),
                     // re-play the track from scratch — but only once per user
                     // interaction. The flag prevents the MediaSession/notification
                     // from re-triggering togglePlayPause in a loop after replay.
                     delay(1500)
                     if (resumeReplayInFlight) return@launch
-                    val stillNotPlaying = when (handler) {
-                        is AppleMusicPlaybackHandler -> !handler.isPlaying()
-                        else -> !router.getSpotifyHandler().isPlaying()
-                    }
+                    val stillNotPlaying = !handler.isPlaying()
                     if (stillNotPlaying) {
                         val replayTrack = stateHolder.state.value.currentTrack ?: return@launch
                         Log.d(TAG, "togglePlayPause: resume failed, re-playing '${replayTrack.title}'")
@@ -640,9 +648,18 @@ class PlaybackController constructor(
         controller?.seekTo(positionMs)
     }
 
-    private suspend fun playTrackInternal(track: TrackEntity, skipReselect: Boolean = false) = playMutex.withLock {
+    /**
+     * @param advancing the play is the queue (or a spinoff) moving on, so a
+     *   track that can't play is skipped rather than reported (desktop's
+     *   `autoSkipIfAdvancing`).
+     */
+    private suspend fun playTrackInternal(
+        track: TrackEntity,
+        skipReselect: Boolean = false,
+        advancing: Boolean = false,
+    ) = playMutex.withLock {
         try {
-            playTrackInternalUnsafe(track, skipReselect)
+            playTrackInternalUnsafe(track, skipReselect, advancing)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // Don't swallow cancellation
         } catch (e: Exception) {
@@ -653,7 +670,11 @@ class PlaybackController constructor(
         }
     }
 
-    private suspend fun playTrackInternalUnsafe(track: TrackEntity, skipReselect: Boolean = false) {
+    private suspend fun playTrackInternalUnsafe(
+        track: TrackEntity,
+        skipReselect: Boolean = false,
+        advancing: Boolean = false,
+    ) {
         // Cancel any idle timeout — we're actively playing now
         cancelIdleTimeout()
         if (stateHolder.state.value.playbackError != null) {
@@ -685,7 +706,7 @@ class PlaybackController constructor(
             if (isAppVisible()) {
                 spotifyBlockedInBackground = false
             } else {
-                playWithoutSpotify(routedTrack)
+                playWithoutSpotify(routedTrack, advancing)
                 return
             }
         }
@@ -706,6 +727,7 @@ class PlaybackController constructor(
                 notifyExternalMode(false)
                 stopSpotifyStatePolling()
                 stopAppleMusicStatePolling()
+                stopSoundCloudStatePolling()
 
                 val ctrl = controller ?: return
                 // Restore normal ExoPlayer settings after external playback,
@@ -751,7 +773,9 @@ class PlaybackController constructor(
                 // call) where Android can suspend the process.
                 spotifyStateJob?.cancel()
                 appleMusicPollingJob?.cancel()
+                soundCloudPollingJob?.cancel()
                 router.getAppleMusicHandler().musicKitBridge.onTrackEnded = null
+                router.getSoundCloudHandler().bridge.onFinished = null
 
                 // If switching between different external handlers (e.g. Apple Music
                 // → Spotify), stop the OLD handler. For same-handler transitions
@@ -856,6 +880,9 @@ class PlaybackController constructor(
                 // gap, Android can kill the process between songs.
                 sendExternalPlaybackStart(routedTrack)
 
+                (action.handler as? SoundCloudPlaybackHandler)?.volumeFraction =
+                    resolverVolumeFraction(routedTrack.resolver)
+
                 try {
                     // Every play and skip waits on playMutex, so a handler
                     // that never returns freezes playback for the session: a
@@ -870,14 +897,17 @@ class PlaybackController constructor(
                     )
                 } catch (e: com.parachord.android.playback.handlers.SpotifyWakeBlockedException) {
                     spotifyBlockedInBackground = true
-                    playWithoutSpotify(routedTrack)
+                    playWithoutSpotify(routedTrack, advancing)
                     return
                 } catch (e: com.parachord.android.playback.handlers.SpotifyPlaybackNotStartedException) {
                     // Spotify accepted the play but never started (#452). In
                     // the background that keeps happening, so later Spotify
                     // tracks skip straight to the fallback too.
                     if (!isAppVisible()) spotifyBlockedInBackground = true
-                    playWithoutSpotify(routedTrack)
+                    playWithoutSpotify(routedTrack, advancing)
+                    return
+                } catch (e: EmbedPlaybackRefusedException) {
+                    playAfterEmbedRefused(routedTrack, e, advancing)
                     return
                 } catch (e: com.parachord.android.playback.handlers.PlaybackStartTimeoutException) {
                     Log.w(TAG, "'${routedTrack.title}': ${e.message}")
@@ -892,12 +922,7 @@ class PlaybackController constructor(
                 }
 
                 // Start the appropriate state polling based on the handler type
-                when (action.handler) {
-                    is AppleMusicPlaybackHandler ->
-                        startAppleMusicStatePolling()
-                    else ->
-                        startSpotifyStatePolling()
-                }
+                startStatePolling(action.handler)
             }
 
             is PlaybackAction.BrowserPlayback -> {
@@ -979,6 +1004,7 @@ class PlaybackController constructor(
         notifyExternalMode(false)
         stopSpotifyStatePolling()
         stopAppleMusicStatePolling()
+        stopSoundCloudStatePolling()
 
         // Restore normal ExoPlayer settings after external playback
         ctrl.volume = 1f
@@ -1406,6 +1432,71 @@ class PlaybackController constructor(
         releaseExternalPlaybackWakeLock()
         // Clear the callback to avoid stale references
         router.getAppleMusicHandler().musicKitBridge.onTrackEnded = null
+    }
+
+    /** Start the state loop for [handler]'s service. */
+    private fun startStatePolling(handler: ExternalPlaybackHandler) {
+        when (handler) {
+            is AppleMusicPlaybackHandler -> startAppleMusicStatePolling()
+            is SoundCloudPlaybackHandler -> startSoundCloudStatePolling()
+            else -> startSpotifyStatePolling()
+        }
+    }
+
+    /**
+     * Mirror SoundCloud's widget into the playback state. The widget pushes
+     * its events ([com.parachord.android.playback.handlers.SoundCloudWidgetBridge]),
+     * so this only copies them every 500 ms; nothing waits on the WebView, so
+     * a Main thread deferred with the screen off can't stall it.
+     */
+    private fun startSoundCloudStatePolling() {
+        soundCloudPollingJob?.cancel()
+        acquireExternalPlaybackWakeLock()
+        val handler = router.getSoundCloudHandler()
+        val trackEndHandled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val advance = {
+            if (trackEndHandled.compareAndSet(false, true)) {
+                scope.launch(Dispatchers.Main) { skipNextInternal(userInitiated = false) }
+            }
+        }
+        handler.bridge.onFinished = {
+            Log.d(TAG, "SoundCloud track finished")
+            advance()
+        }
+        soundCloudPollingJob = scope.launch(Dispatchers.Default) {
+            // The widget's finish event is the signal; this catches one that
+            // never arrived (the position stopped at the end, not playing).
+            var stoppedAtEnd = 0
+            while (isActive && isExternalPlayback) {
+                val position = handler.getPosition()
+                val duration = handler.getDuration()
+                val playing = handler.isPlaying()
+                stateHolder.update {
+                    copy(
+                        isPlaying = playing,
+                        isBuffering = false,
+                        position = position,
+                        duration = if (duration > 0) duration else this.duration,
+                    )
+                }
+                if (duration > 0 && duration - position in 1..30_000) {
+                    prewarmSpotifyFor(queueManager.snapshot.value.upNext.firstOrNull())
+                }
+                stoppedAtEnd = if (!playing && duration > 0 && duration - position < 1500) stoppedAtEnd + 1 else 0
+                if (stoppedAtEnd >= 4) {
+                    Log.d(TAG, "SoundCloud track done (safety net, pos=$position dur=$duration)")
+                    advance()
+                    break
+                }
+                delay(500)
+            }
+        }
+    }
+
+    private fun stopSoundCloudStatePolling() {
+        soundCloudPollingJob?.cancel()
+        releaseExternalPlaybackWakeLock()
+        router.getSoundCloudHandler().bridge.onFinished = null
     }
 
     /**
@@ -2128,54 +2219,119 @@ class PlaybackController constructor(
      * none cached). With no other source, the track stops with a message the
      * car shows: open Spotify on the phone.
      */
-    private suspend fun playWithoutSpotify(track: TrackEntity) {
+    private suspend fun playWithoutSpotify(track: TrackEntity, advancing: Boolean) {
+        if (playFromOtherSource(track, "spotify", advancing) != null) return
+        Log.w(TAG, "'${track.title}': Spotify can't start in the background and there's no other source")
+        stateHolder.update {
+            copy(
+                currentTrack = track,
+                isPlaying = false,
+                isBuffering = false,
+                playbackError = "Open Spotify on your phone to play this",
+            )
+        }
+    }
+
+    /**
+     * Play [track] from its best source other than [excluded]: the cached
+     * sources, or a resolve without it when none of those will do. Returns
+     * the resolver it played from, or null when there's no other source.
+     */
+    private suspend fun playFromOtherSource(track: TrackEntity, excluded: String, advancing: Boolean): String? {
         val key = trackKey(track.title, track.artist)
         trackResolverCache.awaitLoaded()
-        var sources = trackResolverCache.trackSources.value[key].orEmpty().filter { it.resolver != "spotify" }
+        var sources = trackResolverCache.trackSources.value[key].orEmpty().filter { it.resolver != excluded }
         if (resolverScoring.selectBest(sources) == null) {
             sources = try {
                 resolverManager.resolve(
                     "${track.title} ${track.artist}",
                     targetTitle = track.title,
                     targetArtist = track.artist,
-                    excludeResolvers = setOf("spotify"),
+                    excludeResolvers = setOf(excluded),
                     targetIsrc = track.isrc,
                     targetMbid = track.recordingMbid,
                 )
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "Resolving '${track.title}' without Spotify failed: ${e.message}")
+                Log.w(TAG, "Resolving '${track.title}' without $excluded failed: ${e.message}")
                 emptyList()
             }
         }
-        val best = resolverScoring.selectBest(sources)
-        if (best == null) {
-            Log.w(TAG, "'${track.title}': Spotify can't start in the background and there's no other source")
-            stateHolder.update {
-                copy(
-                    currentTrack = track,
-                    isPlaying = false,
-                    isBuffering = false,
-                    playbackError = "Open Spotify on your phone to play this",
-                )
-            }
-            return
-        }
-        Log.d(TAG, "'${track.title}': Spotify can't start in the background, playing from ${best.resolver}")
+        val best = resolverScoring.selectBest(sources) ?: return null
+        Log.d(TAG, "'${track.title}': can't play from $excluded, playing from ${best.resolver}")
         playTrackInternalUnsafe(
             track.copy(
                 resolver = best.resolver,
                 sourceType = best.sourceType,
                 sourceUrl = best.url,
-                spotifyUri = null,
-                spotifyId = null,
-                soundcloudId = best.soundcloudId,
-                appleMusicId = best.appleMusicId,
+                // The chosen source's ids, as reselectBestSource; never the
+                // excluded service's, which the router would pick again.
+                spotifyUri = best.spotifyUri ?: track.spotifyUri.takeIf { excluded != "spotify" },
+                spotifyId = best.spotifyId ?: track.spotifyId.takeIf { excluded != "spotify" },
+                soundcloudId = best.soundcloudId ?: track.soundcloudId.takeIf { excluded != "soundcloud" },
+                appleMusicId = best.appleMusicId ?: track.appleMusicId.takeIf { excluded != "applemusic" },
                 isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, sources),
             ),
             skipReselect = true,
+            advancing = advancing,
+        )
+        return best.resolver
+    }
+
+    /**
+     * A service's embedded player refused [track] (SoundCloud's widget can't
+     * play a track SoundCloud won't let it embed). Desktop parachord#1209:
+     * another source plays; otherwise the queue moves on when it was
+     * advancing; otherwise the user is told, with the track's page on the
+     * service to open. The browser never opens by itself.
+     */
+    private suspend fun playAfterEmbedRefused(
+        track: TrackEntity,
+        e: EmbedPlaybackRefusedException,
+        advancing: Boolean,
+    ) {
+        Log.w(TAG, "'${track.title}': ${e.message}")
+        embedRefusedTrackId = track.id
+        val excluded = track.resolver ?: "soundcloud"
+        val fallback = playFromOtherSource(track, excluded, advancing)
+        if (fallback != null) {
+            val label = com.parachord.android.ui.components.resolverDisplayName(fallback)
+            Toast.makeText(context, "${e.serviceName} can't play this track here. Playing via $label.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        stopSoundCloudStatePolling()
+        router.stopExternalPlayback()
+        sendExternalPlaybackStop()
+        isExternalPlayback = false
+        if (advancing || stateHolder.state.value.spinoffMode) {
+            Log.d(TAG, "Auto-skip '${track.title}': ${e.serviceName} won't play it")
+            stateHolder.update { copy(isPlaying = false, isBuffering = false) }
+            // After this advance's job ends: skipNext ignores auto-advance
+            // while an advance is in flight.
+            scope.launch {
+                delay(600)
+                skipNextInternal(userInitiated = false)
+            }
+            return
+        }
+        val message = com.parachord.shared.playback.SoundCloudWidget.refusedMessage(e.serviceName, track.title, e.reason)
+        stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = message) }
+        _notices.tryEmit(
+            PlaybackNotice(
+                message = message,
+                actionLabel = e.pageUrl?.let { "Open in ${e.serviceName}" },
+                actionUrl = e.pageUrl,
+            ),
         )
     }
+
+    /** The last track an embedded player refused; see [togglePlayPause]. */
+    @Volatile private var embedRefusedTrackId: String? = null
+
+    private val _notices = kotlinx.coroutines.flow.MutableSharedFlow<PlaybackNotice>(extraBufferCapacity = 4)
+
+    /** Playback messages for the UI that carry an action (a snackbar). */
+    val notices: kotlinx.coroutines.flow.SharedFlow<PlaybackNotice> = _notices
 
     /**
      * Resolve an unresolved track on-the-fly at play time.

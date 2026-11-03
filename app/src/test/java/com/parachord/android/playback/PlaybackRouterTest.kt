@@ -71,6 +71,20 @@ class PlaybackRouterTest {
     }
 
     @Test
+    fun `routes soundcloud track to its widget, as external playback`() = runTest {
+        val widgetHandler = SoundCloudPlaybackHandler(mockk(relaxed = true))
+        val widgetRouter = PlaybackRouter(spotifyHandler, appleMusicHandler, widgetHandler, pluginManager)
+        val track = TrackEntity(
+            id = "1", title = "Song", artist = "Artist",
+            resolver = "soundcloud", soundcloudId = "293",
+        )
+
+        val action = widgetRouter.route(track)
+        assertTrue(action is PlaybackAction.ExternalPlayback)
+        assertEquals(widgetHandler, (action as PlaybackAction.ExternalPlayback).handler)
+    }
+
+    @Test
     fun `routes local file track to ExoPlayer`() = runTest {
         val track = TrackEntity(
             id = "1", title = "Song", artist = "Artist",

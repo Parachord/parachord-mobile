@@ -75,3 +75,14 @@ val PlaybackState.effectiveTrack: TrackEntity?
     }
 
 enum class RepeatMode { OFF, ALL, ONE }
+
+/**
+ * A playback message the app shows as a snackbar, with an optional action
+ * that opens [actionUrl] (e.g. "Open in SoundCloud" for a track SoundCloud's
+ * widget won't play).
+ */
+data class PlaybackNotice(
+    val message: String,
+    val actionLabel: String? = null,
+    val actionUrl: String? = null,
+)

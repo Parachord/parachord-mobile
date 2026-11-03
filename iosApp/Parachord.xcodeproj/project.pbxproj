@@ -49,6 +49,9 @@
 		AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E4 /* FriendProfileScreen.swift */; };
 		AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E6 /* MediaLibraryScanner.swift */; };
 		AA00000000000000000000E9 /* SpinoffController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E8 /* SpinoffController.swift */; };
+		AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FC /* SoundCloudWidget.swift */; };
+		AA00000000000000000000FF /* soundcloud-widget.html in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FE /* soundcloud-widget.html */; };
+		AA0000000000000000000101 /* soundcloud-widget-player.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000100 /* soundcloud-widget-player.js */; };
 		AA00000000000000000000EB /* ChatScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000EA /* ChatScreen.swift */; };
 		D15217E9E8816973635D7FB5 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C24958C1C47BFB3FDAA151C /* ShareViewController.swift */; };
 /* End PBXBuildFile section */
@@ -123,6 +126,9 @@
 		AA00000000000000000000E4 /* FriendProfileScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FriendProfileScreen.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E6 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E8 /* SpinoffController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpinoffController.swift; sourceTree = "<group>"; };
+		AA00000000000000000000FC /* SoundCloudWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundCloudWidget.swift; sourceTree = "<group>"; };
+		AA00000000000000000000FE /* soundcloud-widget.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "Resources/soundcloud-widget.html"; sourceTree = "<group>"; };
+		AA0000000000000000000100 /* soundcloud-widget-player.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/soundcloud-widget-player.js"; sourceTree = "<group>"; };
 		AA00000000000000000000EA /* ChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScreen.swift; sourceTree = "<group>"; };
 		B2118EE0889B3F7F9B26B3E9 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -214,6 +220,7 @@
 				AA00000000000000000000FA /* HomeFeedModel.swift */,
 				AA00000000000000000000E2 /* ListenAlongController.swift */,
 				AA00000000000000000000E8 /* SpinoffController.swift */,
+				AA00000000000000000000FC /* SoundCloudWidget.swift */,
 				AA00000000000000000000EA /* ChatScreen.swift */,
 				AA00000000000000000000E4 /* FriendProfileScreen.swift */,
 				AA00000000000000000000E6 /* MediaLibraryScanner.swift */,
@@ -233,6 +240,8 @@
 				AA00000000000000000000D0 /* CollectionView.swift */,
 				AA000000000000000000006E /* CuratedAlbumScreens.swift */,
 				AA0000000000000000000019 /* resolver-loader.js */,
+				AA00000000000000000000FE /* soundcloud-widget.html */,
+				AA0000000000000000000100 /* soundcloud-widget-player.js */,
 				AA000000000000000000001A /* axe-plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
 			);
@@ -328,6 +337,8 @@
 			files = (
 				AA0000000000000000000022 /* Assets.xcassets in Resources */,
 				AA0000000000000000000029 /* resolver-loader.js in Resources */,
+				AA00000000000000000000FF /* soundcloud-widget.html in Resources */,
+				AA0000000000000000000101 /* soundcloud-widget-player.js in Resources */,
 				AA000000000000000000002A /* axe-plugins in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -408,6 +419,7 @@
 				AA00000000000000000000FB /* HomeFeedModel.swift in Sources */,
 				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,
 				AA00000000000000000000E9 /* SpinoffController.swift in Sources */,
+				AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */,
 				AA00000000000000000000EB /* ChatScreen.swift in Sources */,
 				AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */,
 				AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */,

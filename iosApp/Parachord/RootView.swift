@@ -235,6 +235,38 @@ struct ContentView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        // Playback notices (#495): a SoundCloud track its widget won't play —
+        // "Playing via X", or "Open in SoundCloud" when nothing else can.
+        // Android shows the same as a toast / snackbar.
+        .overlay(alignment: .bottom) {
+            if let n = coordinator.notice {
+                HStack(spacing: 12) {
+                    Text(n.message)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let label = n.actionLabel, let url = n.actionUrl.flatMap(URL.init(string:)) {
+                        Button(label) {
+                            coordinator.notice = nil
+                            UIApplication.shared.open(url)
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(PC.accentSoft)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.88)))
+                .padding(.horizontal, 16).padding(.bottom, 140)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .onTapGesture { coordinator.notice = nil }
+                .task(id: n.id) {
+                    try? await Task.sleep(nanoseconds: n.actionLabel == nil ? 3_500_000_000 : 8_000_000_000)
+                    if coordinator.notice?.id == n.id {
+                        withAnimation(.easeInOut(duration: 0.25)) { coordinator.notice = nil }
+                    }
+                }
+            }
+        }
         // #235 On-Air triggers: refresh every friend's now-playing and auto-pin
         // on-air friends into the sidebar (auto-unpin when they go offline),
         // every 2 min — mirrors Android's MainViewModel cycle. Runs an initial

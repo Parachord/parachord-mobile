@@ -498,13 +498,13 @@ class SpotifyPlaybackHandler constructor(
     }
 
     /** Get current playback position from Spotify. */
-    fun getPosition(): Long = cachedPosition
+    override fun getPosition(): Long = cachedPosition
 
     /** Get current track duration from Spotify. */
     fun getDuration(): Long = cachedDuration
 
     /** Whether Spotify is currently playing. */
-    fun isPlaying(): Boolean = cachedIsPlaying
+    override fun isPlaying(): Boolean = cachedIsPlaying
 
     fun disconnect() {
         stopStatePolling()
