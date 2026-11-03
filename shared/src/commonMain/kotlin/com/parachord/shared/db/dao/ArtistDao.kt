@@ -52,6 +52,13 @@ class ArtistDao(private val db: ParachordDb) {
         queries.getById(id).executeAsOneOrNull()?.toArtist()
     }
 
+    suspend fun getByIds(ids: List<String>): List<Artist> = withContext(Dispatchers.Default) {
+        if (ids.isEmpty()) return@withContext emptyList()
+        ids.distinct().chunked(900).flatMap { chunk ->
+            queries.getByIds(chunk).executeAsList().map { it.toArtist() }
+        }
+    }
+
     suspend fun getBySpotifyId(spotifyId: String): Artist? = withContext(Dispatchers.Default) {
         queries.getBySpotifyId(spotifyId).executeAsOneOrNull()?.toArtist()
     }

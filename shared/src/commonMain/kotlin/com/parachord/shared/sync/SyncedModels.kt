@@ -31,8 +31,8 @@ data class SyncedAlbum(
 
 /**
  * An artist fetched from a remote sync provider, paired with the provider's
- * external identifier. No addedAt — provider follow APIs typically don't
- * return one.
+ * external identifier. No separate addedAt — provider follow APIs don't
+ * return one, so providers date [entity] with the sync time (desktop parity).
  */
 data class SyncedArtist(
     val entity: Artist,

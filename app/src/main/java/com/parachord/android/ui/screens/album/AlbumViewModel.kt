@@ -313,7 +313,7 @@ class AlbumViewModel constructor(
                 year = detail.year,
                 trackCount = detail.tracks.size,
             )
-            libraryRepository.addAlbum(album)
+            libraryRepository.addAlbumToCollection(album)
         }
     }
 

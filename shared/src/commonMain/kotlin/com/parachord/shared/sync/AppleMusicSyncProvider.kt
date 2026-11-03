@@ -979,6 +979,8 @@ class AppleMusicSyncProvider(
                 imageUrl = null,
                 spotifyId = null,
                 genres = "",
+                // No date on library artists: the sync time, as for Spotify artists.
+                addedAt = currentTimeMillis(),
             ),
             spotifyId = id,
         )

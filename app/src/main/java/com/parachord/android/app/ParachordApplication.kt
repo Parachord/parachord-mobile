@@ -84,11 +84,11 @@ class ParachordApplication : Application() {
             }
         }
 
-        // One-time redate of collection tracks saved as 1970 (#508). Never fail startup on it.
+        // One-time redate of collection items saved as 1970 (#508). Never fail startup on it.
         appScope.launch {
             try {
-                if (com.parachord.shared.db.TrackAddedAtRepair.runOnce(sqlDriver, kvStore)) {
-                    com.parachord.shared.platform.Log.d("ParachordApplication", "Redated collection tracks saved with addedAt = 0")
+                if (com.parachord.shared.db.CollectionAddedAtRepair.runOnce(sqlDriver, kvStore)) {
+                    com.parachord.shared.platform.Log.d("ParachordApplication", "Redated collection items saved with addedAt = 0")
                 }
             } catch (_: Exception) {
                 // Retried next launch (the flag is only set on success).

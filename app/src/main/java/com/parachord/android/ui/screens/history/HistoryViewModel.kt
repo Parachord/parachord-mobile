@@ -415,7 +415,7 @@ class HistoryViewModel constructor(
             if (isInCollection) {
                 libraryRepository.deleteArtistByName(artistName)
             } else {
-                libraryRepository.addArtist(
+                libraryRepository.addArtistToCollection(
                     com.parachord.android.data.db.entity.ArtistEntity(
                         id = "manual-${java.util.UUID.randomUUID()}",
                         name = artistName,
@@ -430,7 +430,7 @@ class HistoryViewModel constructor(
 
     fun addAlbumToCollection(title: String, artist: String, artworkUrl: String?) {
         viewModelScope.launch {
-            libraryRepository.addAlbum(AlbumEntity(
+            libraryRepository.addAlbumToCollection(AlbumEntity(
                 id = "album-${title.hashCode()}-${artist.hashCode()}",
                 title = title,
                 artist = artist,

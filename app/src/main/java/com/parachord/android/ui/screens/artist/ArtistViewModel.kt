@@ -121,7 +121,7 @@ class ArtistViewModel constructor(
             } else {
                 // Save to collection
                 val info = _artistInfo.value
-                artistDao.insert(ArtistEntity(
+                libraryRepository.addArtistToCollection(ArtistEntity(
                     id = "manual-${UUID.randomUUID()}",
                     name = artistName,
                     imageUrl = info?.imageUrl,
@@ -390,7 +390,7 @@ class ArtistViewModel constructor(
                 artworkUrl = artworkUrl,
                 year = year,
             )
-            libraryRepository.addAlbum(album)
+            libraryRepository.addAlbumToCollection(album)
         }
     }
 
@@ -541,7 +541,7 @@ class ArtistViewModel constructor(
             if (existing != null) {
                 artistDao.delete(existing)
             } else {
-                artistDao.insert(ArtistEntity(
+                libraryRepository.addArtistToCollection(ArtistEntity(
                     id = "manual-${UUID.randomUUID()}",
                     name = artistName,
                     imageUrl = imageUrl,

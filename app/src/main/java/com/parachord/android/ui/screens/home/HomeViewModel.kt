@@ -563,7 +563,7 @@ class HomeViewModel constructor(
             if (isInCollection) {
                 repository.deleteArtistByName(artistName)
             } else {
-                repository.addArtist(
+                repository.addArtistToCollection(
                     ArtistEntity(
                         id = "manual-${java.util.UUID.randomUUID()}",
                         name = artistName,
@@ -584,7 +584,7 @@ class HomeViewModel constructor(
                 artist = artist,
                 artworkUrl = artworkUrl,
             )
-            repository.addAlbum(album)
+            repository.addAlbumToCollection(album)
         }
     }
 

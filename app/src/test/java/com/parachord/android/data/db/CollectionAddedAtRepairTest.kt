@@ -1,9 +1,13 @@
 package com.parachord.android.data.db
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
-import com.parachord.shared.db.TrackAddedAtRepair
+import com.parachord.shared.db.CollectionAddedAtRepair
 import com.parachord.shared.db.ParachordDb
+import com.parachord.shared.db.dao.AlbumDao
+import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.model.Album
+import com.parachord.shared.model.Artist
 import com.parachord.shared.model.Track
 import com.parachord.shared.store.KvStore
 import com.russhwolf.settings.MapSettings
@@ -13,11 +17,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** #508 — tracks saved with addedAt = 0: hearts get the repair's date, synced songs their sync date, local files nothing. */
-class TrackAddedAtRepairTest {
+/** #508 — collection rows saved with addedAt = 0: user adds get the repair's date, synced rows their sync date, local files nothing. */
+class CollectionAddedAtRepairTest {
 
     private val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { ParachordDb.Schema.create(it) }
-    private val trackDao = TrackDao(ParachordDb(driver), driver)
+    private val db = ParachordDb(driver)
+    private val trackDao = TrackDao(db, driver)
+    private val albumDao = AlbumDao(db)
+    private val artistDao = ArtistDao(db)
     private val now = 1_800_000_000_000L
 
     private suspend fun addedAt(id: String) = trackDao.getById(id)?.addedAt
@@ -34,7 +41,7 @@ class TrackAddedAtRepairTest {
         trackDao.insert(Track(id = "local", title = "Local", artist = "B", resolver = "localfiles"))
         trackDao.insert(Track(id = "dated", title = "Dated", artist = "C", resolver = "spotify", addedAt = 1_700_000_000_000L))
 
-        TrackAddedAtRepair.run(driver, now)
+        CollectionAddedAtRepair.run(driver, now)
 
         assertEquals(now, addedAt("heart"))
         assertEquals(now, addedAt("heart-no-resolver"))
@@ -47,7 +54,23 @@ class TrackAddedAtRepairTest {
     @Test
     fun runOnceRunsOnlyTheFirstTime() = runBlocking {
         val kv = KvStore(MapSettings())
-        assertTrue(TrackAddedAtRepair.runOnce(driver, kv, now))
-        assertFalse(TrackAddedAtRepair.runOnce(driver, kv, now))
+        assertTrue(CollectionAddedAtRepair.runOnce(driver, kv, now))
+        assertFalse(CollectionAddedAtRepair.runOnce(driver, kv, now))
+    }
+
+    @Test
+    fun albumsAndArtistsAreRedatedToo() = runBlocking {
+        albumDao.insert(Album(id = "album-1-2", title = "Added from a card", artist = "A"))
+        albumDao.insert(Album(id = "local-album-9", title = "Local", artist = "B"))
+        artistDao.insert(Artist(id = "spotify-xyz", name = "Followed"))
+        driver.execute(null, "INSERT INTO sync_sources (itemId, itemType, providerId, externalId, syncedAt) VALUES ('spotify-xyz', 'artist', 'spotify', 'xyz', 1750000000000)", 0)
+        artistDao.insert(Artist(id = "manual-1", name = "Hearted"))
+
+        CollectionAddedAtRepair.run(driver, now)
+
+        assertEquals(now, albumDao.getById("album-1-2")?.addedAt)
+        assertEquals(0L, albumDao.getById("local-album-9")?.addedAt)
+        assertEquals(1_750_000_000_000L, artistDao.getById("spotify-xyz")?.addedAt)
+        assertEquals(now, artistDao.getById("manual-1")?.addedAt)
     }
 }
