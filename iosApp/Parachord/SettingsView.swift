@@ -1114,7 +1114,7 @@ private struct PluginConfigSheet: View {
             }
         } header: { Text("Connection") } footer: {
             Text(credsSaved
-                 ? "Sign in through SoundCloud to let Parachord find SoundCloud tracks. Opens SoundCloud in a secure in-app browser; Parachord never sees your password."
+                 ? "Sign in through SoundCloud to let Parachord find SoundCloud tracks. Opens SoundCloud in a secure in-app browser; Parachord never sees your password. If SoundCloud's page stays blank, it doesn't recognize the Client ID, or the app's Redirect URI isn't parachord://auth/callback/soundcloud."
                  : "Add your SoundCloud app credentials below, then connect. SoundCloud restricts who can create API apps, so you may not be able to get credentials. Spotify and Apple Music are easier to set up.")
         }
 
