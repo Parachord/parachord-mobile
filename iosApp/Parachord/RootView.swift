@@ -499,7 +499,10 @@ struct ContentView: View {
             dlAck("Playing \(t)")
         case "control":
             switch cmd.action {
-            case "pause", "resume", "play": coord.togglePlayPause()
+            case "pause", "resume", "play":
+                if ControlLinkKt.controlLinkShouldToggle(action: cmd.action ?? "", isPlaying: coord.isPlaying) {
+                    coord.togglePlayPause()
+                }
             case "skip", "next": coord.skipNext()
             case "previous": coord.skipPrevious()
             default: break
