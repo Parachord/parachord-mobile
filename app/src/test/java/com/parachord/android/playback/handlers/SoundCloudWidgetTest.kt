@@ -87,6 +87,13 @@ class SoundCloudWidgetTest {
     }
 
     @Test
+    fun `the widget's iframe may use DRM, or encrypted-only tracks never start`() {
+        // Gradle runs unit tests from the app module's directory.
+        val module = java.io.File("src/main/assets/js/soundcloud-widget-player.js").readText()
+        assertTrue(module.contains("'autoplay; encrypted-media'"))
+    }
+
+    @Test
     fun `Android and iOS carry the same widget page and module`() {
         // Gradle runs unit tests from the app module's directory.
         for (name in listOf("soundcloud-widget.html", "soundcloud-widget-player.js")) {
