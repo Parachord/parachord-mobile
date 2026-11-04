@@ -113,11 +113,12 @@ private val NOT_LETTER_OR_DIGIT = Regex("[^$LETTER_OR_NUMBER_CLASS]")
  * search. It also lost accented letters instead of folding them
  * ("Beyoncé" → "beyonc", now "beyonce").
  */
-fun normalizeStr(s: String?): String {
+fun normalizeStr(s: String?): String = foldStr(s).replace(NOT_LETTER_OR_DIGIT, "")
+
+/** The folding half of [normalizeStr], with punctuation and spaces still in place. */
+private fun foldStr(s: String?): String {
     if (s.isNullOrEmpty()) return ""
-    return com.parachord.shared.platform.nfkd(s.lowercase())
-        .replace(COMBINING_MARKS, "")
-        .replace(NOT_LETTER_OR_DIGIT, "")
+    return com.parachord.shared.platform.nfkd(s.lowercase()).replace(COMBINING_MARKS, "")
 }
 
 /**
@@ -130,11 +131,58 @@ private fun stringsMatch(a: String, b: String): Boolean {
 }
 
 /**
+ * What services join a multi-artist credit with. Runs on [foldStr] output, where
+ * NFKD has already made a full-width "＆" or no-break space plain, so the literal
+ * spaces hold (no `\s` or `\b`: JS and the JVM disagree on them outside ASCII).
+ * The words need a space on both sides, so "Little Feat", "Malcolm X" and
+ * "And One" stay whole. Byte-aligned with desktop's `ARTIST_CREDIT_JOIN`
+ * (`sync-providers/confidence-scoring.js`, parachord#1253). `+`, `/`, `vs`, `with`
+ * and `×` are deliberately not joins; change that on desktop first.
+ */
+private val ARTIST_CREDIT_JOIN = Regex(",|&| (?:and|x) | [(\\[]?(?:feat\\.?|ft\\.?|featuring) ")
+
+/**
+ * A credit in brackets at the very end of a title: "Song (feat. A)". Brackets are
+ * required, since a bare "ft" can be part of the title. Runs on [foldStr] output.
+ * Byte-aligned with desktop's `TRAILING_TITLE_CREDIT`.
+ */
+private val TRAILING_TITLE_CREDIT = Regex(" *[(\\[] *(?:feat|ft|featuring)[. ][^)\\]]*[)\\]] *$")
+
+private fun creditedNames(artist: String?): Set<String> =
+    foldStr(artist).split(ARTIST_CREDIT_JOIN).map { normalizeStr(it) }.filter { it.isNotEmpty() }.toSet()
+
+/**
+ * Is this the same artist credit? Containment, or every credited name on one side
+ * is credited on the other, in any order. Names compare whole, so "Simon &
+ * Schuster" isn't "Simon & Garfunkel" and "Paul Simon" isn't either. Port of
+ * desktop's `_artistsMatch`.
+ */
+private fun artistsMatch(a: String?, b: String?): Boolean {
+    if (stringsMatch(normalizeStr(a), normalizeStr(b))) return true
+    val namesA = creditedNames(a)
+    val namesB = creditedNames(b)
+    return (namesA.isNotEmpty() && namesB.containsAll(namesA)) ||
+        (namesB.isNotEmpty() && namesA.containsAll(namesB))
+}
+
+/**
+ * Containment, or the same title once a trailing credit comes off both sides. The
+ * second check is equality on purpose: containment would let "Hello (feat. A)"
+ * reach "Hello Goodbye". Port of desktop's `_titlesMatch`.
+ */
+private fun titlesMatch(a: String?, b: String?): Boolean {
+    if (stringsMatch(normalizeStr(a), normalizeStr(b))) return true
+    val bareA = normalizeStr(foldStr(a).replace(TRAILING_TITLE_CREDIT, ""))
+    val bareB = normalizeStr(foldStr(b).replace(TRAILING_TITLE_CREDIT, ""))
+    return bareA.isNotEmpty() && bareA == bareB
+}
+
+/**
  * Pick the best-matching result for a target track, in desktop `findBestMatch`'s
  * order: exact recording MBID, exact ISRC, exact normalized title + artist, a
- * containment match that isn't another version ([isOtherVersion]), then any
- * containment match. Name matches use the SAME bidirectional [stringsMatch] gate
- * [scoreConfidence] uses, so a selected candidate is guaranteed to score 0.95
+ * name match that isn't another version ([isOtherVersion]), then any name match.
+ * Name matches use the SAME [titlesMatch] + [artistsMatch] gate [scoreConfidence]
+ * uses, so a selected candidate is guaranteed to score 0.95
  * rather than 0.50. Returns null when nothing matches; callers decide whether
  * to fall back to the raw first result.
  *
@@ -179,17 +227,17 @@ fun <T> selectBestMatch(
     results.firstOrNull {
         normalizeStr(titleOf(it)) == nt && normalizeStr(artistOf(it)) == na
     }?.let { return it }
-    // Tier 4: a containment match that isn't another version (a live cut, remix
-    // or cover the target doesn't name). Tier 5: any containment match, so
+    // Tier 4: a name match that isn't another version (a live cut, remix or
+    // cover the target doesn't name). Tier 5: any name match, so
     // "Song - Remastered"-style catalog titles and variant-only results still
     // resolve (desktop parachord#1115).
-    val contains: (T) -> Boolean = {
-        stringsMatch(nt, normalizeStr(titleOf(it))) && stringsMatch(na, normalizeStr(artistOf(it)))
+    val namesMatch: (T) -> Boolean = {
+        titlesMatch(targetTitle, titleOf(it)) && artistsMatch(targetArtist, artistOf(it))
     }
     results.firstOrNull {
-        contains(it) && !isOtherVersion(titleOf(it), artistOf(it), targetTitle, targetArtist)
+        namesMatch(it) && !isOtherVersion(titleOf(it), artistOf(it), targetTitle, targetArtist)
     }?.let { return it }
-    return results.firstOrNull(contains)
+    return results.firstOrNull(namesMatch)
 }
 
 /**
@@ -238,7 +286,7 @@ fun isOtherVersion(
  * target track.
  *
  * Models the desktop's two-stage gate: validation first
- * (`validateResolvedTrack` — requires BOTH title AND artist substring match),
+ * (`validateResolvedTrack` — requires BOTH [titlesMatch] AND [artistsMatch]),
  * then confidence within validated sources (`calculateConfidence`). On
  * desktop, a result that fails `validateResolvedTrack` is not added to
  * `track.sources` at all, so it never reaches the priority sort. We
@@ -293,16 +341,8 @@ fun scoreConfidence(
         targetMbid.lowercase() == matchedMbid.lowercase()
     ) return 1.0
 
-    val normTarget = normalizeStr(targetTitle)
-    val normArtist = normalizeStr(targetArtist)
-    val normMatchTitle = normalizeStr(matchedTitle)
-    val normMatchArtist = normalizeStr(matchedArtist)
-
-    val titleMatch = stringsMatch(normTarget, normMatchTitle)
-    val artistMatch = stringsMatch(normArtist, normMatchArtist)
-
     // Desktop's validateResolvedTrack: both must match.
-    return if (titleMatch && artistMatch) 0.95 else 0.50
+    return if (titlesMatch(targetTitle, matchedTitle) && artistsMatch(targetArtist, matchedArtist)) 0.95 else 0.50
 }
 
 // ── Apple Music ids (#265) ─────────────────────────────────────────────────
