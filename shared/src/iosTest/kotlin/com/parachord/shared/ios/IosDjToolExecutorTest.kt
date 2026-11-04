@@ -87,18 +87,20 @@ class IosDjToolExecutorTest {
     }
 
     @Test
-    fun queueAddStartsNothingWhenTheTrackToStartWithIsMissing() = runTest {
+    fun queueAddStartsWithTheFirstTrackFoundWhenTheFirstRequestedIsMissing() = runTest {
+        searchFinds("B", "Second")
         searchFinds("C", "Third")
 
         val result = executor.execute(
             "queue_add",
-            mapOf("tracks" to listOf(track("Biohio", "Happy Me"), track("C", "Third"))),
+            mapOf("tracks" to listOf(track("Biohio", "Happy Me"), track("B", "Second"), track("C", "Third"))),
         )
 
         assertEquals(true, result["success"])
-        assertEquals(false, result["nowPlaying"])
-        assertEquals("Could not find \"Happy Me\" by Biohio", result["error"])
-        assertEquals(emptyList(), played)
+        assertEquals(true, result["nowPlaying"])
+        assertEquals(listOf(track("Biohio", "Happy Me")), result["notFound"])
+        assertEquals(null, result["error"])
+        assertEquals(listOf("Second"), played)
         assertEquals(listOf("Third"), queued)
         assertEquals(1, cleared)
     }

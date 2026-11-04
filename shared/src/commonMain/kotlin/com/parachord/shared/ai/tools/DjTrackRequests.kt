@@ -36,8 +36,6 @@ suspend fun findRequestedTrack(
 class RequestedTracks(
     val found: List<TrackSearchResult>,
     val notFound: List<Map<String, String>>,
-    /** The list's first track, when it wasn't found. It's the one `queue_add` would start. */
-    val missingFirst: Map<String, String>?,
 )
 
 /** Looks up each entry in order. An entry with no artist or title is skipped. */
@@ -47,29 +45,21 @@ suspend fun findRequestedTracks(
 ): RequestedTracks {
     val found = mutableListOf<TrackSearchResult>()
     val notFound = mutableListOf<Map<String, String>>()
-    var missingFirst: Map<String, String>? = null
-    var isFirst = true
     for (track in tracks) {
         val artist = track["artist"] as? String ?: continue
         val title = track["title"] as? String ?: continue
         val match = findRequestedTrack(artist, title, search)
-        if (match != null) {
-            found += match
-        } else {
-            val missing = mapOf("artist" to artist, "title" to title)
-            notFound += missing
-            if (isFirst) missingFirst = missing
-        }
-        isFirst = false
+        if (match != null) found += match else notFound += mapOf("artist" to artist, "title" to title)
     }
-    return RequestedTracks(found, notFound, missingFirst)
+    return RequestedTracks(found, notFound)
 }
 
 /**
  * `queue_add` once its tracks are looked up. With none found, nothing changes. With
- * [playFirst] the queue is replaced and the first track starts, but if the first
- * track is the one missing nothing starts and the rest are queued, as on desktop:
- * playing the next one instead would start an album or a mix in the wrong place.
+ * [playFirst] the queue is replaced and the first track FOUND starts, even when the
+ * first one requested is the one missing: a request to play something shouldn't
+ * end in silence. Desktop starts nothing there (parachord#1241's fix); this is a
+ * deliberate difference.
  */
 suspend fun <T> runQueueAdd(
     requested: RequestedTracks,
@@ -87,17 +77,17 @@ suspend fun <T> runQueueAdd(
         }
     }
     val tracks = requested.found.map { toTrack(it) }
-    val startFirst = playFirst && requested.missingFirst == null
-    if (playFirst) clearQueue()
-    if (startFirst) playTrack(tracks.first())
-    val toQueue = if (startFirst) tracks.drop(1) else tracks
+    if (playFirst) {
+        clearQueue()
+        playTrack(tracks.first())
+    }
+    val toQueue = if (playFirst) tracks.drop(1) else tracks
     if (toQueue.isNotEmpty()) addToQueue(toQueue)
     return buildMap {
         put("success", true)
         put("queued", tracks.size)
-        put("nowPlaying", startFirst)
+        put("nowPlaying", playFirst)
         put("tracks", requested.found.map { mapOf("artist" to it.artist, "title" to it.title) })
         if (requested.notFound.isNotEmpty()) put("notFound", requested.notFound)
-        requested.missingFirst?.let { put("error", djTrackNotFoundError(it.getValue("artist"), it.getValue("title"))) }
     }
 }

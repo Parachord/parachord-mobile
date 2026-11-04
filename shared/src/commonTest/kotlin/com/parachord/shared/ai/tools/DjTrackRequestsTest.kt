@@ -79,12 +79,11 @@ class DjTrackRequestsTest {
     }
 
     @Test
-    fun anEntryWithNoNamesIsSkipped_notReportedOrCountedAsFirst() = runTest {
+    fun anEntryWithNoNamesIsSkipped_notReported() = runTest {
         val requested = findRequestedTracks(
             listOf(mapOf("artist" to "A"), mapOf("artist" to "B", "title" to "C")),
         ) { _, _ -> listOf(result("B", "C")) }
         assertEquals(listOf("C"), requested.found.map { it.title })
         assertEquals(emptyList(), requested.notFound)
-        assertNull(requested.missingFirst)
     }
 }

@@ -12,9 +12,9 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
-import io.mockk.verifyOrder
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -91,24 +91,26 @@ class DjToolExecutorTest {
     }
 
     @Test
-    fun `queue_add starts nothing when the track to start with is missing`() = runTest {
+    fun `queue_add starts with the first track found when the first requested is missing`() = runTest {
+        searchFinds("B", "Second")
         searchFinds("C", "Third")
 
         val result = executor.execute(
             "queue_add",
-            mapOf("tracks" to listOf(track("Biohio", "Happy Me"), track("C", "Third"))),
+            mapOf("tracks" to listOf(track("Biohio", "Happy Me"), track("B", "Second"), track("C", "Third"))),
         )
 
         assertEquals(true, result["success"])
-        assertEquals(1, result["queued"])
-        assertEquals(false, result["nowPlaying"])
+        assertEquals(2, result["queued"])
+        assertEquals(true, result["nowPlaying"])
         assertEquals(listOf(track("Biohio", "Happy Me")), result["notFound"])
-        assertEquals("Could not find \"Happy Me\" by Biohio", result["error"])
-        coVerify(exactly = 0) { playback.playTrack(any<TrackEntity>()) }
-        verifyOrder {
-            playback.clearQueue()
-            playback.addToQueue(any())
-        }
+        assertNull(result["error"])
+        val played = slot<TrackEntity>()
+        coVerify { playback.playTrack(capture(played)) }
+        assertEquals("Second", played.captured.title)
+        val queued = slot<List<TrackEntity>>()
+        verify { playback.addToQueue(capture(queued)) }
+        assertEquals(listOf("Third"), queued.captured.map { it.title })
     }
 
     @Test
