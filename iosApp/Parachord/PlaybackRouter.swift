@@ -74,7 +74,7 @@ struct PlaybackRouter {
                                                    soundcloudId: source.soundcloudId) else { continue }
                 let result = await soundCloud.load(link: link,
                                                    volume: IosVolumeOffsets.shared.fraction(for: "soundcloud"),
-                                                   title: title, artist: artist, artworkUrl: artworkUrl)
+                                                   title: title, artist: artist, artworkUrl: artworkUrl ?? source.artworkUrl)
                 switch result {
                 case .started:
                     return .played(.soundCloud, resolver: source.resolver)
@@ -94,7 +94,7 @@ struct PlaybackRouter {
                     trackId: source.bandcampTrackId, pageUrl: source.url) {
                     result = await bandcamp.load(embedUrl: embedUrl,
                                                  volume: IosVolumeOffsets.shared.fraction(for: "bandcamp"),
-                                                 title: title, artist: artist, artworkUrl: artworkUrl)
+                                                 title: title, artist: artist, artworkUrl: artworkUrl ?? source.artworkUrl)
                 }
                 switch result {
                 case .started:

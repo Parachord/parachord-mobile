@@ -140,6 +140,15 @@ final class IosSoundCloudWidget {
         webView?.evaluateJavaScript("scHoldAudio(\(on))", completionHandler: nil)
     }
 
+    /// The lock screen for another engine's track during the hold: WebKit may show
+    /// this page while its silent loop plays, and empty that clears the lock
+    /// screen. Its buttons come back through [onRemoteCommand].
+    @MainActor func mirrorNowPlaying(title: String, artist: String, artworkUrl: String?) {
+        webView?.evaluateJavaScript(
+            "scNowPlaying(\(generation), \(Self.json(title)), \(Self.json(artist)), \(Self.json(artworkUrl ?? "")))",
+            completionHandler: nil)
+    }
+
     // MARK: Page
 
     @MainActor

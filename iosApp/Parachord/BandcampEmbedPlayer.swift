@@ -16,8 +16,9 @@ import Shared
 // exactly the URL asked for.
 //
 // Each track is a new page, so nothing in it outlives the track. That's why the
-// audio-session hold lives in SoundCloud's page, which stays loaded: see
-// `iosApp/AGENTS.md`, "Bandcamp through its embed".
+// audio-session hold lives in SoundCloud's page, which stays loaded, and why that
+// page also carries this track's lock-screen info: see `iosApp/AGENTS.md`,
+// "Bandcamp through its embed".
 
 @Observable
 final class IosBandcampEmbed {
@@ -66,6 +67,7 @@ final class IosBandcampEmbed {
         // Before anything else: released and re-requested with the screen locked,
         // iOS refuses WebKit's session and the track plays silent.
         await audioHold?.holdAudio(true)
+        audioHold?.mirrorNowPlaying(title: title, artist: artist, artworkUrl: artworkUrl)
 
         pollTask?.cancel()
         generation += 1
@@ -138,7 +140,9 @@ final class IosBandcampEmbed {
                     announced = true
                     _ = await evaluate(Self.nowPlayingScript(title: title, artist: artist, artworkUrl: artworkUrl))
                 }
-                _ = await evaluate("__pcPosition(\(duration), \(currentTime), \(isPlaying))")
+                // Not while paused: once at the pause is enough, and repeating it
+                // fights the silent loop's own position (the scrubber bounced to 0:00).
+                if isPlaying { _ = await evaluate("__pcPosition(\(duration), \(currentTime), true)") }
                 drainRemoteCommands(await evaluate("__pcTakeRemote()") as? String)
             }
             if load.finished && !reportedFinish {
@@ -153,19 +157,32 @@ final class IosBandcampEmbed {
     @MainActor func play() {
         tracker?.userSetPaused(paused: false, nowMs: Self.nowMs)
         webView?.evaluateJavaScript(BandcampEmbed.shared.PLAY_SCRIPT, completionHandler: nil)
+        // After the play, so the page never goes without audio in between.
+        webView?.evaluateJavaScript("window.__pcHold && __pcHold(false)", completionHandler: nil)
         isPlaying = true
+        publishPosition()
     }
 
     @MainActor func pause() {
         tracker?.userSetPaused(paused: true, nowMs: Self.nowMs)
+        // Before the pause, so the page never goes without audio in between.
+        webView?.evaluateJavaScript("window.__pcHold && __pcHold(true)", completionHandler: nil)
         webView?.evaluateJavaScript(BandcampEmbed.shared.PAUSE_SCRIPT, completionHandler: nil)
         isPlaying = false
+        publishPosition()
     }
 
     @MainActor func seek(to seconds: Double) {
         currentTime = max(0, seconds)
         tracker?.seeked(seconds: currentTime)
         webView?.evaluateJavaScript(BandcampEmbed.shared.seekScript(seconds: currentTime), completionHandler: nil)
+        publishPosition()
+    }
+
+    /// The lock screen's position and play state, once.
+    @MainActor private func publishPosition() {
+        webView?.evaluateJavaScript("window.__pcPosition && __pcPosition(\(duration), \(currentTime), \(isPlaying))",
+                                    completionHandler: nil)
     }
 
     /// Halt the track: leaving the page stops it, nothing is left paused. Releases
@@ -182,6 +199,7 @@ final class IosBandcampEmbed {
         if !keepAudioSession { await audioHold?.holdAudio(false) }
     }
 
+
     // MARK: Lock screen
 
     /// WebKit publishes the lock screen for the page that's playing, and sends its
@@ -192,6 +210,32 @@ final class IosBandcampEmbed {
         """
         (function () {
           window.__pcRemote = [];
+          // A silent loop in this page while paused. With no audio iOS suspends the
+          // page's process, which drops the lock screen to "Not Playing" and leaves
+          // play with nothing to wake. Same page as the player, so unlike the
+          // track-change hold in SoundCloud's page it reports nothing different.
+          var silence = null;
+          window.__pcHold = function (on) {
+            if (on) {
+              if (!silence) {
+                var rate = 8000, bytes = new Uint8Array(44 + rate), view = new DataView(bytes.buffer);
+                var str = function (at, s) { for (var i = 0; i < s.length; i++) view.setUint8(at + i, s.charCodeAt(i)); };
+                str(0, 'RIFF'); view.setUint32(4, 36 + rate, true); str(8, 'WAVE'); str(12, 'fmt ');
+                view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+                view.setUint32(24, rate, true); view.setUint32(28, rate, true); view.setUint16(32, 1, true);
+                view.setUint16(34, 8, true); str(36, 'data'); view.setUint32(40, rate, true);
+                for (var b = 44; b < bytes.length; b++) bytes[b] = 128;
+                // Never added to the document, so desktop's bcAudio() can't find it.
+                silence = new Audio(URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' })));
+                silence.loop = true;
+              }
+              var p = silence.play();
+              if (p && p.catch) p.catch(function () {});
+            } else if (silence) {
+              silence.pause();
+            }
+            return true;
+          };
           window.__pcTakeRemote = function () { var c = window.__pcRemote; window.__pcRemote = []; return JSON.stringify(c); };
           window.__pcPosition = function (duration, position, playing) {
             var ms = navigator.mediaSession;

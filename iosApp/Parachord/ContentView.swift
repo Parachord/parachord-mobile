@@ -2256,8 +2256,14 @@ final class QueuePlaybackCoordinator {
         self.soundCloud.onRemoteCommand = { [weak self] command in
             guard let self else { return }
             switch command {
-            case "play": Task { @MainActor in self.soundCloud.play() }
-            case "pause": Task { @MainActor in self.soundCloud.pause() }
+            // Bandcamp's track too: this page holds the audio session for it, and
+            // WebKit can show this page's lock screen instead of Bandcamp's.
+            case "play": Task { @MainActor in
+                if self.activeEngine == .bandcamp { self.bandcamp.play() } else { self.soundCloud.play() }
+            }
+            case "pause": Task { @MainActor in
+                if self.activeEngine == .bandcamp { self.bandcamp.pause() } else { self.soundCloud.pause() }
+            }
             case "next": self.skipNext()
             case "previous": self.skipPrevious()
             default: break
@@ -2265,14 +2271,7 @@ final class QueuePlaybackCoordinator {
         }
         self.soundCloud.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
         self.bandcamp.onTrackEnded = self.soundCloud.onTrackEnded
-        self.bandcamp.onRemoteCommand = { [weak self] command in
-            guard let self else { return }
-            switch command {
-            case "play": Task { @MainActor in self.bandcamp.play() }
-            case "pause": Task { @MainActor in self.bandcamp.pause() }
-            default: self.soundCloud.onRemoteCommand?(command)
-            }
-        }
+        self.bandcamp.onRemoteCommand = self.soundCloud.onRemoteCommand
         self.bandcamp.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
         // Lock-screen / Control-Center next & previous drive the QUEUE
         // (engine-agnostic), not a single player — the "real next/previous"
