@@ -12,6 +12,7 @@ import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.QueueManager
 import com.parachord.android.playlist.PlaylistImportManager
 import com.parachord.android.resolver.ResolverManager
+import com.parachord.android.resolver.ResolverScoring
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -86,6 +87,7 @@ class DeepLinkViewModel constructor(
     private val playbackController: PlaybackController,
     private val queueManager: QueueManager,
     private val resolverManager: ResolverManager,
+    private val resolverScoring: ResolverScoring,
     private val playlistImportManager: PlaylistImportManager,
     private val chatService: AiChatService,
     private val protocolPlayHandler: ProtocolPlayHandler,
@@ -185,7 +187,7 @@ class DeepLinkViewModel constructor(
                         targetTitle = action.title,
                         targetArtist = action.artist,
                     )
-                    val source = sources.firstOrNull()
+                    val source = resolverScoring.selectBest(sources)
                     if (source == null) {
                         _navEvents.emit(DeepLinkNavEvent.Toast("Could not find: ${action.artist} - ${action.title}"))
                     } else {
@@ -227,7 +229,7 @@ class DeepLinkViewModel constructor(
                         targetTitle = action.title,
                         targetArtist = action.artist,
                     )
-                    val source = sources.firstOrNull()
+                    val source = resolverScoring.selectBest(sources)
                     if (source != null) {
                         val trackEntity = TrackEntity(
                             id = source.url,
