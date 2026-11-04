@@ -15,11 +15,12 @@ import Shared
 // Engine routing mirrors CLAUDE.md "Playback Routing":
 //   localfiles / direct (a playable URL) → AVPlayer
 //   soundcloud                           → SoundCloud's widget (#495)
+//   bandcamp                             → Bandcamp's embed (#513)
 //   applemusic (catalog ID)              → MusicKit
 //   spotify (track URI)                  → Spotify Connect
 
 enum PlaybackEngineKind: String {
-    case avPlayer, musicKit, spotify, soundCloud, browser
+    case avPlayer, musicKit, spotify, soundCloud, bandcamp, browser
 }
 
 enum RouteResult: Equatable {
@@ -44,8 +45,9 @@ struct PlaybackRouter {
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
     let soundCloud: IosSoundCloudWidget
+    let bandcamp: IosBandcampEmbed
     /// Called when an embedded player refuses a source (SoundCloud's widget
-    /// can't play, or only previews, the track) with the service's name and
+    /// can't play, or only previews, the track; Bandcamp's embed doesn't start) with the service's name and
     /// the track's page on it. The walk then moves on to the next source.
     var onRefused: ((_ service: String, _ pageUrl: String?, _ reason: String) -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
@@ -55,9 +57,11 @@ struct PlaybackRouter {
     /// Walk the ranked sources; start the first engine-available one.
     func play(ranked: [ResolvedSource], title: String, artist: String, artworkUrl: String? = nil) async -> RouteResult {
         for source in ranked {
-            // Non-streaming resolver (Bandcamp) — hand its URL back to open in
-            // the browser, before trying any audio engine for this source.
-            if nonStreamingResolvers.contains(source.resolver), !source.url.isEmpty {
+            // Non-streaming resolver — hand its URL back to open in the browser,
+            // before trying any audio engine for this source. Not Bandcamp, which
+            // keeps `stream: false` so older app versions still open the browser,
+            // and plays in its embed here (#513).
+            if source.resolver != "bandcamp", nonStreamingResolvers.contains(source.resolver), !source.url.isEmpty {
                 return .openBrowser(source.url)
             }
             switch source.resolver {
@@ -77,6 +81,27 @@ struct PlaybackRouter {
                 case .refused(let reason):
                     if reason == "superseded" { return .noPlayableSource }
                     onRefused?(widget.SERVICE_NAME, widget.pageLink(url: source.url, soundcloudUrl: source.soundcloudUrl), reason)
+                }
+
+            case "bandcamp":
+                // Bandcamp's embed (#513, desktop parachord#1231). A track it
+                // won't start, or that has no id to be found, falls through to
+                // the next ranked source, as SoundCloud's does.
+                let embed = BandcampEmbed.shared
+                let pageLink = embed.pageLink(url: source.url)
+                var result = IosBandcampEmbed.LoadResult.refused("unplayable")
+                if let embedUrl = try? await IosContainer.companion.shared.bandcampEmbedUrl(
+                    trackId: source.bandcampTrackId, pageUrl: source.url) {
+                    result = await bandcamp.load(embedUrl: embedUrl,
+                                                 volume: IosVolumeOffsets.shared.fraction(for: "bandcamp"),
+                                                 title: title, artist: artist, artworkUrl: artworkUrl)
+                }
+                switch result {
+                case .started:
+                    return .played(.bandcamp, resolver: source.resolver)
+                case .refused(let reason):
+                    if reason == "superseded" { return .noPlayableSource }
+                    onRefused?(embed.SERVICE_NAME, pageLink, reason)
                 }
 
             case "localfiles", "direct":

@@ -952,6 +952,42 @@ shared page, desktop's module, previews counted as refused) are in the root
   silent skip (queue advancing or spinoff), and the `Notice` banner with
   "Open in SoundCloud" (`RootView`).
 
+## Bandcamp through its embed (#513, desktop parachord#1231)
+
+Bandcamp plays in its embedded player as the top-level page of a hidden
+`WKWebView` (`IosBandcampEmbed`, `BandcampEmbedPlayer.swift`), engine `.bandcamp`
+in `PlaybackRouter` / `QueuePlaybackCoordinator`. Cross-platform details (the
+URL and state rules, the shared tracker, why there's no bridge) are in the root
+`CLAUDE.md` → "Bandcamp — the Embed".
+
+- **No message handler on this view.** Bandcamp's scripts run at its top level.
+  The poll asks `bcState()` from outside, and `Resources/bandcamp-embed-control.js`
+  is a byte-for-byte copy of Android's and desktop's (an Android unit test fails
+  if Android's and iOS's differ).
+- **In a window, or it never plays.** A view in no window stays at 0:00 (tested
+  on WebKit for #513), so it's added to the key window, at `alpha 0.01`.
+- **The audio-session hold lives in SoundCloud's page.** See "SoundCloud through
+  its widget": WebKit releases its session when a track ends, and iOS won't
+  reactivate it locked. Each Bandcamp track is a new page, so a hold inside it
+  would die with it. `load` calls `IosSoundCloudWidget.holdAudio(true)`, which
+  loads SoundCloud's page if needed and plays `scHoldAudio`'s silent loop there;
+  moving between the two embeds keeps the hold (`applyEngineHandoff`).
+  **Unverified:** that a hold in one `WKWebView` keeps the session for another.
+  Only a real device, locked, can show it, and "position moved" proves nothing.
+  If the next track is silent locked, look here first.
+- **Lock screen:** the Media Session is set in the Bandcamp page by a fixed script
+  (`nowPlayingScript`). With no bridge, its button handlers only queue the command
+  in the page, and the poll collects it; `drainRemoteCommands` accepts only the
+  known commands and a finite position. Not yet tried on a device: which of the
+  two pages' sessions WebKit shows while both have audio.
+- **Refused:** falls through to the next ranked source in `PlaybackRouter`, as
+  SoundCloud's does.
+- **`cacheSchemaVersion` was deliberately not bumped** for
+  `ResolvedSource.bandcampTrackId`. A bump re-resolves every track at once, which
+  can trip Spotify's abuse window, and a cached source with no id has its id
+  looked up from its page. A custom-domain page can't be, and stays refused until
+  that entry is resolved again.
+
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
 Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`

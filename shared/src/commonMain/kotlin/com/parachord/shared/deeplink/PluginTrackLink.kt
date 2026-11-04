@@ -79,6 +79,7 @@ object PluginTrackLink {
                 soundcloudId = soundcloudId,
                 soundcloudUrl = soundcloudUrl,
                 appleMusicId = appleMusicId,
+                bandcampTrackId = meta.text("bandcampTrackId")?.takeIf { id -> id.all { it in '0'..'9' } },
                 confidence = 1.0,
                 matchedTitle = title,
                 matchedArtist = artist,

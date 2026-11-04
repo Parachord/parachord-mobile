@@ -1786,12 +1786,13 @@ final class QueuePlaybackCoordinator {
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
     let soundCloud: IosSoundCloudWidget
+    let bandcamp: IosBandcampEmbed
     private let resolverCache: IosTrackResolverCache
     private let container = IosContainer.companion.shared
     private let queueManager = QueueManager()
 
     private var router: PlaybackRouter {
-        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify, soundCloud: soundCloud,
+        PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify, soundCloud: soundCloud, bandcamp: bandcamp,
                        nonStreamingResolvers: nonStreamingResolvers)
     }
 
@@ -2013,6 +2014,7 @@ final class QueuePlaybackCoordinator {
         case .musicKit: return musicKit.isPlaying
         case .spotify: return spotifyPlaying
         case .soundCloud: return soundCloud.isPlaying
+        case .bandcamp: return bandcamp.isPlaying
         case .browser: return false   // external — we don't manage its playback
         }
     }
@@ -2022,6 +2024,7 @@ final class QueuePlaybackCoordinator {
         case .musicKit: return musicKit.currentTime
         case .spotify: return spotifyPositionSec
         case .soundCloud: return soundCloud.currentTime
+        case .bandcamp: return bandcamp.currentTime
         case .browser: return 0
         }
     }
@@ -2031,6 +2034,7 @@ final class QueuePlaybackCoordinator {
         case .musicKit: return musicKit.duration
         case .spotify: return spotifyDurationSec
         case .soundCloud: return soundCloud.duration
+        case .bandcamp: return bandcamp.duration
         case .browser: return 0
         }
     }
@@ -2048,6 +2052,8 @@ final class QueuePlaybackCoordinator {
             Task { @MainActor in await spotify.seek(toSec: seconds) }
         case .soundCloud:
             Task { @MainActor in soundCloud.seek(to: seconds) }
+        case .bandcamp:
+            Task { @MainActor in bandcamp.seek(to: seconds) }
         case .browser:
             break   // external playback — nothing to seek
         }
@@ -2068,6 +2074,7 @@ final class QueuePlaybackCoordinator {
         case .spotify: return "spotify"
         case .musicKit: return "applemusic"
         case .soundCloud: return "soundcloud"
+        case .bandcamp: return "bandcamp"
         case .avPlayer:
             // AVPlayer plays soundcloud / localfiles / direct — surface the
             // best cached URL-based source for the current track.
@@ -2105,8 +2112,10 @@ final class QueuePlaybackCoordinator {
     @MainActor
     private func applyEngineHandoff(from previousEngine: PlaybackEngineKind, to kind: PlaybackEngineKind) async {
         guard previousEngine != kind else { return }
-        // Leaving SoundCloud halts the widget (it's never left paused).
-        if previousEngine == .soundCloud { soundCloud.stop() }
+        // Leaving an embedded player halts it (it's never left paused). Moving
+        // between the two keeps WebKit's audio session: they share the hold.
+        if previousEngine == .soundCloud { soundCloud.stop(keepAudioSession: kind == .bandcamp) }
+        if previousEngine == .bandcamp { await bandcamp.stop(keepAudioSession: kind == .soundCloud) }
         switch kind {
         case .avPlayer:
             // Our own audio — drop the external keepalive; player.play()
@@ -2146,6 +2155,15 @@ final class QueuePlaybackCoordinator {
             if previousEngine == .spotify { await spotify.pause() }
             IosAudioSession.configureForSoundCloud()
             keepAlive.start()
+        case .bandcamp:
+            // Bandcamp's embed (#513): out of process like SoundCloud's widget,
+            // with the same session and keepalive. Coming from SoundCloud the
+            // previous engine's already stopped above.
+            player.haltAudio()
+            if previousEngine == .musicKit { musicKit.pause() }
+            if previousEngine == .spotify { await spotify.pause() }
+            IosAudioSession.configureForSoundCloud()
+            keepAlive.start()
         case .browser:
             keepAlive.stop()
         }
@@ -2176,6 +2194,10 @@ final class QueuePlaybackCoordinator {
             IosAudioSession.configureForSoundCloud()
             keepAlive.restart()
             soundCloud.play()
+        case .bandcamp:
+            IosAudioSession.configureForSoundCloud()
+            keepAlive.restart()
+            bandcamp.play()
         case .browser:
             break
         }
@@ -2205,6 +2227,7 @@ final class QueuePlaybackCoordinator {
         musicKit: IosMusicKitPlayer,
         spotify: IosSpotifyConnect,
         soundCloud: IosSoundCloudWidget = IosSoundCloudWidget(),
+        bandcamp: IosBandcampEmbed = IosBandcampEmbed(),
         resolverCache: IosTrackResolverCache,
         installLifecycleMonitor: Bool = true
     ) {
@@ -2212,6 +2235,8 @@ final class QueuePlaybackCoordinator {
         self.musicKit = musicKit
         self.spotify = spotify
         self.soundCloud = soundCloud
+        self.bandcamp = bandcamp
+        self.bandcamp.audioHold = soundCloud
         self.resolverCache = resolverCache
         // Auto-advance: both engines pull the next queued track when the
         // current one ends. AVPlayer fires onTrackEnded from its end
@@ -2239,6 +2264,16 @@ final class QueuePlaybackCoordinator {
             }
         }
         self.soundCloud.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
+        self.bandcamp.onTrackEnded = self.soundCloud.onTrackEnded
+        self.bandcamp.onRemoteCommand = { [weak self] command in
+            guard let self else { return }
+            switch command {
+            case "play": Task { @MainActor in self.bandcamp.play() }
+            case "pause": Task { @MainActor in self.bandcamp.pause() }
+            default: self.soundCloud.onRemoteCommand?(command)
+            }
+        }
+        self.bandcamp.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
         // Lock-screen / Control-Center next & previous drive the QUEUE
         // (engine-agnostic), not a single player — the "real next/previous"
         // the AVPlayer's skip±15s stand-ins anticipated.
@@ -2362,8 +2397,12 @@ final class QueuePlaybackCoordinator {
             Task { @MainActor in
                 if soundCloud.isPlaying { soundCloud.pause() } else { soundCloud.play() }
             }
+        case .bandcamp:
+            Task { @MainActor in
+                if bandcamp.isPlaying { bandcamp.pause() } else { bandcamp.play() }
+            }
         case .browser:
-            // Re-open the Bandcamp page (playback happens in the browser).
+            // Re-open the track's page (playback happens in the browser).
             if let url = browserUrl, let u = URL(string: url) {
                 Task { @MainActor in _ = await UIApplication.shared.open(u) }
             }
@@ -2404,6 +2443,7 @@ final class QueuePlaybackCoordinator {
                 case .musicKit: musicKit.pause()
                 case .spotify: await spotify.pause()
                 case .soundCloud: soundCloud.stop()
+                case .bandcamp: await bandcamp.stop()
                 case .avPlayer, .browser: break
                 }
             }
@@ -2484,6 +2524,7 @@ final class QueuePlaybackCoordinator {
                     case .musicKit: musicKit.pause()
                     case .spotify: await spotify.pause()
                     case .soundCloud: soundCloud.stop()
+                    case .bandcamp: await bandcamp.stop()
                     case .avPlayer, .browser: break
                     }
                 }
@@ -2651,13 +2692,14 @@ final class QueuePlaybackCoordinator {
                     startSpotifyPolling()
                 }
             case .openBrowser(let url):
-                // Bandcamp (stream:false): stop the prior engine's audio, show
+                // A browser-only resolver (stream:false): stop the prior engine's audio, show
                 // the track in the mini player (not playing), open the URL.
                 switch activeEngine {
                 case .avPlayer: player.pause()
                 case .musicKit: musicKit.pause()
                 case .spotify: await spotify.pause()
                 case .soundCloud: soundCloud.stop()
+                case .bandcamp: await bandcamp.stop()
                 case .browser: break
                 }
                 activeEngine = .browser
@@ -2698,6 +2740,7 @@ final class QueuePlaybackCoordinator {
         case .musicKit: musicKit.pause()
         case .spotify: await spotify.pause(); spotifyPlaying = false
         case .soundCloud: soundCloud.stop()
+        case .bandcamp: await bandcamp.stop()
         case .browser: break
         }
         keepAlive.stop()

@@ -1769,6 +1769,19 @@ class PlaybackService : MediaLibraryService() {
         // hasPreviousMediaItem stays false for v1 (no history surface).
         override fun hasPreviousMediaItem(): Boolean = false
 
+        /**
+         * The lock screen / notification scrubber, and Android Auto's. Without
+         * this it sought inside the silence loop, so no external engine (Spotify,
+         * Apple Music, SoundCloud, Bandcamp) ever heard about it.
+         */
+        override fun seekTo(positionMs: Long) {
+            if (externalMode) {
+                playbackController.seekTo(positionMs)
+                return
+            }
+            super.seekTo(positionMs)
+        }
+
         override fun seekTo(mediaItemIndex: Int, positionMs: Long) {
             if (mediaItemIndex == 0) {
                 // No-op for tapping the current track. Don't forward to the

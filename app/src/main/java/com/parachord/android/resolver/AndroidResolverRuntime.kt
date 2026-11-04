@@ -403,6 +403,7 @@ class AndroidResolverRuntime constructor(
                 spotifyId = result.spotifyId,
                 soundcloudId = result.soundcloudId,
                 appleMusicId = result.appleMusicId,
+                bandcampTrackId = com.parachord.shared.resolver.pluginBandcampTrackId(resultJson),
                 // Optional `.axe` result field — a plugin that resolves a
                 // streaming source MAY return its ISRC for the MBID fallback,
                 // validated/normalized so a malformed value never stores (#217).

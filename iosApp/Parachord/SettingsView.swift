@@ -938,7 +938,7 @@ private struct PluginConfigSheet: View {
                 case "librefm": libreFmSection
                 case "applemusic": appleMusicSection
                 case "localfiles": localFilesSection
-                case "bandcamp": infoSection("Bandcamp needs no credentials — it resolves and opens tracks in the browser.")
+                case "bandcamp": infoSection("Bandcamp needs no credentials — tracks play through Bandcamp's own player.")
                 // No key required (matches Android's toggle-only Discogs) — the
                 // public API works unauthenticated; a token would only raise rate
                 // limits, which we don't surface.

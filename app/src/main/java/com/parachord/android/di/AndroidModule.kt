@@ -517,6 +517,9 @@ val androidModule = module {
     singleOf(::AppleMusicPlaybackHandler)
     singleOf(::SoundCloudPlaybackHandler)
     singleOf(::SoundCloudWidgetBridge)
+    singleOf(::BandcampEmbedBridge)
+    single { com.parachord.shared.playback.BandcampEmbedResolver(get()) }
+    singleOf(::BandcampPlaybackHandler)
     // One Apple Music catalog limiter app-wide (Apple throttles per token):
     // MusicKit JS's catalog calls and the plugin host's catalog reads share it.
     single { com.parachord.shared.api.MusicKitCatalogLimiter() }

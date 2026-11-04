@@ -7,6 +7,7 @@ import com.parachord.android.playback.handlers.ExternalPlaybackHandler
 import com.parachord.android.playback.handlers.LocalFileHandler
 import com.parachord.android.playback.handlers.PlaybackAction
 import com.parachord.android.playback.handlers.AppleMusicPlaybackHandler
+import com.parachord.android.playback.handlers.BandcampPlaybackHandler
 import com.parachord.android.playback.handlers.SoundCloudPlaybackHandler
 import com.parachord.android.playback.handlers.SourceHandler
 import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
@@ -18,13 +19,15 @@ import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
  * 1. Spotify tracks → Web API / Spotify Connect (external playback)
  * 2. Apple Music tracks → MusicKit JS WebView (external playback)
  * 3. SoundCloud tracks → SoundCloud's embeddable widget (hidden WebView)
- * 4. Local files → ExoPlayer with content:// URI
- * 5. Direct streams → ExoPlayer with HTTP URL
+ * 4. Bandcamp tracks → Bandcamp's embedded player (hidden WebView)
+ * 5. Local files → ExoPlayer with content:// URI
+ * 6. Direct streams → ExoPlayer with HTTP URL
  */
 class PlaybackRouter constructor(
     private val spotifyHandler: SpotifyPlaybackHandler,
     private val appleMusicHandler: AppleMusicPlaybackHandler,
     private val soundCloudHandler: SoundCloudPlaybackHandler,
+    private val bandcampHandler: BandcampPlaybackHandler,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
 ) {
     companion object {
@@ -47,7 +50,18 @@ class PlaybackRouter constructor(
      * Returns null if no handler can play this track.
      */
     suspend fun route(track: TrackEntity): PlaybackAction? {
-        // Check if this track's resolver is a non-streaming .axe plugin (e.g., Bandcamp).
+        // Bandcamp plays in its embed (#513). Ahead of the check below, because
+        // bandcamp.axe keeps `stream: false` so older app versions still open the
+        // browser, and ahead of the handler walk, because a track re-routed here
+        // can still carry another service's ids.
+        if (bandcampHandler.canHandle(track)) {
+            Log.d(TAG, "Routing '${track.title}' to BandcampPlaybackHandler")
+            stopExternalPlayback()
+            activeExternalHandler = bandcampHandler
+            return PlaybackAction.ExternalPlayback(bandcampHandler)
+        }
+
+        // Check if this track's resolver is another non-streaming .axe plugin.
         // These plugins resolve tracks (find them) but can't stream audio — open in browser.
         val resolver = track.resolver
         if (resolver != null && track.sourceUrl != null) {

@@ -130,6 +130,16 @@ final class IosSoundCloudWidget {
         if !keepAudioSession { webView.evaluateJavaScript("scHoldAudio(false)", completionHandler: nil) }
     }
 
+    /// Keep WebKit's audio session in use with no SoundCloud track playing:
+    /// Bandcamp's embed (#513) loads a new page per track, so its own page can't
+    /// hold anything across tracks. This page stays loaded.
+    @MainActor func holdAudio(_ on: Bool) async {
+        if on {
+            guard await ensurePage() else { return }
+        }
+        webView?.evaluateJavaScript("scHoldAudio(\(on))", completionHandler: nil)
+    }
+
     // MARK: Page
 
     @MainActor

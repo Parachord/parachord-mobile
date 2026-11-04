@@ -21,7 +21,7 @@ import com.parachord.shared.playback.SoundCloudWidget
  */
 class SoundCloudPlaybackHandler constructor(
     private val widget: SoundCloudWidgetBridge,
-) : SourceHandler, ExternalPlaybackHandler {
+) : SourceHandler, EmbedPlaybackHandler {
 
     companion object {
         private const val TAG = "SoundCloudPlayback"
@@ -36,8 +36,11 @@ class SoundCloudPlaybackHandler constructor(
             SoundCloudWidget.pageLink(url = track.sourceUrl, soundcloudUrl = null)
     }
 
-    /** Gain (0..1) for the next [play]: the resolver's dB offset, set by the controller. */
-    @Volatile var volumeFraction: Float = 1f
+    @Volatile override var volumeFraction: Float = 1f
+
+    override var onFinished: (() -> Unit)?
+        get() = widget.onFinished
+        set(value) { widget.onFinished = value }
 
     val bridge: SoundCloudWidgetBridge get() = widget
 
@@ -72,5 +75,5 @@ class SoundCloudPlaybackHandler constructor(
 
     override fun getPosition(): Long = widget.positionMs
     override fun isPlaying(): Boolean = widget.isPlaying
-    fun getDuration(): Long = widget.durationMs
+    override fun getDuration(): Long = widget.durationMs
 }

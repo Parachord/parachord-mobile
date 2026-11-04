@@ -73,6 +73,7 @@ Each resolver type routes to a specific playback mechanism:
 - **Spotify** → Web API (Spotify Connect, controls Spotify app on-device via HTTP)
 - **SoundCloud** → SoundCloud's embeddable widget in a hidden WebView (external playback, like Apple Music); iOS the same in a `WKWebView`
 - **Local files** → ExoPlayer with content:// URI
+- **Bandcamp** → Bandcamp's embedded player as the top-level page of a hidden WebView (external playback); iOS the same in a `WKWebView`
 - **Direct streams** → ExoPlayer with HTTP URL
 
 ### SoundCloud — the Widget (#495, desktop parachord#1209)
@@ -85,6 +86,22 @@ The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/s
 - **A refused track is a failed source** (`EmbedPlaybackRefusedException`): another source plays (with a "Playing via X" toast), else the queue moves on when it was advancing or in a spinoff, else a snackbar offers "Open in SoundCloud" when the track has a soundcloud.com page. The browser never opens by itself.
 - **Link:** the source's soundcloud.com permalink, else `https://api.soundcloud.com/tracks/<id>` (the form SoundCloud's own embed code uses). Shared: `SoundCloudWidget.widgetLink` / `pageLink` (`shared/.../playback/SoundCloudWidget.kt`).
 - **iOS does the same** in a hidden `WKWebView` (`iosApp/Parachord/SoundCloudWidget.swift`) with byte-identical copies of the page and module in `iosApp/Parachord/Resources/` (an Android unit test fails if they drift — edit Android's, copy). iOS has one extra trap — WebKit's own audio session can't be re-activated with the screen locked, so the page's `scHoldAudio` keeps it in use between tracks; see `iosApp/AGENTS.md` → "SoundCloud through its widget".
+
+### Bandcamp — the Embed (#513, desktop parachord#1231)
+
+Bandcamp plays through its own embedded player (`bandcamp.com/EmbeddedPlayer`), with no sign-in. The URL rules, state rules and id lookup are shared (`shared/.../playback/BandcampEmbed.kt`, a port of desktop's `bandcamp-embed-url.js`, `sanitizeEmbedState` and adapter); each platform has a thin web view and poll loop (Android `BandcampEmbedBridge` + `BandcampPlaybackHandler`, iOS `IosBandcampEmbed`).
+
+- **The embed is the web view's top-level page.** It has no protocol and our page can't reach into a cross-origin iframe. Desktop's `bandcamp-embed-control.js` runs in it and drives the page's `<audio>`: `assets/js/` and `iosApp/Parachord/Resources/` hold byte-identical copies of desktop's `main-process/` file (an Android unit test fails if they differ). Update it by copying desktop's.
+- **No bridge into the page.** Bandcamp's scripts run at that top level, so there's no `@JavascriptInterface` or `WKScriptMessageHandler`. The apps poll `bcState()` every 500 ms from outside and hand the answer to `BandcampEmbedTracker`, which trusts none of it. Only fixed scripts run, and a value reaches them only as a checked number.
+- **Drive a page only after its load finished.** Replaying a track is the same URL, so the old page is still up for a moment; its moved position read as "started" and the new page never got its click (paused at 0:00, found on a Pixel). Android gates on `onPageFinished`, iOS on `didFinish` for the navigation it started.
+- **Always the single-track URL.** `album=…/track=…` runs on into the album's next track by itself. The URL is built only from a numeric track id. `bandcamp.axe` search results carry it (`ResolvedSource.bandcampTrackId`); a track row has no column for it, so Android reads it from `TrackResolverCache`. With no id (older cached sources, library rows, `lookupUrl` results), `BandcampEmbedResolver` looks it up through the search API and then the page, but only for a track page on a `bandcamp.com` subdomain.
+- **`#big_play_button`, not `.embeddedplaybutton`.** The second is a 0x0 element and loads no stream.
+- **A failed source, like SoundCloud.** Started means the position advanced, within 15 s. A track that doesn't start throws `EmbedPlaybackRefusedException`: another source plays, else the queue moves on, else a snackbar offers "Open in Bandcamp". The browser never opens by itself. An error after it started counts as the track's end, so the queue can't stall.
+- **`stream: false` stays in the plugin**, so app versions without this engine keep opening the browser. Both routers check for Bandcamp first, ahead of their non-streaming check. A `minAppVersion` for the phones isn't needed for that reason.
+- **The controller treats both embeds the same**: `EmbedPlaybackHandler` (position, duration, `onFinished`, volume), mirrored by `startEmbedStatePolling`.
+- **The real length comes from the embed.** The plugin's results hard-code `duration: 210`.
+
+**Not checked:** whether repeated plays of one track hit a Bandcamp limit. Desktop's #1231 asked for that check and recorded no result. A limit that stops a track from starting is a refused source; one that stops it mid-track isn't detected.
 
 ### Spotify Connect — Device Wake & Playback
 
@@ -149,7 +166,7 @@ The Android app runs the **same .axe plugin system as desktop**. 19 plugins load
 
 **Plugin types loaded:**
 - **Content resolvers** (stream: true): spotify, applemusic, soundcloud, localfiles — native Kotlin takes priority (faster), .axe as fallback
-- **Content resolvers** (stream: false): bandcamp — resolves tracks but opens browser for playback (matches desktop behavior)
+- **Content resolvers** (stream: false): bandcamp — plays in its embed through an explicit engine ahead of the `stream: false` check (see "Bandcamp — the Embed"), so older app versions still open the browser
 - **AI providers**: chatgpt, gemini, claude — native Kotlin handles these, `AxeAiProvider` wrapper available for .axe-only providers (ollama)
 - **Meta-services**: discogs, wikipedia, lastfm, listenbrainz, librefm — native Kotlin implementations, `AxeScrobbler` wrapper ready for migration
 - **Concert services**: ticketmaster, seatgeek, bandsintown, songkick — API key config in Settings
@@ -214,7 +231,7 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   Apple Music resolver uses the plugin's `resolve` as its fallback when MusicKit isn't
   configured yet (it usually isn't when Home resolves at launch).
 - **Plugin results don't all carry `url`.** ID-based resolvers return a catalog id
-  (`appleMusicId`, `spotifyUri`); Bandcamp returns only `bandcampUrl`. Hosts read
+  (`appleMusicId`, `spotifyUri`); Bandcamp returns `bandcampUrl` and no `url`. Hosts read
   `url`, then the plugin's own `<resolverId>Url` (`pluginServiceUrl`), then the
   service URL/id fields — never require `url`.
 - **Artist photos are a chain with a plugin step** (desktop parachord#1141).
@@ -1085,7 +1102,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda |
 | Scrobbling | `shared/.../playback/scrobbler/{ScrobbleManager,Scrobbler,ListenBrainzScrobbler,LastFmScrobbler,LibreFmScrobbler,LbSourceEnrichment,ScrobblePluginDispatch}.kt` (KMP-shared, #193; app-side `playback/scrobbler/*` are typealias shims). Android JS dispatch: `playback/JsScrobblePluginDispatcher.kt`. Last.fm signing: `shared/.../api/LastFmSigning.kt` |
 | Local file scanning | `data/scanner/MediaScanner.kt` |
-| Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` + `SoundCloudWidgetBridge.kt` (`assets/js/soundcloud-widget.html`) |
+| Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` + `SoundCloudWidgetBridge.kt` (`assets/js/soundcloud-widget.html`), `BandcampPlaybackHandler.kt` + `BandcampEmbedBridge.kt` (`assets/js/bandcamp-embed-control.js`) |
 | Apple Music bridge | `playback/handlers/MusicKitWebBridge.kt`, `assets/js/musickit-bridge.html` |
 | Settings/defaults | `shared/.../settings/SettingsStore.kt` (typealias shim in `data/store/`); `shared/.../store/KvStore.kt` + `KvStoreFactory` (Android: SharedPreferences, iOS: NSUserDefaults) |
 | Theme | `ui/theme/Theme.kt` |

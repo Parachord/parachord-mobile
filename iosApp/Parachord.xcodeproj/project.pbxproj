@@ -50,6 +50,8 @@
 		AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E6 /* MediaLibraryScanner.swift */; };
 		AA00000000000000000000E9 /* SpinoffController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000E8 /* SpinoffController.swift */; };
 		AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FC /* SoundCloudWidget.swift */; };
+		AA0000000000000000000103 /* BandcampEmbedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000102 /* BandcampEmbedPlayer.swift */; };
+		AA0000000000000000000105 /* bandcamp-embed-control.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000104 /* bandcamp-embed-control.js */; };
 		AA00000000000000000000FF /* soundcloud-widget.html in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FE /* soundcloud-widget.html */; };
 		AA0000000000000000000101 /* soundcloud-widget-player.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000100 /* soundcloud-widget-player.js */; };
 		AA00000000000000000000EB /* ChatScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000EA /* ChatScreen.swift */; };
@@ -127,6 +129,8 @@
 		AA00000000000000000000E6 /* MediaLibraryScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaLibraryScanner.swift; sourceTree = "<group>"; };
 		AA00000000000000000000E8 /* SpinoffController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpinoffController.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FC /* SoundCloudWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundCloudWidget.swift; sourceTree = "<group>"; };
+		AA0000000000000000000102 /* BandcampEmbedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandcampEmbedPlayer.swift; sourceTree = "<group>"; };
+		AA0000000000000000000104 /* bandcamp-embed-control.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/bandcamp-embed-control.js"; sourceTree = "<group>"; };
 		AA00000000000000000000FE /* soundcloud-widget.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "Resources/soundcloud-widget.html"; sourceTree = "<group>"; };
 		AA0000000000000000000100 /* soundcloud-widget-player.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/soundcloud-widget-player.js"; sourceTree = "<group>"; };
 		AA00000000000000000000EA /* ChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatScreen.swift; sourceTree = "<group>"; };
@@ -221,6 +225,7 @@
 				AA00000000000000000000E2 /* ListenAlongController.swift */,
 				AA00000000000000000000E8 /* SpinoffController.swift */,
 				AA00000000000000000000FC /* SoundCloudWidget.swift */,
+				AA0000000000000000000102 /* BandcampEmbedPlayer.swift */,
 				AA00000000000000000000EA /* ChatScreen.swift */,
 				AA00000000000000000000E4 /* FriendProfileScreen.swift */,
 				AA00000000000000000000E6 /* MediaLibraryScanner.swift */,
@@ -242,6 +247,7 @@
 				AA0000000000000000000019 /* resolver-loader.js */,
 				AA00000000000000000000FE /* soundcloud-widget.html */,
 				AA0000000000000000000100 /* soundcloud-widget-player.js */,
+				AA0000000000000000000104 /* bandcamp-embed-control.js */,
 				AA000000000000000000001A /* axe-plugins */,
 				AA0000000000000000000012 /* Assets.xcassets */,
 			);
@@ -339,6 +345,7 @@
 				AA0000000000000000000029 /* resolver-loader.js in Resources */,
 				AA00000000000000000000FF /* soundcloud-widget.html in Resources */,
 				AA0000000000000000000101 /* soundcloud-widget-player.js in Resources */,
+				AA0000000000000000000105 /* bandcamp-embed-control.js in Resources */,
 				AA000000000000000000002A /* axe-plugins in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -420,6 +427,7 @@
 				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,
 				AA00000000000000000000E9 /* SpinoffController.swift in Sources */,
 				AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */,
+				AA0000000000000000000103 /* BandcampEmbedPlayer.swift in Sources */,
 				AA00000000000000000000EB /* ChatScreen.swift in Sources */,
 				AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */,
 				AA00000000000000000000E7 /* MediaLibraryScanner.swift in Sources */,

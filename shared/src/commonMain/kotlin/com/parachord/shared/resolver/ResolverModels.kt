@@ -23,6 +23,13 @@ data class ResolvedSource(
     val soundcloudUrl: String? = null,
     val appleMusicId: String? = null,
     /**
+     * Bandcamp's numeric track id, what its embed plays (#513). `bandcamp.axe`
+     * search results carry it. Null on sources saved before this field, and on
+     * `lookupUrl` results; then [com.parachord.shared.playback.BandcampEmbedResolver]
+     * looks it up from the track's page.
+     */
+    val bandcampTrackId: String? = null,
+    /**
      * ISRC of the matched recording, when the resolver's response carries one
      * (Spotify `external_ids.isrc`, Apple Music catalog `attributes.isrc`, or an
      * `.axe` result's `isrc`). The service-agnostic supply side of the ISRC →
@@ -347,6 +354,18 @@ fun pickTrackIsrc(topLevelIsrc: String?, sources: List<ResolvedSource>): String?
         validateIsrc(source.isrc)?.let { return it }
     }
     return null
+}
+
+/**
+ * `bandcampTrackId` from a plugin result, a number or a numeric string. Read
+ * here rather than in each runtime's result type because the JSON can be either.
+ */
+fun pluginBandcampTrackId(resultJson: String): String? = try {
+    val obj = kotlinx.serialization.json.Json.parseToJsonElement(resultJson) as? kotlinx.serialization.json.JsonObject
+    (obj?.get("bandcampTrackId") as? kotlinx.serialization.json.JsonPrimitive)
+        ?.content?.takeIf { id -> id.isNotEmpty() && id.all { it in '0'..'9' } }
+} catch (_: Exception) {
+    null
 }
 
 /**
