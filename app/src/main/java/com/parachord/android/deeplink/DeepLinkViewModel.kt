@@ -3,12 +3,14 @@ package com.parachord.android.deeplink
 import android.net.Uri
 import com.parachord.shared.platform.Log
 import com.parachord.shared.deeplink.DeepLinkAction
+import com.parachord.shared.deeplink.controlLinkShouldToggle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.ai.AiChatService
 import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.repository.FriendsRepository
 import com.parachord.android.playback.PlaybackController
+import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.playback.QueueManager
 import com.parachord.android.playlist.PlaylistImportManager
 import com.parachord.android.resolver.ResolverManager
@@ -85,6 +87,7 @@ class DeepLinkViewModel constructor(
     private val deepLinkHandler: DeepLinkHandler,
     private val externalLinkResolver: ExternalLinkResolver,
     private val playbackController: PlaybackController,
+    private val playbackStateHolder: PlaybackStateHolder,
     private val queueManager: QueueManager,
     private val resolverManager: ResolverManager,
     private val resolverScoring: ResolverScoring,
@@ -216,8 +219,10 @@ class DeepLinkViewModel constructor(
 
                 is DeepLinkAction.Control -> {
                     when (action.action) {
-                        "pause" -> playbackController.togglePlayPause()
-                        "resume", "play" -> playbackController.togglePlayPause()
+                        "pause", "resume", "play" ->
+                            if (controlLinkShouldToggle(action.action, playbackStateHolder.state.value.isPlaying)) {
+                                playbackController.togglePlayPause()
+                            }
                         "skip", "next" -> playbackController.skipNext()
                         "previous" -> playbackController.skipPrevious()
                     }

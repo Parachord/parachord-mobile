@@ -84,6 +84,7 @@ class DeepLinkViewModelSourceSelectionTest {
         deepLinkHandler = deepLinkHandler,
         externalLinkResolver = mockk(relaxed = true),
         playbackController = playbackController,
+        playbackStateHolder = mockk(relaxed = true),
         queueManager = queueManager,
         resolverManager = resolverManager,
         resolverScoring = ResolverScoring(settingsStore),
