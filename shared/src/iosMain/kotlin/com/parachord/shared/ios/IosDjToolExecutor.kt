@@ -2,6 +2,10 @@ package com.parachord.shared.ios
 
 import com.parachord.shared.ai.ChatPlaybackSnapshot
 import com.parachord.shared.ai.tools.DjToolExecutor
+import com.parachord.shared.ai.tools.djTrackNotFoundError
+import com.parachord.shared.ai.tools.findRequestedTrack
+import com.parachord.shared.ai.tools.findRequestedTracks
+import com.parachord.shared.ai.tools.runQueueAdd
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.Track
@@ -52,11 +56,8 @@ class IosDjToolExecutor(
     private suspend fun executePlay(args: Map<String, Any?>): Map<String, Any?> {
         val artist = args["artist"] as? String ?: return mapOf("error" to "Missing artist")
         val title = args["title"] as? String ?: return mapOf("error" to "Missing title")
-        val results = metadataService.searchTracks("$artist $title", 20)
-        if (results.isEmpty()) return mapOf("error" to "No results found for \"$artist - $title\"")
-        val best = results.find {
-            it.artist.equals(artist, ignoreCase = true) && it.title.equals(title, ignoreCase = true)
-        } ?: results.first()
+        val best = findRequestedTrack(artist, title, metadataService::searchTracks)
+            ?: return mapOf("success" to false, "error" to djTrackNotFoundError(artist, title))
         val track = best.toTrack()
         bridge.onPlayTrack(track)
         return mapOf(
@@ -96,29 +97,13 @@ class IosDjToolExecutor(
         if (tracksArg.isEmpty()) return mapOf("error" to "Empty tracks list")
         val playFirst = args["playFirst"] as? Boolean ?: true
 
-        val resolved = mutableListOf<Track>()
-        for (t in tracksArg) {
-            val artist = t["artist"] as? String ?: continue
-            val title = t["title"] as? String ?: continue
-            val results = metadataService.searchTracks("$artist $title", 5)
-            val best = results.find {
-                it.artist.equals(artist, ignoreCase = true) && it.title.equals(title, ignoreCase = true)
-            } ?: results.firstOrNull()
-            if (best != null) resolved.add(best.toTrack())
-        }
-        if (resolved.isEmpty()) return mapOf("error" to "Could not find any of the requested tracks")
-
-        if (playFirst) {
-            bridge.onClearQueue()
-            bridge.onPlayTrack(resolved.first())
-            resolved.drop(1).forEach { bridge.onAddToQueue(it) }
-        } else {
-            resolved.forEach { bridge.onAddToQueue(it) }
-        }
-        return mapOf(
-            "success" to true,
-            "queued" to resolved.size,
-            "tracks" to resolved.map { mapOf("artist" to it.artist, "title" to it.title) },
+        return runQueueAdd(
+            requested = findRequestedTracks(tracksArg, metadataService::searchTracks),
+            playFirst = playFirst,
+            toTrack = { it.toTrack() },
+            clearQueue = { bridge.onClearQueue() },
+            playTrack = { bridge.onPlayTrack(it) },
+            addToQueue = { tracks -> tracks.forEach { bridge.onAddToQueue(it) } },
         )
     }
 

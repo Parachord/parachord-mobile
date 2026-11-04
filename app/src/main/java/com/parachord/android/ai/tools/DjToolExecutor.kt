@@ -10,6 +10,11 @@ import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
+import com.parachord.shared.ai.tools.DJ_NONE_FOUND_ERROR
+import com.parachord.shared.ai.tools.djTrackNotFoundError
+import com.parachord.shared.ai.tools.findRequestedTrack
+import com.parachord.shared.ai.tools.findRequestedTracks
+import com.parachord.shared.ai.tools.runQueueAdd
 import java.util.UUID
 
 /**
@@ -53,17 +58,8 @@ class DjToolExecutor constructor(
         val artist = args["artist"] as? String ?: return mapOf("error" to "Missing artist")
         val title = args["title"] as? String ?: return mapOf("error" to "Missing title")
 
-        val query = "$artist $title"
-        val results = metadataService.searchTracks(query, 20)
-        if (results.isEmpty()) {
-            return mapOf("error" to "No results found for \"$artist - $title\"")
-        }
-
-        // Prefer exact case-insensitive match, else take first result
-        val bestMatch = results.find {
-            it.artist.equals(artist, ignoreCase = true) &&
-                it.title.equals(title, ignoreCase = true)
-        } ?: results.first()
+        val bestMatch = findRequestedTrack(artist, title, metadataService::searchTracks)
+            ?: return mapOf("success" to false, "error" to djTrackNotFoundError(artist, title))
 
         val track = bestMatch.toTrackEntity()
         playbackController.playTrack(track)
@@ -124,40 +120,13 @@ class DjToolExecutor constructor(
             return mapOf("error" to "Empty tracks list")
         }
 
-        // Resolve each track via search
-        val resolvedTracks = mutableListOf<TrackEntity>()
-        for (trackMap in tracksArg) {
-            val artist = trackMap["artist"] as? String ?: continue
-            val title = trackMap["title"] as? String ?: continue
-            val query = "$artist $title"
-            val results = metadataService.searchTracks(query, 5)
-            val bestMatch = results.find {
-                it.artist.equals(artist, ignoreCase = true) &&
-                    it.title.equals(title, ignoreCase = true)
-            } ?: results.firstOrNull()
-            if (bestMatch != null) {
-                resolvedTracks.add(bestMatch.toTrackEntity())
-            }
-        }
-
-        if (resolvedTracks.isEmpty()) {
-            return mapOf("error" to "Could not find any of the requested tracks")
-        }
-
-        if (playFirst) {
-            playbackController.clearQueue()
-            playbackController.playTrack(resolvedTracks.first())
-            if (resolvedTracks.size > 1) {
-                playbackController.addToQueue(resolvedTracks.drop(1))
-            }
-        } else {
-            playbackController.addToQueue(resolvedTracks)
-        }
-
-        return mapOf(
-            "success" to true,
-            "queued" to resolvedTracks.size,
-            "tracks" to resolvedTracks.map { mapOf("artist" to it.artist, "title" to it.title) },
+        return runQueueAdd(
+            requested = findRequestedTracks(tracksArg, metadataService::searchTracks),
+            playFirst = playFirst,
+            toTrack = { it.toTrackEntity() },
+            clearQueue = playbackController::clearQueue,
+            playTrack = { playbackController.playTrack(it) },
+            addToQueue = playbackController::addToQueue,
         )
     }
 
@@ -172,21 +141,13 @@ class DjToolExecutor constructor(
         val tracksArg = args["tracks"] as? List<Map<String, Any?>>
             ?: return mapOf("error" to "Missing tracks")
 
-        // Resolve tracks via search
-        val resolvedTracks = mutableListOf<TrackEntity>()
-        for (trackMap in tracksArg) {
-            val artist = trackMap["artist"] as? String ?: continue
-            val title = trackMap["title"] as? String ?: continue
-            val query = "$artist $title"
-            val results = metadataService.searchTracks(query, 5)
-            val bestMatch = results.find {
-                it.artist.equals(artist, ignoreCase = true) &&
-                    it.title.equals(title, ignoreCase = true)
-            } ?: results.firstOrNull()
-            if (bestMatch != null) {
-                resolvedTracks.add(bestMatch.toTrackEntity())
-            }
+        // A wrong song saved here could sync out to Spotify, Apple Music and the
+        // person's other clients, so a track that isn't found stays out.
+        val requested = findRequestedTracks(tracksArg, metadataService::searchTracks)
+        if (requested.found.isEmpty() && requested.notFound.isNotEmpty()) {
+            return mapOf("success" to false, "error" to DJ_NONE_FOUND_ERROR, "notFound" to requested.notFound)
         }
+        val resolvedTracks = requested.found.map { it.toTrackEntity() }
 
         val playlistId = UUID.randomUUID().toString()
         val playlist = PlaylistEntity(
@@ -200,12 +161,13 @@ class DjToolExecutor constructor(
         // Collection tracks table (which was the old broken behavior)
         libraryRepository.createPlaylistWithTracks(playlist, resolvedTracks)
 
-        return mapOf(
-            "success" to true,
-            "playlistId" to playlistId,
-            "name" to name,
-            "trackCount" to resolvedTracks.size,
-        )
+        return buildMap {
+            put("success", true)
+            put("playlistId", playlistId)
+            put("name", name)
+            put("trackCount", resolvedTracks.size)
+            if (requested.notFound.isNotEmpty()) put("notFound", requested.notFound)
+        }
     }
 
     private fun executeShuffle(args: Map<String, Any?>): Map<String, Any?> {
