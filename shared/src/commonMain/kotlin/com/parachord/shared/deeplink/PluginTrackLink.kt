@@ -22,6 +22,10 @@ import kotlinx.serialization.json.longOrNull
  * confidence 1.0), so rescoring keeps it above the floor. Without a SoundCloud
  * sign-in it's the only SoundCloud source the track gets, since SoundCloud's
  * `resolve` can't search. The other resolvers then resolve the track as usual.
+ *
+ * A plugin with no album to report may name its own service instead
+ * (`soundcloud.axe`'s `album: 'SoundCloud'`), which is no album. Any other value
+ * is the plugin's data, so this needs no list of services.
  */
 object PluginTrackLink {
 
@@ -49,7 +53,7 @@ object PluginTrackLink {
         val meta = root["track"] as? JsonObject ?: return null
         val title = meta.text("title") ?: return null
         val artist = meta.text("artist") ?: return null
-        val album = meta.text("album")
+        val album = meta.text("album")?.takeUnless { it.namesService(resolverId) }
 
         val spotifyId = meta.text("spotifyId")
         val spotifyUri = meta.text("spotifyUri")
@@ -107,6 +111,10 @@ object PluginTrackLink {
         )
         return Linked(track, source)
     }
+
+    /** "Apple Music" names `applemusic`: the id is the plugin's name without case, spaces or punctuation. */
+    private fun String.namesService(resolverId: String): Boolean =
+        filter { it.isLetterOrDigit() }.equals(resolverId.filter { it.isLetterOrDigit() }, ignoreCase = true)
 
     private fun JsonObject.text(key: String): String? =
         (this[key] as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotEmpty() && it != "null" }

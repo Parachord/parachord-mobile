@@ -41,6 +41,49 @@ class PluginTrackLinkTest {
     }
 
     @Test
+    fun anAlbumNamedAfterThePluginsOwnServiceIsNoAlbum() {
+        // soundcloud.axe's `album: 'SoundCloud'` placeholder. It would otherwise show
+        // as the album in Now Playing and reach scrobbles and album lookups.
+        val linked = assertNotNull(PluginTrackLink.parse(soundCloudLookup, link))
+        assertNull(linked.track.album)
+    }
+
+    @Test
+    fun theServiceNameMatchIgnoresCaseSpacesAndPunctuation() {
+        // resolverId "applemusic" is the plugin named "Apple Music".
+        val linked = assertNotNull(
+            PluginTrackLink.parse(
+                """{"resolverId":"applemusic","track":{"title":"t","artist":"a","album":"Apple Music"}}""",
+                link,
+            ),
+        )
+        assertNull(linked.track.album)
+    }
+
+    @Test
+    fun aRealAlbumIsKept() {
+        val linked = assertNotNull(
+            PluginTrackLink.parse(
+                """{"resolverId":"soundcloud","track":{"title":"t","artist":"a","album":"Skin"}}""",
+                link,
+            ),
+        )
+        assertEquals("Skin", linked.track.album)
+    }
+
+    @Test
+    fun anAlbumNamedAfterAnotherServiceIsKept() {
+        // Only the plugin's own name is a placeholder, so nothing here lists services.
+        val linked = assertNotNull(
+            PluginTrackLink.parse(
+                """{"resolverId":"bandcamp","track":{"title":"t","artist":"a","album":"SoundCloud"}}""",
+                link,
+            ),
+        )
+        assertEquals("SoundCloud", linked.track.album)
+    }
+
+    @Test
     fun noLookupMeansNoTrack() {
         // No plugin claims the link, or the plugin answered null (a set or a user page).
         assertNull(PluginTrackLink.parse(null, link))
