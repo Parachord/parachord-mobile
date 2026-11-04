@@ -25,7 +25,7 @@ import com.parachord.android.data.metadata.MbidEnrichmentService
 import com.parachord.android.playback.handlers.AppleMusicPlaybackHandler
 import com.parachord.android.playback.handlers.EmbedPlaybackRefusedException
 import com.parachord.android.playback.handlers.ExternalPlaybackHandler
-import com.parachord.android.playback.handlers.SoundCloudPlaybackHandler
+import com.parachord.android.playback.handlers.EmbedPlaybackHandler
 import com.parachord.android.playback.handlers.PlaybackAction
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
@@ -89,7 +89,9 @@ class PlaybackController constructor(
     private var positionUpdateJob: Job? = null
     private var spotifyStateJob: Job? = null
     private var appleMusicPollingJob: Job? = null
-    private var soundCloudPollingJob: Job? = null
+    private var embedPollingJob: Job? = null
+    /** The embedded player [embedPollingJob] is mirroring. */
+    private var activeEmbedHandler: EmbedPlaybackHandler? = null
     private var idleTimeoutJob: Job? = null
     /** Tracks an in-flight track advance (auto or manual skip).
      *  Prevents concurrent advances from double-skipping and lets
@@ -245,7 +247,7 @@ class PlaybackController constructor(
         positionUpdateJob?.cancel()
         spotifyStateJob?.cancel()
         appleMusicPollingJob?.cancel()
-        soundCloudPollingJob?.cancel()
+        embedPollingJob?.cancel()
         idleTimeoutJob?.cancel()
         if (isExternalPlayback) sendExternalPlaybackStop()
         controllerFuture?.let { MediaController.releaseFuture(it) }
@@ -364,7 +366,7 @@ class PlaybackController constructor(
             if (isExternalPlayback) {
                 stopSpotifyStatePolling()
                 stopAppleMusicStatePolling()
-                stopSoundCloudStatePolling()
+                stopEmbedStatePolling()
                 scope.launch { router.stopExternalPlayback() }
                 sendExternalPlaybackStop()
                 isExternalPlayback = false
@@ -559,7 +561,7 @@ class PlaybackController constructor(
                     // awake at 500ms intervals while paused.
                     stopSpotifyStatePolling()
                     stopAppleMusicStatePolling()
-                    stopSoundCloudStatePolling()
+                    stopEmbedStatePolling()
                     // DON'T demote from foreground — keep the notification visible
                     // (showing paused state) like other music players. The state
                     // observer updates the notification with isPlaying=false.
@@ -727,7 +729,7 @@ class PlaybackController constructor(
                 notifyExternalMode(false)
                 stopSpotifyStatePolling()
                 stopAppleMusicStatePolling()
-                stopSoundCloudStatePolling()
+                stopEmbedStatePolling()
 
                 val ctrl = controller ?: return
                 // Restore normal ExoPlayer settings after external playback,
@@ -773,9 +775,9 @@ class PlaybackController constructor(
                 // call) where Android can suspend the process.
                 spotifyStateJob?.cancel()
                 appleMusicPollingJob?.cancel()
-                soundCloudPollingJob?.cancel()
+                embedPollingJob?.cancel()
                 router.getAppleMusicHandler().musicKitBridge.onTrackEnded = null
-                router.getSoundCloudHandler().bridge.onFinished = null
+                activeEmbedHandler?.onFinished = null
 
                 // If switching between different external handlers (e.g. Apple Music
                 // → Spotify), stop the OLD handler. For same-handler transitions
@@ -880,7 +882,7 @@ class PlaybackController constructor(
                 // gap, Android can kill the process between songs.
                 sendExternalPlaybackStart(routedTrack)
 
-                (action.handler as? SoundCloudPlaybackHandler)?.volumeFraction =
+                (action.handler as? EmbedPlaybackHandler)?.volumeFraction =
                     resolverVolumeFraction(routedTrack.resolver)
 
                 try {
@@ -1004,7 +1006,7 @@ class PlaybackController constructor(
         notifyExternalMode(false)
         stopSpotifyStatePolling()
         stopAppleMusicStatePolling()
-        stopSoundCloudStatePolling()
+        stopEmbedStatePolling()
 
         // Restore normal ExoPlayer settings after external playback
         ctrl.volume = 1f
@@ -1438,34 +1440,36 @@ class PlaybackController constructor(
     private fun startStatePolling(handler: ExternalPlaybackHandler) {
         when (handler) {
             is AppleMusicPlaybackHandler -> startAppleMusicStatePolling()
-            is SoundCloudPlaybackHandler -> startSoundCloudStatePolling()
+            is EmbedPlaybackHandler -> startEmbedStatePolling(handler)
             else -> startSpotifyStatePolling()
         }
     }
 
     /**
-     * Mirror SoundCloud's widget into the playback state. The widget pushes
-     * its events ([com.parachord.android.playback.handlers.SoundCloudWidgetBridge]),
-     * so this only copies them every 500 ms; nothing waits on the WebView, so
-     * a Main thread deferred with the screen off can't stall it.
+     * Mirror an embedded player (SoundCloud's widget, Bandcamp's embed) into the
+     * playback state. The handler keeps its own state up to date (the widget
+     * pushes events, the embed is polled), so this only copies it every 500 ms;
+     * nothing waits on the WebView, so a Main thread deferred with the screen
+     * off can't stall it.
      */
-    private fun startSoundCloudStatePolling() {
-        soundCloudPollingJob?.cancel()
+    private fun startEmbedStatePolling(handler: EmbedPlaybackHandler) {
+        embedPollingJob?.cancel()
+        activeEmbedHandler?.takeIf { it !== handler }?.onFinished = null
+        activeEmbedHandler = handler
         acquireExternalPlaybackWakeLock()
-        val handler = router.getSoundCloudHandler()
         val trackEndHandled = java.util.concurrent.atomic.AtomicBoolean(false)
         val advance = {
             if (trackEndHandled.compareAndSet(false, true)) {
                 scope.launch(Dispatchers.Main) { skipNextInternal(userInitiated = false) }
             }
         }
-        handler.bridge.onFinished = {
-            Log.d(TAG, "SoundCloud track finished")
+        handler.onFinished = {
+            Log.d(TAG, "${handler::class.simpleName}: track finished")
             advance()
         }
-        soundCloudPollingJob = scope.launch(Dispatchers.Default) {
-            // The widget's finish event is the signal; this catches one that
-            // never arrived (the position stopped at the end, not playing).
+        embedPollingJob = scope.launch(Dispatchers.Default) {
+            // The player's finish is the signal; this catches one that never
+            // arrived (the position stopped at the end, not playing).
             var stoppedAtEnd = 0
             while (isActive && isExternalPlayback) {
                 val position = handler.getPosition()
@@ -1484,7 +1488,7 @@ class PlaybackController constructor(
                 }
                 stoppedAtEnd = if (!playing && duration > 0 && duration - position < 1500) stoppedAtEnd + 1 else 0
                 if (stoppedAtEnd >= 4) {
-                    Log.d(TAG, "SoundCloud track done (safety net, pos=$position dur=$duration)")
+                    Log.d(TAG, "${handler::class.simpleName}: track done (safety net, pos=$position dur=$duration)")
                     advance()
                     break
                 }
@@ -1493,10 +1497,11 @@ class PlaybackController constructor(
         }
     }
 
-    private fun stopSoundCloudStatePolling() {
-        soundCloudPollingJob?.cancel()
+    private fun stopEmbedStatePolling() {
+        embedPollingJob?.cancel()
         releaseExternalPlaybackWakeLock()
-        router.getSoundCloudHandler().bridge.onFinished = null
+        activeEmbedHandler?.onFinished = null
+        activeEmbedHandler = null
     }
 
     /**
@@ -2299,7 +2304,7 @@ class PlaybackController constructor(
             Toast.makeText(context, "${e.serviceName} can't play this track here. Playing via $label.", Toast.LENGTH_SHORT).show()
             return
         }
-        stopSoundCloudStatePolling()
+        stopEmbedStatePolling()
         router.stopExternalPlayback()
         sendExternalPlaybackStop()
         isExternalPlayback = false

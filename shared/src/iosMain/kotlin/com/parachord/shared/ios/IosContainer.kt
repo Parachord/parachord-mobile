@@ -2689,6 +2689,16 @@ class IosContainer private constructor() {
      * e.g. Bandcamp) — playback opens these in the browser. Mirrors Android's
      * PlaybackRouter check (`capabilities["stream"] == false && resolve == true`).
      */
+    private val bandcampEmbedResolver by lazy { com.parachord.shared.playback.BandcampEmbedResolver(httpClient) }
+
+    /** The embed URL for a Bandcamp source (#513); null when there's none to be had. Never throws to Swift. */
+    suspend fun bandcampEmbedUrl(trackId: String?, pageUrl: String?): String? = try {
+        bandcampEmbedResolver.embedUrl(trackId, pageUrl)
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        null
+    }
+
     suspend fun nonStreamingResolverIds(): Set<String> {
         pluginManager.ensureInitialized()
         return pluginManager.plugins.value

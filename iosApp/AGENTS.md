@@ -952,6 +952,51 @@ shared page, desktop's module, previews counted as refused) are in the root
   silent skip (queue advancing or spinoff), and the `Notice` banner with
   "Open in SoundCloud" (`RootView`).
 
+## Bandcamp through its embed (#513, desktop parachord#1231)
+
+Bandcamp plays in its embedded player as the top-level page of a hidden
+`WKWebView` (`IosBandcampEmbed`, `BandcampEmbedPlayer.swift`), engine `.bandcamp`
+in `PlaybackRouter` / `QueuePlaybackCoordinator`. Cross-platform details (the
+URL and state rules, the shared tracker, why there's no bridge) are in the root
+`CLAUDE.md` → "Bandcamp — the Embed".
+
+- **No message handler on this view.** Bandcamp's scripts run at its top level.
+  The poll asks `bcState()` from outside, and `Resources/bandcamp-embed-control.js`
+  is a byte-for-byte copy of Android's and desktop's (an Android unit test fails
+  if Android's and iOS's differ).
+- **In a window, or it never plays.** A view in no window stays at 0:00 (tested
+  on WebKit for #513), so it's added to the key window, at `alpha 0.01`.
+- **The audio-session hold lives in SoundCloud's page, and runs unmuted for the
+  whole track.** See "SoundCloud through its widget": WebKit releases its session
+  when a track ends, and iOS won't reactivate it locked. Each Bandcamp track is a new
+  page, so a hold inside it would die with it. So `IosSoundCloudWidget` plays
+  `scHoldAudio`'s silent loop in that page, which stays loaded, in a separate
+  WebContent process. **Don't try to quiet it mid-track; both were tried on an
+  iPad and the next track went silent:** stopped and restarted near the track's end
+  (iOS won't start it again locked), and muted (WebKit counts a muted element as
+  silent and interrupts it when the page isn't visible, logged as
+  `MediaElementSession::visibilityChanged` / `beginInterruption`). The page carries
+  the track's info too (`mirrorNowPlaying`), and its buttons route by `activeEngine`.
+- **While paused, the Bandcamp page runs its own silent loop** (`__pcHold`). With no
+  audio, iOS suspends the page's process, which drops the lock screen to "Not
+  Playing" and leaves play with nothing to wake (seen on an iPad). It's in the same
+  page as the player and started last, so WebKit shows this page's info rather than
+  the hold page's. It's an unattached `Audio`, so desktop's `bcAudio()` can't find it.
+  **Known gap:** while paused, the lock screen's position reads 0:00, the loop's own
+  position (the track resumes from the right place). Reporting the real position
+  each poll only made it bounce.
+- **Lock screen:** the Media Session is set in the Bandcamp page by a fixed script
+  (`nowPlayingScript`). With no bridge, its button handlers only queue the command
+  in the page, and the poll collects it; `drainRemoteCommands` accepts only the
+  known commands and a finite position.
+- **Refused:** falls through to the next ranked source in `PlaybackRouter`, as
+  SoundCloud's does.
+- **`cacheSchemaVersion` was deliberately not bumped** for
+  `ResolvedSource.bandcampTrackId`. A bump re-resolves every track at once, which
+  can trip Spotify's abuse window, and a cached source with no id has its id
+  looked up from its page. A custom-domain page can't be, and stays refused until
+  that entry is resolved again.
+
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
 Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`

@@ -221,6 +221,7 @@ class IosResolverRuntime(
                     soundcloudId = parsed.soundcloudId,
                     soundcloudUrl = parsed.soundcloudUrl,
                     appleMusicId = parsed.appleMusicId,
+                    bandcampTrackId = com.parachord.shared.resolver.pluginBandcampTrackId(raw),
                     // Optional `.axe` result field — a streaming resolver MAY
                     // supply its ISRC for the MBID fallback. Validated/normalized
                     // so a malformed value never enters the source record (#217).

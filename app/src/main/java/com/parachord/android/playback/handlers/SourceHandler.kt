@@ -12,6 +12,7 @@ import com.parachord.android.data.db.entity.TrackEntity
  * - LocalFileHandler: ExoPlayer with content:// URI
  * - SpotifyPlaybackHandler: Spotify Web API (Spotify Connect)
  * - SoundCloudPlaybackHandler: SoundCloud's embeddable widget (hidden WebView)
+ * - BandcampPlaybackHandler: Bandcamp's embedded player (hidden WebView)
  */
 interface SourceHandler {
     /** Whether this handler can play the given source type or resolver. */
@@ -50,6 +51,22 @@ interface ExternalPlaybackHandler {
     fun isPlaying(): Boolean
 }
 
+/**
+ * An external handler playing through a service's embedded player in a hidden
+ * WebView (SoundCloud's widget, Bandcamp's embed). The controller mirrors these
+ * the same way and treats their refusals as failed sources.
+ */
+interface EmbedPlaybackHandler : ExternalPlaybackHandler {
+    /** Gain (0..1) for the next [play]: the resolver's dB offset, set by the controller. */
+    var volumeFraction: Float
+
+    /** Length of the current track in ms, from the player; 0 when unknown. */
+    fun getDuration(): Long
+
+    /** Called (on a background thread) when the current track finishes. */
+    var onFinished: (() -> Unit)?
+}
+
 class DirectStreamHandler : SourceHandler {
     override fun canHandle(track: TrackEntity): Boolean =
         track.resolver == null && (track.sourceType == "direct" || track.sourceType == "stream")
@@ -82,8 +99,8 @@ class PlaybackStartTimeoutException(message: String) : Exception(message)
 
 /**
  * A service's embedded player won't play this track here (SoundCloud's widget
- * loads a track SoundCloud won't let it embed and never starts it; desktop
- * parachord#1209). [com.parachord.android.playback.PlaybackController] treats
+ * loads a track SoundCloud won't let it embed and never starts it, desktop
+ * parachord#1209; Bandcamp's embed doesn't start, #513). [com.parachord.android.playback.PlaybackController] treats
  * it as a failed source: another source plays, the queue moves on, or the user
  * is offered [pageUrl].
  */

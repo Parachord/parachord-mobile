@@ -4,6 +4,7 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.playback.handlers.AppleMusicPlaybackHandler
 import com.parachord.android.playback.handlers.ExternalPlaybackHandler
 import com.parachord.android.playback.handlers.PlaybackAction
+import com.parachord.android.playback.handlers.BandcampPlaybackHandler
 import com.parachord.android.playback.handlers.SoundCloudPlaybackHandler
 import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
 import com.parachord.android.plugin.PluginManager
@@ -22,6 +23,7 @@ class PlaybackRouterTest {
     private lateinit var spotifyHandler: SpotifyPlaybackHandler
     private lateinit var appleMusicHandler: AppleMusicPlaybackHandler
     private lateinit var soundCloudHandler: SoundCloudPlaybackHandler
+    private lateinit var bandcampHandler: BandcampPlaybackHandler
     private lateinit var pluginManager: PluginManager
     private lateinit var router: PlaybackRouter
 
@@ -30,6 +32,7 @@ class PlaybackRouterTest {
         spotifyHandler = mockk(relaxed = true)
         appleMusicHandler = mockk(relaxed = true)
         soundCloudHandler = mockk(relaxed = true)
+        bandcampHandler = mockk(relaxed = true)
         pluginManager = mockk(relaxed = true)
         // `plugins` is a StateFlow<List<Plugin>>; relaxed mockk can't infer the
         // generic type so the default iteration fails. Give it an empty list.
@@ -39,9 +42,10 @@ class PlaybackRouterTest {
         every { spotifyHandler.canHandle(any()) } returns false
         every { appleMusicHandler.canHandle(any()) } returns false
         every { soundCloudHandler.canHandle(any()) } returns false
+        every { bandcampHandler.canHandle(any()) } returns false
         coEvery { soundCloudHandler.createMediaItem(any()) } returns null
 
-        router = PlaybackRouter(spotifyHandler, appleMusicHandler, soundCloudHandler, pluginManager)
+        router = PlaybackRouter(spotifyHandler, appleMusicHandler, soundCloudHandler, bandcampHandler, pluginManager)
     }
 
     @Test
@@ -73,7 +77,7 @@ class PlaybackRouterTest {
     @Test
     fun `routes soundcloud track to its widget, as external playback`() = runTest {
         val widgetHandler = SoundCloudPlaybackHandler(mockk(relaxed = true))
-        val widgetRouter = PlaybackRouter(spotifyHandler, appleMusicHandler, widgetHandler, pluginManager)
+        val widgetRouter = PlaybackRouter(spotifyHandler, appleMusicHandler, widgetHandler, bandcampHandler, pluginManager)
         val track = TrackEntity(
             id = "1", title = "Song", artist = "Artist",
             resolver = "soundcloud", soundcloudId = "293",
@@ -206,5 +210,29 @@ class PlaybackRouterTest {
         // Spotify is first in handler order
         assertTrue(action is PlaybackAction.ExternalPlayback)
         assertEquals(spotifyHandler, (action as PlaybackAction.ExternalPlayback).handler)
+    }
+
+    @Test
+    fun `routes bandcamp to its embed, not the browser, though the plugin says stream false`() = runTest {
+        val track = TrackEntity(
+            id = "1", title = "Song", artist = "Artist",
+            resolver = "bandcamp", sourceUrl = "https://x.bandcamp.com/track/song",
+            // A track re-routed here can still carry another service's ids.
+            spotifyUri = "spotify:track:abc123",
+        )
+        every { bandcampHandler.canHandle(track) } returns true
+        every { spotifyHandler.canHandle(track) } returns true
+        every { pluginManager.plugins } returns MutableStateFlow(
+            listOf(
+                mockk(relaxed = true) {
+                    every { id } returns "bandcamp"
+                    every { capabilities } returns mapOf("stream" to false, "resolve" to true)
+                },
+            ),
+        )
+
+        val action = router.route(track)
+        assertTrue(action is PlaybackAction.ExternalPlayback)
+        assertEquals(bandcampHandler, (action as PlaybackAction.ExternalPlayback).handler)
     }
 }

@@ -99,9 +99,9 @@ One queue across all sources. Tap any track and Parachord figures out where to p
 |--------|---------|-----|
 | **Spotify** (Premium) | Spotify Connect via the Web API: controls Spotify on your phone or any Connect device | Same: Spotify Connect via the Web API |
 | **Apple Music** (subscription) | MusicKit JS in a hidden WebView | Native MusicKit |
-| **SoundCloud** | Native ExoPlayer streaming | AVPlayer |
+| **SoundCloud** | SoundCloud's own player in a hidden WebView | Same, in a hidden WKWebView |
 | **Local files** | Device media library, with artwork extraction and online enrichment | Device music library |
-| **Bandcamp** | Resolves tracks and opens them in the browser (as on desktop) | Same |
+| **Bandcamp** | Bandcamp's own player in a hidden WebView | Same, in a hidden WKWebView |
 | **Direct HTTP streams** | ExoPlayer | AVPlayer |
 
 ### Resolver pipeline
