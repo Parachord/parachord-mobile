@@ -376,7 +376,12 @@ val androidModule = module {
     // artists/playlists). Playlists are Achordion-only via their LB MBID anchor
     // (no go.parachord.com smart-link minting — see ShareManager kdoc / #138), so
     // it no longer needs SmartLinksClient.
-    single { com.parachord.android.share.ShareManager(get(), get(), get(), get(), get()) }
+    single {
+        com.parachord.android.share.ShareManager(
+            get(), get(), get(), get(), get(),
+            com.parachord.shared.share.PlaylistShareCheck(get()) { get<SettingsStore>().getListenBrainzToken() },
+        )
+    }
 
     // Spotify Web API — migrated to shared Ktor client (SpotifyClient) in
     // Phase 9E.1.8. Binding lives in sharedModule; per-request auth via

@@ -3,13 +3,20 @@ package com.parachord.android.share
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.data.db.entity.PlaylistTrackEntity
 import com.parachord.android.data.db.entity.TrackEntity
+import com.parachord.shared.share.PlaylistShareCheck
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -104,20 +111,10 @@ fun rememberShareAlbumLite(): (title: String, artist: String, artworkUrl: String
 
 @Composable
 fun rememberSharePlaylist(): (PlaylistEntity, List<PlaylistTrackEntity>) -> Unit {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val shareManager: ShareManager = koinInject()
-    return remember(context) {
-        { playlist, tracks ->
-            scope.launch {
-                val result = shareManager.sharePlaylist(playlist, tracks) ?: run {
-                    Toast.makeText(context, LB_SHARE_HINT, Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                openShareSheet(context, result.url, result.subject)
-            }
-            Unit
-        }
+    val share = rememberPlaylistShareFlow(shareManager)
+    return remember(share) {
+        { playlist, tracks -> share { shareManager.sharePlaylist(playlist, tracks) } }
     }
 }
 
@@ -127,20 +124,54 @@ fun rememberSharePlaylist(): (PlaylistEntity, List<PlaylistTrackEntity>) -> Unit
  */
 @Composable
 fun rememberSharePlaylistById(): (String) -> Unit {
+    val shareManager: ShareManager = koinInject()
+    val share = rememberPlaylistShareFlow(shareManager)
+    return remember(share) {
+        { id -> share { shareManager.sharePlaylist(id) } }
+    }
+}
+
+/**
+ * Runs a playlist share and acts on the answer: the share sheet, a message, or the
+ * "Make this playlist public?" prompt, which it also hosts. Cancelling or tapping
+ * outside the prompt changes nothing and shares nothing (#527, desktop parachord#1265).
+ */
+@Composable
+private fun rememberPlaylistShareFlow(shareManager: ShareManager): (suspend () -> PlaylistShare) -> Unit {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val shareManager: ShareManager = koinInject()
-    return remember(context) {
-        { id ->
-            scope.launch {
-                val result = shareManager.sharePlaylist(id) ?: run {
-                    Toast.makeText(context, LB_SHARE_HINT, Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                openShareSheet(context, result.url, result.subject)
-            }
-            Unit
+    var prompt by remember { mutableStateOf<PlaylistShare.NeedsPublic?>(null) }
+
+    fun handle(share: PlaylistShare) {
+        when (share) {
+            PlaylistShare.NotSynced -> Toast.makeText(context, LB_SHARE_HINT, Toast.LENGTH_LONG).show()
+            PlaylistShare.Gone -> Toast.makeText(context, PlaylistShareCheck.GONE_MESSAGE, Toast.LENGTH_LONG).show()
+            is PlaylistShare.Failed ->
+                Toast.makeText(context, PlaylistShareCheck.makePublicFailed(share.error), Toast.LENGTH_LONG).show()
+            is PlaylistShare.NeedsPublic -> prompt = share
+            is PlaylistShare.Ready -> openShareSheet(context, share.result.url, share.result.subject)
         }
+    }
+
+    prompt?.let { asked ->
+        AlertDialog(
+            onDismissRequest = { prompt = null },
+            title = { Text(PlaylistShareCheck.PRIVATE_TITLE) },
+            text = { Text(PlaylistShareCheck.privateMessage(asked.name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    prompt = null
+                    scope.launch { handle(shareManager.makePublicAndShare(asked)) }
+                }) { Text(PlaylistShareCheck.PRIVATE_CONFIRM) }
+            },
+            dismissButton = {
+                TextButton(onClick = { prompt = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    return remember(context, scope) {
+        { ask -> scope.launch { handle(ask()) } }
     }
 }
 

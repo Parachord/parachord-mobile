@@ -509,8 +509,7 @@ struct PlaylistsScreen: View {
     @State private var renameText = ""
     @State private var deleteTarget: Playlist?
     @State private var syncTarget: Playlist?
-    @State private var shareItem: PCShareItem?
-    @State private var shareNote: String?
+    @State private var shareFlow = PlaylistShareFlow()
     // XSPF import (#254/#198) — hosted globally so the FAB shares the same flow.
     @State private var importer = PlaylistImporter.shared
     let onMenu: () -> Void
@@ -558,7 +557,7 @@ struct PlaylistsScreen: View {
                                 Button { path.append(p.id) } label: { row(p) }.buttonStyle(.plain)
                                     .contextMenu {
                                         Button { playPlaylist(p) } label: { Label("Play Playlist", systemImage: "play.fill") }
-                                        Button { sharePlaylist(p) } label: { Label("Share…", systemImage: "square.and.arrow.up") }
+                                        Button { shareFlow.share(localId: p.id, name: p.name) } label: { Label("Share…", systemImage: "square.and.arrow.up") }
                                         Button { syncTarget = p } label: { Label("Sync…", systemImage: "arrow.triangle.2.circlepath") }
                                         Button { renameTarget = p; renameText = p.name } label: { Label("Rename", systemImage: "pencil") }
                                         Button(role: .destructive) { deleteTarget = p } label: { Label("Delete Playlist", systemImage: "trash") }
@@ -595,21 +594,7 @@ struct PlaylistsScreen: View {
                     .presentationDetents([.medium])
                 }
             }
-            .sheet(item: $shareItem) { item in PCActivityView(items: [item.url]) }
-            .alert("Sharing", isPresented: Binding(get: { shareNote != nil }, set: { if !$0 { shareNote = nil } })) {
-                Button("OK") { shareNote = nil }
-            } message: { Text(shareNote ?? "") }
-        }
-    }
-
-    private func sharePlaylist(_ p: Playlist) {
-        Task {
-            let raw = (try? await container.playlistShareUrl(localId: p.id)) ?? nil
-            if let s = raw, let url = URL(string: s) {
-                shareItem = PCShareItem(url: url)
-            } else {
-                shareNote = "Sync “\(p.name)” to ListenBrainz first to share it via Achordion."
-            }
+            .playlistShareFlow(shareFlow)
         }
     }
 
@@ -969,8 +954,7 @@ struct SavedPlaylistDetailView: View {
     // Overflow (⋯) menu + its actions — Share via Achordion, Sync channels (#274).
     @State private var showMenu = false
     @State private var showSync = false
-    @State private var shareItem: PCShareItem?
-    @State private var shareNote: String?
+    @State private var shareFlow = PlaylistShareFlow()
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     private let container = IosContainer.companion.shared
@@ -995,13 +979,13 @@ struct SavedPlaylistDetailView: View {
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { model.start() }
         .confirmationDialog(model.name, isPresented: $showMenu, titleVisibility: .visible) {
-            Button("Share…") { sharePlaylist() }
+            Button("Share…") { shareFlow.share(localId: model.playlistId, name: model.name) }
             Button("Sync…") { showSync = true }
             Button("Edit Playlist") { editing = true }
             Button("Rename") { renameText = model.name; showRename = true }
             Button("Delete Playlist", role: .destructive) { showDelete = true }
         }
-        .sheet(item: $shareItem) { item in PCActivityView(items: [item.url]) }
+        .playlistShareFlow(shareFlow)
         .sheet(isPresented: $showSync) {
             if let p = model.playlist {
                 PlaylistSyncChannelsSheet(playlist: p) {
@@ -1011,9 +995,6 @@ struct SavedPlaylistDetailView: View {
                 .presentationDetents([.medium])
             }
         }
-        .alert("Sharing", isPresented: Binding(get: { shareNote != nil }, set: { if !$0 { shareNote = nil } })) {
-            Button("OK") { shareNote = nil }
-        } message: { Text(shareNote ?? "") }
         .alert("Rename Playlist", isPresented: $showRename) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) {}
@@ -1022,20 +1003,6 @@ struct SavedPlaylistDetailView: View {
         .confirmationDialog("Delete “\(model.name)”?", isPresented: $showDelete, titleVisibility: .visible) {
             Button("Delete Playlist", role: .destructive) { model.delete(); dismiss() }
             Button("Cancel", role: .cancel) {}
-        }
-    }
-
-    /// Build the Achordion/smart-link share URL for this playlist and present the
-    /// system share sheet. Mirrors `PlaylistsScreen.sharePlaylist` — falls back to
-    /// a note when the playlist isn't yet syncable (no LB mbid to key Achordion on).
-    private func sharePlaylist() {
-        Task {
-            let raw = (try? await container.playlistShareUrl(localId: model.playlistId)) ?? nil
-            if let s = raw, let url = URL(string: s) {
-                shareItem = PCShareItem(url: url)
-            } else {
-                shareNote = "Sync “\(model.name)” to ListenBrainz first to share it via Achordion."
-            }
         }
     }
 
@@ -1183,5 +1150,71 @@ struct SavedPlaylistDetailView: View {
         }
         .listStyle(.plain)
         .environment(\.editMode, .constant(.active))
+    }
+}
+
+// MARK: - Sharing a playlist
+
+/// Shares a playlist through its ListenBrainz link once ListenBrainz has been asked
+/// about it (#527, desktop parachord#1265): the system share sheet, a note when
+/// there's nothing to share, or the "Make this playlist public?" prompt. The rules
+/// live in the shared `PlaylistShareCheck`.
+@MainActor @Observable
+final class PlaylistShareFlow {
+    var item: PCShareItem?
+    var note: String?
+    var prompt: IosPlaylistShare?
+    private let container = IosContainer.companion.shared
+
+    func share(localId: String, name: String) {
+        Task {
+            guard let share = try? await container.preparePlaylistShare(localId: localId, name: name) else {
+                note = "Couldn’t share “\(name)”."
+                return
+            }
+            handle(share)
+        }
+    }
+
+    func makePublic() {
+        guard let mbid = prompt?.privateMbid else { return }
+        prompt = nil
+        Task {
+            guard let share = try? await container.makePlaylistPublicAndShare(mbid: mbid) else {
+                note = "Couldn’t make this playlist public."
+                return
+            }
+            handle(share)
+        }
+    }
+
+    private func handle(_ share: IosPlaylistShare) {
+        if share.privateMbid != nil {
+            prompt = share
+        } else if let s = share.url, let url = URL(string: s) {
+            item = PCShareItem(url: url)
+        } else {
+            note = share.message
+        }
+    }
+}
+
+extension View {
+    /// Hosts what a `PlaylistShareFlow` shows. Cancel changes nothing and shares nothing.
+    func playlistShareFlow(_ flow: PlaylistShareFlow) -> some View {
+        self
+            .sheet(item: Binding(get: { flow.item }, set: { flow.item = $0 })) { item in
+                PCActivityView(items: [item.url])
+            }
+            .alert("Sharing", isPresented: Binding(get: { flow.note != nil }, set: { if !$0 { flow.note = nil } })) {
+                Button("OK") { flow.note = nil }
+            } message: { Text(flow.note ?? "") }
+            .alert(
+                flow.prompt?.promptTitle ?? "",
+                isPresented: Binding(get: { flow.prompt != nil }, set: { if !$0 { flow.prompt = nil } })
+            ) {
+                Button(flow.prompt?.promptConfirm ?? "") { flow.makePublic() }
+                Button("Cancel", role: .cancel) { flow.prompt = nil }
+            } message: { Text(flow.prompt?.promptMessage ?? "") }
     }
 }

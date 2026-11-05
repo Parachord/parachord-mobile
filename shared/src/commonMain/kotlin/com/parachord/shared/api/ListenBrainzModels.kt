@@ -140,3 +140,9 @@ class ListenBrainzLabsRateLimitedException(val retryAfterSeconds: Long?) :
  * breaker doesn't count a 404 (#291).
  */
 class ListenBrainzHttpException(val status: Int, message: String) : Exception(message)
+
+/**
+ * What ListenBrainz says about a playlist, each null when it didn't say. Only a
+ * clear answer should change anything (desktop's `playlistStatus`, parachord#1265).
+ */
+data class LbPlaylistStatus(val exists: Boolean?, val isPublic: Boolean?)

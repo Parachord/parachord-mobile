@@ -1,5 +1,7 @@
 package com.parachord.android.share
 
+import com.parachord.shared.share.PlaylistShareCheck
+import com.parachord.shared.share.PlaylistShareTarget
 import com.parachord.android.data.db.dao.PlaylistDao
 import com.parachord.android.data.db.dao.PlaylistTrackDao
 import com.parachord.android.data.db.entity.TrackEntity
@@ -36,7 +38,15 @@ class ShareManagerTest {
         // No LB link by default → playlist not shareable (Achordion-only, #138).
         syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
         trackResolverCache = noSources(),
+        playlistShareCheck = shareCheck(),
     )
+
+    /** ListenBrainz has no objection unless a test says otherwise. */
+    private fun shareCheck(
+        answer: (String) -> PlaylistShareTarget = { PlaylistShareTarget.Ok(it) },
+    ): PlaylistShareCheck = mockk {
+        coEvery { target(any()) } answers { answer(firstArg()) }
+    }
 
     /** No resolved sources known: the submit falls back to the track's own ids. */
     private fun noSources(): com.parachord.android.resolver.TrackResolverCache =
@@ -234,10 +244,10 @@ class ShareManagerTest {
     }
 
     @Test
-    fun sharePlaylist_noLbLink_returnsNull_achordionOnly() = runTest {
+    fun sharePlaylist_noLbLink_isNotSynced_achordionOnly() = runTest {
         // Achordion-only (#138): a playlist with no ListenBrainz anchor isn't
-        // shareable — returns null (the caller shows a "sync to LB" toast). No
-        // go.parachord.com smart-link minting.
+        // shareable (the caller shows a "sync to LB" toast). No go.parachord.com
+        // smart-link minting.
         val achordion = mockk<AchordionClient>(relaxed = true)
         val playlistDao = mockk<PlaylistDao>()
         coEvery { playlistDao.getById("p1") } returns com.parachord.android.data.db.entity.PlaylistEntity(
@@ -249,21 +259,24 @@ class ShareManagerTest {
             playlistTrackDao = mockk(relaxed = true) { coEvery { getByPlaylistIdSync(any()) } returns emptyList() },
             syncPlaylistLinkDao = mockk(relaxed = true) { coEvery { selectForLink(any(), any()) } returns null },
             trackResolverCache = noSources(),
+            playlistShareCheck = shareCheck(),
         )
 
-        val result = mgr.sharePlaylist("p1")
-        assertEquals(null, result)
+        assertEquals(PlaylistShare.NotSynced, mgr.sharePlaylist("p1"))
     }
 
-    @Test
-    fun sharePlaylist_withLbLink_usesAchordionPlaylistPage() = runTest {
-        val achordion = mockk<AchordionClient>(relaxed = true)
-        coEvery { achordion.playlistShareUrl("lb-mbid-1") } returns "https://achordion.xyz/playlist/lb-mbid-1"
+    /** A manager for a playlist linked to the ListenBrainz playlist `lb-mbid-1`. */
+    private fun linkedManager(
+        achordion: AchordionClient = mockk(relaxed = true) {
+            coEvery { playlistShareUrl("lb-mbid-1") } returns "https://achordion.xyz/playlist/lb-mbid-1"
+        },
+        check: PlaylistShareCheck = shareCheck(),
+    ): ShareManager {
         val playlistDao = mockk<PlaylistDao>()
         coEvery { playlistDao.getById("p1") } returns com.parachord.android.data.db.entity.PlaylistEntity(
             id = "p1", name = "My Playlist", ownerName = "me",
         )
-        val mgr = ShareManager(
+        return ShareManager(
             achordionClient = achordion,
             playlistDao = playlistDao,
             playlistTrackDao = mockk(relaxed = true) { coEvery { getByPlaylistIdSync(any()) } returns emptyList() },
@@ -274,10 +287,52 @@ class ShareManagerTest {
                     )
             },
             trackResolverCache = noSources(),
+            playlistShareCheck = check,
         )
+    }
 
-        val result = mgr.sharePlaylist("p1")
-        assertEquals("https://achordion.xyz/playlist/lb-mbid-1", result?.url)
-        assertTrue(result?.isSmartLink == true)
+    @Test
+    fun sharePlaylist_withLbLink_usesAchordionPlaylistPage() = runTest {
+        val share = linkedManager().sharePlaylist("p1") as PlaylistShare.Ready
+        assertEquals("https://achordion.xyz/playlist/lb-mbid-1", share.result.url)
+        assertTrue(share.result.isSmartLink)
+    }
+
+    @Test
+    fun sharePlaylist_goneFromListenBrainz_handsOutNoLink() = runTest {
+        val achordion = mockk<AchordionClient>(relaxed = true)
+        val mgr = linkedManager(achordion, shareCheck { PlaylistShareTarget.Gone })
+
+        assertEquals(PlaylistShare.Gone, mgr.sharePlaylist("p1"))
+        coVerify(exactly = 0) { achordion.playlistShareUrl(any()) }
+    }
+
+    @Test
+    fun sharePlaylist_private_asksFirst_andHandsOutNoLink() = runTest {
+        val achordion = mockk<AchordionClient>(relaxed = true)
+        val mgr = linkedManager(achordion, shareCheck { PlaylistShareTarget.Private(it) })
+
+        assertEquals(PlaylistShare.NeedsPublic("lb-mbid-1", "My Playlist"), mgr.sharePlaylist("p1"))
+        coVerify(exactly = 0) { achordion.playlistShareUrl(any()) }
+    }
+
+    @Test
+    fun makePublicAndShare_givesTheLinkOnceItWorked() = runTest {
+        val check = shareCheck()
+        coEvery { check.makePublic("lb-mbid-1") } returns null
+        val share = linkedManager(check = check).makePublicAndShare(PlaylistShare.NeedsPublic("lb-mbid-1", "My Playlist"))
+
+        assertEquals("https://achordion.xyz/playlist/lb-mbid-1", (share as PlaylistShare.Ready).result.url)
+    }
+
+    @Test
+    fun makePublicAndShare_failure_handsOutNoLink() = runTest {
+        val achordion = mockk<AchordionClient>(relaxed = true)
+        val check = shareCheck()
+        coEvery { check.makePublic("lb-mbid-1") } returns "HTTP 403"
+        val share = linkedManager(achordion, check).makePublicAndShare(PlaylistShare.NeedsPublic("lb-mbid-1", "My Playlist"))
+
+        assertEquals(PlaylistShare.Failed("HTTP 403"), share)
+        coVerify(exactly = 0) { achordion.playlistShareUrl(any()) }
     }
 }

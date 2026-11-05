@@ -19,6 +19,10 @@ import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -73,6 +77,7 @@ class ListenBrainzClient(
         /** LB's playlist item/add endpoint caps at 100 recordings per call (#300). */
         private const val LB_MAX_ADD_PER_CALL = 100
         private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
+        private const val JSPF_PLAYLIST_EXTENSION = "https://musicbrainz.org/doc/jspf#playlist"
         /** Canonical ISRC shape (after uppercasing): 2-char country + 3-char registrant + 7 digits. */
         private val ISRC_REGEX = Regex("^[A-Z]{2}[A-Z0-9]{3}[0-9]{7}$")
 
@@ -584,6 +589,83 @@ class ListenBrainzClient(
             Log.w(TAG, "Failed to parse last_modified_at for $playlistMbid", e)
             null
         }
+    }
+
+    /**
+     * GET /1/playlist/{playlistMbid}: is it still there, and who can see it? Port
+     * of desktop's `playlistStatus` (parachord#1265). Only a 404 means gone: with
+     * the owner's [token], a private playlist still answers 200. Never throws,
+     * because a share mustn't depend on the answer.
+     */
+    suspend fun playlistStatus(playlistMbid: String, token: String): LbPlaylistStatus {
+        val response = try {
+            executeWithRetry {
+                httpClient.get("$BASE_URL/1/playlist/$playlistMbid") { header("Authorization", "Token $token") }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "playlistStatus($playlistMbid) failed: ${e.message}")
+            return LbPlaylistStatus(exists = null, isPublic = null)
+        }
+        if (response.status == HttpStatusCode.NotFound) return LbPlaylistStatus(exists = false, isPublic = null)
+        if (!response.status.isSuccess()) return LbPlaylistStatus(exists = null, isPublic = null)
+        val isPublic = try {
+            (jspfExtension(response.bodyAsText())?.get("public") as? JsonPrimitive)
+                ?.takeIf { !it.isString }
+                ?.booleanOrNull
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        return LbPlaylistStatus(exists = true, isPublic = isPublic)
+    }
+
+    /**
+     * Changes who can see a playlist. Port of desktop's `setPlaylistPublic`.
+     * ListenBrainz rebuilds the collaborators from an edit's extension, so leaving
+     * them out silently removes everyone: they're read first and re-sent, and if
+     * they can't be read nothing is edited. Fields left out of the body (title,
+     * annotation) stay as they are. Throws on any failure.
+     */
+    suspend fun setPlaylistPublic(playlistMbid: String, isPublic: Boolean, token: String) {
+        val current = executeWithRetry {
+            httpClient.get("$BASE_URL/1/playlist/$playlistMbid") { header("Authorization", "Token $token") }
+        }
+        if (!current.status.isSuccess()) {
+            throw ListenBrainzHttpException(current.status.value, "setPlaylistPublic($playlistMbid) read failed: HTTP ${current.status.value}")
+        }
+        val collaborators = jspfExtension(current.bodyAsText())?.get("collaborators") as? JsonArray ?: JsonArray(emptyList())
+        val body = buildJsonObject {
+            putJsonObject("playlist") {
+                putJsonObject("extension") {
+                    putJsonObject(JSPF_PLAYLIST_EXTENSION) {
+                        put("public", isPublic)
+                        put("collaborators", collaborators)
+                    }
+                }
+            }
+        }
+        val response = executeWithRetry {
+            httpClient.post("$BASE_URL/1/playlist/edit/$playlistMbid") {
+                header("Authorization", "Token $token")
+                contentType(io.ktor.http.ContentType.Application.Json)
+                setBody(body)
+            }
+        }
+        if (response.status == HttpStatusCode.Unauthorized) {
+            throw ListenBrainzUnauthorizedException("ListenBrainz returned 401 on setPlaylistPublic — token rejected")
+        }
+        if (!response.status.isSuccess()) {
+            throw ListenBrainzHttpException(response.status.value, "setPlaylistPublic($playlistMbid) failed: HTTP ${response.status.value}")
+        }
+    }
+
+    /** The playlist's JSPF extension, or null when it has none. Throws when [body] isn't a playlist. */
+    private fun jspfExtension(body: String): JsonObject? {
+        val playlist = Json.parseToJsonElement(body).jsonObject.getValue("playlist").jsonObject
+        return (playlist["extension"] as? JsonObject)?.get(JSPF_PLAYLIST_EXTENSION) as? JsonObject
     }
 
     /**
