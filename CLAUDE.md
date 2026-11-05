@@ -533,6 +533,8 @@ SINGLE-AUTHORITY (hosted-XSPF, FOLLOWED `writable=false` source, or user-flagged
 
 **Where docs diverge from shipped code (code wins):** baseline advances unconditionally (docs said full-coverage-only); the mass-change guard is total-wipe-only — empty merge + non-empty baseline (docs said ">N%"); `NWAY_FILL_PENDING_ACTION` markers were deleted (replaced by hydration-cache pending detection; stale ones swept each sync); the background hydration drain is not built yet (inline per-cycle budget only); ISRC rides `PlaylistTrack.trackIsrc`, not a new column.
 
+**Why mobile has no `remote-deleted` flag (#527).** Desktop marks a mirror `pendingAction = "remote-deleted"` when a push gets a 404 and keeps it. Mobile detaches it instead (#6 above), and nothing should write that value here: no screen on either platform reads `pendingAction`, so nothing could clear it, and the push loop's `pendingAction` skip runs before the dead-mirror probe, so a flagged mirror would never detach and its chip would stay forever. A mirror deleted between the list fetch and the push gets a 404 that is logged and kept out of the failure breaker, and the next sync's list no longer has it, so it detaches then (`DeadMirrorReconcileIntegrationTest` A1b).
+
 **Key files:** `shared/.../sync/SyncEngine.kt` (`runNwayPropagation`, `propagateReconcilePlaylist`, `isProviderPendingForKey`, `streakEscalated`, `pushPlaylistsForProvider`, `effectivePlaylistChannels`), `PlaylistMerge.kt`, `NwayKeyUnify.kt`, `NwayShadow.kt` (`computeNwayPropagationPlan`), `PlaylistMaterializeDiff.kt` + `PlaylistMaterializeExecutor.kt`, `HydrationCoordinator.kt`, `DeadMirrorReconcile.kt`, `SyncProvider.kt` (`TrackRemoveMode`/`ProviderFeatures`), `SyncSettings.kt` (`isPlaylistPushCandidate`, `autoMirrorsByDefault`, `isNwayPropagateEnabled`, `getSyncEngineMode`), `SyncEngineMode.kt` (the 3-state `legacy`/`shadow`/`new` gate), `PlaylistSyncChannelManager.kt`, `SettingsStore.kt` (KvStore channel/mirrorOnly), tables `sync_playlist_{baseline,nway,source,link}.sq`; tests `NwayMaterializeTest`, `NwaySourceAuthorityTest`, `DeadMirrorReconcile*Test`, `PlaylistMergeTest`, `LbPushPickerNwayTest`.
 
 ### ListenBrainz Playlist Sync — Interop Contract (hard-won)
@@ -541,7 +543,7 @@ SINGLE-AUTHORITY (hosted-XSPF, FOLLOWED `writable=false` source, or user-flagged
 
 1. **Fetch the COMPLETE remote list — paginate, all-or-nothing.** `ListenBrainzClient.getUserOwnedPlaylists` MUST page through `count` + `offset` until all `playlist_count` entries are pulled. LB's `GET /1/user/{user}/playlists` defaults to **`count=25`**. The root cause of the incident: without pagination the SyncEngine three-layer dedup only saw the 25 newest playlists, so every older playlist failed Layer 1 (its MBID looked deleted-remotely → link cleared) AND Layer 3 (name not in the page) → recreated. Each new dup became one of the newest 25, evicting the rest → runaway. The non-negotiable invariant: **the dedup must be handed the full owned-playlist list.** Corollary (Achordion contract rule 4 — **a failed/partial fetch is NOT a confirmed-empty result**): if the full list can't be retrieved — HTTP error, 429, malformed body, a 404 mid-walk, or an empty page before reaching `playlist_count` — `getUserOwnedPlaylists` THROWS rather than returning a truncated list. A partial list would make the dedup treat the un-fetched playlists as deleted-remotely and recreate them; throwing aborts the sync cycle for the provider, preserves the local→MBID mappings, and retries next cycle. Only a 404 on the FIRST page (offset 0) is a legitimate empty result (user has no playlists).
 
-2. **Default PRIVATE — send an explicit `public` flag.** `createPlaylist` uses `isPublic = false`, matching desktop. **LB treats a MISSING `public` flag as public**, so it must always be sent explicitly. Pushing a user's whole library as public playlists is a privacy leak; the original `isPublic = true` is what made the 6,400 dups publicly visible.
+2. **Default PRIVATE — send an explicit `public` flag.** `createPlaylist` uses `isPublic = false`, matching desktop. **LB treats a MISSING `public` flag as public**, so it must always be sent explicitly. Pushing a user's whole library as public playlists is a privacy leak; the original `isPublic = true` is what made the 6,400 dups publicly visible. The only path to public is the person confirming the share prompt (see "Outbound Sharing").
 
 3. **Reconcile via the MBID link, edit in place.** First push creates the LB playlist and persists `sync_playlist_link[localId]["listenbrainz"] = mbid`. Every later sync drives off that link (Layer 1) → `replacePlaylistTracks` (delete-all + add-all on the **same** MBID). A 404'd MBID (user deleted on LB) is handled by create-once + re-map — never recreate-every-run.
 
@@ -589,9 +591,11 @@ Importing a playlist from an XSPF URL (as opposed to an uploaded `.xspf` file or
 Long-press / overflow → Share fires the Android share sheet. Post-migration (v0.6.x+) the share URL depends on the entity type:
 
 - **Track / album / artist** → Achordion entity URL (`https://achordion.xyz/<type>/<mbid>`) via `AchordionClient`. Mirrors desktop's `publishSmartLink` / `publishAlbumSmartLink` / `publishArtistSmartLink` in `parachord-desktop/app.js`.
-- **Playlist** → `https://go.parachord.com/<id>` via `SmartLinksClient`. Retained for playlists because Achordion has no playlist entity page yet.
+- **Playlist** → `https://achordion.xyz/playlist/<lbMbid>`, keyed on the playlist's ListenBrainz mirror or id. A playlist with neither isn't shareable, and the person is told to sync it to ListenBrainz first.
 
-Recipients on Slack / Discord / iMessage get a rich Open Graph preview either way — Achordion renders per-service "Listen on Spotify/Apple Music/SoundCloud" buttons after server-side link resolution; smart-links serve the existing feature.fm-style landing page.
+**A playlist share asks ListenBrainz first (#527, desktop parachord#1265).** Mirrors are created private, so a link would only open for its owner, and one deleted since the last sync wouldn't open at all. `PlaylistShareCheck` (shared, a port of desktop's `playlistShareTarget`) asks `ListenBrainzClient.playlistStatus` with the owner's token, within 4 s: a 404 shows a message, `public: false` shows "Make this playlist public?", and anything unclear (offline, rate limited, slow, no token) shares anyway. Nothing goes public unless the person confirms; cancelling shares nothing. `setPlaylistPublic` reads the collaborators and re-sends them, because a ListenBrainz edit with an `extension` and no `collaborators` silently clears them; if they can't be read, nothing is edited.
+
+Recipients on Slack / Discord / iMessage get a rich Open Graph preview — Achordion renders per-service "Listen on Spotify/Apple Music/SoundCloud" buttons after server-side link resolution.
 
 **Track shares pre-warm Achordion's cache** via `POST /api/track-links/submit` so recipients see fully-resolved per-service links instead of an empty page on first load. Submit gates (all must hold):
 1. `recordingMbid` is non-null.
@@ -608,17 +612,13 @@ Album and artist shares call entity-link only — **no submit** (matches desktop
 - Albums: `https://achordion.xyz/release-group/lookup?artist=&title=`
 - Artists: `https://achordion.xyz/artist/lookup?name=`
 
-Playlist shares fall back to the `https://parachord.com/go?uri=parachord://...` deeplink wrapper when smart-link creation fails — never to a raw source URL like `open.spotify.com/playlist/<id>`. The wrapper at `parachord.com/go` is a separate static GitHub Pages redirect — different service from the smart-link backend at `go.parachord.com`.
-
 **Bearer token** for Achordion comes from `AppConfig.achordionBearerToken` (BuildConfig field, sourced from `local.properties` or CI secret). Empty token short-circuits cleanly to lookup URLs without calling the API.
 
-**Smart-link payload requirements (playlist path, from `smart-links/functions/api/create.js`):** `title` is required; `tracks` array must be non-empty for `type=playlist`. Build the payload defensively — if there's nothing to send, skip the API and go straight to the deeplink wrapper rather than POSTing a guaranteed 400.
-
-**Wiring:** `TrackContextMenuHost` auto-wires share for tracks (every screen that uses the host gets it for free). Album / Artist / Playlist context menus take an optional `onShare: (() -> Unit)?` parameter — every callsite passes it explicitly via `rememberShareAlbumLite`, `rememberShareArtist`, `rememberSharePlaylist`, or `rememberSharePlaylistById`. The "lite" variants skip the per-track URL map (deeplink fallback only) for screens like the artist discography where tracks aren't in scope; the rich variant is used on detail screens (`PlaylistDetailScreen`) where the full tracklist is available.
+**Wiring:** `TrackContextMenuHost` auto-wires share for tracks (every screen that uses the host gets it for free). Album / Artist / Playlist context menus take an optional `onShare: (() -> Unit)?` parameter — every callsite passes it explicitly via `rememberShareAlbumLite`, `rememberShareArtist`, `rememberSharePlaylist`, or `rememberSharePlaylistById`. The "lite" variants skip the per-track URL map (deeplink fallback only) for screens like the artist discography where tracks aren't in scope. The two playlist helpers also host the "Make this playlist public?" prompt (`rememberPlaylistShareFlow`); iOS has `PlaylistShareFlow`.
 
 **Key files:**
 - `shared/.../api/AchordionClient.kt` — Ktor client (entity-link + submit)
-- `shared/.../api/SmartLinksClient.kt` — playlist-only Ktor client
+- `shared/.../share/PlaylistShareCheck.kt` — what a playlist share should do
 - `app/.../share/ShareManager.kt` — caller, parallel `coroutineScope` for track shares (entity-link + submit fire concurrently)
 - `app/.../share/ShareSheet.kt` — `openShareSheet` + `rememberShareXxx` Composable helpers
 - `app/.../ui/components/{Track,Album,Artist}ContextMenu.kt`, `app/.../ui/screens/playlists/PlaylistsScreen.kt` (PlaylistContextMenu)

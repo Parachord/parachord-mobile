@@ -224,6 +224,16 @@ data class IosComplexLink(
     val sources: List<ResolvedSource> = emptyList(),
 )
 
+/** What came of asking to share a playlist: a link, a message, or a prompt to answer first. */
+data class IosPlaylistShare(
+    val url: String? = null,
+    val message: String? = null,
+    val privateMbid: String? = null,
+    val promptTitle: String = "",
+    val promptMessage: String = "",
+    val promptConfirm: String = "",
+)
+
 /** Flat share-URL result for the iOS share sheet (#222). */
 data class IosShareResult(
     val url: String,
@@ -3131,16 +3141,42 @@ class IosContainer private constructor() {
     suspend fun getPlaylistMirrorProviders(id: String): List<String> =
         libraryRepository.getPlaylistMirrors(id).keys.toList()
 
+    private val playlistShareCheck by lazy {
+        com.parachord.shared.share.PlaylistShareCheck(listenBrainzClient) { settingsStore.getListenBrainzToken() }
+    }
+
     /**
-     * The Achordion share URL for a playlist (`achordion.xyz/playlist/<lbMbid>`),
-     * or null when the playlist isn't on ListenBrainz (the share anchor). Matches
-     * desktop — sync the playlist to ListenBrainz to enable sharing. Override-
-     * aware (a Sync-menu-disabled LB channel won't share).
+     * What a share of this playlist should do, after asking ListenBrainz (#527,
+     * desktop parachord#1265). A deleted playlist gets a message, a private one the
+     * prompt, and neither hands out a link until that's settled. The link is
+     * `achordion.xyz/playlist/<lbMbid>`, keyed on the playlist's ListenBrainz mirror
+     * or id. Override-aware: a Sync-menu-disabled LB channel won't share.
      */
-    suspend fun playlistShareUrl(localId: String): String? {
+    suspend fun preparePlaylistShare(localId: String, name: String): IosPlaylistShare {
         val lbMbid = libraryRepository.getPlaylistMirrors(localId)["listenbrainz"]
             ?: localId.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
-        return lbMbid?.let { achordionClient.playlistShareUrl(it) }
+            ?: return IosPlaylistShare(message = "Sync “$name” to ListenBrainz first to share it via Achordion.")
+        return when (val target = playlistShareCheck.target(lbMbid)) {
+            com.parachord.shared.share.PlaylistShareTarget.Gone ->
+                IosPlaylistShare(message = com.parachord.shared.share.PlaylistShareCheck.GONE_MESSAGE)
+            is com.parachord.shared.share.PlaylistShareTarget.Private -> IosPlaylistShare(
+                privateMbid = target.mbid,
+                promptTitle = com.parachord.shared.share.PlaylistShareCheck.PRIVATE_TITLE,
+                promptMessage = com.parachord.shared.share.PlaylistShareCheck.privateMessage(name),
+                promptConfirm = com.parachord.shared.share.PlaylistShareCheck.PRIVATE_CONFIRM,
+            )
+            is com.parachord.shared.share.PlaylistShareTarget.Ok ->
+                IosPlaylistShare(url = achordionClient.playlistShareUrl(target.mbid))
+        }
+    }
+
+    /** The person confirmed the prompt. Never throws: this crosses into Swift. */
+    suspend fun makePlaylistPublicAndShare(mbid: String): IosPlaylistShare {
+        val error = playlistShareCheck.makePublic(mbid)
+        if (error != null) {
+            return IosPlaylistShare(message = com.parachord.shared.share.PlaylistShareCheck.makePublicFailed(error))
+        }
+        return IosPlaylistShare(url = achordionClient.playlistShareUrl(mbid))
     }
 
     // ── Outbound sharing via the shared ShareLinkResolver (#222) ──────────────

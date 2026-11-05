@@ -3335,11 +3335,12 @@ class SyncEngine constructor(
         for ((pIdx, playlist) in candidates.withIndex()) {
             _syncPhase.value = "playlists · $providerId push ${pIdx + 1}/${candidates.size}"
             try {
-                // Phase 3 — Fix 3 + pendingAction skip:
-                // Skip rows the user marked remote-deleted; the playlist
-                // detail banner will let the user re-push or unlink. Lift
-                // the link lookup here so the dedup-Layer-1 block below
-                // can reuse it without a second query.
+                // Phase 3 — Fix 3 + pendingAction skip. Nothing writes
+                // "remote-deleted" and no screen reads it: a dead mirror is
+                // detached below instead, and this skip runs before that probe,
+                // so a flagged mirror would never detach (#527). Lift the link
+                // lookup here so the dedup-Layer-1 block below can reuse it
+                // without a second query.
                 val link = linksByPlaylistId[playlist.id]
                 if (link?.pendingAction != null) {
                     Log.d(TAG, "Skipping push for ${playlist.id} on $providerId — pendingAction=${link.pendingAction}")

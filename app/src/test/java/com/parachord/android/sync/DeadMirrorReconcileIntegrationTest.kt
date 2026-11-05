@@ -120,6 +120,36 @@ class DeadMirrorReconcileIntegrationTest {
         assertEquals("no new mirror was created", 0, am.createCount)
     }
 
+    // ── A1b — #527: deleted between the list fetch and the push ─────────────────────
+    @Test
+    fun `A1b a 404 on a listed mirror is not re-created and detaches on the next sync`() = runBlocking {
+        val lb = FakeProvider("listenbrainz")
+        val h = Harness(listOf(lb))
+        h.seed("local-z", "Race", sourceUrl = null)
+        h.linkMirror("local-z", "listenbrainz", "lb-race")
+        h.playlistTrackDao.replaceAll("local-z", listOf(track("local-z", 0, appleMusicId = null).copy(trackRecordingMbid = "mbid-1")))
+        lb.remotePlaylistsList = listOf(synced("local-z", "lb-race", "Race", "s1"))
+        lb.replaceFailure = com.parachord.shared.api.ListenBrainzHttpException(404, "gone")
+        lb.tracksById = emptyMap()
+
+        h.engine.syncAll()
+
+        assertEquals("the failed push attempted the replace", 1, lb.replaceAttempts)
+        assertNotNull("this cycle keeps the link, since the list still showed it", h.linkDao.selectForLink("local-z", "listenbrainz"))
+        assertEquals("nothing is re-created", 0, lb.createCount)
+
+        // The next list no longer has it, and the probe confirms the 404.
+        lb.remotePlaylistsList = emptyList()
+        lb.goneExternalIds = setOf("lb-race")
+
+        h.engine.syncAll()
+
+        assertNull("the dead link is dropped", h.linkDao.selectForLink("local-z", "listenbrainz"))
+        assertEquals("the provider is excluded so it stays gone", emptySet<String>(), h.settings.getPlaylistChannels("local-z"))
+        assertEquals("no further push reached the dead mirror", 1, lb.replaceAttempts)
+        assertEquals("still nothing re-created", 0, lb.createCount)
+    }
+
     // ── A2 — stale link but probe says it EXISTS (partial fetch): keep the link, never re-create ──
     @Test
     fun `A2 partial — stale link with probe-exists is kept and not re-created`() = runBlocking {
@@ -526,7 +556,15 @@ class DeadMirrorReconcileIntegrationTest {
             createCount++
             return RemoteCreated(externalId = "$id-new-$createCount", snapshotId = null)
         }
-        override suspend fun replacePlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? = null
+        var replaceFailure: Exception? = null
+        var replaceAttempts = 0
+            private set
+
+        override suspend fun replacePlaylistTracks(externalPlaylistId: String, externalTrackIds: List<String>): String? {
+            replaceAttempts++
+            replaceFailure?.let { throw it }
+            return null
+        }
         override suspend fun updatePlaylistDetails(externalPlaylistId: String, name: String?, description: String?) {}
         override suspend fun deletePlaylist(externalPlaylistId: String): DeleteResult = DeleteResult.Success
     }

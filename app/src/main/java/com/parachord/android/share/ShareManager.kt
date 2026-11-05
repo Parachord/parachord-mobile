@@ -1,5 +1,7 @@
 package com.parachord.android.share
 
+import com.parachord.shared.share.PlaylistShareCheck
+import com.parachord.shared.share.PlaylistShareTarget
 import android.net.Uri
 import com.parachord.android.data.db.dao.PlaylistDao
 import com.parachord.android.data.db.dao.PlaylistTrackDao
@@ -26,8 +28,10 @@ import kotlinx.coroutines.withTimeout
  *   `publishSmartLink` / `publishAlbumSmartLink` / `publishArtistSmartLink`.
  * - **Playlists** resolve to the Achordion playlist page keyed on the
  *   ListenBrainz MBID anchor. A playlist with no LB link isn't shareable
- *   yet (`sharePlaylist` returns null; the caller shows a "sync to
- *   ListenBrainz" toast) — matches desktop's `publishCollectionSmartLink`.
+ *   yet ([PlaylistShare.NotSynced]; the caller shows a "sync to ListenBrainz"
+ *   toast) — matches desktop's `publishCollectionSmartLink`. ListenBrainz is
+ *   asked first, since a deleted or private playlist's link wouldn't open
+ *   ([PlaylistShareCheck], #527).
  *   We no longer mint `go.parachord.com` smart-links for playlists: the
  *   inbound round-trip (#138) can't resolve a device-local playlist id on
  *   the recipient, so a tracklist/Achordion path is the only correct share.
@@ -38,12 +42,22 @@ import kotlinx.coroutines.withTimeout
  * Network calls are bounded by a 4 s timeout so a slow API can't hold
  * up the share sheet.
  */
+/** What came of asking to share a playlist. */
+sealed interface PlaylistShare {
+    data object NotSynced : PlaylistShare
+    data object Gone : PlaylistShare
+    data class NeedsPublic(val mbid: String, val name: String) : PlaylistShare
+    data class Failed(val error: String) : PlaylistShare
+    data class Ready(val result: ShareManager.ShareResult) : PlaylistShare
+}
+
 class ShareManager constructor(
     private val achordionClient: AchordionClient,
     private val playlistDao: PlaylistDao,
     private val playlistTrackDao: PlaylistTrackDao,
     private val syncPlaylistLinkDao: com.parachord.shared.db.dao.SyncPlaylistLinkDao,
     private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache,
+    private val playlistShareCheck: PlaylistShareCheck,
 ) {
     companion object {
         private const val TAG = "ShareManager"
@@ -140,11 +154,11 @@ class ShareManager constructor(
 
     /**
      * Convenience for callsites that have a [playlistId] but no in-memory
-     * track list — fetches both from the local DB before sharing. Returns
-     * null when the playlist row doesn't exist anymore.
+     * track list — fetches both from the local DB before sharing.
+     * [PlaylistShare.NotSynced] when the playlist row doesn't exist anymore.
      */
-    suspend fun sharePlaylist(playlistId: String): ShareResult? {
-        val playlist = playlistDao.getById(playlistId) ?: return null
+    suspend fun sharePlaylist(playlistId: String): PlaylistShare {
+        val playlist = playlistDao.getById(playlistId) ?: return PlaylistShare.NotSynced
         val tracks = playlistTrackDao.getByPlaylistIdSync(playlistId)
         return sharePlaylist(playlist, tracks)
     }
@@ -152,20 +166,32 @@ class ShareManager constructor(
     /**
      * Achordion-only (matches desktop `publishCollectionSmartLink`): a playlist
      * shares via its ListenBrainz MBID anchor — the LB push-link, or the
-     * id-prefix when LB is the source. **Returns null when there's no LB anchor**
-     * (caller shows a "sync to ListenBrainz" toast). We no longer mint
+     * id-prefix when LB is the source. **[PlaylistShare.NotSynced] when there's no
+     * LB anchor** (caller shows a "sync to ListenBrainz" toast). We no longer mint
      * `go.parachord.com` smart-links for playlists — the inbound round-trip (#138)
      * can't resolve a device-local playlist id on the recipient's device.
      */
     suspend fun sharePlaylist(
         playlist: PlaylistEntity,
         @Suppress("UNUSED_PARAMETER") tracks: List<PlaylistTrackEntity>,
-    ): ShareResult? {
+    ): PlaylistShare {
         val lbMbid = syncPlaylistLinkDao.selectForLink(playlist.id, "listenbrainz")?.externalId
             ?: playlist.id.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
-            ?: return null
-        return ShareResult(achordionClient.playlistShareUrl(lbMbid), playlist.name, isSmartLink = true)
+            ?: return PlaylistShare.NotSynced
+        return when (val target = playlistShareCheck.target(lbMbid)) {
+            PlaylistShareTarget.Gone -> PlaylistShare.Gone
+            is PlaylistShareTarget.Private -> PlaylistShare.NeedsPublic(target.mbid, playlist.name)
+            is PlaylistShareTarget.Ok -> readyToShare(target.mbid, playlist.name)
+        }
     }
+
+    /** The person confirmed [share]'s prompt. */
+    suspend fun makePublicAndShare(share: PlaylistShare.NeedsPublic): PlaylistShare =
+        playlistShareCheck.makePublic(share.mbid)?.let { PlaylistShare.Failed(it) }
+            ?: readyToShare(share.mbid, share.name)
+
+    private suspend fun readyToShare(mbid: String, name: String) =
+        PlaylistShare.Ready(ShareResult(achordionClient.playlistShareUrl(mbid), name, isSmartLink = true))
 
     /**
      * Shares an artist via the Achordion artist entity page when we have an
