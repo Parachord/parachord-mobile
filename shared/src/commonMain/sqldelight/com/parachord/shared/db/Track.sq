@@ -33,9 +33,6 @@ SELECT * FROM tracks WHERE id IN ?;
 getByAlbumId:
 SELECT * FROM tracks WHERE albumId = ? ORDER BY title;
 
-search:
-SELECT * FROM tracks WHERE title LIKE '%' || ? || '%' OR artist LIKE '%' || ? || '%';
-
 existsByTitleAndArtist:
 SELECT COUNT(*) > 0 FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?);
 
@@ -51,6 +48,9 @@ LIMIT 1;
 
 getRecentSync:
 SELECT * FROM tracks ORDER BY addedAt DESC LIMIT ?;
+
+getLocalFiles:
+SELECT * FROM tracks WHERE resolver = 'localfiles';
 
 findLocalFile:
 SELECT * FROM tracks WHERE resolver = 'localfiles' AND LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) LIMIT 1;

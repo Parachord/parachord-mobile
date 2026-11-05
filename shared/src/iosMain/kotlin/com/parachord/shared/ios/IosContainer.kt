@@ -3426,7 +3426,7 @@ class IosContainer private constructor() {
     private val claudeProvider: ClaudeProvider by lazy { ClaudeProvider(httpClient, chatJson) }
     private val geminiProvider: GeminiProvider by lazy { GeminiProvider(httpClient, chatJson) }
     private val chatProviders: List<AiChatProvider> by lazy { listOf(chatGptProvider, claudeProvider, geminiProvider) }
-    private val djToolExecutor: IosDjToolExecutor by lazy { IosDjToolExecutor(metadataService, settingsStore, chatPlaybackBridge) }
+    private val djToolExecutor: IosDjToolExecutor by lazy { IosDjToolExecutor(metadataService, settingsStore, chatPlaybackBridge, localFiles = { trackDao.getLocalFiles() }) }
     private val chatContextProvider: ChatContextProvider by lazy {
         ChatContextProvider(
             getPlaybackSnapshot = { chatPlaybackBridge.current },

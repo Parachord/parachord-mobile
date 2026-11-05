@@ -29,6 +29,7 @@ class IosDjToolExecutor(
     private val metadataService: MetadataService,
     private val settingsStore: SettingsStore,
     private val bridge: IosChatPlaybackBridge,
+    private val localFiles: suspend () -> List<Track>,
 ) : DjToolExecutor {
 
     override suspend fun execute(name: String, args: Map<String, Any?>): Map<String, Any?> {
@@ -56,7 +57,7 @@ class IosDjToolExecutor(
     private suspend fun executePlay(args: Map<String, Any?>): Map<String, Any?> {
         val artist = args["artist"] as? String ?: return mapOf("error" to "Missing artist")
         val title = args["title"] as? String ?: return mapOf("error" to "Missing title")
-        val best = findRequestedTrack(artist, title, metadataService::searchTracks)
+        val best = findRequestedTrack(artist, title, localFiles, metadataService::searchTracks)
             ?: return mapOf("success" to false, "error" to djTrackNotFoundError(artist, title))
         val track = best.toTrack()
         bridge.onPlayTrack(track)
@@ -98,7 +99,7 @@ class IosDjToolExecutor(
         val playFirst = args["playFirst"] as? Boolean ?: true
 
         return runQueueAdd(
-            requested = findRequestedTracks(tracksArg, metadataService::searchTracks),
+            requested = findRequestedTracks(tracksArg, localFiles, metadataService::searchTracks),
             playFirst = playFirst,
             toTrack = { it.toTrack() },
             clearQueue = { bridge.onClearQueue() },

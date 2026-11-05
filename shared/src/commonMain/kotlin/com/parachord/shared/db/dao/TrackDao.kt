@@ -1,5 +1,6 @@
 package com.parachord.shared.db.dao
 
+import com.parachord.shared.search.LibraryTrackSearch
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import app.cash.sqldelight.coroutines.mapToOneOrNull
@@ -41,8 +42,11 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
     fun getByAlbumId(albumId: String): Flow<List<Track>> =
         queries.getByAlbumId(albumId).asFlow().mapToList(Dispatchers.Default).map { rows -> rows.map { it.toTrack() } }
 
+    /** The Library section of Search, live. See [LibraryTrackSearch]. */
     fun search(query: String): Flow<List<Track>> =
-        queries.search(query, query).asFlow().mapToList(Dispatchers.Default).map { rows -> rows.map { it.toTrack() } }
+        queries.getAll().asFlow().mapToList(Dispatchers.Default).map { rows ->
+            withContext(Dispatchers.Default) { LibraryTrackSearch.search(rows.map { it.toTrack() }, query) }
+        }
 
     fun existsByTitleAndArtist(title: String, artist: String): Flow<Boolean> =
         queries.existsByTitleAndArtist(title, artist).asFlow()
@@ -84,10 +88,15 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.findLocalFile(title, artist).executeAsOneOrNull()?.toTrack()
     }
 
-    /** One-shot title/artist substring search (the [search] Flow's suspend twin —
-     *  used by iOS Search, which debounces in the VM and calls per query). */
+    /** Every track that plays from a file on this device. */
+    suspend fun getLocalFiles(): List<Track> = withContext(Dispatchers.Default) {
+        queries.getLocalFiles().executeAsList().map { it.toTrack() }
+    }
+
+    /** The [search] Flow's suspend twin — used by iOS Search, which debounces in the
+     *  VM and calls per query. */
     suspend fun searchOnce(query: String): List<Track> = withContext(Dispatchers.Default) {
-        queries.search(query, query).executeAsList().map { it.toTrack() }
+        LibraryTrackSearch.search(queries.getAll().executeAsList().map { it.toTrack() }, query)
     }
 
     /* ---- Writes ---- */
