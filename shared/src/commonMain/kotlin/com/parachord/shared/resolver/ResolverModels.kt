@@ -116,7 +116,7 @@ private val NOT_LETTER_OR_DIGIT = Regex("[^$LETTER_OR_NUMBER_CLASS]")
 fun normalizeStr(s: String?): String = foldStr(s).replace(NOT_LETTER_OR_DIGIT, "")
 
 /** The folding half of [normalizeStr], with punctuation and spaces still in place. */
-private fun foldStr(s: String?): String {
+internal fun foldStr(s: String?): String {
     if (s.isNullOrEmpty()) return ""
     return com.parachord.shared.platform.nfkd(s.lowercase()).replace(COMBINING_MARKS, "")
 }

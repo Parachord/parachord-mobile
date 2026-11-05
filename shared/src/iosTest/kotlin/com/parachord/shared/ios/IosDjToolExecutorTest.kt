@@ -5,6 +5,7 @@ import com.parachord.shared.metadata.ArtistInfo
 import com.parachord.shared.metadata.MetadataProvider
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.TrackSearchResult
+import com.parachord.shared.model.Track
 import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.store.KvStore
 import com.parachord.shared.store.SecureTokenStore
@@ -38,6 +39,7 @@ class IosDjToolExecutorTest {
         override fun observe(key: String) = flowOf(m[key])
     }
 
+    private var localFiles = emptyList<Track>()
     private val played = mutableListOf<String>()
     private val queued = mutableListOf<String>()
     private var cleared = 0
@@ -51,6 +53,7 @@ class IosDjToolExecutorTest {
         MetadataService(listOf(provider), { emptySet() }),
         SettingsStore(secure, KvStore(MapSettings())),
         bridge,
+        localFiles = { localFiles },
     )
 
     private fun searchFinds(artist: String, title: String) {
@@ -67,6 +70,30 @@ class IosDjToolExecutorTest {
         assertEquals("Could not find \"Happy Me\" by Biohio", result["error"])
         assertEquals(emptyList(), played)
     }
+
+    /** #529: the catalogs don't have it, or the network is off. */
+    @Test
+    fun playFindsATrackThatIsOnlyInTheLocalLibrary() = runTest {
+        localFiles = listOf(localFile("Zzqart", "Basement Demo"))
+
+        val result = executor.execute("play", track("Zzqart", "Basement Demo"))
+
+        assertEquals(true, result["success"])
+        assertEquals(listOf("Basement Demo"), played)
+    }
+
+    @Test
+    fun queueAddFindsATrackThatIsOnlyInTheLocalLibrary() = runTest {
+        localFiles = listOf(localFile("Zzqart", "Basement Demo"))
+
+        val result = executor.execute("queue_add", mapOf("tracks" to listOf(track("Zzqart", "Basement Demo"))))
+
+        assertEquals(1, result["queued"])
+        assertEquals(null, result["notFound"])
+    }
+
+    private fun localFile(artist: String, title: String) =
+        Track(id = "local-1", title = title, artist = artist, resolver = "localfiles")
 
     @Test
     fun queueAddLeavesOutAMissingTrackAndSaysWhich() = runTest {

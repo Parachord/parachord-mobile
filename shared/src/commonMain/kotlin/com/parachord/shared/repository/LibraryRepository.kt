@@ -102,6 +102,7 @@ class LibraryRepository(
     }
 
     fun searchTracks(query: String): Flow<List<Track>> = trackDao.search(query)
+    suspend fun getLocalFiles(): List<Track> = trackDao.getLocalFiles()
     fun searchAlbums(query: String): Flow<List<Album>> = albumDao.search(query)
 
     fun getAlbumTracks(albumId: String): Flow<List<Track>> = trackDao.getByAlbumId(albumId)

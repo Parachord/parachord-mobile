@@ -56,6 +56,34 @@ class DjToolExecutorTest {
         coVerify(exactly = 0) { playback.playTrack(any<TrackEntity>()) }
     }
 
+    /** #529: the catalogs don't have it, or the network is off. */
+    @Test
+    fun `play finds a track that is only in the local library`() = runTest {
+        coEvery { library.getLocalFiles() } returns listOf(
+            TrackEntity(id = "local-1", title = "Basement Demo", artist = "Zzqart", resolver = "localfiles"),
+        )
+        coEvery { metadata.searchTracks(any(), any()) } returns emptyList()
+
+        val result = executor.execute("play", track("Zzqart", "Basement Demo"))
+
+        assertEquals(true, result["success"])
+        val played = slot<TrackEntity>()
+        coVerify { playback.playTrack(capture(played)) }
+        assertEquals("Basement Demo", played.captured.title)
+    }
+
+    @Test
+    fun `queue_add finds a track that is only in the local library`() = runTest {
+        coEvery { library.getLocalFiles() } returns listOf(
+            TrackEntity(id = "local-1", title = "Basement Demo", artist = "Zzqart", resolver = "localfiles"),
+        )
+
+        val result = executor.execute("queue_add", mapOf("tracks" to listOf(track("Zzqart", "Basement Demo"))))
+
+        assertEquals(1, result["queued"])
+        assertNull(result["notFound"])
+    }
+
     @Test
     fun `play picks the requested song out of the results`() = runTest {
         searchFinds("Biohio", "Happy Me")

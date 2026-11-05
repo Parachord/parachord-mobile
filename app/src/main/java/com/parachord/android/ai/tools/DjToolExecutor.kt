@@ -58,7 +58,7 @@ class DjToolExecutor constructor(
         val artist = args["artist"] as? String ?: return mapOf("error" to "Missing artist")
         val title = args["title"] as? String ?: return mapOf("error" to "Missing title")
 
-        val bestMatch = findRequestedTrack(artist, title, metadataService::searchTracks)
+        val bestMatch = findRequestedTrack(artist, title, libraryRepository::getLocalFiles, metadataService::searchTracks)
             ?: return mapOf("success" to false, "error" to djTrackNotFoundError(artist, title))
 
         val track = bestMatch.toTrackEntity()
@@ -121,7 +121,7 @@ class DjToolExecutor constructor(
         }
 
         return runQueueAdd(
-            requested = findRequestedTracks(tracksArg, metadataService::searchTracks),
+            requested = findRequestedTracks(tracksArg, libraryRepository::getLocalFiles, metadataService::searchTracks),
             playFirst = playFirst,
             toTrack = { it.toTrackEntity() },
             clearQueue = playbackController::clearQueue,
@@ -143,7 +143,7 @@ class DjToolExecutor constructor(
 
         // A wrong song saved here could sync out to Spotify, Apple Music and the
         // person's other clients, so a track that isn't found stays out.
-        val requested = findRequestedTracks(tracksArg, metadataService::searchTracks)
+        val requested = findRequestedTracks(tracksArg, libraryRepository::getLocalFiles, metadataService::searchTracks)
         if (requested.found.isEmpty() && requested.notFound.isNotEmpty()) {
             return mapOf("success" to false, "error" to DJ_NONE_FOUND_ERROR, "notFound" to requested.notFound)
         }

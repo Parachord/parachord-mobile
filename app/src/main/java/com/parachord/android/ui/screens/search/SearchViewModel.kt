@@ -62,7 +62,7 @@ class SearchViewModel constructor(
     // Local library results (instant, from Room)
     val localTrackResults: StateFlow<List<TrackEntity>> = debouncedQuery
         .flatMapLatest { q ->
-            if (q.isBlank()) flowOf(emptyList()) else repository.searchTracks("%$q%")
+            if (q.isBlank()) flowOf(emptyList()) else repository.searchTracks(q)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
