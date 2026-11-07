@@ -68,6 +68,7 @@ import com.parachord.android.auth.OAuthManager
 import com.parachord.android.deeplink.DeepLinkConfirmation
 import com.parachord.android.deeplink.DeepLinkNavEvent
 import com.parachord.android.deeplink.DeepLinkViewModel
+import com.parachord.android.deeplink.LaunchIntentPolicy
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.playback.handlers.MusicKitWebBridge
@@ -116,7 +117,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleDeepLink(intent)
+        // Handle the launch link once. A recreate (rotation) or a relaunch
+        // from Recents hands back the same intent; replaying a play link
+        // would interrupt what's playing. New links come via onNewIntent.
+        if (LaunchIntentPolicy.shouldHandleOnCreate(
+                isRestoring = savedInstanceState != null,
+                intentFlags = intent?.flags ?: 0,
+            )
+        ) {
+            handleDeepLink(intent)
+        }
         requestNotificationPermissionIfNeeded()
         setContent {
             ParachordApp()
