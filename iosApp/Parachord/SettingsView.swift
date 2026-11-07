@@ -367,6 +367,18 @@ final class SettingsViewModel {
         }
     }
 
+    /// Disconnect Apple Music (desktop `disconnectAppleMusic`): it leaves the
+    /// priority list, its cached sources go, and the token is forgotten. iOS
+    /// can't revoke the MusicKit permission itself; the footer says where to.
+    func disconnectAppleMusic() {
+        appleMusicError = nil
+        appleMusicConnected = false          // before recompute, so the prune drops it
+        activeResolvers.remove("applemusic")
+        recomputeResolvers()
+        IosTrackResolverCache.shared.resolverRemoved("applemusic")
+        Task { try? await container.disconnectAppleMusic() }
+    }
+
     // ── Connect status ────────────────────────────────────────────────
     func isConnected(_ id: String) -> Bool {
         switch id {
@@ -1223,6 +1235,7 @@ private struct PluginConfigSheet: View {
                         .foregroundStyle(.green)
                     Spacer()
                 }
+                Button("Disconnect", role: .destructive) { model.disconnectAppleMusic() }
             } else {
                 Button {
                     model.connectAppleMusic()
@@ -1240,7 +1253,9 @@ private struct PluginConfigSheet: View {
         } footer: {
             Text(
                 model.appleMusicConnected
-                    ? "Apple Music can match tracks in your library and play them. Requires an active subscription."
+                    ? "Apple Music can match tracks in your library and play them. Requires an active subscription. "
+                      + "Disconnecting also turns off Apple Music sync; your synced items stay. "
+                      + "To also revoke Parachord's access, use iOS Settings › Privacy & Security › Media & Apple Music."
                     : "Connect to let Parachord match your tracks to Apple Music and play them. "
                       + "Until you do, Apple Music won't appear as a source for any track. "
                       + "Requires an active subscription."

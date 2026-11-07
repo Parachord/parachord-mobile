@@ -790,6 +790,27 @@ class IosContainer private constructor() {
      *  SKCloudServiceController). Enables the Apple Music library API for sync. */
     suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)
     suspend fun hasAppleMusicUserToken(): Boolean = !settingsStore.getAppleMusicUserToken().isNullOrBlank()
+
+    /**
+     * Disconnect Apple Music (desktop `disconnectAppleMusic`, Android
+     * `SettingsViewModel.disconnectAppleMusic`): forget the Music User Token and,
+     * like Android, take Apple Music out of the enabled sync providers so sync
+     * stops calling the library API without one. Synced items and their links
+     * stay, so reconnecting resumes where it left off. The reauth banner is
+     * cleared too: a deliberate disconnect isn't a stale token to fix.
+     * The resolver side (active list, cached sources) is the caller's.
+     */
+    suspend fun disconnectAppleMusic() {
+        settingsStore.clearAppleMusicUserToken()
+        syncEngine.clearAppleMusicReauth()
+        val providers = settingsStore.getEnabledSyncProviders()
+        if ("applemusic" in providers) {
+            val current = providers - "applemusic"
+            settingsStore.setEnabledSyncProviders(current)
+            val s = settingsStore.getSyncSettings()
+            settingsStore.saveSyncSettings(s.copy(enabled = current.isNotEmpty()))
+        }
+    }
     /** The ES256 dev token SKCloudServiceController.requestUserToken needs. */
     suspend fun appleMusicDeveloperToken(): String = appConfig.appleMusicDeveloperToken
 

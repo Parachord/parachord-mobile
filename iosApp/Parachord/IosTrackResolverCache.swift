@@ -254,6 +254,21 @@ final class IosTrackResolverCache {
         pump()
     }
 
+    /// A resolver was DISCONNECTED (desktop `removeResolverSources`): drop its
+    /// sources from every cached track so its badge goes and nothing routes to
+    /// it. The other resolvers' sources stay. Reconnecting merges it back in
+    /// through `resolverEnabled`.
+    func resolverRemoved(_ resolverId: String) {
+        var changed = false
+        for (key, sources) in cache where sources.contains(where: { $0.resolver == resolverId }) {
+            cache[key] = sources.filter { $0.resolver != resolverId }
+            changed = true
+        }
+        queue.removeAll { $0.merge == resolverId }
+        missedAt = missedAt.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        if changed { scheduleSave() }
+    }
+
     /// Batch convenience — submits each request with `order` = its array index,
     /// so a list passed top-to-bottom resolves top-down.
     func resolveInBackground(_ requests: [ResolveRequest]) {
