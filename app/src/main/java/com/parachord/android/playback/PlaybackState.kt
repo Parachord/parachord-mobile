@@ -74,6 +74,19 @@ val PlaybackState.effectiveTrack: TrackEntity?
         )
     }
 
+/**
+ * The cover for what's playing, by the same chain as track rows: the art the
+ * streaming service reported, the track's own, then the art its resolved
+ * sources carry ([trackArtwork] is `TrackResolverCache.trackArtwork`). The mini
+ * player, Now Playing and Home's Continue Listening all use it, so they never
+ * disagree. Null shows the placeholder.
+ */
+fun PlaybackState.effectiveArtwork(trackArtwork: Map<String, String>): String? {
+    val track = currentTrack ?: return null
+    return effectiveTrack?.artworkUrl?.takeIf { it.isNotBlank() }
+        ?: trackArtwork[com.parachord.android.resolver.trackKey(track.title, track.artist)]
+}
+
 enum class RepeatMode { OFF, ALL, ONE }
 
 /**

@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headphones
 import com.parachord.android.data.db.entity.FriendEntity
+import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.playback.effectiveTrack
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.rememberHapticClick
@@ -298,9 +299,10 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Use streaming source artwork when available (higher quality, confirms actual track)
+                // Streaming source artwork first (higher quality, confirms actual
+                // track), then the track's own, then its resolved sources' art.
                 val streamingMeta = playbackState.streamingMetadata
-                val displayArtworkUrl = streamingMeta?.artworkUrl ?: track?.artworkUrl
+                val displayArtworkUrl = playbackState.effectiveArtwork(trackArtwork)
 
                 // Large album artwork — tap to open album page.
                 // Dynamically sized: takes remaining height after fixed elements
