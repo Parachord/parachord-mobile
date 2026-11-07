@@ -11,6 +11,7 @@
 		48F05C31EC85A9A45A71E6D5 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = B2118EE0889B3F7F9B26B3E9 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000020 /* ParachordApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* ParachordApp.swift */; };
 		AA0000000000000000000107 /* AppBootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000106 /* AppBootstrap.swift */; };
+		AA0000000000000000000109 /* NowPlayingPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000108 /* NowPlayingPublisher.swift */; };
 		AA0000000000000000000021 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000011 /* ContentView.swift */; };
 		AA0000000000000000000022 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* Assets.xcassets */; };
 		AA0000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000013 /* SettingsView.swift */; };
@@ -90,6 +91,7 @@
 		AA0000000000000000000005 /* Parachord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Parachord.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000010 /* ParachordApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParachordApp.swift; sourceTree = "<group>"; };
 		AA0000000000000000000106 /* AppBootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrap.swift; sourceTree = "<group>"; };
+		AA0000000000000000000108 /* NowPlayingPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingPublisher.swift; sourceTree = "<group>"; };
 		AA0000000000000000000011 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000000013 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -208,6 +210,7 @@
 			children = (
 				AA0000000000000000000010 /* ParachordApp.swift */,
 				AA0000000000000000000106 /* AppBootstrap.swift */,
+				AA0000000000000000000108 /* NowPlayingPublisher.swift */,
 				AA0000000000000000000011 /* ContentView.swift */,
 				AA0000000000000000000013 /* SettingsView.swift */,
 				AA0000000000000000000091 /* IosLocationManager.swift */,
@@ -411,6 +414,7 @@
 			files = (
 				AA0000000000000000000020 /* ParachordApp.swift in Sources */,
 				AA0000000000000000000107 /* AppBootstrap.swift in Sources */,
+				AA0000000000000000000109 /* NowPlayingPublisher.swift in Sources */,
 				AA0000000000000000000021 /* ContentView.swift in Sources */,
 				AA0000000000000000000023 /* SettingsView.swift in Sources */,
 				AA0000000000000000000090 /* IosLocationManager.swift in Sources */,

@@ -1021,6 +1021,49 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   looked up from its page. A custom-domain page can't be, and stays refused until
   that entry is resolved again.
 
+## Now Playing and remote commands (`NowPlayingPublisher`)
+
+The lock screen, Control Center, AirPods and CarPlay's Now Playing screen all
+read `MPNowPlayingInfoCenter` and send their buttons through
+`MPRemoteCommandCenter`. `NowPlayingPublisher.swift` is the only Swift code
+that touches either. The primary `QueuePlaybackCoordinator` owns it (the Dev-tab
+smoke-test coordinator, `installLifecycleMonitor: false`, has none, since the
+command center is process-wide). `IosAVPlayer` no longer touches either; it
+reports play, pause, seek and a known duration through `onNowPlayingChanged`.
+
+- **Commands go to the coordinator**: play, pause, toggle, next, previous and
+  scrub call `togglePlayPause` / `skipNext` / `skipPrevious` / `seek`, so they
+  act on whichever engine is playing. They used to call the AVPlayer directly,
+  so a stray play during Apple Music or Spotify reactivated the local,
+  non-mixable session. The ±15 s skip commands are off: while they were on, the
+  lock screen showed skip buttons instead of next / previous for local files.
+- **Who publishes the info**, per engine:
+  - Local files and direct streams (`.avPlayer`): the publisher, with title,
+    artist, album, duration, elapsed, rate and artwork (`pcTrackArt`, through
+    `PCImageStore`). Nothing is published until the player has an item, nor
+    while a new track is starting (`isStarting`), when `currentTrack` is already
+    the new one but the old one is still playing.
+  - Apple Music: `ApplicationMusicPlayer`, natively. The publisher leaves the
+    info alone.
+  - Spotify: Spotify's app. Parachord's session mixes with others, so iOS
+    shows Spotify's Now Playing (the CarPlay design's decision).
+  - SoundCloud and Bandcamp: WebKit, from the page's Media Session (see the two
+    sections above); their buttons come back through the pages.
+  For Spotify, SoundCloud and Bandcamp the publisher clears the app's own info,
+  so a stale local track can't show if their publisher goes away.
+- **The direct-URL fast path in `playTrack` runs `applyEngineHandoff` too.** It
+  used to switch `activeEngine` to `.avPlayer` without stopping the previous
+  engine, so a Bandcamp page kept playing under the next track and kept the
+  lock screen.
+- **Checking it in the simulator.** The lock screen can't be photographed with
+  `simctl`, but `mediaremoted` logs what it publishes:
+  `xcrun simctl spawn booted log stream --level debug --predicate 'process == "mediaremoted"'`
+  and look for `setting nowPlayingItem` (title, artist, `artworkAvailable`),
+  `setting supportedCommands` and `computedNowPlayingClient`. The app is one
+  client (`com.parachord.ios`), WebKit another (`com.apple.WebKit.GPU/com.parachord.ios`),
+  and WebKit's wins while it plays. The publisher itself logs `NOWPLAYING
+  published …` on each change.
+
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
 Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`

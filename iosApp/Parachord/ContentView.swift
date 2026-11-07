@@ -1375,10 +1375,8 @@ private extension MusicAuthorization.Status {
 // the foundation those features sit on top of, not the full
 // implementation.
 //
-// Background audio (`UIBackgroundModes: audio` + lock-screen
-// `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter`) is phase 4.5;
-// for this commit playback stops when the app backgrounds, which is
-// fine for the smoke-test demo.
+// The lock screen / CarPlay info and remote commands for this player are
+// published by the coordinator's `NowPlayingPublisher`, not here.
 
 @Observable
 /// Per-resolver volume offsets, cached so they can be applied SYNCHRONOUSLY.
@@ -1446,7 +1444,6 @@ final class IosAVPlayer {
     private var timeObserver: Any?
     private var statusObservation: NSKeyValueObservation?
     private var endObservation: NSObjectProtocol?
-    private var remoteCommandsRegistered = false
 
     var status: Status = .idle
     var isPlaying = false
@@ -1455,8 +1452,7 @@ final class IosAVPlayer {
     var errorMessage: String?
     var loadedURL: URL?
 
-    // Now-playing metadata, surfaced both to the lock screen via
-    // MPNowPlayingInfoCenter and back to the UI as a read-back proof.
+    // The loaded track's title and artist, as `load` was given them.
     var nowPlayingTitle: String = ""
     var nowPlayingArtist: String = ""
 
@@ -1464,20 +1460,18 @@ final class IosAVPlayer {
     /// coordinator (phase 4.6) sets this to auto-advance. Nil by
     /// default, so standalone single-track use just stops at the end.
     var onTrackEnded: (() -> Void)?
-    /// The last keys we pushed to MPNowPlayingInfoCenter — displayed in
-    /// the smoke-test card so the lock-screen wiring is observable in
-    /// the simulator (where photographing the actual lock screen is
-    /// awkward).
-    var lastNowPlayingKeys: [String] = []
+    /// Fired when what the lock screen shows for this player changed: the
+    /// duration became known, or it played, paused or finished a seek. The
+    /// coordinator's `NowPlayingPublisher` republishes; this player doesn't
+    /// touch `MPNowPlayingInfoCenter` or `MPRemoteCommandCenter` itself.
+    var onNowPlayingChanged: (() -> Void)?
 
     init() {
         configureAudioSession()
-        setupRemoteCommands()
     }
 
     deinit {
         teardown()
-        tearDownRemoteCommands()
     }
 
     /// Set the `.playback` category so OUR audio plays through the device
@@ -1569,7 +1563,7 @@ final class IosAVPlayer {
                         ? item.duration.seconds : 0
                     // Duration is now known — refresh the lock-screen
                     // payload so the scrubber shows the right length.
-                    self.updateNowPlayingInfo()
+                    self.onNowPlayingChanged?()
                 case .failed:
                     self.status = .failed
                     self.errorMessage = item.error?.localizedDescription
@@ -1621,14 +1615,14 @@ final class IosAVPlayer {
         player?.play()
         isPlaying = true
         status = .playing
-        updateNowPlayingInfo()
+        onNowPlayingChanged?()
     }
 
     func pause() {
         player?.pause()
         isPlaying = false
         status = .paused
-        updateNowPlayingInfo()
+        onNowPlayingChanged?()
     }
 
     func togglePlayPause() {
@@ -1637,9 +1631,14 @@ final class IosAVPlayer {
 
     func seek(to seconds: Double) {
         let target = CMTime(seconds: seconds, preferredTimescale: 600)
-        player?.seek(to: target) { [weak self] _ in
-            // Reflect the new position into the lock-screen scrubber.
-            self?.updateNowPlayingInfo()
+        player?.seek(to: target) { [weak self] finished in
+            // Reflect the new position into the lock-screen scrubber now, not
+            // at the next periodic tick.
+            DispatchQueue.main.async {
+                guard let self, finished else { return }
+                self.currentTime = seconds
+                self.onNowPlayingChanged?()
+            }
         }
     }
 
@@ -1649,95 +1648,8 @@ final class IosAVPlayer {
         // coordinator stops the silent keepalive around this for external
         // playback; for local playback this is the final release.
         IosAudioSession.deactivate()
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        lastNowPlayingKeys = []
-    }
-
-    // MARK: - Lock screen / Control Center (phase 4.5)
-
-    /// Push the current track + transport state into
-    /// `MPNowPlayingInfoCenter`. This is what populates the lock
-    /// screen, Control Center, the now-playing widget, CarPlay, and
-    /// the AirPods/Watch transport surfaces. Called on load, play,
-    /// pause, and seek so the elapsed-time scrubber stays in sync.
-    private func updateNowPlayingInfo() {
-        var info: [String: Any] = [:]
-        info[MPMediaItemPropertyTitle] = nowPlayingTitle.isEmpty
-            ? "Unknown Title" : nowPlayingTitle
-        info[MPMediaItemPropertyArtist] = nowPlayingArtist.isEmpty
-            ? "Unknown Artist" : nowPlayingArtist
-        if duration > 0 {
-            info[MPMediaItemPropertyPlaybackDuration] = duration
-        }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-        // Rate drives whether the lock-screen UI shows a play or pause
-        // glyph and whether the scrubber animates: 1.0 = playing,
-        // 0.0 = paused.
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        lastNowPlayingKeys = info.keys.sorted().map { shortKey($0) }
-    }
-
-    /// Register lock-screen / remote transport command handlers
-    /// (play, pause, toggle, skip-back/forward seek, scrub). Each maps
-    /// to the same controls the in-app buttons drive. Idempotent.
-    private func setupRemoteCommands() {
-        guard !remoteCommandsRegistered else { return }
-        let center = MPRemoteCommandCenter.shared()
-
-        center.playCommand.addTarget { [weak self] _ in
-            self?.play()
-            return .success
-        }
-        center.pauseCommand.addTarget { [weak self] _ in
-            self?.pause()
-            return .success
-        }
-        center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            self?.togglePlayPause()
-            return .success
-        }
-        center.changePlaybackPositionCommand.addTarget { [weak self] event in
-            guard let self,
-                  let e = event as? MPChangePlaybackPositionCommandEvent
-            else { return .commandFailed }
-            self.seek(to: e.positionTime)
-            return .success
-        }
-        // Skip ±15s — stand-ins until queue management (phase 4.6)
-        // provides real next/previous track commands.
-        center.skipForwardCommand.preferredIntervals = [15]
-        center.skipForwardCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            self.seek(to: min(self.currentTime + 15, self.duration))
-            return .success
-        }
-        center.skipBackwardCommand.preferredIntervals = [15]
-        center.skipBackwardCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            self.seek(to: max(self.currentTime - 15, 0))
-            return .success
-        }
-        remoteCommandsRegistered = true
-    }
-
-    private func tearDownRemoteCommands() {
-        let center = MPRemoteCommandCenter.shared()
-        center.playCommand.removeTarget(nil)
-        center.pauseCommand.removeTarget(nil)
-        center.togglePlayPauseCommand.removeTarget(nil)
-        center.changePlaybackPositionCommand.removeTarget(nil)
-        center.skipForwardCommand.removeTarget(nil)
-        center.skipBackwardCommand.removeTarget(nil)
-        remoteCommandsRegistered = false
-    }
-
-    /// Trim the verbose `MPMediaItem*` / `MPNowPlayingInfo*` constant
-    /// names down to a readable tail for the UI read-back panel.
-    private func shortKey(_ key: String) -> String {
-        key
-            .replacingOccurrences(of: "MPMediaItemProperty", with: "")
-            .replacingOccurrences(of: "MPNowPlayingInfoProperty", with: "")
+        // Nothing playing: the publisher takes the info off the lock screen.
+        onNowPlayingChanged?()
     }
 
     private func teardown() {
@@ -1987,6 +1899,10 @@ final class QueuePlaybackCoordinator {
     /// (e.g. a phone call), so external playback recovers instead of staying
     /// silent (#322).
     @ObservationIgnored private var audioMonitor: IosAudioSessionMonitor?
+    /// Lock screen / Control Center / CarPlay: the info for engines with no
+    /// publisher of their own, and the remote commands, routed here. Only the
+    /// primary coordinator has one (MPRemoteCommandCenter is process-wide).
+    @ObservationIgnored private var nowPlaying: NowPlayingPublisher?
 
     /// True from the moment a track is tapped until its engine starts (resolve
     /// + route can take a beat). The mini-player shows a spinner so the tap
@@ -2276,10 +2192,18 @@ final class QueuePlaybackCoordinator {
         self.bandcamp.onTrackEnded = self.soundCloud.onTrackEnded
         self.bandcamp.onRemoteCommand = self.soundCloud.onRemoteCommand
         self.bandcamp.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
-        // Lock-screen / Control-Center next & previous drive the QUEUE
-        // (engine-agnostic), not a single player — the "real next/previous"
-        // the AVPlayer's skip±15s stand-ins anticipated.
-        setupQueueRemoteCommands()
+        // Lock screen / Control Center / CarPlay: remote commands drive the
+        // coordinator (whichever engine is playing), and the local player's
+        // info is published from one place. The Dev-tab smoke-test coordinator
+        // (installLifecycleMonitor: false) doesn't register a second set.
+        // Every coordinator is created on the main actor.
+        if installLifecycleMonitor {
+            let publisher = MainActor.assumeIsolated { NowPlayingPublisher(coordinator: self) }
+            self.nowPlaying = publisher
+            self.player.onNowPlayingChanged = { [weak publisher] in
+                Task { @MainActor in publisher?.refresh(force: true) }
+            }
+        }
         // #322: observe audio-session interruptions and resume the active engine
         // after a resumable interruption (e.g. a phone call). The observer fires
         // on .main; hop onto the main actor to touch engine state. ONLY the
@@ -2319,6 +2243,8 @@ final class QueuePlaybackCoordinator {
                     // #322: warm the next track's Apple Music `Song` ~15s before
                     // the boundary so its play() skips the ~1.6s catalog fetch.
                     self.prefetchNextIfNeeded(remainingSec: self.duration - self.currentTime)
+                    // Track changes, artwork that resolved late, and drift.
+                    self.nowPlaying?.refresh()
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
@@ -2354,26 +2280,6 @@ final class QueuePlaybackCoordinator {
                 ?? next.appleMusicId
             guard let amId, !amId.isEmpty else { return }
             await musicKit.prefetch(appleMusicId: amId)
-        }
-    }
-
-    /// Register engine-agnostic next/previous-track commands on the shared
-    /// remote command center so lock-screen / Control-Center / headphone
-    /// next-prev advance our queue regardless of which engine is active.
-    /// (Per-engine play/pause + now-playing info stay where they are:
-    /// AVPlayer self-registers them; ApplicationMusicPlayer drives the lock
-    /// screen natively during Apple Music playback.)
-    private func setupQueueRemoteCommands() {
-        let center = MPRemoteCommandCenter.shared()
-        center.nextTrackCommand.isEnabled = true
-        center.nextTrackCommand.addTarget { [weak self] _ in
-            self?.skipNext()
-            return .success
-        }
-        center.previousTrackCommand.isEnabled = true
-        center.previousTrackCommand.addTarget { [weak self] _ in
-            self?.skipPrevious()
-            return .success
         }
     }
 
@@ -2609,7 +2515,13 @@ final class QueuePlaybackCoordinator {
             // the track's (possibly stale) direct URL.
             if forcedResolver == nil, let url = track.sourceUrl, !url.isEmpty,
                resolverCache.cached(artist: track.artist, title: track.title, album: track.album) == nil {
+                // Stop the engine that was playing, as the routed path does:
+                // without this a Bandcamp or Apple Music track kept playing under
+                // this one, and kept the lock screen / CarPlay.
+                let previousEngine = activeEngine
                 activeEngine = .avPlayer
+                await applyEngineHandoff(from: previousEngine, to: .avPlayer)
+                if Task.isCancelled { return }
                 player.load(url: url, title: track.title, artist: track.artist, resolver: "direct")
                 startAVPlaybackWhenReady()
                 isStarting = false
@@ -3630,21 +3542,6 @@ struct DevSmokeTestView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
-            }
-
-            if !avPlayer.lastNowPlayingKeys.isEmpty {
-                Divider()
-                Text("MPNowPlayingInfoCenter (phase 4.5)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("\(avPlayer.nowPlayingTitle) — \(avPlayer.nowPlayingArtist)")
-                    .font(.caption)
-                Text("keys: \(avPlayer.lastNowPlayingKeys.joined(separator: ", "))")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                Text("+ MPRemoteCommandCenter: play / pause / toggle / seek / skip±15s")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding()
