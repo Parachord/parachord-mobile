@@ -622,7 +622,16 @@ class SettingsViewModel constructor(
 
     // --- SoundCloud ---
 
-    /** Whether the user has saved SoundCloud client credentials (BYOK). */
+    /**
+     * Why the last SoundCloud sign-in didn't finish (port 8888 busy, SoundCloud
+     * refused the code), or null.
+     */
+    val soundCloudSignInError: StateFlow<String?> = oAuthManager.soundCloudSignInError
+
+    /**
+     * Whether the user has saved their own SoundCloud app credentials. Optional:
+     * without them, Connect signs in to Parachord's built-in app.
+     */
     val soundCloudCredentialsSaved: StateFlow<Boolean> = settingsStore.getSoundCloudClientIdFlow()
         .map { !it.isNullOrBlank() }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)

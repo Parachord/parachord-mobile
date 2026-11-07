@@ -2488,22 +2488,55 @@ class IosContainer private constructor() {
     fun getLastFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLastFmSessionKeyFlow().map { it != null }
 
-    // ── SoundCloud (OAuth 2.1 + PKCE; the user's own app credentials) ──
+    // ── SoundCloud (OAuth 2.1 + PKCE; the user's own app, else Parachord's) ──
     /** Token exchange + refresh, shared with Android (plain client: no auth plugins). */
     val soundCloudAuth: com.parachord.shared.api.auth.SoundCloudAuth by lazy {
         com.parachord.shared.api.auth.SoundCloudAuth(authHttpClient, settingsStore)
     }
 
-    /** The saved Client ID, or "" when there's none (the sign-in needs it). */
-    suspend fun soundCloudClientId(): String = settingsStore.getSoundCloudClientId() ?: ""
+    /**
+     * Listens on 127.0.0.1:8888 while a SoundCloud sign-in is open: every
+     * sign-in uses desktop's redirect URI (`SoundCloudLoopback`). Its scope has a handler: an uncaught exception in
+     * a Kotlin/Native coroutine aborts the app.
+     */
+    private val soundCloudLoopback = com.parachord.shared.api.auth.SoundCloudLoopbackServer()
+    private val soundCloudLoopbackScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e -> Log.e("SoundCloudLoopback", "Listener failed: ${e.message}") },
+    )
+
+    /** The Client ID a sign-in uses: the saved one, else Parachord's built-in app. */
+    suspend fun soundCloudClientId(): String = soundCloudAuth.credentialsInUse()?.clientId ?: ""
+
+    /** The redirect URI every SoundCloud sign-in uses: desktop's loopback address. */
+    val soundCloudRedirectUri: String = com.parachord.shared.api.auth.SoundCloudLoopback.REDIRECT_URI
+
+    /**
+     * Start listening for the sign-in with OAuth [state]. Null when listening,
+     * else the message to show (port 8888 is taken); then don't open the
+     * browser. Never throws: Swift awaits it.
+     */
+    suspend fun startSoundCloudLoopback(state: String): String? = try {
+        soundCloudLoopback.start(soundCloudLoopbackScope, state)
+        null
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        e.message ?: "Couldn't start SoundCloud sign-in."
+    }
+
+    /** Stop listening (sign-in finished or cancelled). */
+    fun stopSoundCloudLoopback() = soundCloudLoopback.stop()
 
     /**
      * Finish SoundCloud sign-in: exchange the authorization code (from
-     * `IosOAuthManager.authorize`) for tokens and store them. Throws with a
-     * readable message when the credentials are missing or SoundCloud refuses.
+     * `IosOAuthManager.authorize`) for tokens and store them, naming the
+     * [redirectUri] the authorize step sent. Throws with a readable message
+     * when SoundCloud refuses.
      */
-    suspend fun connectSoundCloud(code: String, codeVerifier: String) {
-        soundCloudAuth.exchangeCode(code, codeVerifier)
+    @Throws(Throwable::class)
+    suspend fun connectSoundCloud(code: String, codeVerifier: String, redirectUri: String) {
+        soundCloudAuth.exchangeCode(code, codeVerifier, redirectUri)
     }
 
     /** Sign out of SoundCloud; the Client ID + Secret stay. */

@@ -79,7 +79,7 @@ Each resolver type routes to a specific playback mechanism:
 
 ### SoundCloud — the Widget (#495, desktop parachord#1209)
 
-The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/stream` 429s with the token in the query and redirects to a 30-second preview with it in a header, and the full streams (HLS only) answer 403 "An active Artist Pro subscription is required". So SoundCloud plays through SoundCloud's own widget (`w.soundcloud.com/player`), which needs no sign-in. Search and resolution still use the API and the user's SoundCloud credentials.
+The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/stream` 429s with the token in the query and redirects to a 30-second preview with it in a header, and the full streams (HLS only) answer 403 "An active Artist Pro subscription is required". So SoundCloud plays through SoundCloud's own widget (`w.soundcloud.com/player`), which needs no sign-in. Search and resolution still use the API and a SoundCloud sign-in (see "SoundCloud sign-in — the loopback listener").
 
 - **Desktop's module, unchanged.** `assets/js/soundcloud-widget-player.js` is a byte-for-byte copy of desktop's `src/renderer/lib/soundcloud-widget-player.js` (the widget's postMessage protocol, no SoundCloud `api.js`). `assets/js/soundcloud-widget.html` hosts it and relays its callbacks, tagged with a load generation, to `SoundCloudWidgetBridge` through a `@JavascriptInterface`. Update the module by copying desktop's again, not by editing it.
 - **Background playback rides on the Apple Music setup**: a WebView never added to a window, `LAYER_TYPE_NONE`, `mediaPlaybackRequiresUserGesture = false`, `keepAlive()` before each track, and the controller's silent ExoPlayer loop for the foreground service and MediaSession. Chromium owns audio focus.
@@ -88,6 +88,17 @@ The SoundCloud API no longer gives a signed-in user full tracks: `/tracks/{id}/s
 - **A refused track is a failed source** (`EmbedPlaybackRefusedException`): another source plays (with a "Playing via X" toast), else the queue moves on when it was advancing or in a spinoff, else a snackbar offers "Open in SoundCloud" when the track has a soundcloud.com page. The browser never opens by itself.
 - **Link:** the source's soundcloud.com permalink, else `https://api.soundcloud.com/tracks/<id>` (the form SoundCloud's own embed code uses). Shared: `SoundCloudWidget.widgetLink` / `pageLink` (`shared/.../playback/SoundCloudWidget.kt`).
 - **iOS does the same** in a hidden `WKWebView` (`iosApp/Parachord/SoundCloudWidget.swift`) with byte-identical copies of the page and module in `iosApp/Parachord/Resources/` (an Android unit test fails if they drift — edit Android's, copy). iOS has one extra trap — WebKit's own audio session can't be re-activated with the screen locked, so the page's `scHoldAudio` keeps it in use between tracks; see `iosApp/AGENTS.md` → "SoundCloud through its widget".
+
+### SoundCloud sign-in — the loopback listener
+
+Search and resolution need a SoundCloud sign-in. **Every sign-in, on every platform, uses desktop's redirect URI `http://127.0.0.1:8888/callback/soundcloud`.** It's the only one Parachord's built-in SoundCloud app (`SoundCloudBuiltInApp`, the client id + secret desktop ships as `FALLBACK_SOUNDCLOUD_*` in `main.js`) has, and SoundCloud matches it exactly (another port, `localhost` or `parachord://` leaves its sign-in page blank; checked in Chrome). A person's own app registers the same URI, so one app works on desktop, Android and iOS. **Never change the built-in app's redirect: desktop would stop signing in.**
+
+- **The phones listen on 127.0.0.1:8888 during sign-in, as desktop does** (`SoundCloudLoopbackServer`, shared, on ktor-network). Loopback is shared between processes, so the browser's redirect reaches the app. The listener is only a trampoline: it answers `302` to `parachord://auth/callback/soundcloud` with the same `code` + `state`, and each platform's existing callback takes over (Android `OAuthRedirectActivity`, iOS ASWebAuthenticationSession). Only `code`, `state`, `error`, `error_description` are carried; another state gets a `400` and the listener keeps waiting; it stops after the forward, 10 min, or `stop()`. Verified on a Pixel 9a (Android 17) with a real SoundCloud account.
+- **The exchange sends the redirect the authorize step used.** Android records it on the pending flow, so a flow started before this change (with `parachord://`) still exchanges correctly.
+- **Credentials: own pair → build pair → built-in** (`resolveSoundCloudCredentials`), never mixed, so authorize and exchange name the same app.
+- **A busy port can't fall back to another one** (exact match). The sign-in shows `SoundCloudLoopbackPortBusyException`'s message and doesn't open the browser. A squatter that sees the code can't use it without the PKCE verifier.
+- **No cleartext exception is needed**: `network_security_config.xml` governs the app's own outgoing requests, and the listener only accepts. iOS ATS likewise.
+- **Desktop keeps 127.0.0.1:8888 open whenever it runs**, and the iOS simulator shares the Mac's loopback, so a simulator sign-in fails as "port busy" while desktop runs. Devices are unaffected.
 
 ### Bandcamp — the Embed (#513, desktop parachord#1231)
 

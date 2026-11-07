@@ -455,19 +455,20 @@ val androidModule = module {
         )
     } bind com.parachord.shared.sync.SyncSettingsProvider::class
     // SoundCloud token exchange + refresh (shared with iOS). The user's own
-    // app credentials win; the build's are the fallback, as before.
+    // app credentials win, then the build's, then Parachord's built-in app
+    // (signed in through the loopback listener, SoundCloudLoopback).
     single {
         val settingsStore: com.parachord.shared.settings.SettingsStore = get()
         com.parachord.shared.api.auth.SoundCloudAuth(
             httpClient = get(),
             settingsStore = settingsStore,
             credentials = {
-                val id = settingsStore.getSoundCloudClientId()
-                    ?: com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_ID.ifBlank { null }
-                val secret = settingsStore.getSoundCloudClientSecret()
-                    ?: com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_SECRET.ifBlank { null }
-                if (id == null || secret == null) null
-                else com.parachord.shared.api.auth.SoundCloudCredentials(id, secret)
+                com.parachord.shared.api.auth.resolveSoundCloudCredentials(
+                    settingsStore.getSoundCloudClientId(),
+                    settingsStore.getSoundCloudClientSecret(),
+                    com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_ID,
+                    com.parachord.android.BuildConfig.SOUNDCLOUD_CLIENT_SECRET,
+                )
             },
         )
     }

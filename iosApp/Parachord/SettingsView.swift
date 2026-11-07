@@ -363,8 +363,9 @@ final class SettingsViewModel {
         // A stale token alone (e.g. iCloud-Keychain-synced) isn't a usable
         // connection without the BYO Client ID — both are required.
         case "spotify": return spotifyConnected && !spotifyClientId.isEmpty
-        // Signed in, with the app credentials the token refreshes with.
-        case "soundcloud": return soundCloudConnected && !(values["soundcloud"]?.isEmpty ?? true)
+        // Signed in. The token refreshes with the saved app credentials, else
+        // Parachord's built-in app (clearing saved credentials signs out).
+        case "soundcloud": return soundCloudConnected
         case "librefm": return libreFmConnected
         // Scrobbling needs the session key (OAuth), not the read-only username.
         case "lastfm": return lastFmConnected
@@ -543,18 +544,26 @@ final class SettingsViewModel {
         recomputeResolvers()
     }
 
-    // ── SoundCloud OAuth (the user's own app credentials) ─────────────
+    // ── SoundCloud OAuth (the user's own app, else Parachord's built-in one) ──
     func connectSoundCloud() {
-        let clientId = values["soundcloud"] ?? ""
-        guard !clientId.isEmpty else {
-            soundCloudError = "Save your SoundCloud Client ID and Secret first."; return
-        }
         soundCloudBusy = true; soundCloudError = nil
         Task { @MainActor in
+            // Every sign-in uses desktop's redirect URI, so the loopback listener
+            // runs first (shared SoundCloudLoopback); it bounces SoundCloud's
+            // redirect to parachord://, which the auth session catches.
+            let clientId = (try? await container.soundCloudClientId()) ?? ""
+            let redirectURI = container.soundCloudRedirectUri
+            let state = IosOAuthManager.makeState()
+            if let message = try? await container.startSoundCloudLoopback(state: state) {
+                soundCloudError = message
+                soundCloudBusy = false
+                return
+            }
+            defer { container.stopSoundCloudLoopback() }
             do {
                 let m = IosOAuthManager(); oauthManager = m
-                let r = try await m.authorize(OAuthConfig.soundCloud(clientId: clientId))
-                try await container.connectSoundCloud(code: r.code, codeVerifier: r.codeVerifier)
+                let r = try await m.authorize(OAuthConfig.soundCloud(clientId: clientId, redirectURI: redirectURI), state: state)
+                try await container.connectSoundCloud(code: r.code, codeVerifier: r.codeVerifier, redirectUri: redirectURI)
                 soundCloudConnected = true             // before recompute, so the prune keeps it
                 activeResolvers.insert("soundcloud")   // connecting enables it (desktop parity)
                 setPluginEnabled("soundcloud", true)
@@ -1108,14 +1117,14 @@ private struct PluginConfigSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent).tint(Color(uiColor: UIColor(hex: 0xFF5500)))
-                .disabled(!credsSaved || model.soundCloudBusy)
+                .disabled(model.soundCloudBusy)
                 .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                 if let e = model.soundCloudError { Text(e).font(.caption).foregroundStyle(.red) }
             }
         } header: { Text("Connection") } footer: {
             Text(credsSaved
-                 ? "Sign in through SoundCloud to let Parachord find SoundCloud tracks. Opens SoundCloud in a secure in-app browser; Parachord never sees your password. If SoundCloud's page stays blank, it doesn't recognize the Client ID, or the app's Redirect URI isn't parachord://auth/callback/soundcloud."
-                 : "Add your SoundCloud app credentials below, then connect. SoundCloud restricts who can create API apps, so you may not be able to get credentials. Spotify and Apple Music are easier to set up.")
+                 ? "Sign in through SoundCloud with your own app to let Parachord find SoundCloud tracks. Opens SoundCloud in a secure in-app browser; Parachord never sees your password. If SoundCloud's page stays blank, it doesn't recognize the Client ID, or the app's Redirect URI isn't http://127.0.0.1:8888/callback/soundcloud."
+                 : "Sign in through SoundCloud to let Parachord find SoundCloud tracks. Playing them needs no sign-in. Opens SoundCloud in a secure in-app browser; Parachord never sees your password.")
         }
 
         Section {
@@ -1139,8 +1148,8 @@ private struct PluginConfigSheet: View {
             Link(destination: URL(string: "https://soundcloud.com/you/apps")!) {
                 Label("Create an app — soundcloud.com/you/apps →", systemImage: "key.fill").font(.system(size: 14))
             }
-        } header: { Text("SoundCloud app credentials") } footer: {
-            Text("Set the app's Redirect URI to parachord://auth/callback/soundcloud (the same as Android, so one app works for both phones). Clearing the credentials also signs you out.")
+        } header: { Text("Your own SoundCloud app (optional)") } footer: {
+            Text("Only needed to use your own SoundCloud app instead of Parachord's. Set its Redirect URI to http://127.0.0.1:8888/callback/soundcloud, the same as Parachord on desktop and Android, so one app works everywhere; during sign-in Parachord receives it on this device. Clearing the credentials also signs you out.")
         }
     }
 

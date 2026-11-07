@@ -8,10 +8,16 @@ import androidx.browser.customtabs.CustomTabsIntent
 import com.parachord.android.BuildConfig
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.shared.api.auth.SoundCloudAuth
+import com.parachord.shared.api.auth.SoundCloudLoopback
+import com.parachord.shared.api.auth.SoundCloudLoopbackPortBusyException
+import com.parachord.shared.api.auth.SoundCloudLoopbackServer
 import com.parachord.shared.api.auth.SpotifyRefreshOutcome
 import com.parachord.shared.api.auth.classifySpotifyRefresh
 import com.parachord.shared.api.auth.parseSpotifyErrorCode
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +47,24 @@ class OAuthManager constructor(
     soundCloudAuthLazy: Lazy<SoundCloudAuth>,
 ) {
     private val soundCloudAuth: SoundCloudAuth by soundCloudAuthLazy
+
+    /**
+     * Listens on 127.0.0.1:8888 while a SoundCloud sign-in is open. Every
+     * sign-in uses desktop's redirect URI (the built-in app's only one, and
+     * the one a person's own app registers so it works everywhere); the
+     * listener bounces it to parachord://auth/callback/soundcloud
+     * ([SoundCloudLoopback]).
+     */
+    private val soundCloudLoopback = SoundCloudLoopbackServer()
+    private val loopbackScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            CoroutineExceptionHandler { _, e -> Log.e(TAG, "SoundCloud sign-in listener: ${e.message}") },
+    )
+
+    private val _soundCloudSignInError = MutableStateFlow<String?>(null)
+
+    /** Why the last SoundCloud sign-in didn't finish, or null. Cleared when a new one starts. */
+    val soundCloudSignInError: StateFlow<String?> = _soundCloudSignInError.asStateFlow()
 
     companion object {
         private const val TAG = "OAuthManager"
@@ -259,22 +283,34 @@ class OAuthManager constructor(
 
     /**
      * Launch SoundCloud OAuth 2.1 flow with PKCE + state in a Custom Tab.
-     * Uses the user's own client ID from settings, or falls back to BuildConfig.
+     * Uses the person's own SoundCloud app when they saved one, else
+     * Parachord's built-in app. Either way the redirect is desktop's loopback
+     * address, so the listener runs until SoundCloud's redirect arrives. A
+     * busy port is reported through [soundCloudSignInError] and the browser
+     * isn't opened.
      */
     suspend fun launchSoundCloudAuth() {
-        val clientId = settingsStore.getSoundCloudClientId()
-            ?: BuildConfig.SOUNDCLOUD_CLIENT_ID.ifBlank { null }
+        _soundCloudSignInError.value = null
+        val clientId = soundCloudAuth.credentialsInUse()?.clientId
         if (clientId == null) {
             Log.w(TAG, "No SoundCloud client ID available")
             return
         }
+        val redirectUri = SoundCloudLoopback.REDIRECT_URI
 
         val verifier = generateCodeVerifier()
         val state = generateOAuthState()
+        try {
+            soundCloudLoopback.start(loopbackScope, state)
+        } catch (e: SoundCloudLoopbackPortBusyException) {
+            _soundCloudSignInError.value = e.message
+            return
+        }
         pendingFlows[state] = PendingOAuthFlow(
             service = "soundcloud",
             codeVerifier = verifier,
             createdAt = System.currentTimeMillis(),
+            redirectUri = redirectUri,
         )
         prunePendingFlows()
         val challenge = generateCodeChallenge(verifier)
@@ -283,7 +319,7 @@ class OAuthManager constructor(
             .buildUpon()
             .appendQueryParameter("client_id", clientId)
             .appendQueryParameter("response_type", "code")
-            .appendQueryParameter("redirect_uri", "$REDIRECT_URI/soundcloud")
+            .appendQueryParameter("redirect_uri", redirectUri)
             .appendQueryParameter("code_challenge_method", "S256")
             .appendQueryParameter("code_challenge", challenge)
             .appendQueryParameter("state", state)
@@ -373,7 +409,6 @@ class OAuthManager constructor(
     }
 
     private suspend fun handleSoundCloudCallback(uri: Uri): Boolean {
-        val code = uri.getQueryParameter("code") ?: return false
         val state = uri.getQueryParameter("state")
         if (state == null) {
             Log.w(TAG, "SoundCloud callback missing state parameter — rejecting")
@@ -385,13 +420,25 @@ class OAuthManager constructor(
             Log.w(TAG, "SoundCloud callback state mismatch — possible CSRF; rejecting")
             return false
         }
+        soundCloudLoopback.stop()
+        val code = uri.getQueryParameter("code")
+        if (code == null) {
+            val error = uri.getQueryParameter("error")
+            Log.w(TAG, "SoundCloud sign-in returned no code (${error ?: "no error"})")
+            _soundCloudSignInError.value =
+                if (error == "access_denied") null // the person said no; nothing to explain
+                else "SoundCloud didn't finish signing in" + (error?.let { " ($it)" } ?: "") + ". Try again."
+            return false
+        }
         val verifier = flow.codeVerifier
 
         return try {
-            soundCloudAuth.exchangeCode(code, verifier, "$REDIRECT_URI/soundcloud")
+            // The exchange must name the redirect the authorize step used.
+            soundCloudAuth.exchangeCode(code, verifier, flow.redirectUri ?: "$REDIRECT_URI/soundcloud")
             true
         } catch (e: Exception) {
             Log.e(TAG, "SoundCloud token exchange error", e)
+            _soundCloudSignInError.value = e.message ?: "SoundCloud sign-in failed. Try again."
             false
         }
     }
@@ -514,6 +561,8 @@ private data class PendingOAuthFlow(
     val service: String,
     val codeVerifier: String,
     val createdAt: Long,
+    /** The redirect_uri the authorize step sent (null: flows saved before it was recorded). */
+    val redirectUri: String? = null,
 )
 
 @Serializable

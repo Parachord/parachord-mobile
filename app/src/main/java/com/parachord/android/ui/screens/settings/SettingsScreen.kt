@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.settings
 
+import com.parachord.shared.api.auth.SoundCloudLoopback
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.background
@@ -435,6 +436,7 @@ private fun PlugInsTab(
     // reference (like lovePushEnabled below) — no prop threading needed.
     val spotifyClientId by settingsViewModel.spotifyClientId.collectAsStateWithLifecycle()
     val spotifyError by settingsViewModel.spotifyError.collectAsStateWithLifecycle()
+    val soundCloudError by settingsViewModel.soundCloudSignInError.collectAsStateWithLifecycle()
     fun isResolverEnabled(id: String): Boolean = activeResolvers.isEmpty() || id in activeResolvers
     val allPlugins = remember(axePlugins) { buildPluginList(axePlugins) }
 
@@ -886,6 +888,7 @@ private fun PlugInsTab(
             onSaveSpotifyClientId = { settingsViewModel.setSpotifyClientId(it) },
             onClearSpotifyClientId = { settingsViewModel.setSpotifyClientId("") },
             spotifyError = spotifyError,
+            soundCloudError = soundCloudError,
             scanProgress = scanProgress,
             onScanLocalFiles = onScanLocalFiles,
             onTicketmasterApiKeySubmit = onTicketmasterApiKeySubmit,
@@ -1175,6 +1178,7 @@ private fun PluginConfigSheet(
     onSaveSpotifyClientId: (String) -> Unit = {},
     onClearSpotifyClientId: () -> Unit = {},
     spotifyError: String? = null,
+    soundCloudError: String? = null,
     scanProgress: ScanProgress = ScanProgress(),
     onScanLocalFiles: () -> Unit = {},
     onTicketmasterApiKeySubmit: (String) -> Unit = {},
@@ -1341,6 +1345,7 @@ private fun PluginConfigSheet(
                 "soundcloud" -> SoundCloudConfig(
                     isConnected = isConnected,
                     credentialsSaved = soundCloudCredentialsSaved,
+                    error = soundCloudError,
                     onSaveCredentials = onSoundCloudSaveCredentials,
                     onConnect = onSoundCloudConnect,
                     onDisconnect = onSoundCloudDisconnect,
@@ -1663,6 +1668,7 @@ private fun SpotifyConfig(
 private fun SoundCloudConfig(
     isConnected: Boolean,
     credentialsSaved: Boolean,
+    error: String?,
     onSaveCredentials: (String, String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
@@ -1700,35 +1706,26 @@ private fun SoundCloudConfig(
             Text("Disconnect", color = MaterialTheme.colorScheme.error)
         }
     } else {
+        // Parachord's built-in SoundCloud app signs in without any setup
+        // (through the loopback listener); the person's own app is optional.
         Text(
-            text = if (credentialsSaved) "Credentials saved. Tap Connect to authorize with SoundCloud."
-            else "Add your SoundCloud app credentials below, then connect.",
+            text = if (credentialsSaved) "Tap Connect to sign in to SoundCloud with your own app. Playing tracks needs no sign-in."
+            else "Sign in to SoundCloud to let Parachord find SoundCloud tracks. Playing them needs no sign-in.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (!credentialsSaved) {
-            // #400: be honest. Parachord ships no SoundCloud key, and SoundCloud
-            // restricts new API apps, so most people can't get one. Point them at
-            // what will work instead of letting the grayed tile look broken.
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "SoundCloud restricts who can create API apps, so you may not be able to get " +
-                    "credentials. Spotify and Apple Music are easier to set up.",
-                style = MaterialTheme.typography.bodySmall,
-                color = SetupRequiredAmber,
-            )
-        }
         Spacer(modifier = Modifier.height(12.dp))
-        TextButton(
-            onClick = onConnect,
-            enabled = credentialsSaved,
-        ) {
-            Text(
-                "Connect SoundCloud",
-                color = if (credentialsSaved) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        TextButton(onClick = onConnect) {
+            Text("Connect SoundCloud", color = MaterialTheme.colorScheme.primary)
         }
+    }
+    if (error != null && !isConnected) {
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = error,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
     }
 
     Spacer(modifier = Modifier.height(16.dp))
@@ -1736,7 +1733,7 @@ private fun SoundCloudConfig(
     Spacer(modifier = Modifier.height(12.dp))
 
     // Advanced — Client ID & Secret
-    var advancedOpen by remember { mutableStateOf(!credentialsSaved && !isConnected) }
+    var advancedOpen by remember { mutableStateOf(false) }
     TextButton(onClick = { advancedOpen = !advancedOpen }) {
         Text(
             text = if (advancedOpen) "▾ Advanced" else "▸ Advanced",
@@ -1749,7 +1746,7 @@ private fun SoundCloudConfig(
     if (advancedOpen) {
         val uriHandler = LocalUriHandler.current
         Text(
-            text = "Create a SoundCloud app to get your Client ID and Secret:",
+            text = "Optional: use your own SoundCloud app instead of Parachord's. Create one to get a Client ID and Secret:",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1772,7 +1769,7 @@ private fun SoundCloudConfig(
         Spacer(modifier = Modifier.height(4.dp))
         SelectionContainer {
             Text(
-                text = "parachord://auth/callback/soundcloud",
+                text = SoundCloudLoopback.REDIRECT_URI,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium,
                 fontFamily = FontFamily.Monospace,
@@ -1781,7 +1778,8 @@ private fun SoundCloudConfig(
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "SoundCloud only allows one redirect URI per app, so you'll need a separate app for Android.",
+            text = "The same as Parachord on desktop, so one app works on desktop, Android and iOS. " +
+                "During sign-in Parachord receives it on this phone.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

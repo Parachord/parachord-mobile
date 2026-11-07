@@ -17,7 +17,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-/** The user's own SoundCloud app credentials (Parachord ships none on iOS). */
+/** A SoundCloud app's credentials: the person's own, or Parachord's built-in app ([SoundCloudBuiltInApp]). */
 data class SoundCloudCredentials(val clientId: String, val clientSecret: String)
 
 /**
@@ -41,21 +41,24 @@ class SoundCloudAuth(
     private val httpClient: HttpClient,
     private val settingsStore: SettingsStore,
     private val credentials: suspend () -> SoundCloudCredentials? = {
-        val id = settingsStore.getSoundCloudClientId()
-        val secret = settingsStore.getSoundCloudClientSecret()
-        if (id.isNullOrBlank() || secret.isNullOrBlank()) null else SoundCloudCredentials(id, secret)
+        resolveSoundCloudCredentials(settingsStore.getSoundCloudClientId(), settingsStore.getSoundCloudClientSecret())
     },
     private val nowMs: () -> Long = ::currentTimeMillis,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val refreshMutex = Mutex()
 
+    /** The app a sign-in uses now; the authorize URL must name this client id. */
+    suspend fun credentialsInUse(): SoundCloudCredentials? = credentials()
+
     /**
      * Exchange the sign-in's authorization [code] (with its PKCE
-     * [codeVerifier]) for tokens and store them. Throws with a readable
+     * [codeVerifier]) for tokens and store them. [redirectUri] must be the one
+     * the authorize step sent: desktop's loopback address
+     * ([SoundCloudLoopback.REDIRECT_URI]). Throws with a readable
      * message when the credentials are missing or SoundCloud refuses.
      */
-    suspend fun exchangeCode(code: String, codeVerifier: String, redirectUri: String = REDIRECT_URI) {
+    suspend fun exchangeCode(code: String, codeVerifier: String, redirectUri: String = SoundCloudLoopback.REDIRECT_URI) {
         val creds = credentials()
             ?: throw IllegalStateException("Add your SoundCloud app's Client ID and Secret first.")
         val response = httpClient.submitForm(
@@ -209,7 +212,8 @@ class SoundCloudAuth(
         private const val TAG = "SoundCloudAuth"
         const val AUTHORIZE_URL = "https://secure.soundcloud.com/authorize"
         const val TOKEN_URL = "https://secure.soundcloud.com/oauth/token"
-        const val REDIRECT_URI = "parachord://auth/callback/soundcloud"
+        /** The redirect every sign-in uses, desktop's (see [SoundCloudLoopback]). */
+        const val REDIRECT_URI = SoundCloudLoopback.REDIRECT_URI
 
         /** A refresh token unused for long enough expires; refreshing weekly keeps it alive. */
         const val PROACTIVE_REFRESH_MS = 7L * 24 * 60 * 60 * 1000

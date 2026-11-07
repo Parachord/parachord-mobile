@@ -85,7 +85,7 @@ class SoundCloudAuthTest {
         assertTrue("grant_type=authorization_code" in body)
         assertTrue("code_verifier=VERIFIER" in body)
         assertTrue("client_secret=SECRET" in body)
-        assertTrue("redirect_uri=parachord%3A%2F%2Fauth%2Fcallback%2Fsoundcloud" in body)
+        assertTrue("redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback%2Fsoundcloud" in body)
     }
 
     @Test
@@ -97,11 +97,35 @@ class SoundCloudAuthTest {
     }
 
     @Test
-    fun exchange_without_credentials_throws_before_any_request() = runTest {
+    fun exchange_without_own_credentials_uses_the_built_in_app() = runTest {
         val r = rig { ok("A1") }
         r.secure.remove("soundcloud_client_secret")
-        assertFailsWith<IllegalStateException> { r.auth.exchangeCode("CODE", "V") }
-        assertTrue(r.bodies.isEmpty())
+        r.auth.exchangeCode("CODE", "V")
+        val body = r.bodies.single()
+        assertTrue("client_id=${SoundCloudBuiltInApp.CLIENT_ID}" in body)
+        assertTrue("redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback%2Fsoundcloud" in body)
+        assertEquals("A1", r.store.getSoundCloudToken())
+    }
+
+    @Test
+    fun exchange_sends_the_redirect_the_authorize_step_used() = runTest {
+        // A flow started before this change registered parachord:// and must exchange with it.
+        val r = rig { ok("A1") }
+        r.auth.exchangeCode("CODE", "V", "parachord://auth/callback/soundcloud")
+        assertTrue("redirect_uri=parachord%3A%2F%2Fauth%2Fcallback%2Fsoundcloud" in r.bodies.single())
+    }
+
+    @Test
+    fun exchange_without_any_credentials_throws_before_any_request() = runTest {
+        val secure = FakeSecureStore()
+        val bodies = mutableListOf<String>()
+        val engine = MockEngine { req ->
+            bodies += (req.body as OutgoingContent.ByteArrayContent).bytes().decodeToString()
+            respond("{}", HttpStatusCode.OK, jsonHeaders)
+        }
+        val auth = SoundCloudAuth(HttpClient(engine), SettingsStore(secure, KvStore(MapSettings())), credentials = { null })
+        assertFailsWith<IllegalStateException> { auth.exchangeCode("CODE", "V") }
+        assertTrue(bodies.isEmpty())
     }
 
     @Test
