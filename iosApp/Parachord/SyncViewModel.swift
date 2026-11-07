@@ -175,6 +175,9 @@ final class SyncViewModel {
         let dev = (try? await container.appleMusicDeveloperToken()) ?? ""
         if let mut = await acquireAppleMusicMUT(developerToken: dev), !mut.isEmpty {
             try? await container.setAppleMusicUserToken(token: mut)
+            // Connecting enables the Apple Music resolver too (desktop parity).
+            try? await container.enableResolverAfterConnect(resolverId: "applemusic")
+            IosTrackResolverCache.shared.resolverEnabled("applemusic")
             return true
         }
         return false
@@ -206,6 +209,9 @@ final class SyncViewModel {
                 let devToken = (try? await container.appleMusicDeveloperToken()) ?? ""
                 if let mut = await acquireAppleMusicMUT(developerToken: devToken), !mut.isEmpty {
                     try? await container.setAppleMusicUserToken(token: mut)
+                    // Connecting enables the Apple Music resolver too (desktop parity).
+                    try? await container.enableResolverAfterConnect(resolverId: "applemusic")
+                    IosTrackResolverCache.shared.resolverEnabled("applemusic")
                 } else {
                     appleMusicBusy = false
                     appleMusicOn = false
