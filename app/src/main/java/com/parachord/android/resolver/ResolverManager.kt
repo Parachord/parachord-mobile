@@ -182,7 +182,13 @@ class ResolverManager constructor(
         // If we have an Apple Music ID, use it directly
         // Only a CATALOG id is a usable hint (#265): a library id (`i.…`) from older
         // Apple Music sync data isn't — drop it and let the cascade search instead.
-        if (com.parachord.shared.resolver.isAppleMusicCatalogId(appleMusicId)) {
+        // And only when Apple Music is connected: the hint skips the native
+        // resolver's Music User Token gate (#327), so unconnected it ranked Apple
+        // Music first and playback went to Apple's sign-in. Same gate as the
+        // Spotify hint's verify and `storedIdSources` (iOS: #533).
+        if (com.parachord.shared.resolver.isAppleMusicCatalogId(appleMusicId) &&
+            !settingsStore.getAppleMusicUserToken().isNullOrBlank()
+        ) {
             results.add(
                 ResolvedSource(
                     url = "applemusic:song:$appleMusicId",

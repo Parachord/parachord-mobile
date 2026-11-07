@@ -27,12 +27,13 @@ import org.junit.Test
 class ResolverManagerHintsTest {
 
     private lateinit var spotifyClient: SpotifyClient
+    private lateinit var settingsStore: com.parachord.shared.settings.SettingsStore
     private lateinit var resolver: ResolverManager
 
     @Before
     fun setUp() {
         spotifyClient = mockk(relaxed = true)
-        val settingsStore = mockk<com.parachord.shared.settings.SettingsStore>(relaxed = true)
+        settingsStore = mockk(relaxed = true)
         // Post-#210, ResolverManager delegates the cascade to the shared
         // ResolverCoordinator. A relaxed mock returns an empty scored list by
         // default, so these tests isolate resolveWithHints' Spotify-verify +
@@ -80,5 +81,39 @@ class ResolverManagerHintsTest {
         assertEquals("abc", spotify!!.spotifyId)
         // ...and it must not fall through to a search (which would also 429).
         coVerify(exactly = 0) { spotifyClient.searchTrack(any()) }
+    }
+
+    // An Apple Music ID becomes a source at confidence 1.0 with no search, so the
+    // native resolver's Music User Token gate (#327) never sees it. Unconnected,
+    // that source ranked Apple Music first and playback went to Apple's sign-in.
+
+    @Test
+    fun `apple music id is not a source when apple music isn't connected`() = runTest {
+        coEvery { settingsStore.getAppleMusicUserToken() } returns null
+
+        val sources = resolver.resolveWithHints(
+            query = "Song Artist",
+            appleMusicId = "1440857781",
+            targetTitle = "Song",
+            targetArtist = "Artist",
+        )
+
+        assertTrue("no apple music source without a connection", sources.none { it.resolver == "applemusic" })
+    }
+
+    @Test
+    fun `apple music id is a source when apple music is connected`() = runTest {
+        coEvery { settingsStore.getAppleMusicUserToken() } returns "mut"
+
+        val sources = resolver.resolveWithHints(
+            query = "Song Artist",
+            appleMusicId = "1440857781",
+            targetTitle = "Song",
+            targetArtist = "Artist",
+        )
+
+        val am = sources.firstOrNull { it.resolver == "applemusic" }
+        assertEquals("1440857781", am?.appleMusicId)
+        assertEquals(1.0, am?.confidence)
     }
 }
