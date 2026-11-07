@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.first
 /** Max loved songs shown in a car's "Loved Songs" folder. */
 const val CAR_LOVED_CAP = 100
 
-/** Max playlists, or tracks of one playlist, listed in a car. */
+/** Max tracks listed when one playlist is opened in a car. The playlists list itself is uncapped. */
 const val CAR_PLAYLIST_CAP = 500
 
 /** Ids of the car browse tree. Shared by Android Auto and CarPlay. */
@@ -99,7 +99,6 @@ class CarBrowse(private val source: CarLibrarySource) {
             CarIds.ROOT -> listOf(playlistsFolder(), lovedFolder(), collectionRadio())
             CarIds.PLAYLISTS -> source.playlists()
                 .sortedByDescending { it.updatedAt }
-                .take(CAR_PLAYLIST_CAP)
                 .map { playlistItem(it) }
             CarIds.LOVED -> lovedSongs(source.collectionTracks()).map { lovedItem(it) }
             else -> emptyList()

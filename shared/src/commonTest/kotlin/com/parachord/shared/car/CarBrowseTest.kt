@@ -83,11 +83,15 @@ class CarBrowseTest {
     }
 
     @Test
-    fun `a playlist list is capped at 500`() = runTest {
-        val src = FakeSource(playlists = (0 until 600).map { pl("p$it", updatedAt = it.toLong()) })
-        assertEquals(500, CarBrowse(src).children(CarIds.PLAYLISTS).size)
+    fun `a playlist's tracklist is capped at 500`() = runTest {
         val rows = FakeSource(rows = mapOf("p" to (0 until 600).map { row("p", it) }))
         assertEquals(501, CarBrowse(rows).children("playlist:p").size) // Shuffle + 500
+    }
+
+    @Test
+    fun `more than 500 playlists are all listed`() = runTest {
+        val src = FakeSource(playlists = (0 until 600).map { pl("p$it", updatedAt = it.toLong()) })
+        assertEquals(600, CarBrowse(src).children(CarIds.PLAYLISTS).size)
     }
 
     @Test
