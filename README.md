@@ -124,7 +124,7 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 - **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz.
 - **On Tour**: a teal dot next to the artist name when they're playing near you. The radius is configurable.
 - **Friends**: see what your Last.fm and ListenBrainz contacts have been playing, and **Listen Along** with them.
-- **Spinoff**: start a radio of similar tracks from whatever is playing, without touching your queue.
+- **Spinoff**: start a radio of similar tracks from whatever is playing, without touching your queue. When Last.fm has few similar tracks for a song, the radio fills up with the top songs of similar artists.
 - **Concerts**: Ticketmaster and SeatGeek search, filtered by location.
 
 ### AI features (bring your own key)

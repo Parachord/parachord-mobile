@@ -317,13 +317,16 @@ struct PCNowPlaying: View {
         }
         .foregroundStyle(.white.opacity(0.65))
         .alert(
-            "No similar tracks",
-            isPresented: Binding(get: { spinoff.lastEmptySeed != nil },
-                                 set: { if !$0 { spinoff.lastEmptySeed = nil } })
+            spinoff.lastFetchFailed ? "Spinoff" : "No similar tracks",
+            isPresented: Binding(get: { spinoff.lastEmptySeed != nil || spinoff.lastFetchFailed },
+                                 set: { if !$0 { spinoff.lastEmptySeed = nil; spinoff.lastFetchFailed = false } })
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Couldn't find tracks similar to “\(spinoff.lastEmptySeed ?? "")”.")
+            // Desktop's wording for a failed request (parachord#1281).
+            Text(spinoff.lastFetchFailed
+                 ? "Failed to fetch similar tracks"
+                 : "Couldn't find tracks similar to “\(spinoff.lastEmptySeed ?? "")”.")
         }
     }
 
