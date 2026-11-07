@@ -288,7 +288,12 @@ class IosContainer private constructor() {
 
     val settingsStore: SettingsStore by lazy {
         SettingsStore(
-            secureStore = IosSecureTokenStore(),
+            secureStore = IosSecureTokenStore(
+                migrationDone = { kvStore.getBoolean("keychain_accessibility_v1") },
+                markMigrationDone = {
+                    kotlinx.coroutines.runBlocking { kvStore.setBoolean("keychain_accessibility_v1", true) }
+                },
+            ),
             kv = kvStore,
         )
     }
