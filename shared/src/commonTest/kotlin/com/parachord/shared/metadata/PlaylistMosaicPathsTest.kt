@@ -67,6 +67,31 @@ class PlaylistMosaicPathsTest {
     }
 
     @Test
+    fun `covers are the first four distinct non-blank track covers in order`() {
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            PlaylistMosaicPaths.covers(listOf(null, "a", "", "b", "a", "c", "d", "e")),
+        )
+    }
+
+    @Test
+    fun `the cover fingerprint is stable and order-sensitive`() {
+        val ab = PlaylistMosaicPaths.coverSignature(listOf("https://x/a.jpg", "https://x/b.jpg"))
+        assertEquals(16, ab.length)
+        assertEquals(ab, PlaylistMosaicPaths.coverSignature(listOf("https://x/a.jpg", "https://x/b.jpg")))
+        assertEquals(false, ab == PlaylistMosaicPaths.coverSignature(listOf("https://x/b.jpg", "https://x/a.jpg")))
+        // Pinned so both platforms (JVM + Native) provably compute the same value.
+        assertEquals("cbf29ce484222325", PlaylistMosaicPaths.coverSignature(emptyList()))
+    }
+
+    @Test
+    fun `version reads the v query`() {
+        assertEquals("abc", PlaylistMosaicPaths.version("file:/x/playlist_mosaics/a.jpg?v=abc"))
+        assertEquals("abc", PlaylistMosaicPaths.version("file:///x/a.jpg?t=1&v=abc"))
+        assertNull(PlaylistMosaicPaths.version("file:///x/a.jpg"))
+    }
+
+    @Test
     fun `Android's single-slash file URI is a local file with the same path`() {
         val android = "file:/data/user/0/p/files/playlist_mosaics/a.jpg"
         assertEquals(true, PlaylistMosaicPaths.isLocalFile(android))

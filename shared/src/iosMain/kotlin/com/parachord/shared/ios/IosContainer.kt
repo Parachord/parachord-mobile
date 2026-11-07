@@ -2072,11 +2072,15 @@ class IosContainer private constructor() {
     suspend fun reportBrokenArtistImage(url: String, artist: String): String? =
         try { brokenArtRetry.reportArtistImage(url, artist) } catch (e: Exception) { null }
 
-    /** Regenerate the 2×2 mosaic for every playlist with missing/stale art
-     *  (Android's ParachordApplication startup hook). Call fire-and-forget on
-     *  launch. Guarded: bridged suspend must not throw across the ObjC bridge. */
+    /** Bring every playlist's cover up to date with its tracks, then keep it
+     *  so: each later track write re-checks that playlist (Android's
+     *  ParachordApplication startup hook). Call fire-and-forget on launch.
+     *  Guarded: bridged suspend must not throw across the ObjC bridge. */
     suspend fun regeneratePlaylistMosaics() {
-        try { imageEnrichmentService.regenerateAllPlaylistMosaics() } catch (_: Exception) {}
+        try {
+            imageEnrichmentService.watchTrackChanges()
+            imageEnrichmentService.regenerateAllPlaylistMosaics()
+        } catch (_: Exception) {}
     }
 
     /** Enrich ONE playlist's mosaic art (Android's enrichPlaylistArtIfNeeded) —

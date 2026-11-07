@@ -9,12 +9,15 @@ import com.parachord.shared.db.dao.PlaylistTrackDao
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MetadataService
+import com.parachord.shared.metadata.PlaylistMosaicPaths
 import com.parachord.shared.model.PlaylistTrack
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -36,12 +39,13 @@ class MosaicContainerMoveTest {
     ) {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { ParachordDb.Schema.create(it) }
         val db = ParachordDb(driver)
+        val tracks = PlaylistTrackDao(db)
         val files = onDisk.toMutableSet()
         val composed = mutableListOf<String>()
         val service = ImageEnrichmentService(
             metadataService = MetadataService(emptyList(), getDisabledProviders = { emptySet() }),
             artistDao = ArtistDao(db), albumDao = AlbumDao(db), trackDao = TrackDao(db, driver),
-            playlistDao = PlaylistDao(db), playlistTrackDao = PlaylistTrackDao(db),
+            playlistDao = PlaylistDao(db), playlistTrackDao = tracks,
             httpClient = HttpClient(MockEngine { respond("", HttpStatusCode.OK) }),
             composeMosaic = { id, _ ->
                 composed += id
@@ -60,7 +64,7 @@ class MosaicContainerMoveTest {
                 lastModified = 1L, locallyModified = 0L, ownerName = null, sourceUrl = null,
                 sourceContentHash = null, localOnly = 0L, writable = 1L,
             )
-            PlaylistTrackDao(db).insertAll(
+            tracks.insertAll(
                 trackArt.mapIndexed { i, url ->
                     PlaylistTrack(playlistId = id, position = i, trackTitle = "t$i", trackArtist = "a$i", trackArtworkUrl = url)
                 },
@@ -71,31 +75,32 @@ class MosaicContainerMoveTest {
     }
 
     private val twoCovers = listOf("https://img/a.jpg", "https://img/b.jpg")
+    private val sig = PlaylistMosaicPaths.coverSignature(twoCovers)
 
     @Test
     fun `a mosaic that moved with the container is re-pointed at today's directory`() = runBlocking {
         val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
-        s.insert("a", "file://$oldDir/a.jpg?v=5", twoCovers)
+        s.insert("a", "file://$oldDir/a.jpg?v=$sig", twoCovers)
         s.service.regenerateAllPlaylistMosaics()
-        assertEquals("file://$newDir/a.jpg?v=5", s.art("a"))
+        assertEquals("file://$newDir/a.jpg?v=$sig", s.art("a"))
         assertEquals(emptyList<String>(), s.composed)
     }
 
     @Test
-    fun `a mosaic whose file is still there is untouched`() = runBlocking {
+    fun `a mosaic that matches its tracks is untouched`() = runBlocking {
         val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
-        s.insert("a", "file://$newDir/a.jpg", twoCovers)
+        s.insert("a", "file://$newDir/a.jpg?v=$sig", twoCovers)
         s.service.regenerateAllPlaylistMosaics()
-        assertEquals("file://$newDir/a.jpg", s.art("a"))
+        assertEquals("file://$newDir/a.jpg?v=$sig", s.art("a"))
         assertEquals(emptyList<String>(), s.composed)
     }
 
     @Test
     fun `a mosaic gone everywhere is rebuilt and stored in place of the dead URL`() = runBlocking {
         val s = Setup(onDisk = emptySet(), currentDir = newDir)
-        s.insert("a", "file://$oldDir/a.jpg", twoCovers)
+        s.insert("a", "file://$oldDir/a.jpg?v=$sig", twoCovers)
         s.service.regenerateAllPlaylistMosaics()
-        assertEquals("file://$newDir/a.jpg", s.art("a"))
+        assertEquals("file://$newDir/a.jpg?v=$sig", s.art("a"))
     }
 
     /** Android stores what `composeMosaicAndroid` returns: `File.toURI()`, which
@@ -105,13 +110,13 @@ class MosaicContainerMoveTest {
     @Test
     fun `an Android file-colon-single-slash mosaic that exists is not rebuilt`() = runBlocking {
         val androidDir = "/data/user/0/com.parachord.android/files/playlist_mosaics"
-        val stored = java.io.File("$androidDir/spotify-abc.jpg").toURI().toString()
-        assertEquals("file:$androidDir/spotify-abc.jpg", stored)   // the form under test
+        val uri = java.io.File("$androidDir/spotify-abc.jpg").toURI().toString()
+        assertEquals("file:$androidDir/spotify-abc.jpg", uri)   // the form under test
         val s = Setup(onDisk = setOf("$androidDir/spotify-abc.jpg"), currentDir = androidDir)
-        s.insert("spotify-abc", stored, twoCovers)
+        s.insert("spotify-abc", "$uri?v=$sig", twoCovers)
         s.service.regenerateAllPlaylistMosaics()
         assertEquals(emptyList<String>(), s.composed)
-        assertEquals(stored, s.art("spotify-abc"))
+        assertEquals("$uri?v=$sig", s.art("spotify-abc"))
     }
 
     /** The pass was meant to replace provider stock art with a mosaic (53916b22),
@@ -124,10 +129,69 @@ class MosaicContainerMoveTest {
         s.insert("spotify-abc", "https://mosaic.scdn.co/640/stock", twoCovers)
 
         s.service.regenerateAllPlaylistMosaics()
-        assertEquals("file:$androidDir/spotify-abc.jpg", s.art("spotify-abc"))
+        assertEquals("file:$androidDir/spotify-abc.jpg?v=$sig", s.art("spotify-abc"))
         assertEquals(listOf("spotify-abc"), s.composed)
 
         s.service.regenerateAllPlaylistMosaics()   // next launch
         assertEquals(listOf("spotify-abc"), s.composed)
+    }
+
+    // ── The mosaic follows its tracks ──────────────────────────────────────
+
+    @Test
+    fun `a mosaic built before covers were fingerprinted is rebuilt once`() = runBlocking {
+        val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
+        s.insert("a", "file://$newDir/a.jpg", twoCovers)
+        s.service.regenerateAllPlaylistMosaics()
+        assertEquals("file://$newDir/a.jpg?v=$sig", s.art("a"))
+        s.service.regenerateAllPlaylistMosaics()
+        assertEquals(listOf("a"), s.composed)
+    }
+
+    @Test
+    fun `changing the tracks rebuilds the mosaic with the new covers`() = runBlocking {
+        val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
+        s.insert("a", "file://$newDir/a.jpg?v=$sig", twoCovers)
+        val newCovers = listOf("https://img/c.jpg", "https://img/a.jpg", "https://img/d.jpg")
+        s.tracks.replaceAll("a", newCovers.mapIndexed { i, url ->
+            PlaylistTrack(playlistId = "a", position = i, trackTitle = "n$i", trackArtist = "n$i", trackArtworkUrl = url)
+        })
+
+        assertEquals(true, s.service.refreshPlaylistMosaic("a"))
+        assertEquals("file://$newDir/a.jpg?v=${PlaylistMosaicPaths.coverSignature(newCovers)}", s.art("a"))
+        assertEquals(false, s.service.refreshPlaylistMosaic("a"))   // now current
+    }
+
+    @Test
+    fun `reordering so different covers lead rebuilds - same covers in the same order don't`() = runBlocking {
+        val four = listOf("https://img/1.jpg", "https://img/2.jpg", "https://img/3.jpg", "https://img/4.jpg", "https://img/5.jpg")
+        val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
+        val sig4 = PlaylistMosaicPaths.coverSignature(four.take(4))
+        s.insert("a", "file://$newDir/a.jpg?v=$sig4", four)
+
+        // A rewrite of the same tracks (a sync re-pull) changes nothing.
+        s.tracks.replaceAll("a", s.tracks.getByPlaylistIdSync("a"))
+        assertEquals(false, s.service.refreshPlaylistMosaic("a"))
+
+        // Moving track 5 to the top changes which four covers lead.
+        val moved = listOf(four[4]) + four.take(4)
+        s.tracks.replaceAll("a", moved.mapIndexed { i, url ->
+            PlaylistTrack(playlistId = "a", position = i, trackTitle = "n$i", trackArtist = "n$i", trackArtworkUrl = url)
+        })
+        assertEquals(true, s.service.refreshPlaylistMosaic("a"))
+    }
+
+    @Test
+    fun `a track write while the app runs updates the mosaic without a relaunch`() = runBlocking {
+        val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
+        s.insert("a", "file://$newDir/a.jpg?v=$sig", twoCovers)
+        s.service.watchTrackChanges(debounceMs = 10)
+
+        s.tracks.insertAll(listOf(
+            PlaylistTrack(playlistId = "a", position = 2, trackTitle = "c", trackArtist = "c", trackArtworkUrl = "https://img/c.jpg"),
+        ))
+        val expected = "file://$newDir/a.jpg?v=${PlaylistMosaicPaths.coverSignature(twoCovers + "https://img/c.jpg")}"
+        withTimeout(5_000) { while (s.art("a") != expected) delay(20) }
+        assertEquals(listOf("a"), s.composed)
     }
 }

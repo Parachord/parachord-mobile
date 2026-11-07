@@ -120,21 +120,15 @@ class ParachordApplication : Application() {
             }
         }
 
-        // On every app launch, regenerate playlist mosaics for any playlist
-        // whose artwork isn't already a locally-generated `file://` mosaic.
-        // This catches:
-        //  - Synced AM/Spotify playlists where we initially stored the
-        //    provider's stock playlist artwork (these get replaced with
-        //    mosaics built from the actual track album art).
-        //  - Hosted XSPF playlists that lost their mosaic from a prior bug
-        //    or re-import.
-        //  - Any new playlist that arrived without artwork.
-        //
-        // Bounded concurrency inside the function (MAX_PLAYLIST_REGEN_CONCURRENCY=4)
-        // so a 100-playlist library doesn't slam the network at startup.
-        // Skips playlists already on `file://` URLs — idempotent.
+        // Keep playlist covers in step with their tracks. At launch, every
+        // playlist whose cover is missing, provider stock art, or a mosaic of
+        // covers it no longer has gets a fresh 2x2 mosaic (a database-only
+        // check; unchanged playlists cost nothing). While the app runs, every
+        // track write (sync pull, edit, hosted XSPF update) re-checks that
+        // playlist. Rebuilds are bounded (MAX_PLAYLIST_REGEN_CONCURRENCY=4).
         appScope.launch {
             try {
+                imageEnrichmentService.watchTrackChanges()
                 imageEnrichmentService.regenerateAllPlaylistMosaics()
             } catch (_: Exception) {
                 // Background pass; don't take down the app on a failure.

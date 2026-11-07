@@ -6,7 +6,11 @@ import com.parachord.shared.db.ParachordDb
 import com.parachord.shared.db.Playlist_tracks
 import com.parachord.shared.model.PlaylistTrack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
@@ -17,6 +21,23 @@ import kotlinx.coroutines.withContext
 class PlaylistTrackDao(private val db: ParachordDb) {
 
     private val queries get() = db.playlistTrackQueries
+
+    private val _changes = MutableSharedFlow<String>(
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /**
+     * The id of each playlist whose tracks were just written (added, removed,
+     * reordered, replaced, or given a cover). Every track write goes through
+     * this DAO — sync pulls, local edits, hosted XSPF, iOS — so this is the one
+     * place a reader can learn that a playlist changed. The playlist mosaic
+     * follows its tracks this way ([com.parachord.shared.metadata.ImageEnrichmentService.watchTrackChanges]).
+     * Best effort: with no collector, or a burst past the buffer, ids drop.
+     */
+    val changes: SharedFlow<String> = _changes.asSharedFlow()
+
+    private fun changed(playlistId: String) { _changes.tryEmit(playlistId) }
 
     /* ---- Mapping ---- */
 
@@ -80,15 +101,18 @@ class PlaylistTrackDao(private val db: ParachordDb) {
                 )
             }
         }
+        tracks.map { it.playlistId }.distinct().forEach(::changed)
     }
 
     suspend fun deleteByPlaylistId(playlistId: String): Unit = withContext(Dispatchers.Default) {
         queries.deleteByPlaylistId(playlistId)
+        changed(playlistId)
     }
 
 
     suspend fun deleteTrack(playlistId: String, position: Int): Unit = withContext(Dispatchers.Default) {
         queries.deleteTrack(playlistId = playlistId, position = position.toLong())
+        changed(playlistId)
     }
 
     /**
@@ -116,6 +140,7 @@ class PlaylistTrackDao(private val db: ParachordDb) {
                 trackTitle = title,
                 trackArtist = artist,
             )
+            changed(playlistId)
         }
 
     /** Replace a dead cover URL on every playlist-track row that holds it. */
@@ -187,5 +212,6 @@ class PlaylistTrackDao(private val db: ParachordDb) {
                 )
             }
         }
+        changed(playlistId)
     }
 }
