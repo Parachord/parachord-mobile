@@ -69,6 +69,7 @@ import com.parachord.android.deeplink.DeepLinkConfirmation
 import com.parachord.android.deeplink.DeepLinkNavEvent
 import com.parachord.android.deeplink.DeepLinkViewModel
 import com.parachord.android.data.store.SettingsStore
+import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.playback.handlers.MusicKitWebBridge
 import com.parachord.android.ui.components.ActionOverlay
 import com.parachord.android.ui.components.NetworkBanner
@@ -278,6 +279,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
     val showBottomBar = currentDestination?.route !in fullScreenRoutes
 
     val playbackState by mainViewModel.playbackState.collectAsStateWithLifecycle()
+    val trackArtwork by mainViewModel.trackArtwork.collectAsStateWithLifecycle()
     val currentTrack = playbackState.currentTrack
     val isCurrentTrackFavorited by mainViewModel.isCurrentTrackFavorited.collectAsStateWithLifecycle()
     val isCurrentArtistOnTour by mainViewModel.isOnTour.collectAsStateWithLifecycle()
@@ -582,7 +584,8 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                 MiniPlayer(
                                     trackTitle = streamMeta?.title ?: currentTrack.title,
                                     artistName = streamMeta?.artist ?: currentTrack.artist,
-                                    artworkUrl = streamMeta?.artworkUrl ?: currentTrack.artworkUrl,
+                                    artworkUrl = playbackState.effectiveArtwork(trackArtwork),
+                                    albumTitle = streamMeta?.album ?: currentTrack.album,
                                     isPlaying = playbackState.isPlaying,
                                     isBuffering = playbackState.isBuffering,
                                     isFavorited = isCurrentTrackFavorited,

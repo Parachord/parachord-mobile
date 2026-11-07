@@ -48,6 +48,7 @@ fun MiniPlayer(
     trackTitle: String,
     artistName: String,
     artworkUrl: String?,
+    albumTitle: String? = null,
     isPlaying: Boolean,
     isBuffering: Boolean,
     isFavorited: Boolean,
@@ -89,6 +90,8 @@ fun MiniPlayer(
                 cornerRadius = 4.dp,
                 elevation = 0.dp,
                 placeholderName = artistName.ifBlank { trackTitle },
+                artist = artistName,
+                album = albumTitle,
             )
 
             Spacer(modifier = Modifier.width(12.dp))

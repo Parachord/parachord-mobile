@@ -129,6 +129,8 @@ import com.parachord.android.ai.AiArtistSuggestion
 import com.parachord.android.ai.AiRecommendations
 import com.parachord.android.data.repository.WeeklyPlaylistEntry
 import com.parachord.android.playback.PlaybackState
+import com.parachord.android.playback.effectiveArtwork
+import com.parachord.android.playback.effectiveTrack
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -174,6 +176,7 @@ fun HomeScreen(
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
     val resolverOrder by viewModel.resolverOrder.collectAsStateWithLifecycle()
     val trackResolvers by viewModel.trackResolvers.collectAsStateWithLifecycle()
+    val trackArtwork by viewModel.trackArtwork.collectAsStateWithLifecycle()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsStateWithLifecycle()
     val contextMenuState = rememberTrackContextMenuState()
     val sharePlaylistById = rememberSharePlaylistById()
@@ -472,6 +475,7 @@ fun HomeScreen(
                     item {
                         ContinueListeningCard(
                             playbackState = playbackState,
+                            trackArtwork = trackArtwork,
                             onPlayPause = { viewModel.togglePlayPause() },
                             onClick = onNavigateToNowPlaying,
                         )
@@ -1529,10 +1533,12 @@ private fun HomeHexFallback(name: String) {
 @Composable
 private fun ContinueListeningCard(
     playbackState: PlaybackState,
+    trackArtwork: Map<String, String>,
     onPlayPause: () -> Unit,
     onClick: () -> Unit,
 ) {
-    val track = playbackState.currentTrack ?: return
+    // What's actually playing, as the mini player and Now Playing show it.
+    val track = playbackState.effectiveTrack ?: return
     val isDark = ParachordTheme.isDark
 
     Column {
@@ -1564,11 +1570,13 @@ private fun ContinueListeningCard(
         ) {
             // Album art
             AlbumArtCard(
-                artworkUrl = track.artworkUrl,
+                artworkUrl = playbackState.effectiveArtwork(trackArtwork),
                 size = 56.dp,
                 cornerRadius = 8.dp,
                 elevation = 2.dp,
                 placeholderName = track.artist,
+                artist = track.artist,
+                album = track.album,
             )
 
             Spacer(modifier = Modifier.width(14.dp))

@@ -54,6 +54,7 @@ class MainViewModel constructor(
     private val networkMonitor: NetworkMonitor,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
     private val pluginSyncService: com.parachord.android.plugin.PluginSyncService,
+    trackResolverCache: com.parachord.android.resolver.TrackResolverCache,
 ) : ViewModel() {
 
     companion object {
@@ -65,6 +66,9 @@ class MainViewModel constructor(
     }
 
     val playbackState: StateFlow<PlaybackState> = playbackStateHolder.state
+
+    /** Art from each track's resolved sources, for the mini player's cover. */
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
 
     /** Playback messages with an action, shown as a snackbar. */
     val playbackNotices = playbackController.notices
