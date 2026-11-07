@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto / media controls: end the running spinoff. The Spinoff fork
+     cut out of a filled disc, since Auto draws its buttons in one colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="44"
+    android:viewportHeight="44">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M22,0A22,22 0,1 1,22 44A22,22 0,1 1,22 0zM32,24a3.9955,3.9955 0,0 0,-3.858 3H24a3.0033,3.0033 0,0 1,-3 -3V20a4.9514,4.9514 0,0 0,-1.0256 -3H28.142a4,4 0,1 0,0 -2H15.858a4,4 0,1 0,0 2H16a3.0033,3.0033 0,0 1,3 3v4a5.0059,5.0059 0,0 0,5 5h4.142A3.9935,3.9935 0,1 0,32 24zM32,14a2,2 0,1 1,-2 2A2.0023,2.0023 0,0 1,32 14zM12,18a2,2 0,1 1,2 -2A2.002,2.002 0,0 1,12 18zM32,30a2,2 0,1 1,2 -2A2.0027,2.0027 0,0 1,32 30z" />
+</vector>
