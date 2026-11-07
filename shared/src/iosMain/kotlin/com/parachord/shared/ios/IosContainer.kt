@@ -1305,7 +1305,11 @@ class IosContainer private constructor() {
                 // here leaves the user's queue alone.
                 val seed = com.parachord.shared.playback.resolveSpinoffSeed(mode.artist, mode.title, ::artistTopTrackTitle)
                     ?: return IosComplexLink("failed", message = com.parachord.shared.playback.noSpinoffSeedMessage(mode.artist))
-                val pool = spinoffPool(seed.artist, seed.title)
+                val pool = try {
+                    spinoffPool(seed.artist, seed.title)
+                } catch (e: com.parachord.shared.playback.SpinoffFetchFailedException) {
+                    return IosComplexLink("failed", message = "Couldn't fetch similar tracks")
+                }
                 val name = action.name
                     ?: if (!mode.title.isNullOrBlank()) "Radio: ${mode.artist} – ${mode.title}" else "Radio: ${mode.artist}"
                 if (pool.isEmpty()) IosComplexLink("failed", message = "No similar tracks for \"${seed.title}\"")
@@ -1512,43 +1516,33 @@ class IosContainer private constructor() {
         friendsRepository.fetchTransientFriendNowPlaying(service, user)
 
     // ── Spinoff (#231) — seed-based radio pool, Android parity ──────────────
-    // Mirrors Android PlaybackController.startSpinoffWithSeed's Mode B: Last.fm
-    // `track.getsimilar` for the (artist, title) seed → metadata-only Tracks that
-    // resolve on-the-fly at play time (same lazy path as listen-along, so it stays
-    // visibility-scoped and doesn't burst the resolver — see iOS CLAUDE.md). Returns
-    // shuffled, capped, and EXCLUDING the seed itself. Empty on no-results/error so
-    // the caller can surface "no similar tracks" without starting a spinoff.
-    suspend fun spinoffPool(seedArtist: String, seedTitle: String, limit: Int = 30): List<Track> {
-        val resp = runCatching {
-            lastFmClient.getSimilarTracks(
-                track = seedTitle, artist = seedArtist,
-                apiKey = appConfig.lastFmApiKey, limit = limit,
-            )
-        }.getOrNull() ?: return emptyList()
-        val seedKey = "${seedTitle.lowercase()}|${seedArtist.lowercase()}"
-        return resp.similartracks?.track.orEmpty()
-            .mapNotNull { t ->
-                val artist = t.artist?.name ?: return@mapNotNull null
-                if ("${t.name.lowercase()}|${artist.lowercase()}" == seedKey) return@mapNotNull null
-                makeSpinoffTrack(t.name, artist)
-            }
-            .shuffled()
+    // The shared builder (#534, desktop parachord#1281): Last.fm similar tracks,
+    // topped up from similar artists' top tracks when there are fewer than 5, the
+    // seed and duplicates left out → metadata-only Tracks that resolve on-the-fly
+    // at play time (same lazy path as listen-along, so it stays visibility-scoped
+    // and doesn't burst the resolver — see iOS CLAUDE.md). Empty when Last.fm has
+    // nothing; throws SpinoffFetchFailedException when the similar-tracks request
+    // itself failed, so the caller says "Failed to fetch similar tracks" instead.
+    // @Throws so that exception reaches Swift instead of aborting the app (#322).
+    private val spinoffLastFm by lazy {
+        com.parachord.shared.playback.LastFmSpinoffSource(lastFmClient, appConfig.lastFmApiKey)
     }
 
-    // Lightweight spinoff-availability probe (Android's checkSpinoffAvailability,
-    // limit=1) — does the seed have ANY Last.fm similar tracks? Throws on API error
-    // so the caller (iOS) can map a failure to "unchecked" (nil) rather than false.
-    // @Throws — awaited from Swift on every track change (incl. backgrounded
-    // auto-advance); a thrown Last.fm network error must reach the Swift catch,
-    // not abort the app across the Kotlin/Native bridge (#322).
     @Throws(Throwable::class)
-    suspend fun spinoffAvailable(seedArtist: String, seedTitle: String): Boolean {
-        val resp = lastFmClient.getSimilarTracks(
-            track = seedTitle, artist = seedArtist,
-            apiKey = appConfig.lastFmApiKey, limit = 1,
-        )
-        return !resp.similartracks?.track.isNullOrEmpty()
+    suspend fun spinoffPool(seedArtist: String, seedTitle: String): List<Track> {
+        val built = com.parachord.shared.playback.buildSpinoffPool(spinoffLastFm, seedArtist, seedTitle)
+        if (built.failed) throw com.parachord.shared.playback.SpinoffFetchFailedException()
+        return built.tracks.map { makeSpinoffTrack(it.title, it.artist) }
     }
+
+    // The Spinoff button's check (Android's checkSpinoffAvailability): any similar
+    // track, or failing that any similar artist. A failed request answers false.
+    // @Throws — awaited from Swift on every track change (incl. backgrounded
+    // auto-advance); nothing should throw, but anything that does must reach the
+    // Swift catch, not abort the app across the Kotlin/Native bridge (#322).
+    @Throws(Throwable::class)
+    suspend fun spinoffAvailable(seedArtist: String, seedTitle: String): Boolean =
+        com.parachord.shared.playback.checkSpinoffAvailable(spinoffLastFm, seedArtist, seedTitle)
 
     private fun makeSpinoffTrack(title: String, artist: String): Track = Track(
         id = "spinoff:${title.lowercase()}|${artist.lowercase()}", title = title, artist = artist,

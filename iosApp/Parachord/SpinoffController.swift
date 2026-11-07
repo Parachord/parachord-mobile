@@ -29,6 +29,9 @@ final class SpinoffController {
     var loading = false
     /// Set briefly when a seed yields no similar tracks, so the UI can alert.
     var lastEmptySeed: String?
+    /// Set briefly when Last.fm's similar-tracks request itself failed (#534),
+    /// so the alert says so instead of "no similar tracks".
+    var lastFetchFailed = false
 
     func bind(_ c: QueuePlaybackCoordinator) { coordinator = c }
 
@@ -48,12 +51,22 @@ final class SpinoffController {
 
         loading = true
         lastEmptySeed = nil
+        lastFetchFailed = false
         task?.cancel()
         task = Task { @MainActor [weak self] in
             guard let self else { return }
-            let pool = (try? await self.container.spinoffPool(seedArtist: artist, seedTitle: title, limit: 30)) ?? []
+            // Shared builder (#534): similar tracks, topped up from similar
+            // artists' top tracks. Throws only when the similar-tracks request
+            // failed, which is a different message from "none found".
+            let pool: [Track]?
+            do {
+                pool = try await self.container.spinoffPool(seedArtist: artist, seedTitle: title)
+            } catch {
+                pool = nil
+            }
             defer { self.loading = false }
             guard !Task.isCancelled else { return }
+            guard let pool else { self.lastFetchFailed = true; return }
             guard !pool.isEmpty else { self.lastEmptySeed = title; return }
             // Don't interrupt the current song — beginSpinoff stashes the pool and
             // the next advance (song-end or Next) pulls from it. Banner includes the

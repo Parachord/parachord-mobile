@@ -457,11 +457,15 @@ data class LfmSimilarArtist(
     val name: String,
     val url: String? = null,
     val image: List<LfmImage> = emptyList(),
+    /** 0–1, sent as a quoted string ("0.982313"); parse with toDoubleOrNull. */
+    val match: String? = null,
 )
 
 @Serializable
 data class LfmSimilarArtistsResponse(
     val similarartists: LfmSimilar? = null,
+    /** Last.fm's error code, sent in place of the list (6 = not found). */
+    val error: Int? = null,
 )
 
 @Serializable
@@ -524,6 +528,8 @@ fun List<LfmImage>.bestImageUrl(): String? =
 @Serializable
 data class LfmTopTracksResponse(
     val toptracks: LfmTopTracks? = null,
+    /** Last.fm's error code, sent in place of the list (6 = not found). */
+    val error: Int? = null,
 )
 
 @Serializable
@@ -848,6 +854,8 @@ data class LfmTrackInfoAlbum(
 @Serializable
 data class LfmSimilarTracksResponse(
     val similartracks: LfmSimilarTracksList? = null,
+    /** Last.fm's error code, sent in place of the list (6 = not found). */
+    val error: Int? = null,
 )
 
 @Serializable

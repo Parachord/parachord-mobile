@@ -72,7 +72,6 @@ class PlaybackController constructor(
 ) {
     companion object {
         private const val TAG = "PlaybackController"
-        private const val SPINOFF_SIMILAR_LIMIT = 20
         /** Pool size below which Mode C triggers a refill (matches desktop's < 3). */
         private const val POOL_REFILL_THRESHOLD = 3
         /**
@@ -1722,53 +1721,56 @@ class PlaybackController constructor(
         lastFmClient.getArtistTopTracks(artist = artist, apiKey = BuildConfig.LASTFM_API_KEY, limit = 1)
             .toptracks?.track?.firstOrNull()?.name
 
+    /** Last.fm as the shared spinoff pool sees it (#534). */
+    private val spinoffLastFm by lazy {
+        com.parachord.shared.playback.LastFmSpinoffSource(lastFmClient, BuildConfig.LASTFM_API_KEY)
+    }
+
     /**
-     * Fetch Last.fm `track.getsimilar` for the seed and resolve each candidate.
+     * Build the seed's pool with the shared builder (Last.fm similar tracks,
+     * topped up from similar artists' top tracks when there are fewer than 5,
+     * desktop parachord#1281) and resolve each candidate.
      *
      * Touches NO playback state, so a caller can run it BEFORE deciding whether
      * to tear down the user's queue (#397). Returns the resolved pool, possibly
      * empty (no similar tracks, or none resolvable — e.g. a user with only
-     * Bandcamp connected). A Last.fm/network exception propagates so the caller
-     * chooses how to report it.
+     * Bandcamp connected). A failed similar-tracks request throws
+     * [com.parachord.shared.playback.SpinoffFetchFailedException] so the caller
+     * reports it as a failure, not as "no similar tracks".
      */
     suspend fun buildSpinoffPool(seedArtist: String, seedTitle: String): List<TrackEntity> =
         withContext(Dispatchers.IO) {
-            // 1. Fetch similar tracks via Last.fm `track.getsimilar`.
-            data class PoolSeed(val name: String, val artistName: String)
-            val response = lastFmClient.getSimilarTracks(
-                track = seedTitle,
-                artist = seedArtist,
-                apiKey = BuildConfig.LASTFM_API_KEY,
-                limit = SPINOFF_SIMILAR_LIMIT,
-            )
-            val candidates: List<PoolSeed> = response.similartracks?.track.orEmpty().mapNotNull {
-                val a = it.artist?.name ?: return@mapNotNull null
-                PoolSeed(it.name, a)
-            }
+            // 1. Candidates from the shared pool builder.
+            val built = com.parachord.shared.playback.buildSpinoffPool(spinoffLastFm, seedArtist, seedTitle)
+            if (built.failed) throw com.parachord.shared.playback.SpinoffFetchFailedException()
+            val candidates = built.tracks
             if (candidates.isEmpty()) {
                 Log.d(TAG, "Spinoff: no similar tracks found for '$seedTitle'")
                 return@withContext emptyList()
             }
-            Log.d(TAG, "Spinoff: found ${candidates.size} candidate tracks for '$seedTitle', resolving...")
+            Log.d(TAG, "Spinoff: found ${candidates.size} candidate tracks for '$seedTitle'" +
+                (if (built.usedFallback) " (similar artists' top tracks)" else "") + ", resolving...")
 
-            // 2. Convert to TrackEntities and resolve each.
+            // 2. Convert to TrackEntities and resolve each, in the pool's order:
+            // the builder already shuffled, and its fallback tracks are dealt so
+            // no two in a row share an artist, so don't shuffle again here.
             // Skip Last.fm images — they're almost always placeholder/blank.
             // Album art will be enriched via metadata providers on playback.
             val resolvedTracks = mutableListOf<TrackEntity>()
-            for (cand in candidates.shuffled()) {
-                val query = "${cand.name} ${cand.artistName}"
+            for (cand in candidates) {
+                val query = "${cand.title} ${cand.artist}"
                 try {
                     val sources = resolverManager.resolve(
                         query,
-                        targetTitle = cand.name,
-                        targetArtist = cand.artistName,
+                        targetTitle = cand.title,
+                        targetArtist = cand.artist,
                     )
                     val best = resolverScoring.selectBest(sources) ?: continue
                     resolvedTracks.add(
                         TrackEntity(
-                            id = "spinoff_${cand.name}_${cand.artistName}".hashCode().toString(),
-                            title = cand.name,
-                            artist = cand.artistName,
+                            id = "spinoff_${cand.title}_${cand.artist}".hashCode().toString(),
+                            title = cand.title,
+                            artist = cand.artist,
                             sourceUrl = best.url,
                             resolver = best.resolver,
                             spotifyUri = best.spotifyUri,
@@ -1779,7 +1781,7 @@ class PlaybackController constructor(
                     )
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w(TAG, "Spinoff: failed to resolve '${cand.name}'", e)
+                    Log.w(TAG, "Spinoff: failed to resolve '${cand.title}'", e)
                 }
             }
             if (resolvedTracks.isEmpty()) Log.d(TAG, "Spinoff: no tracks could be resolved")
@@ -2036,8 +2038,12 @@ class PlaybackController constructor(
     }
 
     /**
-     * Check whether spinoff is available for the current track.
-     * Lightweight call with limit=1 — called on track change.
+     * Check whether spinoff is available for the current track — called on
+     * track change. The shared check (desktop parachord#1281) asks
+     * `track.getsimilar&limit=1`, and only when that's empty
+     * `artist.getsimilar&limit=1`, so songs Last.fm has no similar tracks for
+     * ("Shape of You") still get a Spinoff from similar artists. A failed
+     * request answers false.
      */
     fun checkSpinoffAvailability() {
         val track = stateHolder.state.value.currentTrack ?: return
@@ -2046,13 +2052,12 @@ class PlaybackController constructor(
 
         scope.launch(Dispatchers.IO) {
             try {
-                val response = lastFmClient.getSimilarTracks(
-                    track = track.title,
-                    artist = track.artist,
-                    apiKey = BuildConfig.LASTFM_API_KEY,
-                    limit = 1,
+                val available = com.parachord.shared.playback.checkSpinoffAvailable(
+                    spinoffLastFm, track.artist, track.title,
                 )
-                val available = !response.similartracks?.track.isNullOrEmpty()
+                // Up to two requests: don't let a slow answer for the previous
+                // track land on the one now playing.
+                if (stateHolder.state.value.currentTrack?.id != track.id) return@launch
                 stateHolder.update { copy(spinoffAvailable = available) }
             } catch (e: Exception) {
                 Log.w(TAG, "Spinoff availability check failed", e)
