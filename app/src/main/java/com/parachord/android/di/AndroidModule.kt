@@ -894,6 +894,9 @@ val androidModule = module {
             tombstones = get(),
         )
     }
+
+    // The car browse tree (Android Auto, and CarPlay through the same logic).
+    single { com.parachord.shared.car.CarBrowse(com.parachord.shared.car.daoCarLibrarySource(get(), get(), get(), get())) }
     // ChartsRepository takes `lastFmApiKey` as a constructor parameter
     // (sourced here from BuildConfig). Apple Music marketing-tools RSS
     // feeds + Last.fm chart endpoints all flow through shared Ktor clients

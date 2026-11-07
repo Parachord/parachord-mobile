@@ -2237,7 +2237,7 @@ class PlaybackController constructor(
                 currentTrack = track,
                 isPlaying = false,
                 isBuffering = false,
-                playbackError = "Open Spotify on your phone to play this",
+                playbackError = com.parachord.shared.car.CarMessages.OPEN_SPOTIFY_ON_PHONE,
             )
         }
     }
