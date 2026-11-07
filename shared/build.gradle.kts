@@ -48,6 +48,10 @@ kotlin {
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.kotlinx.json)
             implementation(libs.ktor.client.logging)
+            // Raw sockets for SoundCloud's loopback sign-in listener
+            // (SoundCloudLoopback): JVM + Kotlin/Native, already on the
+            // classpath through the client engines.
+            implementation(libs.ktor.network)
             // SQLDelight (Phase 3)
             api(libs.sqldelight.coroutines)
             // Koin (Phase 4)

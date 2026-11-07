@@ -899,16 +899,18 @@ struct OAuthConfig {
         )
     }
 
-    /// SoundCloud OAuth 2.1 (PKCE + state), the user's own app — same
-    /// endpoint and redirect as Android's `OAuthManager.launchSoundCloudAuth`.
-    /// SoundCloud takes no scopes.
-    static func soundCloud(clientId: String) -> OAuthConfig {
+    /// SoundCloud OAuth 2.1 (PKCE + state) — same endpoint and redirect as
+    /// Android's `OAuthManager.launchSoundCloudAuth`: desktop's
+    /// http://127.0.0.1:8888/callback/soundcloud, where the app's loopback
+    /// listener (shared `SoundCloudLoopback`) bounces it to parachord://,
+    /// which this session catches. SoundCloud takes no scopes.
+    static func soundCloud(clientId: String, redirectURI: String) -> OAuthConfig {
         OAuthConfig(
             service: "soundcloud",
             authorizeURL: "https://secure.soundcloud.com/authorize",
             clientId: clientId,
             scopes: [],
-            redirectURI: "parachord://auth/callback/soundcloud",
+            redirectURI: redirectURI,
             callbackScheme: "parachord"
         )
     }
@@ -944,11 +946,12 @@ final class IosOAuthManager: NSObject, ASWebAuthenticationPresentationContextPro
     /// Run the full PKCE authorize step. Returns the authorization
     /// `code` + the `codeVerifier` (caller exchanges them for tokens
     /// via the shared HTTP layer). Throws on cancel / state mismatch /
-    /// missing code.
-    func authorize(_ config: OAuthConfig) async throws -> OAuthResult {
+    /// missing code. Pass [state] when something must know it before the
+    /// browser opens (SoundCloud's loopback listener).
+    func authorize(_ config: OAuthConfig, state presetState: String? = nil) async throws -> OAuthResult {
         let verifier = Self.makeCodeVerifier()
         let challenge = Self.codeChallenge(for: verifier)
-        let state = Self.makeState()
+        let state = presetState ?? Self.makeState()
 
         var components = URLComponents(string: config.authorizeURL)!
         components.queryItems = [
@@ -1082,7 +1085,7 @@ final class IosOAuthManager: NSObject, ASWebAuthenticationPresentationContextPro
     }
 
     /// 192-bit random state param for CSRF protection (matches Android).
-    private static func makeState() -> String {
+    static func makeState() -> String {
         randomURLSafe(byteCount: 24)
     }
 
