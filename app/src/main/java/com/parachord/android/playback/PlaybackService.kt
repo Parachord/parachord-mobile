@@ -215,32 +215,66 @@ class PlaybackService : MediaLibraryService() {
 
         /** Session command behind the heart on Android Auto's now-playing screen. */
         const val COMMAND_TOGGLE_LOVE = "com.parachord.android.TOGGLE_LOVE"
+
+        /** Session command behind the Spinoff button beside the heart. */
+        const val COMMAND_TOGGLE_SPINOFF = "com.parachord.android.TOGGLE_SPINOFF"
     }
 
     private val toggleLoveCommand = SessionCommand(COMMAND_TOGGLE_LOVE, Bundle.EMPTY)
+    private val toggleSpinoffCommand = SessionCommand(COMMAND_TOGGLE_SPINOFF, Bundle.EMPTY)
 
     /**
-     * Whether the playing track is in the collection, or null when nothing is
-     * playing (no heart then). Same title+artist match as the app's heart.
+     * What the custom buttons show: whether the playing track is in the
+     * collection (null when nothing is playing, and then no buttons; same
+     * title+artist match as the app's heart), and the spinoff state.
      */
-    @Volatile private var currentTrackLoved: Boolean? = null
+    private data class MediaButtonsState(
+        val loved: Boolean?,
+        val spinoffMode: Boolean,
+        val spinoffAvailable: Boolean?,
+    )
+
+    @Volatile private var mediaButtonsState = MediaButtonsState(null, false, null)
 
     /**
-     * The heart for Android Auto and the system media controls: filled when the
-     * playing track is in the collection. Tapping it toggles, like the heart in
-     * the app's mini player. Auto and the platform controls read the custom
-     * icon resource; Media3 controllers use the heart icon constant.
+     * The buttons for Android Auto and the system media controls ([autoMediaButtons]):
+     * the heart, filled when the playing track is in the collection, and
+     * Spinoff, which starts a spinoff from the playing track or ends the
+     * running one, like the Spinoff button on the phone's Now Playing screen.
+     * Auto and the platform controls read the custom icon resource; Media3
+     * controllers use the icon constant.
      */
-    private fun customLayoutFor(loved: Boolean?): List<CommandButton> {
-        if (loved == null) return emptyList()
-        val button = CommandButton.Builder(
-            if (loved) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED,
-        )
-            .setCustomIconResId(if (loved) R.drawable.ic_auto_heart_filled else R.drawable.ic_auto_heart_outline)
-            .setDisplayName(if (loved) "Remove from Collection" else "Add to Collection")
-            .setSessionCommand(toggleLoveCommand)
-            .build()
-        return listOf(button)
+    private fun customLayoutFor(state: MediaButtonsState): List<CommandButton> =
+        autoMediaButtons(state.loved, state.spinoffMode, state.spinoffAvailable).map { button ->
+            when (button) {
+                AutoMediaButton.LOVE, AutoMediaButton.UNLOVE -> {
+                    val loved = button == AutoMediaButton.UNLOVE
+                    CommandButton.Builder(
+                        if (loved) CommandButton.ICON_HEART_FILLED else CommandButton.ICON_HEART_UNFILLED,
+                    )
+                        .setCustomIconResId(if (loved) R.drawable.ic_auto_heart_filled else R.drawable.ic_auto_heart_outline)
+                        .setDisplayName(if (loved) "Remove from Collection" else "Add to Collection")
+                        .setSessionCommand(toggleLoveCommand)
+                        .build()
+                }
+                AutoMediaButton.SPINOFF, AutoMediaButton.END_SPINOFF -> {
+                    val active = button == AutoMediaButton.END_SPINOFF
+                    CommandButton.Builder(CommandButton.ICON_RADIO)
+                        .setCustomIconResId(if (active) R.drawable.ic_auto_spinoff_active else R.drawable.ic_auto_spinoff)
+                        .setDisplayName(if (active) "End Spinoff" else "Spinoff")
+                        .setSessionCommand(toggleSpinoffCommand)
+                        .build()
+                }
+            }
+        }
+
+    /**
+     * Start a spinoff from the playing track, or end the running one. A tap
+     * while the pool is still being built is ignored, so it can't restart it.
+     */
+    private fun toggleSpinoffFromMediaButton() {
+        if (stateHolder.state.value.spinoffLoading) return
+        playbackController.toggleSpinoff()
     }
 
     /**
@@ -313,20 +347,27 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
-        // Keep the heart in step with the playing track and the collection,
-        // whichever changes (a heart tapped in the app updates the car too).
+        // Keep the heart and Spinoff in step with the playing track, the
+        // collection and the spinoff state, whichever changes (a heart or
+        // Spinoff tapped in the app updates the car too).
         serviceScope.launch {
-            stateHolder.state
+            val lovedFlow = stateHolder.state
                 .map { it.effectiveTrack?.let { t -> t.title to t.artist } }
                 .distinctUntilChanged()
                 .flatMapLatest { key ->
                     if (key == null) flowOf(null)
                     else libraryRepository.isTrackInCollection(key.first, key.second)
                 }
+            val spinoffFlow = stateHolder.state
+                .map { it.spinoffMode to it.spinoffAvailable }
                 .distinctUntilChanged()
-                .collect { loved ->
-                    currentTrackLoved = loved
-                    mediaSession?.setCustomLayout(customLayoutFor(loved))
+            combine(lovedFlow, spinoffFlow) { loved, (mode, available) ->
+                MediaButtonsState(loved, mode, available)
+            }
+                .distinctUntilChanged()
+                .collect { state ->
+                    mediaButtonsState = state
+                    mediaSession?.setCustomLayout(customLayoutFor(state))
                 }
         }
 
@@ -414,7 +455,7 @@ class PlaybackService : MediaLibraryService() {
      * role in Auto is purely the remote-control UI.
      */
     private inner class LibraryCallback : MediaLibrarySession.Callback {
-        /** Offer the heart's command and current layout to every controller (Auto, system UI). */
+        /** Offer the heart's and Spinoff's commands and the current layout to every controller (Auto, system UI). */
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
@@ -422,10 +463,11 @@ class PlaybackService : MediaLibraryService() {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
                 .buildUpon()
                 .add(toggleLoveCommand)
+                .add(toggleSpinoffCommand)
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
-                .setCustomLayout(customLayoutFor(currentTrackLoved))
+                .setCustomLayout(customLayoutFor(mediaButtonsState))
                 .build()
         }
 
@@ -437,6 +479,10 @@ class PlaybackService : MediaLibraryService() {
         ): ListenableFuture<SessionResult> {
             if (customCommand.customAction == COMMAND_TOGGLE_LOVE) {
                 toggleCurrentTrackLove()
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            if (customCommand.customAction == COMMAND_TOGGLE_SPINOFF) {
+                toggleSpinoffFromMediaButton()
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
             }
             return super.onCustomCommand(session, controller, customCommand, args)
