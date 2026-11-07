@@ -341,7 +341,17 @@ class ImageEnrichmentService(
      *
      * Returns the composed local URI or null if not enough artwork is available.
      */
-    suspend fun enrichPlaylistArt(playlistId: String, cacheBustToken: String? = null): String? {
+    /**
+     * [replacing]: the art this mosaic replaces. Normally the result is stored
+     * only over blank art; with [replacing] it's stored while the row still
+     * holds exactly that value (stock provider art, or a mosaic whose file is
+     * gone), so a cover chosen meanwhile is never overwritten.
+     */
+    suspend fun enrichPlaylistArt(
+        playlistId: String,
+        cacheBustToken: String? = null,
+        replacing: String? = null,
+    ): String? {
         val deferred = playlistMutex.withLock {
             val cur = playlistFetches[playlistId]
             if (cur != null && cur.isActive) return@withLock cur
@@ -458,7 +468,11 @@ class ImageEnrichmentService(
                     } else resultUrl
 
                     if (finalUrl != null) {
-                        playlistDao.updateArtworkById(playlistId, finalUrl)
+                        if (replacing != null) {
+                            playlistDao.replaceArtworkById(playlistId, expected = replacing, artworkUrl = finalUrl)
+                        } else {
+                            playlistDao.updateArtworkById(playlistId, finalUrl)
+                        }
                     }
                     finalUrl
                 } catch (_: Exception) {
@@ -486,8 +500,8 @@ class ImageEnrichmentService(
      * the provider's auto-generated stock cover.
      *
      * Idempotent and bounded:
-     * - Skips playlists already showing a `file://` mosaic (canonical state)
-     *   whose file is still there. One whose file is gone is repaired: if the
+     * - Skips playlists already showing a local mosaic (`file:///…` on iOS,
+     *   `file:/…` on Android; canonical state) whose file is still there. One whose file is gone is repaired: if the
      *   app's container moved (iOS), the row is pointed at the same file in
      *   today's mosaic directory; otherwise the mosaic is built again.
      * - Each call dedups against in-flight `enrichPlaylistArt` invocations
@@ -504,7 +518,7 @@ class ImageEnrichmentService(
         val currentDir = mosaicDir?.invoke()
         val needsMosaic = playlists.filter { p ->
             val art = p.artworkUrl
-            if (art.isNullOrBlank() || !art.startsWith("file://")) return@filter true
+            if (art.isNullOrBlank() || !PlaylistMosaicPaths.isLocalFile(art)) return@filter true
             if (exists == null) return@filter false
             when (val r = PlaylistMosaicPaths.repair(art, currentDir, exists)) {
                 PlaylistMosaicPaths.Repair.Keep -> false
@@ -512,11 +526,7 @@ class ImageEnrichmentService(
                     playlistDao.replaceArtworkById(p.id, expected = art, artworkUrl = r.url)
                     false
                 }
-                PlaylistMosaicPaths.Repair.Regenerate -> {
-                    // `enrichPlaylistArt` only writes over blank art.
-                    playlistDao.replaceArtworkById(p.id, expected = art, artworkUrl = null)
-                    true
-                }
+                PlaylistMosaicPaths.Repair.Regenerate -> true
             }
         }
         if (needsMosaic.isEmpty()) return
@@ -533,7 +543,14 @@ class ImageEnrichmentService(
                             // Coil keys on URL; subsequent rewrites need a
                             // cache-bust, but a fresh write to a new path
                             // doesn't.
-                            enrichPlaylistArt(p.id, cacheBustToken = null)
+                            // `replacing`: the stock art or dead mosaic seen
+                            // above. Without it the result is only stored over
+                            // blank art, so stock art was never replaced and
+                            // its mosaic was rebuilt at every launch.
+                            enrichPlaylistArt(
+                                p.id, cacheBustToken = null,
+                                replacing = p.artworkUrl?.takeIf { it.isNotBlank() },
+                            )
                         } catch (_: Exception) {
                             // Per-playlist failure is fine — try others.
                         }

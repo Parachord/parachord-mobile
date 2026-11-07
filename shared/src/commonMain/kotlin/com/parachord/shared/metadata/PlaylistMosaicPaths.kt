@@ -27,11 +27,17 @@ object PlaylistMosaicPaths {
         return stored.substring(idx + MARKER.length).substringBefore('?').ifBlank { null }
     }
 
-    /** The filesystem path of a `file://` URL (query dropped), or null for any
-     *  other scheme. */
+    /** Whether [url] is a local file, in either form: iOS writes `file:///…`,
+     *  Android's `File.toURI()` writes `file:/…` (one slash). */
+    fun isLocalFile(url: String?): Boolean = url != null && url.startsWith("file:")
+
+    /** The filesystem path of a local file URL (query dropped), or null for
+     *  any other scheme. */
     fun filePath(url: String): String? {
-        if (!url.startsWith("file://")) return null
-        return url.removePrefix("file://").substringBefore('?').ifBlank { null }
+        if (!isLocalFile(url)) return null
+        val rest = url.removePrefix("file:")
+        val path = if (rest.startsWith("//")) rest.removePrefix("//") else rest
+        return path.substringBefore('?').ifBlank { null }
     }
 
     /**

@@ -67,6 +67,17 @@ class PlaylistMosaicPathsTest {
     }
 
     @Test
+    fun `Android's single-slash file URI is a local file with the same path`() {
+        val android = "file:/data/user/0/p/files/playlist_mosaics/a.jpg"
+        assertEquals(true, PlaylistMosaicPaths.isLocalFile(android))
+        assertEquals("/data/user/0/p/files/playlist_mosaics/a.jpg", PlaylistMosaicPaths.filePath("$android?v=3"))
+        assertEquals("/abs/playlist_mosaics/a.jpg", PlaylistMosaicPaths.filePath("file:///abs/playlist_mosaics/a.jpg"))
+        assertEquals(false, PlaylistMosaicPaths.isLocalFile("https://mosaic.scdn.co/300/abc"))
+        assertEquals(false, PlaylistMosaicPaths.isLocalFile(null))
+        assertEquals(Repair.Keep, PlaylistMosaicPaths.repair(android, "/data/user/0/p/files/playlist_mosaics") { true })
+    }
+
+    @Test
     fun `file name handles both file URI forms and strips the query`() {
         assertEquals("a.jpg", PlaylistMosaicPaths.fileName("file:/data/user/0/p/files/playlist_mosaics/a.jpg"))
         assertEquals("a.jpg", PlaylistMosaicPaths.fileName("file:///data/playlist_mosaics/a.jpg?v=9"))

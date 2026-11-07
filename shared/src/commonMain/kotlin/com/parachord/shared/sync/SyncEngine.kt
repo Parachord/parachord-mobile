@@ -4623,7 +4623,8 @@ class SyncEngine constructor(
      *  - the existing remote URL when both are remote (no-op churn)
      */
     private fun preserveLocalMosaic(existing: String?, remote: String?): String? {
-        if (existing != null && existing.startsWith("file://")) return existing
+        // `file:/…` (Android) or `file:///…` (iOS).
+        if (com.parachord.shared.metadata.PlaylistMosaicPaths.isLocalFile(existing)) return existing
         return remote ?: existing
     }
 
