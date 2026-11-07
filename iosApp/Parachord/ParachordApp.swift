@@ -1,5 +1,4 @@
 import SwiftUI
-import JavaScriptCore
 import Shared
 
 @main
@@ -41,15 +40,11 @@ private struct RootGate: View {
         }
         .task {
             async let warm: () = {
-                // Install the .axe NativeBridge polyfill BEFORE plugins load —
-                // moved here from App.init so the container's first-access init
-                // (Koin + plugin host) runs AFTER the splash is on screen, not
-                // before the first frame. IosJsRuntime.initialize() only loads
-                // the resolvers when this installer is present.
-                IosContainer.companion.shared.pluginJsRuntime.nativeBridgeInstaller = { ctx in
-                    JsPolyfills.installNativeBridge(to: ctx)
-                }
-                _ = try? await IosContainer.companion.shared.loadPluginsAndList()
+                // Plugin host + playback (AppBootstrap): run here, after the
+                // splash is on screen, so the container's first-access init
+                // (Koin + plugin host) doesn't hold up the first frame. CarPlay
+                // starts the same bootstrap without this view.
+                await AppBootstrap.shared.start()
                 // Marketplace plugin sync (24h-debounced) so playback-telemetry
                 // plugins like achordion download + hot-reload/register without a
                 // manual Settings trigger (Android parity: MainViewModel.syncIfNeeded).

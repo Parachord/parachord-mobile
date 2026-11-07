@@ -193,9 +193,11 @@ struct ContentView: View {
         .preferredColorScheme(theme.scheme)
         .task { theme.start() }
         .task { ResolverPrefs.shared.start() }
-        // #235 Listen Along: bind the engine to the shared coordinator, and accept
-        // parachord://listen-along?service=&user= deep links.
-        .onAppear { listenAlong.bind(coordinator); spinoff.bind(coordinator); bindChatPlayback() }
+        // Playback start-up (plugin host, the Listen Along / Spinoff / chat binds,
+        // the queue restore and the current track's artwork) lives in
+        // AppBootstrap so CarPlay can start it with no phone screen. RootGate has
+        // usually run it already; this just awaits that run.
+        .task { await AppBootstrap.shared.start() }
         // SwiftUI's App lifecycle delivers BOTH custom-scheme URLs AND Universal
         // Links through .onOpenURL (the UL arrives as the raw https:// URL), so
         // route by scheme here. Previously handleDeepLink's `scheme == "parachord"`
@@ -304,19 +306,6 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 300_000_000_000)   // 5 min
             }
         }
-        // Restore the persisted queue on launch (paused — never auto-plays). #220
-        .task { await coordinator.restoreQueue() }
-        // Resolve the current track as soon as it changes (incl. natural
-        // auto-advance, where the next track may not have been pre-resolved) so
-        // the mini-player art is ready and crossfades reliably — not only when the
-        // upcoming track happened to already be cached. The resolver cache is
-        // @Observable, so the mini's pcTrackArt re-renders when this lands.
-        .task(id: coordinator.currentTrack?.id) {
-            if let t = coordinator.currentTrack {
-                IosTrackResolverCache.shared.resolve(
-                    ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: 0)
-            }
-        }
         .sheet(isPresented: $showAdd, onDismiss: {
             // Slide the chat in AFTER the add sheet finishes dismissing.
             if pendingChat { pendingChat = false; withAnimation(.easeInOut(duration: 0.3)) { showChat = true } }
@@ -358,25 +347,6 @@ struct ContentView: View {
         )) { request in
             SpotifyDevicePickerSheet(request: request) { playback.spotify.onDevicePicked($0) }
         }
-    }
-
-    /// Wire the DJ-chat tool surface to the live playback coordinator (#223). The
-    /// shared IosDjToolExecutor calls these closures; we hop to the main actor and
-    /// drive the coordinator (fire-and-forget, like the spinoff/scrobble bridges).
-    private func bindChatPlayback() {
-        let coord = coordinator
-        IosContainer.companion.shared.bindChatPlayback(
-            onPlayTrack: { track in Task { @MainActor in
-                coord.setQueue([track], startIndex: 0,
-                               context: PlaybackContext(type: "chat", name: "Shuffleupagus", id: nil)) } },
-            onAddToQueue: { track in Task { @MainActor in coord.addToQueue(track) } },
-            onClearQueue: { Task { @MainActor in coord.clearQueue() } },
-            onPause: { Task { @MainActor in if coord.isPlaying { coord.togglePlayPause() } } },
-            onResume: { Task { @MainActor in if !coord.isPlaying { coord.togglePlayPause() } } },
-            onSkipNext: { Task { @MainActor in coord.skipNext() } },
-            onSkipPrevious: { Task { @MainActor in coord.skipPrevious() } },
-            onSetShuffle: { _ in Task { @MainActor in coord.toggleShuffle() } }
-        )
     }
 
     private func closeChat() { pendingChatPrompt = nil; withAnimation(.easeInOut(duration: 0.28)) { showChat = false; chatDragX = 0 } }

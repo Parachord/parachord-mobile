@@ -210,8 +210,20 @@ Every screen follows the same shape — don't reinvent it:
 
 `AppPlayback` (in `NowPlayingView.swift`) is the single app-wide playback
 engine — one `IosAVPlayer` + one shared `QueuePlaybackCoordinator`,
-created at the ContentView root, shared by the Now Playing tab and the
-mini player. The Dev tab keeps its OWN separate smoke-test player on
+created by `AppBootstrap` (below), shared by the Now Playing tab and the
+mini player.
+
+**Playback starts from `AppBootstrap.shared.start()`, not from a view.**
+CarPlay can launch the app with the phone locked and no phone window scene,
+so `AppBootstrap.swift` holds everything playback needs, in order: the `.axe`
+plugin host (NativeBridge installer, then `loadPluginsAndList`),
+`AppPlayback.shared`, the Spinoff / Listen Along / chat playback binds, the
+paused queue restore, and the current track's re-resolve on every track
+change (its artwork). `start()` is idempotent: concurrent and later callers
+await the same run, and it logs `APP_BOOTSTRAP started` once per launch.
+`RootGate` (behind the splash) and `ContentView` both call it; the phone's
+views keep only UI-session work (friends, collection sync, hosted-playlist
+polling, banners, sheets). Don't move playback start-up back into a view. The Dev tab keeps its OWN separate smoke-test player on
 purpose; it retires with the Dev tab.
 
 ---
@@ -283,7 +295,7 @@ there**, so several gaps only surface on iOS:
   `console.log` is captured by `xcrun simctl log stream`. Filter with a
   predicate like `eventMessage CONTAINS "plugin:"`. `print` output does NOT
   reliably reach os_log.
-- **The `NativeBridge` installer MUST be set at app STARTUP** (`ParachordApp.init`),
+- **The `NativeBridge` installer MUST be set at app STARTUP** (`AppBootstrap.start()`),
   not just in the Dev tab. `IosJsRuntime.initialize()` only loads
   `resolver-loader.js` + the plugins when `nativeBridgeInstaller` is present;
   otherwise it stands up a bare JSContext with no `window.__resolverLoader`.
@@ -292,7 +304,7 @@ there**, so several gaps only surface on iOS:
   runs before the installer is set, the host initializes plugin-less and stays
   broken for the whole session (no badges, nothing resolves, taps flash then
   fail). Symptom of regressing this: resolution works only after visiting the
-  Dev tab. Keep the installer wired in `ParachordApp.init()` + pre-warm there.
+  Dev tab. Keep the installer as `AppBootstrap`'s first step, before anything resolves.
 
 ### Running `.axe` async on iOS — poll, don't reimplement (DJ chat + dynamic models)
 
