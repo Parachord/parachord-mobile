@@ -49,8 +49,22 @@ class IosMosaicComposer(private val httpClient: HttpClient) {
     companion object {
         private const val MOSAIC_SIZE = 600.0
         private const val JPEG_QUALITY = 0.85
-        private const val SUBDIR = "playlist_mosaics"
     }
+
+    /** `<Application Support>/playlist_mosaics` in TODAY's data container.
+     *  Resolved on every call, never cached: iOS can move the container
+     *  across launches and updates, and a stored absolute path then points at
+     *  the old one ([PlaylistMosaicPaths]). */
+    fun mosaicDir(): String? {
+        val supportDirUrls = NSFileManager.defaultManager.URLsForDirectory(
+            directory = NSApplicationSupportDirectory,
+            inDomains = NSUserDomainMask,
+        )
+        val supportPath = (supportDirUrls.firstOrNull() as? NSURL)?.path ?: return null
+        return "$supportPath/${PlaylistMosaicPaths.DIR_NAME}"
+    }
+
+    fun fileExists(path: String): Boolean = NSFileManager.defaultManager.fileExistsAtPath(path)
 
     suspend fun compose(playlistId: String, urls: List<String>): String? {
         val tileSize = MOSAIC_SIZE / 2.0
@@ -119,12 +133,7 @@ class IosMosaicComposer(private val httpClient: HttpClient) {
 
         // Resolve <App Support>/playlist_mosaics/, mkdir -p equivalent,
         // then atomically write.
-        val supportDirUrls = NSFileManager.defaultManager.URLsForDirectory(
-            directory = NSApplicationSupportDirectory,
-            inDomains = NSUserDomainMask,
-        )
-        val supportPath = (supportDirUrls.firstOrNull() as? NSURL)?.path ?: return null
-        val mosaicDir = "$supportPath/$SUBDIR"
+        val mosaicDir = mosaicDir() ?: return null
         NSFileManager.defaultManager.createDirectoryAtPath(
             path = mosaicDir,
             withIntermediateDirectories = true,

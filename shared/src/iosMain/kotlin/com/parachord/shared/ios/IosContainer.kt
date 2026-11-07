@@ -2027,8 +2027,24 @@ class IosContainer private constructor() {
             // 2×2 album-art mosaic for playlists (ListenBrainz weeklies, hosted
             // XSPF, etc.) — UIGraphics composite → file:// JPEG (Android parity).
             composeMosaic = { playlistId, urls -> mosaicComposer.compose(playlistId, urls) },
+            // The data container can move across launches/updates; the launch
+            // repair re-points stored mosaics at today's directory.
+            mosaicDir = { mosaicComposer.mosaicDir() },
+            fileExists = { path -> mosaicComposer.fileExists(path) },
         )
     }
+
+    /**
+     * The URL to load a stored playlist cover from. A `file://` mosaic whose
+     * file is gone (the app's data container moved) maps to the same file in
+     * today's mosaic directory; anything else comes back unchanged. For
+     * readers that may run before the launch repair, such as a cover drawn
+     * at startup or CarPlay.
+     */
+    fun playlistArtworkUrl(stored: String): String =
+        com.parachord.shared.metadata.PlaylistMosaicPaths.resolveForRead(
+            stored, mosaicComposer.mosaicDir(), mosaicComposer::fileExists,
+        )
 
     /** Retries a cover or artist image that failed to load and patches every
      *  stored copy of the dead URL (library rows + curated list caches). */

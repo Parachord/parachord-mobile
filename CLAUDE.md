@@ -1116,7 +1116,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Playback routing | `playback/PlaybackRouter.kt`, `PlaybackController.kt` |
 | Metadata cascade | `data/metadata/MetadataService.kt`, `*Provider.kt` |
 | MBID enrichment | `shared/.../metadata/MbidEnrichmentService.kt` (typealias shim in `data/metadata/`), `shared/.../api/ListenBrainzClient.kt` (`mbidMapperLookup`) |
-| Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda |
+| Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda; stored mosaic URLs that name an old iOS app container are repaired at launch (`PlaylistMosaicPaths`, see `iosApp/AGENTS.md`) |
 | Scrobbling | `shared/.../playback/scrobbler/{ScrobbleManager,Scrobbler,ListenBrainzScrobbler,LastFmScrobbler,LibreFmScrobbler,LbSourceEnrichment,ScrobblePluginDispatch}.kt` (KMP-shared, #193; app-side `playback/scrobbler/*` are typealias shims). Android JS dispatch: `playback/JsScrobblePluginDispatcher.kt`. Last.fm signing: `shared/.../api/LastFmSigning.kt` |
 | Local file scanning | `data/scanner/MediaScanner.kt` |
 | Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` + `SoundCloudWidgetBridge.kt` (`assets/js/soundcloud-widget.html`), `BandcampPlaybackHandler.kt` + `BandcampEmbedBridge.kt` (`assets/js/bandcamp-embed-control.js`) |

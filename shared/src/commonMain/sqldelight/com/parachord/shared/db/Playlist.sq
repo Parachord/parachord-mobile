@@ -55,6 +55,14 @@ UPDATE playlists SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artw
 clearArtworkById:
 UPDATE playlists SET artworkUrl = NULL WHERE id = ?;
 
+-- Replace the stored artwork URL only while it is still `expected`. Used by
+-- the launch repair of mosaics left pointing at an old iOS app container
+-- (PlaylistMosaicPaths): a NULL `artworkUrl` clears a dead URL so the
+-- regenerated mosaic's `updateArtworkById` can land. Compare-and-set, so a
+-- mosaic written meanwhile is never overwritten.
+replaceArtworkById:
+UPDATE playlists SET artworkUrl = :artworkUrl WHERE id = :id AND artworkUrl = :expected;
+
 updateHostedSnapshot:
 UPDATE playlists
 SET sourceContentHash = ?,

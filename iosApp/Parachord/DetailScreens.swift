@@ -95,6 +95,9 @@ func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, reso
     // Cover content: real art fill-cropped, gradient placeholder on miss/load.
     // While the track is still resolving (no art yet) show the shimmer skeleton
     // instead of the gradient letter tile — art pops in once resolution lands.
+    // A stored file:// playlist mosaic can name an old app container (iOS moves
+    // it across updates); read it from today's. Other URLs pass through.
+    let url = url.map { $0.hasPrefix("file://") ? IosContainer.companion.shared.playlistArtworkUrl(stored: $0) : $0 }
     let content = ZStack {
         if let url, let u = URL(string: url) {
             PCCachedImage(url: u, retryArtist: artist, retryAlbum: album) { img in

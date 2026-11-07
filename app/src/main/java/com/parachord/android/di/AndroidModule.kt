@@ -683,6 +683,10 @@ val androidModule = module {
             composeMosaic = { playlistId, urls ->
                 com.parachord.android.data.metadata.composeMosaicAndroid(context, playlistId, urls)
             },
+            mosaicDir = {
+                java.io.File(context.filesDir, com.parachord.shared.metadata.PlaylistMosaicPaths.DIR_NAME).absolutePath
+            },
+            fileExists = { path -> java.io.File(path).exists() },
         )
     }
     // Search covers for rows without one (desktop fetchSearchAlbumArt): Cover
