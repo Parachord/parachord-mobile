@@ -130,8 +130,13 @@ final class SettingsViewModel {
     private var resolversReady = false
 
     /// Resolvers needing an explicit connection before they can resolve.
-    /// (Bandcamp / Local Files need none; Apple Music auths at play time.)
-    func requiresConnection(_ id: String) -> Bool { id == "spotify" || id == "soundcloud" }
+    /// Bandcamp / Local Files need none. Apple Music needs its Music User Token,
+    /// as on desktop (its plugin declares `requiresAuth`; `app.js` treats an
+    /// active-but-unauthorized Apple Music as "Setup required") and Android
+    /// (`appleMusicConfigured && appleMusicAuthorized`). It's also what iOS
+    /// resolution itself gates on (#327), so listing it unconnected promised a
+    /// source that never resolves.
+    func requiresConnection(_ id: String) -> Bool { id == "spotify" || id == "soundcloud" || id == "applemusic" }
     /// Usable = no connection required, or connected.
     func isUsable(_ id: String) -> Bool { !requiresConnection(id) || isConnected(id) }
     /// In the priority list = user-enabled AND usable AND mobile-allowed.
@@ -306,11 +311,13 @@ final class SettingsViewModel {
             let storedActive = (try? await store.getActiveResolvers()) ?? []
             // Fresh install: only no-auth resolvers are enabled by default (matches
             // desktop's ['bandcamp','localfiles']); auth-gated ones (Spotify /
-            // SoundCloud) join the enabled set when connected. A NEW marketplace
+            // SoundCloud / Apple Music) join the enabled set when connected — so one
+            // already connected before this first seed (Apple Music via the Sync
+            // tab) starts enabled. A NEW marketplace
             // resolver on an EXISTING install lands in the disabled section with an
             // Enable button (we can't distinguish "new" from "user-disabled" here,
             // so we don't auto-enable it — avoids un-disabling a user's choice).
-            let defaultActive = Set(catalogIds.filter { !requiresConnection($0) })
+            let defaultActive = Set(catalogIds.filter { isUsable($0) })
             activeResolvers = storedActive.isEmpty ? defaultActive : Set(storedActive).intersection(catalogIds)
             resolverOrder = ((try? await store.getResolverOrder())?.filter { resolverService($0) != nil }) ?? []
             resolversReady = true
@@ -348,13 +355,28 @@ final class SettingsViewModel {
                 return
             }
             try? await container.setAppleMusicUserToken(token: mut)
-            appleMusicConnected = true
+            appleMusicConnected = true              // before recompute, so the prune keeps it
+            activeResolvers.insert("applemusic")    // connecting enables it (desktop parity)
+            setPluginEnabled("applemusic", true)
+            recomputeResolvers()
             // Tracks resolved while the gate was closed cached no Apple Music
             // source. Merge it in additively so existing results survive —
             // without this the fix appears not to work until each track is
             // re-resolved by some other means.
             IosTrackResolverCache.shared.resolverEnabled("applemusic")
         }
+    }
+
+    /// Disconnect Apple Music (desktop `disconnectAppleMusic`): it leaves the
+    /// priority list, its cached sources go, and the token is forgotten. iOS
+    /// can't revoke the MusicKit permission itself; the footer says where to.
+    func disconnectAppleMusic() {
+        appleMusicError = nil
+        appleMusicConnected = false          // before recompute, so the prune drops it
+        activeResolvers.remove("applemusic")
+        recomputeResolvers()
+        IosTrackResolverCache.shared.resolverRemoved("applemusic")
+        Task { try? await container.disconnectAppleMusic() }
     }
 
     // ── Connect status ────────────────────────────────────────────────
@@ -1222,6 +1244,7 @@ private struct PluginConfigSheet: View {
                         .foregroundStyle(.green)
                     Spacer()
                 }
+                Button("Disconnect", role: .destructive) { model.disconnectAppleMusic() }
             } else {
                 Button {
                     model.connectAppleMusic()
@@ -1239,7 +1262,9 @@ private struct PluginConfigSheet: View {
         } footer: {
             Text(
                 model.appleMusicConnected
-                    ? "Apple Music can match tracks in your library and play them. Requires an active subscription."
+                    ? "Apple Music can match tracks in your library and play them. Requires an active subscription. "
+                      + "Disconnecting also turns off Apple Music sync; your synced items stay. "
+                      + "To also revoke Parachord's access, use iOS Settings › Privacy & Security › Media & Apple Music."
                     : "Connect to let Parachord match your tracks to Apple Music and play them. "
                       + "Until you do, Apple Music won't appear as a source for any track. "
                       + "Requires an active subscription."

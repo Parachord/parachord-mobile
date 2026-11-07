@@ -790,6 +790,27 @@ class IosContainer private constructor() {
      *  SKCloudServiceController). Enables the Apple Music library API for sync. */
     suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)
     suspend fun hasAppleMusicUserToken(): Boolean = !settingsStore.getAppleMusicUserToken().isNullOrBlank()
+
+    /**
+     * Disconnect Apple Music (desktop `disconnectAppleMusic`, Android
+     * `SettingsViewModel.disconnectAppleMusic`): forget the Music User Token and,
+     * like Android, take Apple Music out of the enabled sync providers so sync
+     * stops calling the library API without one. Synced items and their links
+     * stay, so reconnecting resumes where it left off. The reauth banner is
+     * cleared too: a deliberate disconnect isn't a stale token to fix.
+     * The resolver side (active list, cached sources) is the caller's.
+     */
+    suspend fun disconnectAppleMusic() {
+        settingsStore.clearAppleMusicUserToken()
+        syncEngine.clearAppleMusicReauth()
+        val providers = settingsStore.getEnabledSyncProviders()
+        if ("applemusic" in providers) {
+            val current = providers - "applemusic"
+            settingsStore.setEnabledSyncProviders(current)
+            val s = settingsStore.getSyncSettings()
+            settingsStore.saveSyncSettings(s.copy(enabled = current.isNotEmpty()))
+        }
+    }
     /** The ES256 dev token SKCloudServiceController.requestUserToken needs. */
     suspend fun appleMusicDeveloperToken(): String = appConfig.appleMusicDeveloperToken
 
@@ -2883,7 +2904,34 @@ class IosContainer private constructor() {
         targetIsrc: String? = null,
         targetMbid: String? = null,
     ): List<ResolvedSource> =
-        resolverCoordinator.resolveSources(artist, title, album, spotifyId, appleMusicId, targetIsrc, targetMbid)
+        resolverCoordinator.resolveSources(
+            artist, title, album, spotifyId,
+            // A catalog id becomes an Apple Music source at confidence 1.0 without
+            // any search, so the native resolver's Music User Token gate (#327)
+            // never sees it. Apply the same gate here: unconnected, Apple Music
+            // must not be offered (or ranked first and prompt for authorization
+            // at play time) just because a track carries its id.
+            appleMusicId?.takeIf { !settingsStore.getAppleMusicUserToken().isNullOrBlank() },
+            targetIsrc, targetMbid,
+        )
+
+    /**
+     * Enable [resolverId] after the user connected it somewhere other than
+     * Settings → Plug-ins (Apple Music from the Sync tab), as desktop's connect
+     * does: add it to `active_resolvers` and insert it into the priority order at
+     * its canonical place. An empty stored list hasn't been seeded yet; Settings
+     * seeds it with every usable resolver, so this one included.
+     */
+    suspend fun enableResolverAfterConnect(resolverId: String) {
+        val active = settingsStore.getActiveResolvers()
+        if (active.isNotEmpty() && resolverId !in active) {
+            settingsStore.setActiveResolvers(active + resolverId)
+        }
+        val order = settingsStore.getResolverOrder()
+        if (order.isNotEmpty() && resolverId !in order) {
+            settingsStore.setResolverOrder(resolverScoring.insertInCanonicalOrder(order, resolverId))
+        }
+    }
 
     /**
      * Return [track] enriched with the streaming IDs + active resolver taken from
