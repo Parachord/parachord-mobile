@@ -273,10 +273,12 @@ there**, so several gaps only surface on iOS:
   `AxeResolveResult` required `url` (it only runs url-based bandcamp/youtube
   `.axe`). Accept a source with EITHER a playable `url` OR a routable ID, and
   map the extra fields (`previewUrl`, `appleMusicUrl`, `soundcloudUrl`, …).
-- **`.axe` resolvers need credentials for most sources.** With no tokens:
-  soundcloud "No token, skipping", spotify silent, localfiles "not available".
-  Apple Music **works credential-free** via iTunes Search — the one resolver
-  that returns real matches on a bare simulator. Test with it.
+- **Most resolvers need a connection.** With no tokens: soundcloud "No token,
+  skipping", spotify silent, localfiles "not available". **Apple Music needs
+  its Music User Token too** (Settings → Plug-ins → Apple Music → Connect): its
+  catalog search is native (`IosResolverRuntime.resolveAppleMusicNative`, no
+  `.axe`) and returns nothing without the token (#327), logging "Apple Music
+  resolution skipped: no Music User Token" once. Bandcamp needs nothing.
 - **`NativeBridge.log` uses `NSLog`, not `print`** so `.axe` / resolver-loader
   `console.log` is captured by `xcrun simctl log stream`. Filter with a
   predicate like `eventMessage CONTAINS "plugin:"`. `print` output does NOT
@@ -598,9 +600,19 @@ by walking the responder chain to `UIApplication.open` (extensions have no
 
 ## MusicKit / Apple Music playback (the full saga — verified on-device)
 
-Apple Music *resolution* needs nothing (the `.axe` uses no-auth iTunes
-Search). Apple Music *playback* (`ApplicationMusicPlayer`) is the hard part —
-it took many rounds. The complete, correct procedure:
+**Connected means the Music User Token**, as on desktop (its plugin declares
+`requiresAuth`) and Android. Settings → Plug-ins → Apple Music → Connect
+stores it; the Sync tab's Apple Music toggle gets it the same way.
+Without it, nothing offers Apple Music:
+
+- **Resolution:** the native catalog search returns null (#327).
+- **A stored Apple Music id:** `IosContainer.resolveSources` drops the hint (#533). Otherwise it would become a 1.0 source, rank first and prompt for MusicKit authorization at play time.
+- **Settings:** Apple Music `requiresConnection`, so it sits under Disabled with "Connect to enable". Connecting from either place adds it to `active_resolvers` in canonical order (`enableResolverAfterConnect` for the Sync tab).
+
+**Disconnect** (the Apple Music sheet) clears the token. It removes Apple Music from the active resolvers and drops its cached sources (`IosTrackResolverCache.resolverRemoved`). As on Android, it also takes Apple Music out of the enabled sync providers, keeping synced items and links. The app can't revoke the MusicKit permission itself; that's in iOS Settings › Privacy & Security › Media & Apple Music.
+
+Apple Music *playback* (`ApplicationMusicPlayer`) is the hard part. It took
+many rounds. The complete, correct procedure:
 
 1. **MusicKit is NOT a code-signing entitlement.** Do NOT hand-write a
    `Parachord.entitlements` with `com.apple.developer.musickit` — it's not a
