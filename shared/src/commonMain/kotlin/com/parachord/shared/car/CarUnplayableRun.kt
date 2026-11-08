@@ -1,8 +1,8 @@
 package com.parachord.shared.car
 
 /**
- * How many tracks in a row may fail with no playable source, while a car is
- * connected, before playback stops on the last one with
+ * How many tracks in a row may fail with no playable source, in a car that
+ * can't play the embeds, before playback stops on the last one with
  * [CarMessages.OPEN_PARACHORD_ON_PHONE] instead of skipping on.
  */
 const val CAR_UNPLAYABLE_RUN_LIMIT = 3
@@ -12,8 +12,12 @@ const val CAR_UNPLAYABLE_RUN_LIMIT = 3
  * doesn't silently run through a whole queue it can't play (CarPlay with the
  * phone app in the background can't play Bandcamp or SoundCloud).
  *
- * Only failures count; any track that starts resets the run. With no car
- * connected the run never stops playback, so the phone keeps skipping as before.
+ * Only failures count. Any track that starts resets the run, and so does
+ * [reset]: the platform calls it when a car connects and on every explicit
+ * play (a tap, not the queue moving on), so failures on the phone before the
+ * car connected, or before the person picked something new, don't count.
+ * Playback stops only while the car can't play what the phone could
+ * (`carWithoutPhone`); otherwise the queue skips on as on the phone.
  */
 class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
     var count: Int = 0
@@ -24,14 +28,20 @@ class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
         count = 0
     }
 
+    /** A car connected, or the person started something themselves. */
+    fun reset() {
+        count = 0
+    }
+
     /**
      * A track failed with no playable source. True when playback should stop
-     * on it: a car is connected and this failure reaches [limit]. The run starts
-     * over after a stop, so pressing play counts afresh.
+     * on it: [carWithoutPhone] (a car is connected and the phone app can't host
+     * the embeds) and this failure reaches [limit]. The run starts over after a
+     * stop, so pressing play counts afresh.
      */
-    fun failed(carConnected: Boolean): Boolean {
+    fun failed(carWithoutPhone: Boolean): Boolean {
         count += 1
-        if (carConnected && count >= limit) {
+        if (carWithoutPhone && count >= limit) {
             count = 0
             return true
         }

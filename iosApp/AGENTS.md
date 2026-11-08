@@ -315,7 +315,7 @@ there**, so several gaps only surface on iOS:
 
 ### Spinoff + Listen Along on iOS — coordinator-level, not a queue swap
 
-Model + cross-platform details live in root `CLAUDE.md` → "Spinoff + Listen Along". iOS specifics: the spinoff pool + `spinoffMode` + `preSpinoffContext` live on `QueuePlaybackCoordinator` (ContentView.swift) — `beginSpinoff`/`advanceSpinoff`/`exitSpinoff`; `skipNext` + `autoAdvance` check the pool BEFORE the queue. The pool and the ✨ check come from the shared `buildSpinoffPool` / `checkSpinoffAvailable` (#534; the similar-artists fallback is described in root `CLAUDE.md`) through `IosContainer.spinoffPool` / `spinoffAvailable`. `spinoffPool` is `@Throws` and throws `SpinoffFetchFailedException` when the similar-tracks request itself failed, so `SpinoffController` can tell `lastFetchFailed` ("Failed to fetch similar tracks", desktop's wording) from `lastEmptySeed` ("No similar tracks"). Radio Mode B catches it as "Couldn't fetch similar tracks". Listen Along keeps its OWN suspension in `ListenAlongController`; the two never co-exist (each `stop`s/`exitSpinoff`s the other). The chat/spinoff/listen-along screens slide in as **trailing-edge drawers** (`.transition(.move(edge: .trailing))` + a left-edge swipe-to-close zone in the RootView ZStack), NOT bottom covers — matches Android's right-slide.
+Model + cross-platform details live in root `CLAUDE.md` → "Spinoff + Listen Along". iOS specifics: the spinoff pool + `spinoffMode` + `preSpinoffContext` live on `QueuePlaybackCoordinator` (ContentView.swift) — `beginSpinoff`/`advanceSpinoff`/`exitSpinoff`; `skipNext` + `autoAdvance` check the pool BEFORE the queue. The pool and the availability check come from the shared `buildSpinoffPool` / `checkSpinoffAvailable` (#534; the similar-artists fallback is described in root `CLAUDE.md`) through `IosContainer.spinoffPool` / `spinoffAvailable`. `spinoffPool` is `@Throws` and throws `SpinoffFetchFailedException` when the similar-tracks request itself failed, so `SpinoffController` can tell `lastFetchFailed` ("Failed to fetch similar tracks", desktop's wording) from `lastEmptySeed` ("No similar tracks"). Radio Mode B catches it as "Couldn't fetch similar tracks". Listen Along keeps its OWN suspension in `ListenAlongController`; the two never co-exist (each `stop`s/`exitSpinoff`s the other). The chat/spinoff/listen-along screens slide in as **trailing-edge drawers** (`.transition(.move(edge: .trailing))` + a left-edge swipe-to-close zone in the RootView ZStack), NOT bottom covers — matches Android's right-slide. **The Spinoff icon is the fork** (`Assets.xcassets/SpinoffFork`, Android's `ParachordIcons.Spinoff` / `ic_auto_spinoff.xml`, desktop's icon; `SpinoffForkActive` is the fork cut out of a disc, for CarPlay). Both are template SVGs with preserved vector data, so they tint and scale (13–22 pt on the phone, CarPlay's 20 pt buttons). `sparkles` is Shuffleupagus's icon, not Spinoff's.
 
 ### Tracklist resolution: visibility-scoped, top-down, globally bounded
 
@@ -1132,13 +1132,16 @@ rules change; with it false every path is the phone's.
 - **A run of unplayable tracks stops.** With the phone app in the background a
   Bandcamp or SoundCloud-only playlist can't play a single track, and the queue
   used to skip silently to its end. `CarUnplayableRun` (shared) counts tracks in
-  a row that no source could play (any track that starts resets it); with the
-  car connected the third (`CAR_UNPLAYABLE_RUN_LIMIT`) stops on that track, as
-  the Spotify case does, with `CarMessages.OPEN_PARACHORD_ON_PHONE` ("Open
-  Parachord on your phone to play these tracks"). Play retries it. A track
-  tapped in the car whose embed was refused for having no phone window gets the
-  same message, not the phone's "only plays on its own site". With the car
-  disconnected the queue skips on as before.
+  a row that no source could play. A track that starts, an explicit play (a tap,
+  or Play on a stopped track; not the queue moving on) and a car connecting
+  (`CarPlaySession.connectionCount`) each start the run over. While
+  `blocksEmbeds` (car connected, no phone window) the third
+  (`CAR_UNPLAYABLE_RUN_LIMIT`) stops on that track, as the Spotify case does,
+  with `CarMessages.OPEN_PARACHORD_ON_PHONE` ("Open Parachord on your phone to
+  play these tracks"). Play retries it. A track tapped in the car whose embed
+  was refused for having no phone window gets the same message, not the phone's
+  "only plays on its own site". With the car disconnected, or the phone app
+  open, the queue skips on as on the phone.
 - **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
   temporary hook (never commit one). In the simulator, with the app
   backgrounded, a Bandcamp source, or a SoundCloud source with no page yet,
@@ -1183,7 +1186,8 @@ only draws it.
   - **Buttons** from the shared `carNowPlayingButtons` (Android Auto's): the
     heart (`heart` / `heart.fill`) adds the playing track to the collection or
     removes it, as the phone's heart does; Spinoff uses the phone's Spinoff
-    icon (`sparkles`), cut out of a filled disc while a spinoff runs, and calls
+    fork (`SpinoffFork`), the fork cut out of a filled disc while a spinoff runs
+    (`SpinoffForkActive`), and calls
     `SpinoffController.toggle()`; a tap while the pool loads is ignored, and it's
     hidden when the track has nothing similar. No buttons while nothing plays or
     before the collection has answered. A heart tapped on the phone updates the
@@ -1193,12 +1197,20 @@ only draws it.
     artwork through `CarArtwork`), refreshed while it's open; a tap calls
     `playFromQueue` and returns to Now Playing. During a spinoff or Listen Along
     it's "Your Queue" with disabled rows (Listen Along's suspended queue), as
-    the phone dims it.
+    the phone dims it. A list's title can't change, so a spinoff that starts or
+    ends while it's open swaps in a new list (pop + push, no animation). Its
+    artwork loads stop once it's popped (`templateDidDisappear`, forwarded by
+    `CarBrowseTemplates`, the interface controller's one delegate).
   - **Alerts:** a new `notice` shows as a `CPAlertTemplate` with OK, one at a
-    time (a newer notice replaces the one on screen); OK clears the phone's
-    banner too. A notice from before the car connected isn't shown, and
+    time. The alert follows `notice`: when it's cleared or replaced the alert
+    is dismissed, then the new one (if any) shows. The phone's banner clears
+    `notice` after 3.5 s (8 s with an action) while the phone's UI is running,
+    so in that case the car's alert goes with it. OK clears the phone's banner
+    too. A notice from before the car connected isn't shown, and
     `Notice.showInCar = false` ("Playing via X") stays on the phone, as Android
     Auto shows only errors.
+  - **The heart acts only on the track whose state it shows**: a tap between a
+    track change and the new track's collection answer does nothing.
 - **Artwork** (`CarArtwork`). Loaded after the list shows, four at a time.
   Once the list is popped no new loads start; ones already in flight finish.
   http(s) and `file://` URLs go through `PCImageStore`, then a car-sized copy

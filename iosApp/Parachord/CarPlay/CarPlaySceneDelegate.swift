@@ -34,6 +34,9 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             // once the bootstrap (which `start()` runs) has made it.
             let nowPlaying = CarNowPlaying(interfaceController: interfaceController)
             self.nowPlaying = nowPlaying
+            browse.onTemplateDidDisappear = { [weak nowPlaying] template in
+                nowPlaying?.templateDidDisappear(template)
+            }
             Task { @MainActor in await nowPlaying.start() }
             // The root is read from the database only, so it doesn't wait for
             // the plugin host; a tap awaits the bootstrap before it plays.

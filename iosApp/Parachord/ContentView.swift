@@ -1760,10 +1760,12 @@ final class QueuePlaybackCoordinator {
     }
     var notice: Notice?
 
-    /// Tracks in a row no source could play. In the car it stops playback on
-    /// the third (`CAR_UNPLAYABLE_RUN_LIMIT`) instead of skipping through the
-    /// whole queue; see `CarUnplayableRun`.
+    /// Tracks in a row no source could play. In the car with no phone window
+    /// it stops playback on the third (`CAR_UNPLAYABLE_RUN_LIMIT`) instead of
+    /// skipping through the whole queue; see `CarUnplayableRun`. Counted from
+    /// the car's connect (`unplayableRunConnection`) and the last explicit play.
     @ObservationIgnored private let unplayableRun = CarUnplayableRun(limit: CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT)
+    @ObservationIgnored private var unplayableRunConnection = 0
 
     /// The first source an embedded player refused during one route.
     private final class EmbedRefusal {
@@ -1841,11 +1843,11 @@ final class QueuePlaybackCoordinator {
     @ObservationIgnored private var preSpinoffContext: PlaybackContext?
     // Radio (#256): a refill source for deep-link stations (Mode B artist-only /
     // Mode C with refill). When the pool runs low, top it up from this URL via the
-    // shared resolver. nil for the in-app ✨ spinoff (finite similar-track pool).
+    // shared resolver. nil for the in-app Spinoff button (finite similar-track pool).
     @ObservationIgnored private var spinoffRefillUrl: String?
     @ObservationIgnored private var spinoffRefill: ((String) async -> [Track])?
     @ObservationIgnored private var spinoffRefilling = false
-    /// True while a spinoff station is active — observed; gates the ✨ button, the
+    /// True while a spinoff station is active — observed; gates the Spinoff button, the
     /// "YOUR QUEUE" suspended queue display, and the "Spinoff from X" peek.
     var spinoffMode = false
     /// Last.fm availability for the CURRENT track: nil = unchecked (button enabled),
@@ -1909,7 +1911,7 @@ final class QueuePlaybackCoordinator {
     }
 
     /// Exit spinoff: drop the pool, restore the saved context. The queue was never
-    /// modified, so the next skipNext resumes it. Also the ✨ button's toggle-off.
+    /// modified, so the next skipNext resumes it. Also the Spinoff button's toggle-off.
     func exitSpinoff() {
         guard spinoffMode else { return }
         spinoffPool.removeAll()
@@ -2548,10 +2550,13 @@ final class QueuePlaybackCoordinator {
     private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false) {
         currentTrack = track
         needsLoadOnPlay = false
+        // An explicit play (a tap, Play on a stopped track) starts a new run of
+        // unplayable tracks; only the queue moving on adds to one.
+        if !advancing { unplayableRun.reset() }
         // New track → re-arm the next-track Apple Music pre-fetch (#322).
         prefetchedNextForCurrentTrack = false
         // Refresh whether spinoff is available for this track (#231) — no-op during
-        // spinoff (the pool tracks don't re-check; the ✨ button shows "exit").
+        // spinoff (the pool tracks don't re-check; the Spinoff button shows "exit").
         checkSpinoffAvailability(for: track)
         isStarting = true
         // Supersede any in-flight start so only the LATEST request reaches the
@@ -2734,11 +2739,19 @@ final class QueuePlaybackCoordinator {
                 // forced deck switch, DON'T skip: the user asked to change source,
                 // not to skip the song — leave the current playback as-is.
                 if forcedResolver == nil {
-                    if unplayableRun.failed(carConnected: CarPlaySession.shared.isConnected) {
-                        // In the car, the third track in a row nothing could
-                        // play (Bandcamp / SoundCloud with the phone app in the
-                        // background): stop on it rather than run silently
-                        // through the queue. Play retries it.
+                    // A car that connected since the run began starts it over:
+                    // failures on the phone before it don't count.
+                    let session = CarPlaySession.shared
+                    if session.connectionCount != unplayableRunConnection {
+                        unplayableRunConnection = session.connectionCount
+                        unplayableRun.reset()
+                    }
+                    if unplayableRun.failed(carWithoutPhone: session.blocksEmbeds) {
+                        // In the car with no phone window, the third track in a
+                        // row nothing could play (Bandcamp / SoundCloud can't
+                        // play there): stop on it rather than run silently
+                        // through the queue. Play retries it. With the phone app
+                        // open the queue skips on, as on the phone.
                         NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
                         await haltActiveEngine()
                         notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)

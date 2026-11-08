@@ -12,9 +12,9 @@ import UIKit
 // - The buttons Android Auto shows (`carNowPlayingButtons`, shared): the heart
 //   adds the playing track to the collection or removes it, and Spinoff starts
 //   a spinoff from it or ends the running one. Spinoff uses the phone's
-//   Spinoff icon (`sparkles`), cut out of a filled disc while a spinoff runs;
-//   it's hidden when the track has nothing similar, and a tap while the pool is
-//   loading is ignored. The buttons follow the phone: a heart tapped there
+//   Spinoff fork (`SpinoffFork`), cut out of a filled disc while a spinoff
+//   runs (`SpinoffForkActive`); it's hidden when the track has nothing
+//   similar, and a tap while the pool is loading is ignored. The buttons follow the phone: a heart tapped there
 //   updates the car too.
 // - Up Next lists the queue (title, artist, artwork); a tap plays that track,
 //   as the phone's queue does, and returns to Now Playing. While a spinoff or a
@@ -22,8 +22,10 @@ import UIKit
 //   with its rows disabled, as the phone dims them.
 // - A playback notice that needs the driver (a track that can't play here,
 //   "Open Spotify on your phone…", "Open Parachord on your phone…") shows as
-//   an alert with OK, one at a time: a newer notice replaces the alert on
-//   screen. "Playing via X" stays on the phone (`Notice.showInCar`).
+//   an alert with OK, one at a time. The alert follows `notice`: cleared or
+//   replaced (the phone's banner clears it after a few seconds), the alert
+//   goes, and a newer notice shows. "Playing via X" stays on the phone
+//   (`Notice.showInCar`).
 
 @MainActor
 final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
@@ -40,13 +42,18 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
     /// doesn't redraw them.
     private var shownButtons: [CarNowPlayingButton]?
 
-    /// The Up Next list while it's pushed, and the rows it shows.
+    /// The Up Next list while it's pushed, the rows it shows, whether it shows
+    /// the waiting queue ("Your Queue"), and its artwork loads.
     private weak var upNextList: CPListTemplate?
     private var upNextSignature: [String] = []
+    private var upNextSuspended = false
     private var upNextArtwork: Task<Void, Never>?
 
     /// The notice the car has already seen (shown or skipped).
     private var seenNoticeId: UUID?
+    /// The alert on screen and the notice it shows.
+    private weak var alert: CPAlertTemplate?
+    private var alertNoticeId: UUID?
 
     init(interfaceController: CPInterfaceController) {
         self.interfaceController = interfaceController
@@ -112,7 +119,7 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
         watchLoved(state.track)
         updateButtons(state)
         refreshUpNextIfShown(state)
-        showNoticeIfNew(state.notice)
+        syncAlert(state.notice)
     }
 
     private var currentState: State? {
@@ -128,8 +135,10 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
 
     // MARK: Buttons
 
+    private static func lovedKey(_ track: Track) -> String { "\(track.title)\u{1F}\(track.artist)" }
+
     private func watchLoved(_ track: Track?) {
-        let key = track.map { "\($0.title)\u{1F}\($0.artist)" }
+        let key = track.map(Self.lovedKey)
         guard key != lovedKey else { return }
         lovedKey = key
         lovedWatch?.cancel()
@@ -179,7 +188,9 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
     /// The playing track into the collection, or out of it, as the phone's
     /// heart does.
     private func toggleLove() {
-        guard let track = coordinator?.currentTrack, let loved else { return }
+        // `loved` must be this track's: right after a track change it can
+        // still be the previous track's until `observe` runs.
+        guard let track = coordinator?.currentTrack, let loved, lovedKey == Self.lovedKey(track) else { return }
         Task {
             if loved { try? await container.removeTrackFromCollection(track: track) }
             else { try? await container.addTrackToCollection(track: track) }
@@ -196,10 +207,17 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
 
     private func showUpNext() {
         guard let ic = interfaceController, let state = currentState else { return }
+        ic.pushTemplate(makeUpNext(state), animated: true, completion: nil)
+    }
+
+    private func makeUpNext(_ state: State) -> CPListTemplate {
+        upNextArtwork?.cancel()
         let list = CPListTemplate(title: state.suspended ? "Your Queue" : "Up Next", sections: [])
+        upNextSuspended = state.suspended
+        upNextSignature = []
         fill(list, with: state)
         upNextList = list
-        ic.pushTemplate(list, animated: true, completion: nil)
+        return list
     }
 
     private func refreshUpNextIfShown(_ state: State) {
@@ -208,14 +226,34 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
             upNextList = nil
             return
         }
+        // A list's title can't change: a spinoff or Listen Along that started or
+        // ended while it's open swaps in a list with the right title.
+        if state.suspended != upNextSuspended, ic.topTemplate === list {
+            let replacement = makeUpNext(state)
+            ic.popTemplate(animated: false) { [weak ic] _, _ in
+                MainActor.assumeIsolated { ic?.pushTemplate(replacement, animated: false, completion: nil) }
+            }
+            return
+        }
         fill(list, with: state)
+    }
+
+    /// A template left the car's stack or was covered (forwarded by the
+    /// interface controller's delegate, `CarBrowseTemplates`). Once the Up
+    /// Next list is popped its artwork loads stop.
+    func templateDidDisappear(_ template: CPTemplate) {
+        guard let list = upNextList, template === list, let ic = interfaceController,
+              !ic.templates.contains(where: { $0 === list }) else { return }
+        upNextArtwork?.cancel()
+        upNextArtwork = nil
+        upNextList = nil
     }
 
     /// The rows for [state]'s queue, unless they're the ones already shown.
     private func fill(_ list: CPListTemplate, with state: State) {
         let shown = Array(state.queue.prefix(CPListTemplate.maximumItemCount))
         let signature = [state.suspended ? "suspended" : "live"] + shown.map(\.id)
-        if list.sections.count > 0, signature == upNextSignature { return }
+        if !upNextSignature.isEmpty, signature == upNextSignature { return }
         upNextSignature = signature
 
         var rows: [CPListItem] = []
@@ -262,28 +300,50 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
 
     // MARK: Alerts
 
-    private func showNoticeIfNew(_ notice: QueuePlaybackCoordinator.Notice?) {
-        guard let notice, notice.id != seenNoticeId else { return }
-        seenNoticeId = notice.id
-        guard notice.showInCar, let ic = interfaceController else { return }
+    /// Keep the alert in step with `notice`: a notice the car hasn't seen
+    /// shows (if it's one for the car); the alert on screen goes when its
+    /// notice is cleared or replaced. One at a time.
+    private func syncAlert(_ notice: QueuePlaybackCoordinator.Notice?) {
+        var next: (CPAlertTemplate, UUID)?
+        if let notice, notice.id != seenNoticeId {
+            seenNoticeId = notice.id
+            if notice.showInCar { next = (makeAlert(notice), notice.id) }
+        }
+        let stale = alertNoticeId != nil && notice?.id != alertNoticeId
+        guard stale || next != nil else { return }
+        replaceAlert(with: next)
+    }
+
+    private func makeAlert(_ notice: QueuePlaybackCoordinator.Notice) -> CPAlertTemplate {
         let id = notice.id
-        let alert = CPAlertTemplate(titleVariants: [notice.message], actions: [
+        return CPAlertTemplate(titleVariants: [notice.message], actions: [
             CPAlertAction(title: "OK", style: .default) { [weak self] _ in
-                MainActor.assumeIsolated { self?.dismissAlert(noticeId: id) }
+                MainActor.assumeIsolated { self?.okTapped(noticeId: id) }
             },
         ])
-        // One at a time: a newer notice replaces the one on screen.
-        if ic.presentedTemplate != nil {
-            ic.dismissTemplate(animated: false) { [weak ic] _, _ in
-                MainActor.assumeIsolated { ic?.presentTemplate(alert, animated: true, completion: nil) }
-            }
+    }
+
+    /// Dismiss our alert if it's on screen, then present [next], if any.
+    private func replaceAlert(with next: (CPAlertTemplate, UUID)?) {
+        guard let ic = interfaceController else { return }
+        let present = { [weak self, weak ic] in
+            guard let self, let ic, self.running, let next else { return }
+            self.alert = next.0
+            self.alertNoticeId = next.1
+            ic.presentTemplate(next.0, animated: true, completion: nil)
+        }
+        let current = alert
+        alert = nil
+        alertNoticeId = nil
+        if let current, ic.presentedTemplate === current {
+            ic.dismissTemplate(animated: next == nil) { _, _ in MainActor.assumeIsolated { present() } }
         } else {
-            ic.presentTemplate(alert, animated: true, completion: nil)
+            present()
         }
     }
 
-    private func dismissAlert(noticeId: UUID) {
-        interfaceController?.dismissTemplate(animated: true, completion: nil)
+    private func okTapped(noticeId: UUID) {
+        replaceAlert(with: nil)
         // Seen in the car: the phone's banner needn't show it again.
         if coordinator?.notice?.id == noticeId { coordinator?.notice = nil }
     }
@@ -292,36 +352,29 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
 
     // Drawn at CarPlay's button size (`CPNowPlayingButtonMaximumImageSize`) as
     // template images; CarPlay tints them.
-    private static let heart = drawn("heart", inDisc: false)
-    private static let heartFilled = drawn("heart.fill", inDisc: false)
-    private static let spinoff = drawn("sparkles", inDisc: false)
-    /// The Spinoff sparkles cut out of a filled disc, since CarPlay draws its
-    /// buttons in one colour (Android Auto's `ic_auto_spinoff_active`).
-    private static let spinoffActive = drawn("sparkles", inDisc: true)
+    private static let heart = drawn(UIImage(systemName: "heart", withConfiguration: symbolConfig), fill: 0.9)
+    private static let heartFilled = drawn(UIImage(systemName: "heart.fill", withConfiguration: symbolConfig), fill: 0.9)
+    /// The phone's Spinoff fork (Android's `ic_auto_spinoff`, desktop's icon).
+    private static let spinoff = drawn(UIImage(named: "SpinoffFork"), fill: 1)
+    /// The fork cut out of a filled disc, since CarPlay draws its buttons in
+    /// one colour (Android Auto's `ic_auto_spinoff_active`).
+    private static let spinoffActive = drawn(UIImage(named: "SpinoffForkActive"), fill: 1)
 
-    private static func drawn(_ name: String, inDisc: Bool) -> UIImage {
+    private static let symbolConfig = UIImage.SymbolConfiguration(pointSize: 64, weight: .regular)
+
+    /// [source] aspect-fitted into [fill] of the button's square, centred.
+    private static func drawn(_ source: UIImage?, fill: CGFloat) -> UIImage {
+        guard let source, source.size.width > 0, source.size.height > 0 else { return UIImage() }
+        let glyph = source.withTintColor(.black, renderingMode: .alwaysOriginal)
         let size = CPNowPlayingButtonMaximumImageSize
         let format = UIGraphicsImageRendererFormat()
         format.scale = max(CarArtwork.displayScale, 2)
-        let config = UIImage.SymbolConfiguration(pointSize: 64, weight: inDisc ? .semibold : .regular)
-        guard let glyph = UIImage(systemName: name, withConfiguration: config)?
-            .withTintColor(.black, renderingMode: .alwaysOriginal) else { return UIImage() }
         let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            let side = min(size.width, size.height)
-            // The glyph fits a box this share of the canvas, centred.
-            let box = side * (inDisc ? 0.62 : 0.9)
+            let box = min(size.width, size.height) * fill
             let ratio = min(box / glyph.size.width, box / glyph.size.height)
             let fitted = CGSize(width: glyph.size.width * ratio, height: glyph.size.height * ratio)
-            let rect = CGRect(x: (size.width - fitted.width) / 2, y: (size.height - fitted.height) / 2,
-                              width: fitted.width, height: fitted.height)
-            if inDisc {
-                UIColor.black.setFill()
-                UIBezierPath(ovalIn: CGRect(x: (size.width - side) / 2, y: (size.height - side) / 2,
-                                            width: side, height: side)).fill()
-                glyph.draw(in: rect, blendMode: .destinationOut, alpha: 1)
-            } else {
-                glyph.draw(in: rect)
-            }
+            glyph.draw(in: CGRect(x: (size.width - fitted.width) / 2, y: (size.height - fitted.height) / 2,
+                                  width: fitted.width, height: fitted.height))
         }
         return image.withRenderingMode(.alwaysTemplate)
     }

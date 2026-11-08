@@ -30,6 +30,9 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
     private var artworkTasks: [UUID: Task<Void, Never>] = [:]
     /// The tapped row's play, while it waits. A newer tap or a disconnect cancels it.
     private var playTask: Task<Void, Never>?
+    /// Also told when a template disappears: this class is the interface
+    /// controller's one delegate (`CarNowPlaying`'s Up Next list uses it).
+    var onTemplateDidDisappear: ((CPTemplate) -> Void)?
 
     private static let maxArtworkLoads = 4
 
@@ -181,6 +184,7 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
 
     nonisolated func templateDidDisappear(_ aTemplate: CPTemplate, animated: Bool) {
         MainActor.assumeIsolated {
+            onTemplateDidDisappear?(aTemplate)
             // Covered by a pushed list it's still on the stack; popped, it isn't.
             guard let ic = interfaceController,
                   !ic.templates.contains(where: { $0 === aTemplate }) else { return }

@@ -17,9 +17,10 @@ import UIKit
 //   only uses the phone's own Spotify device (`IosSpotifyConnect.play`).
 // - A track only Spotify could have played stops with
 //   `CarMessages.OPEN_SPOTIFY_ON_PHONE` instead of being skipped.
-// - The third track in a row that nothing could play stops with
-//   `CarMessages.OPEN_PARACHORD_ON_PHONE` (`CarUnplayableRun`), and so does a
-//   tapped track whose embed had no phone window to play in.
+// - With no phone window (`blocksEmbeds`), the third track in a row that
+//   nothing could play stops with `CarMessages.OPEN_PARACHORD_ON_PHONE`
+//   (`CarUnplayableRun`, counted from the connect or the last tap), and so does
+//   a tapped track whose embed had no phone window to play in.
 //
 // With the car disconnected every path behaves as it does on the phone.
 
@@ -29,11 +30,15 @@ final class CarPlaySession {
     static let shared = CarPlaySession()
 
     private(set) var isConnected = false
+    /// Goes up on every connect, so playback can tell a new car session from
+    /// the one it last saw (the unplayable run restarts on connect).
+    @ObservationIgnored private(set) var connectionCount = 0
 
     private init() {}
 
     func connected() {
         isConnected = true
+        connectionCount += 1
         NSLog("CARPLAY connected")
     }
 
