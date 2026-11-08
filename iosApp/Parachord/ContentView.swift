@@ -2709,11 +2709,14 @@ final class QueuePlaybackCoordinator {
                     isStarting = false
                     return
                 }
-                if refusal.service != nil, refusal.reason == "page", !(advancing || spinoffMode),
-                   forcedResolver == nil, CarPlaySession.shared.blocksEmbeds {
-                    // Tapped in the car with the phone app in the background:
-                    // the embed had no window to play in, so its "only plays on
-                    // its own site" message would be wrong. Play retries it.
+                if refusal.service != nil, refusal.reason == "page" || refusal.reason == "unplayable",
+                   !(advancing || spinoffMode),
+                   forcedResolver == nil, CarPlaySession.shared.phoneAppNotInFront {
+                    // Tapped in the car with Parachord not in front on the
+                    // phone: the embed had no window, or may not have been let
+                    // start while locked, so its "only plays on its own site"
+                    // message would be wrong and nobody could act on a phone
+                    // banner. Play retries it.
                     await haltActiveEngine()
                     notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
                     needsLoadOnPlay = true
@@ -2746,12 +2749,12 @@ final class QueuePlaybackCoordinator {
                         unplayableRunConnection = session.connectionCount
                         unplayableRun.reset()
                     }
-                    if unplayableRun.failed(carWithoutPhone: session.blocksEmbeds) {
-                        // In the car with no phone window, the third track in a
-                        // row nothing could play (Bandcamp / SoundCloud can't
-                        // play there): stop on it rather than run silently
-                        // through the queue. Play retries it. With the phone app
-                        // open the queue skips on, as on the phone.
+                    if unplayableRun.failed(carWithoutPhone: session.phoneAppNotInFront) {
+                        // In the car with Parachord not in front on the phone,
+                        // the third track in a row nothing could play: stop on
+                        // it rather than run silently through the queue. Play
+                        // retries it. With the phone app open the queue skips
+                        // on, as on the phone.
                         NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
                         await haltActiveEngine()
                         notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)

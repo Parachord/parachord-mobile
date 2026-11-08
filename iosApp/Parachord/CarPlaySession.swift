@@ -18,10 +18,11 @@ import UIKit
 //   only uses the phone's own Spotify device (`IosSpotifyConnect.play`).
 // - A track only Spotify could have played stops with
 //   `CarMessages.OPEN_SPOTIFY_ON_PHONE` instead of being skipped.
-// - With no phone window (`blocksEmbeds`), the third track in a row that
-//   nothing could play stops with `CarMessages.OPEN_PARACHORD_ON_PHONE`
+// - With Parachord not in front on the phone (`phoneAppNotInFront`: locked,
+//   behind another app, or never shown), the third track in a row that nothing
+//   could play stops with `CarMessages.OPEN_PARACHORD_ON_PHONE`
 //   (`CarUnplayableRun`, counted from the connect or the last tap), and so does
-//   a tapped track whose embed had no phone window to play in.
+//   a tapped track whose SoundCloud or Bandcamp embed was refused or didn't start.
 //
 // With the car disconnected every path behaves as it does on the phone.
 
@@ -61,8 +62,22 @@ final class CarPlaySession {
     /// A connected phone (not CarPlay) window scene with a key window, in any
     /// activation state: the embeds attach to that key window.
     private static var phoneHasKeyWindow: Bool {
+        phoneKeyWindowScene { $0 != .unattached }
+    }
+
+    /// True when the car is connected and Parachord isn't the app in front on
+    /// the phone (locked, behind another app, or never shown). Then nobody can
+    /// act on a phone message, and an embed that times out may be one iOS
+    /// wouldn't let start while locked, so the unplayable-run stop and the
+    /// car's "open Parachord on your phone" message apply. Wider than
+    /// `blocksEmbeds`, which only stops new web views from being created.
+    var phoneAppNotInFront: Bool {
+        isConnected && !Self.phoneKeyWindowScene { $0 == .foregroundActive }
+    }
+
+    private static func phoneKeyWindowScene(_ state: (UIScene.ActivationState) -> Bool) -> Bool {
         UIApplication.shared.connectedScenes.contains { scene in
-            guard scene.activationState != .unattached,
+            guard state(scene.activationState),
                   scene.session.role == .windowApplication,
                   let windowScene = scene as? UIWindowScene else { return false }
             return windowScene.windows.contains { $0.isKeyWindow }

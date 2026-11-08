@@ -232,7 +232,7 @@ with the Dev tab.
 happen with the phone locked, and iOS's default accessibility
 (`kSecAttrAccessibleWhenUnlocked`) hides the sign-in tokens then.
 `IosSecureTokenStore` therefore writes `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`
-and migrates older items once (`keychain_accessibility_v1`); until the migration
+and migrates older items once (`keychain_accessibility_v2`); until the migration
 is done, reads and writes go through a legacy instance, all under one lock.
 Details in the class's KDoc.
 
@@ -1145,8 +1145,11 @@ CarPlay scene delegate (`connected()` / `disconnected()`). While it's true a few
 rules change; with it false every path is the phone's.
 
 - **SoundCloud and Bandcamp need a phone window.** Their web views live in the
-  phone's key window, which keeps playing them with the phone locked or another
-  app in front, as on the phone. Only when the car launched the app and the
+  phone's key window, which should keep playing them with the phone locked or
+  another app in front, as on the phone (seen in the simulator with Settings in
+  front; **unverified on a locked device** for a fresh car tap after a Spotify or
+  Apple Music play, when no `scHoldAudio` hold is running and iOS may refuse
+  WebKit's audio session, so the track could "start" silent). Only when the car launched the app and the
   phone never showed it is there no phone window scene at all (iOS won't open
   one from the background); with the car connected and no connected phone
   window scene with a key window, `blocksEmbeds` is true:
@@ -1179,13 +1182,15 @@ rules change; with it false every path is the phone's.
   a row that no source could play. A track that starts, an explicit play (a tap,
   or Play on a stopped track; not the queue moving on) and a car connecting
   (`CarPlaySession.connectionCount`) each start the run over. While
-  `blocksEmbeds` (car connected, no phone window) the third
+  `phoneAppNotInFront` (car connected, Parachord not in front on the phone:
+  locked, behind another app or never shown; wider than `blocksEmbeds`) the third
   (`CAR_UNPLAYABLE_RUN_LIMIT`) stops on that track, as the Spotify case does,
   with `CarMessages.OPEN_PARACHORD_ON_PHONE` ("Open Parachord on your phone to
-  play these tracks"). Play retries it. A track tapped in the car whose embed
-  was refused for having no phone window gets the same message, not the phone's
-  "only plays on its own site". With the car disconnected, or the phone app
-  open, the queue skips on as on the phone.
+  play these tracks"). Play retries it. A track tapped in the car whose
+  SoundCloud or Bandcamp embed was refused for having no window (`page`) or
+  didn't start (`unplayable`) gets the same message, not the phone's "only plays
+  on its own site"; a `preview` refusal keeps SoundCloud's own message. With the
+  car disconnected, or the phone app open, the queue skips on as on the phone.
 - **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
   temporary hook (never commit one). In the simulator, with the app
   backgrounded, a Bandcamp source, or a SoundCloud source with no page yet,

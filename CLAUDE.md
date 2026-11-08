@@ -126,14 +126,14 @@ Both car UIs show one tree and follow one set of rules, all in `shared/.../car/`
 - **`CarIds`**, the exact media ids: `parachord_root`, `browse:playlists`, `browse:loved`, `action:collection-radio`, `playlist:<id>`, `playlist-shuffle:<id>`, `playlist-track:<position>:<playlistId>` (position first so an id containing `:` parses), `loved-track:<id>`.
 - **`CarItem`** (`id`, `title`, `subtitle`, `artworkUrl`, `album`, `isBrowsable`, `isPlayable`, `kind` = `FOLDER | PLAYLIST | TRACK | ACTION`) is the tile; **`CarPlayRequest`** (`tracks`, `startIndex`, `shuffle`; null shuffle keeps the current setting) is what a tap plays. Collection Radio plays the whole collection shuffled.
 - **`carNowPlayingButtons(loved, spinoffMode, spinoffAvailable)`** gives the Now Playing buttons: heart (`LOVE` / `UNLOVE`), then Spinoff (`SPINOFF` / `END_SPINOFF`). None while nothing plays; Spinoff is hidden, not dimmed, when nothing similar exists.
-- **`CarMessages`** (`OPEN_SPOTIFY_ON_PHONE`, `OPEN_PARACHORD_ON_PHONE`) and **`CarUnplayableRun`** (stop after `CAR_UNPLAYABLE_RUN_LIMIT` = 3 unplayable tracks in a row, only when the car can't host the embeds).
+- **`CarMessages`** (`OPEN_SPOTIFY_ON_PHONE`, `OPEN_PARACHORD_ON_PHONE`) and **`CarUnplayableRun`** (stop after `CAR_UNPLAYABLE_RUN_LIMIT` = 3 unplayable tracks in a row, only in the car with Parachord not in front on the phone).
 
 **Per platform, only the drawing.** Android `PlaybackService` maps `CarItem` → `MediaItem` and serves it from the `MediaLibrarySession` callback (and sends `playRequest` to the controller). iOS draws `CPListTemplate`s from `IosContainer.carChildren` / `carPlayRequest` (`iosApp/Parachord/CarPlay/`; details in `iosApp/AGENTS.md` → "The CarPlay screens"). Change the tree, caps, ids or button rules once, in shared.
 
 **Car-only playback rules on iOS** (`CarPlaySession`; a phone with no car connected plays as always):
 - SoundCloud and Bandcamp are refused only when a car is connected and the app has no phone window to host a web view, which happens when the car launched the app and the phone never showed it (iOS won't open a window from the background). Then Bandcamp is always refused (each track is a new page) and SoundCloud only when its page would have to be created, and the router moves to the next source. A phone window that exists plays them even with the phone locked or another app in front, as on the phone.
 - Spotify never wakes the Spotify app, shows no device picker and uses only this phone's own device; if it isn't listed the source fails at once. A track only Spotify could play stops with `OPEN_SPOTIFY_ON_PHONE`.
-- After 3 unplayable tracks in a row (with the embeds blocked) playback stops on the last one with `OPEN_PARACHORD_ON_PHONE`, instead of skipping to the end of the queue.
+- After 3 unplayable tracks in a row (in the car, with Parachord not in front on the phone) playback stops on the last one with `OPEN_PARACHORD_ON_PHONE`, instead of skipping to the end of the queue.
 
 **Entitlement.** The CarPlay audio entitlement (`com.apple.developer.carplay-audio`) is in `ParachordSimulator.entitlements`, applied only through `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device and App Store builds can't carry it until Apple grants it to the App ID, so shipping CarPlay needs that grant first; never add it to `Parachord.entitlements` before then.
 
