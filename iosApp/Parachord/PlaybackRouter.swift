@@ -50,6 +50,10 @@ struct PlaybackRouter {
     /// can't play, or only previews, the track; Bandcamp's embed doesn't start) with the service's name and
     /// the track's page on it. The walk then moves on to the next source.
     var onRefused: ((_ service: String, _ pageUrl: String?, _ reason: String) -> Void)? = nil
+    /// Called when a Spotify source was tried and didn't start (no usable
+    /// device, rate-limited, Premium needed). The walk then moves on. In the
+    /// car the caller uses it to stop on the track instead of skipping it.
+    var onSpotifyFailed: (() -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -124,6 +128,7 @@ struct PlaybackRouter {
             case "spotify":
                 guard spotify.canPlay, let uri = source.spotifyUri, !uri.isEmpty else { continue }
                 if await spotify.play(uri: uri) { return .played(.spotify, resolver: source.resolver) }
+                onSpotifyFailed?()
 
             default:
                 continue

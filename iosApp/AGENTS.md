@@ -712,7 +712,9 @@ Conformance checklist (audited 2026-06-07):
   value — `spotify://` is iOS's launch-intent equivalent), ~1.5s wake settle.
   Not a flat unconditional 18s.
 - **Self-select THIS device** (`isLocalRealDevice`: name + Smartphone/Tablet
-  type), never an active *remote* phantom. Always wake on the local path.
+  type), never an active *remote* phantom. Always wake on the local path,
+  except in the car: there it never wakes, never shows the picker and fails at
+  once if the phone's device isn't listed (see "Playback in the car").
 - **Single-pass**, single 502 retry after 1s; **cold-device verification**
   (2 polls × 500ms via `getPlaybackStateOrNull`); persist the **synthetic**
   `localDeviceId`, never the real id.
@@ -972,7 +974,8 @@ shared page, desktop's module, previews counted as refused) are in the root
   `seekforward`/`seekbackward` handlers and disabling the skip commands on
   `MPRemoteCommandCenter` both had no effect.
 - **A refused source falls through** to the next ranked one in `PlaybackRouter`
-  (`onRefused`); `playTrack(advancing:)` decides between "Playing via X", a
+  (`onRefused`); in the car with no phone window in the foreground every
+  SoundCloud source is refused (see "Playback in the car"); `playTrack(advancing:)` decides between "Playing via X", a
   silent skip (queue advancing or spinoff), and the `Notice` banner with
   "Open in SoundCloud" (`RootView`).
 
@@ -989,7 +992,9 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   is a byte-for-byte copy of Android's and desktop's (an Android unit test fails
   if Android's and iOS's differ).
 - **In a window, or it never plays.** A view in no window stays at 0:00 (tested
-  on WebKit for #513), so it's added to the key window, at `alpha 0.01`.
+  on WebKit for #513), so it's added to the key window, at `alpha 0.01`. In the
+  car with no phone window in the foreground it refuses instead (see "Playback
+  in the car"), as SoundCloud's widget does.
 - **The audio-session hold lives in SoundCloud's page, and runs unmuted for the
   whole track.** See "SoundCloud through its widget": WebKit releases its session
   when a track ends, and iOS won't reactivate it locked. Each Bandcamp track is a new
@@ -1054,7 +1059,16 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
 - **The direct-URL fast path in `playTrack` runs `applyEngineHandoff` too.** It
   used to switch `activeEngine` to `.avPlayer` without stopping the previous
   engine, so a Bandcamp page kept playing under the next track and kept the
-  lock screen.
+  lock screen. `activeEngine` flips only after the handoff and a cancellation
+  check, so a newer start during the handoff still sees the engine that was
+  playing.
+- **Play on a track no engine holds starts it.** A queue restored paused at
+  launch shows its track but loads nothing, and so does a track stopped
+  because nothing could play it (the car's Spotify case below). For both,
+  `needsLoadOnPlay` makes `togglePlayPause` (the phone's button, the remote
+  play / toggle commands, CarPlay) run `playTrack` instead of resuming whatever
+  the active engine last held. Restored queues keep no position, so the track
+  starts from the top.
 - **Checking it in the simulator.** The lock screen can't be photographed with
   `simctl`, but `mediaremoted` logs what it publishes:
   `xcrun simctl spawn booted log stream --level debug --predicate 'process == "mediaremoted"'`
@@ -1063,6 +1077,38 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   client (`com.parachord.ios`), WebKit another (`com.apple.WebKit.GPU/com.parachord.ios`),
   and WebKit's wins while it plays. The publisher itself logs `NOWPLAYING
   published …` on each change.
+
+## Playback in the car (`CarPlaySession`)
+
+`CarPlaySession.shared.isConnected` (`CarPlaySession.swift`) is set by the
+CarPlay scene delegate (`connected()` / `disconnected()`). While it's true a few
+rules change; with it false every path is the phone's.
+
+- **SoundCloud and Bandcamp need a phone window.** Their web views live in the
+  phone's key window. With the car connected and no foreground-active phone
+  window scene with a key window (phone locked, app in the background),
+  `blocksEmbeds` is true and `IosSoundCloudWidget.ensurePage` /
+  `IosBandcampEmbed.ensureWebView` refuse (reason `page`), so the router moves
+  on to the next source as for any refused embed. With the app open on the
+  phone they play as usual.
+- **Spotify never opens the Spotify app.** `IosSpotifyConnect.play` shows no
+  device picker, ignores a saved device, and uses only the phone's own Spotify
+  device (`isLocalRealDevice`), already listed by `getDevices`. If it isn't
+  listed, the source fails at once: no `spotify:` wake, no polling. The warm
+  path is taken only when its cached device is the phone's own
+  (`lastResolvedIsLocal`), so a remembered speaker at home isn't used; a car
+  play doesn't write the preferred device either.
+- **A track only Spotify could play stops, it isn't skipped.** When the router
+  tried Spotify (`onSpotifyFailed`) and nothing else played, `playTrack` halts
+  the old engine, keeps the track on screen and sets `notice` to
+  `CarMessages.OPEN_SPOTIFY_ON_PHONE` (Android Auto's wording, shared). Play
+  retries it once Spotify is open. This applies even while the queue is
+  advancing, so a Spotify-only playlist doesn't skip to its end.
+- **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
+  temporary hook (never commit one). In the simulator, with the app
+  backgrounded, a SoundCloud or Bandcamp source logs
+  `… car connected with no phone window, refusing` and the next source plays.
+  The Spotify rules need a device with Spotify installed.
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 

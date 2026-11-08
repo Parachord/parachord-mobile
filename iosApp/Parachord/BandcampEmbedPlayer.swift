@@ -282,6 +282,12 @@ final class IosBandcampEmbed {
 
     @MainActor
     private func ensureWebView() -> WKWebView? {
+        // In the car with no phone window in the foreground: refuse, so the
+        // next source plays (an embed out of a window stays at 0:00).
+        if CarPlaySession.shared.blocksEmbeds {
+            NSLog("BandcampEmbed: car connected with no phone window, refusing")
+            return nil
+        }
         if let webView { return webView }
         let delegate = NavigationDelegate()
         delegate.onFinished = { [weak self] navigation in

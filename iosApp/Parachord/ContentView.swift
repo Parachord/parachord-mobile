@@ -285,6 +285,10 @@ final class IosSpotifyConnect {
     // SpotifyPlaybackHandler). Plumbing — not observable UI state.
     @ObservationIgnored private var deviceVerified = false
     @ObservationIgnored private var lastResolvedLocalId: String?
+    /// Whether `lastResolvedLocalId` is this phone's own Spotify device (not a
+    /// remote one). In the car only the phone's device is used, so the warm
+    /// path is taken only when this is true.
+    @ObservationIgnored private var lastResolvedIsLocal = false
     /// Synthetic "this device" id persisted as the preferred device — the real
     /// id changes between Spotify sessions, so we persist this token instead.
     static let localDeviceId = "__local_device__"
@@ -372,6 +376,10 @@ final class IosSpotifyConnect {
     /// Returns `false` when no local device can be established → `PlaybackRouter`
     /// falls through to the next source in the user's resolver order, instead of
     /// "succeeding" onto a phantom remote.
+    ///
+    /// **In the car** (`CarPlaySession.shared.isConnected`): no picker, no
+    /// saved device, no wake. Only the phone's own Spotify device, already
+    /// listed, is used; otherwise this returns `false` at once.
     @MainActor
     func play(uri: String) async -> Bool {
         let client = IosContainer.companion.shared.spotifyClient
@@ -402,43 +410,69 @@ final class IosSpotifyConnect {
         //    restarted) fails → we clear + fall through to the cold resolve.
         //    Mirrors Android's "fire startPlayback directly without any device
         //    fetch" warm-path optimization.
-        if deviceVerified, let warmId = lastResolvedLocalId {
+        // In the car (CarPlaySession): only this phone's own Spotify device is
+        // used, so a remembered remote device isn't fired at.
+        let inCar = CarPlaySession.shared.isConnected
+        if deviceVerified, let warmId = lastResolvedLocalId, !inCar || lastResolvedIsLocal {
             if await startPlayback(client, uri: uri, deviceId: warmId) {
                 return true
             }
             lastResolvedLocalId = nil
+            lastResolvedIsLocal = false
             deviceVerified = false
         }
 
-        // 2. Resolve the target device (Android `pickDevice` parity).
-        //    - preferred == "This device"  → wake this device.
-        //    - preferred remote present     → control it silently.
-        //    - stale preference             → clear, fall through.
-        //    - no live device at all        → wake this device (only option).
-        //    - otherwise (ambiguous)        → ASK via the picker; remember the
-        //      choice (LOCAL token for this-device, real id for a remote).
-        let preferred = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
-        let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
-
         var target: SpDevice?
-        if preferred == Self.localDeviceId {
+        var targetIsLocal = false
+        if inCar {
+            // 2a. In the car: no picker, no saved device, no wake that opens
+            //     the Spotify app (the driver isn't looking at the phone, and a
+            //     locked phone can't switch apps). Only the phone's own
+            //     Spotify device, if it's already listed; else fail at once so
+            //     the next source plays.
             target = await resolveLocalDevice(client, playUri: uri)
-        } else if let pid = preferred, let match = usable.first(where: { $0.id == pid }) {
-            target = match
-        } else {
-            if let pid = preferred, !pid.isEmpty {
-                try? await settings.clearPreferredSpotifyDeviceId() // stale
+            targetIsLocal = true
+            if target == nil {
+                lastAction = "Spotify isn't running on this phone"
+                return false
             }
-            if usable.isEmpty {
+        } else {
+            // 2b. Resolve the target device (Android `pickDevice` parity).
+            //    - preferred == "This device"  → wake this device.
+            //    - preferred remote present     → control it silently.
+            //    - stale preference             → clear, fall through.
+            //    - no live device at all        → wake this device (only option).
+            //    - otherwise (ambiguous)        → ASK via the picker; remember the
+            //      choice (LOCAL token for this-device, real id for a remote).
+            let preferred = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
+            let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
+
+            if preferred == Self.localDeviceId {
                 target = await resolveLocalDevice(client, playUri: uri)
+                targetIsLocal = true
+            } else if let pid = preferred, let match = usable.first(where: { $0.id == pid }) {
+                target = match
             } else {
-                // Offer the live devices plus a synthetic "This device".
-                guard let chosen = await presentPicker(usable + [localDeviceEntry()]) else {
-                    lastAction = "Playback cancelled"
-                    return false
+                if let pid = preferred, !pid.isEmpty {
+                    try? await settings.clearPreferredSpotifyDeviceId() // stale
                 }
-                try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
-                target = isLocalPlaceholder(chosen) ? await resolveLocalDevice(client, playUri: uri) : chosen
+                if usable.isEmpty {
+                    target = await resolveLocalDevice(client, playUri: uri)
+                    targetIsLocal = true
+                } else {
+                    // Offer the live devices plus a synthetic "This device".
+                    guard let chosen = await presentPicker(usable + [localDeviceEntry()]) else {
+                        lastAction = "Playback cancelled"
+                        return false
+                    }
+                    try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
+                    if isLocalPlaceholder(chosen) {
+                        target = await resolveLocalDevice(client, playUri: uri)
+                        targetIsLocal = true
+                    } else {
+                        target = chosen
+                    }
+                }
             }
         }
 
@@ -446,6 +480,7 @@ final class IosSpotifyConnect {
             lastAction = "Couldn't find a Spotify device. Open Spotify and try again."
             return false
         }
+        if !targetIsLocal { targetIsLocal = isLocalRealDevice(dev) }
 
         // 4. Play. (We're on the COLD path here — the warm path returns
         // early on success — so deviceVerified is currently false.)
@@ -460,11 +495,13 @@ final class IosSpotifyConnect {
             }
             deviceVerified = true
             lastResolvedLocalId = dev.id
+            lastResolvedIsLocal = targetIsLocal
             // Sticky default (parity with Android): persist the SYNTHETIC
             // localDeviceId, never the real id (it changes between Spotify
-            // sessions). Only when no preference is already set.
+            // sessions). Only when no preference is already set, and not from
+            // the car, whose device choice is forced rather than the person's.
             let existing = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
-            if existing == nil {
+            if existing == nil && !inCar {
                 try? await settings.setPreferredSpotifyDeviceId(deviceId: Self.localDeviceId)
             }
         }
@@ -580,6 +617,7 @@ final class IosSpotifyConnect {
         try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
         deviceVerified = false
         lastResolvedLocalId = nil
+        lastResolvedIsLocal = false
         lastAction = isLocalPlaceholder(chosen) ? "Spotify target: This device" : "Spotify target: \(chosen.name)"
     }
 
@@ -602,6 +640,9 @@ final class IosSpotifyConnect {
             let live = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
             if let local = live.first(where: { isLocalRealDevice($0) }) { return local }
         }
+        // In the car, never wake: it opens the Spotify app on a phone the
+        // driver isn't looking at (and a locked phone can't). Not listed = fail.
+        if CarPlaySession.shared.isConnected { return nil }
 
         // Poll at 1s (not 300ms) so a cold play makes ~18 getDevices calls over
         // ~18s instead of 66 — those ungated /v1/me/player/devices calls add up
@@ -1727,7 +1768,15 @@ final class QueuePlaybackCoordinator {
         var service: String?
         var pageUrl: String?
         var reason = "unplayable"
+        /// A Spotify source was tried during the route and didn't start.
+        var spotifyFailed = false
     }
+
+    /// The current track is on screen but no engine has it loaded: a queue
+    /// restored paused at launch, or a track that stopped because nothing
+    /// could play it. Play / toggle then starts it through `playTrack` instead
+    /// of resuming whatever the active engine last held.
+    @ObservationIgnored private var needsLoadOnPlay = false
 
     /// Resolver ids that open in the browser instead of streaming (stream:false,
     /// e.g. Bandcamp). Seeded with the known default so it holds before the .axe
@@ -2285,6 +2334,13 @@ final class QueuePlaybackCoordinator {
 
     /// Engine-agnostic play/pause toggle for the mini player + Now Playing.
     func togglePlayPause() {
+        // Nothing loaded for the track on screen (restored queue, or stopped
+        // because no source could play): start it. Restored queues keep no
+        // position, so it starts from the top.
+        if needsLoadOnPlay, let track = currentTrack, !isStarting {
+            playTrack(track)
+            return
+        }
         switch activeEngine {
         case .avPlayer:
             player.isPlaying ? player.pause() : player.play()
@@ -2318,8 +2374,9 @@ final class QueuePlaybackCoordinator {
     }
 
     /// Establish a new queue and start playing the track at
-    /// `startIndex`. Mirrors `PlaybackEngine.setQueue`.
-    func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil) {
+    /// `startIndex`. Mirrors `PlaybackEngine.setQueue`. [shuffle] overrides
+    /// the current shuffle setting (the car's Shuffle rows); nil keeps it.
+    func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil, shuffle: Bool? = nil) {
         // Spinoff (#231): the user starting their own playback ends any active
         // spinoff (it's not the pool driving this setQueue). Exclude the spinoff's
         // own context so beginSpinoff's setContext path isn't mistaken for takeover.
@@ -2329,7 +2386,7 @@ final class QueuePlaybackCoordinator {
             tracks: tracks,
             startIndex: Int32(startIndex),
             context: context,
-            shuffle: shuffleEnabled
+            shuffle: shuffle ?? shuffleEnabled
         )
         syncSnapshot()
         if let track = toPlay {
@@ -2488,6 +2545,7 @@ final class QueuePlaybackCoordinator {
     /// can play is skipped rather than reported (desktop `autoSkipIfAdvancing`).
     private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false) {
         currentTrack = track
+        needsLoadOnPlay = false
         // New track → re-arm the next-track Apple Music pre-fetch (#322).
         prefetchedNextForCurrentTrack = false
         // Refresh whether spinoff is available for this track (#231) — no-op during
@@ -2518,10 +2576,13 @@ final class QueuePlaybackCoordinator {
                 // Stop the engine that was playing, as the routed path does:
                 // without this a Bandcamp or Apple Music track kept playing under
                 // this one, and kept the lock screen / CarPlay.
+                // activeEngine flips only after the handoff (which can suspend)
+                // and a staleness check: a newer start during the handoff must
+                // still see the engine that was actually playing.
                 let previousEngine = activeEngine
-                activeEngine = .avPlayer
                 await applyEngineHandoff(from: previousEngine, to: .avPlayer)
                 if Task.isCancelled { return }
+                activeEngine = .avPlayer
                 player.load(url: url, title: track.title, artist: track.artist, resolver: "direct")
                 startAVPlaybackWhenReady()
                 isStarting = false
@@ -2571,6 +2632,7 @@ final class QueuePlaybackCoordinator {
             router.onRefused = { service, pageUrl, reason in
                 if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl; refusal.reason = reason }
             }
+            router.onSpotifyFailed = { refusal.spotifyFailed = true }
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist,
                                            artworkUrl: track.artworkUrl)
             // Superseded while the engine was starting — skip the stale UI
@@ -2621,6 +2683,18 @@ final class QueuePlaybackCoordinator {
                 if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
 
             case .noPlayableSource:
+                if refusal.spotifyFailed, forcedResolver == nil, CarPlaySession.shared.isConnected {
+                    // In the car, Spotify couldn't start (it isn't running on
+                    // the phone, and the car never opens it) and nothing else
+                    // can play the track: stop on it with Android Auto's
+                    // message rather than skip through a Spotify-only
+                    // playlist. Play again retries it once Spotify is open.
+                    await haltActiveEngine()
+                    notice = Notice(message: CarMessages.shared.OPEN_SPOTIFY_ON_PHONE)
+                    needsLoadOnPlay = true
+                    isStarting = false
+                    return
+                }
                 if let service = refusal.service, !(advancing || spinoffMode) {
                     // A track SoundCloud's widget won't play, and nothing else
                     // can: say so, with its page on the service (desktop
@@ -2785,6 +2859,9 @@ final class QueuePlaybackCoordinator {
             shuffle: state.shuffleEnabled)
         await MainActor.run {
             self.currentTrack = state.currentTrack
+            // Shown paused but loaded in no engine: play starts it. (Not when
+            // a track was already started this launch.)
+            self.needsLoadOnPlay = state.currentTrack != nil && self.playTask == nil
             self.syncSnapshot()
         }
     }

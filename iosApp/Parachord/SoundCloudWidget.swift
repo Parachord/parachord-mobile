@@ -153,6 +153,12 @@ final class IosSoundCloudWidget {
 
     @MainActor
     private func ensurePage() async -> Bool {
+        // In the car with no phone window in the foreground, the view has
+        // nowhere live to run: refuse, so the next source plays.
+        if CarPlaySession.shared.blocksEmbeds {
+            NSLog("SoundCloudWidget: car connected with no phone window, refusing")
+            return false
+        }
         if webView == nil {
             guard let htmlURL = Bundle.main.url(forResource: "soundcloud-widget", withExtension: "html"),
                   let jsURL = Bundle.main.url(forResource: "soundcloud-widget-player", withExtension: "js"),
