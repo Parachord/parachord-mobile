@@ -45,6 +45,7 @@ class MusicKitSdkPlaybackHandler(
         private const val PREFS = "musickit_sdk_spike"
         private const val KEY_ENABLED = "enabled"
         private const val KEY_SDK_MUT = "sdk_mut"
+        private const val KEY_STOREFRONT = "storefront"
 
         private const val AUTH_FACTORY = "com.apple.android.sdk.authentication.AuthenticationFactory"
         private const val AUTH_MANAGER = "com.apple.android.sdk.authentication.AuthenticationManager"
@@ -89,12 +90,20 @@ class MusicKitSdkPlaybackHandler(
         jsUserTokenCache = settingsStore.getAppleMusicUserToken()
     }
 
+    /**
+     * `TokenProvider.getAppleMusicStoreFrontId()` (1.1.3+): the encoded
+     * storefront the SDK's sign-in returns. With a MusicKit JS token there's
+     * none; it can be set over adb (see [registerAdbTrigger]).
+     */
+    val storefront: String? get() = prefs.getString(KEY_STOREFRONT, null)?.takeIf { it.isNotBlank() }
+
     /** What the spike's settings row shows. */
     fun status(): String = buildString {
         append("auth AAR: ${if (hasAuthSdk) "found" else "missing"}")
         append(" · playback AAR: ${if (hasPlaybackSdk) "found" else "missing"}")
         append(" · Apple Music app: ${appleMusicAppVersion() ?: "not installed"}")
         append(" · token: ${if (sdkUserToken != null) "SDK sign-in" else if (!jsUserTokenCache.isNullOrBlank()) "MusicKit JS" else "none"}")
+        append(" · storefront: ${storefront ?: "none"}")
         lastError?.let { append("\nlast error: $it") }
     }
 
@@ -131,9 +140,11 @@ class MusicKitSdkPlaybackHandler(
             "sign-in error: ${(err as? Enum<*>)?.name ?: err}"
         } else {
             val mut = r.getMethod("getMusicUserToken").invoke(result) as String
-            prefs.edit().putString(KEY_SDK_MUT, mut).apply()
-            controller = null // rebuild with the new token
-            "signed in (token ${mut.length} chars)"
+            val sf = runCatching { r.getMethod("getAppleMusicStorefrontId").invoke(result) as? String }.getOrNull()
+            val country = runCatching { r.getMethod("getStorefrontId").invoke(result) as? String }.getOrNull()
+            prefs.edit().putString(KEY_SDK_MUT, mut).putString(KEY_STOREFRONT, sf).apply()
+            releaseController() // rebuild with the new token
+            "signed in (token ${mut.length} chars, storefront $country / $sf)"
         }
     }.getOrElse { "sign-in result failed: ${it.rootMessage()}" }.also { Log.i(TAG, it); lastError = it }
 
@@ -158,6 +169,7 @@ class MusicKitSdkPlaybackHandler(
 
     private val statePlaying by lazy { intConst(PLAYBACK_STATE, "PLAYING") }
     private val stateStopped by lazy { intConst(PLAYBACK_STATE, "STOPPED") }
+    private val statePaused by lazy { intConst(PLAYBACK_STATE, "PAUSED") }
 
     private fun intConst(c: String, f: String) =
         runCatching { cls(c)!!.getField(f).getInt(null) }.getOrDefault(Int.MIN_VALUE)
@@ -185,22 +197,29 @@ class MusicKitSdkPlaybackHandler(
                 when (m.name) {
                     "getDeveloperToken" -> devToken
                     "getUserToken" -> sdkUserToken ?: jsUserTokenCache
+                    "getAppleMusicStoreFrontId" -> storefront
                     "hashCode" -> System.identityHashCode(proxy)
                     "equals" -> proxy === args?.firstOrNull()
                     "toString" -> "ParachordSpikeTokenProvider"
                     else -> null
                 }
             }
-            val create = cls(CONTROLLER_FACTORY)!!.methods.first {
-                it.name == "createLocalController" && it.parameterTypes.size == 2
-            }
-            val c = create.invoke(null, context.applicationContext, provider)!!
+            // The overload with a Handler puts listener callbacks on the main thread.
+            val c = cls(CONTROLLER_FACTORY)!!
+                .getMethod("createLocalController", Context::class.java, Handler::class.java, providerCls)
+                .invoke(null, context.applicationContext, main, provider)!!
             addListener(c)
             Log.i(TAG, "Local controller created (token: ${if (sdkUserToken != null) "SDK" else "MusicKit JS"}); " +
                 "methods with 'olume': ${c.javaClass.methods.filter { it.name.contains("olume") }.map { it.name }}")
             controller = c
             c
         }.onFailure { Log.e(TAG, "createLocalController failed", it); lastError = "controller: ${it.rootMessage()}" }.getOrNull()
+    }
+
+    private fun releaseController() {
+        val c = controller ?: return
+        controller = null
+        main.post { runCatching { c.javaClass.getMethod("release").invoke(c) } }
     }
 
     private fun addListener(c: Any) {
@@ -214,14 +233,20 @@ class MusicKitSdkPlaybackHandler(
                 "onPlaybackStateChanged" -> {
                     val cur = (args?.getOrNull(2) as? Number)?.toInt()
                     Log.d(TAG, "+${since}ms onPlaybackStateChanged ${args?.getOrNull(1)} → $cur")
-                    if (cur == stateStopped && cachedDuration > 0 && cachedDuration - cachedPosition < 3000) {
+                    if (cur == stateStopped && audioSeen && cachedDuration > 0 && cachedDuration - cachedPosition < 3000) {
                         Log.d(TAG, "stopped at end → onFinished")
                         onFinished?.invoke()
                     }
                 }
                 "onItemEnded" -> {
-                    Log.d(TAG, "+${since}ms onItemEnded pos=${args?.getOrNull(2)}")
-                    onFinished?.invoke()
+                    // The SDK also reports the PREVIOUS track ending when a new
+                    // queue loads; only our own track, after its audio started,
+                    // is a finish.
+                    val endedId = args?.getOrNull(1)?.let(::storeId)
+                    val pos = (args?.getOrNull(2) as? Number)?.toLong() ?: -1
+                    val ours = endedId == currentId && audioSeen && pos > 0
+                    Log.d(TAG, "+${since}ms onItemEnded id=$endedId pos=$pos ${if (ours) "→ onFinished" else "(ignored)"}")
+                    if (ours) onFinished?.invoke()
                 }
                 "onPlaybackError" -> {
                     val e = args?.getOrNull(1) as? Throwable
@@ -237,14 +262,40 @@ class MusicKitSdkPlaybackHandler(
             .onFailure { Log.w(TAG, "addListener failed: ${it.rootMessage()}") }
     }
 
+    @Volatile private var audioSeen = false
+    @Volatile private var kicked = false
+
+    /** The catalog id of a PlayerQueueItem (or null). */
+    private fun storeId(queueItem: Any): String? = runCatching {
+        val media = queueItem.javaClass.getMethod("getItem").invoke(queueItem) ?: return@runCatching null
+        (media.javaClass.getMethod("getSubscriptionStoreId").invoke(media) as? String)?.takeIf { it.isNotBlank() }
+            ?: media.javaClass.getMethod("getPlaybackStoreId").invoke(media) as? String
+    }.getOrNull()
+
     private val tick = object : Runnable {
         override fun run() {
             if (!ticking) return
             controller?.let {
-                cachedPosition = (call("getCurrentPosition") as? Number)?.toLong()?.coerceAtLeast(0) ?: 0
-                cachedDuration = (call("getDuration") as? Number)?.toLong()?.coerceAtLeast(0) ?: 0
-                cachedPlaying = (call("getPlaybackState") as? Number)?.toInt() == statePlaying
-                if (cachedPosition > 0) startSignal?.complete("audio")
+                val item = call("getCurrentItem")?.let(::storeId)
+                val state = (call("getPlaybackState") as? Number)?.toInt()
+                if (item != null && item == currentId) {
+                    cachedPosition = (call("getCurrentPosition") as? Number)?.toLong()?.coerceAtLeast(0) ?: 0
+                    cachedDuration = (call("getDuration") as? Number)?.toLong()?.coerceAtLeast(0) ?: 0
+                    cachedPlaying = state == statePlaying
+                    if (cachedPosition > 0 && cachedPlaying) {
+                        audioSeen = true
+                        startSignal?.complete("audio")
+                    }
+                    // After stop() the SDK abandons audio focus and a later
+                    // prepare(play=true) can stay PAUSED without asking for it
+                    // again (seen on SDK 1.1.4). Count how often a play() is needed.
+                    val since = System.currentTimeMillis() - playCalledAt
+                    if (!audioSeen && !kicked && state == statePaused && since > 2500) {
+                        kicked = true
+                        Log.w(TAG, "KICK: '$item' still PAUSED ${since}ms after prepare(play=true); calling play()")
+                        call("play")
+                    }
+                }
             }
             main.postDelayed(this, 250)
         }
@@ -254,6 +305,63 @@ class MusicKitSdkPlaybackHandler(
         if (ticking) return
         ticking = true
         main.post(tick)
+    }
+
+    // ── adb trigger (debug only) ─────────────────────────────────────
+
+    init {
+        if (BuildConfig.DEBUG) registerAdbTrigger()
+    }
+
+    /**
+     * Lets the spike's measurements be scripted over adb:
+     * - `am broadcast -a com.parachord.spike.ENGINE --es engine sdk|js`
+     * - `am broadcast -a com.parachord.spike.PLAY --es tracks 'id|title|artist;id|title|artist'`
+     * - `am broadcast -a com.parachord.spike.STOREFRONT --es sf '<encoded id>'` (empty clears)
+     * - `am broadcast -a com.parachord.spike.STATUS`
+     * Each logs under the `MusicKitSdkSpike` tag.
+     */
+    private fun registerAdbTrigger() {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                when (intent.action) {
+                    "com.parachord.spike.ENGINE" -> {
+                        enabled = intent.getStringExtra("engine") == "sdk"
+                        Log.i(TAG, "ENGINE ${if (enabled) "sdk" else "js"}")
+                    }
+                    "com.parachord.spike.STOREFRONT" -> {
+                        prefs.edit().putString(KEY_STOREFRONT, intent.getStringExtra("sf")).apply()
+                        releaseController()
+                        Log.i(TAG, "STOREFRONT ${storefront ?: "none"}")
+                    }
+                    "com.parachord.spike.STATUS" -> Log.i(TAG, "STATUS ${status()}")
+                    "com.parachord.spike.PLAY" -> {
+                        val tracks = intent.getStringExtra("tracks").orEmpty().split(";").mapNotNull { row ->
+                            val f = row.split("|")
+                            if (f.size < 3 || f[0].isBlank()) null else TrackEntity(
+                                id = "spike-${f[0]}", title = f[1], artist = f[2],
+                                resolver = "applemusic", appleMusicId = f[0],
+                            )
+                        }
+                        Log.i(TAG, "PLAY ${tracks.size} track(s) engine=${if (enabled) "sdk" else "js"}")
+                        if (tracks.isNotEmpty()) {
+                            org.koin.java.KoinJavaComponent.get<com.parachord.android.playback.PlaybackController>(
+                                com.parachord.android.playback.PlaybackController::class.java,
+                            ).playQueue(tracks, 0, null, shuffle = false)
+                        }
+                    }
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction("com.parachord.spike.ENGINE")
+            addAction("com.parachord.spike.PLAY")
+            addAction("com.parachord.spike.STOREFRONT")
+            addAction("com.parachord.spike.STATUS")
+        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            context.applicationContext, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED,
+        )
     }
 
     // ── Handler ──────────────────────────────────────────────────────
@@ -270,6 +378,11 @@ class MusicKitSdkPlaybackHandler(
         startSignal = signal
         playCalledAt = System.currentTimeMillis()
         currentId = id
+        audioSeen = false
+        kicked = false
+        cachedPosition = 0
+        cachedDuration = 0
+        cachedPlaying = false
         val prepared = withContext(Dispatchers.Main) {
             val c = createController() ?: return@withContext false
             runCatching {
@@ -293,7 +406,7 @@ class MusicKitSdkPlaybackHandler(
         val outcome = withTimeoutOrNull(START_TIMEOUT_MS) { signal.await() } ?: "timeout"
         val ms = System.currentTimeMillis() - playCalledAt
         // The number the spike compares against MusicKit JS (see AppleMusicPlaybackHandler).
-        Log.i(TAG, "START_LATENCY engine=sdk id=$id outcome=$outcome ms=$ms title='${track.title}'")
+        Log.i(TAG, "START_LATENCY engine=sdk id=$id outcome=$outcome ms=$ms kicked=$kicked title='${track.title}'")
         if (outcome != "audio" && currentId == id) {
             throw EmbedPlaybackRefusedException("Apple Music", null, "SDK $outcome")
         }

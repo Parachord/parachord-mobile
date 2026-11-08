@@ -139,7 +139,9 @@ android {
             )
         }
         debug {
-            applicationIdSuffix = ".debug"
+            // SPIKE: `-PspikeApp` installs as com.parachord.android.spike, beside
+            // (not over) the regular debug build.
+            applicationIdSuffix = if (project.hasProperty("spikeApp")) ".spike" else ".debug"
             isDebuggable = true
         }
     }
