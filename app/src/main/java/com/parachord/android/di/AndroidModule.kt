@@ -527,15 +527,20 @@ val androidModule = module {
     single { com.parachord.shared.playback.BandcampEmbedResolver(get()) }
     singleOf(::BandcampPlaybackHandler)
     // One Apple Music catalog limiter app-wide (Apple throttles per token):
-    // MusicKit JS's catalog calls and the plugin host's catalog reads share it.
+    // MusicKit JS's catalog calls, the resolver's catalog search and the
+    // plugin host's catalog reads share it.
     single { com.parachord.shared.api.MusicKitCatalogLimiter() }
     single {
+        val settings = get<SettingsStore>()
         com.parachord.shared.api.AppleMusicCatalog(
             httpClient = get(),
-            developerToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
+            // The token MusicKit JS uses too: the one saved in Settings while
+            // it's current, else the build's.
+            developerToken = { settings.getAppleMusicDeveloperToken() },
             limiter = get(),
         )
     }
+    single { com.parachord.shared.resolver.AppleMusicCatalogResolver(get(), get()) }
     singleOf(::MusicKitWebBridge)
 
     // ── Scrobblers (as set) ──────────────────────────────────────────

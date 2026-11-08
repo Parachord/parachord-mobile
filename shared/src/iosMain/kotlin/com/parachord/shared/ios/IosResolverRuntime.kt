@@ -1,20 +1,14 @@
 package com.parachord.shared.ios
 
-import com.parachord.shared.api.MusicKitCatalogLimiter
 import com.parachord.shared.platform.Log
 
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.plugin.IosJsRuntime
+import com.parachord.shared.resolver.AppleMusicCatalogLookup
+import com.parachord.shared.resolver.AppleMusicCatalogResolver
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverRuntime
-import com.parachord.shared.resolver.selectBestMatch
 import com.parachord.shared.settings.SettingsStore
-import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.encodeURLParameter
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -33,8 +27,8 @@ import kotlinx.serialization.json.jsonPrimitive
  * fan-out, the Spotify branch (injected lambda), gating, re-score and ranking.
  * Spotify is NOT a dependency here — it lives entirely in the coordinator.
  *
- * These bodies were moved VERBATIM from `IosResolverCoordinator` (Task 3). The
- * logic is unchanged (they already pick their best match via [selectBestMatch]).
+ * These bodies were moved from `IosResolverCoordinator` (Task 3). Apple Music
+ * now resolves through the shared [AppleMusicCatalogResolver], as on Android.
  *
  * ## Concurrency through one JSC context
  *
@@ -50,18 +44,13 @@ import kotlinx.serialization.json.jsonPrimitive
 class IosResolverRuntime(
     private val jsRuntime: IosJsRuntime,
     private val settingsStore: SettingsStore,
-    private val httpClient: HttpClient,
-    private val appleMusicDeveloperToken: String,
     private val trackDao: TrackDao,
     /**
-     * Throttle for the Apple Music catalog search (#241) — the same class and
-     * policy Android uses for its MusicKit bridge calls: at most 3 in flight,
-     * 150 ms between starts, and a 5-minute cooldown after 3 consecutive
-     * rate-limits. Unthrottled, a list-resolve burst tripped Apple's catalog
-     * throttle, the Apple Music source dropped out, and Spotify won even when
-     * Apple Music ranked higher (#232).
+     * The Apple Music catalog search, shared with Android: one throttled
+     * catalog GET with the developer token (the app-wide
+     * `MusicKitCatalogLimiter`, #241) and the best title + artist match.
      */
-    private val catalogLimiter: MusicKitCatalogLimiter = MusicKitCatalogLimiter(),
+    private val appleMusicResolver: AppleMusicCatalogResolver,
 ) : ResolverRuntime {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -80,12 +69,8 @@ class IosResolverRuntime(
         targetArtist: String?,
         album: String?,
     ): ResolvedSource? = when (resolverId) {
-        // Blank dev token → skip (parity with the pre-#210 fan-out's
-        // `amAvailable = … && appleMusicDeveloperToken.isNotBlank()` gate, and
-        // with resolveSingle's gate) — avoids a wasted empty-Bearer catalog call.
-        "applemusic" -> if (appleMusicDeveloperToken.isNotBlank()) {
-            resolveAppleMusicNative(targetArtist ?: "", targetTitle ?: "")
-        } else null
+        // No developer token → the catalog makes no request.
+        "applemusic" -> resolveAppleMusicNative(query, targetTitle, targetArtist)
         "localfiles" -> resolveLocalFileNative(targetTitle, targetArtist)
         else -> null
     }
@@ -106,9 +91,7 @@ class IosResolverRuntime(
         targetMbid: String?,
     ): ResolvedSource? =
         if (resolverId == "applemusic") {
-            if (appleMusicDeveloperToken.isNotBlank()) {
-                resolveAppleMusicNative(targetArtist ?: "", targetTitle ?: "", targetIsrc)
-            } else null
+            resolveAppleMusicNative(query, targetTitle, targetArtist, targetIsrc)
         } else {
             resolveNative(resolverId, query, targetTitle, targetArtist, album)
         }
@@ -243,159 +226,27 @@ class IosResolverRuntime(
     }
 
     /**
-     * Native Apple Music catalog resolution (Android parity). Searches the
-     * catalog `songs` endpoint with the dev-token Bearer — the same catalog
-     * MusicKit queries — and returns the best title+artist match as a routable
-     * `applemusic` source (appleMusicId + artwork + 30s preview). The placeholder
-     * 0.9 confidence is overridden by [com.parachord.shared.resolver.scoreConfidence]
-     * in the coordinator's re-score, so a wrong-song catalog hit is still dropped
-     * by the 0.60 floor.
+     * Native Apple Music resolution through the shared catalog search (Android
+     * runs the same [AppleMusicCatalogResolver]). Only a found song is a
+     * source; its placeholder 0.9 confidence is replaced by `scoreConfidence`
+     * in the coordinator's re-score, so a wrong-song hit is still dropped by
+     * the 0.60 floor. iOS has no iTunes fallback: a catalog that can't be
+     * reached leaves the track to the other resolvers.
      */
-    /**
-     * GET the Apple Music catalog through [catalogLimiter], with ONE spaced retry
-     * on a transient failure (429 / 5xx / network blip / blank body). Returns the
-     * body on 2xx, or null when it can't get one (#232, #241).
-     *
-     * Every attempt goes through the limiter, so a list resolve is spaced out
-     * instead of bursting. A 429 counts as a strike; a 2xx resets the count;
-     * three strikes in a row open a 5-minute cooldown in which this returns null
-     * WITHOUT calling Apple — continuing to hit a throttled catalog only extends
-     * the throttle. Other errors are not rate-limit signals and don't count.
-     */
-    private suspend fun fetchCatalog(url: String): String? {
-        repeat(2) { attempt ->
-            val outcome = catalogLimiter.runThrottled { fetchCatalogOnce(url) }
-            if (outcome == null) {
-                Log.d("IosResolverRuntime", "AM catalog limiter cooling down — Apple Music source skipped (#241)")
-                return null
-            }
-            when (outcome) {
-                is CatalogAttempt.Ok -> {
-                    catalogLimiter.reportSuccess()
-                    return outcome.body
-                }
-                CatalogAttempt.RateLimited -> catalogLimiter.reportRateLimit()
-                CatalogAttempt.Transient -> {}
-                is CatalogAttempt.Failed -> {
-                    Log.w("IosResolverRuntime", "AM catalog returned ${outcome.status} — Apple Music source dropped for this resolve")
-                    return null
-                }
-            }
-            if (attempt == 0) delay(600)
-        }
-        Log.w("IosResolverRuntime", "AM catalog still failing after a retry — Apple Music source dropped for this resolve (#232)")
-        return null
-    }
-
-    /** One catalog GET, classified for [fetchCatalog]'s retry + limiter bookkeeping. */
-    private suspend fun fetchCatalogOnce(url: String): CatalogAttempt = try {
-        val resp = httpClient.get(url) { header("Authorization", "Bearer $appleMusicDeveloperToken") }
-        val status = resp.status.value
-        val text = resp.bodyAsText()
-        when {
-            status in 200..299 && text.isNotBlank() -> CatalogAttempt.Ok(text)
-            status == 429 -> CatalogAttempt.RateLimited
-            status >= 500 || text.isBlank() -> CatalogAttempt.Transient
-            else -> CatalogAttempt.Failed(status)
-        }
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        CatalogAttempt.Transient
-    }
-
-    private sealed interface CatalogAttempt {
-        data class Ok(val body: String) : CatalogAttempt
-        data object RateLimited : CatalogAttempt
-        data object Transient : CatalogAttempt
-        data class Failed(val status: Int) : CatalogAttempt
-    }
-
-    /** One-shot guard for the no-MUT log below. A duplicate log from a race is
-     *  harmless; the point is to not emit one per track. */
-    private var loggedMutGate = false
-
     private suspend fun resolveAppleMusicNative(
-        artist: String,
-        title: String,
+        query: String,
+        targetTitle: String?,
+        targetArtist: String?,
         targetIsrc: String? = null,
-    ): ResolvedSource? {
-        // Don't offer Apple Music unless the user has connected it. The catalog
-        // search below needs only the developer token, so without this gate AM
-        // resolves for EVERY user — including Spotify-only users — and tapping the
-        // resulting badge routes playback to the Apple Music login screen (#327).
-        // Mirrors the Spotify token gate on the resolver's native Spotify branch.
-        if (settingsStore.getAppleMusicUserToken().isNullOrBlank()) {
-            // Say so ONCE per process. Silently returning null here means Apple
-            // Music resolves nothing for every track with no trace anywhere,
-            // which is exactly how this became a mystery to debug. Once, not
-            // per-track: this runs for every row in every list.
-            if (!loggedMutGate) {
-                loggedMutGate = true
-                Log.w(
-                    "IosResolverRuntime",
-                    "Apple Music resolution skipped: no Music User Token. " +
-                        "Connect Apple Music in Settings → Plug-ins.",
-                )
+    ): ResolvedSource? =
+        when (val result = appleMusicResolver.lookup(query, targetTitle, targetArtist, targetIsrc)) {
+            is AppleMusicCatalogLookup.Found -> result.source
+            AppleMusicCatalogLookup.Unavailable -> {
+                Log.d("IosResolverRuntime", "Apple Music catalog unavailable — Apple Music source skipped")
+                null
             }
-            return null
+            else -> null
         }
-        val storefront = settingsStore.getAppleMusicStorefront()?.ifBlank { null } ?: "us"
-        val term = "$artist $title".encodeURLParameter()
-        val url = "https://api.music.apple.com/v1/catalog/$storefront/search?types=songs&limit=10&term=$term"
-        // Single spaced retry on a TRANSIENT failure (#232). The iOS MusicKit
-        // catalog is unthrottled (no per-request limiter yet — see CLAUDE.md), so
-        // resolving a list occasionally trips a 429; when this returns null the AM
-        // source drops out and the reliable Spotify hint wins over a
-        // higher-priority Apple Music — the "occasionally picks Spotify over AM"
-        // bug. IosTrackResolverCache already caps concurrency at 3, so one 600ms-
-        // spaced retry recovers a transient blip without meaningfully adding load;
-        // a sustained throttle still falls through to Spotify (correct).
-        val body = fetchCatalog(url) ?: return null
-
-        val data = runCatching {
-            json.parseToJsonElement(body).jsonObject["results"]?.jsonObject
-                ?.get("songs")?.jsonObject?.get("data")?.jsonArray
-        }.getOrNull() ?: return null
-        if (data.isEmpty()) return null
-
-        // Best title+artist match via the shared bidirectional matcher (same gate
-        // scoreConfidence uses, so the pick scores 0.95 not 0.50), falling back to
-        // the first catalog hit. Shared with Android's AM tiers — one matcher, no
-        // drift. Bidirectional handles the "THE Tallest Man on Earth" case where
-        // the catalog string is a substring of the target.
-        fun attr(el: kotlinx.serialization.json.JsonElement, k: String) =
-            el.jsonObject["attributes"]?.jsonObject?.get(k)?.jsonPrimitive?.contentOrNull
-        val best = selectBestMatch(
-            data, title, artist,
-            { attr(it, "name") },
-            { attr(it, "artistName") },
-            // Exact-ISRC hit wins before name matching (#402).
-            targetIsrc = targetIsrc,
-            isrcOf = { attr(it, "isrc") },
-        ) ?: data.first()
-
-        val attrs = best.jsonObject["attributes"]?.jsonObject ?: return null
-        val id = best.jsonObject["id"]?.jsonPrimitive?.contentOrNull ?: return null
-        val artwork = attrs["artwork"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
-            ?.replace("{w}", "600")?.replace("{h}", "600")?.replace("{f}", "jpg")
-        val preview = attrs["previews"]?.jsonArray?.firstOrNull()?.jsonObject
-            ?.get("url")?.jsonPrimitive?.contentOrNull
-
-        return ResolvedSource(
-            url = preview ?: "",
-            sourceType = "applemusic",
-            resolver = "applemusic",
-            appleMusicId = id,
-            // Apple Music catalog attributes carry the ISRC — supply it for the
-            // MBID fallback.
-            isrc = com.parachord.shared.resolver.validateIsrc(attrs["isrc"]?.jsonPrimitive?.contentOrNull),
-            confidence = 0.9, // overridden by scoreConfidence in the coordinator
-            matchedTitle = attrs["name"]?.jsonPrimitive?.contentOrNull,
-            matchedArtist = attrs["artistName"]?.jsonPrimitive?.contentOrNull,
-            artworkUrl = artwork,
-        )
-    }
 
     /** The plugin's model `setting` object, read SYNCHRONOUSLY from the loaded
      *  `.axe` (a property read, no Promise) — `{type, default, options, fallbackOptions}`. */

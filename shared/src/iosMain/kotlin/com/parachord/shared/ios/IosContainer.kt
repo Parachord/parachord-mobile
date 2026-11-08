@@ -2873,17 +2873,15 @@ class IosContainer private constructor() {
         IosResolverRuntime(
             jsRuntime = pluginJsRuntime,
             settingsStore = settingsStore,
-            httpClient = httpClient,
-            appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
             trackDao = trackDao,
-            catalogLimiter = appleMusicCatalogLimiter,
+            appleMusicResolver = com.parachord.shared.resolver.AppleMusicCatalogResolver(appleMusicCatalog, settingsStore),
         )
     }
 
     /**
-     * One Apple Music catalog limiter app-wide (Apple throttles per token): the
-     * native catalog resolve above and the plugin host's catalog reads
-     * ([appleMusicCatalog]) share it, as on Android.
+     * One Apple Music catalog limiter app-wide (Apple throttles per token),
+     * behind the one [appleMusicCatalog] that the native resolve above and the
+     * plugin host's catalog reads both use, as on Android.
      */
     private val appleMusicCatalogLimiter: com.parachord.shared.api.MusicKitCatalogLimiter by lazy {
         com.parachord.shared.api.MusicKitCatalogLimiter()

@@ -4,8 +4,9 @@ import com.parachord.shared.platform.Log
 import com.parachord.android.auth.OAuthManager
 import com.parachord.android.data.db.dao.TrackDao
 import com.parachord.android.data.store.SettingsStore
-import com.parachord.android.playback.handlers.MusicKitWebBridge
 import com.parachord.android.plugin.PluginManager
+import com.parachord.shared.resolver.AppleMusicCatalogLookup
+import com.parachord.shared.resolver.AppleMusicCatalogResolver
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverRuntime
 import com.parachord.shared.resolver.selectBestMatch
@@ -19,8 +20,9 @@ import okhttp3.Request
 
 /**
  * Android [ResolverRuntime] (#210, D2). Owns the platform-specific native
- * non-Spotify resolvers (Apple Music via MusicKit + iTunes, SoundCloud via the
- * API, local files via the DAO) and `.axe` execution via [PluginManager.resolve].
+ * non-Spotify resolvers (Apple Music via the shared catalog search, then the
+ * plugin / iTunes; SoundCloud via the API; local files via the DAO) and `.axe`
+ * execution via [PluginManager.resolve].
  *
  * The shared [com.parachord.shared.resolver.ResolverCoordinator] owns the
  * fan-out, the Spotify branch (injected lambda), gating, re-score and ranking.
@@ -34,7 +36,7 @@ class AndroidResolverRuntime constructor(
     private val oAuthManager: OAuthManager,
     private val okHttpClient: OkHttpClient,
     private val json: Json,
-    private val musicKitBridge: MusicKitWebBridge,
+    private val appleMusicResolver: AppleMusicCatalogResolver,
     private val trackDao: TrackDao,
     private val pluginManager: PluginManager,
 ) : ResolverRuntime {
@@ -53,8 +55,8 @@ class AndroidResolverRuntime constructor(
         targetArtist: String?,
         album: String?,
     ): ResolvedSource? = when (resolverId) {
-        // Android's native AM (MusicKit+iTunes), SoundCloud, and local-file
-        // resolvers don't take album — parity with the pre-#210 fan-out.
+        // Android's native AM, SoundCloud, and local-file resolvers don't take
+        // album — parity with the pre-#210 fan-out.
         "applemusic" -> resolveAppleMusic(query, targetTitle, targetArtist)
         "soundcloud" -> resolveSoundCloud(query)
         "localfiles" -> resolveLocalFile(targetTitle, targetArtist)
@@ -62,10 +64,10 @@ class AndroidResolverRuntime constructor(
     }
 
     /**
-     * Identity-aware dispatch (#402): Apple Music's MusicKit tier picks among
+     * Identity-aware dispatch (#402): Apple Music's catalog tier picks among
      * several catalog hits, so it gets the target ISRC to prefer an exact
-     * recording before name matching (desktop `findBestMatch` tier 2; MusicKit
-     * hits carry an ISRC, not an MBID). Everything else ignores the identity.
+     * recording before name matching (desktop `findBestMatch` tier 2; catalog
+     * songs carry an ISRC, not an MBID). Everything else ignores the identity.
      */
     override suspend fun resolveNative(
         resolverId: String,
@@ -96,63 +98,27 @@ class AndroidResolverRuntime constructor(
         targetArtist: String? = null,
         targetIsrc: String? = null,
     ): ResolvedSource? {
-        // Don't offer Apple Music as a source unless the user has connected it.
-        // Tier 2 below is the no-auth iTunes Search API, so without this gate AM
-        // resolves for EVERY user — including Spotify-only users — and tapping the
-        // resulting badge routes playback to the Apple Music login screen (#327).
-        // Mirrors the Spotify token gate in ResolverManager.verifySpotifyTrack.
-        if (settingsStore.getAppleMusicUserToken().isNullOrBlank()) return null
-        // Tier 1: MusicKit JS (requires developer token + auth)
-        if (musicKitBridge.configured.value) {
-            try {
-                val results = musicKitBridge.search(query, limit = 5)
-                // Pick the best title+artist match (desktop's matchFromResults,
-                // via the shared bidirectional matcher that scoreConfidence uses)
-                // instead of blindly taking the first catalog hit — a wrong first
-                // result would score 0.50 and get floored out, leaving NO Apple
-                // Music source even when a correct match sat lower in the list.
-                val best = if (targetTitle != null && targetArtist != null) {
-                    selectBestMatch(
-                        results, targetTitle, targetArtist, { it.title }, { it.artist },
-                        targetIsrc = targetIsrc,
-                        isrcOf = { it.isrc },
-                    ) ?: results.firstOrNull()
-                } else {
-                    results.firstOrNull()
-                }
-                if (best != null) {
-                    Log.d(TAG, "Apple Music (MusicKit) matched '${best.title}' by ${best.artist}")
-                    return ResolvedSource(
-                        url = best.appleMusicUrl ?: "applemusic:song:${best.id}",
-                        sourceType = "applemusic",
-                        resolver = "applemusic",
-                        appleMusicId = best.id,
-                        // MusicKit catalog attributes carry the ISRC (iTunes-Search
-                        // Tier 2 below does not) — supply it for the MBID fallback,
-                        // validated/normalized so a malformed value never stores (#217).
-                        isrc = com.parachord.shared.resolver.validateIsrc(best.isrc),
-                        confidence = 0.9, // Default — overridden by scoreConfidence() in resolve()
-                        matchedTitle = best.title,
-                        matchedArtist = best.artist,
-                        // Carry MusicKit's artwork URL so ImageEnrichmentService
-                        // persists it onto the track row instead of re-asking
-                        // the metadata cascade for art it could've had for free.
-                        artworkUrl = best.artworkUrl,
-                    )
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "MusicKit search failed, falling back to iTunes: ${e.message}")
-            }
+        // Tier 1: the Apple Music catalog, through the shared search iOS runs
+        // too. It also holds the connection gate: no Music User Token, no
+        // Apple Music source on any tier (#327) — the tiers below would
+        // otherwise resolve it for every user, Spotify-only ones included,
+        // and a tap would route to the Apple Music sign-in. A catalog answer
+        // is final, as in the plugin host's `appleMusicSearchWithMusicKit`;
+        // only an unreachable catalog (no developer token, the limiter
+        // cooling down, a failed request) falls through.
+        when (val result = appleMusicResolver.lookup(query, targetTitle, targetArtist, targetIsrc)) {
+            is AppleMusicCatalogLookup.Found -> return result.source
+            AppleMusicCatalogLookup.NotConnected, AppleMusicCatalogLookup.NoMatch -> return null
+            AppleMusicCatalogLookup.Unavailable ->
+                Log.d(TAG, "Apple Music catalog unavailable, trying the plugin for '$query'")
         }
 
         // Tier 2: the Apple Music plugin's own resolve, through the resolver
         // registry — the same .axe desktop runs. Its search asks the host's
-        // `appleMusicSearchWithMusicKit` (bootstrap.html), which searches
-        // Apple's catalog with the developer token and falls back to iTunes
-        // itself. MusicKit is usually still configuring when Home resolves
-        // its tracks at launch, and iTunes Search lags new releases, so this
-        // tier is what finds a just-released song ("I Know!" by Swapmeet).
-        // The native iTunes search stays only for when the plugin isn't loaded.
+        // `appleMusicSearchWithMusicKit` (bootstrap.html), which tries the
+        // same catalog and falls back to iTunes itself when it can't be
+        // reached. The native iTunes search stays only for when the plugin
+        // isn't loaded.
         // Wait for the plugins to load first: at launch they finish a few
         // seconds after Home starts resolving, and checking early skipped
         // the plugin for exactly the tracks this tier is for.
@@ -186,8 +152,8 @@ class AndroidResolverRuntime constructor(
 
                 val body = response.body?.string() ?: return@withContext null
                 val result = json.decodeFromString<ITunesSearchResponse>(body)
-                // Best title+artist match (see resolveAppleMusic Tier 1) rather
-                // than the first iTunes hit.
+                // Best title+artist match (the shared matcher) rather than the
+                // first iTunes hit.
                 val best = (
                     if (targetTitle != null && targetArtist != null) {
                         selectBestMatch(result.results, targetTitle, targetArtist, { it.trackName }, { it.artistName })

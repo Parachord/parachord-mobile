@@ -82,45 +82,6 @@
     }
 
     /**
-     * Search the Apple Music catalog for songs.
-     * Returns JSON: { success: bool, results: [...], error?: string }
-     */
-    async function search(query, limit, storefront) {
-        try {
-            if (!music) return JSON.stringify({ success: false, results: [], error: 'Not configured' });
-            const sf = storefront || 'us';
-            const l = limit || 10;
-            const response = await music.api.music(
-                '/v1/catalog/' + sf + '/search',
-                { term: query, types: 'songs', limit: l }
-            );
-            const songs = (response.data.results.songs && response.data.results.songs.data) || [];
-            const results = songs.map(function(song) {
-                var artwork = song.attributes.artwork;
-                var artworkUrl = null;
-                if (artwork && artwork.url) {
-                    artworkUrl = artwork.url.replace('{w}', '600').replace('{h}', '600');
-                }
-                return {
-                    id: song.id,
-                    title: song.attributes.name,
-                    artist: song.attributes.artistName,
-                    album: song.attributes.albumName || null,
-                    duration: song.attributes.durationInMillis || null,
-                    artworkUrl: artworkUrl,
-                    isrc: song.attributes.isrc || null,
-                    previewUrl: (song.attributes.previews && song.attributes.previews.length > 0)
-                        ? song.attributes.previews[0].url : null,
-                    appleMusicUrl: song.attributes.url || null,
-                };
-            });
-            return JSON.stringify({ success: true, results: results });
-        } catch (e) {
-            return JSON.stringify({ success: false, results: [], error: e.message || String(e) });
-        }
-    }
-
-    /**
      * Get playlist tracks by Apple Music playlist ID.
      * Returns JSON: { success: bool, name: string, tracks: [...], error?: string }
      */

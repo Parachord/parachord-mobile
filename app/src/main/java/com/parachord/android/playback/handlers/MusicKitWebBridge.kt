@@ -632,37 +632,6 @@ class MusicKitWebBridge constructor(
         }
     }
 
-    // ── Search ────────────────────────────────────────────────────
-
-    /**
-     * Search the Apple Music catalog for songs.
-     * Returns a list of search results, or empty on failure.
-     */
-    suspend fun search(query: String, limit: Int = 10): List<AppleMusicSearchResult> {
-        if (!awaitMusicKitReady()) return emptyList()
-        val storefront = settingsStore.getAppleMusicStorefront() ?: "us"
-        return catalogLimiter.runThrottled {
-            val result = evaluate("search(atob('${b64(query)}'), $limit, atob('${b64(storefront)}'))")
-                ?: return@runThrottled emptyList()
-            try {
-                val parsed = json.decodeFromString<MusicKitSearchResponse>(cleanJsString(result))
-                if (!parsed.success) {
-                    if (catalogLimiter.looksLikeRateLimit(parsed.error)) {
-                        catalogLimiter.reportRateLimit()
-                    }
-                    Log.w(TAG, "Search failed: ${parsed.error}")
-                    emptyList()
-                } else {
-                    catalogLimiter.reportSuccess()
-                    parsed.results
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse search response: $result", e)
-                emptyList()
-            }
-        } ?: emptyList()
-    }
-
     // ── Playlist Fetch ─────────────────────────────────────────────
 
     /**
@@ -1072,13 +1041,6 @@ class MusicKitWebBridge constructor(
         val success: Boolean = false,
         val authorized: Boolean = false,
         val musicUserToken: String? = null,
-        val error: String? = null,
-    )
-
-    @Serializable
-    data class MusicKitSearchResponse(
-        val success: Boolean = false,
-        val results: List<AppleMusicSearchResult> = emptyList(),
         val error: String? = null,
     )
 
