@@ -3991,7 +3991,7 @@ class SyncEngine constructor(
         // Spotify-specific scalars stay write-through (per Decision 5).
         // For other providers, sync_playlist_link.snapshotId is the
         // source of truth and gets refreshed via the upsert below.
-        // Preserve locally-generated mosaic art (`file://...filesDir/playlist_mosaics/`)
+        // Preserve locally-generated mosaic art (`file:` URLs into `playlist_mosaics/`)
         // from being overwritten by the provider's stock playlist art. Mosaics are
         // built from album-art tiles in ImageEnrichmentService and are the canonical
         // visual identity for playlists in Parachord. The provider's art gets used
@@ -4616,14 +4616,16 @@ class SyncEngine constructor(
     /**
      * Don't overwrite a locally-generated mosaic with the provider's
      * stock playlist art. Mosaics live under `filesDir/playlist_mosaics/`
-     * and are written as `file://...` URIs by [com.parachord.android.data.metadata.ImageEnrichmentService.enrichPlaylistArt].
+     * and are written as `file:` URIs (`file:/…` on Android, `file:///…` on
+     * iOS) by [com.parachord.shared.metadata.ImageEnrichmentService.enrichPlaylistArt].
      * Returns:
-     *  - the existing mosaic when it's a `file://` path (don't overwrite)
+     *  - the existing mosaic when it's a local `file:` path (don't overwrite)
      *  - the remote URL when there's no existing artwork
      *  - the existing remote URL when both are remote (no-op churn)
      */
     private fun preserveLocalMosaic(existing: String?, remote: String?): String? {
-        if (existing != null && existing.startsWith("file://")) return existing
+        // `file:/…` (Android) or `file:///…` (iOS).
+        if (com.parachord.shared.metadata.PlaylistMosaicPaths.isLocalFile(existing)) return existing
         return remote ?: existing
     }
 

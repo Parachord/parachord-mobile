@@ -2074,8 +2074,24 @@ class IosContainer private constructor() {
             // 2×2 album-art mosaic for playlists (ListenBrainz weeklies, hosted
             // XSPF, etc.) — UIGraphics composite → file:// JPEG (Android parity).
             composeMosaic = { playlistId, urls -> mosaicComposer.compose(playlistId, urls) },
+            // The data container can move across launches/updates; the launch
+            // repair re-points stored mosaics at today's directory.
+            mosaicDir = { mosaicComposer.mosaicDir() },
+            fileExists = { path -> mosaicComposer.fileExists(path) },
         )
     }
+
+    /**
+     * The URL to load a stored playlist cover from. A `file://` mosaic whose
+     * file is gone (the app's data container moved) maps to the same file in
+     * today's mosaic directory; anything else comes back unchanged. For
+     * readers that may run before the launch repair, such as a cover drawn
+     * at startup or CarPlay.
+     */
+    fun playlistArtworkUrl(stored: String): String =
+        com.parachord.shared.metadata.PlaylistMosaicPaths.resolveForRead(
+            stored, mosaicComposer.mosaicDir(), mosaicComposer::fileExists,
+        )
 
     /** Retries a cover or artist image that failed to load and patches every
      *  stored copy of the dead URL (library rows + curated list caches). */
@@ -2103,11 +2119,15 @@ class IosContainer private constructor() {
     suspend fun reportBrokenArtistImage(url: String, artist: String): String? =
         try { brokenArtRetry.reportArtistImage(url, artist) } catch (e: Exception) { null }
 
-    /** Regenerate the 2×2 mosaic for every playlist with missing/stale art
-     *  (Android's ParachordApplication startup hook). Call fire-and-forget on
-     *  launch. Guarded: bridged suspend must not throw across the ObjC bridge. */
+    /** Bring every playlist's cover up to date with its tracks, then keep it
+     *  so: each later track write re-checks that playlist (Android's
+     *  ParachordApplication startup hook). Call fire-and-forget on launch.
+     *  Guarded: bridged suspend must not throw across the ObjC bridge. */
     suspend fun regeneratePlaylistMosaics() {
-        try { imageEnrichmentService.regenerateAllPlaylistMosaics() } catch (_: Exception) {}
+        try {
+            imageEnrichmentService.watchTrackChanges()
+            imageEnrichmentService.regenerateAllPlaylistMosaics()
+        } catch (_: Exception) {}
     }
 
     /** Enrich ONE playlist's mosaic art (Android's enrichPlaylistArtIfNeeded) —

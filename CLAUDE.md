@@ -384,6 +384,16 @@ The ListenBrainz mapper is the **only** MBID source for un-enriched tracks, and 
 
 This means local files without embedded art get artwork pulled from metadata providers, matching how streaming-resolved tracks get their art.
 
+### Playlist Mosaics — Follow the Tracks
+
+A playlist's cover is a 2x2 mosaic of its first four distinct track covers (`PlaylistMosaicPaths.covers`; one cover is used as-is), composed by the platform (`composeMosaicAndroid`, iOS `IosMosaicComposer`) and stored in `playlists.artworkUrl` as a local file URL: `file:/…` on Android (`File.toURI()`), `file:///…` on iOS. Both forms count as a local mosaic everywhere (`PlaylistMosaicPaths.isLocalFile`); a check that only accepts `file://` makes every Android mosaic look missing.
+
+- **The URL carries a fingerprint of its covers**, `?v=<coverSignature>` (FNV-1a, same on every platform). `ImageEnrichmentService.refreshPlaylistMosaic` compares it with the playlist's covers now, from the database only, and rebuilds only on a mismatch. A new `v` also makes Coil and iOS's `PCImageStore` (keyed on the URL) load the rewritten file.
+- **When it runs:** at launch for every playlist (`regenerateAllPlaylistMosaics`), and after any write to a playlist's tracks while the app runs: `PlaylistTrackDao.changes` (sync pulls, edits, reorders, hosted XSPF updates, cover backfills) → `watchTrackChanges`, 2 s after that playlist's last write. Desktop builds its 2x2 from the current tracks each session and drops it on save (`getPlaylistCovers`); this is the stored-file equivalent.
+- **Stock provider art is replaced** by the mosaic (Spotify's `mosaic.scdn.co`, Apple Music's `AM.PDCXS11.jpg`). A rebuild is stored with a compare-and-set (`replaceArtworkById`) against the art the check saw, so a cover written meanwhile is never overwritten. `updateArtworkById` only writes over blank art, so it can't replace anything. A Spotify pull keeps a local mosaic (`SyncEngine.preserveLocalMosaic`).
+- **iOS container moves.** iOS can move the app's data container, which leaves a stored absolute path pointing at nothing. The check re-points it at the same file name in today's mosaic directory (`PlaylistMosaicPaths.repair`, via the `mosaicDir` / `fileExists` lambdas), and readers that can run first use `IosContainer.playlistArtworkUrl(stored:)`. See `iosApp/AGENTS.md`.
+- **Cheap when nothing changed:** one query per playlist and no network. A rebuild fetches up to 4 images; at most 4 run at once.
+
 ### Playlist Sync — Duplicate Prevention
 
 Pushing local playlists to Spotify is a prime source of duplicates: `Playlist.spotifyId` is the only link between a local row and its remote, and any save path that forgets to forward it produces a fresh remote duplicate on the next sync. Mirrors desktop's `sync_playlist_links` map and three-layer dedup (desktop commits `40bb2cbf`, `214333ed`, `745e2db8`).
@@ -1137,7 +1147,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Playback routing | `playback/PlaybackRouter.kt`, `PlaybackController.kt` |
 | Metadata cascade | `data/metadata/MetadataService.kt`, `*Provider.kt` |
 | MBID enrichment | `shared/.../metadata/MbidEnrichmentService.kt` (typealias shim in `data/metadata/`), `shared/.../api/ListenBrainzClient.kt` (`mbidMapperLookup`) |
-| Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda |
+| Image enrichment | `shared/.../metadata/ImageEnrichmentService.kt` (typealias shim in `data/metadata/`); platform-specific 2x2 mosaic via `composeMosaicAndroid` lambda; mosaics follow their tracks and survive iOS container moves (`PlaylistMosaicPaths`, see "Playlist Mosaics — Follow the Tracks") |
 | Scrobbling | `shared/.../playback/scrobbler/{ScrobbleManager,Scrobbler,ListenBrainzScrobbler,LastFmScrobbler,LibreFmScrobbler,LbSourceEnrichment,ScrobblePluginDispatch}.kt` (KMP-shared, #193; app-side `playback/scrobbler/*` are typealias shims). Android JS dispatch: `playback/JsScrobblePluginDispatcher.kt`. Last.fm signing: `shared/.../api/LastFmSigning.kt` |
 | Local file scanning | `data/scanner/MediaScanner.kt` |
 | Playback handlers | `playback/handlers/SpotifyPlaybackHandler.kt`, `AppleMusicPlaybackHandler.kt`, `SoundCloudPlaybackHandler.kt` + `SoundCloudWidgetBridge.kt` (`assets/js/soundcloud-widget.html`), `BandcampPlaybackHandler.kt` + `BandcampEmbedBridge.kt` (`assets/js/bandcamp-embed-control.js`) |

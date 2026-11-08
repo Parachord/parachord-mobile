@@ -258,10 +258,11 @@ fun PlaylistsScreen(
                         // Trigger mosaic generation when artwork is missing OR when
                         // the existing artwork is a remote URL (e.g. provider stock
                         // art that overwrote a mosaic before the preserveLocalMosaic
-                        // guard landed). Only `file://` URLs (locally-generated
-                        // mosaics) are treated as canonical and skipped.
+                        // guard landed). Only local files (locally-generated
+                        // mosaics, stored as `file:/…`) are treated as
+                        // canonical and skipped.
                         val art = playlist.artworkUrl
-                        if (art.isNullOrBlank() || !art.startsWith("file://")) {
+                        if (art.isNullOrBlank() || !com.parachord.shared.metadata.PlaylistMosaicPaths.isLocalFile(art)) {
                             LaunchedEffect(playlist.id) {
                                 viewModel.enrichPlaylistArtIfNeeded(playlist.id)
                             }
