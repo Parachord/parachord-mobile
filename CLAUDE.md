@@ -137,7 +137,7 @@ The car UIs show one tree and follow one set of rules, all in `shared/.../car/` 
 - Spotify never wakes the Spotify app, shows no device picker and uses only this phone's own device; if it isn't listed the source fails at once. A track only Spotify could play stops with `OPEN_SPOTIFY_ON_PHONE`.
 - After 3 unplayable tracks in a row (in the car, with Parachord not in front on the phone) playback stops on the last one with `OPEN_PARACHORD_ON_PHONE`, instead of skipping to the end of the queue.
 
-**Entitlement.** The CarPlay audio entitlement (`com.apple.developer.carplay-audio`) is in `ParachordSimulator.entitlements`, applied only through `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device and App Store builds can't carry it until Apple grants it to the App ID, so shipping CarPlay needs that grant first; never add it to `Parachord.entitlements` before then.
+**Entitlement.** Apple granted the CarPlay audio entitlement (`com.apple.developer.carplay-audio`), and it's enabled on the `com.parachord.ios` App ID. It's in `Parachord.entitlements`, so simulator, device and App Store builds all carry it. A device build fails to sign if the App ID loses the capability, and a new App ID (another bundle id) needs it enabled in the developer portal first.
 
 **Spinoff's icon is the fork** on both platforms and in both car UIs (Android `ic_auto_spinoff.xml`, iOS `SpinoffFork` / `SpinoffForkActive`); sparkles is Shuffleupagus.
 

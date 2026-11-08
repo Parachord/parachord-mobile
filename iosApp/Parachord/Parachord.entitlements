@@ -7,5 +7,7 @@
 		<string>applinks:parachord.com</string>
 		<string>applinks:go.parachord.com</string>
 	</array>
+	<key>com.apple.developer.carplay-audio</key>
+	<true/>
 </dict>
 </plist>

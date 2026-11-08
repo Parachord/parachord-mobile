@@ -1273,11 +1273,13 @@ only draws it.
   remembered for the session; a cover that failed offline or timed out is tried
   again next time. Playlist mosaics are absolute `file://` paths that go stale
   when the app container moves; a missing file is a miss, not an error.
-- **Entitlement, simulator only.** `com.apple.developer.carplay-audio` is in
-  `ParachordSimulator.entitlements`, used only through
-  `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device builds keep
-  `Parachord.entitlements` and keep signing: never add the CarPlay entitlement
-  there until Apple grants it to the App ID.
+- **Entitlement.** `com.apple.developer.carplay-audio` is in
+  `Parachord.entitlements`, for simulator and device builds alike. Apple
+  granted it, and it's enabled on the `com.parachord.ios` App ID (developer
+  portal → Identifiers → Additional Capabilities → CarPlay Audio App).
+  Automatic signing puts it in the provisioning profile; if a device build
+  says the profile lacks it, refresh the profiles (Xcode → Settings → Accounts
+  → Download Manual Profiles). The share extension doesn't need it.
 - **Opening the CarPlay simulator.** Run the app in the iOS simulator, then in
   Simulator choose I/O → External Displays → CarPlay (bring Simulator to the
   front first: the item was greyed out with it in the background). To test a
