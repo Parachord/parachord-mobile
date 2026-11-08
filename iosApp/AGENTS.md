@@ -221,6 +221,10 @@ plugin host (NativeBridge installer, then `loadPluginsAndList`),
 paused queue restore, and the current track's re-resolve on every track
 change (its artwork). `start()` is idempotent: concurrent and later callers
 await the same run, and it logs `APP_BOOTSTRAP started` once per launch.
+The restore applies the saved queue only if nothing has played yet
+(`QueueRestorePolicy`, shared with Android, checked after it read storage):
+a CarPlay tap waits for the bootstrap, but a deep link or a phone tap doesn't,
+and the old queue used to land on top of it (`QUEUE restore skipped` in the log).
 `RootGate` (behind the splash) and `ContentView` both call it; the phone's
 views keep only UI-session work (friends, collection sync, hosted-playlist
 polling, banners, sheets). Don't move playback start-up back into a view.

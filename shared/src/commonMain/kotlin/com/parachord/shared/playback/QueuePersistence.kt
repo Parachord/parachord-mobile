@@ -39,3 +39,24 @@ object QueuePersistenceCodec {
     fun decode(jsonStr: String): PersistedQueueState? =
         runCatching { json.decodeFromString(PersistedQueueState.serializer(), jsonStr) }.getOrNull()
 }
+
+/**
+ * When a saved queue may be put back at startup.
+ *
+ * Only when nothing has played yet in this run of the app. The restore reads
+ * storage first, so something else can start playing before it gets to apply
+ * what it read: the car (Android Auto or CarPlay) starting the app with the
+ * phone locked, a deep link, a tap on the phone. Applying it then put the
+ * queue and track from the last session back over what was playing: the
+ * phone showed the old track, and on Android the car was handed it too,
+ * paused, with Play starting the old track over.
+ */
+object QueueRestorePolicy {
+    /**
+     * @param hasCurrentTrack a track is already showing as the current one.
+     * @param playRequested a play was asked for in this run (it may still be
+     *   resolving, so there's no current track yet).
+     */
+    fun shouldApply(hasCurrentTrack: Boolean, playRequested: Boolean): Boolean =
+        !hasCurrentTrack && !playRequested
+}
