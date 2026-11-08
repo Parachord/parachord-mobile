@@ -9,10 +9,11 @@ import UIKit
 // car"):
 //
 // - SoundCloud and Bandcamp play in a hidden web view attached to the phone's
-//   key window. With the car connected and no phone window in the foreground
-//   (`blocksEmbeds`), Bandcamp and a SoundCloud page that doesn't exist yet
-//   count as refused, so the next source plays. An existing SoundCloud page
-//   plays as on the phone.
+//   key window. With the car connected and no phone window at all
+//   (`blocksEmbeds`: the car launched the app and the phone never showed it),
+//   Bandcamp and a SoundCloud page that doesn't exist yet count as refused, so
+//   the next source plays. With a phone window, locked or behind another app,
+//   they play as on the phone; so does an existing SoundCloud page.
 // - Spotify never opens the Spotify app, never shows the device picker and
 //   only uses the phone's own Spotify device (`IosSpotifyConnect.play`).
 // - A track only Spotify could have played stops with
@@ -48,18 +49,20 @@ final class CarPlaySession {
     }
 
     /// True when no new SoundCloud / Bandcamp web view may be created: the car
-    /// is connected and the phone has no window in the foreground to host one
-    /// (locked, or the app in the background). With the app open on the phone
-    /// they play as usual.
+    /// is connected and the app has no phone window to host one. That's a
+    /// launch by the car that the phone never showed: iOS gives the app only
+    /// the CarPlay scene and won't open a window from the background. A phone
+    /// window that exists counts even with the phone locked or another app in
+    /// front, since the hidden web view plays there just as it does on the phone.
     var blocksEmbeds: Bool {
-        isConnected && !Self.phoneHasForegroundKeyWindow
+        isConnected && !Self.phoneHasKeyWindow
     }
 
-    /// A phone (not CarPlay) window scene that's foreground-active and has a
-    /// key window.
-    private static var phoneHasForegroundKeyWindow: Bool {
+    /// A connected phone (not CarPlay) window scene with a key window, in any
+    /// activation state: the embeds attach to that key window.
+    private static var phoneHasKeyWindow: Bool {
         UIApplication.shared.connectedScenes.contains { scene in
-            guard scene.activationState == .foregroundActive,
+            guard scene.activationState != .unattached,
                   scene.session.role == .windowApplication,
                   let windowScene = scene as? UIWindowScene else { return false }
             return windowScene.windows.contains { $0.isKeyWindow }

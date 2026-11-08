@@ -1006,7 +1006,7 @@ shared page, desktop's module, previews counted as refused) are in the root
   `seekforward`/`seekbackward` handlers and disabling the skip commands on
   `MPRemoteCommandCenter` both had no effect.
 - **A refused source falls through** to the next ranked one in `PlaybackRouter`
-  (`onRefused`); in the car with no phone window in the foreground, a source
+  (`onRefused`); in the car with no phone window at all, a source
   that would have to create the page is refused (see "Playback in the car").
   `playTrack(advancing:)` decides between "Playing via X", a
   silent skip (queue advancing or spinoff), and the `Notice` banner with
@@ -1026,7 +1026,7 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   if Android's and iOS's differ).
 - **In a window, or it never plays.** A view in no window stays at 0:00 (tested
   on WebKit for #513), so it's added to the key window, at `alpha 0.01`. In the
-  car with no phone window in the foreground it refuses instead (see "Playback
+  car with no phone window at all it refuses instead (see "Playback
   in the car"): each track is a new page, so there's never one to reuse.
 - **The audio-session hold lives in SoundCloud's page, and runs unmuted for the
   whole track.** See "SoundCloud through its widget": WebKit releases its session
@@ -1145,9 +1145,11 @@ CarPlay scene delegate (`connected()` / `disconnected()`). While it's true a few
 rules change; with it false every path is the phone's.
 
 - **SoundCloud and Bandcamp need a phone window.** Their web views live in the
-  phone's key window. With the car connected and no foreground-active phone
-  window scene with a key window (phone locked, app in the background),
-  `blocksEmbeds` is true:
+  phone's key window, which keeps playing them with the phone locked or another
+  app in front, as on the phone. Only when the car launched the app and the
+  phone never showed it is there no phone window scene at all (iOS won't open
+  one from the background); with the car connected and no connected phone
+  window scene with a key window, `blocksEmbeds` is true:
   - Bandcamp loads a new page per track, so `IosBandcampEmbed.ensureWebView`
     always refuses (reason `page`).
   - SoundCloud refuses only when `IosSoundCloudWidget.ensurePage` would have to

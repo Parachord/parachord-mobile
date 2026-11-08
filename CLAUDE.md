@@ -131,7 +131,7 @@ Both car UIs show one tree and follow one set of rules, all in `shared/.../car/`
 **Per platform, only the drawing.** Android `PlaybackService` maps `CarItem` → `MediaItem` and serves it from the `MediaLibrarySession` callback (and sends `playRequest` to the controller). iOS draws `CPListTemplate`s from `IosContainer.carChildren` / `carPlayRequest` (`iosApp/Parachord/CarPlay/`; details in `iosApp/AGENTS.md` → "The CarPlay screens"). Change the tree, caps, ids or button rules once, in shared.
 
 **Car-only playback rules on iOS** (`CarPlaySession`; a phone with no car connected plays as always):
-- SoundCloud and Bandcamp are refused only when a car is connected and the phone has no foreground window to host a web view: Bandcamp always (each track is a new page), SoundCloud only when its page would have to be created. The router moves to the next source.
+- SoundCloud and Bandcamp are refused only when a car is connected and the app has no phone window to host a web view, which happens when the car launched the app and the phone never showed it (iOS won't open a window from the background). Then Bandcamp is always refused (each track is a new page) and SoundCloud only when its page would have to be created, and the router moves to the next source. A phone window that exists plays them even with the phone locked or another app in front, as on the phone.
 - Spotify never wakes the Spotify app, shows no device picker and uses only this phone's own device; if it isn't listed the source fails at once. A track only Spotify could play stops with `OPEN_SPOTIFY_ON_PHONE`.
 - After 3 unplayable tracks in a row (with the embeds blocked) playback stops on the last one with `OPEN_PARACHORD_ON_PHONE`, instead of skipping to the end of the queue.
 

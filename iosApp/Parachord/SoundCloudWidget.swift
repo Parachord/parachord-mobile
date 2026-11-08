@@ -187,7 +187,7 @@ final class IosSoundCloudWidget {
     @MainActor
     private func ensurePage() async -> Bool {
         if webView == nil {
-            // In the car with no phone window in the foreground, a new view has
+            // In the car with no phone window at all, a new view has
             // nowhere live to go: refuse, so the next source plays. A page that
             // already exists (kept alive by scHoldAudio) plays as on the phone.
             if CarPlaySession.shared.blocksEmbeds {
