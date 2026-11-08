@@ -223,8 +223,18 @@ change (its artwork). `start()` is idempotent: concurrent and later callers
 await the same run, and it logs `APP_BOOTSTRAP started` once per launch.
 `RootGate` (behind the splash) and `ContentView` both call it; the phone's
 views keep only UI-session work (friends, collection sync, hosted-playlist
-polling, banners, sheets). Don't move playback start-up back into a view. The Dev tab keeps its OWN separate smoke-test player on
-purpose; it retires with the Dev tab.
+polling, banners, sheets). Don't move playback start-up back into a view.
+
+The Dev tab keeps its OWN separate smoke-test player on purpose; it retires
+with the Dev tab.
+
+**Keychain items must be readable after first unlock.** A CarPlay launch can
+happen with the phone locked, and iOS's default accessibility
+(`kSecAttrAccessibleWhenUnlocked`) hides the sign-in tokens then.
+`IosSecureTokenStore` therefore writes `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`
+and migrates older items once (`keychain_accessibility_v1`); until the migration
+is done, reads and writes go through a legacy instance, all under one lock.
+Details in the class's KDoc.
 
 ---
 
@@ -1071,6 +1081,10 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   so a stray play during Apple Music or Spotify reactivated the local,
   non-mixable session. The ±15 s skip commands are off: while they were on, the
   lock screen showed skip buttons instead of next / previous for local files.
+  The remote commands used to be registered by the AVPlayer only, so the command
+  set Apple Music's lock screen shows (it may now offer next / previous where it
+  offered ±15 s) changed when they moved to the coordinator. Not checked on an
+  iPad yet.
 - **Who publishes the info**, per engine:
   - Local files and direct streams (`.avPlayer`): the publisher, with title,
     artist, album, duration, elapsed, rate and artwork (`pcTrackArt`, through
@@ -1241,6 +1255,21 @@ only draws it.
   front first: the item was greyed out with it in the background). To test a
   CarPlay-only launch, terminate the app first, then tap Parachord on the
   CarPlay screen; the app starts with no phone window.
+- **Simulator workflow notes.**
+  - **Use an iOS 18 simulator** (e.g. iPhone 16 Pro, iOS 18.3). The iOS 26.5
+    simulator's CarPlay shell froze and ignored clicks. This guide's build
+    command targets 26.5 for the phone app; pick the iOS 18.3 destination when
+    testing CarPlay, if the installed Xcode accepts it.
+  - **Screenshots:** `xcrun simctl io booted screenshot --display=external <file>`
+    captures the CarPlay display headlessly (then `sips -Z 1400`).
+  - **Reinstalling the app while CarPlay is connected** closes the app and the
+    car returns to its home screen; open Parachord on the car screen again.
+  - **A stuck CarPlay window** reconnects after I/O → External Displays →
+    Disabled, then → CarPlay.
+  - **Covers in Now Playing:** the iOS 18.3 simulator's WebKit can't use Media
+    Session artwork ("Failed to determine dimensions"), so SoundCloud and
+    Bandcamp covers don't show in CarPlay Now Playing there (see the known gap
+    under Bandcamp).
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 

@@ -118,6 +118,27 @@ Bandcamp plays through its own embedded player (`bandcamp.com/EmbeddedPlayer`), 
 
 **Not checked:** whether repeated plays of one track hit a Bandcamp limit. Desktop's #1231 asked for that check and recorded no result. A limit that stops a track from starting is a refused source; one that stops it mid-track isn't detected.
 
+### CarPlay / Android Auto — shared car logic
+
+Both car UIs show one tree and follow one set of rules, all in `shared/.../car/` (`com.parachord.shared.car`):
+
+- **`CarBrowse`** (over a `CarLibrarySource`; `daoCarLibrarySource` is the DAO-backed one): `children(parentId)`, `item(id)`, `playRequest(id)`, `isBrowseTreeId(id)`. The root lists Playlists, Loved Songs and Collection Radio. Caps: `CAR_LOVED_CAP` 100 loved songs, `CAR_PLAYLIST_CAP` 500 tracks in one opened playlist (the playlists list is uncapped).
+- **`CarIds`**, the exact media ids: `parachord_root`, `browse:playlists`, `browse:loved`, `action:collection-radio`, `playlist:<id>`, `playlist-shuffle:<id>`, `playlist-track:<position>:<playlistId>` (position first so an id containing `:` parses), `loved-track:<id>`.
+- **`CarItem`** (`id`, `title`, `subtitle`, `artworkUrl`, `album`, `isBrowsable`, `isPlayable`, `kind` = `FOLDER | PLAYLIST | TRACK | ACTION`) is the tile; **`CarPlayRequest`** (`tracks`, `startIndex`, `shuffle`; null shuffle keeps the current setting) is what a tap plays. Collection Radio plays the whole collection shuffled.
+- **`carNowPlayingButtons(loved, spinoffMode, spinoffAvailable)`** gives the Now Playing buttons: heart (`LOVE` / `UNLOVE`), then Spinoff (`SPINOFF` / `END_SPINOFF`). None while nothing plays; Spinoff is hidden, not dimmed, when nothing similar exists.
+- **`CarMessages`** (`OPEN_SPOTIFY_ON_PHONE`, `OPEN_PARACHORD_ON_PHONE`) and **`CarUnplayableRun`** (stop after `CAR_UNPLAYABLE_RUN_LIMIT` = 3 unplayable tracks in a row, only when the car can't host the embeds).
+
+**Per platform, only the drawing.** Android `PlaybackService` maps `CarItem` → `MediaItem` and serves it from the `MediaLibrarySession` callback (and sends `playRequest` to the controller). iOS draws `CPListTemplate`s from `IosContainer.carChildren` / `carPlayRequest` (`iosApp/Parachord/CarPlay/`; details in `iosApp/AGENTS.md` → "The CarPlay screens"). Change the tree, caps, ids or button rules once, in shared.
+
+**Car-only playback rules on iOS** (`CarPlaySession`; a phone with no car connected plays as always):
+- SoundCloud and Bandcamp are refused only when a car is connected and the phone has no foreground window to host a web view: Bandcamp always (each track is a new page), SoundCloud only when its page would have to be created. The router moves to the next source.
+- Spotify never wakes the Spotify app, shows no device picker and uses only this phone's own device; if it isn't listed the source fails at once. A track only Spotify could play stops with `OPEN_SPOTIFY_ON_PHONE`.
+- After 3 unplayable tracks in a row (with the embeds blocked) playback stops on the last one with `OPEN_PARACHORD_ON_PHONE`, instead of skipping to the end of the queue.
+
+**Entitlement.** The CarPlay audio entitlement (`com.apple.developer.carplay-audio`) is in `ParachordSimulator.entitlements`, applied only through `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device and App Store builds can't carry it until Apple grants it to the App ID, so shipping CarPlay needs that grant first; never add it to `Parachord.entitlements` before then.
+
+**Spinoff's icon is the fork** on both platforms and in both car UIs (Android `ic_auto_spinoff.xml`, iOS `SpinoffFork` / `SpinoffForkActive`); sparkles is Shuffleupagus.
+
 ### Spotify Connect — Device Wake & Playback
 
 Spotify playback uses the **Web API** (not the App Remote SDK). The `SpotifyPlaybackHandler` manages device discovery, wake, and playback via Spotify Connect HTTP endpoints.

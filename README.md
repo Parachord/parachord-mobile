@@ -125,6 +125,7 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 - **On Tour**: a teal dot next to the artist name when they're playing near you. The radius is configurable.
 - **Friends**: see what your Last.fm and ListenBrainz contacts have been playing, and **Listen Along** with them.
 - **Spinoff**: start a radio of similar tracks from whatever is playing, without touching your queue. When Last.fm has few similar tracks for a song, the radio fills up with the top songs of similar artists.
+- **Android Auto and CarPlay**: browse your playlists, loved songs and Collection Radio from the car, with Now Playing buttons for the heart and Spinoff and (CarPlay) Up Next. Both draw one shared browse tree. CarPlay needs Apple's CarPlay audio entitlement to ship, so today it runs in the simulator only.
 - **Concerts**: Ticketmaster and SeatGeek search, filtered by location.
 
 ### AI features (bring your own key)

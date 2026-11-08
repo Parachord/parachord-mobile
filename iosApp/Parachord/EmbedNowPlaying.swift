@@ -25,7 +25,8 @@ import UIKit
 //
 // The scripts here are fixed. The values reach them as ONE JSON object built
 // with `JSONSerialization`, never interpolated as raw strings, and artwork is
-// passed only for an http(s) URL. These scripts are ours: the pages' own
+// passed only as an http(s) URL or as the `data:image/jpeg` URL the app made
+// from its own download of that cover. These scripts are ours: the pages' own
 // files (`bandcamp-embed-control.js`, `soundcloud-widget*.{html,js}`) are
 // byte-identical copies of desktop's and are never edited for this.
 

@@ -74,10 +74,9 @@ import java.net.URL
  * MediaLibrarySession for lock-screen controls, Bluetooth, and Android Auto.
  *
  * Extends [MediaLibraryService] (rather than plain MediaSessionService) so the
- * app registers as a browsable media app with Android Auto. Auto requires a
- * library callback even for "remote control only" integrations — we expose a
- * minimal browsable root with no children, which is enough for Auto to surface
- * the Now Playing screen while the user's actual audio routes through their
+ * app registers as a browsable media app with Android Auto. The browse tree
+ * (Playlists, Loved Songs, Collection Radio) comes from the shared `CarBrowse`,
+ * which CarPlay draws too; the user's actual audio routes through their
  * preferred channel (Bluetooth, Auto audio). See [LibraryCallback].
  *
  * Uses a unified notification style for both ExoPlayer (local/SoundCloud) and
@@ -425,18 +424,15 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * Minimal [MediaLibrarySession.Callback] that exposes a browsable root
-     * with no children. Android Auto requires a library callback for the app
-     * to register as a media app, but we don't implement a real browse tree
-     * today — Auto's use case is limited to displaying the Now Playing screen
-     * and forwarding transport controls (play/pause/skip/seek) back to our
-     * existing [ExternalPlaybackForwardingPlayer], which already routes them
-     * to the correct handler (Spotify Web API, MusicKit JS, ExoPlayer).
+     * [MediaLibrarySession.Callback] that serves the shared `CarBrowse` tree
+     * (`CarItem` → `MediaItem`) to Android Auto and other browsers, starts what
+     * a tap's `CarPlayRequest` names, and forwards transport controls
+     * (play/pause/skip/seek) to our [ExternalPlaybackForwardingPlayer], which
+     * routes them to the correct handler (Spotify Web API, MusicKit JS, ExoPlayer).
      *
      * Audio routing is independent: whether via Bluetooth A2DP or Auto's own
      * audio channel, the car speakers receive audio from whichever app owns
-     * the audio stream (Spotify app, MusicKit WebView, ExoPlayer). Parachord's
-     * role in Auto is purely the remote-control UI.
+     * the audio stream (Spotify app, MusicKit WebView, ExoPlayer).
      */
     private inner class LibraryCallback : MediaLibrarySession.Callback {
         /** Offer the heart's and Spinoff's commands and the current layout to every controller (Auto, system UI). */
