@@ -1604,7 +1604,8 @@ class IosContainer private constructor() {
      * The queue context for a play started from the car list [parentId] titled
      * [title], so the phone's Now Playing names where it came from and a running
      * Listen Along sees that the person took over (it only checks a non-null
-     * context). Playlists keep their id so the phone can open them.
+     * context). Playlists keep their id so the phone can open them. Any other
+     * list gets a neutral "carplay" context named [title], never another list's name.
      */
     fun carPlaybackContext(parentId: String, title: String): com.parachord.shared.playback.PlaybackContext {
         com.parachord.shared.car.CarIds.playlistIdOrNull(parentId)?.let { id ->
@@ -1613,8 +1614,10 @@ class IosContainer private constructor() {
         return when (parentId) {
             com.parachord.shared.car.CarIds.LOVED ->
                 com.parachord.shared.playback.PlaybackContext(type = "collection", name = "Loved Songs")
-            else -> // the root's Collection Radio
+            // Collection Radio is the root's only playable row.
+            com.parachord.shared.car.CarIds.ROOT ->
                 com.parachord.shared.playback.PlaybackContext(type = "collection", name = "Collection Radio")
+            else -> com.parachord.shared.playback.PlaybackContext(type = "carplay", name = title)
         }
     }
 

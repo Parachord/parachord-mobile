@@ -1142,15 +1142,22 @@ only draws it.
   `carPlaybackContext` (the playlist, "Loved Songs" or "Collection Radio", so
   the phone's Now Playing names it and a Listen Along sees the takeover), and
   pushes `CPNowPlayingTemplate.shared` unless it's already on top. A null
-  request (a stale id) plays and pushes nothing. Rows beyond
-  `CPListTemplate.maximumItemCount` are dropped; an empty list shows a disabled
-  "Nothing here yet" row.
-- **Artwork** (`CarArtwork`). Loaded after the list shows, four at a time,
-  stopped when the list is popped. http(s) and `file://` URLs go through
-  `PCImageStore`, then a car-sized copy is kept in memory. A track whose own
-  URL fails falls back to its resolved sources' art (`pcTrackArt`); anything
-  else keeps an SF Symbol. Playlist mosaics are absolute `file://` paths that go
-  stale when the app container moves; a missing file is a miss, not an error.
+  request (a stale id) plays and pushes nothing. Only the latest tap plays: a
+  new tap or a disconnect cancels one still waiting (a cold launch waits for
+  the bootstrap), and the play is dropped if the car is gone by then. Rows
+  beyond `CPListTemplate.maximumItemCount` are dropped; an empty list shows a
+  disabled "Nothing here yet" row. That limit was 500 in the simulator, so a
+  500-track playlist shows its Shuffle row and 499 tracks on CarPlay (Android
+  Auto shows all 500).
+- **Artwork** (`CarArtwork`). Loaded after the list shows, four at a time.
+  Once the list is popped no new loads start; ones already in flight finish.
+  http(s) and `file://` URLs go through `PCImageStore`, then a car-sized copy
+  is kept in memory. A track whose own URL fails falls back to its resolved
+  sources' art (`pcTrackArt`); anything else keeps an SF Symbol. Only a
+  definite miss (a missing file, HTTP 404/410, data that isn't an image) is
+  remembered for the session; a cover that failed offline or timed out is tried
+  again next time. Playlist mosaics are absolute `file://` paths that go stale
+  when the app container moves; a missing file is a miss, not an error.
 - **Entitlement, simulator only.** `com.apple.developer.carplay-audio` is in
   `ParachordSimulator.entitlements`, used only through
   `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device builds keep

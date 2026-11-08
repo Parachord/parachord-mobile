@@ -12,18 +12,24 @@ import UIKit
 // - A browsable row pushes the list of its children.
 // - A playable row asks `carPlayRequest` what to play, starts it on the app's
 //   one coordinator (`AppPlayback.shared`) and shows `CPNowPlayingTemplate`.
-//   A stale id (null request) plays nothing and pushes nothing.
+//   A stale id (null request) plays nothing and pushes nothing. Only the
+//   latest tap plays: a new tap or a disconnect cancels a play still waiting
+//   (on a cold launch it waits for the bootstrap).
 // - Rows beyond `CPListTemplate.maximumItemCount` (the car's own limit) are
 //   dropped. An empty list shows one disabled "Nothing here yet" row.
 // - Artwork loads after the list is shown (`CarArtwork`), at most a few at a
-//   time, and stops when the list is popped.
+//   time. Once the list is popped no new loads start (in-flight ones finish).
 
 @MainActor
 final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
     private weak var interfaceController: CPInterfaceController?
     private let container = IosContainer.companion.shared
-    /// Artwork loads per list, cancelled once that list leaves the stack.
-    private var artworkTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// Artwork loads per list, keyed by the UUID in the list's `userInfo`
+    /// (an object address can be reused by the next list pushed), cancelled
+    /// once that list leaves the stack.
+    private var artworkTasks: [UUID: Task<Void, Never>] = [:]
+    /// The tapped row's play, while it waits. A newer tap or a disconnect cancels it.
+    private var playTask: Task<Void, Never>?
 
     private static let maxArtworkLoads = 4
 
@@ -64,10 +70,12 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
         return template
     }
 
-    /// Stop every artwork load (the car disconnected).
+    /// Stop every artwork load and a pending play (the car disconnected).
     func cancelAll() {
         artworkTasks.values.forEach { $0.cancel() }
         artworkTasks.removeAll()
+        playTask?.cancel()
+        playTask = nil
     }
 
     // MARK: Rows
@@ -77,12 +85,19 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
                              image: CarArtwork.placeholder(for: item))
         if item.isBrowsable { row.accessoryType = .disclosureIndicator }
         row.handler = { [weak self] _, completion in
-            Task { @MainActor in
-                if item.isBrowsable {
-                    await self?.open(item)
-                } else if item.isPlayable {
-                    await self?.play(item, parentId: parentId, listTitle: listTitle)
+            guard let self else { completion(); return }
+            if item.isBrowsable {
+                Task { @MainActor in
+                    await self.open(item)
+                    completion()
                 }
+            } else if item.isPlayable {
+                self.playTask?.cancel()
+                self.playTask = Task { @MainActor in
+                    await self.play(item, parentId: parentId, listTitle: listTitle)
+                    completion()
+                }
+            } else {
                 completion()
             }
         }
@@ -91,6 +106,7 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
 
     private func open(_ item: CarItem) async {
         let child = await list(for: item.id, title: item.title)
+        guard CarPlaySession.shared.isConnected else { return }
         interfaceController?.pushTemplate(child, animated: true, completion: nil)
     }
 
@@ -107,6 +123,12 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
         }
         guard let request else {
             NSLog("CARPLAY nothing to play for \(item.id)")
+            return
+        }
+        // A newer tap or a disconnect while this waited (the bootstrap, the
+        // database read) wins: don't start playback for a car that's gone.
+        guard !Task.isCancelled, CarPlaySession.shared.isConnected else {
+            NSLog("CARPLAY dropped the play of \(item.id) (superseded or disconnected)")
             return
         }
         let context = container.carPlaybackContext(parentId: parentId, title: listTitle)
@@ -130,7 +152,8 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
 
     private func loadArtwork(_ rows: [(CPListItem, CarItem)], for template: CPListTemplate) {
         guard !rows.isEmpty else { return }
-        let key = ObjectIdentifier(template)
+        let key = UUID()
+        template.userInfo = key
         // Read the candidates now: the resolver-cache fallback is main-actor state.
         let jobs = rows.map { ($0.0, CarArtwork.candidates(for: $0.1)) }.filter { !$0.1.isEmpty }
         artworkTasks[key] = Task { @MainActor [weak self] in
@@ -150,7 +173,7 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
                     running += 1
                 }
             }
-            self?.artworkTasks[key] = nil
+            self?.artworkTasks[key] = nil   // a UUID is never reused, so this is only ours
         }
     }
 
@@ -161,7 +184,7 @@ final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
             // Covered by a pushed list it's still on the stack; popped, it isn't.
             guard let ic = interfaceController,
                   !ic.templates.contains(where: { $0 === aTemplate }) else { return }
-            let key = ObjectIdentifier(aTemplate)
+            guard let key = aTemplate.userInfo as? UUID else { return }
             artworkTasks[key]?.cancel()
             artworkTasks[key] = nil
         }

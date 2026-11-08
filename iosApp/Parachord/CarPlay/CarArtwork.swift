@@ -24,8 +24,11 @@ enum CarArtwork {
         c.countLimit = 600
         return c
     }()
-    /// URLs that failed this session, so a dead cover isn't fetched again on every visit.
-    private static var failed: Set<String> = []
+    /// URLs that definitely have no image (a missing file, HTTP 404/410, data
+    /// that isn't an image), so a dead cover isn't fetched again on every visit.
+    /// A transport failure (offline, timeout, a tunnel) isn't remembered: the
+    /// next request for that cover tries again.
+    private static var deadUrls: Set<String> = []
 
     private static let requestTimeout: TimeInterval = 15
 
@@ -60,24 +63,30 @@ enum CarArtwork {
     /// The car-sized image at [url] (http(s) or `file://`), or nil when it
     /// can't be loaded.
     static func image(for url: String?) async -> UIImage? {
-        guard let url, !url.isEmpty, !failed.contains(url), let u = URL(string: url) else { return nil }
+        guard let url, !url.isEmpty, !deadUrls.contains(url), let u = URL(string: url) else { return nil }
         guard u.isFileURL || u.scheme == "http" || u.scheme == "https" else { return nil }
         if let hit = cache.object(forKey: url as NSString) { return hit }
 
         let target = CPListItem.maximumImageSize
         let scale = displayScale
         let timeout = requestTimeout
-        let image = await Task.detached(priority: .utility) { () -> UIImage? in
-            guard let full = await loadFull(u, timeout: timeout) else { return nil }
-            return resized(full, to: target, scale: scale)
+        let result = await Task.detached(priority: .utility) { () -> LoadResult in
+            switch await loadFull(u, timeout: timeout) {
+            case .image(let full): return .image(resized(full, to: target, scale: scale))
+            case let other: return other
+            }
         }.value
 
-        if let image {
+        switch result {
+        case .image(let image):
             cache.setObject(image, forKey: url as NSString)
-        } else {
-            failed.insert(url)
+            return image
+        case .dead:
+            deadUrls.insert(url)
+            return nil
+        case .unavailable:
+            return nil
         }
-        return image
     }
 
     /// An SF Symbol for a row with no cover (yet).
@@ -100,24 +109,40 @@ enum CarArtwork {
 
     // MARK: Loading (off the main actor)
 
+    private enum LoadResult {
+        case image(UIImage)
+        /// Definitely no image here: don't ask again this session.
+        case dead
+        /// Couldn't tell (offline, timeout, a server error): try again later.
+        case unavailable
+    }
+
     /// Memory or disk store first, then the file or the network.
-    private nonisolated static func loadFull(_ url: URL, timeout: TimeInterval) async -> UIImage? {
-        if let stored = PCImageStore.load(url) { return stored }
-        let data: Data?
+    private nonisolated static func loadFull(_ url: URL, timeout: TimeInterval) async -> LoadResult {
+        if let stored = PCImageStore.load(url) { return .image(stored) }
+        let data: Data
         if url.isFileURL {
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            data = try? Data(contentsOf: url)
+            guard FileManager.default.fileExists(atPath: url.path) else { return .dead }
+            guard let read = try? Data(contentsOf: url) else { return .unavailable }
+            data = read
         } else {
             var request = URLRequest(url: url)
             request.timeoutInterval = timeout
-            guard let (body, response) = try? await URLSession.shared.data(for: request),
-                  (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? false
-            else { return nil }
+            let body: Data
+            let response: URLResponse
+            do {
+                (body, response) = try await URLSession.shared.data(for: request)
+            } catch {
+                return .unavailable   // URLError: offline, timeout, cancelled
+            }
+            guard let status = (response as? HTTPURLResponse)?.statusCode else { return .unavailable }
+            if status == 404 || status == 410 { return .dead }
+            guard (200..<300).contains(status) else { return .unavailable }
             data = body
         }
-        guard let data, let image = UIImage(data: data) else { return nil }
+        guard let image = UIImage(data: data) else { return .dead }
         PCImageStore.store(url, data, image)
-        return image
+        return .image(image)
     }
 
     /// Scale-to-fill crop into [size] points at [scale].
