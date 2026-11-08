@@ -22,10 +22,10 @@ import UIKit
 //   with its rows disabled, as the phone dims them.
 // - A playback notice that needs the driver (a track that can't play here,
 //   "Open Spotify on your phone…", "Open Parachord on your phone…") shows as
-//   an alert with OK, one at a time. The alert follows `notice`: cleared or
-//   replaced (the phone's banner clears it after a few seconds), the alert
-//   goes, and a newer notice shows. "Playing via X" stays on the phone
-//   (`Notice.showInCar`).
+//   an alert with OK, one at a time. It stays until OK, or until a different
+//   notice replaces it (that one shows if it's for the car); the phone
+//   banner's timeout clearing `notice` leaves it up. "Playing via X" stays on
+//   the phone (`Notice.showInCar`).
 
 @MainActor
 final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
@@ -301,15 +301,16 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
     // MARK: Alerts
 
     /// Keep the alert in step with `notice`: a notice the car hasn't seen
-    /// shows (if it's one for the car); the alert on screen goes when its
-    /// notice is cleared or replaced. One at a time.
+    /// shows (if it's one for the car), one at a time. The alert on screen
+    /// stays until OK or until a different notice replaces it; `notice`
+    /// going nil (the phone banner's timeout) leaves it up.
     private func syncAlert(_ notice: QueuePlaybackCoordinator.Notice?) {
         var next: (CPAlertTemplate, UUID)?
         if let notice, notice.id != seenNoticeId {
             seenNoticeId = notice.id
             if notice.showInCar { next = (makeAlert(notice), notice.id) }
         }
-        let stale = alertNoticeId != nil && notice?.id != alertNoticeId
+        let stale = alertNoticeId != nil && notice != nil && notice?.id != alertNoticeId
         guard stale || next != nil else { return }
         replaceAlert(with: next)
     }

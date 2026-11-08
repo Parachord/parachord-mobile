@@ -1202,11 +1202,11 @@ only draws it.
     artwork loads stop once it's popped (`templateDidDisappear`, forwarded by
     `CarBrowseTemplates`, the interface controller's one delegate).
   - **Alerts:** a new `notice` shows as a `CPAlertTemplate` with OK, one at a
-    time. The alert follows `notice`: when it's cleared or replaced the alert
-    is dismissed, then the new one (if any) shows. The phone's banner clears
-    `notice` after 3.5 s (8 s with an action) while the phone's UI is running,
-    so in that case the car's alert goes with it. OK clears the phone's banner
-    too. A notice from before the car connected isn't shown, and
+    time. It stays until the driver taps OK, or until a different notice
+    replaces it: that alert is dismissed, then the new notice shows if it's
+    one for the car. `notice` going nil doesn't dismiss it: the phone's banner
+    clears `notice` after 3.5 s (8 s with an action), and the car alert must
+    outlast that. OK clears the phone's banner too. A notice from before the car connected isn't shown, and
     `Notice.showInCar = false` ("Playing via X") stays on the phone, as Android
     Auto shows only errors.
   - **The heart acts only on the track whose state it shows**: a tap between a
