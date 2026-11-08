@@ -974,8 +974,9 @@ shared page, desktop's module, previews counted as refused) are in the root
   `seekforward`/`seekbackward` handlers and disabling the skip commands on
   `MPRemoteCommandCenter` both had no effect.
 - **A refused source falls through** to the next ranked one in `PlaybackRouter`
-  (`onRefused`); in the car with no phone window in the foreground every
-  SoundCloud source is refused (see "Playback in the car"); `playTrack(advancing:)` decides between "Playing via X", a
+  (`onRefused`); in the car with no phone window in the foreground, a source
+  that would have to create the page is refused (see "Playback in the car").
+  `playTrack(advancing:)` decides between "Playing via X", a
   silent skip (queue advancing or spinoff), and the `Notice` banner with
   "Open in SoundCloud" (`RootView`).
 
@@ -994,7 +995,7 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
 - **In a window, or it never plays.** A view in no window stays at 0:00 (tested
   on WebKit for #513), so it's added to the key window, at `alpha 0.01`. In the
   car with no phone window in the foreground it refuses instead (see "Playback
-  in the car"), as SoundCloud's widget does.
+  in the car"): each track is a new page, so there's never one to reuse.
 - **The audio-session hold lives in SoundCloud's page, and runs unmuted for the
   whole track.** See "SoundCloud through its widget": WebKit releases its session
   when a track ends, and iOS won't reactivate it locked. Each Bandcamp track is a new
@@ -1087,17 +1088,24 @@ rules change; with it false every path is the phone's.
 - **SoundCloud and Bandcamp need a phone window.** Their web views live in the
   phone's key window. With the car connected and no foreground-active phone
   window scene with a key window (phone locked, app in the background),
-  `blocksEmbeds` is true and `IosSoundCloudWidget.ensurePage` /
-  `IosBandcampEmbed.ensureWebView` refuse (reason `page`), so the router moves
-  on to the next source as for any refused embed. With the app open on the
-  phone they play as usual.
+  `blocksEmbeds` is true:
+  - Bandcamp loads a new page per track, so `IosBandcampEmbed.ensureWebView`
+    always refuses (reason `page`).
+  - SoundCloud refuses only when `IosSoundCloudWidget.ensurePage` would have to
+    create the page. A page that already exists (kept alive by `scHoldAudio`)
+    plays as on the phone, and if the widget can't start the track its own
+    refusal timeout still moves on.
+  A refusal sends the router to the next source as for any refused embed. With
+  the app open on the phone both play as usual.
 - **Spotify never opens the Spotify app.** `IosSpotifyConnect.play` shows no
   device picker, ignores a saved device, and uses only the phone's own Spotify
   device (`isLocalRealDevice`), already listed by `getDevices`. If it isn't
   listed, the source fails at once: no `spotify:` wake, no polling. The warm
   path is taken only when its cached device is the phone's own
-  (`lastResolvedIsLocal`), so a remembered speaker at home isn't used; a car
-  play doesn't write the preferred device either.
+  (`lastResolvedIsLocal`, set from `isLocalRealDevice` on the device that
+  played, whichever path found it), so a remembered speaker at home, or another
+  phone that a post-wake poll accepted, isn't used. A car play doesn't write
+  the preferred device either.
 - **A track only Spotify could play stops, it isn't skipped.** When the router
   tried Spotify (`onSpotifyFailed`) and nothing else played, `playTrack` halts
   the old engine, keeps the track on screen and sets `notice` to
@@ -1106,8 +1114,9 @@ rules change; with it false every path is the phone's.
   advancing, so a Spotify-only playlist doesn't skip to its end.
 - **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
   temporary hook (never commit one). In the simulator, with the app
-  backgrounded, a SoundCloud or Bandcamp source logs
-  `… car connected with no phone window, refusing` and the next source plays.
+  backgrounded, a Bandcamp source, or a SoundCloud source with no page yet,
+  logs `… car connected with no phone window, refusing` and the next source
+  plays.
   The Spotify rules need a device with Spotify installed.
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)

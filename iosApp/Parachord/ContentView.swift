@@ -423,7 +423,6 @@ final class IosSpotifyConnect {
         }
 
         var target: SpDevice?
-        var targetIsLocal = false
         if inCar {
             // 2a. In the car: no picker, no saved device, no wake that opens
             //     the Spotify app (the driver isn't looking at the phone, and a
@@ -431,7 +430,6 @@ final class IosSpotifyConnect {
             //     Spotify device, if it's already listed; else fail at once so
             //     the next source plays.
             target = await resolveLocalDevice(client, playUri: uri)
-            targetIsLocal = true
             if target == nil {
                 lastAction = "Spotify isn't running on this phone"
                 return false
@@ -449,7 +447,6 @@ final class IosSpotifyConnect {
 
             if preferred == Self.localDeviceId {
                 target = await resolveLocalDevice(client, playUri: uri)
-                targetIsLocal = true
             } else if let pid = preferred, let match = usable.first(where: { $0.id == pid }) {
                 target = match
             } else {
@@ -458,7 +455,6 @@ final class IosSpotifyConnect {
                 }
                 if usable.isEmpty {
                     target = await resolveLocalDevice(client, playUri: uri)
-                    targetIsLocal = true
                 } else {
                     // Offer the live devices plus a synthetic "This device".
                     guard let chosen = await presentPicker(usable + [localDeviceEntry()]) else {
@@ -466,12 +462,7 @@ final class IosSpotifyConnect {
                         return false
                     }
                     try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
-                    if isLocalPlaceholder(chosen) {
-                        target = await resolveLocalDevice(client, playUri: uri)
-                        targetIsLocal = true
-                    } else {
-                        target = chosen
-                    }
+                    target = isLocalPlaceholder(chosen) ? await resolveLocalDevice(client, playUri: uri) : chosen
                 }
             }
         }
@@ -480,7 +471,6 @@ final class IosSpotifyConnect {
             lastAction = "Couldn't find a Spotify device. Open Spotify and try again."
             return false
         }
-        if !targetIsLocal { targetIsLocal = isLocalRealDevice(dev) }
 
         // 4. Play. (We're on the COLD path here — the warm path returns
         // early on success — so deviceVerified is currently false.)
@@ -495,7 +485,10 @@ final class IosSpotifyConnect {
             }
             deviceVerified = true
             lastResolvedLocalId = dev.id
-            lastResolvedIsLocal = targetIsLocal
+            // From the device itself, not the path that found it: the
+            // post-wake poll can accept any phone/tablet, which the car
+            // mustn't fire at.
+            lastResolvedIsLocal = isLocalRealDevice(dev)
             // Sticky default (parity with Android): persist the SYNTHETIC
             // localDeviceId, never the real id (it changes between Spotify
             // sessions). Only when no preference is already set, and not from

@@ -9,8 +9,10 @@ import UIKit
 // car"):
 //
 // - SoundCloud and Bandcamp play in a hidden web view attached to the phone's
-//   key window. With the car connected and no phone window in the foreground,
-//   they count as refused (`blocksEmbeds`), so the next source plays.
+//   key window. With the car connected and no phone window in the foreground
+//   (`blocksEmbeds`), Bandcamp and a SoundCloud page that doesn't exist yet
+//   count as refused, so the next source plays. An existing SoundCloud page
+//   plays as on the phone.
 // - Spotify never opens the Spotify app, never shows the device picker and
 //   only uses the phone's own Spotify device (`IosSpotifyConnect.play`).
 // - A track only Spotify could have played stops with
@@ -37,10 +39,10 @@ final class CarPlaySession {
         NSLog("CARPLAY disconnected")
     }
 
-    /// True when SoundCloud's widget and Bandcamp's embed mustn't start a
-    /// track: the car is connected and the phone has no window in the
-    /// foreground to host their web view (locked, or the app in the
-    /// background). With the app open on the phone they play as usual.
+    /// True when no new SoundCloud / Bandcamp web view may be created: the car
+    /// is connected and the phone has no window in the foreground to host one
+    /// (locked, or the app in the background). With the app open on the phone
+    /// they play as usual.
     var blocksEmbeds: Bool {
         isConnected && !Self.phoneHasForegroundKeyWindow
     }
