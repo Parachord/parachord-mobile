@@ -37,6 +37,13 @@ class PlaybackRouter constructor(
     private val localFileHandler = LocalFileHandler()
     private val directStreamHandler = DirectStreamHandler()
 
+    /**
+     * SPIKE: Apple's MusicKit SDK engine. Routes `applemusic` tracks only when
+     * the debug toggle is on and Apple's AARs are in the build
+     * ([com.parachord.android.playback.handlers.MusicKitSdkPlaybackHandler]).
+     */
+    var appleMusicSdkSpike: com.parachord.android.playback.handlers.MusicKitSdkPlaybackHandler? = null
+
     /** The handler currently managing external playback, if any. */
     var activeExternalHandler: ExternalPlaybackHandler? = null
         private set
@@ -70,6 +77,13 @@ class PlaybackRouter constructor(
                 Log.d(TAG, "Non-streaming resolver '$resolver' — routing to browser: ${track.sourceUrl}")
                 return PlaybackAction.BrowserPlayback(track.sourceUrl!!, track)
             }
+        }
+
+        appleMusicSdkSpike?.takeIf { it.canHandle(track) }?.let { sdk ->
+            Log.d(TAG, "Routing '${track.title}' to MusicKitSdkPlaybackHandler (spike)")
+            if (activeExternalHandler !== sdk) stopExternalPlayback()
+            activeExternalHandler = sdk
+            return PlaybackAction.ExternalPlayback(sdk)
         }
 
         // Find the first handler that can handle this track

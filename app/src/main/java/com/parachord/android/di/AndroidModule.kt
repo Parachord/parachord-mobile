@@ -487,7 +487,13 @@ val androidModule = module {
     singleOf(::PlaybackStateHolder)
     singleOf(::QueueManager)
     singleOf(::QueuePersistence)
-    singleOf(::PlaybackRouter)
+    // SPIKE: the router also takes Apple's MusicKit SDK engine (debug toggle, off by default).
+    single {
+        PlaybackRouter(get(), get(), get(), get(), get()).apply {
+            appleMusicSdkSpike = get<com.parachord.android.playback.handlers.MusicKitSdkPlaybackHandler>()
+        }
+    }
+    single { com.parachord.android.playback.handlers.MusicKitSdkPlaybackHandler(androidContext(), get()) }
     singleOf(::PlaybackController)
     singleOf(::JsScrobblePluginDispatcher)
     // ScrobbleManager moved to shared/commonMain (#193). Forward the two

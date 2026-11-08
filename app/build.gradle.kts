@@ -193,6 +193,14 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
+    // SPIKE: Apple's MusicKit SDK for Android (MusicKitAuth + MediaPlayback AARs).
+    // Apple's license doesn't allow redistributing them, so they aren't in git:
+    // drop them into app/libs/musickit/ (gitignored) by hand. Debug builds only;
+    // the app reaches them by reflection and builds fine without them.
+    debugImplementation(fileTree("libs/musickit") { include("*.aar") })
+    // The SDK's sign-in activity extends AppCompatActivity.
+    debugImplementation("androidx.appcompat:appcompat:1.7.0")
+
     // Navigation
     implementation(libs.androidx.navigation.compose)
 

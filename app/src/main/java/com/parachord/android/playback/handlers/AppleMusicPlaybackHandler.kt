@@ -3,6 +3,7 @@ package com.parachord.android.playback.handlers
 import com.parachord.shared.platform.Log
 import com.parachord.android.data.db.entity.TrackEntity
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Handles Apple Music playback via MusicKit JS inside a hidden WebView.
@@ -88,6 +89,31 @@ class AppleMusicPlaybackHandler constructor(
                 } else {
                     musicKitBridge.emitSignInRequired()
                 }
+            }
+        }
+        measureStartLatency(songId, track.title)
+    }
+
+    /**
+     * SPIKE: log the time from [play] to the first moved position, the same
+     * measure [MusicKitSdkPlaybackHandler] logs, so the two engines compare
+     * (`adb logcat | grep START_LATENCY`).
+     */
+    private fun measureStartLatency(songId: String, title: String) {
+        val startedAt = playStartedAt
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+            val deadline = startedAt + 20_000
+            while (System.currentTimeMillis() < deadline && playStartedAt == startedAt) {
+                // 1..10 s: a leftover position from the previous track reads larger.
+                if (getPosition() in 1..10_000) {
+                    Log.i("MusicKitSdkSpike", "START_LATENCY engine=js id=$songId outcome=audio " +
+                        "ms=${System.currentTimeMillis() - startedAt} title='$title'")
+                    return@launch
+                }
+                delay(100)
+            }
+            if (playStartedAt == startedAt) {
+                Log.i("MusicKitSdkSpike", "START_LATENCY engine=js id=$songId outcome=timeout ms=20000 title='$title'")
             }
         }
     }

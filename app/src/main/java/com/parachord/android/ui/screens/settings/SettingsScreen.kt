@@ -3378,6 +3378,8 @@ private fun SyncTab(
         // testing. The preview → accept entry above is the real user path.
         if (BuildConfig.DEBUG) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { SectionHeader("Developer · Apple Music engine (spike)") }
+            item { MusicKitSdkSpikeRow() }
             item { SectionHeader("Developer · sync engine") }
             item {
                 ListItem(
@@ -3816,4 +3818,45 @@ private fun ThemeModeSelector(
             )
         }
     }
+}
+
+
+/**
+ * SPIKE (debug only): play Apple Music through Apple's MusicKit SDK for Android
+ * instead of MusicKit JS. See docs/plans/2026-11-08-musickit-android-sdk-spike.md.
+ */
+@Composable
+private fun MusicKitSdkSpikeRow() {
+    val handler: com.parachord.android.playback.handlers.MusicKitSdkPlaybackHandler = org.koin.compose.koinInject()
+    var enabled by remember { mutableStateOf(handler.enabled) }
+    var status by remember { mutableStateOf(handler.status()) }
+    LaunchedEffect(Unit) { handler.refreshTokens(); status = handler.status() }
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        handler.handleSignInResult(result.data)
+        status = handler.status()
+    }
+    ListItem(
+        headlineContent = { Text("Use Apple's Android SDK for Apple Music") },
+        supportingContent = { Text(status) },
+        trailingContent = {
+            Switch(
+                checked = enabled,
+                onCheckedChange = {
+                    handler.enabled = it
+                    enabled = handler.enabled
+                    status = handler.status()
+                },
+            )
+        },
+    )
+    Button(
+        onClick = {
+            handler.signInIntent()?.let { launcher.launch(it) }
+            status = handler.status()
+        },
+        enabled = com.parachord.android.playback.handlers.MusicKitSdkPlaybackHandler.hasAuthSdk,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+    ) { Text("Sign in through the Apple Music app") }
 }
