@@ -83,9 +83,13 @@ final class IosBandcampEmbed {
         pageLoaded = false
         positionThrottle.reset()
         currentNavigation = view.load(URLRequest(url: url))
+        // The cover as a data: URL, fetched while the page loads (WebKit's own
+        // fetch of the http(s) URL failed behind redirects).
+        let artwork = Task { await EmbedNowPlaying.inlineArtwork(artworkUrl) }
         pollTask = Task { @MainActor [weak self] in
             await self?.pollLoop(gen: gen, load: load, embedUrl: embedUrl, volume: volume,
-                                 title: title, artist: artist, album: album, artworkUrl: artworkUrl)
+                                 title: title, artist: artist, album: album, artworkUrl: artworkUrl,
+                                 artwork: artwork)
         }
 
         let started = Date()
@@ -107,7 +111,8 @@ final class IosBandcampEmbed {
 
     @MainActor
     private func pollLoop(gen: Int, load: BandcampEmbedTracker, embedUrl: String, volume: Float,
-                          title: String, artist: String, album: String?, artworkUrl: String?) async {
+                          title: String, artist: String, album: String?, artworkUrl: String?,
+                          artwork: Task<EmbedNowPlaying.InlineArtwork?, Never>) async {
         let embed = BandcampEmbed.shared
         var installed = false
         var clicked = false
@@ -150,6 +155,18 @@ final class IosBandcampEmbed {
                     }
                     positionThrottle.reset()
                     wasPlaying = true
+                    // Then the downloaded cover, once it's ready and if this is
+                    // still the track: the holding page first, this page last,
+                    // since WebKit shows the page that updated last.
+                    Task { @MainActor [weak self] in
+                        guard let inline = await artwork.value, let self, gen == self.generation else { return }
+                        NSLog("BandcampEmbed: cover for '\(title)' as a data URL, \(inline.width)x\(inline.height)")
+                        await self.audioHold?.mirrorArtwork(title: title, artist: artist, album: album,
+                                                            artworkUrl: artworkUrl, inline: inline)
+                        guard gen == self.generation, let script = EmbedNowPlaying.metadataScript(
+                            title: title, artist: artist, album: album, artworkUrl: artworkUrl, inline: inline) else { return }
+                        _ = await self.evaluate(script)
+                    }
                 }
                 // Resumed after a pause: WebKit kept showing the track as paused
                 // (a frozen scrubber) until the element was seeked, whatever the

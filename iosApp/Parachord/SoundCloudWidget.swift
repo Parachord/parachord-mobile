@@ -86,8 +86,14 @@ final class IosSoundCloudWidget {
             "scNowPlaying(\(gen), \(Self.json(title)), \(Self.json(artist)), \(Self.json(artworkUrl ?? "")))",
             completionHandler: nil)
         // The page's call sets the buttons; ours adds the album and an
-        // http(s)-only artwork with its type.
+        // http(s)-only artwork with its type, then the downloaded cover.
         setMetadata(title: title, artist: artist, album: album, artworkUrl: artworkUrl)
+        Task { @MainActor [weak self] in
+            guard let inline = await EmbedNowPlaying.inlineArtwork(artworkUrl),
+                  let self, gen == self.generation else { return }
+            NSLog("SoundCloudWidget: cover for '\(title)' as a data URL, \(inline.width)x\(inline.height)")
+            self.setMetadata(title: title, artist: artist, album: album, artworkUrl: artworkUrl, inline: inline)
+        }
 
         let started = Date()
         let deadline = Date().addingTimeInterval(Self.loadTimeoutSec)
@@ -157,9 +163,22 @@ final class IosSoundCloudWidget {
         setMetadata(title: title, artist: artist, album: album, artworkUrl: artworkUrl)
     }
 
-    @MainActor private func setMetadata(title: String, artist: String, album: String?, artworkUrl: String?) {
+    /// The downloaded cover for another engine's track during the hold. Returns
+    /// once the page has it, so the playing page can update after it (WebKit
+    /// shows the page that updated last).
+    @MainActor func mirrorArtwork(title: String, artist: String, album: String?, artworkUrl: String?,
+                                  inline: EmbedNowPlaying.InlineArtwork) async {
+        guard let webView, let script = EmbedNowPlaying.metadataScript(
+            title: title, artist: artist, album: album, artworkUrl: artworkUrl, inline: inline) else { return }
+        await withCheckedContinuation { continuation in
+            webView.evaluateJavaScript(script) { _, _ in continuation.resume() }
+        }
+    }
+
+    @MainActor private func setMetadata(title: String, artist: String, album: String?, artworkUrl: String?,
+                                        inline: EmbedNowPlaying.InlineArtwork? = nil) {
         guard let script = EmbedNowPlaying.metadataScript(title: title, artist: artist, album: album,
-                                                          artworkUrl: artworkUrl) else { return }
+                                                          artworkUrl: artworkUrl, inline: inline) else { return }
         webView?.evaluateJavaScript(script, completionHandler: nil)
     }
 

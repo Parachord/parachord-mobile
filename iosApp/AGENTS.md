@@ -970,7 +970,8 @@ shared page, desktop's module, previews counted as refused) are in the root
   seek / next / previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`),
   and our own scripts (`EmbedNowPlaying`, injected from Swift: the page itself
   stays byte-identical) set `navigator.mediaSession.metadata` (title, artist,
-  album, an http(s) artwork) and the position state: on play, pause, seek or a
+  album, the cover: its http(s) URL, then a `data:` URL once the app has
+  downloaded it, as for Bandcamp below) and the position state: on play, pause, seek or a
   new duration, and every 5 s from the widget's progress. Not checked on a
   device or in the simulator (no SoundCloud sign-in there): whether WebKit
   publishes this top-level session or the widget iframe's. **Known gap:** WebKit shows
@@ -1023,8 +1024,18 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   Session, and shows whichever page updated last: this one or SoundCloud's
   holding page. Fixed scripts set it, each given one JSON object
   (`EmbedNowPlaying`): the track's metadata (title, artist, album, the cover the
-  phone shows, http(s) only) in both pages, and the position (play, pause, seek,
-  every 5 s) only in this one. Sent to the holding page, the position made it
+  phone shows) in both pages, and the position (play, pause, seek, every 5 s)
+  only in this one. The cover goes in first as its http(s) URL, then, once the
+  app has it (through `PCImageStore`, a download capped at 5 s), as a
+  `data:image/jpeg` URL of at most 512 px, if the same track is still playing:
+  WebKit's own fetch of a redirecting cover (coverartarchive → archive.org)
+  was the fragile step. **Known gap (iOS 18.3 simulator):** CarPlay still shows
+  no cover there. WebKit hands MediaRemote the cover as TIFF data, and the GPU
+  process logs `[MRArtwork] Failed to determine dimensions for provided image
+  data` on every CarPlay artwork request (`CarPlayTemplateUIHost`: "No available
+  artwork received"), whatever the source URL. On iOS 26.5 `mediaremoted`
+  reported the cover's size (1200×1200), so it may be 18.x only; not yet seen
+  on a CarPlay screen on 26.x or a device. Sent to the holding page, the position made it
   report the track as paused and take the lock screen back on each update. As a
   track starts, the holding page often updates last, so for about 5 s (until
   WebKit updates this page by itself) Now Playing shows its 1-second loop
