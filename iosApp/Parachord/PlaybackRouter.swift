@@ -50,12 +50,17 @@ struct PlaybackRouter {
     /// can't play, or only previews, the track; Bandcamp's embed doesn't start) with the service's name and
     /// the track's page on it. The walk then moves on to the next source.
     var onRefused: ((_ service: String, _ pageUrl: String?, _ reason: String) -> Void)? = nil
+    /// Called when a Spotify source was tried and didn't start (no usable
+    /// device, rate-limited, Premium needed). The walk then moves on. In the
+    /// car the caller uses it to stop on the track instead of skipping it.
+    var onSpotifyFailed: (() -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
 
     /// Walk the ranked sources; start the first engine-available one.
-    func play(ranked: [ResolvedSource], title: String, artist: String, artworkUrl: String? = nil) async -> RouteResult {
+    func play(ranked: [ResolvedSource], title: String, artist: String, album: String? = nil,
+              artworkUrl: String? = nil) async -> RouteResult {
         for source in ranked {
             // Non-streaming resolver — hand its URL back to open in the browser,
             // before trying any audio engine for this source. Not Bandcamp, which
@@ -74,7 +79,8 @@ struct PlaybackRouter {
                                                    soundcloudId: source.soundcloudId) else { continue }
                 let result = await soundCloud.load(link: link,
                                                    volume: IosVolumeOffsets.shared.fraction(for: "soundcloud"),
-                                                   title: title, artist: artist, artworkUrl: artworkUrl ?? source.artworkUrl)
+                                                   title: title, artist: artist, album: album,
+                                                   artworkUrl: artworkUrl ?? source.artworkUrl)
                 switch result {
                 case .started:
                     return .played(.soundCloud, resolver: source.resolver)
@@ -94,7 +100,8 @@ struct PlaybackRouter {
                     trackId: source.bandcampTrackId, pageUrl: source.url) {
                     result = await bandcamp.load(embedUrl: embedUrl,
                                                  volume: IosVolumeOffsets.shared.fraction(for: "bandcamp"),
-                                                 title: title, artist: artist, artworkUrl: artworkUrl ?? source.artworkUrl)
+                                                 title: title, artist: artist, album: album,
+                                                 artworkUrl: artworkUrl ?? source.artworkUrl)
                 }
                 switch result {
                 case .started:
@@ -124,6 +131,7 @@ struct PlaybackRouter {
             case "spotify":
                 guard spotify.canPlay, let uri = source.spotifyUri, !uri.isEmpty else { continue }
                 if await spotify.play(uri: uri) { return .played(.spotify, resolver: source.resolver) }
+                onSpotifyFailed?()
 
             default:
                 continue

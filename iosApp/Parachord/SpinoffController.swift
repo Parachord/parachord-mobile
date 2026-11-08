@@ -35,7 +35,7 @@ final class SpinoffController {
 
     func bind(_ c: QueuePlaybackCoordinator) { coordinator = c }
 
-    /// The ✨ button: toggle the spinoff station on/off (Android `toggleSpinoff`).
+    /// The Spinoff (fork) button: toggle the spinoff station on/off (Android `toggleSpinoff`).
     func toggle() {
         guard let c = coordinator else { return }
         if c.spinoffMode { c.exitSpinoff(); return }

@@ -285,6 +285,10 @@ final class IosSpotifyConnect {
     // SpotifyPlaybackHandler). Plumbing — not observable UI state.
     @ObservationIgnored private var deviceVerified = false
     @ObservationIgnored private var lastResolvedLocalId: String?
+    /// Whether `lastResolvedLocalId` is this phone's own Spotify device (not a
+    /// remote one). In the car only the phone's device is used, so the warm
+    /// path is taken only when this is true.
+    @ObservationIgnored private var lastResolvedIsLocal = false
     /// Synthetic "this device" id persisted as the preferred device — the real
     /// id changes between Spotify sessions, so we persist this token instead.
     static let localDeviceId = "__local_device__"
@@ -372,6 +376,10 @@ final class IosSpotifyConnect {
     /// Returns `false` when no local device can be established → `PlaybackRouter`
     /// falls through to the next source in the user's resolver order, instead of
     /// "succeeding" onto a phantom remote.
+    ///
+    /// **In the car** (`CarPlaySession.shared.isConnected`): no picker, no
+    /// saved device, no wake. Only the phone's own Spotify device, already
+    /// listed, is used; otherwise this returns `false` at once.
     @MainActor
     func play(uri: String) async -> Bool {
         let client = IosContainer.companion.shared.spotifyClient
@@ -402,43 +410,60 @@ final class IosSpotifyConnect {
         //    restarted) fails → we clear + fall through to the cold resolve.
         //    Mirrors Android's "fire startPlayback directly without any device
         //    fetch" warm-path optimization.
-        if deviceVerified, let warmId = lastResolvedLocalId {
+        // In the car (CarPlaySession): only this phone's own Spotify device is
+        // used, so a remembered remote device isn't fired at.
+        let inCar = CarPlaySession.shared.isConnected
+        if deviceVerified, let warmId = lastResolvedLocalId, !inCar || lastResolvedIsLocal {
             if await startPlayback(client, uri: uri, deviceId: warmId) {
                 return true
             }
             lastResolvedLocalId = nil
+            lastResolvedIsLocal = false
             deviceVerified = false
         }
 
-        // 2. Resolve the target device (Android `pickDevice` parity).
-        //    - preferred == "This device"  → wake this device.
-        //    - preferred remote present     → control it silently.
-        //    - stale preference             → clear, fall through.
-        //    - no live device at all        → wake this device (only option).
-        //    - otherwise (ambiguous)        → ASK via the picker; remember the
-        //      choice (LOCAL token for this-device, real id for a remote).
-        let preferred = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
-        let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
-
         var target: SpDevice?
-        if preferred == Self.localDeviceId {
+        if inCar {
+            // 2a. In the car: no picker, no saved device, no wake that opens
+            //     the Spotify app (the driver isn't looking at the phone, and a
+            //     locked phone can't switch apps). Only the phone's own
+            //     Spotify device, if it's already listed; else fail at once so
+            //     the next source plays.
             target = await resolveLocalDevice(client, playUri: uri)
-        } else if let pid = preferred, let match = usable.first(where: { $0.id == pid }) {
-            target = match
-        } else {
-            if let pid = preferred, !pid.isEmpty {
-                try? await settings.clearPreferredSpotifyDeviceId() // stale
+            if target == nil {
+                lastAction = "Spotify isn't running on this phone"
+                return false
             }
-            if usable.isEmpty {
+        } else {
+            // 2b. Resolve the target device (Android `pickDevice` parity).
+            //    - preferred == "This device"  → wake this device.
+            //    - preferred remote present     → control it silently.
+            //    - stale preference             → clear, fall through.
+            //    - no live device at all        → wake this device (only option).
+            //    - otherwise (ambiguous)        → ASK via the picker; remember the
+            //      choice (LOCAL token for this-device, real id for a remote).
+            let preferred = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
+            let usable = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
+
+            if preferred == Self.localDeviceId {
                 target = await resolveLocalDevice(client, playUri: uri)
+            } else if let pid = preferred, let match = usable.first(where: { $0.id == pid }) {
+                target = match
             } else {
-                // Offer the live devices plus a synthetic "This device".
-                guard let chosen = await presentPicker(usable + [localDeviceEntry()]) else {
-                    lastAction = "Playback cancelled"
-                    return false
+                if let pid = preferred, !pid.isEmpty {
+                    try? await settings.clearPreferredSpotifyDeviceId() // stale
                 }
-                try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
-                target = isLocalPlaceholder(chosen) ? await resolveLocalDevice(client, playUri: uri) : chosen
+                if usable.isEmpty {
+                    target = await resolveLocalDevice(client, playUri: uri)
+                } else {
+                    // Offer the live devices plus a synthetic "This device".
+                    guard let chosen = await presentPicker(usable + [localDeviceEntry()]) else {
+                        lastAction = "Playback cancelled"
+                        return false
+                    }
+                    try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
+                    target = isLocalPlaceholder(chosen) ? await resolveLocalDevice(client, playUri: uri) : chosen
+                }
             }
         }
 
@@ -460,11 +485,16 @@ final class IosSpotifyConnect {
             }
             deviceVerified = true
             lastResolvedLocalId = dev.id
+            // From the device itself, not the path that found it: the
+            // post-wake poll can accept any phone/tablet, which the car
+            // mustn't fire at.
+            lastResolvedIsLocal = isLocalRealDevice(dev)
             // Sticky default (parity with Android): persist the SYNTHETIC
             // localDeviceId, never the real id (it changes between Spotify
-            // sessions). Only when no preference is already set.
+            // sessions). Only when no preference is already set, and not from
+            // the car, whose device choice is forced rather than the person's.
             let existing = (try? await settings.getPreferredSpotifyDeviceId()) ?? nil
-            if existing == nil {
+            if existing == nil && !inCar {
                 try? await settings.setPreferredSpotifyDeviceId(deviceId: Self.localDeviceId)
             }
         }
@@ -580,6 +610,7 @@ final class IosSpotifyConnect {
         try? await settings.setPreferredSpotifyDeviceId(deviceId: chooseStableId(chosen))
         deviceVerified = false
         lastResolvedLocalId = nil
+        lastResolvedIsLocal = false
         lastAction = isLocalPlaceholder(chosen) ? "Spotify target: This device" : "Spotify target: \(chosen.name)"
     }
 
@@ -602,6 +633,9 @@ final class IosSpotifyConnect {
             let live = ((try? await client.getDevices())?.devices ?? []).filter { !$0.isRestricted }
             if let local = live.first(where: { isLocalRealDevice($0) }) { return local }
         }
+        // In the car, never wake: it opens the Spotify app on a phone the
+        // driver isn't looking at (and a locked phone can't). Not listed = fail.
+        if CarPlaySession.shared.isConnected { return nil }
 
         // Poll at 1s (not 300ms) so a cold play makes ~18 getDevices calls over
         // ~18s instead of 66 — those ungated /v1/me/player/devices calls add up
@@ -1375,10 +1409,8 @@ private extension MusicAuthorization.Status {
 // the foundation those features sit on top of, not the full
 // implementation.
 //
-// Background audio (`UIBackgroundModes: audio` + lock-screen
-// `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter`) is phase 4.5;
-// for this commit playback stops when the app backgrounds, which is
-// fine for the smoke-test demo.
+// The lock screen / CarPlay info and remote commands for this player are
+// published by the coordinator's `NowPlayingPublisher`, not here.
 
 @Observable
 /// Per-resolver volume offsets, cached so they can be applied SYNCHRONOUSLY.
@@ -1446,7 +1478,6 @@ final class IosAVPlayer {
     private var timeObserver: Any?
     private var statusObservation: NSKeyValueObservation?
     private var endObservation: NSObjectProtocol?
-    private var remoteCommandsRegistered = false
 
     var status: Status = .idle
     var isPlaying = false
@@ -1455,8 +1486,7 @@ final class IosAVPlayer {
     var errorMessage: String?
     var loadedURL: URL?
 
-    // Now-playing metadata, surfaced both to the lock screen via
-    // MPNowPlayingInfoCenter and back to the UI as a read-back proof.
+    // The loaded track's title and artist, as `load` was given them.
     var nowPlayingTitle: String = ""
     var nowPlayingArtist: String = ""
 
@@ -1464,20 +1494,18 @@ final class IosAVPlayer {
     /// coordinator (phase 4.6) sets this to auto-advance. Nil by
     /// default, so standalone single-track use just stops at the end.
     var onTrackEnded: (() -> Void)?
-    /// The last keys we pushed to MPNowPlayingInfoCenter — displayed in
-    /// the smoke-test card so the lock-screen wiring is observable in
-    /// the simulator (where photographing the actual lock screen is
-    /// awkward).
-    var lastNowPlayingKeys: [String] = []
+    /// Fired when what the lock screen shows for this player changed: the
+    /// duration became known, or it played, paused or finished a seek. The
+    /// coordinator's `NowPlayingPublisher` republishes; this player doesn't
+    /// touch `MPNowPlayingInfoCenter` or `MPRemoteCommandCenter` itself.
+    var onNowPlayingChanged: (() -> Void)?
 
     init() {
         configureAudioSession()
-        setupRemoteCommands()
     }
 
     deinit {
         teardown()
-        tearDownRemoteCommands()
     }
 
     /// Set the `.playback` category so OUR audio plays through the device
@@ -1569,7 +1597,7 @@ final class IosAVPlayer {
                         ? item.duration.seconds : 0
                     // Duration is now known — refresh the lock-screen
                     // payload so the scrubber shows the right length.
-                    self.updateNowPlayingInfo()
+                    self.onNowPlayingChanged?()
                 case .failed:
                     self.status = .failed
                     self.errorMessage = item.error?.localizedDescription
@@ -1621,14 +1649,14 @@ final class IosAVPlayer {
         player?.play()
         isPlaying = true
         status = .playing
-        updateNowPlayingInfo()
+        onNowPlayingChanged?()
     }
 
     func pause() {
         player?.pause()
         isPlaying = false
         status = .paused
-        updateNowPlayingInfo()
+        onNowPlayingChanged?()
     }
 
     func togglePlayPause() {
@@ -1637,9 +1665,14 @@ final class IosAVPlayer {
 
     func seek(to seconds: Double) {
         let target = CMTime(seconds: seconds, preferredTimescale: 600)
-        player?.seek(to: target) { [weak self] _ in
-            // Reflect the new position into the lock-screen scrubber.
-            self?.updateNowPlayingInfo()
+        player?.seek(to: target) { [weak self] finished in
+            // Reflect the new position into the lock-screen scrubber now, not
+            // at the next periodic tick.
+            DispatchQueue.main.async {
+                guard let self, finished else { return }
+                self.currentTime = seconds
+                self.onNowPlayingChanged?()
+            }
         }
     }
 
@@ -1649,95 +1682,8 @@ final class IosAVPlayer {
         // coordinator stops the silent keepalive around this for external
         // playback; for local playback this is the final release.
         IosAudioSession.deactivate()
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        lastNowPlayingKeys = []
-    }
-
-    // MARK: - Lock screen / Control Center (phase 4.5)
-
-    /// Push the current track + transport state into
-    /// `MPNowPlayingInfoCenter`. This is what populates the lock
-    /// screen, Control Center, the now-playing widget, CarPlay, and
-    /// the AirPods/Watch transport surfaces. Called on load, play,
-    /// pause, and seek so the elapsed-time scrubber stays in sync.
-    private func updateNowPlayingInfo() {
-        var info: [String: Any] = [:]
-        info[MPMediaItemPropertyTitle] = nowPlayingTitle.isEmpty
-            ? "Unknown Title" : nowPlayingTitle
-        info[MPMediaItemPropertyArtist] = nowPlayingArtist.isEmpty
-            ? "Unknown Artist" : nowPlayingArtist
-        if duration > 0 {
-            info[MPMediaItemPropertyPlaybackDuration] = duration
-        }
-        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
-        // Rate drives whether the lock-screen UI shows a play or pause
-        // glyph and whether the scrubber animates: 1.0 = playing,
-        // 0.0 = paused.
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        lastNowPlayingKeys = info.keys.sorted().map { shortKey($0) }
-    }
-
-    /// Register lock-screen / remote transport command handlers
-    /// (play, pause, toggle, skip-back/forward seek, scrub). Each maps
-    /// to the same controls the in-app buttons drive. Idempotent.
-    private func setupRemoteCommands() {
-        guard !remoteCommandsRegistered else { return }
-        let center = MPRemoteCommandCenter.shared()
-
-        center.playCommand.addTarget { [weak self] _ in
-            self?.play()
-            return .success
-        }
-        center.pauseCommand.addTarget { [weak self] _ in
-            self?.pause()
-            return .success
-        }
-        center.togglePlayPauseCommand.addTarget { [weak self] _ in
-            self?.togglePlayPause()
-            return .success
-        }
-        center.changePlaybackPositionCommand.addTarget { [weak self] event in
-            guard let self,
-                  let e = event as? MPChangePlaybackPositionCommandEvent
-            else { return .commandFailed }
-            self.seek(to: e.positionTime)
-            return .success
-        }
-        // Skip ±15s — stand-ins until queue management (phase 4.6)
-        // provides real next/previous track commands.
-        center.skipForwardCommand.preferredIntervals = [15]
-        center.skipForwardCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            self.seek(to: min(self.currentTime + 15, self.duration))
-            return .success
-        }
-        center.skipBackwardCommand.preferredIntervals = [15]
-        center.skipBackwardCommand.addTarget { [weak self] _ in
-            guard let self else { return .commandFailed }
-            self.seek(to: max(self.currentTime - 15, 0))
-            return .success
-        }
-        remoteCommandsRegistered = true
-    }
-
-    private func tearDownRemoteCommands() {
-        let center = MPRemoteCommandCenter.shared()
-        center.playCommand.removeTarget(nil)
-        center.pauseCommand.removeTarget(nil)
-        center.togglePlayPauseCommand.removeTarget(nil)
-        center.changePlaybackPositionCommand.removeTarget(nil)
-        center.skipForwardCommand.removeTarget(nil)
-        center.skipBackwardCommand.removeTarget(nil)
-        remoteCommandsRegistered = false
-    }
-
-    /// Trim the verbose `MPMediaItem*` / `MPNowPlayingInfo*` constant
-    /// names down to a readable tail for the UI read-back panel.
-    private func shortKey(_ key: String) -> String {
-        key
-            .replacingOccurrences(of: "MPMediaItemProperty", with: "")
-            .replacingOccurrences(of: "MPNowPlayingInfoProperty", with: "")
+        // Nothing playing: the publisher takes the info off the lock screen.
+        onNowPlayingChanged?()
     }
 
     private func teardown() {
@@ -1807,15 +1753,34 @@ final class QueuePlaybackCoordinator {
         let message: String
         var actionLabel: String? = nil
         var actionUrl: String? = nil
+        /// Shown as an alert on the CarPlay screen (`CarNowPlaying`). False for
+        /// information that needs nothing from the driver ("Playing via X"),
+        /// as Android Auto shows only the errors that stopped playback.
+        var showInCar = true
     }
     var notice: Notice?
+
+    /// Tracks in a row no source could play. In the car with no phone window
+    /// it stops playback on the third (`CAR_UNPLAYABLE_RUN_LIMIT`) instead of
+    /// skipping through the whole queue; see `CarUnplayableRun`. Counted from
+    /// the car's connect (`unplayableRunConnection`) and the last explicit play.
+    @ObservationIgnored private let unplayableRun = CarUnplayableRun(limit: CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT)
+    @ObservationIgnored private var unplayableRunConnection = 0
 
     /// The first source an embedded player refused during one route.
     private final class EmbedRefusal {
         var service: String?
         var pageUrl: String?
         var reason = "unplayable"
+        /// A Spotify source was tried during the route and didn't start.
+        var spotifyFailed = false
     }
+
+    /// The current track is on screen but no engine has it loaded: a queue
+    /// restored paused at launch, or a track that stopped because nothing
+    /// could play it. Play / toggle then starts it through `playTrack` instead
+    /// of resuming whatever the active engine last held.
+    @ObservationIgnored private var needsLoadOnPlay = false
 
     /// Resolver ids that open in the browser instead of streaming (stream:false,
     /// e.g. Bandcamp). Seeded with the known default so it holds before the .axe
@@ -1878,11 +1843,11 @@ final class QueuePlaybackCoordinator {
     @ObservationIgnored private var preSpinoffContext: PlaybackContext?
     // Radio (#256): a refill source for deep-link stations (Mode B artist-only /
     // Mode C with refill). When the pool runs low, top it up from this URL via the
-    // shared resolver. nil for the in-app ✨ spinoff (finite similar-track pool).
+    // shared resolver. nil for the in-app Spinoff button (finite similar-track pool).
     @ObservationIgnored private var spinoffRefillUrl: String?
     @ObservationIgnored private var spinoffRefill: ((String) async -> [Track])?
     @ObservationIgnored private var spinoffRefilling = false
-    /// True while a spinoff station is active — observed; gates the ✨ button, the
+    /// True while a spinoff station is active — observed; gates the Spinoff button, the
     /// "YOUR QUEUE" suspended queue display, and the "Spinoff from X" peek.
     var spinoffMode = false
     /// Last.fm availability for the CURRENT track: nil = unchecked (button enabled),
@@ -1946,7 +1911,7 @@ final class QueuePlaybackCoordinator {
     }
 
     /// Exit spinoff: drop the pool, restore the saved context. The queue was never
-    /// modified, so the next skipNext resumes it. Also the ✨ button's toggle-off.
+    /// modified, so the next skipNext resumes it. Also the Spinoff button's toggle-off.
     func exitSpinoff() {
         guard spinoffMode else { return }
         spinoffPool.removeAll()
@@ -1987,6 +1952,10 @@ final class QueuePlaybackCoordinator {
     /// (e.g. a phone call), so external playback recovers instead of staying
     /// silent (#322).
     @ObservationIgnored private var audioMonitor: IosAudioSessionMonitor?
+    /// Lock screen / Control Center / CarPlay: the info for engines with no
+    /// publisher of their own, and the remote commands, routed here. Only the
+    /// primary coordinator has one (MPRemoteCommandCenter is process-wide).
+    @ObservationIgnored private var nowPlaying: NowPlayingPublisher?
 
     /// True from the moment a track is tapped until its engine starts (resolve
     /// + route can take a beat). The mini-player shows a spinner so the tap
@@ -2276,10 +2245,18 @@ final class QueuePlaybackCoordinator {
         self.bandcamp.onTrackEnded = self.soundCloud.onTrackEnded
         self.bandcamp.onRemoteCommand = self.soundCloud.onRemoteCommand
         self.bandcamp.onRemoteSeek = { [weak self] seconds in self?.seek(to: seconds) }
-        // Lock-screen / Control-Center next & previous drive the QUEUE
-        // (engine-agnostic), not a single player — the "real next/previous"
-        // the AVPlayer's skip±15s stand-ins anticipated.
-        setupQueueRemoteCommands()
+        // Lock screen / Control Center / CarPlay: remote commands drive the
+        // coordinator (whichever engine is playing), and the local player's
+        // info is published from one place. The Dev-tab smoke-test coordinator
+        // (installLifecycleMonitor: false) doesn't register a second set.
+        // Every coordinator is created on the main actor.
+        if installLifecycleMonitor {
+            let publisher = MainActor.assumeIsolated { NowPlayingPublisher(coordinator: self) }
+            self.nowPlaying = publisher
+            self.player.onNowPlayingChanged = { [weak publisher] in
+                Task { @MainActor in publisher?.refresh(force: true) }
+            }
+        }
         // #322: observe audio-session interruptions and resume the active engine
         // after a resumable interruption (e.g. a phone call). The observer fires
         // on .main; hop onto the main actor to touch engine state. ONLY the
@@ -2319,6 +2296,8 @@ final class QueuePlaybackCoordinator {
                     // #322: warm the next track's Apple Music `Song` ~15s before
                     // the boundary so its play() skips the ~1.6s catalog fetch.
                     self.prefetchNextIfNeeded(remainingSec: self.duration - self.currentTime)
+                    // Track changes, artwork that resolved late, and drift.
+                    self.nowPlaying?.refresh()
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
@@ -2357,28 +2336,15 @@ final class QueuePlaybackCoordinator {
         }
     }
 
-    /// Register engine-agnostic next/previous-track commands on the shared
-    /// remote command center so lock-screen / Control-Center / headphone
-    /// next-prev advance our queue regardless of which engine is active.
-    /// (Per-engine play/pause + now-playing info stay where they are:
-    /// AVPlayer self-registers them; ApplicationMusicPlayer drives the lock
-    /// screen natively during Apple Music playback.)
-    private func setupQueueRemoteCommands() {
-        let center = MPRemoteCommandCenter.shared()
-        center.nextTrackCommand.isEnabled = true
-        center.nextTrackCommand.addTarget { [weak self] _ in
-            self?.skipNext()
-            return .success
-        }
-        center.previousTrackCommand.isEnabled = true
-        center.previousTrackCommand.addTarget { [weak self] _ in
-            self?.skipPrevious()
-            return .success
-        }
-    }
-
     /// Engine-agnostic play/pause toggle for the mini player + Now Playing.
     func togglePlayPause() {
+        // Nothing loaded for the track on screen (restored queue, or stopped
+        // because no source could play): start it. Restored queues keep no
+        // position, so it starts from the top.
+        if needsLoadOnPlay, let track = currentTrack, !isStarting {
+            playTrack(track)
+            return
+        }
         switch activeEngine {
         case .avPlayer:
             player.isPlaying ? player.pause() : player.play()
@@ -2412,8 +2378,9 @@ final class QueuePlaybackCoordinator {
     }
 
     /// Establish a new queue and start playing the track at
-    /// `startIndex`. Mirrors `PlaybackEngine.setQueue`.
-    func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil) {
+    /// `startIndex`. Mirrors `PlaybackEngine.setQueue`. [shuffle] overrides
+    /// the current shuffle setting (the car's Shuffle rows); nil keeps it.
+    func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil, shuffle: Bool? = nil) {
         // Spinoff (#231): the user starting their own playback ends any active
         // spinoff (it's not the pool driving this setQueue). Exclude the spinoff's
         // own context so beginSpinoff's setContext path isn't mistaken for takeover.
@@ -2423,7 +2390,7 @@ final class QueuePlaybackCoordinator {
             tracks: tracks,
             startIndex: Int32(startIndex),
             context: context,
-            shuffle: shuffleEnabled
+            shuffle: shuffle ?? shuffleEnabled
         )
         syncSnapshot()
         if let track = toPlay {
@@ -2582,10 +2549,14 @@ final class QueuePlaybackCoordinator {
     /// can play is skipped rather than reported (desktop `autoSkipIfAdvancing`).
     private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false) {
         currentTrack = track
+        needsLoadOnPlay = false
+        // An explicit play (a tap, Play on a stopped track) starts a new run of
+        // unplayable tracks; only the queue moving on adds to one.
+        if !advancing { unplayableRun.reset() }
         // New track → re-arm the next-track Apple Music pre-fetch (#322).
         prefetchedNextForCurrentTrack = false
         // Refresh whether spinoff is available for this track (#231) — no-op during
-        // spinoff (the pool tracks don't re-check; the ✨ button shows "exit").
+        // spinoff (the pool tracks don't re-check; the Spinoff button shows "exit").
         checkSpinoffAvailability(for: track)
         isStarting = true
         // Supersede any in-flight start so only the LATEST request reaches the
@@ -2609,6 +2580,15 @@ final class QueuePlaybackCoordinator {
             // the track's (possibly stale) direct URL.
             if forcedResolver == nil, let url = track.sourceUrl, !url.isEmpty,
                resolverCache.cached(artist: track.artist, title: track.title, album: track.album) == nil {
+                // Stop the engine that was playing, as the routed path does:
+                // without this a Bandcamp or Apple Music track kept playing under
+                // this one, and kept the lock screen / CarPlay.
+                // activeEngine flips only after the handoff (which can suspend)
+                // and a staleness check: a newer start during the handoff must
+                // still see the engine that was actually playing.
+                let previousEngine = activeEngine
+                await applyEngineHandoff(from: previousEngine, to: .avPlayer)
+                if Task.isCancelled { return }
                 activeEngine = .avPlayer
                 player.load(url: url, title: track.title, artist: track.artist, resolver: "direct")
                 startAVPlaybackWhenReady()
@@ -2659,13 +2639,20 @@ final class QueuePlaybackCoordinator {
             router.onRefused = { service, pageUrl, reason in
                 if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl; refusal.reason = reason }
             }
+            router.onSpotifyFailed = { refusal.spotifyFailed = true }
+            // The embeds' lock screen / CarPlay art: the cover the phone shows
+            // (the track's own unless it's Last.fm's placeholder, else its
+            // resolved sources'), then the playing source's.
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist,
-                                           artworkUrl: track.artworkUrl)
+                                           album: track.album,
+                                           artworkUrl: pcTrackArt(track.artworkUrl, artist: track.artist,
+                                                                  title: track.title, album: track.album))
             // Superseded while the engine was starting — skip the stale UI
             // state updates (the newer start owns activeEngine now).
             if Task.isCancelled { return }
             switch result {
             case .played(let kind, let playedResolver):
+                unplayableRun.started()
                 let previousEngine = activeEngine
                 activeEngine = kind
                 await applyEngineHandoff(from: previousEngine, to: kind)
@@ -2682,7 +2669,8 @@ final class QueuePlaybackCoordinator {
                 // (incl. Bandcamp), not just the flat-field trio (#276).
                 container.updateScrobbleSources(trackId: track.id, sources: ranked ?? [])
                 if let service = refusal.service, playedResolver != "soundcloud" {
-                    notice = Notice(message: "\(service) can't play this track here. Playing via \(pcResolverName(playedResolver)).")
+                    notice = Notice(message: "\(service) can't play this track here. Playing via \(pcResolverName(playedResolver)).",
+                                    showInCar: false)
                 }
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
@@ -2709,6 +2697,32 @@ final class QueuePlaybackCoordinator {
                 if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
 
             case .noPlayableSource:
+                if refusal.spotifyFailed, forcedResolver == nil, CarPlaySession.shared.isConnected {
+                    // In the car, Spotify couldn't start (it isn't running on
+                    // the phone, and the car never opens it) and nothing else
+                    // can play the track: stop on it with Android Auto's
+                    // message rather than skip through a Spotify-only
+                    // playlist. Play again retries it once Spotify is open.
+                    await haltActiveEngine()
+                    notice = Notice(message: CarMessages.shared.OPEN_SPOTIFY_ON_PHONE)
+                    needsLoadOnPlay = true
+                    isStarting = false
+                    return
+                }
+                if refusal.service != nil, refusal.reason == "page" || refusal.reason == "unplayable",
+                   !(advancing || spinoffMode),
+                   forcedResolver == nil, CarPlaySession.shared.phoneAppNotInFront {
+                    // Tapped in the car with Parachord not in front on the
+                    // phone: the embed had no window, or may not have been let
+                    // start while locked, so its "only plays on its own site"
+                    // message would be wrong and nobody could act on a phone
+                    // banner. Play retries it.
+                    await haltActiveEngine()
+                    notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
+                    needsLoadOnPlay = true
+                    isStarting = false
+                    return
+                }
                 if let service = refusal.service, !(advancing || spinoffMode) {
                     // A track SoundCloud's widget won't play, and nothing else
                     // can: say so, with its page on the service (desktop
@@ -2727,7 +2741,29 @@ final class QueuePlaybackCoordinator {
                 // match with no subscription) — advance to the next track. On a
                 // forced deck switch, DON'T skip: the user asked to change source,
                 // not to skip the song — leave the current playback as-is.
-                if forcedResolver == nil { skipNext() }
+                if forcedResolver == nil {
+                    // A car that connected since the run began starts it over:
+                    // failures on the phone before it don't count.
+                    let session = CarPlaySession.shared
+                    if session.connectionCount != unplayableRunConnection {
+                        unplayableRunConnection = session.connectionCount
+                        unplayableRun.reset()
+                    }
+                    if unplayableRun.failed(carWithoutPhone: session.phoneAppNotInFront) {
+                        // In the car with Parachord not in front on the phone,
+                        // the third track in a row nothing could play: stop on
+                        // it rather than run silently through the queue. Play
+                        // retries it. With the phone app open the queue skips
+                        // on, as on the phone.
+                        NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
+                        await haltActiveEngine()
+                        notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
+                        needsLoadOnPlay = true
+                        isStarting = false
+                        return
+                    }
+                    skipNext()
+                }
             }
             isStarting = false
         }
@@ -2873,6 +2909,9 @@ final class QueuePlaybackCoordinator {
             shuffle: state.shuffleEnabled)
         await MainActor.run {
             self.currentTrack = state.currentTrack
+            // Shown paused but loaded in no engine: play starts it. (Not when
+            // a track was already started this launch.)
+            self.needsLoadOnPlay = state.currentTrack != nil && self.playTask == nil
             self.syncSnapshot()
         }
     }
@@ -3630,21 +3669,6 @@ struct DevSmokeTestView: View {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
-            }
-
-            if !avPlayer.lastNowPlayingKeys.isEmpty {
-                Divider()
-                Text("MPNowPlayingInfoCenter (phase 4.5)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text("\(avPlayer.nowPlayingTitle) — \(avPlayer.nowPlayingArtist)")
-                    .font(.caption)
-                Text("keys: \(avPlayer.lastNowPlayingKeys.joined(separator: ", "))")
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                Text("+ MPRemoteCommandCenter: play / pause / toggle / seek / skip±15s")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
         .padding()

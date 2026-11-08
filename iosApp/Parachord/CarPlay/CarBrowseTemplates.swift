@@ -1,0 +1,196 @@
+import CarPlay
+import Shared
+import UIKit
+
+// MARK: - CarPlay browse lists
+//
+// Renders the shared car browse tree (`CarBrowse` in shared/commonMain, the
+// tree Android Auto shows) as `CPListTemplate`s. The tree decides the rows,
+// their order and caps (500 playlist tracks, 100 loved songs) and what a tap
+// plays; this file only draws it:
+//
+// - A browsable row pushes the list of its children.
+// - A playable row asks `carPlayRequest` what to play, starts it on the app's
+//   one coordinator (`AppPlayback.shared`) and shows `CPNowPlayingTemplate`.
+//   A stale id (null request) plays nothing and pushes nothing. Only the
+//   latest tap plays: a new tap or a disconnect cancels a play still waiting
+//   (on a cold launch it waits for the bootstrap).
+// - Rows beyond `CPListTemplate.maximumItemCount` (the car's own limit) are
+//   dropped. An empty list shows one disabled "Nothing here yet" row.
+// - Artwork loads after the list is shown (`CarArtwork`), at most a few at a
+//   time. Once the list is popped no new loads start (in-flight ones finish).
+
+@MainActor
+final class CarBrowseTemplates: NSObject, CPInterfaceControllerDelegate {
+    private weak var interfaceController: CPInterfaceController?
+    private let container = IosContainer.companion.shared
+    /// Artwork loads per list, keyed by the UUID in the list's `userInfo`
+    /// (an object address can be reused by the next list pushed), cancelled
+    /// once that list leaves the stack.
+    private var artworkTasks: [UUID: Task<Void, Never>] = [:]
+    /// The tapped row's play, while it waits. A newer tap or a disconnect cancels it.
+    private var playTask: Task<Void, Never>?
+    /// Also told when a template disappears: this class is the interface
+    /// controller's one delegate (`CarNowPlaying`'s Up Next list uses it).
+    var onTemplateDidDisappear: ((CPTemplate) -> Void)?
+
+    private static let maxArtworkLoads = 4
+
+    init(interfaceController: CPInterfaceController) {
+        self.interfaceController = interfaceController
+    }
+
+    /// The list of [parentId]'s children, titled [title].
+    func list(for parentId: String, title: String) async -> CPListTemplate {
+        let children: [CarItem]
+        do {
+            children = try await container.carChildren(parentId: parentId)
+        } catch {
+            NSLog("CARPLAY children(\(parentId)) failed: \(error)")
+            children = []
+        }
+        let limit = CPListTemplate.maximumItemCount
+        let shown = Array(children.prefix(limit))
+        if children.count > shown.count {
+            NSLog("CARPLAY \(parentId): showing \(shown.count) of \(children.count) rows (car limit \(limit))")
+        }
+
+        var rows: [CPListItem] = []
+        var artwork: [(CPListItem, CarItem)] = []
+        for item in shown {
+            let row = makeRow(item, parentId: parentId, listTitle: title)
+            rows.append(row)
+            if item.kind == .playlist || item.kind == .track { artwork.append((row, item)) }
+        }
+        if rows.isEmpty {
+            let empty = CPListItem(text: "Nothing here yet", detailText: nil)
+            empty.isEnabled = false
+            rows = [empty]
+        }
+
+        let template = CPListTemplate(title: title, sections: [CPListSection(items: rows)])
+        loadArtwork(artwork, for: template)
+        return template
+    }
+
+    /// Stop every artwork load and a pending play (the car disconnected).
+    func cancelAll() {
+        artworkTasks.values.forEach { $0.cancel() }
+        artworkTasks.removeAll()
+        playTask?.cancel()
+        playTask = nil
+    }
+
+    // MARK: Rows
+
+    private func makeRow(_ item: CarItem, parentId: String, listTitle: String) -> CPListItem {
+        let row = CPListItem(text: item.title, detailText: item.subtitle,
+                             image: CarArtwork.placeholder(for: item))
+        if item.isBrowsable { row.accessoryType = .disclosureIndicator }
+        row.handler = { [weak self] _, completion in
+            guard let self else { completion(); return }
+            if item.isBrowsable {
+                Task { @MainActor in
+                    await self.open(item)
+                    completion()
+                }
+            } else if item.isPlayable {
+                self.playTask?.cancel()
+                self.playTask = Task { @MainActor in
+                    await self.play(item, parentId: parentId, listTitle: listTitle)
+                    completion()
+                }
+            } else {
+                completion()
+            }
+        }
+        return row
+    }
+
+    private func open(_ item: CarItem) async {
+        let child = await list(for: item.id, title: item.title)
+        guard CarPlaySession.shared.isConnected else { return }
+        interfaceController?.pushTemplate(child, animated: true, completion: nil)
+    }
+
+    private func play(_ item: CarItem, parentId: String, listTitle: String) async {
+        // A CarPlay-only launch may still be loading the plugin host; nothing
+        // resolves without it.
+        await AppBootstrap.shared.start()
+        let request: CarPlayRequest?
+        do {
+            request = try await container.carPlayRequest(id: item.id)
+        } catch {
+            NSLog("CARPLAY playRequest(\(item.id)) failed: \(error)")
+            request = nil
+        }
+        guard let request else {
+            NSLog("CARPLAY nothing to play for \(item.id)")
+            return
+        }
+        // A newer tap or a disconnect while this waited (the bootstrap, the
+        // database read) wins: don't start playback for a car that's gone.
+        guard !Task.isCancelled, CarPlaySession.shared.isConnected else {
+            NSLog("CARPLAY dropped the play of \(item.id) (superseded or disconnected)")
+            return
+        }
+        let context = container.carPlaybackContext(parentId: parentId, title: listTitle)
+        AppPlayback.shared.coordinator.setQueue(
+            request.tracks,
+            startIndex: Int(request.startIndex),
+            context: context,
+            shuffle: request.shuffle?.boolValue
+        )
+        showNowPlaying()
+    }
+
+    private func showNowPlaying() {
+        guard let ic = interfaceController else { return }
+        let nowPlaying = CPNowPlayingTemplate.shared
+        if ic.topTemplate === nowPlaying { return }
+        ic.pushTemplate(nowPlaying, animated: true, completion: nil)
+    }
+
+    // MARK: Artwork
+
+    private func loadArtwork(_ rows: [(CPListItem, CarItem)], for template: CPListTemplate) {
+        guard !rows.isEmpty else { return }
+        let key = UUID()
+        template.userInfo = key
+        // Read the candidates now: the resolver-cache fallback is main-actor state.
+        let jobs = rows.map { ($0.0, CarArtwork.candidates(for: $0.1)) }.filter { !$0.1.isEmpty }
+        artworkTasks[key] = Task { @MainActor [weak self] in
+            await withTaskGroup(of: Void.self) { group in
+                var running = 0
+                for (row, urls) in jobs {
+                    if Task.isCancelled { break }
+                    if running >= Self.maxArtworkLoads {
+                        await group.next()
+                        running -= 1
+                    }
+                    group.addTask { @MainActor in
+                        if let image = await CarArtwork.image(forFirstOf: urls), !Task.isCancelled {
+                            row.setImage(image)
+                        }
+                    }
+                    running += 1
+                }
+            }
+            self?.artworkTasks[key] = nil   // a UUID is never reused, so this is only ours
+        }
+    }
+
+    // MARK: CPInterfaceControllerDelegate
+
+    nonisolated func templateDidDisappear(_ aTemplate: CPTemplate, animated: Bool) {
+        MainActor.assumeIsolated {
+            onTemplateDidDisappear?(aTemplate)
+            // Covered by a pushed list it's still on the stack; popped, it isn't.
+            guard let ic = interfaceController,
+                  !ic.templates.contains(where: { $0 === aTemplate }) else { return }
+            guard let key = aTemplate.userInfo as? UUID else { return }
+            artworkTasks[key]?.cancel()
+            artworkTasks[key] = nil
+        }
+    }
+}

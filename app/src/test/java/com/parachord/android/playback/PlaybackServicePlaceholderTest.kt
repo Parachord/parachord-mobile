@@ -1,6 +1,5 @@
 package com.parachord.android.playback
 
-import com.parachord.shared.model.Track
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -83,27 +82,6 @@ class PlaybackServicePlaceholderTest {
         )
         assertEquals("Has Title", title)
         assertEquals("From Cache", subtitle)
-    }
-
-    // ── lovedSongsForAutoBrowse (Loved Songs Auto folder) ────────────────
-
-    private fun track(id: String) = Track(id = id, title = "T$id", artist = "A")
-
-    @Test
-    fun `lovedSongsForAutoBrowse caps the list and preserves order`() {
-        // getAll() already returns ORDER BY addedAt DESC, so the helper only
-        // caps — Android Auto browse lists must stay bounded for responsiveness.
-        val tracks = (1..250).map { track("t$it") }
-        val result = lovedSongsForAutoBrowse(tracks, cap = 100)
-        assertEquals(100, result.size)
-        assertEquals("t1", result.first().id)   // order preserved (recent-first)
-        assertEquals("t100", result.last().id)
-    }
-
-    @Test
-    fun `lovedSongsForAutoBrowse returns all when under the cap`() {
-        val tracks = (1..30).map { track("t$it") }
-        assertEquals(30, lovedSongsForAutoBrowse(tracks, cap = 100).size)
     }
 
     // ── mosaicFileNameFromStored (Auto FileProvider bridge) ──────────────

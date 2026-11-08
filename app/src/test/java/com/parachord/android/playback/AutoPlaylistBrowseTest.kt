@@ -1,30 +1,10 @@
 package com.parachord.android.playback
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** Android Auto: a playlist opens its tracklist, and a tapped track plays from there. */
+/** Android Auto pages a playlist's tracklist when the head unit asks for pages. */
 class AutoPlaylistBrowseTest {
-
-    @Test
-    fun aTrackIdRoundTrips() {
-        assertEquals("spotify-37i9dQ" to 4, parsePlaylistTrackMediaId(playlistTrackMediaId("spotify-37i9dQ", 4)))
-    }
-
-    @Test
-    fun aPlaylistIdWithColonsStillParses() {
-        assertEquals("hosted:xspf:abc" to 0, parsePlaylistTrackMediaId(playlistTrackMediaId("hosted:xspf:abc", 0)))
-    }
-
-    @Test
-    fun otherIdsAreNotPlaylistTracks() {
-        assertNull(parsePlaylistTrackMediaId("playlist:local-1"))
-        assertNull(parsePlaylistTrackMediaId("playlist-shuffle:local-1"))
-        assertNull(parsePlaylistTrackMediaId("playlist-track:x:local-1"))
-        assertNull(parsePlaylistTrackMediaId("playlist-track:3:"))
-        assertNull(parsePlaylistTrackMediaId("loved-track:abc"))
-    }
 
     @Test
     fun pagingReturnsTheAskedPage_orEverythingWhenNotPaged() {

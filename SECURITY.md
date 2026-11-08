@@ -20,7 +20,7 @@ We'll acknowledge receipt within 48 hours and aim to resolve critical issues wit
 
 OAuth tokens and bring-your-own API keys go through the shared `SecureTokenStore`:
 - **Android:** `EncryptedSharedPreferences`, backed by an Android Keystore AES-256-GCM key.
-- **iOS:** the Keychain (`kSecAttrAccessibleAfterFirstUnlock`).
+- **iOS:** the Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so a CarPlay launch with the phone locked can read tokens; they don't move to a new phone via backup).
 
 Non-sensitive preferences (theme, sort order, queue state) use SharedPreferences on Android and NSUserDefaults on iOS.
 

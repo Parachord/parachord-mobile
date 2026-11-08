@@ -288,7 +288,12 @@ class IosContainer private constructor() {
 
     val settingsStore: SettingsStore by lazy {
         SettingsStore(
-            secureStore = IosSecureTokenStore(),
+            secureStore = IosSecureTokenStore(
+                migrationDone = { kvStore.getBoolean("keychain_accessibility_v2") },
+                markMigrationDone = {
+                    kotlinx.coroutines.runBlocking { kvStore.setBoolean("keychain_accessibility_v2", true) }
+                },
+            ),
             kv = kvStore,
         )
     }
@@ -1573,6 +1578,48 @@ class IosContainer private constructor() {
         spotifyId = null, appleMusicId = null, isrc = null, recordingMbid = null,
         artistMbid = null, releaseMbid = null, crossResolverEnrichedAt = null,
     )
+
+    // ── CarPlay browse tree — the same tree Android Auto shows ─────────────
+    // `CarBrowse` (commonMain) owns the ids, rows, sort orders and caps; the
+    // CarPlay screens (iosApp/Parachord/CarPlay/) only render it. Built exactly
+    // as Android's Koin binding builds it (AndroidModule: CarBrowse(daoCarLibrarySource(...))).
+    val carBrowse: com.parachord.shared.car.CarBrowse by lazy {
+        com.parachord.shared.car.CarBrowse(
+            com.parachord.shared.car.daoCarLibrarySource(trackDao, playlistDao, playlistTrackDao, libraryRepository),
+        )
+    }
+
+    /** The rows under [parentId] (`CarIds.ROOT`, a folder, or a playlist). @Throws so a DB
+     *  failure reaches the Swift catch instead of aborting across the bridge (#322). */
+    @Throws(Throwable::class)
+    suspend fun carChildren(parentId: String): List<com.parachord.shared.car.CarItem> =
+        carBrowse.children(parentId)
+
+    /** What tapping [id] plays, or null when there's nothing (an id gone stale). */
+    @Throws(Throwable::class)
+    suspend fun carPlayRequest(id: String): com.parachord.shared.car.CarPlayRequest? =
+        carBrowse.playRequest(id)
+
+    /**
+     * The queue context for a play started from the car list [parentId] titled
+     * [title], so the phone's Now Playing names where it came from and a running
+     * Listen Along sees that the person took over (it only checks a non-null
+     * context). Playlists keep their id so the phone can open them. Any other
+     * list gets a neutral "carplay" context named [title], never another list's name.
+     */
+    fun carPlaybackContext(parentId: String, title: String): com.parachord.shared.playback.PlaybackContext {
+        com.parachord.shared.car.CarIds.playlistIdOrNull(parentId)?.let { id ->
+            return com.parachord.shared.playback.PlaybackContext(type = "playlist", name = title, id = id)
+        }
+        return when (parentId) {
+            com.parachord.shared.car.CarIds.LOVED ->
+                com.parachord.shared.playback.PlaybackContext(type = "collection", name = "Loved Songs")
+            // Collection Radio is the root's only playable row.
+            com.parachord.shared.car.CarIds.ROOT ->
+                com.parachord.shared.playback.PlaybackContext(type = "collection", name = "Collection Radio")
+            else -> com.parachord.shared.playback.PlaybackContext(type = "carplay", name = title)
+        }
+    }
 
     // ── Friend profile (#235 / #196) — a friend's History, flat for Swift ──
     // Friend top-data: same per-timeframe disk cache as own history, keyed by

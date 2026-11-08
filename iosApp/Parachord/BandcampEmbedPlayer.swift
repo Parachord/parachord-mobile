@@ -50,6 +50,8 @@ final class IosBandcampEmbed {
     @ObservationIgnored private var currentNavigation: WKNavigation?
     @ObservationIgnored private var pageLoaded = false
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// When the lock screen / CarPlay is told the position again.
+    @ObservationIgnored private var positionThrottle = EmbedNowPlaying.Throttle()
     @ObservationIgnored private lazy var controlScript: String? = {
         guard let url = Bundle.main.url(forResource: "bandcamp-embed-control", withExtension: "js") else { return nil }
         return try? String(contentsOf: url, encoding: .utf8)
@@ -62,12 +64,13 @@ final class IosBandcampEmbed {
     /// Load `embedUrl` (from `BandcampEmbed.embedUrl`) and start it at `volume`
     /// (0...1). Returns once the position has moved, or `.refused`.
     @MainActor
-    func load(embedUrl: String, volume: Float, title: String, artist: String, artworkUrl: String?) async -> LoadResult {
+    func load(embedUrl: String, volume: Float, title: String, artist: String, album: String?,
+              artworkUrl: String?) async -> LoadResult {
         guard let url = URL(string: embedUrl), let view = ensureWebView() else { return .refused("page") }
         // Before anything else: released and re-requested with the screen locked,
         // iOS refuses WebKit's session and the track plays silent.
         await audioHold?.holdAudio(true)
-        audioHold?.mirrorNowPlaying(title: title, artist: artist, artworkUrl: artworkUrl)
+        audioHold?.mirrorNowPlaying(title: title, artist: artist, album: album, artworkUrl: artworkUrl)
 
         pollTask?.cancel()
         generation += 1
@@ -78,10 +81,15 @@ final class IosBandcampEmbed {
         currentTime = 0
         duration = 0
         pageLoaded = false
+        positionThrottle.reset()
         currentNavigation = view.load(URLRequest(url: url))
+        // The cover as a data: URL, fetched while the page loads (WebKit's own
+        // fetch of the http(s) URL failed behind redirects).
+        let artwork = Task { await EmbedNowPlaying.inlineArtwork(artworkUrl) }
         pollTask = Task { @MainActor [weak self] in
             await self?.pollLoop(gen: gen, load: load, embedUrl: embedUrl, volume: volume,
-                                 title: title, artist: artist, artworkUrl: artworkUrl)
+                                 title: title, artist: artist, album: album, artworkUrl: artworkUrl,
+                                 artwork: artwork)
         }
 
         let started = Date()
@@ -103,12 +111,14 @@ final class IosBandcampEmbed {
 
     @MainActor
     private func pollLoop(gen: Int, load: BandcampEmbedTracker, embedUrl: String, volume: Float,
-                          title: String, artist: String, artworkUrl: String?) async {
+                          title: String, artist: String, album: String?, artworkUrl: String?,
+                          artwork: Task<EmbedNowPlaying.InlineArtwork?, Never>) async {
         let embed = BandcampEmbed.shared
         var installed = false
         var clicked = false
         var announced = false
         var reportedFinish = false
+        var wasPlaying = true
         while !Task.isCancelled && gen == generation {
             var raw: String?
             if pageLoaded && webView?.url?.absoluteString == embedUrl {
@@ -138,11 +148,37 @@ final class IosBandcampEmbed {
             if clicked && raw != nil {
                 if !announced {
                     announced = true
-                    _ = await evaluate(Self.nowPlayingScript(title: title, artist: artist, artworkUrl: artworkUrl))
+                    _ = await evaluate(Self.nowPlayingScript)
+                    if let script = EmbedNowPlaying.metadataScript(title: title, artist: artist, album: album,
+                                                                   artworkUrl: artworkUrl) {
+                        _ = await evaluate(script)
+                    }
+                    positionThrottle.reset()
+                    wasPlaying = true
+                    // Then the downloaded cover, once it's ready and if this is
+                    // still the track: the holding page first, this page last,
+                    // since WebKit shows the page that updated last.
+                    Task { @MainActor [weak self] in
+                        guard let inline = await artwork.value, let self, gen == self.generation else { return }
+                        NSLog("BandcampEmbed: cover for '\(title)' as a data URL, \(inline.width)x\(inline.height)")
+                        await self.audioHold?.mirrorArtwork(title: title, artist: artist, album: album,
+                                                            artworkUrl: artworkUrl, inline: inline)
+                        guard gen == self.generation, let script = EmbedNowPlaying.metadataScript(
+                            title: title, artist: artist, album: album, artworkUrl: artworkUrl, inline: inline) else { return }
+                        _ = await self.evaluate(script)
+                    }
                 }
-                // Not while paused: once at the pause is enough, and repeating it
-                // fights the silent loop's own position (the scrubber bounced to 0:00).
-                if isPlaying { _ = await evaluate("__pcPosition(\(duration), \(currentTime), true)") }
+                // Resumed after a pause: WebKit kept showing the track as paused
+                // (a frozen scrubber) until the element was seeked, whatever the
+                // position state said. A seek to where it already is fixes it.
+                if isPlaying, !wasPlaying { _ = await evaluate("window.__pcResync && __pcResync()") }
+                wasPlaying = isPlaying
+                // The position on a change and every few seconds, not every poll.
+                // Not repeated while paused: it fights the silent loop's own
+                // position (the scrubber bounced to 0:00).
+                if positionThrottle.shouldPublish(duration: duration, position: currentTime, playing: isPlaying) {
+                    sendPosition()
+                }
                 drainRemoteCommands(await evaluate("__pcTakeRemote()") as? String)
             }
             if load.finished && !reportedFinish {
@@ -179,10 +215,19 @@ final class IosBandcampEmbed {
         publishPosition()
     }
 
-    /// The lock screen's position and play state, once.
+    /// The lock screen's position and play state, now (a play, pause or seek).
     @MainActor private func publishPosition() {
-        webView?.evaluateJavaScript("window.__pcPosition && __pcPosition(\(duration), \(currentTime), \(isPlaying))",
-                                    completionHandler: nil)
+        _ = positionThrottle.shouldPublish(duration: duration, position: currentTime, playing: isPlaying)
+        sendPosition()
+    }
+
+    /// The position to this page's Media Session. The holding page isn't sent
+    /// it: it then reported the track as paused, and took the lock screen
+    /// back on every update.
+    @MainActor private func sendPosition() {
+        guard let script = EmbedNowPlaying.positionScript(duration: duration, position: currentTime,
+                                                          playing: isPlaying) else { return }
+        webView?.evaluateJavaScript(script, completionHandler: nil)
     }
 
     /// Halt the track: leaving the page stops it, nothing is left paused. Releases
@@ -205,16 +250,16 @@ final class IosBandcampEmbed {
     /// WebKit publishes the lock screen for the page that's playing, and sends its
     /// buttons to the page. With no bridge into a third-party page, the handlers
     /// only queue the command, and the poll collects it (`drainRemoteCommands`,
-    /// which accepts only these commands whatever the page puts there).
-    private static func nowPlayingScript(title: String, artist: String, artworkUrl: String?) -> String {
-        """
+    /// which accepts only these commands whatever the page puts there). The
+    /// track's metadata and position come from `EmbedNowPlaying`.
+    private static let nowPlayingScript = """
         (function () {
           window.__pcRemote = [];
           // A silent loop in this page while paused. With no audio iOS suspends the
           // page's process, which drops the lock screen to "Not Playing" and leaves
           // play with nothing to wake. Same page as the player, so unlike the
           // track-change hold in SoundCloud's page it reports nothing different.
-          var silence = null;
+          var silence = null, silenceUrl = null;
           window.__pcHold = function (on) {
             if (on) {
               if (!silence) {
@@ -226,30 +271,33 @@ final class IosBandcampEmbed {
                 view.setUint16(34, 8, true); str(36, 'data'); view.setUint32(40, rate, true);
                 for (var b = 44; b < bytes.length; b++) bytes[b] = 128;
                 // Never added to the document, so desktop's bcAudio() can't find it.
-                silence = new Audio(URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' })));
+                silenceUrl = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+                silence = new Audio(silenceUrl);
                 silence.loop = true;
               }
               var p = silence.play();
               if (p && p.catch) p.catch(function () {});
             } else if (silence) {
+              // Dropped, not just paused: a paused element stays the page's
+              // now-playing one, and the lock screen / CarPlay then showed the
+              // resumed track as paused.
               silence.pause();
+              silence.removeAttribute('src');
+              silence.load();
+              silence = null;
+              URL.revokeObjectURL(silenceUrl);
+              silenceUrl = null;
             }
+            return true;
+          };
+          window.__pcResync = function () {
+            var el = document.querySelector('audio');
+            if (el && !el.paused) el.currentTime = el.currentTime;
             return true;
           };
           window.__pcTakeRemote = function () { var c = window.__pcRemote; window.__pcRemote = []; return JSON.stringify(c); };
-          window.__pcPosition = function (duration, position, playing) {
-            var ms = navigator.mediaSession;
-            if (!ms) return false;
-            try { ms.playbackState = playing ? 'playing' : 'paused'; } catch (e) {}
-            if (ms.setPositionState && duration > 0) {
-              try { ms.setPositionState({ duration: duration, position: Math.min(Math.max(position, 0), duration), playbackRate: 1 }); } catch (e) {}
-            }
-            return true;
-          };
           var ms = navigator.mediaSession;
-          if (!ms || typeof MediaMetadata === 'undefined') return false;
-          var artwork = \(json(artworkUrl ?? ""));
-          ms.metadata = new MediaMetadata({ title: \(json(title)), artist: \(json(artist)), artwork: artwork ? [{ src: artwork, sizes: '512x512' }] : [] });
+          if (!ms) return false;
           var actions = { play: 'play', pause: 'pause', nexttrack: 'next', previoustrack: 'previous' };
           Object.keys(actions).forEach(function (action) {
             try { ms.setActionHandler(action, function () { window.__pcRemote.push(actions[action]); }); } catch (e) {}
@@ -258,7 +306,6 @@ final class IosBandcampEmbed {
           return true;
         })()
         """
-    }
 
     @MainActor
     private func drainRemoteCommands(_ raw: String?) {
@@ -274,14 +321,16 @@ final class IosBandcampEmbed {
         }
     }
 
-    private static func json(_ s: String) -> String {
-        (try? String(data: JSONEncoder().encode(s), encoding: .utf8)) ?? "\"\""
-    }
-
     // MARK: Page
 
     @MainActor
     private func ensureWebView() -> WKWebView? {
+        // In the car with no phone window at all: refuse, so the
+        // next source plays (an embed out of a window stays at 0:00).
+        if CarPlaySession.shared.blocksEmbeds {
+            NSLog("BandcampEmbed: car connected with no phone window, refusing")
+            return nil
+        }
         if let webView { return webView }
         let delegate = NavigationDelegate()
         delegate.onFinished = { [weak self] navigation in

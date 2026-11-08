@@ -304,7 +304,8 @@ struct PCNowPlaying: View {
                 // The current song keeps playing — the pool starts when it ends.
                 Button { spinoff.toggle() } label: {
                     VStack(spacing: 4) {
-                        Image(systemName: "sparkles").font(.system(size: 21))
+                        // The fork, as on Android and desktop (sparkles is Shuffleupagus).
+                        Image("SpinoffFork").resizable().scaledToFit().frame(width: 22, height: 22)
                         Text("Spinoff").font(.system(size: 11))
                     }.frame(maxWidth: .infinity)
                 }
@@ -405,7 +406,7 @@ struct PCNowPlaying: View {
         func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
     }
 
-    /// ✨ Spinoff button tint: active = purple (#C084FC), unavailable = very dim,
+    /// Spinoff button tint: active = purple (#C084FC), unavailable = very dim,
     /// otherwise the normal control gray (#231 / Android parity).
     private var spinoffTint: Color {
         if coordinator.spinoffMode { return Color(uiColor: UIColor(hex: 0xC084FC)) }
@@ -451,7 +452,7 @@ struct PCNowPlaying: View {
             let purple = Color(uiColor: UIColor(hex: 0xC084FC))
             Button { withAnimation(.spring(duration: 0.32)) { showQueue = true } } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(purple)
+                    Image("SpinoffFork").resizable().scaledToFit().frame(width: 14, height: 14).foregroundStyle(purple)
                     Text(ctx.name.uppercased())
                         .font(.system(size: 11, weight: .semibold)).tracking(1).foregroundStyle(purple).lineLimit(1)
                     Spacer()

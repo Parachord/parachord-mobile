@@ -210,9 +210,31 @@ Every screen follows the same shape — don't reinvent it:
 
 `AppPlayback` (in `NowPlayingView.swift`) is the single app-wide playback
 engine — one `IosAVPlayer` + one shared `QueuePlaybackCoordinator`,
-created at the ContentView root, shared by the Now Playing tab and the
-mini player. The Dev tab keeps its OWN separate smoke-test player on
-purpose; it retires with the Dev tab.
+created by `AppBootstrap` (below), shared by the Now Playing tab and the
+mini player.
+
+**Playback starts from `AppBootstrap.shared.start()`, not from a view.**
+CarPlay can launch the app with the phone locked and no phone window scene,
+so `AppBootstrap.swift` holds everything playback needs, in order: the `.axe`
+plugin host (NativeBridge installer, then `loadPluginsAndList`),
+`ResolverPrefs`, `AppPlayback.shared`, the Spinoff / Listen Along / chat playback binds, the
+paused queue restore, and the current track's re-resolve on every track
+change (its artwork). `start()` is idempotent: concurrent and later callers
+await the same run, and it logs `APP_BOOTSTRAP started` once per launch.
+`RootGate` (behind the splash) and `ContentView` both call it; the phone's
+views keep only UI-session work (friends, collection sync, hosted-playlist
+polling, banners, sheets). Don't move playback start-up back into a view.
+
+The Dev tab keeps its OWN separate smoke-test player on purpose; it retires
+with the Dev tab.
+
+**Keychain items must be readable after first unlock.** A CarPlay launch can
+happen with the phone locked, and iOS's default accessibility
+(`kSecAttrAccessibleWhenUnlocked`) hides the sign-in tokens then.
+`IosSecureTokenStore` therefore writes `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`
+and migrates older items once (`keychain_accessibility_v2`); until the migration
+is done, reads and writes go through a legacy instance, all under one lock.
+Details in the class's KDoc.
 
 ---
 
@@ -283,7 +305,7 @@ there**, so several gaps only surface on iOS:
   `console.log` is captured by `xcrun simctl log stream`. Filter with a
   predicate like `eventMessage CONTAINS "plugin:"`. `print` output does NOT
   reliably reach os_log.
-- **The `NativeBridge` installer MUST be set at app STARTUP** (`ParachordApp.init`),
+- **The `NativeBridge` installer MUST be set at app STARTUP** (`AppBootstrap.start()`),
   not just in the Dev tab. `IosJsRuntime.initialize()` only loads
   `resolver-loader.js` + the plugins when `nativeBridgeInstaller` is present;
   otherwise it stands up a bare JSContext with no `window.__resolverLoader`.
@@ -292,7 +314,7 @@ there**, so several gaps only surface on iOS:
   runs before the installer is set, the host initializes plugin-less and stays
   broken for the whole session (no badges, nothing resolves, taps flash then
   fail). Symptom of regressing this: resolution works only after visiting the
-  Dev tab. Keep the installer wired in `ParachordApp.init()` + pre-warm there.
+  Dev tab. Keep the installer as `AppBootstrap`'s first step, before anything resolves.
 
 ### Running `.axe` async on iOS — poll, don't reimplement (DJ chat + dynamic models)
 
@@ -303,7 +325,7 @@ there**, so several gaps only surface on iOS:
 
 ### Spinoff + Listen Along on iOS — coordinator-level, not a queue swap
 
-Model + cross-platform details live in root `CLAUDE.md` → "Spinoff + Listen Along". iOS specifics: the spinoff pool + `spinoffMode` + `preSpinoffContext` live on `QueuePlaybackCoordinator` (ContentView.swift) — `beginSpinoff`/`advanceSpinoff`/`exitSpinoff`; `skipNext` + `autoAdvance` check the pool BEFORE the queue. The pool and the ✨ check come from the shared `buildSpinoffPool` / `checkSpinoffAvailable` (#534; the similar-artists fallback is described in root `CLAUDE.md`) through `IosContainer.spinoffPool` / `spinoffAvailable`. `spinoffPool` is `@Throws` and throws `SpinoffFetchFailedException` when the similar-tracks request itself failed, so `SpinoffController` can tell `lastFetchFailed` ("Failed to fetch similar tracks", desktop's wording) from `lastEmptySeed` ("No similar tracks"). Radio Mode B catches it as "Couldn't fetch similar tracks". Listen Along keeps its OWN suspension in `ListenAlongController`; the two never co-exist (each `stop`s/`exitSpinoff`s the other). The chat/spinoff/listen-along screens slide in as **trailing-edge drawers** (`.transition(.move(edge: .trailing))` + a left-edge swipe-to-close zone in the RootView ZStack), NOT bottom covers — matches Android's right-slide.
+Model + cross-platform details live in root `CLAUDE.md` → "Spinoff + Listen Along". iOS specifics: the spinoff pool + `spinoffMode` + `preSpinoffContext` live on `QueuePlaybackCoordinator` (ContentView.swift) — `beginSpinoff`/`advanceSpinoff`/`exitSpinoff`; `skipNext` + `autoAdvance` check the pool BEFORE the queue. The pool and the availability check come from the shared `buildSpinoffPool` / `checkSpinoffAvailable` (#534; the similar-artists fallback is described in root `CLAUDE.md`) through `IosContainer.spinoffPool` / `spinoffAvailable`. `spinoffPool` is `@Throws` and throws `SpinoffFetchFailedException` when the similar-tracks request itself failed, so `SpinoffController` can tell `lastFetchFailed` ("Failed to fetch similar tracks", desktop's wording) from `lastEmptySeed` ("No similar tracks"). Radio Mode B catches it as "Couldn't fetch similar tracks". Listen Along keeps its OWN suspension in `ListenAlongController`; the two never co-exist (each `stop`s/`exitSpinoff`s the other). The chat/spinoff/listen-along screens slide in as **trailing-edge drawers** (`.transition(.move(edge: .trailing))` + a left-edge swipe-to-close zone in the RootView ZStack), NOT bottom covers — matches Android's right-slide. **The Spinoff icon is the fork** (`Assets.xcassets/SpinoffFork`, Android's `ParachordIcons.Spinoff` / `ic_auto_spinoff.xml`, desktop's icon; `SpinoffForkActive` is the fork cut out of a disc, for CarPlay). Both are template SVGs with preserved vector data, so they tint and scale (13–22 pt on the phone, CarPlay's 20 pt buttons). `sparkles` is Shuffleupagus's icon, not Spinoff's.
 
 ### Tracklist resolution: visibility-scoped, top-down, globally bounded
 
@@ -717,7 +739,9 @@ Conformance checklist (audited 2026-06-07):
   value — `spotify://` is iOS's launch-intent equivalent), ~1.5s wake settle.
   Not a flat unconditional 18s.
 - **Self-select THIS device** (`isLocalRealDevice`: name + Smartphone/Tablet
-  type), never an active *remote* phantom. Always wake on the local path.
+  type), never an active *remote* phantom. Always wake on the local path,
+  except in the car: there it never wakes, never shows the picker and fails at
+  once if the phone's device isn't listed (see "Playback in the car").
 - **Single-pass**, single 502 retry after 1s; **cold-device verification**
   (2 polls × 500ms via `getPlaybackStateOrNull`); persist the **synthetic**
   `localDeviceId`, never the real id.
@@ -969,15 +993,22 @@ shared page, desktop's module, previews counted as refused) are in the root
   page's `<title>`, "Parachord SoundCloud", no artwork) and takes the buttons
   itself: `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter` from Swift are
   ignored for this engine (verified on an iPad: only the Media Session handlers
-  fire). So `scNowPlaying` sets `navigator.mediaSession.metadata` (title,
-  artist, artwork) + action handlers that relay play / pause / seek / next /
-  previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`), and
-  `scPositionState` keeps the scrubber current. **Known gap:** WebKit shows
+  fire). So `scNowPlaying` sets the action handlers that relay play / pause /
+  seek / next / previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`),
+  and our own scripts (`EmbedNowPlaying`, injected from Swift: the page itself
+  stays byte-identical) set `navigator.mediaSession.metadata` (title, artist,
+  album, the cover: its http(s) URL, then a `data:` URL once the app has
+  downloaded it, as for Bandcamp below) and the position state: on play, pause, seek or a
+  new duration, and every 5 s from the widget's progress. Not checked on a
+  device or in the simulator (no SoundCloud sign-in there): whether WebKit
+  publishes this top-level session or the widget iframe's. **Known gap:** WebKit shows
   ±10 s skip buttons instead of next / previous; nulling the page's
   `seekforward`/`seekbackward` handlers and disabling the skip commands on
   `MPRemoteCommandCenter` both had no effect.
 - **A refused source falls through** to the next ranked one in `PlaybackRouter`
-  (`onRefused`); `playTrack(advancing:)` decides between "Playing via X", a
+  (`onRefused`); in the car with no phone window at all, a source
+  that would have to create the page is refused (see "Playback in the car").
+  `playTrack(advancing:)` decides between "Playing via X", a
   silent skip (queue advancing or spinoff), and the `Notice` banner with
   "Open in SoundCloud" (`RootView`).
 
@@ -994,7 +1025,9 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   is a byte-for-byte copy of Android's and desktop's (an Android unit test fails
   if Android's and iOS's differ).
 - **In a window, or it never plays.** A view in no window stays at 0:00 (tested
-  on WebKit for #513), so it's added to the key window, at `alpha 0.01`.
+  on WebKit for #513), so it's added to the key window, at `alpha 0.01`. In the
+  car with no phone window at all it refuses instead (see "Playback
+  in the car"): each track is a new page, so there's never one to reuse.
 - **The audio-session hold lives in SoundCloud's page, and runs unmuted for the
   whole track.** See "SoundCloud through its widget": WebKit releases its session
   when a track ends, and iOS won't reactivate it locked. Each Bandcamp track is a new
@@ -1014,8 +1047,31 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   **Known gap:** while paused, the lock screen's position reads 0:00, the loop's own
   position (the track resumes from the right place). Reporting the real position
   each poll only made it bounce.
-- **Lock screen:** the Media Session is set in the Bandcamp page by a fixed script
-  (`nowPlayingScript`). With no bridge, its button handlers only queue the command
+- **Lock screen and CarPlay:** WebKit publishes Now Playing from a page's Media
+  Session, and shows whichever page updated last: this one or SoundCloud's
+  holding page. Fixed scripts set it, each given one JSON object
+  (`EmbedNowPlaying`): the track's metadata (title, artist, album, the cover the
+  phone shows) in both pages, and the position (play, pause, seek, every 5 s)
+  only in this one. The cover goes in first as its http(s) URL, then, once the
+  app has it (through `PCImageStore`, a download capped at 5 s), as a
+  `data:image/jpeg` URL of at most 512 px, if the same track is still playing:
+  WebKit's own fetch of a redirecting cover (coverartarchive → archive.org)
+  was the fragile step. **Known gap (iOS 18.3 simulator):** CarPlay still shows
+  no cover there. WebKit hands MediaRemote the cover as TIFF data, and the GPU
+  process logs `[MRArtwork] Failed to determine dimensions for provided image
+  data` on every CarPlay artwork request (`CarPlayTemplateUIHost`: "No available
+  artwork received"), whatever the source URL. On iOS 26.5 `mediaremoted`
+  reported the cover's size (1200×1200), so it may be 18.x only; not yet seen
+  on a CarPlay screen on 26.x or a device. Sent to the holding page, the position made it
+  report the track as paused and take the lock screen back on each update. As a
+  track starts, the holding page often updates last, so for about 5 s (until
+  WebKit updates this page by itself) Now Playing shows its 1-second loop
+  (0:01 / -0:00); a seek to the current position didn't make WebKit update
+  sooner. After a resume WebKit kept showing the track as paused until the
+  element was seeked, so the poll seeks it to where it already is
+  (`__pcResync`). The paused-state silent loop is dropped on resume, not just
+  paused. Checked in the simulator through `mediaremoted`'s log, not on a
+  CarPlay screen. With no bridge, the button handlers only queue the command
   in the page, and the poll collects it; `drainRemoteCommands` accepts only the
   known commands and a finite position.
 - **Refused:** falls through to the next ranked source in `PlaybackRouter`, as
@@ -1025,6 +1081,228 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   can trip Spotify's abuse window, and a cached source with no id has its id
   looked up from its page. A custom-domain page can't be, and stays refused until
   that entry is resolved again.
+
+## Now Playing and remote commands (`NowPlayingPublisher`)
+
+The lock screen, Control Center, AirPods and CarPlay's Now Playing screen all
+read `MPNowPlayingInfoCenter` and send their buttons through
+`MPRemoteCommandCenter`. `NowPlayingPublisher.swift` is the only Swift code
+that touches either. The primary `QueuePlaybackCoordinator` owns it (the Dev-tab
+smoke-test coordinator, `installLifecycleMonitor: false`, has none, since the
+command center is process-wide). `IosAVPlayer` no longer touches either; it
+reports play, pause, seek and a known duration through `onNowPlayingChanged`.
+
+- **Commands go to the coordinator**: play, pause, toggle, next, previous and
+  scrub call `togglePlayPause` / `skipNext` / `skipPrevious` / `seek`, so they
+  act on whichever engine is playing. They used to call the AVPlayer directly,
+  so a stray play during Apple Music or Spotify reactivated the local,
+  non-mixable session. The ±15 s skip commands are off: while they were on, the
+  lock screen showed skip buttons instead of next / previous for local files.
+  The remote commands used to be registered by the AVPlayer only, so the command
+  set Apple Music's lock screen shows (it may now offer next / previous where it
+  offered ±15 s) changed when they moved to the coordinator. Not checked on an
+  iPad yet.
+- **Who publishes the info**, per engine:
+  - Local files and direct streams (`.avPlayer`): the publisher, with title,
+    artist, album, duration, elapsed, rate and artwork (`pcTrackArt`, through
+    `PCImageStore`). Nothing is published until the player has an item, nor
+    while a new track is starting (`isStarting`), when `currentTrack` is already
+    the new one but the old one is still playing.
+  - Apple Music: `ApplicationMusicPlayer`, natively. The publisher leaves the
+    info alone.
+  - Spotify: Spotify's app. Parachord's session mixes with others, so iOS
+    shows Spotify's Now Playing (the CarPlay design's decision).
+  - SoundCloud and Bandcamp: WebKit, from the page's Media Session (see the two
+    sections above); their buttons come back through the pages.
+  For Spotify, SoundCloud and Bandcamp the publisher clears the app's own info,
+  so a stale local track can't show if their publisher goes away.
+- **The direct-URL fast path in `playTrack` runs `applyEngineHandoff` too.** It
+  used to switch `activeEngine` to `.avPlayer` without stopping the previous
+  engine, so a Bandcamp page kept playing under the next track and kept the
+  lock screen. `activeEngine` flips only after the handoff and a cancellation
+  check, so a newer start during the handoff still sees the engine that was
+  playing.
+- **Play on a track no engine holds starts it.** A queue restored paused at
+  launch shows its track but loads nothing, and so does a track stopped
+  because nothing could play it (the car's Spotify case below). For both,
+  `needsLoadOnPlay` makes `togglePlayPause` (the phone's button, the remote
+  play / toggle commands, CarPlay) run `playTrack` instead of resuming whatever
+  the active engine last held. Restored queues keep no position, so the track
+  starts from the top.
+- **Checking it in the simulator.** The lock screen can't be photographed with
+  `simctl`, but `mediaremoted` logs what it publishes:
+  `xcrun simctl spawn booted log stream --level debug --predicate 'process == "mediaremoted"'`
+  and look for `setting nowPlayingItem` (title, artist, `artworkAvailable`),
+  `setting supportedCommands` and `computedNowPlayingClient`. The app is one
+  client (`com.parachord.ios`), WebKit another (`com.apple.WebKit.GPU/com.parachord.ios`),
+  and WebKit's wins while it plays. The publisher itself logs `NOWPLAYING
+  published …` on each change.
+
+## Playback in the car (`CarPlaySession`)
+
+`CarPlaySession.shared.isConnected` (`CarPlaySession.swift`) is set by the
+CarPlay scene delegate (`connected()` / `disconnected()`). While it's true a few
+rules change; with it false every path is the phone's.
+
+- **SoundCloud and Bandcamp need a phone window.** Their web views live in the
+  phone's key window, which should keep playing them with the phone locked or
+  another app in front, as on the phone (seen in the simulator with Settings in
+  front; **unverified on a locked device** for a fresh car tap after a Spotify or
+  Apple Music play, when no `scHoldAudio` hold is running and iOS may refuse
+  WebKit's audio session, so the track could "start" silent). Only when the car launched the app and the
+  phone never showed it is there no phone window scene at all (iOS won't open
+  one from the background); with the car connected and no connected phone
+  window scene with a key window, `blocksEmbeds` is true:
+  - Bandcamp loads a new page per track, so `IosBandcampEmbed.ensureWebView`
+    always refuses (reason `page`).
+  - SoundCloud refuses only when `IosSoundCloudWidget.ensurePage` would have to
+    create the page. A page that already exists (kept alive by `scHoldAudio`)
+    plays as on the phone, and if the widget can't start the track its own
+    refusal timeout still moves on.
+  A refusal sends the router to the next source as for any refused embed. With
+  the app open on the phone both play as usual.
+- **Spotify never opens the Spotify app.** `IosSpotifyConnect.play` shows no
+  device picker, ignores a saved device, and uses only the phone's own Spotify
+  device (`isLocalRealDevice`), already listed by `getDevices`. If it isn't
+  listed, the source fails at once: no `spotify:` wake, no polling. The warm
+  path is taken only when its cached device is the phone's own
+  (`lastResolvedIsLocal`, set from `isLocalRealDevice` on the device that
+  played, whichever path found it), so a remembered speaker at home, or another
+  phone that a post-wake poll accepted, isn't used. A car play doesn't write
+  the preferred device either.
+- **A track only Spotify could play stops, it isn't skipped.** When the router
+  tried Spotify (`onSpotifyFailed`) and nothing else played, `playTrack` halts
+  the old engine, keeps the track on screen and sets `notice` to
+  `CarMessages.OPEN_SPOTIFY_ON_PHONE` (Android Auto's wording, shared). Play
+  retries it once Spotify is open. This applies even while the queue is
+  advancing, so a Spotify-only playlist doesn't skip to its end.
+- **A run of unplayable tracks stops.** When the car launched the app and the
+  phone never showed it, a Bandcamp or SoundCloud-only playlist can't play a
+  single track, and on a locked phone their fresh starts may fail too; the queue
+  used to skip silently to its end. `CarUnplayableRun` (shared) counts tracks in
+  a row that no source could play. A track that starts, an explicit play (a tap,
+  or Play on a stopped track; not the queue moving on) and a car connecting
+  (`CarPlaySession.connectionCount`) each start the run over. While
+  `phoneAppNotInFront` (car connected, Parachord not in front on the phone:
+  locked, behind another app or never shown; wider than `blocksEmbeds`) the third
+  (`CAR_UNPLAYABLE_RUN_LIMIT`) stops on that track, as the Spotify case does,
+  with `CarMessages.OPEN_PARACHORD_ON_PHONE` ("Open Parachord on your phone to
+  play these tracks"). Play retries it. A track tapped in the car whose
+  SoundCloud or Bandcamp embed was refused for having no window (`page`) or
+  didn't start (`unplayable`) gets the same message, not the phone's "only plays
+  on its own site"; a `preview` refusal keeps SoundCloud's own message. With the
+  car disconnected, or the phone app open, the queue skips on as on the phone.
+- **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
+  temporary hook (never commit one), or open the CarPlay simulator. With the
+  app behind another app, Bandcamp and SoundCloud play as on the phone; the
+  refusal (`… car connected with no phone window, refusing`, then the next
+  source) needs the car to launch the app with no phone window scene: quit the
+  app, then open it from the CarPlay screen without touching the phone. With
+  the app not in front, three tracks nothing could play stop with the car
+  message.
+  The Spotify rules need a device with Spotify installed.
+
+## The CarPlay screens (`iosApp/Parachord/CarPlay/`)
+
+CarPlay shows the same library as Android Auto: one root list ("Parachord")
+with Playlists, Loved Songs and Collection Radio. The rows, their order and
+caps, and what a tap plays all come from the shared `CarBrowse`
+(`shared/.../car/CarBrowse.kt`), which Android Auto renders too. The Swift side
+only draws it.
+
+- **Scene.** `Info.plist` declares only the CarPlay role
+  (`UISceneConfigurations` → `CPTemplateApplicationSceneSessionRoleApplication`
+  → `$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate`). The phone's window scene
+  stays SwiftUI's `WindowGroup`, which needs no manifest entry; the phone app
+  launches as before. On connect `CarPlaySceneDelegate` calls
+  `CarPlaySession.shared.connected()`, starts `AppBootstrap.shared.start()` and
+  sets the root list; on disconnect it calls `disconnected()`. The root is read
+  from the database and doesn't wait for the bootstrap; a tap does.
+- **Lists** (`CarBrowseTemplates`). Rows come from `IosContainer.carChildren`
+  (`CarBrowse.children`). A browsable row pushes its children; a playable row
+  calls `carPlayRequest` (`CarBrowse.playRequest`), then
+  `AppPlayback.shared.coordinator.setQueue(…, shuffle:)` with a context from
+  `carPlaybackContext` (the playlist, "Loved Songs" or "Collection Radio", so
+  the phone's Now Playing names it and a Listen Along sees the takeover), and
+  pushes `CPNowPlayingTemplate.shared` unless it's already on top. A null
+  request (a stale id) plays and pushes nothing. Only the latest tap plays: a
+  new tap or a disconnect cancels one still waiting (a cold launch waits for
+  the bootstrap), and the play is dropped if the car is gone by then. Rows
+  beyond `CPListTemplate.maximumItemCount` are dropped; an empty list shows a
+  disabled "Nothing here yet" row. That limit was 500 in the simulator, so a
+  500-track playlist shows its Shuffle row and 499 tracks on CarPlay (Android
+  Auto shows all 500).
+- **Now Playing** (`CarNowPlaying`). Started by the scene delegate, it
+  follows the coordinator once the bootstrap has made it, and stops on
+  disconnect. CarPlay draws the track and transport from Now Playing info
+  (`NowPlayingPublisher`, or WebKit / MusicKit / Spotify per engine); this adds:
+  - **Buttons** from the shared `carNowPlayingButtons` (Android Auto's): the
+    heart (`heart` / `heart.fill`) adds the playing track to the collection or
+    removes it, as the phone's heart does; Spinoff uses the phone's Spinoff
+    fork (`SpinoffFork`), the fork cut out of a filled disc while a spinoff runs
+    (`SpinoffForkActive`), and calls
+    `SpinoffController.toggle()`; a tap while the pool loads is ignored, and it's
+    hidden when the track has nothing similar. No buttons while nothing plays or
+    before the collection has answered. A heart tapped on the phone updates the
+    car (`watchTrackInCollection`). Images are drawn at
+    `CPNowPlayingButtonMaximumImageSize` (20×20 pt in the simulator) as templates.
+  - **Up Next** (`isUpNextButtonEnabled`): a list of the queue (title, artist,
+    artwork through `CarArtwork`), refreshed while it's open; a tap calls
+    `playFromQueue` and returns to Now Playing. During a spinoff or Listen Along
+    it's "Your Queue" with disabled rows (Listen Along's suspended queue), as
+    the phone dims it. A list's title can't change, so a spinoff that starts or
+    ends while it's open swaps in a new list (pop + push, no animation). Its
+    artwork loads stop once it's popped (`templateDidDisappear`, forwarded by
+    `CarBrowseTemplates`, the interface controller's one delegate).
+  - **Alerts:** a new `notice` shows as a `CPAlertTemplate` with OK, one at a
+    time. It stays until the driver taps OK, or until a different notice
+    replaces it: that alert is dismissed, then the new notice shows if it's
+    one for the car. `notice` going nil doesn't dismiss it: the phone's banner
+    clears `notice` after 3.5 s (8 s with an action), and the car alert must
+    outlast that. OK clears the phone's banner too. A notice from before the car connected isn't shown, and
+    `Notice.showInCar = false` ("Playing via X") stays on the phone, as Android
+    Auto shows only errors.
+  - **The heart acts only on the track whose state it shows**: a tap between a
+    track change and the new track's collection answer does nothing.
+- **Artwork** (`CarArtwork`). Loaded after the list shows, four at a time.
+  Once the list is popped no new loads start; ones already in flight finish.
+  http(s) and `file://` URLs go through `PCImageStore`, then a car-sized copy
+  is kept in memory. A track whose own URL fails falls back to its resolved
+  sources' art (`pcTrackArt`); anything else keeps an SF Symbol. Only a
+  definite miss (a missing file, HTTP 404/410, data that isn't an image) is
+  remembered for the session; a cover that failed offline or timed out is tried
+  again next time. Playlist mosaics are absolute `file://` paths that go stale
+  when the app container moves; a missing file is a miss, not an error.
+- **Entitlement, simulator only.** `com.apple.developer.carplay-audio` is in
+  `ParachordSimulator.entitlements`, used only through
+  `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device builds keep
+  `Parachord.entitlements` and keep signing: never add the CarPlay entitlement
+  there until Apple grants it to the App ID.
+- **Opening the CarPlay simulator.** Run the app in the iOS simulator, then in
+  Simulator choose I/O → External Displays → CarPlay (bring Simulator to the
+  front first: the item was greyed out with it in the background). To test a
+  CarPlay-only launch, terminate the app first, then tap Parachord on the
+  CarPlay screen; the app starts with no phone window.
+- **Simulator workflow notes.**
+  - **Use an iOS 18 simulator** (e.g. iPhone 16 Pro, iOS 18.3). The iOS 26.5
+    simulator's CarPlay shell froze and ignored clicks. Xcode 26 won't build
+    for an 18.3 destination, so build with this guide's 26.5 command, then
+    `xcrun simctl install <18.3-udid> <…/Debug-iphonesimulator/Parachord.app>`
+    — the 26.5-built app runs on the 18.3 simulator. (`generic/platform=iOS
+    Simulator` fails: it also links x86_64, and `Shared.framework` is arm64.)
+    A new simulator starts with an empty library; copy the app's data
+    container (`xcrun simctl get_app_container <udid> com.parachord.ios data`,
+    `Library/Application Support` + `Library/Preferences`) to bring one over.
+  - **Screenshots:** `xcrun simctl io booted screenshot --display=external <file>`
+    captures the CarPlay display headlessly (then `sips -Z 1400`).
+  - **Reinstalling the app while CarPlay is connected** closes the app and the
+    car returns to its home screen; open Parachord on the car screen again.
+  - **A stuck CarPlay window** reconnects after I/O → External Displays →
+    Disabled, then → CarPlay.
+  - **Covers in Now Playing:** the iOS 18.3 simulator's WebKit can't use Media
+    Session artwork ("Failed to determine dimensions"), so SoundCloud and
+    Bandcamp covers don't show in CarPlay Now Playing there (see the known gap
+    under Bandcamp).
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
