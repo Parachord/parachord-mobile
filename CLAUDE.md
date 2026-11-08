@@ -177,6 +177,8 @@ Spotify playback uses the **Web API** (not the App Remote SDK). The `SpotifyPlay
 
 ### Apple Music State Polling & Auto-Advance
 
+**Apple's MusicKit SDK for Android was evaluated and isn't used (#553).** A November 2026 spike (`docs/plans/2026-11-08-musickit-android-sdk-spike.md`) found it plays with the MusicKit JS user token and needs no Apple Music app, starts tracks slightly faster (2.2 s median against 2.6 s) and survived screen-off Doze, as MusicKit JS did. It has no volume control, and Apple's license forbids committing its AARs or hosting them publicly, so CI can't build with it. Read the doc before proposing a native Apple Music engine.
+
 Apple Music playback runs in a hidden WebView via `MusicKitWebBridge`. The `startAppleMusicStatePolling()` loop polls at 500ms intervals on `Dispatchers.Default` for position/duration updates and uses two auto-advance detection paths:
 
 1. **JS callback (primary):** MusicKit JS fires `playbackStateDidChange` → "ended" state → `onTrackEnded` callback → `skipNextInternal()`
