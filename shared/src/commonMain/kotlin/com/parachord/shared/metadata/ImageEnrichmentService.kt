@@ -15,6 +15,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.onSubscription
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -63,7 +65,7 @@ class ImageEnrichmentService(
     private val composeMosaic: suspend (playlistId: String, urls: List<String>) -> String?,
     /**
      * The directory [composeMosaic] writes into today, and whether a file
-     * exists. [regenerateAllPlaylistMosaics] uses them to repair a stored
+     * exists. [refreshPlaylistMosaic] uses them to repair a stored
      * mosaic URL left pointing at an old app container
      * ([PlaylistMosaicPaths]). Without them stored `file://` art is trusted.
      */
@@ -82,11 +84,15 @@ class ImageEnrichmentService(
          *  Last.fm / MusicBrainz with simultaneous requests. */
         const val MAX_TRACK_SEARCH_CONCURRENCY = 4
 
-        /** Bounded concurrency for [regenerateAllPlaylistMosaics] — at
-         *  most this many mosaic builds running in parallel. Each mosaic
+        /** At most this many mosaic rebuilds run at once, across the launch
+         *  pass and [watchTrackChanges]. Each mosaic
          *  fetches up to 4 album-art tiles, so 4 parallel = up to 16
          *  concurrent image fetches. */
         const val MAX_PLAYLIST_REGEN_CONCURRENCY = 4
+
+        /** Quiet time after a playlist's last track write before its mosaic
+         *  is checked, so a sync writing a playlist in steps rebuilds once. */
+        const val TRACK_CHANGE_DEBOUNCE_MS = 2_000L
     }
 
     // In-flight deduplication maps (Mutex-guarded since commonMain has no
@@ -341,7 +347,23 @@ class ImageEnrichmentService(
      *
      * Returns the composed local URI or null if not enough artwork is available.
      */
-    suspend fun enrichPlaylistArt(playlistId: String, cacheBustToken: String? = null): String? {
+    /**
+     * [replacing]: the art this mosaic replaces. Normally the result is stored
+     * only over blank art; with [replacing] it's stored while the row still
+     * holds exactly that value (stock provider art, or a mosaic whose file is
+     * gone), so a cover chosen meanwhile is never overwritten.
+     *
+     * [fillMissingArt]: look up covers for the playlist's tracks that have
+     * none before composing (network; MusicBrainz is 1 request/s). A mosaic
+     * only needs four, so a rebuild whose tracks already hold four distinct
+     * covers skips this.
+     */
+    suspend fun enrichPlaylistArt(
+        playlistId: String,
+        cacheBustToken: String? = null,
+        replacing: String? = null,
+        fillMissingArt: Boolean = true,
+    ): String? {
         val deferred = playlistMutex.withLock {
             val cur = playlistFetches[playlistId]
             if (cur != null && cur.isActive) return@withLock cur
@@ -366,7 +388,8 @@ class ImageEnrichmentService(
                     // concurrency (4) keeps us from hammering Last.fm /
                     // MusicBrainz on a 200-track playlist.
 
-                    val needsAnyArt = tracks.filter { it.trackArtworkUrl.isNullOrBlank() }
+                    val needsAnyArt = if (!fillMissingArt) emptyList()
+                        else tracks.filter { it.trackArtworkUrl.isNullOrBlank() }
                     if (needsAnyArt.isNotEmpty()) {
                         // Pass 1: album-based enrichment (deduped by album+artist)
                         val withAlbum = needsAnyArt.filter { !it.trackAlbum.isNullOrBlank() }
@@ -423,17 +446,19 @@ class ImageEnrichmentService(
                         tracks = playlistTrackDao.getByPlaylistIdSync(playlistId)
                     }
 
-                    // Collect up to 4 unique artwork URLs
-                    val artworkUrls = tracks
-                        .mapNotNull { it.trackArtworkUrl }
-                        .distinct()
-                        .take(4)
+                    // Up to 4 distinct covers, in playlist order — the same rule
+                    // the staleness check uses (PlaylistMosaicPaths.covers).
+                    val artworkUrls = PlaylistMosaicPaths.covers(tracks.map { it.trackArtworkUrl })
 
                     if (artworkUrls.isEmpty()) return@async null
 
-                    val resultUrl = if (artworkUrls.size == 1) {
+                    val finalUrl = if (artworkUrls.size == 1) {
                         // Only one unique artwork — just use it directly
-                        artworkUrls.first()
+                        val single = artworkUrls.first()
+                        if (cacheBustToken != null) {
+                            val sep = if (single.contains('?')) '&' else '?'
+                            "$single${sep}v=$cacheBustToken"
+                        } else single
                     } else {
                         // Generate 2x2 mosaic (pad to 4 by repeating if needed).
                         // Mosaic composite is platform-specific — see `composeMosaic`.
@@ -442,23 +467,23 @@ class ImageEnrichmentService(
                             3 -> artworkUrls + listOf(artworkUrls[0])
                             else -> artworkUrls
                         }
-                        composeMosaic(playlistId, paddedUrls)
+                        // The URL carries the covers' fingerprint as `v`: the
+                        // staleness check compares it with the playlist's covers
+                        // now, and a new value makes Coil / PCImageStore (keyed
+                        // on the URL) reload the rewritten file. File readers
+                        // ignore the query.
+                        composeMosaic(playlistId, paddedUrls)?.let { composed ->
+                            val sep = if (composed.contains('?')) '&' else '?'
+                            "$composed${sep}v=${PlaylistMosaicPaths.coverSignature(artworkUrls)}"
+                        }
                     }
 
-                    // Append cache-buster so Coil's URL-keyed memory + disk
-                    // cache treats a rewritten mosaic (same file path, new
-                    // content) as a new image. `file://` fetchers ignore
-                    // query params when reading the underlying File, so the
-                    // path still resolves. Callers that don't care about
-                    // invalidation (first-time enrichment) pass null and
-                    // get the plain URL.
-                    val finalUrl = if (resultUrl != null && cacheBustToken != null) {
-                        val sep = if (resultUrl.contains('?')) '&' else '?'
-                        "$resultUrl${sep}v=$cacheBustToken"
-                    } else resultUrl
-
                     if (finalUrl != null) {
-                        playlistDao.updateArtworkById(playlistId, finalUrl)
+                        if (replacing != null) {
+                            playlistDao.replaceArtworkById(playlistId, expected = replacing, artworkUrl = finalUrl)
+                        } else {
+                            playlistDao.updateArtworkById(playlistId, finalUrl)
+                        }
                     }
                     finalUrl
                 } catch (_: Exception) {
@@ -474,72 +499,132 @@ class ImageEnrichmentService(
     }
 
     /**
-     * Walk every playlist and regenerate the mosaic for any whose artwork
-     * is NOT a locally-generated `file://` URL. Treats provider stock art
-     * (Spotify's `mosaic.scdn.co/...`, Apple Music's `is1-ssl.mzstatic.com/
-     * .../AM.PDCXS11.jpg` patterns) and missing artwork the same way: kick
-     * off `enrichPlaylistArt` to generate a 2x2 album-art mosaic from the
-     * playlist's tracks.
+     * Bring every playlist's cover up to date with its tracks; see
+     * [refreshPlaylistMosaic] for the rule. Run at app start (Android
+     * `ParachordApplication.onCreate`, iOS `ParachordApp`).
      *
      * Mosaic = "the sum of what's actually IN the playlist". Even when a
-     * playlist is synced from a remote provider, we want the mosaic, not
-     * the provider's auto-generated stock cover.
+     * playlist is synced from a remote provider, we want the mosaic, not the
+     * provider's auto-generated stock cover (Spotify's `mosaic.scdn.co/...`,
+     * Apple Music's `AM.PDCXS11.jpg`).
      *
-     * Idempotent and bounded:
-     * - Skips playlists already showing a `file://` mosaic (canonical state)
-     *   whose file is still there. One whose file is gone is repaired: if the
-     *   app's container moved (iOS), the row is pointed at the same file in
-     *   today's mosaic directory; otherwise the mosaic is built again.
-     * - Each call dedups against in-flight `enrichPlaylistArt` invocations
-     *   via the existing `playlistFetches` mutex map.
-     * - Bounded concurrency = [MAX_PLAYLIST_REGEN_CONCURRENCY] so a library
-     *   with 100 synced playlists doesn't slam the network.
-     *
-     * Run from app start (`ParachordApplication.onCreate`) and after every
-     * sync completion to keep mosaics fresh as new playlists arrive.
+     * Cheap when nothing changed: the check reads the database only, and a
+     * mosaic is rebuilt (network + composite) only when it is missing,
+     * stale or not yet a mosaic. At most [MAX_PLAYLIST_REGEN_CONCURRENCY]
+     * rebuilds run at once, shared with [watchTrackChanges].
      */
     suspend fun regenerateAllPlaylistMosaics() {
         val playlists = playlistDao.getAllSync()
-        val exists = fileExists
-        val currentDir = mosaicDir?.invoke()
-        val needsMosaic = playlists.filter { p ->
-            val art = p.artworkUrl
-            if (art.isNullOrBlank() || !art.startsWith("file://")) return@filter true
-            if (exists == null) return@filter false
-            when (val r = PlaylistMosaicPaths.repair(art, currentDir, exists)) {
-                PlaylistMosaicPaths.Repair.Keep -> false
-                is PlaylistMosaicPaths.Repair.Rewrite -> {
-                    playlistDao.replaceArtworkById(p.id, expected = art, artworkUrl = r.url)
-                    false
-                }
-                PlaylistMosaicPaths.Repair.Regenerate -> {
-                    // `enrichPlaylistArt` only writes over blank art.
-                    playlistDao.replaceArtworkById(p.id, expected = art, artworkUrl = null)
-                    true
-                }
-            }
-        }
-        if (needsMosaic.isEmpty()) return
-
-        val sem = Semaphore(MAX_PLAYLIST_REGEN_CONCURRENCY)
         coroutineScope {
-            needsMosaic.map { p ->
+            playlists.map { p ->
                 async {
-                    sem.withPermit {
-                        try {
-                            // cacheBustToken = null: first-time generation
-                            // case. The mosaic file is written under
-                            // `filesDir/playlist_mosaics/<playlistId>.jpg`.
-                            // Coil keys on URL; subsequent rewrites need a
-                            // cache-bust, but a fresh write to a new path
-                            // doesn't.
-                            enrichPlaylistArt(p.id, cacheBustToken = null)
-                        } catch (_: Exception) {
-                            // Per-playlist failure is fine — try others.
-                        }
+                    try { refresh(p.id, p.artworkUrl) } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        // Per-playlist failure is fine — try others.
                     }
                 }
             }.awaitAll()
         }
+    }
+
+    /**
+     * Rebuild [playlistId]'s cover if it no longer matches its tracks. Rules:
+     *  - Blank art, or provider stock art: build it (stock art is replaced).
+     *  - A local mosaic whose file is gone: re-point it at today's mosaic
+     *    directory if the file moved with the app's container (iOS), else
+     *    rebuild it.
+     *  - A local mosaic whose `v` fingerprint differs from the playlist's
+     *    current covers ([PlaylistMosaicPaths.covers]): rebuild it. This is
+     *    how a mosaic follows track adds, removes, reorders and new covers.
+     *  - Single-cover art equal to the playlist's only cover: keep.
+     * A rebuild is stored only while the row still holds the art seen here.
+     * Returns whether a rebuild ran.
+     */
+    suspend fun refreshPlaylistMosaic(playlistId: String): Boolean {
+        val playlist = playlistDao.getById(playlistId) ?: return false
+        return refresh(playlistId, playlist.artworkUrl)
+    }
+
+    private suspend fun refresh(playlistId: String, storedArt: String?): Boolean {
+        var art = storedArt?.takeIf { it.isNotBlank() }
+        val covers = PlaylistMosaicPaths.covers(
+            playlistTrackDao.getByPlaylistIdSync(playlistId).map { it.trackArtworkUrl },
+        )
+        val exists = fileExists
+        if (art != null && PlaylistMosaicPaths.isLocalFile(art) && exists != null) {
+            when (val r = PlaylistMosaicPaths.repair(art, mosaicDir?.invoke(), exists)) {
+                PlaylistMosaicPaths.Repair.Keep -> Unit
+                is PlaylistMosaicPaths.Repair.Rewrite -> {
+                    playlistDao.replaceArtworkById(playlistId, expected = art, artworkUrl = r.url)
+                    art = r.url
+                }
+                PlaylistMosaicPaths.Repair.Regenerate -> return rebuild(playlistId, art, covers)
+            }
+        }
+        val upToDate = when {
+            art == null -> false
+            PlaylistMosaicPaths.isLocalFile(art) -> when {
+                covers.isEmpty() -> true   // nothing to build from; keep what's there
+                covers.size == 1 -> false   // a mosaic of covers that are gone
+                // Without a file check (no lambdas wired), trust local art.
+                exists == null -> PlaylistMosaicPaths.version(art)?.let { it == PlaylistMosaicPaths.coverSignature(covers) } ?: true
+                else -> PlaylistMosaicPaths.version(art) == PlaylistMosaicPaths.coverSignature(covers)
+            }
+            else -> covers.size == 1 && art == covers[0]
+        }
+        if (upToDate) return false
+        return rebuild(playlistId, art, covers)
+    }
+
+    private suspend fun rebuild(playlistId: String, replacing: String?, covers: List<String>): Boolean {
+        regenPermits.withPermit {
+            // `replacing`: the art seen by the check. Without it the result is
+            // stored only over blank art, so stock art and stale mosaics were
+            // never replaced (and were rebuilt at every launch).
+            enrichPlaylistArt(
+                playlistId, cacheBustToken = null, replacing = replacing,
+                // Four covers already decide the mosaic: no per-track lookups.
+                fillMissingArt = covers.size < 4,
+            )
+        }
+        return true
+    }
+
+    private val regenPermits = Semaphore(MAX_PLAYLIST_REGEN_CONCURRENCY)
+    private val watchMutex = Mutex()
+    private var watching = false
+
+    /**
+     * Keep mosaics in step with their tracks while the app runs: every write
+     * to a playlist's tracks ([PlaylistTrackDao.changes] — sync pulls, edits,
+     * hosted XSPF updates, cover backfills) re-runs [refreshPlaylistMosaic]
+     * for that playlist once its writes have been quiet for [debounceMs].
+     * Idempotent; call at app start.
+     */
+    suspend fun watchTrackChanges(debounceMs: Long = TRACK_CHANGE_DEBOUNCE_MS) {
+        watchMutex.withLock {
+            if (watching) return
+            watching = true
+        }
+        val pending = mutableMapOf<String, kotlinx.coroutines.Job>()
+        val pendingMutex = Mutex()
+        // Return only once subscribed: `changes` has no replay, so a write
+        // between this call and the collector starting would be missed.
+        val subscribed = kotlinx.coroutines.CompletableDeferred<Unit>()
+        scope.launch {
+            playlistTrackDao.changes.onSubscription { subscribed.complete(Unit) }.collect { id ->
+                pendingMutex.withLock {
+                    pending.remove(id)?.cancel()
+                    pending[id] = scope.launch {
+                        kotlinx.coroutines.delay(debounceMs)
+                        pendingMutex.withLock { pending.remove(id) }
+                        try { refreshPlaylistMosaic(id) } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                        }
+                    }
+                }
+            }
+        }
+        subscribed.await()
     }
 }

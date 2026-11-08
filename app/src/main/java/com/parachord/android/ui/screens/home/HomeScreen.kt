@@ -1160,9 +1160,9 @@ private fun WeeklyPlaylistCard(
         // Ephemeral playlist — no Delete (it's not a saved row), no
         // Share yet (smart-link payload would need the full track list,
         // which is async — defer to the detail screen). Save uses the
-        // first cover URL for the saved playlist's artwork; full mosaic
-        // is rebuilt by `ImageEnrichmentService.regenerateAllPlaylistMosaics`
-        // on next app start.
+        // first cover URL for the saved playlist's artwork; the full mosaic
+        // replaces it about 2 s after the tracks are saved
+        // (`ImageEnrichmentService.watchTrackChanges`).
         val previewName = "${entry.weekLabel}'s ${
             if (contextType == "weekly-jam") "Weekly Jams" else "Weekly Exploration"
         }"

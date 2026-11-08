@@ -67,6 +67,42 @@ class PlaylistMosaicPathsTest {
     }
 
     @Test
+    fun `covers are the first four distinct non-blank track covers in order`() {
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            PlaylistMosaicPaths.covers(listOf(null, "a", "", "b", "a", "c", "d", "e")),
+        )
+    }
+
+    @Test
+    fun `the cover fingerprint is stable and order-sensitive`() {
+        val ab = PlaylistMosaicPaths.coverSignature(listOf("https://x/a.jpg", "https://x/b.jpg"))
+        assertEquals(16, ab.length)
+        assertEquals(ab, PlaylistMosaicPaths.coverSignature(listOf("https://x/a.jpg", "https://x/b.jpg")))
+        assertEquals(false, ab == PlaylistMosaicPaths.coverSignature(listOf("https://x/b.jpg", "https://x/a.jpg")))
+        // Pinned so both platforms (JVM + Native) provably compute the same value.
+        assertEquals("cbf29ce484222325", PlaylistMosaicPaths.coverSignature(emptyList()))
+    }
+
+    @Test
+    fun `version reads the v query`() {
+        assertEquals("abc", PlaylistMosaicPaths.version("file:/x/playlist_mosaics/a.jpg?v=abc"))
+        assertEquals("abc", PlaylistMosaicPaths.version("file:///x/a.jpg?t=1&v=abc"))
+        assertNull(PlaylistMosaicPaths.version("file:///x/a.jpg"))
+    }
+
+    @Test
+    fun `Android's single-slash file URI is a local file with the same path`() {
+        val android = "file:/data/user/0/p/files/playlist_mosaics/a.jpg"
+        assertEquals(true, PlaylistMosaicPaths.isLocalFile(android))
+        assertEquals("/data/user/0/p/files/playlist_mosaics/a.jpg", PlaylistMosaicPaths.filePath("$android?v=3"))
+        assertEquals("/abs/playlist_mosaics/a.jpg", PlaylistMosaicPaths.filePath("file:///abs/playlist_mosaics/a.jpg"))
+        assertEquals(false, PlaylistMosaicPaths.isLocalFile("https://mosaic.scdn.co/300/abc"))
+        assertEquals(false, PlaylistMosaicPaths.isLocalFile(null))
+        assertEquals(Repair.Keep, PlaylistMosaicPaths.repair(android, "/data/user/0/p/files/playlist_mosaics") { true })
+    }
+
+    @Test
     fun `file name handles both file URI forms and strips the query`() {
         assertEquals("a.jpg", PlaylistMosaicPaths.fileName("file:/data/user/0/p/files/playlist_mosaics/a.jpg"))
         assertEquals("a.jpg", PlaylistMosaicPaths.fileName("file:///data/playlist_mosaics/a.jpg?v=9"))

@@ -27,11 +27,45 @@ object PlaylistMosaicPaths {
         return stored.substring(idx + MARKER.length).substringBefore('?').ifBlank { null }
     }
 
-    /** The filesystem path of a `file://` URL (query dropped), or null for any
-     *  other scheme. */
+    /**
+     * The covers a playlist's mosaic is built from: the first four distinct
+     * track covers, in playlist order. The same rule decides what a mosaic
+     * SHOULD show, so a stored mosaic can be checked against its tracks
+     * without the network.
+     */
+    fun covers(trackArtworkUrls: List<String?>): List<String> =
+        trackArtworkUrls.filterNotNull().filter { it.isNotBlank() }.distinct().take(4)
+
+    /**
+     * A short fingerprint of [covers], stored as the mosaic URL's `v` query.
+     * When a playlist's covers change, the fingerprint no longer matches and
+     * the mosaic is rebuilt; the new URL also makes image caches reload.
+     * FNV-1a 64-bit, so it's identical on every platform.
+     */
+    fun coverSignature(covers: List<String>): String {
+        var h = 0xcbf29ce484222325uL
+        for (b in covers.joinToString("\n").encodeToByteArray()) {
+            h = (h xor (b.toUByte().toULong())) * 0x100000001b3uL
+        }
+        return h.toString(16).padStart(16, '0')
+    }
+
+    /** The `v` query value of [url], or null. */
+    fun version(url: String): String? =
+        url.substringAfter('?', missingDelimiterValue = "").split('&')
+            .firstOrNull { it.startsWith("v=") }?.removePrefix("v=")?.ifBlank { null }
+
+    /** Whether [url] is a local file, in either form: iOS writes `file:///…`,
+     *  Android's `File.toURI()` writes `file:/…` (one slash). */
+    fun isLocalFile(url: String?): Boolean = url != null && url.startsWith("file:")
+
+    /** The filesystem path of a local file URL (query dropped), or null for
+     *  any other scheme. */
     fun filePath(url: String): String? {
-        if (!url.startsWith("file://")) return null
-        return url.removePrefix("file://").substringBefore('?').ifBlank { null }
+        if (!isLocalFile(url)) return null
+        val rest = url.removePrefix("file:")
+        val path = if (rest.startsWith("//")) rest.removePrefix("//") else rest
+        return path.substringBefore('?').ifBlank { null }
     }
 
     /**
