@@ -20,17 +20,28 @@ import kotlinx.coroutines.delay
  * was in the catalog but not in iTunes Search, so it never resolved to Apple
  * Music.
  *
+ * Both platforms' native Apple Music resolve uses it too
+ * ([com.parachord.shared.resolver.AppleMusicCatalogResolver]).
+ *
  * Only `/v1/catalog/` paths are served (no library, no user data; the
  * developer token itself never reaches JavaScript). Calls go through the
  * shared [MusicKitCatalogLimiter], with one retry on a 429 or a transient
- * failure, like iOS's `IosResolverRuntime.fetchCatalog`.
+ * failure.
+ *
+ * [developerToken] is read on every call: Android's is the one saved in
+ * Settings while it's current, else the build's
+ * (`SettingsStore.getAppleMusicDeveloperToken`).
  */
 class AppleMusicCatalog(
     private val httpClient: HttpClient,
-    private val developerToken: String,
+    private val developerToken: suspend () -> String?,
     private val limiter: MusicKitCatalogLimiter,
 ) {
-    val isAvailable: Boolean get() = developerToken.isNotBlank()
+    /** A fixed token (iOS's build token, tests). */
+    constructor(httpClient: HttpClient, developerToken: String, limiter: MusicKitCatalogLimiter) :
+        this(httpClient, { developerToken }, limiter)
+
+    suspend fun isAvailable(): Boolean = !developerToken().isNullOrBlank()
 
     /**
      * GET `https://api.music.apple.com` + [path] (path and query, starting with
@@ -39,10 +50,11 @@ class AppleMusicCatalog(
      * failed. A null answer sends the plugin to its iTunes fallback.
      */
     suspend fun get(path: String): String? {
-        if (!isAvailable || !isCatalogPath(path)) return null
+        if (!isCatalogPath(path)) return null
+        val token = developerToken()?.takeIf { it.isNotBlank() } ?: return null
         val url = "https://api.music.apple.com$path"
         repeat(2) { attempt ->
-            val outcome = limiter.runThrottled { fetchOnce(url) } ?: return null // cooling down
+            val outcome = limiter.runThrottled { fetchOnce(url, token) } ?: return null // cooling down
             when (outcome) {
                 is Attempt.Ok -> { limiter.reportSuccess(); return outcome.body }
                 Attempt.RateLimited -> limiter.reportRateLimit()
@@ -57,8 +69,8 @@ class AppleMusicCatalog(
         return null
     }
 
-    private suspend fun fetchOnce(url: String): Attempt = try {
-        val resp = httpClient.get(url) { header("Authorization", "Bearer $developerToken") }
+    private suspend fun fetchOnce(url: String, token: String): Attempt = try {
+        val resp = httpClient.get(url) { header("Authorization", "Bearer $token") }
         val status = resp.status.value
         val text = resp.bodyAsText()
         when {

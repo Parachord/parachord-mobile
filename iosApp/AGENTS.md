@@ -298,9 +298,9 @@ there**, so several gaps only surface on iOS:
 - **Most resolvers need a connection.** With no tokens: soundcloud "No token,
   skipping", spotify silent, localfiles "not available". **Apple Music needs
   its Music User Token too** (Settings → Plug-ins → Apple Music → Connect): its
-  catalog search is native (`IosResolverRuntime.resolveAppleMusicNative`, no
-  `.axe`) and returns nothing without the token (#327), logging "Apple Music
-  resolution skipped: no Music User Token" once. Bandcamp needs nothing.
+  catalog search is native (the shared `AppleMusicCatalogResolver`, which
+  Android uses too; no `.axe`) and returns nothing without the token (#327),
+  logging "Apple Music resolution skipped: no Music User Token" once. Bandcamp needs nothing.
 - **`NativeBridge.log` uses `NSLog`, not `print`** so `.axe` / resolver-loader
   `console.log` is captured by `xcrun simctl log stream`. Filter with a
   predicate like `eventMessage CONTAINS "plugin:"`. `print` output does NOT

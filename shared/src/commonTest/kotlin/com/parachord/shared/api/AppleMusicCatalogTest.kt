@@ -62,9 +62,26 @@ class AppleMusicCatalogTest {
     @Test
     fun noTokenMeansNoRequest() = runTest {
         val r = rig(token = "")
-        assertFalse(r.catalog.isAvailable)
+        assertFalse(r.catalog.isAvailable())
         assertNull(r.catalog.get("/v1/catalog/us/songs/1"))
         assertTrue(r.urls.isEmpty())
+    }
+
+    @Test
+    fun theTokenIsReadOnEveryCall() = runTest {
+        var current: String? = null
+        val auth = mutableListOf<String?>()
+        val engine = MockEngine { req ->
+            auth += req.headers[HttpHeaders.Authorization]
+            respond("""{"data":[]}""", HttpStatusCode.OK, json)
+        }
+        val catalog = AppleMusicCatalog(HttpClient(engine), { current }, MusicKitCatalogLimiter())
+        assertNull(catalog.get("/v1/catalog/us/songs/1"))
+        current = "SAVED"
+        assertEquals("""{"data":[]}""", catalog.get("/v1/catalog/us/songs/1"))
+        current = "ROTATED"
+        catalog.get("/v1/catalog/us/songs/1")
+        assertEquals(listOf<String?>("Bearer SAVED", "Bearer ROTATED"), auth)
     }
 
     @Test
