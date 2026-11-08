@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.PowerManager
 import com.parachord.shared.platform.Log
+import com.parachord.shared.playback.QueueRestorePolicy
 import com.parachord.shared.playback.ResolverVolume
 import com.parachord.android.data.store.SettingsStore
 import android.widget.Toast
@@ -80,6 +81,9 @@ class PlaybackController constructor(
          * ~18s for the Connect device to register, a second local-device wake).
          */
         internal const val PLAY_START_TIMEOUT_MS = 75_000L
+
+        /** How long [awaitConnected] waits for the session's controller. */
+        internal const val CONNECT_WAIT_MS = 5_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -113,6 +117,16 @@ class PlaybackController constructor(
      * playback pipeline instead of calling ctrl.play() on the empty ExoPlayer.
      */
     private var pendingRestoredTrack: TrackEntity? = null
+
+    /**
+     * A play was asked for in this run of the app. The saved queue is only
+     * restored while this is false ([QueueRestorePolicy]): Android Auto can
+     * start the app and a play before the restore has read storage.
+     */
+    @Volatile private var playRequestedThisRun = false
+
+    /** Completes once [controller] is set; replaced by each [connect] after a [release]. */
+    private var connected = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     /**
      * How long to keep the foreground service alive after external playback is paused.
@@ -179,19 +193,49 @@ class PlaybackController constructor(
     // state.
     private val poolRefiller = PoolRefiller()
 
+    /**
+     * Connect to [PlaybackService]'s session, restore the saved queue and
+     * start the observers that follow playback (queue saving, scrobbling,
+     * the widget). Idempotent.
+     *
+     * Called by [PlaybackService.onCreate] as well as by the phone's
+     * `MainViewModel`, so all of this runs when Android Auto starts the app
+     * with no phone screen. When only the phone called it, an Auto play ran
+     * with no controller (and saved, scrobbled nothing), and unlocking the
+     * phone then restored the last session's queue over it and handed that
+     * to Auto.
+     */
     fun connect() {
         if (controllerFuture != null) return
 
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         val future = MediaController.Builder(context, sessionToken).buildAsync()
         controllerFuture = future
+        val connectedSignal = connected
 
         future.addListener({
-            controller = future.get()
+            controller = try {
+                future.get()
+            } catch (e: Exception) {
+                Log.e(TAG, "MediaController connection failed: ${e.message}")
+                null
+            }
+            if (controller == null) {
+                // Let a later connect() try again; callers waiting go on without one.
+                if (controllerFuture === future) controllerFuture = null
+                connectedSignal.complete(Unit)
+                return@addListener
+            }
             setupPlayerListener()
+            connectedSignal.complete(Unit)
             // Restore persisted queue (if enabled) and start auto-save
             scope.launch {
-                val restoredTrack = queuePersistence.restoreIfEnabled()
+                val restoredTrack = queuePersistence.restoreIfEnabled(canApply = {
+                    QueueRestorePolicy.shouldApply(
+                        hasCurrentTrack = stateHolder.state.value.currentTrack != null,
+                        playRequested = playRequestedThisRun,
+                    )
+                })
                 if (restoredTrack != null) {
                     val snapshot = queueManager.snapshot.value
                     stateHolder.update {
@@ -242,6 +286,22 @@ class PlaybackController constructor(
         }, MoreExecutors.directExecutor())
     }
 
+    /** A play is on its way (an Android Auto tap still loading its tracks): don't restore the saved queue. */
+    fun notePlayRequested() {
+        playRequestedThisRun = true
+    }
+
+    /**
+     * [connect] if needed and wait (up to [CONNECT_WAIT_MS]) for the
+     * controller, so a play Android Auto asks for right after starting the
+     * app has one: local files and the silent keepalive go through it.
+     */
+    suspend fun awaitConnected() {
+        connect()
+        kotlinx.coroutines.withTimeoutOrNull(CONNECT_WAIT_MS) { connected.await() }
+            ?: Log.w(TAG, "MediaController not connected after ${CONNECT_WAIT_MS}ms; playing without it")
+    }
+
     fun release() {
         positionUpdateJob?.cancel()
         spotifyStateJob?.cancel()
@@ -252,11 +312,13 @@ class PlaybackController constructor(
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
         controller = null
+        connected = kotlinx.coroutines.CompletableDeferred()
         scope.launch { router.stopExternalPlayback() }
     }
 
     /** Play a single track immediately (clears the queue). */
     fun playTrack(track: TrackEntity, context: PlaybackContext? = null) {
+        playRequestedThisRun = true
         onUserPlaybackActionListener?.invoke()
         clearUserPauseMark()
         queueManager.clearQueue()
@@ -274,6 +336,7 @@ class PlaybackController constructor(
         context: PlaybackContext? = null,
         shuffle: Boolean = queueManager.shuffleEnabled,
     ) {
+        playRequestedThisRun = true
         onUserPlaybackActionListener?.invoke()
         clearUserPauseMark()
         val track = queueManager.setQueue(tracks, startIndex, context, shuffle) ?: return
@@ -676,6 +739,7 @@ class PlaybackController constructor(
         skipReselect: Boolean = false,
         advancing: Boolean = false,
     ) {
+        playRequestedThisRun = true
         // Cancel any idle timeout — we're actively playing now
         cancelIdleTimeout()
         if (stateHolder.state.value.playbackError != null) {

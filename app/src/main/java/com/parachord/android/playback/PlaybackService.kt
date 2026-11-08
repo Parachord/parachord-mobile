@@ -318,6 +318,12 @@ class PlaybackService : MediaLibraryService() {
 
         startStateObserver()
 
+        // The controller, the queue restore and the playback observers
+        // (queue saving, scrobbling, widget) start with the session, not only
+        // when a phone screen opens: Android Auto can start the app with the
+        // phone locked. See PlaybackController.connect.
+        playbackController.connect()
+
         // Feed QueueManager snapshots + current-track changes into the
         // wrapper's synthetic timeline. Combines two flows so a change in
         // either side triggers a re-emit. Runs on Dispatchers.Main per
@@ -671,6 +677,11 @@ class PlaybackService : MediaLibraryService() {
         /** Tap-target dispatch for browse-tree entries (called off the binder thread). */
         private suspend fun dispatchBrowseTreeAction(mediaId: String) {
             try {
+                // On a cold start the controller is still connecting: local
+                // files and the silent keepalive need it. Noted first so the
+                // saved queue isn't restored over this tap meanwhile.
+                playbackController.notePlayRequested()
+                playbackController.awaitConnected()
                 when {
                     mediaId.startsWith(SEARCH_TRACK_PREFIX) -> {
                         val idx = mediaId.removePrefix(SEARCH_TRACK_PREFIX).toIntOrNull()

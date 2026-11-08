@@ -86,15 +86,26 @@ class QueuePersistence constructor(
     /**
      * Restore persisted queue if the setting is enabled.
      *
-     * @return The saved current track (paused), or null if nothing to restore.
+     * @param canApply asked just before the saved queue is applied; false
+     *   leaves the queue alone (see [com.parachord.shared.playback.QueueRestorePolicy]).
+     * @return The saved current track (paused), or null if nothing was restored.
      */
-    suspend fun restoreIfEnabled(): com.parachord.android.data.db.entity.TrackEntity? {
+    suspend fun restoreIfEnabled(
+        canApply: () -> Boolean = { true },
+    ): com.parachord.android.data.db.entity.TrackEntity? {
         if (!settingsStore.isPersistQueueEnabled()) return null
 
         val jsonStr = settingsStore.getPersistedQueueState() ?: return null
         return try {
             val state = json.decodeFromString(PersistedQueueState.serializer(), jsonStr)
             if (state.upNext.isEmpty() && state.currentTrack == null) return null
+            // Checked after the reads above, which suspend: a play can start
+            // in the meantime (Android Auto starting the app), and putting the
+            // last session's queue back over it would undo it.
+            if (!canApply()) {
+                Log.d(TAG, "Skipped restoring the queue: something is already playing")
+                return null
+            }
 
             queueManager.restoreState(
                 restoredUpNext = state.upNext.map { it.toTrackEntity() },

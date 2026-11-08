@@ -2901,17 +2901,27 @@ final class QueuePlaybackCoordinator {
         guard let jsonStr = try? await container.settingsStore.getPersistedQueueState(),
               let state = QueuePersistenceCodec.shared.decode(jsonStr: jsonStr) else { return }
         if state.upNext.isEmpty && state.currentTrack == nil { return }
-        queueManager.restoreState(
-            restoredUpNext: state.upNext,
-            restoredHistory: state.playHistory,
-            restoredOriginalOrder: state.originalOrder,
-            context: state.playbackContext,
-            shuffle: state.shuffleEnabled)
         await MainActor.run {
+            // The reads above wait, and a play can start meanwhile (a deep
+            // link, a tap on the phone). Putting the last session's queue back
+            // over it would show the old track (shared QueueRestorePolicy).
+            // CarPlay taps wait for the bootstrap, so they never race this.
+            guard QueueRestorePolicy.shared.shouldApply(
+                hasCurrentTrack: self.currentTrack != nil,
+                playRequested: self.playTask != nil
+            ) else {
+                NSLog("QUEUE restore skipped: something is already playing")
+                return
+            }
+            self.queueManager.restoreState(
+                restoredUpNext: state.upNext,
+                restoredHistory: state.playHistory,
+                restoredOriginalOrder: state.originalOrder,
+                context: state.playbackContext,
+                shuffle: state.shuffleEnabled)
             self.currentTrack = state.currentTrack
-            // Shown paused but loaded in no engine: play starts it. (Not when
-            // a track was already started this launch.)
-            self.needsLoadOnPlay = state.currentTrack != nil && self.playTask == nil
+            // Shown paused but loaded in no engine: play starts it.
+            self.needsLoadOnPlay = state.currentTrack != nil
             self.syncSnapshot()
         }
     }
