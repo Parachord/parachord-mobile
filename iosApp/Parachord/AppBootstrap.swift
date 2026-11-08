@@ -15,6 +15,7 @@ import Shared
 /// 1. The `.axe` plugin host (the NativeBridge installer, then the plugins).
 ///    Without it nothing resolves, and `IosJsRuntime.initialize()` is
 ///    idempotent, so a resolve that ran first would leave it plugin-less.
+///    Then `ResolverPrefs` (resolver order and active set).
 /// 2. `AppPlayback.shared`, the one coordinator per process (#322).
 /// 3. The Spinoff, Listen Along and chat playback binds to that coordinator.
 /// 4. The persisted queue, restored paused (#220).
@@ -46,6 +47,11 @@ final class AppBootstrap {
             JsPolyfills.installNativeBridge(to: ctx)
         }
         _ = try? await container.loadPluginsAndList()
+
+        // The resolver order + active set mirror. Besides the badges it drives
+        // the additive re-resolve when a resolver is enabled, which a CarPlay-only
+        // session needs too. Idempotent.
+        ResolverPrefs.shared.start()
 
         let coordinator = AppPlayback.shared.coordinator
         ListenAlongController.shared.bind(coordinator)

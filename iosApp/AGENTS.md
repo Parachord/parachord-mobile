@@ -217,7 +217,7 @@ mini player.
 CarPlay can launch the app with the phone locked and no phone window scene,
 so `AppBootstrap.swift` holds everything playback needs, in order: the `.axe`
 plugin host (NativeBridge installer, then `loadPluginsAndList`),
-`AppPlayback.shared`, the Spinoff / Listen Along / chat playback binds, the
+`ResolverPrefs`, `AppPlayback.shared`, the Spinoff / Listen Along / chat playback binds, the
 paused queue restore, and the current track's re-resolve on every track
 change (its artwork). `start()` is idempotent: concurrent and later callers
 await the same run, and it logs `APP_BOOTSTRAP started` once per launch.
@@ -1118,6 +1118,49 @@ rules change; with it false every path is the phone's.
   logs `… car connected with no phone window, refusing` and the next source
   plays.
   The Spotify rules need a device with Spotify installed.
+
+## The CarPlay screens (`iosApp/Parachord/CarPlay/`)
+
+CarPlay shows the same library as Android Auto: one root list ("Parachord")
+with Playlists, Loved Songs and Collection Radio. The rows, their order and
+caps, and what a tap plays all come from the shared `CarBrowse`
+(`shared/.../car/CarBrowse.kt`), which Android Auto renders too. The Swift side
+only draws it.
+
+- **Scene.** `Info.plist` declares only the CarPlay role
+  (`UISceneConfigurations` → `CPTemplateApplicationSceneSessionRoleApplication`
+  → `$(PRODUCT_MODULE_NAME).CarPlaySceneDelegate`). The phone's window scene
+  stays SwiftUI's `WindowGroup`, which needs no manifest entry; the phone app
+  launches as before. On connect `CarPlaySceneDelegate` calls
+  `CarPlaySession.shared.connected()`, starts `AppBootstrap.shared.start()` and
+  sets the root list; on disconnect it calls `disconnected()`. The root is read
+  from the database and doesn't wait for the bootstrap; a tap does.
+- **Lists** (`CarBrowseTemplates`). Rows come from `IosContainer.carChildren`
+  (`CarBrowse.children`). A browsable row pushes its children; a playable row
+  calls `carPlayRequest` (`CarBrowse.playRequest`), then
+  `AppPlayback.shared.coordinator.setQueue(…, shuffle:)` with a context from
+  `carPlaybackContext` (the playlist, "Loved Songs" or "Collection Radio", so
+  the phone's Now Playing names it and a Listen Along sees the takeover), and
+  pushes `CPNowPlayingTemplate.shared` unless it's already on top. A null
+  request (a stale id) plays and pushes nothing. Rows beyond
+  `CPListTemplate.maximumItemCount` are dropped; an empty list shows a disabled
+  "Nothing here yet" row.
+- **Artwork** (`CarArtwork`). Loaded after the list shows, four at a time,
+  stopped when the list is popped. http(s) and `file://` URLs go through
+  `PCImageStore`, then a car-sized copy is kept in memory. A track whose own
+  URL fails falls back to its resolved sources' art (`pcTrackArt`); anything
+  else keeps an SF Symbol. Playlist mosaics are absolute `file://` paths that go
+  stale when the app container moves; a missing file is a miss, not an error.
+- **Entitlement, simulator only.** `com.apple.developer.carplay-audio` is in
+  `ParachordSimulator.entitlements`, used only through
+  `CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]`. Device builds keep
+  `Parachord.entitlements` and keep signing: never add the CarPlay entitlement
+  there until Apple grants it to the App ID.
+- **Opening the CarPlay simulator.** Run the app in the iOS simulator, then in
+  Simulator choose I/O → External Displays → CarPlay (bring Simulator to the
+  front first: the item was greyed out with it in the background). To test a
+  CarPlay-only launch, terminate the app first, then tap Parachord on the
+  CarPlay screen; the app starts with no phone window.
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 

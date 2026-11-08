@@ -192,9 +192,8 @@ struct ContentView: View {
         // constant PC.Player.* tokens, not `dyn`.
         .preferredColorScheme(theme.scheme)
         .task { theme.start() }
-        .task { ResolverPrefs.shared.start() }
-        // Playback start-up (plugin host, the Listen Along / Spinoff / chat binds,
-        // the queue restore and the current track's artwork) lives in
+        // Playback start-up (plugin host, ResolverPrefs, the Listen Along /
+        // Spinoff / chat binds, the queue restore and the current track's artwork) lives in
         // AppBootstrap so CarPlay can start it with no phone screen. RootGate has
         // usually run it already; this just awaits that run.
         .task { await AppBootstrap.shared.start() }
