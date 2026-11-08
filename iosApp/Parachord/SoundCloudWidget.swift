@@ -47,6 +47,8 @@ final class IosSoundCloudWidget {
     @ObservationIgnored private var pageReady = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var pendingResult: LoadResult?
+    /// When the lock screen / CarPlay is told the position again.
+    @ObservationIgnored private var positionThrottle = EmbedNowPlaying.Throttle()
     /// Lock-screen / Control Center buttons, relayed from the page's Media
     /// Session handlers: "play", "pause", "next", "previous".
     @ObservationIgnored var onRemoteCommand: ((String) -> Void)?
@@ -62,7 +64,8 @@ final class IosSoundCloudWidget {
     /// and start it at `volume` (0...1). Returns once the position has moved,
     /// or `.refused` when the widget won't play it here.
     @MainActor
-    func load(link: String, volume: Float, title: String, artist: String, artworkUrl: String?) async -> LoadResult {
+    func load(link: String, volume: Float, title: String, artist: String, album: String?,
+              artworkUrl: String?) async -> LoadResult {
         guard await ensurePage() else { return .refused("page") }
         generation += 1
         let gen = generation
@@ -70,6 +73,7 @@ final class IosSoundCloudWidget {
         isPlaying = false
         currentTime = 0
         duration = 0
+        positionThrottle.reset()
         let linkJson = Self.json(link)
         // Keep WebKit's audio session in use between tracks (see the page's
         // scHoldAudio): released and re-requested with the screen locked, iOS
@@ -81,6 +85,9 @@ final class IosSoundCloudWidget {
         webView?.evaluateJavaScript(
             "scNowPlaying(\(gen), \(Self.json(title)), \(Self.json(artist)), \(Self.json(artworkUrl ?? "")))",
             completionHandler: nil)
+        // The page's call sets the buttons; ours adds the album and an
+        // http(s)-only artwork with its type.
+        setMetadata(title: title, artist: artist, album: album, artworkUrl: artworkUrl)
 
         let started = Date()
         let deadline = Date().addingTimeInterval(Self.loadTimeoutSec)
@@ -143,10 +150,17 @@ final class IosSoundCloudWidget {
     /// The lock screen for another engine's track during the hold: WebKit may show
     /// this page while its silent loop plays, and empty that clears the lock
     /// screen. Its buttons come back through [onRemoteCommand].
-    @MainActor func mirrorNowPlaying(title: String, artist: String, artworkUrl: String?) {
+    @MainActor func mirrorNowPlaying(title: String, artist: String, album: String?, artworkUrl: String?) {
         webView?.evaluateJavaScript(
             "scNowPlaying(\(generation), \(Self.json(title)), \(Self.json(artist)), \(Self.json(artworkUrl ?? "")))",
             completionHandler: nil)
+        setMetadata(title: title, artist: artist, album: album, artworkUrl: artworkUrl)
+    }
+
+    @MainActor private func setMetadata(title: String, artist: String, album: String?, artworkUrl: String?) {
+        guard let script = EmbedNowPlaying.metadataScript(title: title, artist: artist, album: album,
+                                                          artworkUrl: artworkUrl) else { return }
+        webView?.evaluateJavaScript(script, completionHandler: nil)
     }
 
     // MARK: Page
@@ -239,7 +253,12 @@ final class IosSoundCloudWidget {
         case "failed":
             pendingResult = .refused(text ?? "unplayable")
         case "progress":
-            if let s = number { currentTime = s }
+            if let s = number {
+                currentTime = s
+                if positionThrottle.shouldPublish(duration: duration, position: currentTime, playing: isPlaying) {
+                    sendPosition()
+                }
+            }
         case "duration":
             if let s = number, s > 0 { duration = s; updateNowPlaying() }
         case "play":
@@ -262,11 +281,20 @@ final class IosSoundCloudWidget {
     }
 
     /// Keep the lock screen's position and play state current (the page's
-    /// Media Session; WebKit owns the now-playing info for this engine).
+    /// Media Session; WebKit owns the now-playing info for this engine): now,
+    /// on a play, pause, seek or new duration, and every few seconds from the
+    /// widget's progress (`EmbedNowPlaying.Throttle`).
     @MainActor
     private func updateNowPlaying() {
-        webView?.evaluateJavaScript(
-            "scPositionState(\(duration), \(currentTime), \(isPlaying))", completionHandler: nil)
+        _ = positionThrottle.shouldPublish(duration: duration, position: currentTime, playing: isPlaying)
+        sendPosition()
+    }
+
+    @MainActor
+    private func sendPosition() {
+        guard let script = EmbedNowPlaying.positionScript(duration: duration, position: currentTime,
+                                                          playing: isPlaying) else { return }
+        webView?.evaluateJavaScript(script, completionHandler: nil)
     }
 
     private static func json(_ s: String) -> String {

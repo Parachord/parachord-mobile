@@ -1753,8 +1753,17 @@ final class QueuePlaybackCoordinator {
         let message: String
         var actionLabel: String? = nil
         var actionUrl: String? = nil
+        /// Shown as an alert on the CarPlay screen (`CarNowPlaying`). False for
+        /// information that needs nothing from the driver ("Playing via X"),
+        /// as Android Auto shows only the errors that stopped playback.
+        var showInCar = true
     }
     var notice: Notice?
+
+    /// Tracks in a row no source could play. In the car it stops playback on
+    /// the third (`CAR_UNPLAYABLE_RUN_LIMIT`) instead of skipping through the
+    /// whole queue; see `CarUnplayableRun`.
+    @ObservationIgnored private let unplayableRun = CarUnplayableRun(limit: CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT)
 
     /// The first source an embedded player refused during one route.
     private final class EmbedRefusal {
@@ -2626,13 +2635,19 @@ final class QueuePlaybackCoordinator {
                 if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl; refusal.reason = reason }
             }
             router.onSpotifyFailed = { refusal.spotifyFailed = true }
+            // The embeds' lock screen / CarPlay art: the cover the phone shows
+            // (the track's own unless it's Last.fm's placeholder, else its
+            // resolved sources'), then the playing source's.
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist,
-                                           artworkUrl: track.artworkUrl)
+                                           album: track.album,
+                                           artworkUrl: pcTrackArt(track.artworkUrl, artist: track.artist,
+                                                                  title: track.title, album: track.album))
             // Superseded while the engine was starting — skip the stale UI
             // state updates (the newer start owns activeEngine now).
             if Task.isCancelled { return }
             switch result {
             case .played(let kind, let playedResolver):
+                unplayableRun.started()
                 let previousEngine = activeEngine
                 activeEngine = kind
                 await applyEngineHandoff(from: previousEngine, to: kind)
@@ -2649,7 +2664,8 @@ final class QueuePlaybackCoordinator {
                 // (incl. Bandcamp), not just the flat-field trio (#276).
                 container.updateScrobbleSources(trackId: track.id, sources: ranked ?? [])
                 if let service = refusal.service, playedResolver != "soundcloud" {
-                    notice = Notice(message: "\(service) can't play this track here. Playing via \(pcResolverName(playedResolver)).")
+                    notice = Notice(message: "\(service) can't play this track here. Playing via \(pcResolverName(playedResolver)).",
+                                    showInCar: false)
                 }
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
@@ -2688,6 +2704,17 @@ final class QueuePlaybackCoordinator {
                     isStarting = false
                     return
                 }
+                if refusal.service != nil, refusal.reason == "page", !(advancing || spinoffMode),
+                   forcedResolver == nil, CarPlaySession.shared.blocksEmbeds {
+                    // Tapped in the car with the phone app in the background:
+                    // the embed had no window to play in, so its "only plays on
+                    // its own site" message would be wrong. Play retries it.
+                    await haltActiveEngine()
+                    notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
+                    needsLoadOnPlay = true
+                    isStarting = false
+                    return
+                }
                 if let service = refusal.service, !(advancing || spinoffMode) {
                     // A track SoundCloud's widget won't play, and nothing else
                     // can: say so, with its page on the service (desktop
@@ -2706,7 +2733,21 @@ final class QueuePlaybackCoordinator {
                 // match with no subscription) — advance to the next track. On a
                 // forced deck switch, DON'T skip: the user asked to change source,
                 // not to skip the song — leave the current playback as-is.
-                if forcedResolver == nil { skipNext() }
+                if forcedResolver == nil {
+                    if unplayableRun.failed(carConnected: CarPlaySession.shared.isConnected) {
+                        // In the car, the third track in a row nothing could
+                        // play (Bandcamp / SoundCloud with the phone app in the
+                        // background): stop on it rather than run silently
+                        // through the queue. Play retries it.
+                        NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
+                        await haltActiveEngine()
+                        notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
+                        needsLoadOnPlay = true
+                        isStarting = false
+                        return
+                    }
+                    skipNext()
+                }
             }
             isStarting = false
         }

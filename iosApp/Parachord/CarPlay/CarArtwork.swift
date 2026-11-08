@@ -51,6 +51,20 @@ enum CarArtwork {
         return urls
     }
 
+    /// The URLs to try for a queued [track] (Up Next), best first: its own
+    /// cover, then its resolved sources' art.
+    static func candidates(for track: Track) -> [String] {
+        var urls: [String] = []
+        if let own = pcTrackArt(track.artworkUrl, artist: track.artist, title: track.title, album: track.album) {
+            urls.append(own)
+        }
+        if let resolved = pcTrackArt(nil, artist: track.artist, title: track.title, album: track.album),
+           !urls.contains(resolved) {
+            urls.append(resolved)
+        }
+        return urls
+    }
+
     /// The first of [urls] that loads, or nil.
     static func image(forFirstOf urls: [String]) async -> UIImage? {
         for url in urls {

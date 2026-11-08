@@ -17,6 +17,9 @@ import UIKit
 //   only uses the phone's own Spotify device (`IosSpotifyConnect.play`).
 // - A track only Spotify could have played stops with
 //   `CarMessages.OPEN_SPOTIFY_ON_PHONE` instead of being skipped.
+// - The third track in a row that nothing could play stops with
+//   `CarMessages.OPEN_PARACHORD_ON_PHONE` (`CarUnplayableRun`), and so does a
+//   tapped track whose embed had no phone window to play in.
 //
 // With the car disconnected every path behaves as it does on the phone.
 

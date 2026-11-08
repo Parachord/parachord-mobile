@@ -966,10 +966,14 @@ shared page, desktop's module, previews counted as refused) are in the root
   page's `<title>`, "Parachord SoundCloud", no artwork) and takes the buttons
   itself: `MPNowPlayingInfoCenter` / `MPRemoteCommandCenter` from Swift are
   ignored for this engine (verified on an iPad: only the Media Session handlers
-  fire). So `scNowPlaying` sets `navigator.mediaSession.metadata` (title,
-  artist, artwork) + action handlers that relay play / pause / seek / next /
-  previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`), and
-  `scPositionState` keeps the scrubber current. **Known gap:** WebKit shows
+  fire). So `scNowPlaying` sets the action handlers that relay play / pause /
+  seek / next / previous to the coordinator (`onRemoteCommand`, `onRemoteSeek`),
+  and our own scripts (`EmbedNowPlaying`, injected from Swift: the page itself
+  stays byte-identical) set `navigator.mediaSession.metadata` (title, artist,
+  album, an http(s) artwork) and the position state: on play, pause, seek or a
+  new duration, and every 5 s from the widget's progress. Not checked on a
+  device or in the simulator (no SoundCloud sign-in there): whether WebKit
+  publishes this top-level session or the widget iframe's. **Known gap:** WebKit shows
   ±10 s skip buttons instead of next / previous; nulling the page's
   `seekforward`/`seekbackward` handlers and disabling the skip commands on
   `MPRemoteCommandCenter` both had no effect.
@@ -1015,8 +1019,21 @@ URL and state rules, the shared tracker, why there's no bridge) are in the root
   **Known gap:** while paused, the lock screen's position reads 0:00, the loop's own
   position (the track resumes from the right place). Reporting the real position
   each poll only made it bounce.
-- **Lock screen:** the Media Session is set in the Bandcamp page by a fixed script
-  (`nowPlayingScript`). With no bridge, its button handlers only queue the command
+- **Lock screen and CarPlay:** WebKit publishes Now Playing from a page's Media
+  Session, and shows whichever page updated last: this one or SoundCloud's
+  holding page. Fixed scripts set it, each given one JSON object
+  (`EmbedNowPlaying`): the track's metadata (title, artist, album, the cover the
+  phone shows, http(s) only) in both pages, and the position (play, pause, seek,
+  every 5 s) only in this one. Sent to the holding page, the position made it
+  report the track as paused and take the lock screen back on each update. As a
+  track starts, the holding page often updates last, so for about 5 s (until
+  WebKit updates this page by itself) Now Playing shows its 1-second loop
+  (0:01 / -0:00); a seek to the current position didn't make WebKit update
+  sooner. After a resume WebKit kept showing the track as paused until the
+  element was seeked, so the poll seeks it to where it already is
+  (`__pcResync`). The paused-state silent loop is dropped on resume, not just
+  paused. Checked in the simulator through `mediaremoted`'s log, not on a
+  CarPlay screen. With no bridge, the button handlers only queue the command
   in the page, and the poll collects it; `drainRemoteCommands` accepts only the
   known commands and a finite position.
 - **Refused:** falls through to the next ranked source in `PlaybackRouter`, as
@@ -1112,6 +1129,16 @@ rules change; with it false every path is the phone's.
   `CarMessages.OPEN_SPOTIFY_ON_PHONE` (Android Auto's wording, shared). Play
   retries it once Spotify is open. This applies even while the queue is
   advancing, so a Spotify-only playlist doesn't skip to its end.
+- **A run of unplayable tracks stops.** With the phone app in the background a
+  Bandcamp or SoundCloud-only playlist can't play a single track, and the queue
+  used to skip silently to its end. `CarUnplayableRun` (shared) counts tracks in
+  a row that no source could play (any track that starts resets it); with the
+  car connected the third (`CAR_UNPLAYABLE_RUN_LIMIT`) stops on that track, as
+  the Spotify case does, with `CarMessages.OPEN_PARACHORD_ON_PHONE` ("Open
+  Parachord on your phone to play these tracks"). Play retries it. A track
+  tapped in the car whose embed was refused for having no phone window gets the
+  same message, not the phone's "only plays on its own site". With the car
+  disconnected the queue skips on as before.
 - **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
   temporary hook (never commit one). In the simulator, with the app
   backgrounded, a Bandcamp source, or a SoundCloud source with no page yet,
@@ -1149,6 +1176,29 @@ only draws it.
   disabled "Nothing here yet" row. That limit was 500 in the simulator, so a
   500-track playlist shows its Shuffle row and 499 tracks on CarPlay (Android
   Auto shows all 500).
+- **Now Playing** (`CarNowPlaying`). Started by the scene delegate, it
+  follows the coordinator once the bootstrap has made it, and stops on
+  disconnect. CarPlay draws the track and transport from Now Playing info
+  (`NowPlayingPublisher`, or WebKit / MusicKit / Spotify per engine); this adds:
+  - **Buttons** from the shared `carNowPlayingButtons` (Android Auto's): the
+    heart (`heart` / `heart.fill`) adds the playing track to the collection or
+    removes it, as the phone's heart does; Spinoff uses the phone's Spinoff
+    icon (`sparkles`), cut out of a filled disc while a spinoff runs, and calls
+    `SpinoffController.toggle()`; a tap while the pool loads is ignored, and it's
+    hidden when the track has nothing similar. No buttons while nothing plays or
+    before the collection has answered. A heart tapped on the phone updates the
+    car (`watchTrackInCollection`). Images are drawn at
+    `CPNowPlayingButtonMaximumImageSize` (20×20 pt in the simulator) as templates.
+  - **Up Next** (`isUpNextButtonEnabled`): a list of the queue (title, artist,
+    artwork through `CarArtwork`), refreshed while it's open; a tap calls
+    `playFromQueue` and returns to Now Playing. During a spinoff or Listen Along
+    it's "Your Queue" with disabled rows (Listen Along's suspended queue), as
+    the phone dims it.
+  - **Alerts:** a new `notice` shows as a `CPAlertTemplate` with OK, one at a
+    time (a newer notice replaces the one on screen); OK clears the phone's
+    banner too. A notice from before the car connected isn't shown, and
+    `Notice.showInCar = false` ("Playing via X") stays on the phone, as Android
+    Auto shows only errors.
 - **Artwork** (`CarArtwork`). Loaded after the list shows, four at a time.
   Once the list is popped no new loads start; ones already in flight finish.
   http(s) and `file://` URLs go through `PCImageStore`, then a car-sized copy

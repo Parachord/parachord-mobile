@@ -11,11 +11,13 @@ import UIKit
 //
 // The root is one list with the shared browse tree's three rows (Playlists,
 // Loved Songs, Collection Radio), the same tree Android Auto shows
-// (`CarBrowse`, rendered by `CarBrowseTemplates`).
+// (`CarBrowse`, rendered by `CarBrowseTemplates`). `CarNowPlaying` adds the
+// heart, Spinoff, Up Next and playback alerts to the Now Playing screen.
 
 final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegate {
     private var interfaceController: CPInterfaceController?
     private var browse: CarBrowseTemplates?
+    private var nowPlaying: CarNowPlaying?
 
     func templateApplicationScene(_ templateApplicationScene: CPTemplateApplicationScene,
                                   didConnect interfaceController: CPInterfaceController) {
@@ -28,9 +30,13 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             self.browse = browse
             interfaceController.delegate = browse
 
+            // Now Playing's buttons, Up Next and alerts follow the coordinator
+            // once the bootstrap (which `start()` runs) has made it.
+            let nowPlaying = CarNowPlaying(interfaceController: interfaceController)
+            self.nowPlaying = nowPlaying
+            Task { @MainActor in await nowPlaying.start() }
             // The root is read from the database only, so it doesn't wait for
             // the plugin host; a tap awaits the bootstrap before it plays.
-            Task { @MainActor in await AppBootstrap.shared.start() }
             Task { @MainActor [weak self] in
                 let root = await browse.list(for: CarIds.shared.ROOT, title: "Parachord")
                 guard let self, self.interfaceController === interfaceController else { return }
@@ -45,6 +51,8 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
             CarPlaySession.shared.disconnected()
             browse?.cancelAll()
             browse = nil
+            nowPlaying?.stop()
+            nowPlaying = nil
             self.interfaceController = nil
         }
     }
