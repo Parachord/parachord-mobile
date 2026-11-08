@@ -196,6 +196,13 @@ class PlaylistDao(private val db: ParachordDb) {
         queries.clearArtworkById(id = id)
     }
 
+    /** Set the artwork to [artworkUrl] (null clears it) only while it is still
+     *  [expected]. */
+    suspend fun replaceArtworkById(id: String, expected: String, artworkUrl: String?): Unit =
+        withContext(Dispatchers.Default) {
+            queries.replaceArtworkById(artworkUrl = artworkUrl, id = id, expected = expected)
+        }
+
     suspend fun backfillLastModified(): Unit = withContext(Dispatchers.Default) {
         queries.backfillLastModified()
     }

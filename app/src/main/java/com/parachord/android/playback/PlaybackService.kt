@@ -2130,13 +2130,8 @@ internal fun <T> pageOf(items: List<T>, page: Int, pageSize: Int): List<T> {
  * as-is and don't need bridging through a FileProvider. Pure + unit-tested;
  * the FileProvider lookup itself lives in PlaybackService.autoArtworkUri.
  */
-internal fun mosaicFileNameFromStored(stored: String?): String? {
-    if (stored.isNullOrBlank()) return null
-    val marker = "playlist_mosaics/"
-    val idx = stored.indexOf(marker)
-    if (idx < 0) return null
-    return stored.substring(idx + marker.length).substringBefore('?').ifBlank { null }
-}
+internal fun mosaicFileNameFromStored(stored: String?): String? =
+    com.parachord.shared.metadata.PlaylistMosaicPaths.fileName(stored)
 
 /**
  * The loved-tracks slice shown in the Android Auto "Loved Songs" folder. The

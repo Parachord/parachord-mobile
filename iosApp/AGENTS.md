@@ -368,6 +368,16 @@ never from a persisted blob, so this is an iOS-only discipline.
 - **`ByteArray` → `NSData`**: `usePinned { NSData.create(bytes: $0.addressOf(0), length: size.toULong()) }`.
 - Any cinterop / NSData path needs `@OptIn(ExperimentalForeignApi::class)`
   at file scope.
+- **A stored absolute path into the app container goes stale.** iOS can move
+  the data container (a new UUID in the path) across launches, reinstalls and
+  updates; the files move, the stored path doesn't. Playlist mosaics are saved
+  as absolute `file://…/playlist_mosaics/<id>.jpg` URLs, so the launch pass
+  (`regenerateAllPlaylistMosaics`) checks each one: a missing file whose name
+  exists in today's mosaic directory gets its row re-pointed, otherwise the
+  mosaic is built again (`PlaylistMosaicPaths`). Readers that can run before
+  that pass (`pcCover`, CarPlay) map the URL through
+  `IosContainer.playlistArtworkUrl(stored:)`. Imported local files avoid the
+  problem with a container-relative `pcfile://` marker instead.
 
 ---
 

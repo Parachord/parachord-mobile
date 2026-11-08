@@ -61,6 +61,14 @@ class ImageEnrichmentService(
      * source images.
      */
     private val composeMosaic: suspend (playlistId: String, urls: List<String>) -> String?,
+    /**
+     * The directory [composeMosaic] writes into today, and whether a file
+     * exists. [regenerateAllPlaylistMosaics] uses them to repair a stored
+     * mosaic URL left pointing at an old app container
+     * ([PlaylistMosaicPaths]). Without them stored `file://` art is trusted.
+     */
+    private val mosaicDir: (() -> String?)? = null,
+    private val fileExists: ((path: String) -> Boolean)? = null,
 ) {
     /** Cover and photo lookups are decoration: their gated requests (MusicBrainz
      *  above all) use the background lane, behind anything the user tapped (#480). */
@@ -478,7 +486,10 @@ class ImageEnrichmentService(
      * the provider's auto-generated stock cover.
      *
      * Idempotent and bounded:
-     * - Skips playlists already showing a `file://` mosaic (canonical state).
+     * - Skips playlists already showing a `file://` mosaic (canonical state)
+     *   whose file is still there. One whose file is gone is repaired: if the
+     *   app's container moved (iOS), the row is pointed at the same file in
+     *   today's mosaic directory; otherwise the mosaic is built again.
      * - Each call dedups against in-flight `enrichPlaylistArt` invocations
      *   via the existing `playlistFetches` mutex map.
      * - Bounded concurrency = [MAX_PLAYLIST_REGEN_CONCURRENCY] so a library
@@ -489,9 +500,24 @@ class ImageEnrichmentService(
      */
     suspend fun regenerateAllPlaylistMosaics() {
         val playlists = playlistDao.getAllSync()
+        val exists = fileExists
+        val currentDir = mosaicDir?.invoke()
         val needsMosaic = playlists.filter { p ->
             val art = p.artworkUrl
-            art.isNullOrBlank() || !art.startsWith("file://")
+            if (art.isNullOrBlank() || !art.startsWith("file://")) return@filter true
+            if (exists == null) return@filter false
+            when (val r = PlaylistMosaicPaths.repair(art, currentDir, exists)) {
+                PlaylistMosaicPaths.Repair.Keep -> false
+                is PlaylistMosaicPaths.Repair.Rewrite -> {
+                    playlistDao.replaceArtworkById(p.id, expected = art, artworkUrl = r.url)
+                    false
+                }
+                PlaylistMosaicPaths.Repair.Regenerate -> {
+                    // `enrichPlaylistArt` only writes over blank art.
+                    playlistDao.replaceArtworkById(p.id, expected = art, artworkUrl = null)
+                    true
+                }
+            }
         }
         if (needsMosaic.isEmpty()) return
 
