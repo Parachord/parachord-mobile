@@ -1278,9 +1278,11 @@ class PlaybackService : MediaLibraryService() {
                     if (currentArtworkUrl == artworkUrl) {
                         currentArtworkBitmap = bitmap
                         val updated = buildNotification(title, artist, isPlaying, bitmap)
-                        onNotificationChangedCallback.onNotificationChanged(
-                            MediaNotification(NOTIFICATION_ID, updated)
-                        )
+                        repostMediaNotification(isExternalForeground) {
+                            onNotificationChangedCallback.onNotificationChanged(
+                                MediaNotification(NOTIFICATION_ID, updated)
+                            )
+                        }
                     }
                 }
             }
@@ -1911,6 +1913,34 @@ class PlaybackService : MediaLibraryService() {
  * Blank/whitespace strings are treated as missing. Pure function — unit-tested
  * in PlaybackServicePlaceholderTest.
  */
+/**
+ * Re-posts the media notification once its artwork has loaded, without letting
+ * a refused foreground start kill the app. Returns whether it was posted.
+ *
+ * [post] hands the notification to Media3's provider callback, which may start
+ * the service in the foreground. With the app in the background (the phone
+ * locked, playback started from a link), Android refuses that with
+ * `ForegroundServiceStartNotAllowedException`. Media3 1.5.1 catches it when it
+ * updates the notification itself, but not on this callback path, so it reached
+ * the service scope uncaught and the process died. That exception is an
+ * [IllegalStateException]; anything else still propagates.
+ *
+ * During external playback the service posts
+ * its own notification and stays foreground by itself (`promoteToForeground`),
+ * so nothing is re-posted through Media3 then: the `onUpdateNotification`
+ * overrides skip Media3 for the same reason.
+ */
+internal fun repostMediaNotification(externalForeground: Boolean, post: () -> Unit): Boolean {
+    if (externalForeground) return false
+    return try {
+        post()
+        true
+    } catch (e: IllegalStateException) {
+        android.util.Log.w("PlaybackService", "Notification update refused: ${e.message}")
+        false
+    }
+}
+
 /** The [page] of [items] Auto asked for; everything when it didn't page. */
 internal fun <T> pageOf(items: List<T>, page: Int, pageSize: Int): List<T> {
     if (pageSize <= 0 || pageSize == Int.MAX_VALUE) return items

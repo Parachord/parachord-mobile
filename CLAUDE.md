@@ -933,6 +933,8 @@ Keeping Apple Music and Spotify playing with the screen off requires navigating 
 
 **startService() vs startForegroundService() from background.** On Android 12+, both can throw `ForegroundServiceStartNotAllowedException` when the app is backgrounded. `startService()` is tried first (works more reliably when the service is already running). The service should already be in foreground from initial promotion when the app was visible.
 
+**The notification provider's artwork re-post can be refused too.** `UnifiedMediaNotificationProvider` re-posts the notification through Media3's `onNotificationChanged` callback once the artwork loads, and Media3 may start the service in the foreground from there. Media3 1.5.1 catches a refusal when it updates the notification itself, but not on this path, so a play started from a link with the phone locked crashed the app. The re-post goes through `repostMediaNotification`, which catches the refusal and skips Media3 during external playback (the service manages its own notification then).
+
 ### On Tour Indicator — Location-Filtered
 
 The "On Tour" teal dot (`#10C9B4`) appears next to the artist name in the mini player and Now Playing screen when the currently playing artist has upcoming concerts near the user's configured concert area.
