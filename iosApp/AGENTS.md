@@ -1274,9 +1274,14 @@ only draws it.
   CarPlay screen; the app starts with no phone window.
 - **Simulator workflow notes.**
   - **Use an iOS 18 simulator** (e.g. iPhone 16 Pro, iOS 18.3). The iOS 26.5
-    simulator's CarPlay shell froze and ignored clicks. This guide's build
-    command targets 26.5 for the phone app; pick the iOS 18.3 destination when
-    testing CarPlay, if the installed Xcode accepts it.
+    simulator's CarPlay shell froze and ignored clicks. Xcode 26 won't build
+    for an 18.3 destination, so build with this guide's 26.5 command, then
+    `xcrun simctl install <18.3-udid> <…/Debug-iphonesimulator/Parachord.app>`
+    — the 26.5-built app runs on the 18.3 simulator. (`generic/platform=iOS
+    Simulator` fails: it also links x86_64, and `Shared.framework` is arm64.)
+    A new simulator starts with an empty library; copy the app's data
+    container (`xcrun simctl get_app_container <udid> com.parachord.ios data`,
+    `Library/Application Support` + `Library/Preferences`) to bring one over.
   - **Screenshots:** `xcrun simctl io booted screenshot --display=external <file>`
     captures the CarPlay display headlessly (then `sips -Z 1400`).
   - **Reinstalling the app while CarPlay is connected** closes the app and the
