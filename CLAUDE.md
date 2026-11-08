@@ -118,9 +118,11 @@ Bandcamp plays through its own embedded player (`bandcamp.com/EmbeddedPlayer`), 
 
 **Not checked:** whether repeated plays of one track hit a Bandcamp limit. Desktop's #1231 asked for that check and recorded no result. A limit that stops a track from starting is a refused source; one that stops it mid-track isn't detected.
 
-### CarPlay / Android Auto — shared car logic
+### CarPlay / Android Auto / Android Automotive — shared car logic
 
-Both car UIs show one tree and follow one set of rules, all in `shared/.../car/` (`com.parachord.shared.car`):
+**Keep the car experiences at feature parity, on shared code.** Android Auto, Android Automotive and CarPlay should offer the same browse tree, Now Playing buttons, messages and playback rules wherever the platforms allow. A car feature lands on all of them in the same change, with its logic in `com.parachord.shared.car` and each platform drawing only what its car framework requires. If one platform can't do it yet (an API it lacks, an entitlement not granted), say so in the PR and file the follow-up; don't leave the gap silent. Android Automotive (Parachord running on the car's own Android, not projected from the phone) isn't built yet; when it is, it reuses this shared tree and the `MediaLibrarySession` that Android Auto uses.
+
+The car UIs show one tree and follow one set of rules, all in `shared/.../car/` (`com.parachord.shared.car`):
 
 - **`CarBrowse`** (over a `CarLibrarySource`; `daoCarLibrarySource` is the DAO-backed one): `children(parentId)`, `item(id)`, `playRequest(id)`, `isBrowseTreeId(id)`. The root lists Playlists, Loved Songs and Collection Radio. Caps: `CAR_LOVED_CAP` 100 loved songs, `CAR_PLAYLIST_CAP` 500 tracks in one opened playlist (the playlists list is uncapped).
 - **`CarIds`**, the exact media ids: `parachord_root`, `browse:playlists`, `browse:loved`, `action:collection-radio`, `playlist:<id>`, `playlist-shuffle:<id>`, `playlist-track:<position>:<playlistId>` (position first so an id containing `:` parses), `loved-track:<id>`.
