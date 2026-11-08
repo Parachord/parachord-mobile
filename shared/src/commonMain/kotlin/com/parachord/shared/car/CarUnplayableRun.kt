@@ -16,8 +16,9 @@ const val CAR_UNPLAYABLE_RUN_LIMIT = 3
  * [reset]: the platform calls it when a car connects and on every explicit
  * play (a tap, not the queue moving on), so failures on the phone before the
  * car connected, or before the person picked something new, don't count.
- * Playback stops only while the car can't play what the phone could
- * (`carWithoutPhone`); otherwise the queue skips on as on the phone.
+ * Playback stops only while a car is connected and the phone app isn't in
+ * front (`carWithoutPhone`: locked, behind another app, or never shown), when
+ * nobody can act on the phone; otherwise the queue skips on as on the phone.
  */
 class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
     var count: Int = 0
@@ -35,8 +36,8 @@ class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
 
     /**
      * A track failed with no playable source. True when playback should stop
-     * on it: [carWithoutPhone] (a car is connected and the phone app can't host
-     * the embeds) and this failure reaches [limit]. The run starts over after a
+     * on it: [carWithoutPhone] (a car is connected and the phone app isn't in
+     * front) and this failure reaches [limit]. The run starts over after a
      * stop, so pressing play counts afresh.
      */
     fun failed(carWithoutPhone: Boolean): Boolean {

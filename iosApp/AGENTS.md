@@ -1176,8 +1176,9 @@ rules change; with it false every path is the phone's.
   `CarMessages.OPEN_SPOTIFY_ON_PHONE` (Android Auto's wording, shared). Play
   retries it once Spotify is open. This applies even while the queue is
   advancing, so a Spotify-only playlist doesn't skip to its end.
-- **A run of unplayable tracks stops.** With the phone app in the background a
-  Bandcamp or SoundCloud-only playlist can't play a single track, and the queue
+- **A run of unplayable tracks stops.** When the car launched the app and the
+  phone never showed it, a Bandcamp or SoundCloud-only playlist can't play a
+  single track, and on a locked phone their fresh starts may fail too; the queue
   used to skip silently to its end. `CarUnplayableRun` (shared) counts tracks in
   a row that no source could play. A track that starts, an explicit play (a tap,
   or Play on a stopped track; not the queue moving on) and a car connecting
@@ -1192,10 +1193,13 @@ rules change; with it false every path is the phone's.
   on its own site"; a `preview` refusal keeps SoundCloud's own message. With the
   car disconnected, or the phone app open, the queue skips on as on the phone.
 - **Testing without a car.** Call `CarPlaySession.shared.connected()` from a
-  temporary hook (never commit one). In the simulator, with the app
-  backgrounded, a Bandcamp source, or a SoundCloud source with no page yet,
-  logs `… car connected with no phone window, refusing` and the next source
-  plays.
+  temporary hook (never commit one), or open the CarPlay simulator. With the
+  app behind another app, Bandcamp and SoundCloud play as on the phone; the
+  refusal (`… car connected with no phone window, refusing`, then the next
+  source) needs the car to launch the app with no phone window scene: quit the
+  app, then open it from the CarPlay screen without touching the phone. With
+  the app not in front, three tracks nothing could play stop with the car
+  message.
   The Spotify rules need a device with Spotify installed.
 
 ## The CarPlay screens (`iosApp/Parachord/CarPlay/`)
