@@ -129,10 +129,20 @@ class PlaybackController constructor(
     private var connected = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     /**
+     * The paused external track the idle timeout stopped, and where it was
+     * paused. Play starts it again there ([resumeAfterIdleStop]); cleared by
+     * any other play (#550).
+     */
+    private var idleStopped: IdleStoppedPlayback? = null
+
+    /**
      * How long to keep the foreground service alive after external playback is paused.
      * After this timeout, the service is fully demoted and the process may be killed.
      */
     private val IDLE_TIMEOUT_MS = 5L * 60 * 1000 // 5 minutes
+
+    /** How long a play after the idle timeout waits for the track to start before seeking. */
+    private val IDLE_RESUME_SEEK_WAIT_MS = 10_000L
 
     /**
      * Partial WakeLock held during external playback (Spotify/Apple Music) to keep
@@ -669,6 +679,17 @@ class PlaybackController constructor(
             return
         }
 
+        // The idle timeout stopped a paused external track (Apple Music,
+        // Spotify, an embed). ExoPlayer only holds its silent keep-alive loop,
+        // so ctrl.play() below would "play" silence: start the track again
+        // where it was paused (#550).
+        val idleResume = idleResumeTarget(idleStopped, stateHolder.state.value.currentTrack?.id)
+        idleStopped = null
+        if (idleResume != null) {
+            scope.launch { resumeAfterIdleStop(idleResume) }
+            return
+        }
+
         // If we have a pending restored track (app restarted, user taps play),
         // route it through the full playback pipeline instead of calling
         // ctrl.play() on ExoPlayer (which has no real media items, causing
@@ -742,6 +763,11 @@ class PlaybackController constructor(
         playRequestedThisRun = true
         // Cancel any idle timeout — we're actively playing now
         cancelIdleTimeout()
+        idleStopped = null
+        // A restored track waiting for its first play is superseded by any
+        // play: left set, a later play (after the idle timeout, say) would
+        // start the track restored at launch instead.
+        pendingRestoredTrack = null
         if (stateHolder.state.value.playbackError != null) {
             stateHolder.update { copy(playbackError = null) }
         }
@@ -1577,9 +1603,37 @@ class PlaybackController constructor(
         idleTimeoutJob = scope.launch {
             delay(IDLE_TIMEOUT_MS)
             Log.d(TAG, "Idle timeout reached — cleaning up paused external playback")
+            val state = stateHolder.state.value
+            idleStopped = state.currentTrack?.let { IdleStoppedPlayback(it, state.position) }
             isExternalPlayback = false
             router.stopExternalPlayback()
         }
+    }
+
+    /**
+     * Play after the idle timeout: start the stopped track again and, once it
+     * plays, seek to where it was paused. The handler the timeout stopped can't
+     * be resumed, so this is a fresh play of the same source.
+     */
+    private suspend fun resumeAfterIdleStop(stopped: IdleStoppedPlayback) {
+        Log.d(TAG, "Play after the idle timeout: re-playing '${stopped.track.title}' at ${stopped.positionMs} ms")
+        playTrackInternal(stopped.track, skipReselect = true)
+        if (stopped.positionMs <= 0) return
+        val deadline = System.currentTimeMillis() + IDLE_RESUME_SEEK_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (stateHolder.state.value.currentTrack?.id != stopped.track.id) return
+            val playing = if (isExternalPlayback) {
+                router.activeExternalHandler?.isPlaying() == true
+            } else {
+                controller?.isPlaying == true
+            }
+            if (playing) {
+                seekTo(stopped.positionMs)
+                return
+            }
+            delay(250)
+        }
+        Log.d(TAG, "Re-played '${stopped.track.title}' didn't start within ${IDLE_RESUME_SEEK_WAIT_MS} ms; not seeking")
     }
 
     private fun cancelIdleTimeout() {
