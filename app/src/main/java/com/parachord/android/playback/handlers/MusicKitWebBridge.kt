@@ -612,7 +612,7 @@ class MusicKitWebBridge constructor(
 
         if (!awaitMusicKitReady()) return false
         val result = evaluate("authorize()", timeoutMs = null) ?: return false
-        Log.d(TAG, "authorize() JS result: $result")
+        Log.d(TAG, "authorize() JS result: ${redactMusicUserToken(result)}")
         return try {
             val parsed = json.decodeFromString<AuthorizeResponse>(cleanJsString(result))
             val authorized = parsed.authorized
@@ -627,7 +627,7 @@ class MusicKitWebBridge constructor(
             }
             authorized
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse authorize response: $result", e)
+            Log.e(TAG, "Failed to parse authorize response: ${redactMusicUserToken(result)}", e)
             false
         }
     }
@@ -1099,3 +1099,14 @@ class MusicKitWebBridge constructor(
         val artworkUrl: String? = null,
     )
 }
+
+/**
+ * [raw] (MusicKit's `authorize()` result) with the Music User Token's value
+ * replaced, so it can be logged. The token is the user's Apple Music sign-in;
+ * logcat ends up in bug reports. Handles the plain JSON and the JSON-in-a-string
+ * form `evaluateJavascript` returns.
+ */
+internal fun redactMusicUserToken(raw: String): String =
+    MUSIC_USER_TOKEN_VALUE.replace(raw) { it.groupValues[1] + "<redacted>" }
+
+private val MUSIC_USER_TOKEN_VALUE = Regex("""(musicUserToken\\?"\s*:\s*\\?")[^"\\]*""")

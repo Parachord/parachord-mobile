@@ -136,6 +136,12 @@ class PlaybackController constructor(
     private var idleStopped: IdleStoppedPlayback? = null
 
     /**
+     * The service was put in the foreground at the start of the play in
+     * progress ([shouldPromoteAtPlayStart]) and no route has taken it over yet.
+     */
+    private var foregroundHeldForPlay = false
+
+    /**
      * How long to keep the foreground service alive after external playback is paused.
      * After this timeout, the service is fully demoted and the process may be killed.
      */
@@ -417,7 +423,7 @@ class PlaybackController constructor(
 
                 advanceJob = scope.launch {
                     try {
-                        playTrackInternal(next, advancing = true)
+                        playTrackInternal(next, advancing = true, userRequested = userInitiated)
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
                         Log.e(TAG, "Spinoff advance to '${next.title}' failed: ${e.message}", e)
@@ -456,7 +462,7 @@ class PlaybackController constructor(
                 // playTrackInternal() handles the transition: for external→external,
                 // the new handler.play() replaces the queue directly. For
                 // external→ExoPlayer, the ExoPlayer path sends the stop.
-                playTrackInternal(next, advancing = true)
+                playTrackInternal(next, advancing = true, userRequested = userInitiated)
                 Log.d(TAG, "skipNext: full transition took ${System.currentTimeMillis() - transitionStart}ms")
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
@@ -737,14 +743,19 @@ class PlaybackController constructor(
      * @param advancing the play is the queue (or a spinoff) moving on, so a
      *   track that can't play is skipped rather than reported (desktop's
      *   `autoSkipIfAdvancing`).
+     * @param userRequested someone asked for this play (a tap, a car or
+     *   Bluetooth button, Next / Previous), so the service is put in the
+     *   foreground as it starts ([shouldPromoteAtPlayStart]). A skip is
+     *   `advancing` and still user-requested.
      */
     private suspend fun playTrackInternal(
         track: TrackEntity,
         skipReselect: Boolean = false,
         advancing: Boolean = false,
+        userRequested: Boolean = !advancing,
     ) = playMutex.withLock {
         try {
-            playTrackInternalUnsafe(track, skipReselect, advancing)
+            playTrackInternalUnsafe(track, skipReselect, advancing, userRequested)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // Don't swallow cancellation
         } catch (e: Exception) {
@@ -752,6 +763,13 @@ class PlaybackController constructor(
             // Leave the app in a usable state — show the track in the mini player
             // even though playback failed, so the user can tap play to retry.
             stateHolder.update { copy(currentTrack = track, isPlaying = false) }
+        } finally {
+            // Promoted at the start, and no route took it over: nothing is playing.
+            if (foregroundHeldForPlay && !isExternalPlayback) {
+                Log.d(TAG, "Play of '${track.title}' didn't start; releasing the foreground")
+                sendExternalPlaybackStop()
+            }
+            foregroundHeldForPlay = false
         }
     }
 
@@ -759,6 +777,7 @@ class PlaybackController constructor(
         track: TrackEntity,
         skipReselect: Boolean = false,
         advancing: Boolean = false,
+        userRequested: Boolean = !advancing,
     ) {
         playRequestedThisRun = true
         // Cancel any idle timeout — we're actively playing now
@@ -768,6 +787,16 @@ class PlaybackController constructor(
         // play: left set, a later play (after the idle timeout, say) would
         // start the track restored at launch instead.
         pendingRestoredTrack = null
+        // Take the foreground now, while the request's window to start a
+        // foreground service is open: the lookup below can outlast it, and
+        // without one Android cuts the app's network when it isn't on screen.
+        // The route takes it over: kept for external playback, handed to Media3
+        // for ExoPlayer, released by playTrackInternal if nothing plays.
+        if (shouldPromoteAtPlayStart(userRequested, isAppVisible(), isExternalPlayback)) {
+            Log.d(TAG, "Promoting to foreground at play start for '${track.title}'")
+            sendExternalPlaybackStart(track)
+            foregroundHeldForPlay = true
+        }
         if (stateHolder.state.value.playbackError != null) {
             stateHolder.update { copy(playbackError = null) }
         }
@@ -813,7 +842,8 @@ class PlaybackController constructor(
 
         when (action) {
             is PlaybackAction.ExoPlayerItem -> {
-                if (isExternalPlayback) sendExternalPlaybackStop()
+                if (isExternalPlayback || foregroundHeldForPlay) sendExternalPlaybackStop()
+                foregroundHeldForPlay = false
                 isExternalPlayback = false
                 notifyExternalMode(false)
                 stopSpotifyStatePolling()
@@ -856,6 +886,8 @@ class PlaybackController constructor(
                 val wasAlreadyExternal = isExternalPlayback
                 val oldHandler = router.activeExternalHandler
                 isExternalPlayback = true
+                // External playback owns the foreground from here on.
+                foregroundHeldForPlay = false
                 stopPositionUpdates()
                 // Cancel old polling jobs WITHOUT releasing the wake lock — we need
                 // continuous CPU wakefulness across the track transition. The new
@@ -1090,7 +1122,8 @@ class PlaybackController constructor(
 
     private suspend fun playViaExoPlayer(track: TrackEntity) {
         val ctrl = controller ?: return
-        if (isExternalPlayback) sendExternalPlaybackStop()
+        if (isExternalPlayback || foregroundHeldForPlay) sendExternalPlaybackStop()
+        foregroundHeldForPlay = false
         isExternalPlayback = false
         notifyExternalMode(false)
         stopSpotifyStatePolling()
