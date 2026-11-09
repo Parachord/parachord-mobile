@@ -358,4 +358,42 @@ class MusicBrainzClientTest {
         client.getRelease("rel-1", inc = "artists+labels+recordings")
         assertEquals("artists+labels+recordings", capturedInc)
     }
+
+    /**
+     * #560: one request for up to 25 official releases with their track lists,
+     * and the digital edition MusicBrainz didn't list first (The Faith Tour).
+     */
+    @Test
+    fun albumReleaseOfGroup_asksForOfficialReleases_andPicksTheDigitalEdition() = runBlocking {
+        var requests = 0
+        val mock = MockEngine { request ->
+            requests++
+            assertEquals("https://musicbrainz.org/ws/2/release", request.url.toString().substringBefore("?"))
+            assertEquals("rg-faith-tour", queryParam(request, "release-group"))
+            assertEquals("official", queryParam(request, "status"))
+            assertEquals("25", queryParam(request, "limit"))
+            assertEquals("recordings+artist-credits", queryParam(request, "inc"))
+            val tracks = { n: Int -> (1..n).joinToString(",") { """{"id":"t$it","title":"Track $it"}""" } }
+            respond(
+                content = """
+                    {
+                      "release-count": 2,
+                      "releases": [
+                        { "id": "cd", "title": "The Faith Tour", "date": "2026-11-06",
+                          "media": [ { "format": "CD", "track-count": 9, "tracks": [${tracks(9)}] } ] },
+                        { "id": "digital", "title": "The Faith Tour", "date": "2026-11-06",
+                          "media": [ { "format": "Digital Media", "track-count": 18, "tracks": [${tracks(18)}] } ] }
+                      ]
+                    }
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val release = buildClient(mock).albumReleaseOfGroup("rg-faith-tour")
+        assertEquals(1, requests)
+        assertEquals("digital", release?.id)
+        assertEquals(18, release?.media?.flatMap { it.tracks }?.size)
+        assertEquals(18, release?.media?.first()?.trackCount)
+    }
 }

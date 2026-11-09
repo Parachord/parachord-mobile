@@ -204,15 +204,16 @@ class MusicBrainzProvider(
 
     /**
      * An album's track list. One request when a discography or search has shown
-     * this album (desktop `fetchReleaseGroupDetails`, parachord#1199): a release
-     * group's first official release with its tracks, or the release itself.
+     * this album (desktop `fetchReleaseGroupDetails`, parachord#1199): the
+     * release group's edition [MusicBrainzClient.albumReleaseOfGroup] picks
+     * (#560), with its tracks, or the release itself.
      * Otherwise a search for the release, then its lookup.
      */
     override suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
         return try {
             val hint = cacheMutex.withLock { albumHints[albumKey(artistName, albumTitle)] }
             val fromGroup = hint?.releaseGroupId?.let { id ->
-                api.browseReleasesByReleaseGroup(id, status = "official").releases.firstOrNull()
+                api.albumReleaseOfGroup(id)
             }
             val releaseType: String?
             val releaseId = hint?.releaseId

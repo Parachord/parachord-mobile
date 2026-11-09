@@ -71,6 +71,13 @@ class MusicBrainzClient(
         private const val TAG = "MusicBrainzClient"
         private const val BASE_URL = "https://musicbrainz.org/ws/2"
 
+        /**
+         * Releases [albumReleaseOfGroup] asks for, as desktop does. A large
+         * group (Abbey Road's 66 releases) comes back as about 400 KB, against
+         * 16 KB for one; most albums have a few.
+         */
+        const val ALBUM_RELEASE_LIMIT = 25
+
         /** Minimum backoff floor for a 503/429 (#273). MusicBrainz 503s with
          *  no (or a zero) `Retry-After` were yielding a 0ms cooldown, so the
          *  gate's "short-circuit during the window" protection was defeated and
@@ -273,6 +280,26 @@ class MusicBrainzClient(
             parameter("limit", limit)
         }
 
+    /**
+     * The edition of an album to open: the release group's official releases
+     * (up to [ALBUM_RELEASE_LIMIT], with their track lists) and [pickRelease]'s
+     * choice among them, in one request. Desktop's `fetchReleaseGroupDetails`
+     * (parachord#1290): the album page and `parachord://` album links both use it,
+     * so they open the same edition everywhere. Null when the group has no
+     * official release.
+     */
+    suspend fun albumReleaseOfGroup(
+        releaseGroupMbid: String,
+        inc: String = "recordings+artist-credits",
+    ): MbReleaseDetail? = pickRelease(
+        browseReleasesByReleaseGroup(
+            releaseGroupMbid = releaseGroupMbid,
+            inc = inc,
+            limit = ALBUM_RELEASE_LIMIT,
+            status = "official",
+        ).releases,
+    )
+
     suspend fun browseReleaseGroups(
         artistId: String,
         limit: Int = 100,
@@ -420,6 +447,8 @@ data class MbReleaseBrowseResponse(
 data class MbMedia(
     val position: Int? = null,
     val format: String? = null,
+    /** The medium's track count; [pickRelease] reads it, falling back to [tracks]. */
+    @SerialName("track-count") val trackCount: Int? = null,
     val tracks: List<MbTrack> = emptyList(),
 )
 

@@ -58,9 +58,8 @@ class DefaultProtocolInputResolver(
             null
         }
         val fromGroup: MbReleaseDetail? = if (direct != null) null else try {
-            musicBrainzClient.browseReleasesByReleaseGroup(
-                releaseGroupMbid = mbid, inc = "recordings+artist-credits", limit = 1,
-            ).releases.firstOrNull()
+            // The edition the album page opens (#560).
+            musicBrainzClient.albumReleaseOfGroup(mbid)
         } catch (e: Exception) {
             Log.w(TAG, "MBID $mbid release-group browse failed: ${e.message}")
             null
