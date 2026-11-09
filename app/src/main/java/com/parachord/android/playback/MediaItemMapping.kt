@@ -36,3 +36,14 @@ fun TrackEntity.toAutoMediaItem(): MediaItem {
         .setMediaMetadata(builder.build())
         .build()
 }
+
+/**
+ * The cover Android Auto shows for a queued [track]: its own, else the art its
+ * resolved sources carry ([trackArtwork] is `TrackResolverCache.trackArtwork`),
+ * as the phone's track rows do. The playing track uses
+ * [PlaybackState.effectiveArtwork], which puts the streaming service's cover
+ * first. Null leaves the car's placeholder.
+ */
+internal fun carArtworkFor(track: TrackEntity, trackArtwork: Map<String, String>): String? =
+    track.artworkUrl?.takeIf { it.isNotBlank() }
+        ?: trackArtwork[com.parachord.android.resolver.trackKey(track.title, track.artist)]

@@ -13,8 +13,9 @@ import UIKit
 //   adds the playing track to the collection or removes it, and Spinoff starts
 //   a spinoff from it or ends the running one. Spinoff uses the phone's
 //   Spinoff fork (`SpinoffFork`), cut out of a filled disc while a spinoff
-//   runs (`SpinoffForkActive`); it's hidden when the track has nothing
-//   similar, and a tap while the pool is loading is ignored. The buttons follow the phone: a heart tapped there
+//   runs (`SpinoffForkActive`), and already while its pool loads, which takes
+//   15 s or more (#551); it's hidden when the track has nothing similar, and a
+//   tap while the pool is loading is ignored. The buttons follow the phone: a heart tapped there
 //   updates the car too.
 // - Up Next lists the queue (title, artist, artwork); a tap plays that track,
 //   as the phone's queue does, and returns to Now Playing. While a spinoff or a
@@ -95,6 +96,8 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
         let track: Track?
         let spinoffMode: Bool
         let spinoffAvailable: Bool?
+        /// The pool is being built: the button already shows as running (#551).
+        let spinoffLoading: Bool
         let notice: QueuePlaybackCoordinator.Notice?
         let queue: [Track]
         let suspended: Bool
@@ -109,6 +112,7 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
                 track: c.currentTrack,
                 spinoffMode: c.spinoffMode,
                 spinoffAvailable: c.spinoffAvailable,
+                spinoffLoading: SpinoffController.shared.loading,
                 notice: c.notice,
                 queue: listeningAlong ? ListenAlongController.shared.suspendedQueue : c.upNext,
                 suspended: listeningAlong || c.spinoffMode
@@ -127,6 +131,7 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
         let listeningAlong = c.playbackContext?.type == ListenAlongController.listenAlongContext
         return State(
             track: c.currentTrack, spinoffMode: c.spinoffMode, spinoffAvailable: c.spinoffAvailable,
+            spinoffLoading: SpinoffController.shared.loading,
             notice: c.notice,
             queue: listeningAlong ? ListenAlongController.shared.suspendedQueue : c.upNext,
             suspended: listeningAlong || c.spinoffMode
@@ -162,7 +167,8 @@ final class CarNowPlaying: NSObject, CPNowPlayingTemplateObserver {
         let buttons = CarNowPlayingButtonsKt.carNowPlayingButtons(
             loved: heart.map { KotlinBoolean(value: $0) },
             spinoffMode: state.spinoffMode,
-            spinoffAvailable: state.spinoffAvailable.map { KotlinBoolean(value: $0) }
+            spinoffAvailable: state.spinoffAvailable.map { KotlinBoolean(value: $0) },
+            spinoffLoading: state.spinoffLoading
         )
         guard buttons != shownButtons else { return }
         shownButtons = buttons
