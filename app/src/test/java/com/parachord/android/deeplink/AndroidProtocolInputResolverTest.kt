@@ -2,7 +2,6 @@ package com.parachord.android.deeplink
 
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.MbMedia
-import com.parachord.shared.api.MbReleaseBrowseResponse
 import com.parachord.shared.api.MbReleaseDetail
 import com.parachord.shared.api.MbTrack
 import com.parachord.shared.api.MusicBrainzClient
@@ -42,19 +41,15 @@ class AndroidProtocolInputResolverTest {
         coEvery { mbClient.getRelease("RG_MBID", any()) } throws
             SerializationException("Not Found")
         coEvery {
-            mbClient.browseReleasesByReleaseGroup("RG_MBID", "recordings+artist-credits", 1)
-        } returns MbReleaseBrowseResponse(
-            releases = listOf(
-                MbReleaseDetail(
-                    id = "REL_MBID",
-                    title = "I Built You a Tower",
-                    media = listOf(
-                        MbMedia(
-                            tracks = listOf(
-                                MbTrack(id = "T1", title = "Song 1"),
-                                MbTrack(id = "T2", title = "Song 2"),
-                            ),
-                        ),
+            mbClient.albumReleaseOfGroup("RG_MBID", any())
+        } returns MbReleaseDetail(
+            id = "REL_MBID",
+            title = "I Built You a Tower",
+            media = listOf(
+                MbMedia(
+                    tracks = listOf(
+                        MbTrack(id = "T1", title = "Song 1"),
+                        MbTrack(id = "T2", title = "Song 2"),
                     ),
                 ),
             ),
@@ -70,7 +65,7 @@ class AndroidProtocolInputResolverTest {
         assertEquals("T1", resolved.tracks[0].mbid)
         coVerifyOrder {
             mbClient.getRelease("RG_MBID", "recordings+artist-credits")
-            mbClient.browseReleasesByReleaseGroup("RG_MBID", "recordings+artist-credits", 1)
+            mbClient.albumReleaseOfGroup("RG_MBID", any())
         }
     }
 
@@ -96,7 +91,7 @@ class AndroidProtocolInputResolverTest {
         assertEquals("Release Title", resolved!!.displayName)
         assertEquals(1, resolved.tracks.size)
         coVerify(exactly = 0) {
-            mbClient.browseReleasesByReleaseGroup(any(), any(), any())
+            mbClient.albumReleaseOfGroup(any(), any())
         }
     }
 
@@ -106,8 +101,8 @@ class AndroidProtocolInputResolverTest {
         coEvery { mbClient.getRelease(any(), any()) } throws
             SerializationException("Not Found")
         coEvery {
-            mbClient.browseReleasesByReleaseGroup(any(), any(), any())
-        } returns MbReleaseBrowseResponse()
+            mbClient.albumReleaseOfGroup(any(), any())
+        } returns null
 
         val resolver = buildResolver(mbClient)
         assertNull(resolver.resolveByMbid("BAD_MBID"))
@@ -124,14 +119,10 @@ class AndroidProtocolInputResolverTest {
             id = "MBID", title = "Empty", media = emptyList(),
         )
         coEvery {
-            mbClient.browseReleasesByReleaseGroup("MBID", any(), any())
-        } returns MbReleaseBrowseResponse(
-            releases = listOf(
-                MbReleaseDetail(
-                    id = "REL2", title = "Sibling Edition",
-                    media = listOf(MbMedia(tracks = listOf(MbTrack(id = "T1", title = "Song")))),
-                ),
-            ),
+            mbClient.albumReleaseOfGroup("MBID", any())
+        } returns MbReleaseDetail(
+            id = "REL2", title = "Sibling Edition",
+            media = listOf(MbMedia(tracks = listOf(MbTrack(id = "T1", title = "Song")))),
         )
 
         val resolver = buildResolver(mbClient)

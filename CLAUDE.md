@@ -28,6 +28,8 @@ The desktop uses a cascading provider pattern. Each provider has a specialty:
 
 **MusicBrainz is the primary source for discography and album tracklists.** Last.fm and Spotify supplement with images and additional metadata. Results from all providers are merged — later providers fill in gaps from earlier ones.
 
+**Which edition an album opens (#560, desktop parachord#1290).** A release group holds every edition. The album page (when a discography or search has given the release group) and `parachord://` album links by MBID ask for up to 25 official releases with their track lists in one request (`MusicBrainzClient.albumReleaseOfGroup`) and open the one shared `pickRelease` chooses: digital-only releases first (what streaming services carry), then the most common track count (the standard edition, so not Abbey Road's 40-track deluxe), then the earliest date, undated last. Taking the first release MusicBrainz listed opened George Michael's "The Faith Tour" with 9 of 18 tracks (one CD). A port of desktop's `release-pick.js`; change it there first. The release-search path (no release group known) still takes the first search result, as desktop does.
+
 ### Resolver Scoring — Two-Tier System
 
 Source selection uses priority-first, confidence-second sorting:
