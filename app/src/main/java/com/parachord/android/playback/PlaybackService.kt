@@ -97,6 +97,7 @@ class PlaybackService : MediaLibraryService() {
     private val carBrowse: CarBrowse by inject()
     private val libraryRepository: com.parachord.shared.repository.LibraryRepository by inject()
     private val metadataService: com.parachord.shared.metadata.MetadataService by inject()
+    private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache by inject()
 
     private var mediaSession: MediaLibrarySession? = null
     private var player: ExoPlayer? = null
@@ -215,9 +216,10 @@ class PlaybackService : MediaLibraryService() {
         val loved: Boolean?,
         val spinoffMode: Boolean,
         val spinoffAvailable: Boolean?,
+        val spinoffLoading: Boolean,
     )
 
-    @Volatile private var mediaButtonsState = MediaButtonsState(null, false, null)
+    @Volatile private var mediaButtonsState = MediaButtonsState(null, false, null, false)
 
     /**
      * The buttons for Android Auto and the system media controls ([carNowPlayingButtons]):
@@ -228,7 +230,7 @@ class PlaybackService : MediaLibraryService() {
      * controllers use the icon constant.
      */
     private fun customLayoutFor(state: MediaButtonsState): List<CommandButton> =
-        carNowPlayingButtons(state.loved, state.spinoffMode, state.spinoffAvailable).map { button ->
+        carNowPlayingButtons(state.loved, state.spinoffMode, state.spinoffAvailable, state.spinoffLoading).map { button ->
             when (button) {
                 CarNowPlayingButton.LOVE, CarNowPlayingButton.UNLOVE -> {
                     val loved = button == CarNowPlayingButton.UNLOVE
@@ -348,10 +350,10 @@ class PlaybackService : MediaLibraryService() {
                     else libraryRepository.isTrackInCollection(key.first, key.second)
                 }
             val spinoffFlow = stateHolder.state
-                .map { it.spinoffMode to it.spinoffAvailable }
+                .map { Triple(it.spinoffMode, it.spinoffAvailable, it.spinoffLoading) }
                 .distinctUntilChanged()
-            combine(lovedFlow, spinoffFlow) { loved, (mode, available) ->
-                MediaButtonsState(loved, mode, available)
+            combine(lovedFlow, spinoffFlow) { loved, (mode, available, loading) ->
+                MediaButtonsState(loved, mode, available, loading)
             }
                 .distinctUntilChanged()
                 .collect { state ->
@@ -360,13 +362,25 @@ class PlaybackService : MediaLibraryService() {
                 }
         }
 
+        // The car shows the covers the phone does (#551): the current track's
+        // by effectiveArtwork (the streaming service's cover, the track's own,
+        // then its resolved sources'), the queue's by carArtworkFor. A spinoff
+        // track comes from Last.fm with no cover of its own, so the car's card
+        // showed the previous cover, then a blank one, until the artwork lookup
+        // after the track started found one.
         queueSnapshotJob = serviceScope.launch {
             combine(
                 queueManager.snapshot,
-                stateHolder.state.map { it.currentTrack }.distinctUntilChanged(),
-            ) { qs, current -> Pair(qs, current) }.collect { (qs, current) ->
-                wrapper.updateQueueSnapshot(currentTrack = current, upNext = qs.upNext)
+                stateHolder.state,
+                trackResolverCache.trackArtwork,
+            ) { qs, state, trackArtwork ->
+                val current = state.currentTrack?.let { it.copy(artworkUrl = state.effectiveArtwork(trackArtwork)) }
+                current to qs.upNext.map { it.copy(artworkUrl = carArtworkFor(it, trackArtwork)) }
             }
+                .distinctUntilChanged()
+                .collect { (current, upNext) ->
+                    wrapper.updateQueueSnapshot(currentTrack = current, upNext = upNext)
+                }
         }
     }
 

@@ -48,4 +48,12 @@ class CarNowPlayingButtonsTest {
             carNowPlayingButtons(loved = false, spinoffMode = true, spinoffAvailable = false),
         )
     }
+
+    @Test
+    fun `a spinoff still building its pool already shows as running — issue 551`() {
+        assertEquals(
+            listOf(CarNowPlayingButton.UNLOVE, CarNowPlayingButton.END_SPINOFF),
+            carNowPlayingButtons(loved = true, spinoffMode = false, spinoffAvailable = true, spinoffLoading = true),
+        )
+    }
 }

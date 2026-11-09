@@ -1244,7 +1244,8 @@ only draws it.
     heart (`heart` / `heart.fill`) adds the playing track to the collection or
     removes it, as the phone's heart does; Spinoff uses the phone's Spinoff
     fork (`SpinoffFork`), the fork cut out of a filled disc while a spinoff runs
-    (`SpinoffForkActive`), and calls
+    (`SpinoffForkActive`) and already while its pool loads (15 s or more, with
+    no other sign in the car that the tap took, #551), and calls
     `SpinoffController.toggle()`; a tap while the pool loads is ignored, and it's
     hidden when the track has nothing similar. No buttons while nothing plays or
     before the collection has answered. A heart tapped on the phone updates the
