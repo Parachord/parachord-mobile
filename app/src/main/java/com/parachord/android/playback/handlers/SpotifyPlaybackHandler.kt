@@ -861,17 +861,19 @@ class SpotifyPlaybackHandler constructor(
         device.id == LOCAL_DEVICE_ID
 
     /**
-     * True when [device] is a real Spotify-registered Smartphone matching the
-     * current handset (Build.MODEL or Build.MANUFACTURER). After
-     * resolveLocalDevice() runs, the "used" device is no longer the synthetic
-     * placeholder — it's the real Connect entry. The sticky-default helper
-     * needs to recognize both forms.
+     * True when [device] is a real Spotify-registered Smartphone that is this
+     * handset ([isThisPhonesSpotifyDevice]). After resolveLocalDevice() runs,
+     * the "used" device is no longer the synthetic placeholder — it's the real
+     * Connect entry. The sticky-default helper needs to recognize both forms.
      */
-    internal fun isLocalRealDevice(device: SpDevice): Boolean {
-        if (device.type != "Smartphone") return false
-        val name = device.name.lowercase()
-        return name.contains(Build.MODEL.lowercase()) ||
-            name.contains(Build.MANUFACTURER.lowercase())
+    internal fun isLocalRealDevice(device: SpDevice): Boolean =
+        isThisPhonesSpotifyDevice(device, androidDeviceName(), Build.MODEL, Build.MANUFACTURER)
+
+    /** The phone's name (Settings › About phone › Device name), which Spotify uses for its Connect device. */
+    private fun androidDeviceName(): String? = try {
+        android.provider.Settings.Global.getString(context.contentResolver, android.provider.Settings.Global.DEVICE_NAME)
+    } catch (e: Exception) {
+        null
     }
 
     /**
@@ -1289,3 +1291,26 @@ class SpotifyWakeBlockedException :
  */
 class SpotifyPlaybackNotStartedException :
     Exception("Spotify accepted the play but didn't start playing")
+
+/**
+ * Whether [device] is this phone's own Spotify Connect device. Spotify names
+ * it after the phone's device name ([androidDeviceName], Settings › About phone
+ * › Device name), so an exact match on that wins. The model or maker inside
+ * the name ("Pixel 9a", "Google") is kept for an unnamed phone. Matching only
+ * those, a phone renamed to "J9a" was never "This device" (#459 spike).
+ */
+internal fun isThisPhonesSpotifyDevice(
+    device: SpDevice,
+    androidDeviceName: String?,
+    model: String?,
+    manufacturer: String?,
+): Boolean {
+    if (device.type != "Smartphone") return false
+    val name = device.name.trim().lowercase()
+    if (name.isEmpty()) return false
+    val deviceName = androidDeviceName?.trim()?.lowercase()
+    if (!deviceName.isNullOrEmpty() && name == deviceName) return true
+    return listOfNotNull(model, manufacturer)
+        .map { it.trim().lowercase() }
+        .any { it.isNotEmpty() && name.contains(it) }
+}

@@ -151,7 +151,7 @@ Spotify playback uses the **Web API** (not the App Remote SDK). The `SpotifyPlay
 
 **Device wake strategy (two-tier):**
 1. **Media button broadcast (invisible):** Sends `KEYCODE_MEDIA_PLAY` targeted to `com.spotify.music`. Wakes Spotify's `MediaBrowserService` without showing any UI. Works when Spotify is in the background but **does NOT work when Spotify is fully killed** (no process to receive the broadcast).
-2. **Launch intent (fallback after 2s):** Uses `getLaunchIntentForPackage` to start Spotify's activity. This brings Spotify briefly to the foreground (jarring), so immediately after launching, we bring our own app back to front. Only used when the broadcast doesn't wake Spotify within 2 seconds of polling.
+2. **Launch intent (fallback after 2s):** Uses `getLaunchIntentForPackage` to start Spotify's activity. This brings Spotify briefly to the foreground (jarring), so immediately after launching, we bring our own app back to front. Only used when the broadcast doesn't wake Spotify within 2 seconds of polling. It needs Spotify declared in the manifest's `<queries>`: without it Android 11+ hides Spotify from Parachord, `getLaunchIntentForPackage` returns null, and the fallback reported "Spotify is not installed" (#459 spike).
 
 **Critical: never use the launch intent as the primary wake strategy.** It opens Spotify visually, which is terrible UX for a music player controlling another music player. Always try the invisible broadcast first.
 
@@ -173,7 +173,7 @@ Spotify playback uses the **Web API** (not the App Remote SDK). The `SpotifyPlay
 
 **Warm-path optimization:** When `deviceVerified && preferredDeviceId != null`, fires `startPlayback` directly without any device fetch (~200ms).
 
-**"This device" resolution:** When the user picks the synthetic local device, `resolveLocalDevice()` wakes Spotify (broadcast → fallback launch intent) and polls for a Smartphone-type device matching `Build.MODEL` or `Build.MANUFACTURER`. Remote devices (TVs, computers) appear in the API even when local Spotify isn't running — `deviceVerified` being true does NOT mean Spotify is running locally.
+**"This device" resolution:** When the user picks the synthetic local device, `resolveLocalDevice()` wakes Spotify (broadcast → fallback launch intent) and polls for this phone's Smartphone-type device (`isThisPhonesSpotifyDevice`): named exactly as the phone (`Settings.Global.DEVICE_NAME`, which Spotify uses for its Connect name), else containing `Build.MODEL` or `Build.MANUFACTURER`. A phone renamed "J9a" shows up as "J9a", which the model match alone never found (#459 spike). iOS matches `UIDevice.current.name`, which since iOS 16 is the generic "iPhone" without Apple's user-assigned-device-name entitlement, so a renamed iPhone has the same gap there. Remote devices (TVs, computers) appear in the API even when local Spotify isn't running — `deviceVerified` being true does NOT mean Spotify is running locally.
 
 **Spotify API device visibility limitations:** `GET /v1/me/player/devices` only returns devices with active Spotify Connect sessions, not all devices on the network. It also returns stale/phantom devices (e.g., a "Bedroom TV" that's been off for days). The desktop app may see more devices via native SDK discovery. Restricted devices (Spotify Free) are filtered from the picker.
 

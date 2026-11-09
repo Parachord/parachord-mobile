@@ -15,6 +15,16 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!--
+      Package visibility (Android 11+): without this Parachord can't see Spotify,
+      so getLaunchIntentForPackage("com.spotify.music") returns null and the
+      wake's launch-intent fallback reported "Spotify is not installed" (found
+      on a Pixel in the #459 spike).
+    -->
+    <queries>
+        <package android:name="com.spotify.music" />
+    </queries>
+
     <application
         android:name=".app.ParachordApplication"
         android:allowBackup="false"
