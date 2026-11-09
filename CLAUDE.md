@@ -676,7 +676,7 @@ Album and artist shares call entity-link only — **no submit** (matches desktop
 - `app/.../share/ShareManager.kt` — caller, parallel `coroutineScope` for track shares (entity-link + submit fire concurrently)
 - `app/.../share/ShareSheet.kt` — `openShareSheet` + `rememberShareXxx` Composable helpers
 - `app/.../ui/components/{Track,Album,Artist}ContextMenu.kt`, `app/.../ui/screens/playlists/PlaylistsScreen.kt` (PlaylistContextMenu)
-- `parachord-desktop/plugins/achordion.axe` — reference implementation
+- `parachord-desktop/plugins-src/achordion/implementation.js` — reference implementation (the desktop repo has no `.axe`; it's generated from `plugins-src/`)
 
 ### Scrobbling — Shared Stack (KMP, #193)
 
@@ -1293,16 +1293,16 @@ A full security review was completed April 2026. The review plan is at `.claude/
 `.axe` plugins are the **cross-platform source of truth** for resolvers, AI providers, meta-services, AND their behavior (model lists, filters, scrobble payloads). **Do NOT natively reimplement what an `.axe` already does** — see the rule in Common Mistakes below.
 
 **Sync topology — the hub is the desktop monorepo, NOT the mobile repo:**
-- **Authoring source:** `parachord-desktop/plugins/` (GitHub `Parachord/parachord`). Plugins are edited here.
-- **Forward sync** (`parachord-desktop/.github/workflows/sync-repos.yml`): push to monorepo `main` touching `plugins/**` → unconditional `cp` to `Parachord/parachord-plugins` (the marketplace) + manifest merge. **NOT version-aware** — a stale monorepo plugin DOWNGRADES the marketplace (the #754 clobber class).
-- **Reverse sync** (`reverse-sync.yml`, daily 6 AM UTC + dispatch): marketplace → monorepo, **version-aware (strictly-greater only, never downgrade)**, opens a PR. Pulls community contributions back.
+- **Authoring source:** `parachord-desktop/plugins-src/<id>/` (GitHub `Parachord/parachord`): `manifest.json` (the plugin's manifest, settings and everything else but the code) plus `implementation.js` (a real module, `module.exports = { search, resolve, … }`). Plugins are edited here. **The desktop repo holds no `.axe` files** (parachord#1099): `node scripts/build-axes.js` generates `plugins/<id>.axe` at build time, along with the bundled fallback list and the plugin's `marketplace-manifest.json` version; `--check` byte-compares and fails on drift.
+- **Forward sync** (`parachord-desktop/.github/workflows/sync-repos.yml`): a push to monorepo `main` touching `plugins-src/**` or `marketplace-manifest.json` runs `build-axes.js`, then an unconditional `cp` of the generated `.axe` files to `Parachord/parachord-plugins` (the marketplace) + manifest merge. **NOT version-aware** — a stale monorepo plugin DOWNGRADES the marketplace (the #754 clobber class).
+- **Reverse sync** (`reverse-sync.yml`, daily 6 AM UTC + dispatch): marketplace → monorepo, **version-aware (strictly-greater only, never downgrade)**. It adopts a marketplace `.axe` by importing it into `plugins-src/<id>/` (`build-axes.js --import --plugin <id>`) and opens a PR with that `plugins-src` diff. Pulls community contributions back.
 - **Apps consume the marketplace at runtime** via `PluginSyncService` (fetches `manifest.json` from `raw.githubusercontent.com/Parachord/parachord-plugins/main/`, downloads newer `.axe`, semver-dedups vs the bundled copy — higher wins).
 
 **Mobile (`parachord-android`) is OUTSIDE the desktop sync.** Its bundled copies — `app/src/main/assets/plugins/*.axe` (Android) AND `iosApp/Parachord/Resources/axe-plugins/*.axe` (iOS — a **separate** copy; `axe-plugins`, not `plugins`, because iOS reserves `PlugIns/`) — are an offline fallback; runtime sync delivers updates. A **one-direction** (marketplace → mobile) pull keeps the bundle fresh: `.github/workflows/sync-plugins.yml` + `.github/scripts/sync-bundled-plugins.js` (version-aware; updates only already-bundled plugins; never downgrades/adds/removes; PR). **No mobile → marketplace forward sync exists** — mobile never authors plugins, so one would only leak in-repo bundled edits upstream.
 
 **Landing a plugin change — two paths:**
-1. **Monorepo-first (safest):** edit `parachord-desktop/plugins/<x>.axe` + bump its `manifest.version` + `marketplace-manifest.json`, push → forward-sync ships it. No clobber window.
-2. **Direct-to-`parachord-plugins` (faster):** edit the marketplace `.axe` + **bump the version** (in the `.axe` AND `manifest.json`) → the reverse-sync adopts it (strictly-greater) and PRs it back. Without a version bump the no-downgrade guard ignores it. **Clobber window:** until that reverse PR merges into the monorepo, any monorepo `plugins/**` push `cp`s the older monorepo copy over your change — merge the reverse PR promptly.
+1. **Monorepo-first (safest):** edit `parachord-desktop/plugins-src/<x>/implementation.js` (or its `manifest.json`), bump `manifest.version` in `plugins-src/<x>/manifest.json`, run `node scripts/build-axes.js` (it syncs the `marketplace-manifest.json` entry's version), push → forward-sync builds and ships it. No clobber window. Never hand-edit a generated `.axe`.
+2. **Direct-to-`parachord-plugins` (faster):** edit the marketplace `.axe` + **bump the version** (in the `.axe` AND `manifest.json`) → the reverse-sync imports it into `plugins-src` (strictly-greater) and PRs that back. Without a version bump the no-downgrade guard ignores it. **Clobber window:** until that reverse PR merges into the monorepo, any monorepo `plugins-src/**` push rebuilds and `cp`s the older monorepo version over your change — merge the reverse PR promptly.
 
 **Verify against the live remote, not the local checkout.** A local `parachord-plugins` clone may sit on a stale feature branch (it was once 50 commits behind `main`, which made the marketplace *look* drifted when it wasn't). Always check `origin/main` / the `raw.githubusercontent.com/.../main/` URL.
 
