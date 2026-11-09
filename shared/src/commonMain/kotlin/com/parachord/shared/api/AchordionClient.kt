@@ -36,7 +36,7 @@ import kotlinx.serialization.json.Json
  *
  * Per-session dedup: an MBID submitted once won't re-submit until the
  * process restarts. Matches desktop's `submittedThisSession` in
- * `parachord-desktop/plugins/achordion.axe`.
+ * `parachord-desktop/plugins-src/achordion/implementation.js`.
  *
  * `authFailed` kill-switch: once any call returns 401, subsequent calls
  * short-circuit without hitting the network until process restart.

@@ -10,7 +10,7 @@ import com.parachord.shared.resolver.ResolvedSource
  * resolved sources for a played track — not just the single played/top-ranked one.
  *
  * Byte-for-byte port of the desktop achordion plugin's `buildLinks` + `linkForSource`
- * (parachord-desktop/plugins/achordion.axe). Every resolved source at confidence
+ * (parachord-desktop/plugins-src/achordion/implementation.js). Every resolved source at confidence
  * >= [PER_SOURCE_MIN_CONFIDENCE] that has a shareable URL becomes its own
  * `{url, host, label}` link, deduped by URL. This is what lets a recording page
  * surface "Listen on Spotify / Apple Music / SoundCloud / Bandcamp" for every
