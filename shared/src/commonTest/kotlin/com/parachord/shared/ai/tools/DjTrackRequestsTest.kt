@@ -128,7 +128,15 @@ class DjTrackRequestsTest {
     @Test
     fun anExactMatchBeatsAnEarlierPartialOne() = runTest {
         val exact = result("Queen", "Bohemian Rhapsody")
-        assertEquals(exact, find("Queen", "Bohemian Rhapsody", result("Queen", "Bohemian Rhapsody - Remastered"), exact))
+        assertEquals(exact, find("Queen", "Bohemian Rhapsody", result("Queen", "Bohemian Rhapsody - 2011 Mix"), exact))
+    }
+
+    @Test
+    fun aRemasterLabelStillCountsAsExact() = runTest {
+        // The studio track Spotify labels "- Remastered" ranks first; a bare
+        // title is often a live album's or a compilation's (OtherVersionMatchTest).
+        val remaster = result("Queen", "Bohemian Rhapsody - Remastered")
+        assertEquals(remaster, find("Queen", "Bohemian Rhapsody", remaster, result("Queen", "Bohemian Rhapsody")))
     }
 
     @Test

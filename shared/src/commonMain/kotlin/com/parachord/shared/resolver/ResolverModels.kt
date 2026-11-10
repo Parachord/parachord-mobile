@@ -179,8 +179,9 @@ private fun titlesMatch(a: String?, b: String?): Boolean {
 
 /**
  * Pick the best-matching result for a target track, in desktop `findBestMatch`'s
- * order: exact recording MBID, exact ISRC, exact normalized title + artist, a
- * name match that isn't another version ([isOtherVersion]), then any name match.
+ * order: exact recording MBID, exact ISRC, exact normalized title + artist (a
+ * trailing remaster label on the result ignored, [REMASTER_LABEL]), a name
+ * match that isn't another version ([isOtherVersion]), then any name match.
  * Name matches use the SAME [titlesMatch] + [artistsMatch] gate [scoreConfidence]
  * uses, so a selected candidate is guaranteed to score 0.95
  * rather than 0.50. Returns null when nothing matches; callers decide whether
@@ -223,9 +224,15 @@ fun <T> selectBestMatch(
     val nt = normalizeStr(targetTitle)
     val na = normalizeStr(targetArtist)
     if (nt.isEmpty() || na.isEmpty()) return null
-    // Tier 3: exact normalized title and artist.
+    // Tier 3: exact normalized title and artist. A trailing remaster label on
+    // the result ("- 2016 Remaster", "(Remastered 2009)") doesn't count
+    // against it unless the request names one too: services label remastered
+    // studio tracks, while a live album or an outtakes set often carries the
+    // bare title, so a raw comparison picked those editions.
+    val targetLabelled = hasRemasterLabel(targetTitle)
     results.firstOrNull {
-        normalizeStr(titleOf(it)) == nt && normalizeStr(artistOf(it)) == na
+        val title = if (targetLabelled) titleOf(it) else withoutRemasterLabel(titleOf(it))
+        normalizeStr(title) == nt && normalizeStr(artistOf(it)) == na
     }?.let { return it }
     // Tier 4: a name match that isn't another version (a live cut, remix or
     // cover the target doesn't name). Tier 5: any name match, so
@@ -239,6 +246,23 @@ fun <T> selectBestMatch(
     }?.let { return it }
     return results.firstOrNull(namesMatch)
 }
+
+/**
+ * A trailing remaster label on a title: "- 2016 Remaster", "- Remastered 2009",
+ * "- 2003 Digital Remaster", "(Remastered)", "[2011 Remaster]", "- Remastered
+ * Version". It labels an edition of the same studio recording. Only at the end,
+ * after a dash or in brackets, so "Remaster Me" keeps its name.
+ */
+private val REMASTER_LABEL = Regex(
+    " *(?:- *$REMASTER_WORDS|[(\\[] *$REMASTER_WORDS *[)\\]]) *$",
+)
+private const val REMASTER_WORDS =
+    "(?:\\d{4} )?(?:digital(?:ly)? )?remaster(?:ed)?(?: \\d{4})?(?: version| edition)?"
+
+private fun hasRemasterLabel(title: String?): Boolean = REMASTER_LABEL.containsMatchIn(foldStr(title))
+
+/** [title] folded, without a trailing [REMASTER_LABEL]. */
+internal fun withoutRemasterLabel(title: String?): String = foldStr(title).replace(REMASTER_LABEL, "")
 
 /**
  * The track a resolve is for, so a resolver that gets several search results
