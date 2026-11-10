@@ -1,5 +1,6 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.playback.ListenAlongPollResult
 import com.parachord.shared.playback.ResolverVolume
 
 import com.parachord.shared.api.GeoLocation
@@ -1585,6 +1586,11 @@ class IosContainer private constructor() {
      *  non-persisted; null when they aren't currently listening. */
     suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
         friendsRepository.fetchTransientFriendNowPlaying(service, user)
+
+    /** One Listen Along poll (#585): listening, not listening, or failed (couldn't find out). */
+    @Throws(Throwable::class)
+    suspend fun pollListenAlong(friend: Friend): ListenAlongPollResult =
+        friendsRepository.pollListenAlong(friend)
 
     // ── Spinoff (#231) — seed-based radio pool, Android parity ──────────────
     // The shared builder (#534, desktop parachord#1281): Last.fm similar tracks,

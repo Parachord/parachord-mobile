@@ -1,5 +1,6 @@
 package com.parachord.shared.playback
 
+import com.parachord.shared.model.Friend
 import com.parachord.shared.model.Track
 
 /** How often a platform asks where the friend is, in milliseconds. */
@@ -39,6 +40,23 @@ sealed interface ListenAlongPoll {
 
     /** The poll couldn't answer (offline, rate limit, bad response): not the same as not listening. */
     data object Failed : ListenAlongPoll
+}
+
+/** A poll's answer plus the refreshed friend for the UI; [friend] is null when none is known (always on [ListenAlongPoll.Failed]). */
+data class ListenAlongPollResult(val poll: ListenAlongPoll, val friend: Friend?)
+
+/**
+ * Reads a refreshed friend as a poll answer: listening when on air with a track name and
+ * artist, else not. A hidden Last.fm profile can't be seen, so it counts as not listening
+ * (its cached track is stale); a missing row is not listening either.
+ */
+fun listenAlongPollOf(friend: Friend?): ListenAlongPoll {
+    if (friend == null || friend.hidesListening || !friend.isOnAir) return ListenAlongPoll.NotListening
+    val name = friend.cachedTrackName?.takeIf { it.isNotBlank() } ?: return ListenAlongPoll.NotListening
+    val artist = friend.cachedTrackArtist?.takeIf { it.isNotBlank() } ?: return ListenAlongPoll.NotListening
+    return ListenAlongPoll.Listening(
+        FriendTrack(name, artist, friend.cachedTrackAlbum, friend.cachedTrackArtworkUrl),
+    )
 }
 
 /** What the platform does after a session event, in order. */

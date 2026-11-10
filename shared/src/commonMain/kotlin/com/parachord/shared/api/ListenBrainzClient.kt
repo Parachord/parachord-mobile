@@ -809,30 +809,39 @@ class ListenBrainzClient(
         count: Int = 50,
     ): List<LbListen> {
         return try {
-            val response = httpClient.get("$BASE_URL/1/user/$username/listens") {
-                parameter("count", count)
-                token?.let { header("Authorization", "Token $it") }
-            }
-            if (!response.status.isSuccess()) {
-                Log.e(TAG, "API error ${response.status.value}: ${response.bodyAsText().take(200)}")
-                return emptyList()
-            }
-            val parsed = json.decodeFromString<ListensWire>(response.bodyAsText())
-            parsed.payload?.listens.orEmpty().mapNotNull { listen ->
-                val md = listen.trackMetadata ?: return@mapNotNull null
-                LbListen(
-                    artistName = md.artistName.orEmpty(),
-                    trackName = md.trackName.orEmpty(),
-                    releaseName = md.releaseName?.ifBlank { null },
-                    listenedAt = listen.listenedAt ?: 0L,
-                    artworkUrl = md.mbidMapping?.let { caaFrontCoverUrl(it.caaReleaseMbid, it.caaId) },
-                )
-            }
+            getRecentListensOrThrow(username, token, count)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to fetch listens for $username", e)
             emptyList()
+        }
+    }
+
+    /** [getRecentListens] that throws when the request fails instead of answering empty. */
+    suspend fun getRecentListensOrThrow(
+        username: String,
+        token: String? = null,
+        count: Int = 50,
+    ): List<LbListen> {
+        val response = httpClient.get("$BASE_URL/1/user/$username/listens") {
+            parameter("count", count)
+            token?.let { header("Authorization", "Token $it") }
+        }
+        if (!response.status.isSuccess()) {
+            Log.e(TAG, "API error ${response.status.value}: ${response.bodyAsText().take(200)}")
+            throw ListenBrainzHttpException(response.status.value, "ListenBrainz answered ${response.status.value}")
+        }
+        val parsed = json.decodeFromString<ListensWire>(response.bodyAsText())
+        return parsed.payload?.listens.orEmpty().mapNotNull { listen ->
+            val md = listen.trackMetadata ?: return@mapNotNull null
+            LbListen(
+                artistName = md.artistName.orEmpty(),
+                trackName = md.trackName.orEmpty(),
+                releaseName = md.releaseName?.ifBlank { null },
+                listenedAt = listen.listenedAt ?: 0L,
+                artworkUrl = md.mbidMapping?.let { caaFrontCoverUrl(it.caaReleaseMbid, it.caaId) },
+            )
         }
     }
 
@@ -855,29 +864,37 @@ class ListenBrainzClient(
      */
     suspend fun getPlayingNow(username: String): LbListen? {
         return try {
-            val response = httpClient.get("$BASE_URL/1/user/$username/playing-now")
-            if (!response.status.isSuccess()) {
-                Log.w(TAG, "playing-now returned ${response.status.value} for $username")
-                return null
-            }
-            val parsed = json.decodeFromString<ListensWire>(response.bodyAsText())
-            val listen = parsed.payload?.listens?.firstOrNull() ?: return null
-            val md = listen.trackMetadata ?: return null
-            val artist = md.artistName.orEmpty()
-            val title = md.trackName.orEmpty()
-            if (artist.isBlank() || title.isBlank()) return null
-            LbListen(
-                artistName = artist,
-                trackName = title,
-                releaseName = md.releaseName?.ifBlank { null },
-                listenedAt = listen.listenedAt ?: 0L,
-            )
+            getPlayingNowOrThrow(username)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             Log.w(TAG, "playing-now failed for $username", e)
             null
         }
+    }
+
+    /**
+     * [getPlayingNow] that throws when the request fails (a non-2xx answer, a transport
+     * or parse error) so a caller can tell "couldn't find out" from "not listening".
+     */
+    suspend fun getPlayingNowOrThrow(username: String): LbListen? {
+        val response = httpClient.get("$BASE_URL/1/user/$username/playing-now")
+        if (!response.status.isSuccess()) {
+            Log.w(TAG, "playing-now returned ${response.status.value} for $username")
+            throw ListenBrainzHttpException(response.status.value, "ListenBrainz answered ${response.status.value}")
+        }
+        val parsed = json.decodeFromString<ListensWire>(response.bodyAsText())
+        val listen = parsed.payload?.listens?.firstOrNull() ?: return null
+        val md = listen.trackMetadata ?: return null
+        val artist = md.artistName.orEmpty()
+        val title = md.trackName.orEmpty()
+        if (artist.isBlank() || title.isBlank()) return null
+        return LbListen(
+            artistName = artist,
+            trackName = title,
+            releaseName = md.releaseName?.ifBlank { null },
+            listenedAt = listen.listenedAt ?: 0L,
+        )
     }
 
     /** Fetch user's top artists. range: week, month, quarter, half_yearly, year, all_time. */
