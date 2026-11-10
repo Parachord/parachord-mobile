@@ -29,6 +29,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -66,6 +67,8 @@ class SpotifyPlaybackHandlerStartConfirmTest {
     private var playingItemJson = """{"id":"4uvx2HRZqGFmSkBc5JapW2"}"""
     private var trackJson: String? = null
     private val pausedDevices = mutableListOf<String?>()
+    /** Status `/me/player/pause` answers; 0 = throw, as when Parachord's network is cut. */
+    private var pauseStatus = HttpStatusCode.NoContent
     private var devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":false,"is_restricted":false}]}"""
     private lateinit var settingsStore: SettingsStore
 
@@ -81,7 +84,8 @@ class SpotifyPlaybackHandlerStartConfirmTest {
                 path.endsWith("/me/player/devices") -> respond(devicesJson, HttpStatusCode.OK, json)
                 path.endsWith("/me/player/pause") && req.method == HttpMethod.Put -> {
                     pausedDevices += req.url.parameters["device_id"]
-                    respond("", HttpStatusCode.NoContent)
+                    if (pauseStatus.value == 0) throw java.io.IOException("Unable to resolve host \"api.spotify.com\"")
+                    respond("", pauseStatus)
                 }
                 path.endsWith("/me/player/play") && req.method == HttpMethod.Put -> {
                     playCalls++
@@ -211,6 +215,84 @@ class SpotifyPlaybackHandlerStartConfirmTest {
         playingItemJson = """{"id":"marketVersion","linked_from":{"id":"4uvx2HRZqGFmSkBc5JapW2"}}"""
         handler().play(track)
         assertEquals(1, playCalls)
+    }
+
+    // ── When Parachord can't reach Spotify, pause it locally ──────────
+    // A play names the track's album (Spotify's Android app plays nothing
+    // without a context), so Spotify runs on into the album when Parachord
+    // misses the end: its network cut in the background, Doze.
+
+    private fun playOnThisPhone(): SpotifyPlaybackHandler = runBlocking {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns SpotifyPlaybackHandler.LOCAL_DEVICE_ID
+        devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":true,"is_restricted":false}]}"""
+        playerStatus = HttpStatusCode.OK
+        val h = handler().also { it.isAppVisible = { true } }
+        h.runPrewarm()
+        h.play(track)
+        h
+    }
+
+    @Test fun `a pause Spotify can't be reached for goes to this phone's Spotify as a media key`() = runBlocking {
+        val h = playOnThisPhone()
+        pauseStatus = HttpStatusCode(0, "network down")
+        h.pause()
+        assertEquals("a down and an up", listOf(KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_PAUSE), mediaKeys())
+    }
+
+    @Test fun `a pause Spotify accepted sends no media key`() = runBlocking {
+        val h = playOnThisPhone()
+        h.pause()
+        assertTrue(mediaKeys().isEmpty())
+    }
+
+    @Test fun `a pause Spotify refused sends no media key`() = runBlocking {
+        // 403: Spotify answered (it's already paused); a media key adds nothing.
+        val h = playOnThisPhone()
+        pauseStatus = HttpStatusCode.Forbidden
+        h.pause()
+        assertTrue(mediaKeys().isEmpty())
+    }
+
+    @Test fun `a failed pause of a remote device sends no media key`() = runBlocking {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns "living-room-tv"
+        devicesJson = """{"devices":[{"id":"living-room-tv","name":"Living Room","type":"TV","is_active":true,"is_restricted":false}]}"""
+        playerStatus = HttpStatusCode.OK
+        val h = handler().also { it.isAppVisible = { true } }
+        h.play(track)
+        pauseStatus = HttpStatusCode(0, "network down")
+        h.pause()
+        assertTrue("a media key would reach this phone's Spotify, not the TV", mediaKeys().isEmpty())
+    }
+
+    @Test fun `the end pause waits for Spotify to be unreachable and the track to have ended`() {
+        val rule = SpotifyPlaybackHandler.Companion
+        // No poll has answered for 5 s (a cut network hangs a poll for 30 s
+        // rather than failing it); last seen at 90 s of a 92 s track 1 s ago:
+        // within 1 s of the end, so it pauses before the album's next track.
+        assertTrue(rule.shouldPauseAtTrackEnd(nowMs = 11_000, isPlaying = true, positionMs = 90_000, durationMs = 92_000,
+            positionSeenAtMs = 10_000, lastPollSuccessAtMs = 6_000))
+        // A poll answered 1 s ago: Parachord's own near-end advance handles it.
+        assertFalse(rule.shouldPauseAtTrackEnd(13_000, true, 90_000, 92_000, 10_000, lastPollSuccessAtMs = 12_000))
+        // Unreachable, but the track has more than a second left.
+        assertFalse(rule.shouldPauseAtTrackEnd(10_500, true, 90_000, 92_000, 10_000, 5_000))
+        // Paused, no length known, or never seen: nothing to do.
+        assertFalse(rule.shouldPauseAtTrackEnd(13_000, false, 90_000, 92_000, 10_000, 8_000))
+        assertFalse(rule.shouldPauseAtTrackEnd(13_000, true, 90_000, 0, 10_000, 8_000))
+        assertFalse(rule.shouldPauseAtTrackEnd(13_000, true, 90_000, 92_000, 0, 8_000))
+    }
+
+    @Test fun `the stale-position watchdog needs a poll that answered`() {
+        val rule = SpotifyPlaybackHandler.Companion
+        // Position stuck 16 s while polls answer: a stall, the track is done.
+        assertTrue(rule.staleWatchdogFires(nowMs = 26_000, isPlaying = true, positionMs = 72_000,
+            positionSeenAtMs = 10_000, pollFailures = 0, lastPollSuccessAtMs = 25_500))
+        // Stuck 16 s, no failure counted, but no poll has answered for 16 s
+        // either (one is hanging on a cut network): not a stall.
+        assertFalse(rule.staleWatchdogFires(26_000, true, 72_000, 10_000, pollFailures = 0, lastPollSuccessAtMs = 10_000))
+        // Polls failing: not a stall.
+        assertFalse(rule.staleWatchdogFires(26_000, true, 72_000, 10_000, pollFailures = 3, lastPollSuccessAtMs = 25_500))
+        // Not stuck long enough.
+        assertFalse(rule.staleWatchdogFires(20_000, true, 72_000, 10_000, 0, 19_500))
     }
 
     @Test fun `a prewarm wakes Spotify with PAUSE and never PLAY`() = runBlocking {

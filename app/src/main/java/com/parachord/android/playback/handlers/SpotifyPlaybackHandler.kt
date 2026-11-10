@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import io.ktor.client.call.body
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.isSuccess
@@ -76,6 +77,67 @@ class SpotifyPlaybackHandler constructor(
         private const val WAKE_INITIAL_DELAY_MS = 500L
         /** Sentinel ID for the synthetic "This device" entry in the picker. */
         const val LOCAL_DEVICE_ID = "__local_device__"
+        /**
+         * How far before the track's computed end [shouldPauseAtTrackEnd]
+         * pauses. The computed position runs ~0.5 s behind (it's extrapolated
+         * from a poll's answer), and pausing at the end let ~1.2 s of the
+         * album's next track play (Pixel 9a). The near-end advance moves on
+         * 2 s early too.
+         */
+        private const val END_PAUSE_LEAD_MS = 1_000L
+        /**
+         * Spotify counts as unreachable after this long without a successful
+         * poll (they run every second). Counted in time, not failed requests:
+         * with Parachord's network cut, a request hangs until its 30 s socket
+         * timeout instead of failing.
+         */
+        internal const val UNREACHABLE_AFTER_MS = 3_000L
+        /** How long the position may stand still, with polls answering, before the track counts as done. */
+        private const val STALE_POSITION_MS = 15_000L
+
+        /**
+         * The stale-position watchdog: the position hasn't moved for
+         * [STALE_POSITION_MS] while polls answer (none failed, and one answered
+         * within [UNREACHABLE_AFTER_MS]). Not while Spotify is unreachable: the
+         * position can't update then, which doesn't mean the track stopped.
+         */
+        internal fun staleWatchdogFires(
+            nowMs: Long,
+            isPlaying: Boolean,
+            positionMs: Long,
+            positionSeenAtMs: Long,
+            pollFailures: Int,
+            lastPollSuccessAtMs: Long,
+        ): Boolean {
+            if (!isPlaying || positionMs <= 0 || positionSeenAtMs <= 0) return false
+            if (pollFailures > 0 || nowMs - lastPollSuccessAtMs > UNREACHABLE_AFTER_MS) return false
+            return nowMs - positionSeenAtMs >= STALE_POSITION_MS
+        }
+
+        /** How long a pause waits for the Web API before using the media key. */
+        private const val PAUSE_WEB_API_TIMEOUT_MS = 3_000L
+
+        /**
+         * Whether to pause this phone's Spotify because our track has ended and
+         * Parachord can't reach Spotify to start the next one. The play names
+         * the track's album (Spotify's Android app plays nothing without a
+         * context, see `SpotifyPlayRequests`), so Spotify would otherwise run
+         * on into the album by itself. Only while Spotify is unreachable: when
+         * polls answer, the near-end advance moves on ~2 s early. The position
+         * is extrapolated from where a poll last saw it moving.
+         */
+        internal fun shouldPauseAtTrackEnd(
+            nowMs: Long,
+            isPlaying: Boolean,
+            positionMs: Long,
+            durationMs: Long,
+            positionSeenAtMs: Long,
+            lastPollSuccessAtMs: Long,
+        ): Boolean {
+            if (!isPlaying || durationMs <= 0 || positionSeenAtMs <= 0) return false
+            if (nowMs - lastPollSuccessAtMs <= UNREACHABLE_AFTER_MS) return false
+            return positionMs + (nowMs - positionSeenAtMs) >= durationMs - END_PAUSE_LEAD_MS
+        }
     }
 
     /**
@@ -127,6 +189,21 @@ class SpotifyPlaybackHandler constructor(
     private var deviceVerified = false
     /** Cached real device ID from last resolveLocalDevice — avoids re-polling on warm transitions. */
     private var lastResolvedLocalId: String? = null
+    /**
+     * Whether the current track plays on this phone's own Spotify. Only then
+     * can a media key ([sendSpotifyMediaKey]) pause it: the key goes to the
+     * Spotify app here, not to a TV or a computer.
+     */
+    private var playingOnThisPhone = false
+    /** Set once [shouldPauseAtTrackEnd] paused the current track, so it pauses once. */
+    private var endPauseSent = false
+    /** When a `/me/player` poll last answered (or the play started). */
+    private var lastPollSuccessAt = 0L
+    private var endGuardJob: Job? = null
+
+    /** Whether a poll has answered within [UNREACHABLE_AFTER_MS]. */
+    private fun spotifyReachable(now: Long = System.currentTimeMillis()): Boolean =
+        now - lastPollSuccessAt <= UNREACHABLE_AFTER_MS
 
     // Actual track metadata from the Spotify API (what's REALLY playing)
     /** Title of the track Spotify reports as currently playing. */
@@ -215,6 +292,8 @@ class SpotifyPlaybackHandler constructor(
             lastPercentComplete = 0f
             consecutivePollFailures = 0
             lastPositionChangeTime = System.currentTimeMillis()
+            endPauseSent = false
+            lastPollSuccessAt = System.currentTimeMillis()
             startStatePolling()
             Log.d(TAG, "play() total flow took ${System.currentTimeMillis() - flowStart}ms")
         } else {
@@ -270,6 +349,7 @@ class SpotifyPlaybackHandler constructor(
                     val resp = spotifyClient.startPlayback(request, deviceId = warmDeviceId)
                     if (resp.status.isSuccess() || resp.status.value == 204) {
                         Log.d(TAG, "Warm path accepted (${resp.status.value}) in ${System.currentTimeMillis() - flowStart}ms")
+                        playingOnThisPhone = warmDeviceId == lastResolvedLocalId || isLocalRealDevice(warmDevice)
                         applyConnectVolume(warmDeviceId)
                         // Always confirm, even on an active device with a
                         // screen showing: Spotify can accept a play, drop its
@@ -343,6 +423,7 @@ class SpotifyPlaybackHandler constructor(
 
                 if (resp.status.isSuccess() || resp.status.value == 204) {
                     Log.d(TAG, "Playback accepted (${resp.status.value}) on '${targetDevice.name}' (attempt $attempt, ${System.currentTimeMillis() - playStart}ms)")
+                    playingOnThisPhone = isLocalPlaceholder(pickedDevice) || isLocalRealDevice(targetDevice)
                     applyConnectVolume(targetDevice.id)
                     stickyDefaultLocalIfUnset(targetDevice)
 
@@ -505,7 +586,17 @@ class SpotifyPlaybackHandler constructor(
 
     override suspend fun pause() {
         pausedByUs = true
-        withAuth { spotifyClient.pausePlayback() }
+        // When the Web API can't be reached (Parachord's network cut in the
+        // background, Doze; a cut network hangs the request for its 30 s
+        // socket timeout, hence the short wait) or answers 5xx, pause this
+        // phone's Spotify with a media key, which needs no network. The
+        // controller stops Spotify this way when it moves to another source.
+        // A 4xx is Spotify answering (403 when it's already paused).
+        val resp = withTimeoutOrNull(PAUSE_WEB_API_TIMEOUT_MS) { withAuth { spotifyClient.pausePlayback() } }
+        if ((resp == null || resp.status.value >= 500) && playingOnThisPhone) {
+            Log.w(TAG, "pause: Web API pause failed (${resp?.status?.value}), pausing this phone's Spotify with a media key")
+            sendSpotifyMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+        }
         cachedIsPlaying = false
     }
 
@@ -1152,19 +1243,19 @@ class SpotifyPlaybackHandler constructor(
         // API, position won't update, but that doesn't mean the track stopped.
         // The stale-position watchdog should only trigger when polls ARE
         // succeeding but position isn't advancing (actual playback stall).
-        if (cachedIsPlaying && cachedPosition > 0 && lastPositionChangeTime > 0 &&
-            consecutivePollFailures == 0
+        // "Polls OK" means a poll answered within the last few seconds, not
+        // only that none has failed: with the network cut, one poll hangs for
+        // its 30 s socket timeout and the failure count stays at 0. That read
+        // as a stall and ended the track early (72 s of 92) while Spotify
+        // played on.
+        val now = System.currentTimeMillis()
+        if (staleWatchdogFires(now, cachedIsPlaying, cachedPosition, lastPositionChangeTime, consecutivePollFailures, lastPollSuccessAt)) {
+            Log.w(TAG, "Watchdog: position stale at ${cachedPosition}ms for ${now - lastPositionChangeTime}ms (polls OK), treating as done")
+            return true
+        } else if (cachedIsPlaying && lastPositionChangeTime > 0 && !spotifyReachable(now) &&
+            now - lastPositionChangeTime >= STALE_POSITION_MS
         ) {
-            val staleDuration = System.currentTimeMillis() - lastPositionChangeTime
-            if (staleDuration >= 15000) {
-                Log.w(TAG, "Watchdog: position stale at ${cachedPosition}ms for ${staleDuration}ms (polls OK), treating as done")
-                return true
-            }
-        } else if (cachedIsPlaying && consecutivePollFailures > 0 && lastPositionChangeTime > 0) {
-            val staleDuration = System.currentTimeMillis() - lastPositionChangeTime
-            if (staleDuration >= 15000) {
-                Log.w(TAG, "Watchdog: position stale ${staleDuration}ms BUT $consecutivePollFailures poll failures — NOT treating as done (likely Doze)")
-            }
+            Log.w(TAG, "Watchdog: position stale ${now - lastPositionChangeTime}ms BUT no poll answered for ${now - lastPollSuccessAt}ms ($consecutivePollFailures failures) — NOT treating as done (likely Doze or no network)")
         }
 
         // Update last-known progress for reset-after-end detection
@@ -1176,12 +1267,21 @@ class SpotifyPlaybackHandler constructor(
 
     private fun startStatePolling() {
         statePollingJob?.cancel()
+        // Its own loop: a poll can hang for 30 s, and this has to run meanwhile.
+        endGuardJob?.cancel()
+        endGuardJob = scope.launch {
+            while (isActive) {
+                delay(1000)
+                pauseAtTrackEndIfUnreachable()
+            }
+        }
         statePollingJob = scope.launch {
             while (isActive) {
                 try {
                     val state = fetchPlaybackState()
                     if (state != null) {
                         consecutivePollFailures = 0
+                        lastPollSuccessAt = System.currentTimeMillis()
                         val apiItemId = state.item?.id
                         val elapsed = System.currentTimeMillis() - playStartedAt
 
@@ -1257,6 +1357,7 @@ class SpotifyPlaybackHandler constructor(
                         }
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     consecutivePollFailures++
                     Log.w(TAG, "State poll failed ($consecutivePollFailures): ${e.message}")
                 }
@@ -1265,8 +1366,28 @@ class SpotifyPlaybackHandler constructor(
         }
     }
 
+    /**
+     * Our track has ended and Spotify can't be reached to start the next one:
+     * pause this phone's Spotify with a media key, once, so it stops after our
+     * track instead of running on into the album ([shouldPauseAtTrackEnd]).
+     */
+    private fun pauseAtTrackEndIfUnreachable() {
+        if (endPauseSent || !playingOnThisPhone) return
+        val now = System.currentTimeMillis()
+        if (!shouldPauseAtTrackEnd(
+                nowMs = now, isPlaying = cachedIsPlaying, positionMs = cachedPosition,
+                durationMs = cachedDuration, positionSeenAtMs = lastPositionChangeTime,
+                lastPollSuccessAtMs = lastPollSuccessAt,
+            )
+        ) return
+        endPauseSent = true
+        Log.w(TAG, "Track ended while Spotify is unreachable (no poll for ${now - lastPollSuccessAt}ms, last pos=$cachedPosition of $cachedDuration): pausing this phone's Spotify with a media key")
+        sendSpotifyMediaKey(KeyEvent.KEYCODE_MEDIA_PAUSE)
+    }
+
     private fun stopStatePolling() {
         statePollingJob?.cancel()
+        endGuardJob?.cancel()
     }
 
     /**
