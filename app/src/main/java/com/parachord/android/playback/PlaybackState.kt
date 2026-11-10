@@ -87,7 +87,8 @@ fun PlaybackState.effectiveArtwork(trackArtwork: Map<String, String>): String? {
         ?: trackArtwork[com.parachord.android.resolver.trackKey(track.title, track.artist)]
 }
 
-enum class RepeatMode { OFF, ALL, ONE }
+/** Off, all or one; the shared enum, so the queue rules ([com.parachord.shared.playback.advanceAction]) read it directly. */
+typealias RepeatMode = com.parachord.shared.playback.RepeatMode
 
 /**
  * A playback message the app shows as a snackbar, with an optional action

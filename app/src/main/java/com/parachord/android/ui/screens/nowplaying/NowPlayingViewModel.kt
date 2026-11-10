@@ -130,6 +130,11 @@ class NowPlayingViewModel constructor(
         playbackController.toggleShuffle()
     }
 
+    /** The repeat button: off → all → one → off. */
+    fun cycleRepeatMode() {
+        playbackController.cycleRepeatMode()
+    }
+
     // Queue management
     fun playFromQueue(index: Int) {
         playbackController.playFromQueue(index)

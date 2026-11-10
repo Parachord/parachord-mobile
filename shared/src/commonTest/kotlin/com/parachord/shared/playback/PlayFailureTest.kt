@@ -36,7 +36,7 @@ class PlayFailureTest {
 
     @Test
     fun `failures the queue doesn't move on from wait for Play — advancing or not`() {
-        val held = PlayFailure.entries - PlayFailure.EMBED_REFUSED
+        val held = PlayFailure.entries - PlayFailure.EMBED_REFUSED - PlayFailure.NO_SOURCE
         for (failure in held) {
             for (advancing in listOf(false, true)) {
                 for (spinoff in listOf(false, true)) {
@@ -50,7 +50,30 @@ class PlayFailureTest {
     }
 
     @Test
+    fun `a track with no source is skipped while the queue advances`() {
+        assertFalse(failedPlayAwaitsLoad(PlayFailure.NO_SOURCE, advancing = true, spinoffMode = false))
+        assertFalse(failedPlayAwaitsLoad(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = true))
+        assertTrue(failedPlayAwaitsLoad(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = false))
+    }
+
+    @Test
     fun `the message names the connection`() {
         assertEquals("Couldn't start playing. Check your connection and try again.", PLAY_START_FAILED_MESSAGE)
+    }
+
+    @Test
+    fun `no match from resolvers that answered online is no source`() {
+        assertEquals(PlayFailure.NO_SOURCE, noSourceFailure(online = true, resolversCouldNotAnswer = false))
+    }
+
+    @Test
+    fun `resolvers that couldn't answer are a failed start and not no source`() {
+        assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = true, resolversCouldNotAnswer = true))
+    }
+
+    @Test
+    fun `offline is a failed start`() {
+        assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = false, resolversCouldNotAnswer = false))
+        assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = false, resolversCouldNotAnswer = true))
     }
 }
