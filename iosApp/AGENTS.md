@@ -1152,7 +1152,8 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   both calls have a time limit (`MusicKitDeadline`, 20 s and 30 s; a timeout is
   `START_TIMED_OUT`, and a play that starts after its limit is paused). When
   nothing plays and an Apple Music start failed, or `IosNetworkStatus`
-  (`NWPathMonitor`) says the device has no network, `playTrack` stops on the
+  (`NWPathMonitor`, which also drives the "No internet connection" banner,
+  `PCOfflineBanner`, after the shared 2 s delay) says the device has no network, `playTrack` stops on the
   track with `PLAY_START_FAILED_MESSAGE`, even while the queue advances or a
   spinoff runs: the next track would fail the same way, and the queue used to
   skip through to its end. A failed retry keeps the restored track's resume
