@@ -26,7 +26,7 @@ final class ListenAlongController {
     /// App-wide instance — bound to the coordinator once at the ContentView root,
     /// triggered from the sidebar, Collection friend rows, and the deep link.
     static let shared = ListenAlongController()
-    nonisolated static let listenAlongContext = "listen-along"
+    nonisolated static let listenAlongContext = SpinoffSessionKt.LISTEN_ALONG_CONTEXT
 
     private let container = IosContainer.companion.shared
     private weak var coordinator: QueuePlaybackCoordinator?

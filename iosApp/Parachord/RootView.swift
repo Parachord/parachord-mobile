@@ -459,8 +459,7 @@ struct ContentView: View {
             dlAck("Playing \(r.name)")
         case "radioPool":
             listenAlong.stop()
-            coordinator.beginRadio(pool: r.tracks, displayName: r.name, refillUrl: r.refillUrl,
-                                   refill: { u in (try? await container.resolveTrackList(url: u)) ?? [] })
+            coordinator.beginRadio(pool: r.tracks, displayName: r.name, refillUrl: r.refillUrl)
             dlAck("Starting \(r.name)")
         case "failed":
             dlAck(r.message ?? "Couldn't open that link")
@@ -491,8 +490,11 @@ struct ContentView: View {
             }
         case "queueAdd", "queueClear": dlConfirm = cmd   // confirm first
         case "shuffle":
-            if coord.shuffleEnabled != cmd.shuffleOn { coord.toggleShuffle() }
-            dlAck(cmd.shuffleOn ? "Shuffle on" : "Shuffle off")
+            if coord.setShuffle(cmd.shuffleOn) {
+                dlAck(cmd.shuffleOn ? "Shuffle on" : "Shuffle off")
+            } else {
+                dlAck(PlaybackMessages.shared.SHUFFLE_UNAVAILABLE)
+            }
         case "volume": break   // system-level on iOS; ignored (parity with Android)
         case "listenAlong":
             guard let s = cmd.service, let u = cmd.user else { return }

@@ -1988,12 +1988,17 @@ final class QueuePlaybackCoordinator {
     // kickStartFirstTrack=false in-app path). Mutually exclusive with Listen Along.
     @ObservationIgnored private var spinoffPool: [Track] = []
     @ObservationIgnored private var preSpinoffContext: PlaybackContext?
-    // Radio (#256): a refill source for deep-link stations (Mode B artist-only /
-    // Mode C with refill). When the pool runs low, top it up from this URL via the
-    // shared resolver. nil for the in-app Spinoff button (finite similar-track pool).
-    @ObservationIgnored private var spinoffRefillUrl: String?
-    @ObservationIgnored private var spinoffRefill: ((String) async -> [Track])?
-    @ObservationIgnored private var spinoffRefilling = false
+    // Radio (#256): a deep-link station with a refill URL tops its pool up from
+    // that URL as it drains. The shared `PoolRefiller` (Android's) owns the rate
+    // limit, the stop after 3 empty refills and the dedup; `refillUrl` is nil for
+    // the in-app Spinoff button (a finite similar-track pool).
+    // Kotlin's `newSpinoffRefiller()`: Kotlin/Native exports a name starting with
+    // "new" as `doNew…`, since ObjC reserves the `new` method family.
+    @ObservationIgnored private let spinoffRefiller = IosContainer.companion.shared.doNewSpinoffRefiller()
+    /// Bumped on every spinoff start and exit, so a refill that lands after its
+    /// station ended (or another started) is dropped instead of joining a pool
+    /// it doesn't belong to.
+    @ObservationIgnored private var spinoffGeneration = 0
     /// True while a spinoff station is active — observed; gates the Spinoff button, the
     /// "YOUR QUEUE" suspended queue display, and the "Spinoff from X" peek.
     var spinoffMode = false
@@ -2010,24 +2015,30 @@ final class QueuePlaybackCoordinator {
         guard !pool.isEmpty else { return }
         preSpinoffContext = playbackContext
         spinoffPool = pool
+        spinoffGeneration += 1
+        spinoffRefiller.refillUrl = nil
+        spinoffRefiller.resetCounters()
         spinoffMode = true
         queueManager.setContext(context: PlaybackContext(type: "spinoff", name: displayName, id: nil))
+        preresolveSpinoffPool()
         syncSnapshot()
     }
 
     /// Start a deep-link RADIO station (#256): kick the first track immediately
     /// ("start fresh radio now"), suspend the user queue like spinoff, and top up
-    /// from [refill]/[refillUrl] as the pool drains. Distinct from beginSpinoff,
-    /// which keeps the current song playing and has a finite pool.
-    func beginRadio(pool: [Track], displayName: String, refillUrl: String?, refill: ((String) async -> [Track])?) {
+    /// from [refillUrl] as the pool drains. Distinct from beginSpinoff, which keeps
+    /// the current song playing and has a finite pool.
+    func beginRadio(pool: [Track], displayName: String, refillUrl: String?) {
         guard !pool.isEmpty else { return }
         preSpinoffContext = playbackContext
         spinoffPool = Array(pool.dropFirst())
-        spinoffRefillUrl = refillUrl
-        spinoffRefill = refill
+        spinoffGeneration += 1
+        spinoffRefiller.refillUrl = refillUrl
+        spinoffRefiller.resetCounters()
         spinoffMode = true
         queueManager.setContext(context: PlaybackContext(type: "spinoff", name: displayName, id: nil))
         playTrack(pool[0])
+        preresolveSpinoffPool()
         syncSnapshot()
     }
 
@@ -2036,24 +2047,54 @@ final class QueuePlaybackCoordinator {
     /// false so the caller falls through to the normal queue ("return to queue").
     private func advanceSpinoff() -> Bool {
         guard spinoffMode else { return false }
-        if spinoffPool.count <= 1 { refillSpinoffIfNeeded() }   // top up a draining radio
+        if SpinoffSessionKt.spinoffNeedsRefill(poolSize: Int32(spinoffPool.count)) {
+            refillSpinoffIfNeeded()   // top up a draining radio
+        }
         if !spinoffPool.isEmpty {
             playTrack(spinoffPool.removeFirst(), advancing: true)
+            preresolveSpinoffPool()
             return true
         }
         exitSpinoff()
         return false
     }
 
-    /// Async top-up for a deep-link radio station whose pool is draining (#256).
-    /// Fire-and-forget; appends to the pool so the next advance has tracks.
-    private func refillSpinoffIfNeeded() {
-        guard spinoffMode, !spinoffRefilling, let url = spinoffRefillUrl, let refill = spinoffRefill else { return }
-        spinoffRefilling = true
+    /// Resolve the pool's next few tracks ahead of time (shared
+    /// `spinoffTracksToPreresolve`), as the queue rows do, so each starts quickly.
+    private func preresolveSpinoffPool() {
+        let next = SpinoffSessionKt.spinoffTracksToPreresolve(pool: spinoffPool).compactMap { $0 as? Track }
+        guard !next.isEmpty else { return }
+        let cache = resolverCache
         Task { @MainActor in
-            let more = await refill(url)
-            spinoffRefilling = false
-            if spinoffMode { spinoffPool.append(contentsOf: more) }
+            for (i, t) in next.enumerated() {
+                cache.resolve(ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: i)
+            }
+        }
+    }
+
+    /// Async top-up for a deep-link radio station whose pool is draining (#256).
+    /// Fire-and-forget; the shared `PoolRefiller` gates it (rate limit, 3 empty
+    /// refills in a row stop it). Appends only while the same station is running.
+    private func refillSpinoffIfNeeded() {
+        guard spinoffMode, spinoffRefiller.canRefill() else { return }
+        let generation = spinoffGeneration
+        let snapshot = spinoffPool
+        let refiller = spinoffRefiller
+        Task { @MainActor [weak self] in
+            let fresh: [Track]
+            do {
+                fresh = try await IosContainer.companion.shared.refillSpinoffPool(refiller: refiller, currentPool: snapshot) ?? []
+            } catch {
+                return
+            }
+            guard let self, !fresh.isEmpty else { return }
+            guard self.spinoffMode, self.spinoffGeneration == generation else {
+                NSLog("SPINOFF refill: dropped %d tracks, the spinoff it was for has ended", fresh.count)
+                return
+            }
+            self.spinoffPool.append(contentsOf: fresh)
+            NSLog("SPINOFF refill: appended %d tracks (pool now %d)", fresh.count, self.spinoffPool.count)
+            self.preresolveSpinoffPool()
         }
     }
 
@@ -2062,8 +2103,9 @@ final class QueuePlaybackCoordinator {
     func exitSpinoff() {
         guard spinoffMode else { return }
         spinoffPool.removeAll()
-        spinoffRefillUrl = nil
-        spinoffRefill = nil
+        spinoffGeneration += 1
+        spinoffRefiller.refillUrl = nil
+        spinoffRefiller.resetCounters()
         spinoffMode = false
         queueManager.setContext(context: preSpinoffContext)
         preSpinoffContext = nil
@@ -2652,9 +2694,30 @@ final class QueuePlaybackCoordinator {
         playTrack(track)
     }
 
-    func toggleShuffle() {
+    /// Whether shuffle may change now (shared `shuffleAllowed`): not during a
+    /// spinoff or Listen Along, whose queue isn't the user's to reorder.
+    var shuffleAllowed: Bool {
+        SpinoffSessionKt.shuffleAllowed(spinoffMode: spinoffMode, playbackContextType: playbackContext?.type)
+    }
+
+    /// Flip shuffle. Returns false, changing nothing, when `shuffleAllowed` is false.
+    @discardableResult
+    func toggleShuffle() -> Bool {
+        guard shuffleAllowed else {
+            NSLog("SHUFFLE refused: spinoff or Listen Along")
+            return false
+        }
         shuffleEnabled = queueManager.toggleShuffle()
         syncSnapshot()
+        return true
+    }
+
+    /// Set shuffle on or off. True when shuffle is now `enabled`; false when
+    /// refused (`shuffleAllowed`).
+    @discardableResult
+    func setShuffle(_ enabled: Bool) -> Bool {
+        if shuffleEnabled == enabled { return true }
+        return toggleShuffle()
     }
 
     /// Cycle repeat off → all → one → off (#221, shared `nextRepeatMode`).

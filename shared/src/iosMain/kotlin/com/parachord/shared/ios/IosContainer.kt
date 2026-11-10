@@ -1370,12 +1370,25 @@ class IosContainer private constructor() {
                 val pool = try {
                     spinoffPool(seed.artist, seed.title)
                 } catch (e: com.parachord.shared.playback.SpinoffFetchFailedException) {
-                    return IosComplexLink("failed", message = "Couldn't fetch similar tracks")
+                    return IosComplexLink("failed", message = com.parachord.shared.playback.PlaybackMessages.SPINOFF_FETCH_FAILED)
                 }
                 val name = action.name
                     ?: if (!mode.title.isNullOrBlank()) "Radio: ${mode.artist} – ${mode.title}" else "Radio: ${mode.artist}"
-                if (pool.isEmpty()) IosComplexLink("failed", message = "No similar tracks for \"${seed.title}\"")
-                else IosComplexLink("radioPool", name = name, tracks = pool)
+                if (pool.isEmpty()) {
+                    return IosComplexLink("failed", message = com.parachord.shared.playback.PlaybackMessages.noSimilarTracks(seed.title))
+                }
+                // Start on a track something can play (shared with Android): a pool
+                // whose first tracks all resolve to nothing would skip silently to
+                // its end, so the link is refused instead.
+                val start = com.parachord.shared.playback.firstPlayableIndex(pool) { t ->
+                    resolveSources(t.artist, t.title, t.album).isNotEmpty()
+                }
+                if (start == null) {
+                    Log.d("IosContainer", "Radio: no playable track in the first pool tracks for '${seed.title}'")
+                    return IosComplexLink("failed", message = com.parachord.shared.playback.PlaybackMessages.noPlayableSimilarTracks(seed.title))
+                }
+                Log.d("IosContainer", "Radio: seed '${seed.title}' by ${seed.artist}, starting at pool track $start ('${pool[start].title}') of ${pool.size}")
+                IosComplexLink("radioPool", name = name, tracks = pool.drop(start))
             }
             is com.parachord.shared.deeplink.RadioMode.PoolBased -> {
                 val input = action.input ?: return IosComplexLink("failed", message = "Radio missing input")
@@ -1399,10 +1412,6 @@ class IosContainer private constructor() {
         val display = name.takeIf { it.isNotBlank() } ?: r.displayName.takeIf { it.isNotBlank() } ?: "Radio"
         return IosComplexLink("radioPool", name = display, tracks = protocolTracksToTracks(r.tracks, r.albumArt), refillUrl = refillUrl)
     }
-
-    /** Resolve a hosted tracklist URL → metadata-only Tracks (radio pool refill). */
-    suspend fun resolveTrackList(url: String): List<Track> =
-        protocolInputResolver.resolveByUrl(url)?.tracks?.let { protocolTracksToTracks(it, null) } ?: emptyList()
 
     /**
      * Map an inbound Universal Link (#124) on a domain WE OWN to its `parachord://`
@@ -1606,14 +1615,26 @@ class IosContainer private constructor() {
     suspend fun spinoffAvailable(seedArtist: String, seedTitle: String): Boolean =
         com.parachord.shared.playback.checkSpinoffAvailable(spinoffLastFm, seedArtist, seedTitle)
 
-    private fun makeSpinoffTrack(title: String, artist: String): Track = Track(
-        id = "spinoff:${title.lowercase()}|${artist.lowercase()}", title = title, artist = artist,
-        album = null, albumId = null, duration = 0, artworkUrl = null,
-        sourceType = null, sourceUrl = null, addedAt = 0,
-        resolver = null, spotifyUri = null, soundcloudId = null,
-        spotifyId = null, appleMusicId = null, isrc = null, recordingMbid = null,
-        artistMbid = null, releaseMbid = null, crossResolverEnrichedAt = null,
-    )
+    private fun makeSpinoffTrack(title: String, artist: String): Track =
+        com.parachord.shared.playback.spinoffTrack(title, artist)
+
+    /**
+     * A radio station's pool refiller (the shared `PoolRefiller`, Android's), its
+     * fetcher reading a hosted tracklist URL. Swift can't call the defaulted
+     * constructor or set a suspend-lambda property, so it asks for a wired one.
+     */
+    fun newSpinoffRefiller(): com.parachord.shared.playback.PoolRefiller =
+        com.parachord.shared.playback.PoolRefiller().apply {
+            fetcher = { url -> protocolInputResolver.resolveByUrl(url)?.tracks ?: emptyList() }
+        }
+
+    /** One refill attempt for [refiller]; null when gated, empty or all duplicates.
+     *  @Throws so a failure reaches Swift's catch instead of aborting the app. */
+    @Throws(Throwable::class)
+    suspend fun refillSpinoffPool(
+        refiller: com.parachord.shared.playback.PoolRefiller,
+        currentPool: List<Track>,
+    ): List<Track>? = refiller.tryRefill(currentPool)
 
     // ── CarPlay browse tree — the same tree Android Auto shows ─────────────
     // `CarBrowse` (commonMain) owns the ids, rows, sort orders and caps; the
