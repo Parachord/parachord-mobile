@@ -242,6 +242,8 @@ final class CriticalDarlingsModel {
     var albums: [CriticsPickAlbum] = []
     var isLoading = false
     var loaded = false
+    /// The repository's error when the load failed with nothing to show.
+    var error: String?
     /// Android's filter bar: search box, sort ("recent" / "artist"), refresh.
     var query = ""
     var sortMode = "recent"
@@ -252,6 +254,9 @@ final class CriticalDarlingsModel {
     }
 
     func load() async { start(force: false) }
+
+    /// Try Again: starts over, past the revalidation interval and the repository's TTL.
+    func retry() { start(force: true) }
 
     /// The refresh button: fetch the feed again past the repository's TTL.
     func refreshNow() {
@@ -270,14 +275,21 @@ final class CriticalDarlingsModel {
     private func start(force: Bool, finished: (() -> Void)? = nil) {
         refresh.run(force: force) { watcher, done in
             isLoading = true
+            if force && albums.isEmpty { error = nil; loaded = false }
             return watcher.watchUntilDone(flow: container.criticsPicksFlow(forceRefresh: force), onEach: { [weak self] v in
                 guard let self else { return }
-                if let list = v as? [CriticsPickAlbum], !list.isEmpty {
-                    withAnimation(.easeInOut(duration: 0.4)) { self.albums = list }
+                if let list = v as? [CriticsPickAlbum] {
+                    if !list.isEmpty { withAnimation(.easeInOut(duration: 0.4)) { self.albums = list } }
+                    self.error = nil
+                } else if let e = v as? ResourceError {
+                    self.error = e.message
                 }
                 self.isLoading = false
                 self.loaded = true
-            }, onDone: { done(); finished?() })
+            }, onDone: { [weak self] in
+                Task { @MainActor in self?.isLoading = false; self?.loaded = true }
+                done(); finished?()
+            })
         }
     }
 }
@@ -299,10 +311,14 @@ struct CriticalDarlingsScreen: View {
                     filterBar
                     if model.isLoading && !model.loaded {
                         PCSkeletonList(count: 6, art: 80)
+                    } else if model.albums.isEmpty, let error = model.error {
+                        PCErrorState(message: error) { model.retry() }
+                    } else if model.albums.isEmpty && model.loaded {
+                        PCEmptyState(message: UiMessages.shared.CRITICS_PICKS_EMPTY)
                     }
                     let visible = model.visibleAlbums
                     if model.loaded && visible.isEmpty && !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text("No results for \u{201C}\(model.query)\u{201D}")
+                        Text(UiMessages.shared.noResultsFor(query: model.query))
                             .font(.system(size: 14)).foregroundStyle(PC.fg3).padding(32)
                     }
                     ForEach(Array(visible.enumerated()), id: \.element.id) { _, album in
@@ -406,19 +422,29 @@ final class FreshDropsModel {
     var drops: [FreshDrop] = []
     var isLoading = false
     var loaded = false
+    /// The repository's error when the load failed with nothing to show.
+    var error: String?
 
-    // Watch the shared repo flow (cached-first → fresh); re-run on a later visit.
-    func load() async {
-        refresh.run { watcher, done in
+    // Watch the shared repo flow (cached-first → fresh); re-run on a later
+    // visit. `force` is Try Again.
+    func load(force: Bool = false) async {
+        refresh.run(force: force) { watcher, done in
             isLoading = true
+            if force { error = nil; loaded = false }
             return watcher.watchUntilDone(flow: container.freshDropsFlow(), onEach: { [weak self] v in
                 guard let self else { return }
-                if let list = v as? [FreshDrop], !list.isEmpty {
-                    withAnimation(.easeInOut(duration: 0.4)) { self.drops = list }
+                if let list = v as? [FreshDrop] {
+                    if !list.isEmpty { withAnimation(.easeInOut(duration: 0.4)) { self.drops = list } }
+                    self.error = nil
+                } else if let e = v as? ResourceError {
+                    self.error = e.message
                 }
                 self.isLoading = false
                 self.loaded = true
-            }, onDone: done)
+            }, onDone: { [weak self] in
+                Task { @MainActor in self?.isLoading = false; self?.loaded = true }
+                done()
+            })
         }
     }
 }
@@ -470,6 +496,13 @@ struct FreshDropsScreen: View {
                     Section {
                         if model.isLoading && !model.loaded {
                             PCSkeletonList(count: 6, art: 80)
+                        } else if model.drops.isEmpty, let error = model.error {
+                            PCErrorState(message: error) { Task { await model.load(force: true) } }
+                        } else if filtered.isEmpty && model.loaded {
+                            // Android's FreshDropsScreen empty states, in its order.
+                            PCEmptyState(message: !search.isEmpty ? UiMessages.shared.noResultsFor(query: search)
+                                         : filter != "all" ? UiMessages.shared.freshDropsFilterEmpty(type: filter)
+                                         : UiMessages.shared.FRESH_DROPS_EMPTY)
                         }
                         ForEach(Array(filtered.enumerated()), id: \.offset) { _, drop in
                             NavigationLink(value: PCRoute.album(title: drop.title, artist: drop.artist)) {
@@ -600,6 +633,9 @@ final class ConcertsModel {
     var events: [ConcertEvent] = []
     var isLoading = false
     var loaded = false
+    /// The repository's error ("Failed to load concerts: …") when the load
+    /// failed with nothing to show, shown as Android's Concerts screen does.
+    var error: String?
 
     // ── Concert location (parity with Android's ConcertsViewModel #201) ──
     // Location lives on the Concerts PAGE now (was duplicated in each concert
@@ -673,8 +709,11 @@ final class ConcertsModel {
             isLoading = true
             return watcher.watchUntilDone(flow: container.concertsFlow(locationChanged: locationChanged), onEach: { [weak self] v in
                 guard let self else { return }
-                if let list = v as? [ConcertEvent], !list.isEmpty {
-                    withAnimation(.easeInOut(duration: 0.4)) { self.events = list }
+                if let list = v as? [ConcertEvent] {
+                    if !list.isEmpty { withAnimation(.easeInOut(duration: 0.4)) { self.events = list } }
+                    self.error = nil
+                } else if let e = v as? ResourceError {
+                    self.error = e.message
                 }
                 self.isLoading = false
                 self.loaded = true
@@ -690,6 +729,7 @@ final class ConcertsModel {
     private func reloadEvents() {
         loaded = false
         events = []
+        error = nil
         subscribe(locationChanged: true)
     }
 
@@ -823,13 +863,17 @@ struct ConcertsScreen: View {
                     gradient: [0x14B8A6, 0x0891B2])
                 if model.isLoading && !model.loaded {
                     PCSkeletonList(count: 6, art: 56)
+                } else if model.events.isEmpty, let error = model.error {
+                    // Android's Concerts error state: the ticket and the
+                    // repository's message (no retry there either).
+                    PCEmptyState(message: error, icon: "ticket")
                 } else if model.events.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "ticket").font(.system(size: 40)).foregroundStyle(PC.fg3)
-                        Text("No upcoming concerts found.\nAdd Ticketmaster / SeatGeek keys in Settings to see shows.")
-                            .font(.system(size: 14)).foregroundStyle(PC.fg2)
-                            .multilineTextAlignment(.center).padding(.horizontal, 40)
-                    }.padding(.vertical, 60)
+                    // iOS ships no Ticketmaster / SeatGeek keys (Android's
+                    // build has them), so the hint names the keys instead of
+                    // Android's "Add artists to your collection…".
+                    PCEmptyState(message: UiMessages.shared.CONCERTS_EMPTY,
+                                 hint: "Add Ticketmaster / SeatGeek keys in Settings to see shows.",
+                                 icon: "ticket")
                 } else {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(grouped, id: \.month) { group in

@@ -164,6 +164,9 @@ final class SettingsViewModel {
 
     /// service id → its stored key/token/username (empty = not configured).
     var values: [String: String] = [:]
+    /// A key that was refused when saved (ListenBrainz's token validation),
+    /// shown under its Save button as Android's Settings does.
+    var keyErrors: [String: String] = [:]
     var aiModels: [String: String] = ["chatgpt": "", "claude": "", "gemini": ""]
     var selectedAiProvider = "chatgpt"
     /// Global "let the DJ see my listening data" gate (shared `send_listening_history`).
@@ -464,21 +467,30 @@ final class SettingsViewModel {
 
     // ── BYO key/token writes (routes to the right SettingsStore method) ─
     func setValue(_ id: String, _ value: String, secret: String? = nil) {
-        values[id] = value
+        let previous = values[id]
+        keyErrors[id] = nil
+        // A ListenBrainz token counts as set only once ListenBrainz accepts it.
+        if !(id == "listenbrainz" && !value.isEmpty) { values[id] = value }
         if requiresConnection(id) { recomputeResolvers() }   // soundcloud: clearing creds disables it
         Task {
             switch id {
             case "lastfm": try? await store.setLastFmUsername(username: value)
             case "listenbrainz":
-                try? await store.setListenBrainzToken(token: value)
-                // Derive + persist the username the public `createdfor` weekly
-                // endpoint needs (mirrors desktop/Android validateToken). Without
-                // this the token saves but Weekly Jams/Exploration never load.
+                // Validate first and save only a token ListenBrainz accepts,
+                // with the username the public `createdfor` weekly endpoint
+                // needs (desktop/Android validateToken). An invalid token is
+                // refused with Android's message, not saved.
                 if value.isEmpty {
+                    try? await store.setListenBrainzToken(token: value)
                     try? await store.clearListenBrainzUsername()
                 } else if let username = try? await container.listenBrainzClient.validateToken(token: value),
                           !username.isEmpty {
+                    try? await store.setListenBrainzToken(token: value)
                     try? await store.setListenBrainzUsername(username: username)
+                    values[id] = value
+                } else {
+                    values[id] = previous
+                    keyErrors[id] = UiMessages.shared.LISTENBRAINZ_INVALID_TOKEN
                 }
             case "discogs": try? await store.setDiscogsToken(token: value)
             case "ticketmaster": try? await store.setTicketmasterApiKey(key: value)
@@ -1243,6 +1255,7 @@ private struct PluginConfigSheet: View {
             .tint(PC.accent)
             .disabled(draft.isEmpty)
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            if let e = model.keyErrors[service.id] { Text(e).font(.caption).foregroundStyle(.red) }
             if !(model.values[service.id]?.isEmpty ?? true) {
                 Button("Clear", role: .destructive) { draft = ""; model.setValue(service.id, "") }
             }

@@ -1,5 +1,6 @@
 package com.parachord.android.ui
 
+import com.parachord.shared.playback.APPLE_MUSIC_SIGN_IN_MESSAGE
 import android.content.Context
 import android.os.PowerManager
 import android.util.Log
@@ -278,7 +279,7 @@ class MainViewModel constructor(
         // Observe Apple Music sign-in required events
         viewModelScope.launch {
             musicKitBridge.signInRequired.collect {
-                _toastEvents.emit("Sign in to Apple Music to play this track")
+                _toastEvents.emit(APPLE_MUSIC_SIGN_IN_MESSAGE)
                 _navigateToSettings.emit(Unit)
             }
         }

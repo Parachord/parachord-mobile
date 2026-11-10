@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.shared.ui.UiMessages
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -439,10 +440,8 @@ class HomeViewModel constructor(
                 it.result is com.parachord.shared.sync.DeleteResult.Unsupported
             }
             if (unsupported.isNotEmpty()) {
-                val names = unsupported.joinToString(", ") { it.providerDisplayName }
                 _toastEvents.trySend(
-                    "Removed from Parachord. $names doesn't allow deletion via the API — " +
-                        "remove manually in the $names app."
+                    UiMessages.playlistDeletionUnsupported(unsupported.map { it.providerDisplayName }),
                 )
             }
         }

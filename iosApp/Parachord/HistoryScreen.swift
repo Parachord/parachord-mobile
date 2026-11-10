@@ -34,40 +34,53 @@ final class HistoryModel {
     private var artistsCache: [String: [HistoryArtist]] = [:]
     private var recentCache: ([RecentTrack], [Track])?
     private var lastLoad: [String: Date] = [:]
+    /// The repository's error per tab+period ("Connect Last.fm to view your
+    /// top tracks", "Failed to load recent tracks"), for a load that failed
+    /// with nothing to show. Android shows it with a retry instead of the
+    /// empty state.
+    private(set) var errors: [String: String] = [:]
+
+    func error(tab: Int, period: String) -> String? { errors[tab == 3 ? "recent" : "\(tab)-\(period)"] }
     private let ttl: TimeInterval = 6 * 3600
 
-    func load(tab: Int, period: String) async {
+    func load(tab: Int, period: String, force: Bool = false) async {
         let key = tab == 3 ? "recent" : "\(tab)-\(period)"
         // 1) Show THIS window's cached data immediately so switching windows never
         //    leaves the prior window's results displayed.
         applyCache(tab: tab, key: key)
         let hasCache = lastLoad[key] != nil
         // 2) Fresh enough → done (instant, no refetch).
-        if let l = lastLoad[key], Date().timeIntervalSince(l) < ttl { return }
+        if !force, let l = lastLoad[key], Date().timeIntervalSince(l) < ttl { return }
         // 3) Skeleton only when there's nothing cached for this window; a stale
         //    revalidation updates the already-shown data in place.
         loading = !hasCache
-        switch tab {
-        case 0:
-            let t = (try? await container.loadTopTracks(period: period)) ?? []
-            if !t.isEmpty {
-                let e = t.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) }
-                tracksCache[key] = (t, e); topTracks = t; trackEntities = e
+        do {
+            switch tab {
+            case 0:
+                let t = try await container.loadTopTracks(period: period)
+                if !t.isEmpty {
+                    let e = t.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) }
+                    tracksCache[key] = (t, e); topTracks = t; trackEntities = e
+                }
+            case 1:
+                let a = try await container.loadTopAlbums(period: period)
+                if !a.isEmpty { albumsCache[key] = a; topAlbums = a }
+            case 2:
+                let a = try await container.loadTopArtists(period: period)
+                if !a.isEmpty { artistsCache[key] = a; topArtists = a }
+            default:
+                let r = try await container.loadRecentTracks()
+                if !r.isEmpty {
+                    let e = r.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) }
+                    recentCache = (r, e); recent = r; recentEntities = e
+                }
             }
-        case 1:
-            let a = (try? await container.loadTopAlbums(period: period)) ?? []
-            if !a.isEmpty { albumsCache[key] = a; topAlbums = a }
-        case 2:
-            let a = (try? await container.loadTopArtists(period: period)) ?? []
-            if !a.isEmpty { artistsCache[key] = a; topArtists = a }
-        default:
-            let r = (try? await container.loadRecentTracks()) ?? []
-            if !r.isEmpty {
-                let e = r.map { Self.track(title: $0.title, artist: $0.artist, album: $0.album, art: $0.artworkUrl) }
-                recentCache = (r, e); recent = r; recentEntities = e
-            }
+            errors[key] = nil
+        } catch {
+            // A failure that isn't a repository's error keeps showing what was there.
+            if let message = pcLoadErrorMessage(error) { errors[key] = message }
         }
-        lastLoad[key] = Date()
+        if errors[key] == nil { lastLoad[key] = Date() }
         loading = false
     }
 
@@ -142,6 +155,8 @@ struct HistoryScreen: View {
                 if model.loading {
                     if tabIndex == 0 || tabIndex == 3 { PCSkeletonList(count: 8, art: 44) }
                     else { PCSkeletonGrid(count: 6, columns: tabIndex == 2 ? 3 : 2) }
+                } else if tabIsEmpty, let error = model.error(tab: tabIndex, period: period) {
+                    errorState(error)
                 } else {
                     switch tabIndex {
                     case 0: topSongs
@@ -211,7 +226,7 @@ struct HistoryScreen: View {
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })
             }
-            emptyIfNeeded(model.topTracks.isEmpty)
+            emptyIfNeeded(model.topTracks.isEmpty, UiMessages.shared.HISTORY_TRACKS_EMPTY)
         }
         .padding(.vertical, 4).padding(.bottom, 120)
     }
@@ -241,7 +256,7 @@ struct HistoryScreen: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8).padding(.bottom, 120)
-        .overlay { if model.topAlbums.isEmpty { emptyState } }
+        .overlay { if model.topAlbums.isEmpty { emptyState(UiMessages.shared.HISTORY_ALBUMS_EMPTY) } }
     }
 
     // ── Top Artists (3-col grid, circular) ─────────────────────────────
@@ -261,7 +276,7 @@ struct HistoryScreen: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12).padding(.bottom, 120)
-        .overlay { if model.topArtists.isEmpty { emptyState } }
+        .overlay { if model.topArtists.isEmpty { emptyState(UiMessages.shared.HISTORY_ARTISTS_EMPTY) } }
     }
 
     // ── Recent (list) ──────────────────────────────────────────────────
@@ -302,7 +317,7 @@ struct HistoryScreen: View {
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })
             }
-            emptyIfNeeded(model.recent.isEmpty)
+            emptyIfNeeded(model.recent.isEmpty, UiMessages.shared.HISTORY_RECENT_EMPTY)
         }
         .padding(.vertical, 4).padding(.bottom, 120)
     }
@@ -316,13 +331,29 @@ struct HistoryScreen: View {
             .clipShape(Circle())
     }
 
-    @ViewBuilder private func emptyIfNeeded(_ empty: Bool) -> some View {
-        if empty { emptyState.padding(.top, 60) }
+    /// The selected tab has nothing to show (an error replaces its empty state).
+    private var tabIsEmpty: Bool {
+        switch tabIndex {
+        case 0: return model.topTracks.isEmpty
+        case 1: return model.topAlbums.isEmpty
+        case 2: return model.topArtists.isEmpty
+        default: return model.recent.isEmpty
+        }
     }
-    private var emptyState: some View {
+
+    /// Android's HistoryScreen ErrorState: the repository's message and Try Again.
+    private func errorState(_ message: String) -> some View {
+        PCErrorState(message: message) { Task { await model.load(tab: tabIndex, period: period, force: true) } }
+    }
+
+    @ViewBuilder private func emptyIfNeeded(_ empty: Bool, _ message: String) -> some View {
+        if empty { emptyState(message).padding(.top, 60) }
+    }
+    /// Android's per-tab EmptyState text (shared `UiMessages`).
+    private func emptyState(_ message: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: "clock").font(.system(size: 38)).foregroundStyle(PC.fg3)
-            Text("No listening data yet.\nSet your Last.fm username in Settings.")
+            Text(message)
                 .font(.system(size: 14)).foregroundStyle(PC.fg2).multilineTextAlignment(.center).padding(.horizontal, 40)
         }
     }

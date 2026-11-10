@@ -24,17 +24,23 @@ final class ChatViewModel {
     var progress: String?
 
     var selectedProvider: Provider? { providers.first { $0.id == selectedProviderId } }
+    /// The providers were read and none has a key: the screen says how to set
+    /// one up (Android's NoProvidersContent) instead of a disabled Send.
+    var noProviderConfigured: Bool { providersLoaded && !providers.contains { $0.configured } }
+    private var providersLoaded = false
 
     private static let known: [(String, String)] = [("chatgpt", "ChatGPT"), ("claude", "Claude"), ("gemini", "Gemini")]
 
     func start() async {
-        if !providers.isEmpty { return }
+        // Re-read while none is configured, so a key added in Settings shows up.
+        if providers.contains(where: { $0.configured }) { return }
         var list: [Provider] = []
         for (id, name) in Self.known {
             let configured = (try? await container.chatProviderConfigured(providerId: id))?.boolValue ?? false
             list.append(Provider(id: id, name: name, configured: configured))
         }
         providers = list
+        providersLoaded = true
         let saved = try? await container.chatSelectedProvider()
         let target = list.first { $0.id == saved && $0.configured } ?? list.first { $0.configured }
         if let t = target { await select(t.id) }
@@ -149,7 +155,9 @@ struct ChatScreen: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 12) {
-                    if model.messages.isEmpty && !model.isLoading {
+                    if model.noProviderConfigured {
+                        noProvidersState.padding(.top, 80)
+                    } else if model.messages.isEmpty && !model.isLoading {
                         emptyState.padding(.top, 80)
                     }
                     ForEach(model.messages) { m in
@@ -162,6 +170,17 @@ struct ChatScreen: View {
             }
             .onChange(of: model.messages.count) { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
             .onChange(of: model.isLoading) { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+        }
+    }
+
+    /// Android's NoProvidersContent.
+    private var noProvidersState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "info.circle").font(.system(size: 40)).foregroundStyle(.white.opacity(0.35))
+            Text(UiMessages.shared.NO_AI_PROVIDERS).font(.system(size: 15)).foregroundStyle(.white.opacity(0.6))
+            Text(UiMessages.shared.NO_AI_PROVIDERS_HINT)
+                .font(.system(size: 14)).foregroundStyle(.white.opacity(0.6)).multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
         }
     }
 

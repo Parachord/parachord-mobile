@@ -232,6 +232,48 @@ polling, banners, sheets). Don't move playback start-up back into a view.
 The Dev tab keeps its OWN separate smoke-test player on purpose; it retires
 with the Dev tab.
 
+### Error and empty states — show what Android shows
+
+A repository's `Resource.Error` carries the user-facing message (the same text
+Android shows). **The iOS bridge must never drop it.** It used to: the
+container's flows kept only `Resource.Success`, so a failed load left a screen
+spinning forever or showing a misleading empty state ("Set your Last.fm
+username" for every History failure).
+
+- **Flows** (`criticsPicksFlow`, `freshDropsFlow`, `recommendedTracksFlow`,
+  `recommendedArtistsFlow`, `concertsFlow`) go through `forDisplay()`: each list
+  as it lands, and the `Resource.Error` itself (Swift: `v as? ResourceError`,
+  `.message`) when the load failed with nothing to show.
+- **Suspend loaders** (`loadTop*`, `loadRecentTracks`, `getFriendTop*`,
+  `getFriendRecentTracks`, `getArtistEvents`) are `@Throws` and throw
+  `IosLoadException` with the repository's message; Swift reads it with
+  `pcLoadErrorMessage(error)` (nil for any other error). The 24 h top-list cache
+  still answers when a refresh fails.
+- **Both follow the shared `keepDataOnError` rule** (`model/Resource.kt`,
+  Android's view models use it too): a failed refresh never replaces a list
+  that's on screen; the error shows only when there's nothing to show.
+- **Words come from the shared `UiMessages`** (`shared/.../ui/UiMessages.kt`):
+  empty states, "Try Again" / "Retry", "Album not found", the MusicBrainz
+  throttle line, the playlist-delete warning, the ListenBrainz invalid-token
+  message. Android reads the same constants, so change a message there, once.
+  A playback message lives beside its rule (`APPLE_MUSIC_SIGN_IN_MESSAGE`,
+  `PLAY_START_FAILED_MESSAGE` in `PlayFailure.kt`).
+- **Views:** `PCErrorState` (the message in the error color + an outlined
+  retry, Android's `ErrorState`) and `PCEmptyState` (Android's `EmptyState`), in
+  `Theme.swift`. Try Again on a curated screen calls `load(force: true)`, which
+  starts over even inside `RevalidatingWatch`'s interval.
+
+Where iOS shows these: Recommendations (per tab), Fresh Drops, Critical
+Darlings, Concerts (the repository's message, no retry, as Android), History
+and a friend's profile (per tab; a friend's Retry only on Recent, as Android),
+an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
+throttle line instead of "No results"), Home's AI suggestions (the provider's
+message), Settings (an invalid ListenBrainz token is refused, not saved), Sync
+now (the run's notices after a successful sync), deleting a playlist Apple
+Music can't delete (a banner), DJ chat with no AI key ("No AI providers
+configured"), and a track only Apple Music could play while the app may not use
+Apple Music (the sign-in message, an "Open Settings" action, stops on the track).
+
 **Keychain items must be readable after first unlock.** A CarPlay launch can
 happen with the phone locked, and iOS's default accessibility
 (`kSecAttrAccessibleWhenUnlocked`) hides the sign-in tokens then.
@@ -700,6 +742,10 @@ many rounds. The complete, correct procedure:
    `PlaybackRouter`: it now calls `MusicAuthorization.request()` on the first
    Apple Music play (`notDetermined → prompt`), so a fresh install prompts and
    plays without the Dev tab. Don't regress this to a status-only check.
+   Denied or restricted access skips the source; if nothing else plays,
+   playback stops on the track with Android's "Sign in to Apple Music to play
+   this track" (`APPLE_MUSIC_SIGN_IN_MESSAGE`) and an "Open Settings" action
+   (the permission is the app's own iOS Settings page), and Play retries.
 7. **Catalog playback needs an active Apple Music subscription** on the
    device's Apple ID. Tokens + auth working but still no audio ⇒ subscription.
 

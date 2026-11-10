@@ -172,3 +172,60 @@ extension View {
             .foregroundStyle(PC.fg1)
     }
 }
+
+// MARK: - Error and empty states (Android's ErrorState / EmptyState)
+
+/// A load that failed with nothing to show: the message in the error color and
+/// an outlined retry button, as Android's `ErrorState` (Recommendations,
+/// Fresh Drops, Critical Darlings, History, a friend's profile). The message
+/// is the repository's own, so both apps say the same thing.
+struct PCErrorState: View {
+    let message: String
+    var retryLabel: String = UiMessages.shared.TRY_AGAIN
+    var onRetry: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(message)
+                .font(.system(size: 14)).foregroundStyle(PC.error)
+                .multilineTextAlignment(.center).padding(.horizontal, 32)
+            if let onRetry {
+                Button(action: onRetry) {
+                    Text(retryLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent)
+                        .padding(.horizontal, 20).frame(height: 38)
+                        .overlay(Capsule().strokeBorder(PC.border))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 60)
+    }
+}
+
+/// Android's `EmptyState`: a list that loaded with nothing in it.
+struct PCEmptyState: View {
+    let message: String
+    var hint: String? = nil
+    var icon: String? = nil
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let icon { Image(systemName: icon).font(.system(size: 38)).foregroundStyle(PC.fg3) }
+            Text(message)
+                .font(.system(size: 14)).foregroundStyle(PC.fg2)
+                .multilineTextAlignment(.center).padding(.horizontal, 32)
+            if let hint {
+                Text(hint).font(.system(size: 13)).foregroundStyle(PC.fg3)
+                    .multilineTextAlignment(.center).padding(.horizontal, 32)
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 60)
+    }
+}
+
+/// The message of a load that failed with nothing to show (`IosLoadException`,
+/// carrying the repository's text), or nil for any other error.
+func pcLoadErrorMessage(_ error: Error) -> String? {
+    guard (error as NSError).userInfo["KotlinException"] is IosLoadException else { return nil }
+    return (error as NSError).userInfo["KotlinException"].flatMap { ($0 as? KotlinThrowable)?.message }
+}

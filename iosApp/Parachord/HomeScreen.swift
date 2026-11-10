@@ -679,6 +679,14 @@ struct HomeScreen: View {
             if feed.aiLoading && feed.aiAlbums.isEmpty && feed.aiArtists.isEmpty {
                 aiHeader("Suggestions")
                 ProgressView().tint(PC.accent).frame(maxWidth: .infinity).padding(.vertical, 24)
+            } else if let error = feed.aiError, feed.aiAlbums.isEmpty && feed.aiArtists.isEmpty {
+                // Android's AiSuggestionsSection error: what went wrong, with
+                // the header's refresh to try again.
+                aiHeader("AI Suggestions")
+                Text(error).font(.system(size: 13)).foregroundStyle(PC.error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 20).padding(.bottom, 8)
             }
         } else if feed.hasAiPlugins == false {
             // Parity with Android's "Surprise Me / Configure Plugins" card.

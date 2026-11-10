@@ -16,40 +16,55 @@ final class RecommendationsModel {
     var tracks: [RecommendedTrack] = []
     var entities: [Track] = []
     var artists: [RecommendedArtist] = []
-    var isLoading = false
-    var loaded = false
-    /// Why the page is empty, naming the services the user connected.
-    var emptyMessage: String?
+    /// Each tab's state, as Android's per-tab `Resource`: loading until its
+    /// flow answers, then a list or the repository's error (shown only with
+    /// nothing to show; the reason "nothing to recommend" arrives this way too).
+    var tracksLoaded = false
+    var artistsLoaded = false
+    var tracksError: String?
+    var artistsError: String?
 
     // Watch the shared recommendation flows (cached-first → fresh); the repo owns
     // its disk cache (architecture realignment). The repo has no TTL (it always
     // refetches), so a later visit re-runs them only after 30 min — the same
     // staleness rule as Android's RecommendationsViewModel (#417).
-    func load() async {
-        refreshTracks.run { watcher, done in
-            isLoading = true
+    func load(force: Bool = false) async {
+        refreshTracks.run(force: force) { watcher, done in
+            if force { tracksLoaded = false; tracksError = nil }
             return watcher.watchUntilDone(flow: container.recommendedTracksFlow(), onEach: { [weak self] v in
                 guard let self else { return }
                 // An empty list is a real answer (no service has anything to
-                // recommend), so it replaces what was shown. Failed refreshes
-                // never arrive here: the flow carries successes only.
+                // recommend), so it replaces what was shown; its reason
+                // follows as an error. A failed refresh behind a list never
+                // arrives (the shared keepDataOnError rule).
                 if let t = v as? [RecommendedTrack] {
                     self.tracks = t
                     self.entities = t.map { Self.makeTrack($0) }
-                    if t.isEmpty {
-                        Task { self.emptyMessage = try? await self.container.recommendationsEmptyMessage() }
-                    }
+                    self.tracksError = nil
+                } else if let e = v as? ResourceError {
+                    self.tracksError = e.message
                 }
-                self.isLoading = false
-                self.loaded = true
-            }, onDone: done)
+                self.tracksLoaded = true
+            }, onDone: { [weak self] in
+                Task { @MainActor in self?.tracksLoaded = true }
+                done()
+            })
         }
-        refreshArtists.run { watcher, done in
-            watcher.watchUntilDone(flow: container.recommendedArtistsFlow(), onEach: { [weak self] v in
+        refreshArtists.run(force: force) { watcher, done in
+            if force { artistsLoaded = false; artistsError = nil }
+            return watcher.watchUntilDone(flow: container.recommendedArtistsFlow(), onEach: { [weak self] v in
                 guard let self else { return }
-                if let a = v as? [RecommendedArtist] { self.artists = a }
-                self.loaded = true
-            }, onDone: done)
+                if let a = v as? [RecommendedArtist] {
+                    self.artists = a
+                    self.artistsError = nil
+                } else if let e = v as? ResourceError {
+                    self.artistsError = e.message
+                }
+                self.artistsLoaded = true
+            }, onDone: { [weak self] in
+                Task { @MainActor in self?.artistsLoaded = true }
+                done()
+            })
         }
     }
 
@@ -121,14 +136,22 @@ struct RecommendationsScreen: View {
 
             sourceChips
 
-            if model.isLoading && !model.loaded {
+            // Per tab, as Android's ArtistsTab / SongsTab: loading, the
+            // repository's error with Try Again, an empty list, or the list.
+            let loaded = tabIndex == 0 ? model.artistsLoaded : model.tracksLoaded
+            let isEmpty = tabIndex == 0 ? model.artists.isEmpty : model.tracks.isEmpty
+            let error = tabIndex == 0 ? model.artistsError : model.tracksError
+            if !loaded && isEmpty {
                 ScrollView { PCSkeletonGrid(count: 9, columns: 3) }
-            } else if model.loaded && model.tracks.isEmpty && model.artists.isEmpty {
-                Spacer()
-                Text(model.emptyMessage ?? "No recommendations yet — connect ListenBrainz and listen to a few tracks.")
-                    .font(.system(size: 14)).foregroundStyle(PC.fg2)
-                    .multilineTextAlignment(.center).padding(40)
-                Spacer()
+            } else if let error, isEmpty {
+                ScrollView {
+                    PCErrorState(message: error) { Task { await model.load(force: true) } }
+                }
+            } else if isEmpty {
+                ScrollView {
+                    PCEmptyState(message: tabIndex == 0 ? UiMessages.shared.RECOMMENDED_ARTISTS_EMPTY
+                                                       : UiMessages.shared.RECOMMENDED_TRACKS_EMPTY)
+                }
             } else {
                 ScrollView {
                     if tabIndex == 0 { artistsGrid } else { songsList }

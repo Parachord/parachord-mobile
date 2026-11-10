@@ -230,13 +230,17 @@ final class SyncViewModel {
     func syncNow() async {
         guard anyOn else { return }
         status = nil
-        let err = (try? await container.syncNow()) ?? "Sync error"   // "" = success
+        let outcome = try? await container.syncNowOutcome()
+        let err = outcome?.error ?? "Sync error"   // "" = success
         spotifyCooldownMs = container.spotifyCooldownRemainingMs()
         if err == container.syncInProgressMessage {
             pendingResync = true
             return
         }
-        status = err.isEmpty ? "Synced ✓" : "Failed: \(err)"
+        // The run's notices ("ListenBrainz rate-limited or unreachable; will
+        // resume next sync cycle"), listed after a successful sync as Android does.
+        let lines = err.isEmpty ? ["Synced ✓"] + (outcome?.notices ?? []) : ["Failed: \(err)"]
+        status = lines.joined(separator: "\n")
         await refreshLastSynced()
     }
 

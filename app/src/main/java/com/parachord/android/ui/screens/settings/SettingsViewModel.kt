@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.settings
 
+import com.parachord.shared.ui.UiMessages
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import android.util.Log
@@ -672,7 +673,7 @@ class SettingsViewModel constructor(
                 settingsStore.setListenBrainzUsername(username)
                 Log.d("SettingsVM", "ListenBrainz connected as: $username")
             } else {
-                listenBrainzAuthError.value = "Invalid token. Check your ListenBrainz user token."
+                listenBrainzAuthError.value = UiMessages.LISTENBRAINZ_INVALID_TOKEN
             }
         }
     }

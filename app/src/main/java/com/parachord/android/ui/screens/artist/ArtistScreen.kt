@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.artist
 
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -934,7 +935,7 @@ private fun OnTourTab(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "No upcoming tour dates",
+                        text = UiMessages.TOUR_DATES_EMPTY,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

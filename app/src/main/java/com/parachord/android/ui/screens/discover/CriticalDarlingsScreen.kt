@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -203,7 +204,7 @@ fun CriticalDarlingsScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedButton(onClick = viewModel::refresh) {
-                            Text("Try Again")
+                            Text(UiMessages.TRY_AGAIN)
                         }
                     }
                 }
@@ -218,9 +219,9 @@ fun CriticalDarlingsScreen(
                     ) {
                         Text(
                             text = if (searchQuery.isNotBlank()) {
-                                "No results for \"$searchQuery\""
+                                UiMessages.noResultsFor(searchQuery)
                             } else {
-                                "No critics' picks available"
+                                UiMessages.CRITICS_PICKS_EMPTY
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -9,6 +9,7 @@ import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.repository.RecommendationsRepository
 import com.parachord.shared.model.RecommendedArtist
+import com.parachord.shared.model.keepDataOnError
 import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
 import com.parachord.android.playback.PlaybackController
@@ -300,18 +301,3 @@ data class SourceCounts(
     val lastfm: Int = 0,
     val listenbrainz: Int = 0,
 )
-
-/**
- * The repository emits its cached list first, then an error if the refresh
- * fails. A failed refresh must not replace a list the user is already looking
- * at with the error screen — keep the data and only surface an error when
- * there's nothing to show. iOS already drops error emissions the same way.
- *
- * When no service has anything to recommend, the repository emits an empty
- * list and then the reason. The empty list replaces what was shown (it may be
- * stale), so the reason that follows it is shown, not swallowed.
- */
-internal fun <T> keepDataOnError(current: Resource<T>, next: Resource<T>): Resource<T> =
-    if (next is Resource.Error && current is Resource.Success && !current.isEmptyList()) current else next
-
-private fun <T> Resource.Success<T>.isEmptyList(): Boolean = (data as? Collection<*>)?.isEmpty() == true

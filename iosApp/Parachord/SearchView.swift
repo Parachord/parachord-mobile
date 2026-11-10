@@ -28,6 +28,10 @@ final class SearchViewModel {
     var isSearching = false
     var hasSearched = false
     var history: [SearchHistory] = []
+    /// MusicBrainz is throttling us (#375): an empty result then isn't "no
+    /// results", so the screen says so instead (Android's SearchScreen).
+    var musicBrainzRateLimited = false
+    private var rateLimitWatcher: Cancellable?
 
     private var searchTask: Task<Void, Never>?
     /// The remote search runs in Kotlin's scope, so cancelling `searchTask`
@@ -42,6 +46,9 @@ final class SearchViewModel {
         guard historyWatcher == nil else { return }
         historyWatcher = container.watchSearchHistory { [weak self] items in
             self?.history = items
+        }
+        rateLimitWatcher = container.watchMusicBrainzRateLimited { [weak self] limited in
+            Task { @MainActor in self?.musicBrainzRateLimited = limited.boolValue }
         }
     }
 
@@ -252,7 +259,14 @@ struct SearchView: View {
         } else if model.hasSearched && model.localTracks.isEmpty && model.artists.isEmpty
             && model.remoteTracks.isEmpty && model.remoteAlbums.isEmpty {
             Spacer()
-            ContentUnavailableView.search(text: model.query)
+            if model.musicBrainzRateLimited {
+                // A throttled MusicBrainz hasn't shown that nothing matched.
+                Text(UiMessages.shared.MUSICBRAINZ_RATE_LIMITED)
+                    .font(.system(size: 14)).foregroundStyle(PC.fg2)
+                    .multilineTextAlignment(.center).padding(32)
+            } else {
+                ContentUnavailableView.search(text: model.query)
+            }
             Spacer()
         } else {
             ScrollView {

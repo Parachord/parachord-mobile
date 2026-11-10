@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.history
 
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
 import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.AlbumContextMenu
@@ -225,7 +226,7 @@ private fun TopSongsTab(
             is Resource.Error -> ErrorState(message = tracks.message, onRetry = { onPeriodChanged(selectedPeriod) })
             is Resource.Success -> {
                 if (tracks.data.isEmpty()) {
-                    EmptyState("No listening data yet")
+                    EmptyState(UiMessages.HISTORY_TRACKS_EMPTY)
                 } else {
                     LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                         items(tracks.data.size) { index ->
@@ -271,7 +272,7 @@ private fun TopAlbumsTab(
             is Resource.Error -> ErrorState(message = albums.message, onRetry = { onPeriodChanged(selectedPeriod) })
             is Resource.Success -> {
                 if (albums.data.isEmpty()) {
-                    EmptyState("No album data yet")
+                    EmptyState(UiMessages.HISTORY_ALBUMS_EMPTY)
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
@@ -423,7 +424,7 @@ private fun TopArtistsTab(
             is Resource.Error -> ErrorState(message = artists.message, onRetry = { onPeriodChanged(selectedPeriod) })
             is Resource.Success -> {
                 if (artists.data.isEmpty()) {
-                    EmptyState("No artist data yet")
+                    EmptyState(UiMessages.HISTORY_ARTISTS_EMPTY)
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
@@ -532,7 +533,7 @@ private fun RecentlyPlayedTab(
             is Resource.Error -> ErrorState(message = recentTracks.message, onRetry = {})
             is Resource.Success -> {
                 if (recentTracks.data.isEmpty() && search.isBlank()) {
-                    EmptyState("No recent listening history")
+                    EmptyState(UiMessages.HISTORY_RECENT_EMPTY)
                 } else {
                     // Sort + filter bar (matching Collection tab pattern)
                     CollectionFilterBar(
@@ -656,7 +657,7 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedButton(onClick = onRetry) {
-                Text("Try Again")
+                Text(UiMessages.TRY_AGAIN)
             }
         }
     }
