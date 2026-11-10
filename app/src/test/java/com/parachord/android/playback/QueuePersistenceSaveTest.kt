@@ -10,6 +10,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import com.parachord.shared.playback.PlaybackResumePosition
+import com.parachord.shared.playback.SavedPlaybackPosition
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
@@ -48,5 +51,31 @@ class QueuePersistenceSaveTest {
         stateHolder.update { copy(currentTrack = track.copy(id = "t2", title = "Hurricane")) }
         delay(800)
         coVerify(exactly = 2) { settingsStore.setPersistedQueueState(any()) }
+    }
+
+    /** #567: the position is saved on its own when playback pauses, so a restored queue resumes there. */
+    @Test fun `a pause saves the position, not the queue`() = runBlocking {
+        val settingsStore = mockk<SettingsStore>(relaxed = true)
+        every { settingsStore.persistQueue } returns flowOf(true)
+        val saved = mutableListOf<String>()
+        coEvery { settingsStore.setPersistedPlaybackPosition(capture(saved)) } returns Unit
+        val stateHolder = PlaybackStateHolder()
+        stateHolder.update { copy(currentTrack = track, isPlaying = true, position = 1_000L, duration = 200_000L) }
+
+        val persistence = QueuePersistence(settingsStore, QueueManager(), stateHolder, Json)
+        persistence.startObserving()
+        delay(800)
+        saved.clear() // the first playing update counts as 15 s since no save
+
+        stateHolder.update { copy(position = 1_500L) }
+        delay(100)
+        assertEquals(0, saved.size)
+
+        stateHolder.update { copy(position = 95_000L, isPlaying = false) }
+        delay(100)
+        assertEquals(1, saved.size)
+        val position = PlaybackResumePosition.decode(saved.single())
+        assertEquals(SavedPlaybackPosition("t1", 95_000L, 200_000L), position)
+        coVerify(exactly = 1) { settingsStore.setPersistedQueueState(any()) }
     }
 }

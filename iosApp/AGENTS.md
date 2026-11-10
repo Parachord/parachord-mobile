@@ -1131,8 +1131,13 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   because nothing could play it (the car's Spotify case below). For both,
   `needsLoadOnPlay` makes `togglePlayPause` (the phone's button, the remote
   play / toggle commands, CarPlay) run `playTrack` instead of resuming whatever
-  the active engine last held. Restored queues keep no position, so the track
-  starts from the top.
+  the active engine last held. A restored track resumes where it was when the
+  app last ran (#567): the 1 s tick saves the position on a pause and every
+  15 s while playing (`savePositionIfDue`, shared `PlaybackResumePosition`, its
+  own `persisted_queue_position` key), `restoreQueue` reads it for the same
+  track id, and the first play seeks there once the track plays
+  (`seekOnceStarted`, up to 60 s). Under 5 s in, or within 10 s of the end,
+  it starts from the top.
 - **Checking it in the simulator.** The lock screen can't be photographed with
   `simctl`, but `mediaremoted` logs what it publishes:
   `xcrun simctl spawn booted log stream --level debug --predicate 'process == "mediaremoted"'`

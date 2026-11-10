@@ -41,6 +41,69 @@ object QueuePersistenceCodec {
 }
 
 /**
+ * Where the current track had got to, saved beside the queue so a queue
+ * restored at launch resumes the track there (#567).
+ *
+ * Kept out of [PersistedQueueState]: it's written every few seconds while a
+ * song plays, and the queue can be hundreds of tracks.
+ *
+ * @param trackId the track the position belongs to; a restored track with
+ *   another id starts from the top.
+ * @param durationMs the track's length when known, else 0.
+ */
+@Serializable
+data class SavedPlaybackPosition(
+    val trackId: String,
+    val positionMs: Long,
+    val durationMs: Long = 0,
+)
+
+/**
+ * When to save the playback position, and where a restored track resumes.
+ *
+ * Without it, a phone that ended the app while it was paused (Android frees
+ * the memory of a paused app it no longer protects; iOS ends suspended apps)
+ * reopened with the song back at 0:00 (#567).
+ */
+object PlaybackResumePosition {
+    /** How often the position is saved while a song plays. */
+    const val SAVE_INTERVAL_MS = 15_000L
+
+    /** A track this barely started starts over. */
+    const val MIN_RESUME_MS = 5_000L
+
+    /** A track this close to its end starts over rather than ending at once. */
+    const val END_MARGIN_MS = 10_000L
+
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    /**
+     * Save when playback has just stopped (a pause, a failed stream), and
+     * every [SAVE_INTERVAL_MS] while it plays.
+     */
+    fun shouldSave(wasPlaying: Boolean, isPlaying: Boolean, msSinceLastSave: Long): Boolean =
+        (wasPlaying && !isPlaying) || (isPlaying && msSinceLastSave >= SAVE_INTERVAL_MS)
+
+    /**
+     * Where [trackId] should start, in ms: the saved position when it's for
+     * this track and worth resuming, else 0 (from the top).
+     */
+    fun resumeAtMs(saved: SavedPlaybackPosition?, trackId: String?): Long {
+        if (saved == null || trackId == null || saved.trackId != trackId) return 0
+        if (saved.positionMs < MIN_RESUME_MS) return 0
+        if (saved.durationMs > 0 && saved.positionMs > saved.durationMs - END_MARGIN_MS) return 0
+        return saved.positionMs
+    }
+
+    fun encode(position: SavedPlaybackPosition): String =
+        json.encodeToString(SavedPlaybackPosition.serializer(), position)
+
+    /** A malformed or missing value is null: the track starts from the top. */
+    fun decode(jsonStr: String?): SavedPlaybackPosition? =
+        jsonStr?.let { runCatching { json.decodeFromString(SavedPlaybackPosition.serializer(), it) }.getOrNull() }
+}
+
+/**
  * When a saved queue may be put back at startup.
  *
  * Only when nothing has played yet in this run of the app. The restore reads
