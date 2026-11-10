@@ -28,8 +28,9 @@ import okhttp3.Request
  * fan-out, the Spotify branch (injected lambda), gating, re-score and ranking.
  * Spotify is NOT a dependency here — it lives entirely in the coordinator.
  *
- * These bodies were moved VERBATIM from `ResolverManager` (Task 2). The logic is
- * unchanged.
+ * These bodies were moved from `ResolverManager` (Task 2). Each returns null
+ * for a no-match or a service that isn't connected, and throws when the
+ * service couldn't answer (#566, see [ResolverRuntime]).
  */
 class AndroidResolverRuntime constructor(
     private val settingsStore: SettingsStore,
@@ -148,9 +149,11 @@ class AndroidResolverRuntime constructor(
 
                 val request = Request.Builder().url(url).get().build()
                 val response = okHttpClient.newCall(request).execute()
-                if (!response.isSuccessful) return@withContext null
+                // Couldn't answer (#566): throw, so the track isn't cached as
+                // having no Apple Music match.
+                if (!response.isSuccessful) throw IllegalStateException("iTunes search returned ${response.code}")
 
-                val body = response.body?.string() ?: return@withContext null
+                val body = response.body?.string() ?: throw IllegalStateException("iTunes search returned no body")
                 val result = json.decodeFromString<ITunesSearchResponse>(body)
                 // Best title+artist match (the shared matcher) rather than the
                 // first iTunes hit.
@@ -182,7 +185,7 @@ class AndroidResolverRuntime constructor(
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "iTunes search failed for '$query': ${e.message}")
-                null
+                throw e
             }
         }
 
@@ -229,7 +232,7 @@ class AndroidResolverRuntime constructor(
             )
         } catch (e: Exception) {
             Log.w(TAG, "Local file resolve failed: ${e.message}")
-            null
+            throw e
         }
     }
 
@@ -258,15 +261,16 @@ class AndroidResolverRuntime constructor(
                     searchSoundCloudTrack(query, newToken)
                 } catch (e2: Exception) {
                     Log.w(TAG, "SoundCloud resolve failed after refresh for '$query': ${e2.message}")
-                    null
+                    throw e2
                 }
             } else {
                 Log.w(TAG, "SoundCloud token refresh failed for '$query'")
-                null
+                throw IllegalStateException("SoundCloud token refresh failed")
             }
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "SoundCloud resolve failed for '$query': ${e.message}")
-            null
+            throw e
         }
     }
 
@@ -295,15 +299,15 @@ class AndroidResolverRuntime constructor(
             }
             if (!response.isSuccessful) {
                 Log.w(TAG, "SoundCloud search returned ${response.code}")
-                return@withContext null
+                throw IllegalStateException("SoundCloud search returned ${response.code}")
             }
 
-            val body = response.body?.string() ?: return@withContext null
+            val body = response.body?.string() ?: throw IllegalStateException("SoundCloud search returned no body")
             val tracks = try {
                 json.decodeFromString<List<ScTrack>>(body)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse SoundCloud search results: ${e.message}")
-                return@withContext null
+                throw e
             }
 
             // Filter to streamable, non-blocked tracks (matches desktop logic)
@@ -386,7 +390,7 @@ class AndroidResolverRuntime constructor(
         }
     } catch (e: Exception) {
         Log.w(TAG, "Plugin resolve($resolverId) failed: ${e.message}")
-        null
+        throw e
     }
 }
 

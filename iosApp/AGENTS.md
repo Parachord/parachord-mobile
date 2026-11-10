@@ -354,6 +354,15 @@ bug):
   rows run N concurrent resolves and defeats both the JSC-context bound and
   the rate-limit protection.
 
+A cached row whose entry lacks an active resolver asks just that resolver
+again when the row appears (`resolveSingleResolver`, merged in). How long it
+waits depends on why it's missing (#566): a resolver that answered "no match"
+waits 30 minutes, one that couldn't answer (offline, a Spotify cooldown, a
+plugin that threw or timed out) waits 2, 4, 8 … 60 minutes (shared
+`ResolverRetry`). The full resolve reports both (`resolveSourcesReport` →
+`ResolveReport.missed` / `.failed`), and `resolveSingleResolver` throws for a
+resolver that couldn't answer, so Swift catches it rather than reading a nil.
+
 When Library / Search / other list screens land, wire them the same way
 (`.onAppear { resolve(req, order: index) }`); don't bulk-submit and don't
 drop the index.

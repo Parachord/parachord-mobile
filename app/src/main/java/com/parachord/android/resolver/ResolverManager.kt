@@ -98,20 +98,42 @@ class ResolverManager constructor(
          */
         targetIsrc: String? = null,
         targetMbid: String? = null,
-    ): List<ResolvedSource> {
+    ): List<ResolvedSource> = resolveReport(
+        query, targetTitle, targetArtist, excludeResolvers,
+        targetIsrc = targetIsrc, targetMbid = targetMbid,
+    ).sources
+
+    /**
+     * [resolve], also saying which resolvers couldn't answer (#566).
+     *
+     * @param onlyResolvers when set, ask only these: a retry of the ones that
+     *   failed last time.
+     */
+    suspend fun resolveReport(
+        query: String,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+        excludeResolvers: Set<String> = emptySet(),
+        onlyResolvers: Set<String>? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
+    ): com.parachord.shared.resolver.ResolveReport {
         // Proactively refresh stale tokens before resolving (no-op, see KDoc).
         ensureTokensFresh()
-        val results = coordinator.resolveScored(
+        val report = coordinator.resolveScoredReport(
             query = query,
             targetTitle = targetTitle,
             targetArtist = targetArtist,
             album = null,
             excludeResolvers = excludeResolvers,
+            onlyResolvers = onlyResolvers,
             targetIsrc = targetIsrc,
             targetMbid = targetMbid,
         )
-        Log.d(TAG, "Resolved '$query' → ${results.size} sources: ${results.map { "${it.resolver}(${String.format("%.0f%%", (it.confidence ?: 0.0) * 100)})" }}")
-        return results
+        val results = report.sources
+        Log.d(TAG, "Resolved '$query' → ${results.size} sources: ${results.map { "${it.resolver}(${String.format("%.0f%%", (it.confidence ?: 0.0) * 100)})" }}" +
+            if (report.failed.isNotEmpty()) "; couldn't answer: ${report.failed}" else "")
+        return report
     }
 
     /**
@@ -132,7 +154,27 @@ class ResolverManager constructor(
         /** Target recording identity for the identity tier (#402); see [resolve]. */
         targetIsrc: String? = null,
         targetMbid: String? = null,
-    ): List<ResolvedSource> = coroutineScope {
+    ): List<ResolvedSource> = resolveWithHintsReport(
+        query, spotifyId, soundcloudId, appleMusicId, targetTitle, targetArtist,
+        targetIsrc = targetIsrc, targetMbid = targetMbid,
+    ).sources
+
+    /**
+     * [resolveWithHints], also saying which resolvers couldn't answer (#566),
+     * so [TrackResolverCache] doesn't keep a failed resolve as complete: a
+     * stored Apple Music id alone, when every search failed, looked like a
+     * track found only on Apple Music.
+     */
+    suspend fun resolveWithHintsReport(
+        query: String,
+        spotifyId: String? = null,
+        soundcloudId: String? = null,
+        appleMusicId: String? = null,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
+    ): com.parachord.shared.resolver.ResolveReport = coroutineScope {
         val results = mutableListOf<ResolvedSource>()
 
         // If we have a Spotify ID from metadata, verify it's actually playable
@@ -221,10 +263,11 @@ class ResolverManager constructor(
         // offender. See #176/#177.)
         val excludeFromCascade =
             if (results.any { it.resolver == "spotify" }) setOf("spotify") else emptySet()
-        val cascadeResults = resolve(
+        val cascade = resolveReport(
             query, targetTitle, targetArtist, excludeResolvers = excludeFromCascade,
             targetIsrc = targetIsrc, targetMbid = targetMbid,
         )
+        val cascadeResults = cascade.sources
         val cascadeByResolver = cascadeResults.associateBy { it.resolver }
         val mergedHints = results.map { hint ->
             if (hint.artworkUrl == null) {
@@ -233,7 +276,7 @@ class ResolverManager constructor(
             } else hint
         }
         val others = cascadeResults.filter { it.resolver !in mergedHints.map { r -> r.resolver } }
-        mergedHints + others
+        com.parachord.shared.resolver.ResolveReport(mergedHints + others, cascade.asked, cascade.failed)
     }
 
     /**

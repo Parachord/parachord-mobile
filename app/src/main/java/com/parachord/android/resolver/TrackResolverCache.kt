@@ -5,6 +5,7 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.MbidEnrichmentService
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.store.SettingsStore
+import com.parachord.shared.resolver.ResolverRetry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +50,8 @@ class TrackResolverCache constructor(
      * plugin's — not just the ones with a DB column. Null = memory only.
      */
     private val persisted: com.parachord.shared.cache.PersistentJsonCache<List<ResolvedSource>>? = null,
+    /** Clock for the retry back-off; injectable for tests. */
+    private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
     companion object {
         private const val TAG = "TrackResolverCache"
@@ -96,7 +99,20 @@ class TrackResolverCache constructor(
     init {
         scope.launch {
             try {
-                val saved = persisted?.all().orEmpty().filterValues { it.isNotEmpty() }
+                var saved = persisted?.all().orEmpty().filterValues { it.isNotEmpty() }
+                // Once: before #566 a resolve whose searches all failed was saved
+                // with only the ids the track carried, and never asked again for
+                // 7 days. Drop those so they resolve again.
+                val p = persisted
+                if (p != null && !settingsStore.isTrackSourcesStoredIdPurgeDone()) {
+                    val stale = saved.filterValues { ResolverRetry.isStoredIdOnly(it) }.keys
+                    if (stale.isNotEmpty()) {
+                        p.remove(stale)
+                        saved = saved - stale
+                        Log.d(TAG, "Dropped ${stale.size} saved track sources left by failed resolves")
+                    }
+                    settingsStore.setTrackSourcesStoredIdPurgeDone()
+                }
                 // Anything resolved while loading wins over the saved copy.
                 if (saved.isNotEmpty()) _trackSources.update { saved + it }
                 Log.d(TAG, "Loaded ${saved.size} saved track sources")
@@ -116,11 +132,179 @@ class TrackResolverCache constructor(
         kotlinx.coroutines.withTimeoutOrNull(3_000) { loaded.await() }
     }
 
-    /** Record [sources] for [key] in memory and on disk. Empty answers stay in memory only. */
-    private fun store(key: String, sources: List<ResolvedSource>) {
+    /** What to ask again for a track whose resolvers failed. */
+    private class RetryRequest(val title: String, val artist: String, val isrc: String?, val mbid: String?)
+
+    /**
+     * Resolvers that couldn't answer for a track, and when to ask them again
+     * (#566). Memory only: after a restart such a track isn't on disk, so it
+     * resolves from scratch.
+     */
+    private class PendingRetry(
+        val failed: Set<String>,
+        val failures: Int,
+        val retryAtMs: Long,
+        val request: RetryRequest?,
+    )
+
+    private val pendingRetries = mutableMapOf<String, PendingRetry>()
+
+    /** Asks failed resolvers again when they're due ([sweepRetries]). */
+    private var sweeper: Job? = null
+
+    /**
+     * Record [sources] for [key] in memory, and on disk once every resolver
+     * asked has answered.
+     *
+     * @param failed the resolvers that couldn't answer this time (#566); they
+     *   are asked again after [ResolverRetry.failedRetryDelayMs], and until
+     *   none are left the sources stay off disk. Kept on disk, a moment without
+     *   network showed tracks with only their stored Apple Music id for the 7
+     *   days the cache keeps them. Null = not known (a caller that resolved on
+     *   its own): any retry already pending for [key] stays.
+     */
+    private fun store(
+        key: String,
+        sources: List<ResolvedSource>,
+        failed: Set<String>? = null,
+        request: RetryRequest? = null,
+    ) {
         _trackSources.update { it + (key to sources) }
+        val waiting = synchronized(pendingRetries) {
+            when {
+                failed == null -> pendingRetries.containsKey(key)
+                failed.isEmpty() -> { pendingRetries.remove(key); false }
+                else -> {
+                    val previous = pendingRetries[key]
+                    val failures = (previous?.failures ?: 0) + 1
+                    pendingRetries[key] = PendingRetry(
+                        failed, failures, nowMs() + ResolverRetry.failedRetryDelayMs(failures),
+                        request ?: previous?.request,
+                    )
+                    if (sweeper?.isActive != true) sweeper = scope.launch { sweepRetries() }
+                    true
+                }
+            }
+        }
+        if (waiting) return
         val p = persisted ?: return
         if (sources.isNotEmpty()) scope.launch { p.put(key, sources) }
+    }
+
+    /**
+     * Ask failed resolvers again when their back-off ends, without waiting for
+     * a screen to submit the track again: Home only re-submits when its list
+     * changes, so a row resolved offline stayed incomplete until the next
+     * launch. Runs on the background lane; ends when nothing is pending.
+     */
+    private suspend fun sweepRetries() {
+        while (true) {
+            val next = synchronized(pendingRetries) {
+                pendingRetries.values.filter { it.request != null }.minOfOrNull { it.retryAtMs }
+            } ?: return
+            // At least a second between passes: a retry still in flight stays due.
+            kotlinx.coroutines.delay((next - nowMs()).coerceAtLeast(1_000))
+            val due = synchronized(pendingRetries) {
+                pendingRetries.filter { (_, p) -> p.request != null && nowMs() >= p.retryAtMs }.toList()
+            }
+            for ((key, pending) in due) {
+                val existing = _trackSources.value[key]
+                val request = pending.request ?: continue
+                if (existing == null) {
+                    synchronized(pendingRetries) { pendingRetries.remove(key) }
+                    continue
+                }
+                if (!synchronized(inFlight) { inFlight.add(key) }) continue
+                scope.launch {
+                    try {
+                        backgroundSemaphore.withPermit {
+                            retryFailed(key, request.title, request.artist, request.isrc, request.mbid, existing, pending.failed)
+                        }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        Log.w(TAG, "Retry for '${request.title}' failed: ${e.message}")
+                    } finally {
+                        synchronized(inFlight) { inFlight.remove(key) }
+                    }
+                }
+            }
+        }
+    }
+
+    /** The resolvers to ask again for [key] now, or null when none are due. */
+    private fun dueRetry(key: String): Set<String>? = synchronized(pendingRetries) {
+        pendingRetries[key]?.takeIf { nowMs() >= it.retryAtMs }?.failed
+    }
+
+    /**
+     * Ask the resolvers that failed for [key] again and merge what they find
+     * into its [existing] sources ([ResolverRetry.merge]).
+     */
+    private suspend fun retryFailed(
+        key: String,
+        title: String,
+        artist: String,
+        isrc: String?,
+        mbid: String?,
+        existing: List<ResolvedSource>,
+        resolvers: Set<String>,
+    ): List<ResolvedSource> {
+        Log.d(TAG, "Asking again for '$title' by $artist: $resolvers")
+        val report = resolverManager.resolveReport(
+            query = "$title $artist",
+            targetTitle = title,
+            targetArtist = artist,
+            onlyResolvers = resolvers,
+            targetIsrc = isrc,
+            targetMbid = mbid,
+        )
+        val merged = ResolverRetry.merge(existing, report)
+        store(key, merged, report.failed, RetryRequest(title, artist, isrc, mbid))
+        return merged
+    }
+
+    /**
+     * One track's sources, for screens that resolve their own rows: the cached
+     * ones, with any resolvers that failed asked again once due, or a fresh
+     * resolve, stored with what couldn't answer (#566). Use this rather than
+     * resolving and calling [putSources], which can't tell a failed resolve
+     * from a complete one.
+     */
+    suspend fun resolveTrack(
+        title: String,
+        artist: String,
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+        soundcloudId: String? = null,
+        isrc: String? = null,
+        recordingMbid: String? = null,
+    ): List<ResolvedSource> {
+        awaitLoaded()
+        val key = trackKey(title, artist)
+        val existing = _trackSources.value[key]
+        if (existing != null) {
+            val due = dueRetry(key) ?: return existing
+            if (!synchronized(inFlight) { inFlight.add(key) }) return existing
+            return try {
+                retryFailed(key, title, artist, isrc, recordingMbid, existing, due)
+            } finally {
+                synchronized(inFlight) { inFlight.remove(key) }
+            }
+        }
+        val report = resolverManager.resolveWithHintsReport(
+            query = "$title $artist",
+            spotifyId = spotifyId,
+            appleMusicId = appleMusicId,
+            soundcloudId = soundcloudId,
+            targetTitle = title,
+            targetArtist = artist,
+            targetIsrc = isrc,
+            targetMbid = recordingMbid,
+        )
+        if (report.sources.isNotEmpty() || report.failed.isNotEmpty()) {
+            store(key, report.sources, report.failed, RetryRequest(title, artist, isrc, recordingMbid))
+        }
+        return report.sources
     }
 
     /**
@@ -244,8 +428,10 @@ class TrackResolverCache constructor(
 
         for (track in tracks) {
             val key = trackKey(track.title, track.artist)
-            // Skip if already resolved (cross-context dedup)
-            if (_trackSources.value.containsKey(key)) continue
+            // Already resolved (cross-context dedup), unless resolvers that
+            // couldn't answer are due to be asked again (#566).
+            val existing = _trackSources.value[key]
+            val retry = if (existing != null) dueRetry(key) ?: continue else null
             // Skip if already in-flight from another context
             val shouldResolve = synchronized(inFlight) { inFlight.add(key) }
             if (!shouldResolve) continue
@@ -255,22 +441,30 @@ class TrackResolverCache constructor(
             launch {
                 try {
                     sem.withPermit {
-                        val sources = resolverManager.resolveWithHints(
-                            query = "${track.title} ${track.artist}",
-                            spotifyId = track.spotifyId,
-                            appleMusicId = track.appleMusicId,
-                            soundcloudId = track.soundcloudId,
-                            targetTitle = track.title,
-                            targetArtist = track.artist,
-                            // Recording identity → exact-ID matches score 1.0 (#402).
-                            targetIsrc = track.isrc,
-                            targetMbid = track.recordingMbid,
-                        )
-                        if (sources.isNotEmpty()) {
-                            store(key, sources)
-                            if (backfillDb) {
-                                backfillResolverIds(track, sources)
+                        val sources = if (existing != null && retry != null) {
+                            retryFailed(key, track.title, track.artist, track.isrc, track.recordingMbid, existing, retry)
+                        } else {
+                            val report = resolverManager.resolveWithHintsReport(
+                                query = "${track.title} ${track.artist}",
+                                spotifyId = track.spotifyId,
+                                appleMusicId = track.appleMusicId,
+                                soundcloudId = track.soundcloudId,
+                                targetTitle = track.title,
+                                targetArtist = track.artist,
+                                // Recording identity → exact-ID matches score 1.0 (#402).
+                                targetIsrc = track.isrc,
+                                targetMbid = track.recordingMbid,
+                            )
+                            if (report.sources.isNotEmpty() || report.failed.isNotEmpty()) {
+                                store(
+                                    key, report.sources, report.failed,
+                                    RetryRequest(track.title, track.artist, track.isrc, track.recordingMbid),
+                                )
                             }
+                            report.sources
+                        }
+                        if (sources.isNotEmpty() && backfillDb) {
+                            backfillResolverIds(track, sources)
                         }
                     }
                 } catch (e: Exception) {
@@ -302,7 +496,10 @@ class TrackResolverCache constructor(
         val sem = if (priority) prioritySemaphore else backgroundSemaphore
         for (track in tracks) {
             val key = trackKey(track.title, track.artist)
-            if (_trackSources.value.containsKey(key)) continue
+            // As in resolveInBackground: skip resolved tracks unless failed
+            // resolvers are due to be asked again (#566).
+            val existing = _trackSources.value[key]
+            val retry = if (existing != null) dueRetry(key) ?: continue else null
             val shouldResolve = synchronized(inFlight) { inFlight.add(key) }
             if (!shouldResolve) continue
             publishInFlight()
@@ -310,19 +507,29 @@ class TrackResolverCache constructor(
             launch {
                 try {
                     sem.withPermit {
-                        val sources = resolverManager.resolveWithHints(
-                            query = "${track.title} ${track.artist}",
-                            spotifyId = track.spotifyId,
-                            appleMusicId = track.appleMusicId,
-                            soundcloudId = track.soundcloudId,
-                            targetTitle = track.title,
-                            targetArtist = track.artist,
-                            // Recording identity → exact-ID matches score 1.0 (#402).
-                            targetIsrc = track.isrc,
-                            targetMbid = track.recordingMbid,
-                        )
+                        val sources = if (existing != null && retry != null) {
+                            retryFailed(key, track.title, track.artist, track.isrc, track.recordingMbid, existing, retry)
+                        } else {
+                            val report = resolverManager.resolveWithHintsReport(
+                                query = "${track.title} ${track.artist}",
+                                spotifyId = track.spotifyId,
+                                appleMusicId = track.appleMusicId,
+                                soundcloudId = track.soundcloudId,
+                                targetTitle = track.title,
+                                targetArtist = track.artist,
+                                // Recording identity → exact-ID matches score 1.0 (#402).
+                                targetIsrc = track.isrc,
+                                targetMbid = track.recordingMbid,
+                            )
+                            if (report.sources.isNotEmpty() || report.failed.isNotEmpty()) {
+                                store(
+                                    key, report.sources, report.failed,
+                                    RetryRequest(track.title, track.artist, track.isrc, track.recordingMbid),
+                                )
+                            }
+                            report.sources
+                        }
                         if (sources.isNotEmpty()) {
-                            store(key, sources)
                             backfillPlaylistTrackResolverIds(track, sources)
                         }
                     }
@@ -403,10 +610,22 @@ class TrackResolverCache constructor(
         }
     }
 
-    /** Store pre-resolved sources into the shared cache (e.g. from ViewModel-local resolution). */
-    fun putSources(title: String, artist: String, sources: List<ResolvedSource>) {
+    /**
+     * Store pre-resolved sources into the shared cache (e.g. from ViewModel-local
+     * resolution).
+     *
+     * @param failed the resolvers that couldn't answer, when the caller knows
+     *   (a [ResolverManager.resolveReport]); null keeps any retry already
+     *   pending for the track. Prefer [resolveTrack] for a screen's own rows.
+     */
+    fun putSources(
+        title: String,
+        artist: String,
+        sources: List<ResolvedSource>,
+        failed: Set<String>? = null,
+    ) {
         if (sources.isEmpty()) return
-        store(trackKey(title, artist), sources)
+        store(trackKey(title, artist), sources, failed, RetryRequest(title, artist, null, null))
     }
 
     /** Get cached resolvers for a track, or null if not yet resolved. */

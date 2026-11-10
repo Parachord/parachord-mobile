@@ -228,22 +228,12 @@ class FriendDetailViewModel constructor(
             for (track in tracks) {
                 val key = trackKey(track.title, track.artist)
                 if (_trackSources.value.containsKey(key)) continue
-                // Check shared cache first (cross-context dedup)
-                val cached = trackResolverCache.getSources(track.title, track.artist)
-                if (cached != null) {
-                    _trackSources.value = _trackSources.value + (key to cached)
-                    trackResolverCache.putSources(track.title, track.artist, cached)
-                    continue
-                }
+                // The shared cache: its sources, a retry of resolvers that
+                // couldn't answer, or a fresh resolve (#566).
                 try {
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.title} ${track.artist}",
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
+                    val sources = trackResolverCache.resolveTrack(track.title, track.artist)
                     if (sources.isNotEmpty()) {
                         _trackSources.value = _trackSources.value + (key to sources)
-                        trackResolverCache.putSources(track.title, track.artist, sources)
                     }
                 } catch (_: Exception) { /* skip */ }
             }
@@ -255,22 +245,12 @@ class FriendDetailViewModel constructor(
             for (track in tracks) {
                 val key = trackKey(track.title, track.artist)
                 if (_trackSources.value.containsKey(key)) continue
-                // Check shared cache first (cross-context dedup)
-                val cached = trackResolverCache.getSources(track.title, track.artist)
-                if (cached != null) {
-                    _trackSources.value = _trackSources.value + (key to cached)
-                    trackResolverCache.putSources(track.title, track.artist, cached)
-                    continue
-                }
+                // The shared cache: its sources, a retry of resolvers that
+                // couldn't answer, or a fresh resolve (#566).
                 try {
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.title} ${track.artist}",
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
+                    val sources = trackResolverCache.resolveTrack(track.title, track.artist)
                     if (sources.isNotEmpty()) {
                         _trackSources.value = _trackSources.value + (key to sources)
-                        trackResolverCache.putSources(track.title, track.artist, sources)
                     }
                 } catch (_: Exception) { /* skip */ }
             }

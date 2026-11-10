@@ -39,6 +39,9 @@ class ResolverManagerHintsTest {
         // default, so these tests isolate resolveWithHints' Spotify-verify +
         // 429-keep-the-badge logic (which still lives in ResolverManager).
         val coordinator = mockk<ResolverCoordinator>(relaxed = true)
+        coEvery {
+            coordinator.resolveScoredReport(any(), any(), any(), any(), any(), any(), any(), any())
+        } returns com.parachord.shared.resolver.ResolveReport(emptyList())
 
         coEvery { settingsStore.getSpotifyAccessToken() } returns "token"
 

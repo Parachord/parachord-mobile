@@ -1,8 +1,29 @@
 package com.parachord.shared.resolver
 
 import com.parachord.shared.plugin.PluginManager
+import com.parachord.shared.platform.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+
+/**
+ * What one resolve found, and which resolvers took part (#566).
+ *
+ * @param sources the sources found (as the method returning it documents:
+ *   scored, or ranked and floored).
+ * @param asked the resolvers that were asked.
+ * @param failed the asked resolvers that couldn't answer (threw). Their
+ *   absence from [sources] says nothing about the track: ask them again later,
+ *   and don't keep this answer as complete.
+ */
+data class ResolveReport(
+    val sources: List<ResolvedSource>,
+    val asked: Set<String> = emptySet(),
+    val failed: Set<String> = emptySet(),
+) {
+    /** Asked resolvers that answered with no match. */
+    val missed: Set<String> get() = asked - failed - sources.map { it.resolver }.toSet()
+}
 
 /**
  * The single shared resolver-orchestration unit (#210). Collapses the
@@ -80,23 +101,61 @@ class ResolverCoordinator(
         excludeResolvers: Set<String> = emptySet(),
         targetIsrc: String? = null,
         targetMbid: String? = null,
-    ): List<ResolvedSource> = coroutineScope {
+    ): List<ResolvedSource> = resolveScoredReport(
+        query, targetTitle, targetArtist, album, excludeResolvers,
+        targetIsrc = targetIsrc, targetMbid = targetMbid,
+    ).sources
+
+    /**
+     * [resolveScored], also saying which resolvers were asked and which
+     * couldn't answer (#566). A resolver that throws is recorded in
+     * [ResolveReport.failed] and contributes nothing; the others still answer.
+     *
+     * @param onlyResolvers when set, ask only these (after the usual gate):
+     *   a retry of the resolvers that failed last time.
+     */
+    suspend fun resolveScoredReport(
+        query: String,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+        album: String? = null,
+        excludeResolvers: Set<String> = emptySet(),
+        onlyResolvers: Set<String>? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
+    ): ResolveReport = coroutineScope {
         val active = getActive()
         val disabled = getDisabled()
 
         // Gate for spotify + natives (D3). `.axe` ids come pre-filtered from
         // ResolverGating.axeResolverIds (which also applies `id !in disabled`).
+        fun wanted(id: String): Boolean =
+            id !in excludeResolvers && (onlyResolvers == null || id in onlyResolvers)
         fun isActive(id: String): Boolean =
-            (active.isEmpty() || id in active) && id !in excludeResolvers
+            (active.isEmpty() || id in active) && wanted(id)
+
+        // One resolver's failure must not sink the others, and must not read
+        // as "no match" either.
+        suspend fun attempt(id: String, block: suspend () -> ResolvedSource?): ResolverAttempt =
+            try {
+                ResolverAttempt(id, block(), failed = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("ResolverCoordinator", "$id couldn't answer for '$query': ${e.message}")
+                ResolverAttempt(id, null, failed = true)
+            }
 
         val tasks = buildList {
             if (isActive("spotify")) {
-                add(async { resolveSpotify(query, MatchTarget(targetTitle, targetArtist, targetIsrc, targetMbid)) })
+                add(async {
+                    attempt("spotify") { resolveSpotify(query, MatchTarget(targetTitle, targetArtist, targetIsrc, targetMbid)) }
+                })
             }
             for (id in runtime.nativeResolverIds) {
                 if (isActive(id)) {
                     add(async {
-                        runtime.resolveNative(id, query, targetTitle, targetArtist, album, targetIsrc, targetMbid)
+                        attempt(id) { runtime.resolveNative(id, query, targetTitle, targetArtist, album, targetIsrc, targetMbid) }
                     })
                 }
             }
@@ -108,13 +167,14 @@ class ResolverCoordinator(
                 nativeResolverIds = runtime.nativeResolverIds + "spotify",
             )
             for (id in axeIds) {
-                if (id !in excludeResolvers) {
-                    add(async { runtime.resolveAxe(id, query, targetTitle, targetArtist, album) })
+                if (wanted(id)) {
+                    add(async { attempt(id) { runtime.resolveAxe(id, query, targetTitle, targetArtist, album) } })
                 }
             }
         }
 
-        var results = tasks.mapNotNull { it.await() }
+        val attempts = tasks.map { it.await() }
+        var results = attempts.mapNotNull { it.source }
 
         // Re-score only when BOTH target fields are present (Android parity):
         // 0.95 when title AND artist substring-match, 0.50 single-axis. Sources
@@ -122,8 +182,14 @@ class ResolverCoordinator(
         if (targetTitle != null && targetArtist != null) {
             results = ResolverGating.rescore(results, targetTitle, targetArtist, targetIsrc, targetMbid)
         }
-        results
+        ResolveReport(
+            sources = results,
+            asked = attempts.map { it.resolverId }.toSet(),
+            failed = attempts.filter { it.failed }.map { it.resolverId }.toSet(),
+        )
     }
+
+    private class ResolverAttempt(val resolverId: String, val source: ResolvedSource?, val failed: Boolean)
 
     /**
      * [resolveScored] + `scoring.selectRanked` (D1): drop sub-floor (< 0.60)
@@ -180,7 +246,27 @@ class ResolverCoordinator(
         preferredResolver: String? = null,
         targetIsrc: String? = null,
         targetMbid: String? = null,
-    ): List<ResolvedSource> {
+    ): List<ResolvedSource> = resolveRankedWithHintsReport(
+        query, targetTitle, targetArtist, album, spotifyId, appleMusicId, soundcloudId,
+        preferredResolver, targetIsrc, targetMbid,
+    ).sources
+
+    /**
+     * [resolveRankedWithHints], also saying which resolvers were asked and which
+     * couldn't answer (#566), for a cache that must not keep a failed answer.
+     */
+    suspend fun resolveRankedWithHintsReport(
+        query: String,
+        targetTitle: String? = null,
+        targetArtist: String? = null,
+        album: String? = null,
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+        soundcloudId: String? = null,
+        preferredResolver: String? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
+    ): ResolveReport {
         val hints = buildList {
             if (!spotifyId.isNullOrBlank()) add(
                 ResolvedSource(
@@ -203,22 +289,15 @@ class ResolverCoordinator(
                 ),
             )
         }
-        if (hints.isEmpty()) {
-            return resolveRanked(
-                query, targetTitle, targetArtist, album, preferredResolver,
-                targetIsrc = targetIsrc, targetMbid = targetMbid,
-            )
-        }
-
         val exclude = hints.map { it.resolver }.toSet()
-        val cascade = resolveScored(
+        val cascade = resolveScoredReport(
             query, targetTitle, targetArtist, album, excludeResolvers = exclude,
             targetIsrc = targetIsrc, targetMbid = targetMbid,
         )
         // Hints win for their resolver (we excluded them from the search); the
         // cascade fills every OTHER resolver. selectRanked applies the active
         // filter + 0.60 floor + priority order to the union.
-        return scoring.selectRanked(hints + cascade, preferredResolver)
+        return cascade.copy(sources = scoring.selectRanked(hints + cascade.sources, preferredResolver))
     }
 
     /**
@@ -241,6 +320,9 @@ class ResolverCoordinator(
      * confidence >= MIN_CONFIDENCE_THRESHOLD` — else null (the same 0.60 floor
      * the ranked path applies). The iOS layer keeps `pluginManager.ensureInitialized()`
      * on top (platform lifecycle), not here.
+     *
+     * Throws when the resolver couldn't answer (#566), so the caller can retry
+     * it sooner than a real no-match (null).
      */
     suspend fun resolveSingle(
         resolverId: String,

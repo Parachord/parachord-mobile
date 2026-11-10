@@ -67,14 +67,16 @@ final class IosTrackResolverCache {
     /// every submission — submitting tracks one-per-row must not exceed the cap
     /// (the previous per-call task group let N rows run N concurrent resolves).
     private var activeWorkers = 0
-    /// Additive single-resolver attempts that came back empty, per
-    /// "key\u{1}resolver" → when. A track that genuinely isn't on a service
-    /// used to re-search it every time its row scrolled into view, every
-    /// session; now a miss waits [missRetryInterval] before the scroll path
-    /// asks again (long enough to outlast a typical rate-limit blip, short
-    /// enough that a transient miss recovers within the session).
-    private var missedAt: [String: Date] = [:]
-    private let missRetryInterval: TimeInterval = 30 * 60
+    /// When a resolver may be asked again for a track, per
+    /// "key\u{1}resolver". A track that genuinely isn't on a service used to
+    /// re-search it every time its row scrolled into view, every session; now
+    /// a no-match waits `ResolverRetry.MISS_RETRY_MS` (30 min) before the scroll
+    /// path asks again. A resolver that couldn't answer (offline, a rate-limit
+    /// cooldown, a service error) is asked again sooner, after 2, 4, 8 … 60
+    /// minutes (`ResolverRetry.failedRetryDelayMs`, shared with Android, #566).
+    private var retryAfter: [String: Date] = [:]
+    /// Consecutive failures per "key\u{1}resolver", for the back-off.
+    private var failureCount: [String: Int] = [:]
 
     /// Max concurrent resolves through the single JSC context (`.axe` plugins
     /// all share it) + the shared Spotify gate. Matches desktop's 4-ish pool.
@@ -204,9 +206,10 @@ final class IosTrackResolverCache {
             // not-disabled resolver that's absent here — scoped to this now-visible
             // row, deduped against in-flight/queued work. Spotify's gate makes this
             // cheap during cooldown and effective once it clears, so scrolling the
-            // chunk back into view fills it in. A resolver that came back empty for
-            // this track isn't asked again for `missRetryInterval` — otherwise a
-            // track that isn't on that service re-searched it on every scroll.
+            // chunk back into view fills it in. A resolver that answered "no match"
+            // for this track isn't asked again for 30 minutes — otherwise a track
+            // that isn't on that service re-searched it on every scroll — and one
+            // that couldn't answer waits the shorter failure back-off (#566).
             let active = ResolverPrefs.shared.active
             guard !active.isEmpty else { return }   // empty = all-on; full resolve already covered it
             let disabled = ResolverPrefs.shared.disabled
@@ -214,7 +217,7 @@ final class IosTrackResolverCache {
             for r in active where !disabled.contains(r) {
                 let flightKey = "\(key)\u{1}\(r)"
                 guard !existing.contains(where: { $0.resolver == r && !$0.noMatch }),
-                      !recentlyMissed(flightKey),
+                      !waitingToRetry(flightKey),
                       !inFlight.contains(flightKey),
                       !queue.contains(where: { $0.req.key == key && $0.merge == r })
                 else { continue }
@@ -231,9 +234,23 @@ final class IosTrackResolverCache {
         pump()
     }
 
-    private func recentlyMissed(_ flightKey: String) -> Bool {
-        guard let at = missedAt[flightKey] else { return false }
-        return Date().timeIntervalSince(at) < missRetryInterval
+    private func waitingToRetry(_ flightKey: String) -> Bool {
+        guard let until = retryAfter[flightKey] else { return false }
+        return Date() < until
+    }
+
+    /// The resolver answered with no match: ask again after 30 minutes.
+    private func noteMissed(_ flightKey: String) {
+        failureCount[flightKey] = nil
+        retryAfter[flightKey] = Date().addingTimeInterval(TimeInterval(ResolverRetry.shared.MISS_RETRY_MS) / 1000)
+    }
+
+    /// The resolver couldn't answer (#566): ask again after the shared back-off.
+    private func noteFailed(_ flightKey: String) {
+        let failures = (failureCount[flightKey] ?? 0) + 1
+        failureCount[flightKey] = failures
+        let delayMs = ResolverRetry.shared.failedRetryDelayMs(failures: Int32(failures))
+        retryAfter[flightKey] = Date().addingTimeInterval(TimeInterval(delayMs) / 1000)
     }
 
     /// A resolver was just ENABLED in Settings (#1). Additively resolve ONLY that
@@ -243,7 +260,8 @@ final class IosTrackResolverCache {
     /// the cached Apple Music results, it doesn't re-resolve from scratch.
     func resolverEnabled(_ resolverId: String) {
         // An explicit enable asks every track again, misses included.
-        missedAt = missedAt.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        retryAfter = retryAfter.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        failureCount = failureCount.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
         for (key, req) in requests {
             guard let existing = cache[key],
                   !existing.contains(where: { $0.resolver == resolverId && !$0.noMatch }),
@@ -265,7 +283,8 @@ final class IosTrackResolverCache {
             changed = true
         }
         queue.removeAll { $0.merge == resolverId }
-        missedAt = missedAt.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        retryAfter = retryAfter.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        failureCount = failureCount.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
         if changed { scheduleSave() }
     }
 
@@ -293,17 +312,23 @@ final class IosTrackResolverCache {
                 inFlight.insert(flightKey)
                 activeWorkers += 1
                 Task { @MainActor in
-                    if let resolved = try? await self.container.resolveSingleResolver(
-                        resolverId: mergeResolver,
-                        artist: item.req.artist, title: item.req.title, album: item.req.album) {
-                        var merged = (self.cache[key] ?? []).filter { $0.resolver != mergeResolver }
-                        merged.append(resolved)
-                        let ranked = (try? await self.container.rankSources(sources: merged)) ?? merged
-                        self.cache[key] = ranked
-                        self.scheduleSave()
-                        self.missedAt[flightKey] = nil
-                    } else {
-                        self.missedAt[flightKey] = Date()
+                    do {
+                        if let resolved = try await self.container.resolveSingleResolver(
+                            resolverId: mergeResolver,
+                            artist: item.req.artist, title: item.req.title, album: item.req.album) {
+                            var merged = (self.cache[key] ?? []).filter { $0.resolver != mergeResolver }
+                            merged.append(resolved)
+                            let ranked = (try? await self.container.rankSources(sources: merged)) ?? merged
+                            self.cache[key] = ranked
+                            self.scheduleSave()
+                            self.retryAfter[flightKey] = nil
+                            self.failureCount[flightKey] = nil
+                        } else {
+                            self.noteMissed(flightKey)
+                        }
+                    } catch {
+                        // Couldn't answer, not a no-match: sooner retry (#566).
+                        self.noteFailed(flightKey)
                     }
                     self.inFlight.remove(flightKey)
                     self.activeWorkers -= 1
@@ -317,7 +342,7 @@ final class IosTrackResolverCache {
             inFlight.insert(key)
             activeWorkers += 1
             Task { @MainActor in
-                let ranked = (try? await self.container.resolveSources(
+                let report = try? await self.container.resolveSourcesReport(
                     artist: item.req.artist, title: item.req.title, album: item.req.album,
                     // #211: pass the metadata-known Spotify ID so the resolver emits
                     // it directly instead of re-searching Spotify per row. (Kotlin
@@ -325,8 +350,14 @@ final class IosTrackResolverCache {
                     spotifyId: item.req.spotifyId, appleMusicId: nil,
                     // The row request carries no recording identity; name-only
                     // scoring here. Play time passes the track's ISRC/MBID (#402).
-                    targetIsrc: nil, targetMbid: nil)) ?? []
+                    targetIsrc: nil, targetMbid: nil)
+                let ranked = report?.sources ?? []
                 self.cache[key] = ranked
+                // #566: a resolver that answered "no match" waits 30 min before
+                // the row's fill asks it again; one that couldn't answer is
+                // asked again after the shorter failure back-off.
+                for r in report?.missed ?? [] { self.noteMissed("\(key)\u{1}\(r)") }
+                for r in report?.failed ?? [] { self.noteFailed("\(key)\u{1}\(r)") }
                 // Persist only real results — never cache an empty/failed
                 // resolve to disk (it may be a transient rate-limit miss). The
                 // empty entry stays in memory for this session only: the

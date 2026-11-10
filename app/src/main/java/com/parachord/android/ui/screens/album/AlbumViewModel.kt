@@ -162,24 +162,13 @@ class AlbumViewModel constructor(
             for (track in tracks) {
                 val key = trackKey(track.title, track.artist)
                 if (_trackSources.value.containsKey(key) || key in resolving) continue
-                // Check shared cache first (cross-context dedup)
-                val cached = trackResolverCache.getSources(track.title, track.artist)
-                if (cached != null) {
-                    _trackSources.value = _trackSources.value + (key to cached)
-                    continue
-                }
                 if (!resolving.add(key)) continue
                 try {
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.title} ${track.artist}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
+                    // The shared cache: its sources, a retry of resolvers that
+                    // couldn't answer, or a fresh resolve (#566).
+                    val sources = trackResolverCache.resolveTrack(track.title, track.artist, spotifyId = track.spotifyId)
                     if (sources.isNotEmpty()) {
                         _trackSources.value = _trackSources.value + (key to sources)
-                        // Feed into shared cache for cross-context display + priority sorting
-                        trackResolverCache.putSources(track.title, track.artist, sources)
                     }
                 } catch (_: Exception) { /* skip */ } finally {
                     resolving.remove(key)

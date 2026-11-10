@@ -1,6 +1,7 @@
 package com.parachord.shared.ios
 
 import com.parachord.shared.plugin.PluginManager
+import com.parachord.shared.resolver.ResolveReport
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverCoordinator
 
@@ -40,9 +41,25 @@ class IosResolverCoordinator(
         // recording MBID scores 1.0 whatever its title/artist strings say.
         targetIsrc: String? = null,
         targetMbid: String? = null,
-    ): List<ResolvedSource> {
+    ): List<ResolvedSource> = resolveSourcesReport(
+        artist, title, album, spotifyId, appleMusicId, targetIsrc, targetMbid,
+    ).sources
+
+    /**
+     * [resolveSources], also saying which resolvers were asked and which
+     * couldn't answer (#566), for `IosTrackResolverCache`.
+     */
+    suspend fun resolveSourcesReport(
+        artist: String,
+        title: String,
+        album: String?,
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+        targetIsrc: String? = null,
+        targetMbid: String? = null,
+    ): ResolveReport {
         pluginManager.ensureInitialized()
-        return coordinator.resolveRankedWithHints(
+        return coordinator.resolveRankedWithHintsReport(
             query = "$artist $title",
             targetTitle = title,
             targetArtist = artist,
@@ -59,7 +76,8 @@ class IosResolverCoordinator(
      * When the user enables a resolver AFTER a track was already cached, we
      * resolve just the newly-enabled resolver and merge it into the existing
      * (still-good) sources — rather than re-resolving everything. Re-scored +
-     * 0.60-floor-filtered like [resolveSources]; null on miss / below floor.
+     * 0.60-floor-filtered like [resolveSources]; null on miss / below floor;
+     * throws when the resolver couldn't answer (#566).
      */
     suspend fun resolveSingle(resolverId: String, artist: String, title: String, album: String?): ResolvedSource? {
         pluginManager.ensureInitialized()

@@ -333,9 +333,13 @@ class PluginManager constructor(
 
     /**
      * A resolver plugin's `resolve(artist, title, album)`: the raw result JSON,
-     * or null. Uses the unique-key poll: a bare `(async () => …)()` evaluates
-     * to the unresolved Promise (`{}` on Android) as soon as the plugin awaits
-     * a real fetch, so every plugin resolve that searched came back empty.
+     * or null when the plugin answered with no match. Uses the unique-key poll:
+     * a bare `(async () => …)()` evaluates to the unresolved Promise (`{}` on
+     * Android) as soon as the plugin awaits a real fetch, so every plugin
+     * resolve that searched came back empty.
+     *
+     * Throws when the plugin threw or didn't answer in time (#566): that's a
+     * resolver that couldn't answer, not one with no match.
      */
     suspend fun resolve(resolverId: String, artist: String, title: String, album: String?): String? {
         ensureInitialized()
@@ -349,6 +353,7 @@ class PluginManager constructor(
                 "if (!r || !r.resolve) return null; " +
                 "return await r.resolve('$artistEsc', '$titleEsc', $albumEsc, r.config || {}); })()",
             attempts = LOOKUP_POLL_ATTEMPTS,
+            throwOnFailure = true,
         )
     }
 
@@ -484,9 +489,16 @@ class PluginManager constructor(
     /**
      * Run an async JS [expression] and return its JSON-stringified result via the
      * unique-key poll (a bare async IIFE yields the unresolved Promise on both
-     * runtimes; see CLAUDE.md "Extensibility principle"). Null on null/error/timeout.
+     * runtimes; see CLAUDE.md "Extensibility principle"). Null on null/error/timeout,
+     * or, with [throwOnFailure], null only for a null answer and a throw for an
+     * error or timeout.
      */
-    private suspend fun pollAsync(prefix: String, expression: String, attempts: Int = ALBUM_POLL_ATTEMPTS): String? {
+    private suspend fun pollAsync(
+        prefix: String,
+        expression: String,
+        attempts: Int = ALBUM_POLL_ATTEMPTS,
+        throwOnFailure: Boolean = false,
+    ): String? {
         val key = "${prefix}_${lookupCounter++}"
         jsRuntime.evaluate(
             """
@@ -509,10 +521,12 @@ class PluginManager constructor(
             val raw = jsRuntime.evaluate("window.__resolveResults['$key']")?.unquote()
             if (raw != null && raw != "pending") {
                 jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
+                if (raw.startsWith("error:") && throwOnFailure) throw IllegalStateException("Plugin call failed: ${raw.removePrefix("error:")}")
                 if (raw == "null" || raw.startsWith("error:")) return null
                 return raw
             }
         }
+        if (throwOnFailure) throw IllegalStateException("Plugin call didn't answer in time")
         return null
     }
 

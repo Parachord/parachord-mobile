@@ -130,7 +130,11 @@ class IosResolverRuntime(
         album: String?,
     ): ResolvedSource? = resolveOne(resolverId, targetArtist ?: "", targetTitle ?: "", album)
 
-    /** Resolve a single track via one `.axe` resolver, awaiting its Promise. */
+    /**
+     * Resolve a single track via one `.axe` resolver, awaiting its Promise.
+     * Null when the plugin answered with no match; throws when it threw, timed
+     * out or returned something unreadable (#566, see [ResolverRuntime]).
+     */
     private suspend fun resolveOne(
         resolverId: String,
         artist: String,
@@ -167,9 +171,9 @@ class IosResolverRuntime(
             if (raw != null && raw != "pending") {
                 // Free the slot so the map doesn't grow unbounded across plays.
                 jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
-                if (raw == "null" || raw.startsWith("error:")) return null
-                val parsed = runCatching { json.decodeFromString<AxeResolveResult>(raw) }.getOrNull()
-                    ?: return null
+                if (raw.startsWith("error:")) throw IllegalStateException("$resolverId resolve failed: ${raw.removePrefix("error:")}")
+                if (raw == "null") return null
+                val parsed = json.decodeFromString<AxeResolveResult>(raw)
 
                 // ID-based resolvers (Apple Music, Spotify) return NO top-level
                 // `url` — they carry a catalog ID (appleMusicId / spotifyUri) and
@@ -222,7 +226,7 @@ class IosResolverRuntime(
                 )
             }
         }
-        return null
+        throw IllegalStateException("$resolverId resolve didn't answer in time")
     }
 
     /**
@@ -231,7 +235,8 @@ class IosResolverRuntime(
      * source; its placeholder 0.9 confidence is replaced by `scoreConfidence`
      * in the coordinator's re-score, so a wrong-song hit is still dropped by
      * the 0.60 floor. iOS has no iTunes fallback: a catalog that can't be
-     * reached leaves the track to the other resolvers.
+     * reached leaves the track to the other resolvers, and is reported as
+     * unable to answer (#566) so Apple Music is asked again later.
      */
     private suspend fun resolveAppleMusicNative(
         query: String,
@@ -243,7 +248,7 @@ class IosResolverRuntime(
             is AppleMusicCatalogLookup.Found -> result.source
             AppleMusicCatalogLookup.Unavailable -> {
                 Log.d("IosResolverRuntime", "Apple Music catalog unavailable — Apple Music source skipped")
-                null
+                throw IllegalStateException("Apple Music catalog unavailable")
             }
             else -> null
         }
