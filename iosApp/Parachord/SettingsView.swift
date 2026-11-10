@@ -115,6 +115,10 @@ final class SettingsViewModel {
     var lastFmConnected = false
     var lastFmError: String?
     var lastFmBusy = false
+    /// Loved-tracks push (#125, shared `LovesPushService`): services whose
+    /// toggle is on, and the backfill's progress (one run at a time, any service).
+    var lovePushEnabled: Set<String> = []
+    var loveBackfill = IosLoveBackfill(service: "", running: false, done: false, pushed: 0, skipped: 0, failed: 0, total: 0)
     /// SoundCloud sign-in token present. Finding SoundCloud tracks needs it:
     /// `soundcloud.axe` returns nothing without `config.token`.
     var soundCloudConnected = false
@@ -256,6 +260,8 @@ final class SettingsViewModel {
             self?.libreFmConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false) })
         subs.append(watcher.watch(flow: container.getLastFmConnectedFlow()) { [weak self] v in
             self?.lastFmConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false) })
+        subs.append(container.watchLovePushEnabled { [weak self] ids in self?.lovePushEnabled = Set(ids) })
+        subs.append(container.watchLoveBackfill { [weak self] state in self?.loveBackfill = state })
         subs.append(watcher.watch(flow: container.getSoundCloudConnectedFlow()) { [weak self] v in
             self?.soundCloudConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
             self?.recomputeResolvers()   // sign-in / sign-out (or a dead refresh token) moves it in/out
@@ -544,6 +550,12 @@ final class SettingsViewModel {
     }
     func setTheme(_ m: String) { themeMode = m; Task { try? await store.setThemeMode(mode: m) } }
     func setScrobbling(_ b: Bool) { scrobblingEnabled = b; Task { try? await store.setScrobblingEnabled(enabled: b) } }
+    func setLovePush(_ service: String, _ on: Bool) {
+        if on { lovePushEnabled.insert(service) } else { lovePushEnabled.remove(service) }
+        Task { try? await container.setLovePushEnabled(service: service, enabled: on) }
+    }
+    func runLoveBackfill(_ service: String) { container.runLoveBackfill(service: service) }
+    func dismissLoveBackfill() { container.dismissLoveBackfill() }
     func setPersistQueue(_ b: Bool) { persistQueue = b; Task { try? await store.setPersistQueue(enabled: b) } }
 
     // ── Spotify OAuth (BYO Client ID) ─────────────────────────────────
@@ -974,6 +986,12 @@ private struct PluginConfigSheet: View {
                     }
                 }
 
+                // Loved-tracks push (#125, Android `LovePushControls`): Last.fm and
+                // ListenBrainz only (Libre.fm has no love endpoint).
+                if ["lastfm", "listenbrainz"].contains(service.id) && model.isConnected(service.id) {
+                    lovePushSection
+                }
+
                 switch service.id {
                 case "spotify": spotifySection
                 case "soundcloud": soundCloudSection
@@ -1048,6 +1066,40 @@ private struct PluginConfigSheet: View {
         switch scanner.phase {
         case .scanning, .requesting, .importing: return true
         default: return false
+        }
+    }
+
+    /// Android `LovePushControls`: the live toggle plus a one-time backfill of
+    /// the whole collection. A running backfill (either service) disables the
+    /// other service's button; a finished one shows its tally until dismissed.
+    @ViewBuilder private var lovePushSection: some View {
+        let label = service.name
+        let state = model.loveBackfill
+        let thisRunning = state.running && state.service == service.id
+        let thisDone = state.done && state.service == service.id
+        let otherRunning = state.running && state.service != service.id
+        Section {
+            Toggle("Push loved tracks to \(label)", isOn: Binding(
+                get: { model.lovePushEnabled.contains(service.id) },
+                set: { model.setLovePush(service.id, $0) }))
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backfill loved tracks")
+                    Text(thisRunning ? "Pushing… \(state.pushed + state.skipped + state.failed) / \(state.total)"
+                         : thisDone ? "Pushed \(state.pushed), skipped \(state.skipped), failed \(state.failed)."
+                         : "One-time push of every track in your collection. Tracks already pushed are skipped.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if thisDone {
+                    Button("Dismiss") { model.dismissLoveBackfill() }
+                } else {
+                    Button(thisRunning ? "Running…" : "Backfill") { model.runLoveBackfill(service.id) }
+                        .disabled(thisRunning || otherRunning)
+                }
+            }
+        } footer: {
+            Text("When you add a track to your collection, send it as a love to \(label).")
         }
     }
 

@@ -711,21 +711,21 @@ When adding a scrobbler or a new platform's connect UI: trace `isEnabled()`'s ex
 
 ### Loved Tracks → ListenBrainz / Last.fm Push
 
-When the user adds a track to their collection (a "love"), Parachord can mirror that to ListenBrainz's `recording-feedback` endpoint and Last.fm's `track.love` — same direction as scrobbles. Mirrors desktop's design doc `docs/plans/2026-05-03-loved-tracks-scrobbler-push-design.md`.
+When the user adds a track to their collection (a "love"), Parachord can mirror that to ListenBrainz's `recording-feedback` endpoint and Last.fm's `track.love` — same direction as scrobbles. Mirrors desktop's design doc `docs/plans/2026-05-03-loved-tracks-scrobbler-push-design.md`. The service (`LovesPushService`) is shared; both platforms run it.
 
-**Per-service toggle, default OFF.** `SettingsStore.LOVE_PUSH_ENABLED` holds a CSV (`"lastfm:true,listenbrainz:false"`). Unset service ⇒ false. Toggling on in Settings → Scrobblers enables push for new loves; toggling off doesn't un-love past pushes.
+**Per-service toggle, default OFF.** `SettingsStore.LOVE_PUSH_ENABLED` holds a CSV (`"lastfm:true,listenbrainz:false"`). Unset service ⇒ false. Toggling on in Settings → Scrobblers (iOS: Settings → Plug-ins → Last.fm / ListenBrainz, once connected) enables push for new loves; toggling off doesn't un-love past pushes.
 
 **Idempotency cache.** `SettingsStore.LOVE_PUSHED_KEYS` is a JSON map `{ "<trackId>": { "<service>": <epochMs> } }`. Survives crashes mid-backfill — each successful push writes its key before moving on, so resume picks up where it left off. Mirrors desktop's `love_pushed_keys` exactly so a user signed into both clients doesn't double-push.
 
 **Push paths:**
-- **Real-time** — `LibraryRepository.addToCollection(track)` calls `LovesPushService.pushLove(track)` after the local upsert. Fire-and-forget; failures log + skip without rolling back the local love.
-- **Backfill** — Settings → Scrobblers exposes a "Backfill N loved tracks" button per service. `SettingsViewModel.runLoveBackfill(service)` enumerates the existing collection, skips entries already in the idempotency cache for that service, and pushes the rest. Progress state surfaces via `loveBackfillState: StateFlow<LovesPushService.BackfillState>`.
+- **Real-time** — `LibraryRepository.addToCollection(track)` calls `LovesPushService.pushLoved(track)` (through its `pushLovedTrack` lambda, wired in `AndroidModule` and `IosContainer`) after the local upsert. Fire-and-forget; failures log + skip without rolling back the local love. Every heart, double-tap and "Add to Collection" on both platforms goes through `addToCollection`.
+- **Backfill** — each service's settings show a Backfill button. It enumerates the existing collection, skips entries already in the idempotency cache for that service, pushes the rest at 1 per second, and shows the progress from `LovesPushService.backfillState` (Android `SettingsViewModel.runLoveBackfill`, iOS `IosContainer.runLoveBackfill` / `watchLoveBackfill`). One backfill runs at a time.
 
 **Per-service gating:**
 - **ListenBrainz**: needs `recording_mbid` (validates against the 36-char canonical regex). Tracks without one are silently skipped — the next mapper backfill via `MbidEnrichmentService` will eventually populate the MBID, and the next love (or backfill run) catches them.
 - **Last.fm**: needs (artist, title) + a valid Last.fm session token. No MBID dependency.
 
-**Key files:** `playback/LovesPushService.kt`, `shared/.../playback/scrobbler/{Scrobbler,ListenBrainzScrobbler,LastFmScrobbler}.kt#loveTrack` (KMP-shared, #193), `ui/screens/settings/SettingsViewModel.kt#runLoveBackfill`.
+**Key files:** `shared/.../playback/LovesPushService.kt` (app-side `playback/LovesPushService.kt` is a typealias), `shared/.../playback/scrobbler/{Scrobbler,ListenBrainzScrobbler,LastFmScrobbler}.kt#loveTrack` (KMP-shared, #193), `ui/screens/settings/SettingsViewModel.kt#runLoveBackfill`, iOS `SettingsView.swift` (`lovePushSection`); test `LovesPushServiceTest`.
 
 ### Friend Follow / Unfollow
 
@@ -747,21 +747,21 @@ When the user adds a track to their collection (a "love"), Parachord can mirror 
 
 Local-files-only tracks never get streaming-service IDs (Spotify / Apple Music / SoundCloud) populated through the normal playback or sync paths. Without intervention they never feed Achordion's match cache either — the contribution loop is broken for the ~30% of users whose libraries are mostly local files. Mirrors desktop's "Cross-Resolver Enrichment (Eager Gate + Slow Trickle)".
 
-**Algorithm.** A `WorkManager` periodic job (`CrossResolverEnrichmentWorker`, 24h cadence) wraps `CrossResolverEnrichmentService.runOnce()` from `shared/.../enrichment/`. Each run:
+**Algorithm.** A background job runs `CrossResolverEnrichmentService.runOnce()` from `shared/.../enrichment/` every 24 h: Android's `WorkManager` periodic `CrossResolverEnrichmentWorker`, iOS's `BGProcessingTask` `com.parachord.ios.enrichment` (`BackgroundSync.handleEnrichment`). Each run:
 
 1. SQL query selects up to **20** localfiles tracks (`resolver = 'localfiles'`) that are missing at least one streaming-service ID column AND haven't been visited within the **30-day cooldown** (`crossResolverEnrichedAt IS NULL OR < cutoff`). Never-tried tracks sort first.
 2. For each candidate (with a **3-second** gap between):
    - If `recordingMbid` is null → call `MbidEnrichmentService.enrichTrack(...)` synchronously and re-read.
-   - Call the resolver cascade (`ResolverManager.resolveWithHints`) for Spotify / Apple Music / SoundCloud matches.
+   - Call the resolver cascade (Android `ResolverManager.resolveWithHints`, iOS `IosContainer.resolveSources`) for Spotify / Apple Music / SoundCloud matches, keeping per service its best source at ≥ 0.95 (`ResolvedSources.fromSources`, shared).
    - Persist any **new** IDs additively to the track row — never overwrite an existing populated ID. Both the Kotlin filter AND the existing `backfillResolverIds` SQL enforce the null-only-update invariant.
    - If `recordingMbid` is now non-null AND we have ≥1 high-confidence (≥0.95) streaming ID, POST to Achordion's `/api/track-links/submit` via `AchordionClient.submitTrackLinks`.
 3. Stamp `crossResolverEnrichedAt = now` **regardless of outcome** so un-findable tracks aren't thrashed every cycle.
 
-**Constraints.** WorkManager requires `NetworkType.UNMETERED` + `requiresBatteryNotLow = true`. Idle-priority background work — never runs on a metered cellular connection or low battery. `KEEP` policy on `enqueueUniquePeriodicWork` so re-enabling on app start is idempotent.
+**Constraints.** Idle-priority background work — never runs on a metered connection or low battery. Android: WorkManager requires `NetworkType.UNMETERED` + `requiresBatteryNotLow = true`, `KEEP` policy on `enqueueUniquePeriodicWork` so re-enabling on app start is idempotent. iOS can't require Wi-Fi of a `BGProcessingTask` (only `requiresNetworkConnectivity`), so the handler checks and skips the run on an expensive or constrained path (cellular, hotspot, Low Data Mode), in Low Power Mode, or under 20% battery off the charger. When iOS runs it is up to iOS (usually idle and charging); the request asks for no sooner than 24 h after the last launch or run. A background launch has no window, so the handler starts `AppBootstrap` first for the `.axe` plugins.
 
-**KMP-ready.** `CrossResolverEnrichmentService` is `shared/commonMain` and generic over the resolver via a `suspend (title, artist) -> ResolvedSources` lambda. The Android Koin binding closes over `ResolverManager.resolveWithHints`. iOS gets the service for free; it just needs its own background-work scheduler equivalent when the shell lands.
+**Shared.** `CrossResolverEnrichmentService` is `shared/commonMain` and generic over the resolver via a `suspend (title, artist) -> ResolvedSources` lambda. The Android Koin binding closes over `ResolverManager.resolveWithHints`, iOS's (`IosContainer.crossResolverEnrichmentService`) over `resolveSources`.
 
-**Key files:** `shared/.../enrichment/CrossResolverEnrichmentService.kt`, `app/.../enrichment/CrossResolverEnrichmentWorker.kt`, `app/.../enrichment/CrossResolverEnrichmentScheduler.kt`.
+**Key files:** `shared/.../enrichment/CrossResolverEnrichmentService.kt`, `app/.../enrichment/CrossResolverEnrichmentWorker.kt`, `app/.../enrichment/CrossResolverEnrichmentScheduler.kt`, `iosApp/Parachord/BackgroundSync.swift`.
 
 ### In-App Announcements
 

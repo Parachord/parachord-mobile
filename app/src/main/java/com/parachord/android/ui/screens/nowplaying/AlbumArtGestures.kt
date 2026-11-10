@@ -33,6 +33,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.parachord.android.ui.components.AlbumArtCardFill
+import com.parachord.shared.playback.SWIPE_COMMIT_FRACTION
+import com.parachord.shared.playback.SWIPE_EDGE_GUARD_PT
+import com.parachord.shared.playback.SWIPE_VELOCITY_THRESHOLD_PX_PER_S
+import com.parachord.shared.playback.SwipeOutcome
+import com.parachord.shared.playback.decideSwipeCommit
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,8 +57,9 @@ import kotlinx.coroutines.launch
  *    if the drag crossed the commit threshold or released with high
  *    velocity, otherwise springs back.
  *
- * See `docs/plans/2026-05-11-now-playing-gestures-design.md` for the
- * full design.
+ * The commit decision and thresholds are shared with iOS
+ * (`shared/.../playback/AlbumArtSwipe.kt`). See
+ * `docs/plans/2026-05-11-now-playing-gestures-design.md` for the full design.
  */
 @Composable
 fun AlbumArtWithGestures(
@@ -209,7 +215,5 @@ fun AlbumArtWithGestures(
     }
 }
 
-private const val SWIPE_COMMIT_FRACTION = 0.30f
-private const val SWIPE_VELOCITY_THRESHOLD_PX_PER_S = 600f
-private val EDGE_GUARD_DP = 16.dp
+private val EDGE_GUARD_DP = SWIPE_EDGE_GUARD_PT.dp
 private const val SWIPE_OUT_ANIMATION_MS = 200

@@ -94,21 +94,11 @@ class PopOfTheTopsViewModel constructor(
         _searchQuery.value = query
     }
 
-    fun filterAlbums(albums: List<ChartAlbum>): List<ChartAlbum> {
-        val q = _searchQuery.value.lowercase().trim()
-        if (q.isBlank()) return albums
-        return albums.filter {
-            it.title.lowercase().contains(q) || it.artist.lowercase().contains(q)
-        }
-    }
+    fun filterAlbums(albums: List<ChartAlbum>): List<ChartAlbum> =
+        com.parachord.shared.model.filterChartAlbums(albums, _searchQuery.value)
 
-    fun filterSongs(songs: List<ChartSong>): List<ChartSong> {
-        val q = _searchQuery.value.lowercase().trim()
-        if (q.isBlank()) return songs
-        return songs.filter {
-            it.title.lowercase().contains(q) || it.artist.lowercase().contains(q)
-        }
-    }
+    fun filterSongs(songs: List<ChartSong>): List<ChartSong> =
+        com.parachord.shared.model.filterChartSongs(songs, _searchQuery.value)
 
     fun playSong(song: ChartSong, allSongs: List<ChartSong>) {
         val index = allSongs.indexOfFirst { it.id == song.id }.coerceAtLeast(0)

@@ -18,19 +18,55 @@ final class PopOfTheTopsModel {
     var songEntities: [Track] = []
     var isLoading = false
     var loaded = false
+    /// Android's filter bar: chart country ("" = Global, Last.fm songs only),
+    /// the Songs tab's source ("apple" / "lastfm"), and the search box.
+    var country = "us"
+    var songsSource = "apple"
+    var query = ""
     private var lastLoad: Date?
+    private var lastKey = ""
     private let ttl: TimeInterval = 6 * 3600
 
+    var countries: [ChartCountry] { container.chartCountries() }
+
+    /// The picker's label: "Global" only means something for Last.fm songs.
+    func countryName(onSongsTab: Bool) -> String {
+        if country.isEmpty && onSongsTab && songsSource == "lastfm" { return "Global" }
+        return countries.first { $0.code == country }?.name ?? "United States"
+    }
+
+    var visibleAlbums: [ChartAlbum] { ChartsModelsKt.filterChartAlbums(albums: albums, query: query) }
+    /// Filtered songs, still paired with their queue entities.
+    var visibleSongs: [(ChartSong, Track)] {
+        let keep = Set(ChartsModelsKt.filterChartSongs(songs: songs, query: query).map(\.id))
+        return zip(songs, songEntities).filter { keep.contains($0.0.id) }
+    }
+
+    func setCountry(_ code: String) {
+        guard code != country else { return }
+        country = code
+        Task { await load() }
+    }
+
+    func setSongsSource(_ source: String) {
+        guard source != songsSource else { return }
+        songsSource = source
+        Task { await load() }
+    }
+
     func load() async {
-        if loaded, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
+        let key = "\(country)|\(songsSource)"
+        if loaded, key == lastKey, let l = lastLoad, Date().timeIntervalSince(l) < ttl { return }
         isLoading = true
-        let al = (try? await container.loadPopOfTheTopsAlbums(countryCode: "us")) ?? []
-        if !al.isEmpty { albums = al }
-        let s = (try? await container.loadPopOfTheTops(countryCode: "us")) ?? []
-        if !s.isEmpty {
-            songs = s
-            songEntities = s.map { Self.makeTrack($0) }
-        }
+        let (c, src) = (country, songsSource)
+        let al = (try? await container.loadPopOfTheTopsAlbums(countryCode: c)) ?? []
+        let s = (try? await container.loadPopOfTheTopsSongs(countryCode: c, source: src)) ?? []
+        // A newer pick landed while this one loaded: let that load fill the lists.
+        guard c == country, src == songsSource else { return }
+        albums = al
+        songs = s
+        songEntities = s.map { Self.makeTrack($0) }
+        lastKey = key
         lastLoad = Date()
         isLoading = false
         loaded = true
@@ -80,8 +116,9 @@ struct PopOfTheTopsScreen: View {
                 count: bannerCount,
                 gradient: [0xF97316, 0xEC4899, 0x8B5CF6])
             PCTabs(tabs: ["Albums", "Songs"], selection: $tabIndex)
+            filterBar
 
-            if model.isLoading && !model.loaded {
+            if model.isLoading && (!model.loaded || model.albums.isEmpty && model.songs.isEmpty) {
                 ScrollView { PCSkeletonGrid(count: 6) }
             } else {
                 ScrollView {
@@ -95,15 +132,84 @@ struct PopOfTheTopsScreen: View {
         .task { await model.load() }
     }
 
+    // ── Filter bar (Android `ChartsFilterBar`): country, source (Songs), search ──
+    @State private var searchOpen = false
+    private let orange = Color(uiColor: UIColor(hex: 0xF97316))
+
+    private var filterBar: some View {
+        let onSongs = tabIndex == 1
+        return VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Menu {
+                    if onSongs && model.songsSource == "lastfm" {
+                        Button { model.setCountry("") } label: {
+                            if model.country.isEmpty { Label("Global", systemImage: "checkmark") } else { Text("Global") }
+                        }
+                    }
+                    ForEach(model.countries, id: \.code) { c in
+                        Button { model.setCountry(c.code) } label: {
+                            if model.country == c.code { Label(c.name, systemImage: "checkmark") } else { Text(c.name) }
+                        }
+                    }
+                } label: { filterChip(model.countryName(onSongsTab: onSongs)) }
+                if onSongs {
+                    Menu {
+                        ForEach([("apple", "Apple Music"), ("lastfm", "Last.fm")], id: \.0) { id, name in
+                            Button { model.setSongsSource(id) } label: {
+                                if model.songsSource == id { Label(name, systemImage: "checkmark") } else { Text(name) }
+                            }
+                        }
+                    } label: { filterChip(model.songsSource == "lastfm" ? "Last.fm" : "Apple Music") }
+                }
+                Spacer()
+                if model.isLoading && model.loaded { ProgressView().controlSize(.small).tint(orange) }
+                Button {
+                    searchOpen.toggle()
+                    if !searchOpen { model.query = "" }
+                } label: {
+                    Image(systemName: searchOpen ? "xmark" : "magnifyingglass")
+                        .font(.system(size: 16)).foregroundStyle(PC.fg2).frame(width: 36, height: 36)
+                }
+                .accessibilityLabel(searchOpen ? "Close search" : "Search")
+            }
+            .padding(.horizontal, 8).padding(.vertical, 2)
+            if searchOpen {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 14)).foregroundStyle(PC.fg3)
+                    TextField("Search…", text: $model.query)
+                        .font(.system(size: 14)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !model.query.isEmpty {
+                        Button { model.query = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(PC.fg3)
+                        }
+                        .accessibilityLabel("Clear")
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(PC.bgInset, in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 16).padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func filterChip(_ text: String) -> some View {
+        HStack(spacing: 2) {
+            Text(text).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1)
+            Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(PC.fg2)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+
     // ── Albums tab: 2-column grid (rank badge on the art) → album page ──
     private var albumsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
-            ForEach(Array(model.albums.enumerated()), id: \.element.id) { index, album in
+            ForEach(Array(model.visibleAlbums.enumerated()), id: \.element.id) { index, album in
                 NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                     VStack(alignment: .leading, spacing: 4) {
                         ZStack(alignment: .topLeading) {
                             albumArt(album.artworkUrl, seed: album.title + album.artist)
-                            Text("#\(index + 1)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                            Text("#\(album.rank > 0 ? Int(album.rank) : index + 1)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
                                 .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
                                 .padding(6)
@@ -146,14 +252,17 @@ struct PopOfTheTopsScreen: View {
             // set in separate @Observable assignments, so a raw songEntities[index]
             // can go out of range and crash on render after a background
             // auto-advance changes currentTrack. #322.
-            ForEach(Array(zip(model.songs, model.songEntities).enumerated()), id: \.offset) { index, pair in
+            let visible = model.visibleSongs
+            ForEach(Array(visible.enumerated()), id: \.offset) { index, pair in
                 let (song, entity) = pair
                 Button {
-                    coordinator.setQueue(model.songEntities, startIndex: index,
+                    // Android plays from the tapped song through the end of the
+                    // shown (filtered) list.
+                    coordinator.setQueue(visible.map(\.1), startIndex: index,
                                          context: PlaybackContext(type: "charts", name: "Top Songs", id: nil))
                 } label: {
                     HStack(spacing: 12) {
-                        Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
+                        Text("\(song.rank > 0 ? Int(song.rank) : index + 1)").font(.system(size: 13, design: .monospaced))
                             .foregroundStyle(PC.fg3).frame(width: 24)
                         songArt(song.artworkUrl, seed: song.title + song.artist)
                         VStack(alignment: .leading, spacing: 2) {

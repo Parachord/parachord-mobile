@@ -554,8 +554,9 @@ val androidModule = module {
 
     // Loves push (issue #125) — orchestrates per-service loveTrack
     // dispatch + idempotency cache for both single-track (live toggle)
-    // and bulk backfill paths.
-    singleOf(::LovesPushService)
+    // and bulk backfill paths. Explicit binding: the class has a defaulted
+    // constructor parameter, which singleOf would try to resolve (#37).
+    single { LovesPushService(get(), get()) }
 
     // ── Metadata ─────────────────────────────────────────────────────
 
@@ -847,20 +848,7 @@ val androidModule = module {
                     targetTitle = title,
                     targetArtist = artist,
                 )
-                fun pick(name: String) = sources
-                    .filter { it.resolver == name && (it.confidence ?: 0.0) >= 0.95 }
-                    .maxByOrNull { it.confidence ?: 0.0 }
-                com.parachord.shared.enrichment.CrossResolverEnrichmentService.ResolvedSources(
-                    spotifyId = pick("spotify")?.spotifyId,
-                    appleMusicId = pick("applemusic")?.appleMusicId,
-                    soundcloudId = pick("soundcloud")?.soundcloudId,
-                    // ISRC from the best high-confidence source that carries one
-                    // (#216), validated + walked with desktop-parity precedence (#217).
-                    isrc = com.parachord.shared.resolver.pickTrackIsrc(
-                        null,
-                        listOfNotNull(pick("spotify"), pick("applemusic"), pick("soundcloud")),
-                    ),
-                )
+                com.parachord.shared.enrichment.CrossResolverEnrichmentService.ResolvedSources.fromSources(sources)
             },
         )
     }

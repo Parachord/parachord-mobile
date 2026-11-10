@@ -244,13 +244,39 @@ final class CriticalDarlingsModel {
     var loaded = false
     /// The repository's error when the load failed with nothing to show.
     var error: String?
+    /// Android's filter bar: search box, sort ("recent" / "artist"), refresh.
+    var query = ""
+    var sortMode = "recent"
+    var refreshing = false
 
-    /// `force` is Try Again: starts over even within the revalidation interval.
-    func load(force: Bool = false) async {
+    var visibleAlbums: [CriticsPickAlbum] {
+        container.filterAndSortCriticsPicks(albums: albums, query: query, sortMode: sortMode)
+    }
+
+    func load() async { start(force: false) }
+
+    /// Try Again: starts over, past the revalidation interval and the repository's TTL.
+    func retry() { start(force: true) }
+
+    /// The refresh button: fetch the feed again past the repository's TTL.
+    func refreshNow() {
+        refreshing = true
+        let started = Date()
+        start(force: true) { [weak self] in
+            // Spin at least 0.7 s so a fast refresh still reads as one (Android).
+            let wait = max(0, 0.7 - Date().timeIntervalSince(started))
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                self?.refreshing = false
+            }
+        }
+    }
+
+    private func start(force: Bool, finished: (() -> Void)? = nil) {
         refresh.run(force: force) { watcher, done in
             isLoading = true
-            if force { error = nil; loaded = false }
-            return watcher.watchUntilDone(flow: container.criticsPicksFlow(), onEach: { [weak self] v in
+            if force && albums.isEmpty { error = nil; loaded = false }
+            return watcher.watchUntilDone(flow: container.criticsPicksFlow(forceRefresh: force), onEach: { [weak self] v in
                 guard let self else { return }
                 if let list = v as? [CriticsPickAlbum] {
                     if !list.isEmpty { withAnimation(.easeInOut(duration: 0.4)) { self.albums = list } }
@@ -262,7 +288,7 @@ final class CriticalDarlingsModel {
                 self.loaded = true
             }, onDone: { [weak self] in
                 Task { @MainActor in self?.isLoading = false; self?.loaded = true }
-                done()
+                done(); finished?()
             })
         }
     }
@@ -282,14 +308,20 @@ struct CriticalDarlingsScreen: View {
                         subtitle: "Top-rated albums from leading music publications",
                         count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
                         gradient: [0xF59E0B, 0xF97316, 0xEF4444])
+                    filterBar
                     if model.isLoading && !model.loaded {
                         PCSkeletonList(count: 6, art: 80)
                     } else if model.albums.isEmpty, let error = model.error {
-                        PCErrorState(message: error) { Task { await model.load(force: true) } }
+                        PCErrorState(message: error) { model.retry() }
                     } else if model.albums.isEmpty && model.loaded {
                         PCEmptyState(message: UiMessages.shared.CRITICS_PICKS_EMPTY)
                     }
-                    ForEach(Array(model.albums.enumerated()), id: \.element.id) { _, album in
+                    let visible = model.visibleAlbums
+                    if model.loaded && visible.isEmpty && !model.query.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text(UiMessages.shared.noResultsFor(query: model.query))
+                            .font(.system(size: 14)).foregroundStyle(PC.fg3).padding(32)
+                    }
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { _, album in
                         NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                             row(album)
                         }
@@ -302,6 +334,64 @@ struct CriticalDarlingsScreen: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
+    }
+
+    // Android `CriticsFilterBar`: search toggle, sort menu, refresh.
+    @State private var searchOpen = false
+
+    private var filterBar: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Spacer()
+                Button {
+                    searchOpen.toggle()
+                    if !searchOpen { model.query = "" }
+                } label: {
+                    Image(systemName: searchOpen ? "xmark" : "magnifyingglass")
+                        .font(.system(size: 16)).foregroundStyle(PC.fg2).frame(width: 40, height: 40)
+                }
+                .accessibilityLabel(searchOpen ? "Close search" : "Search")
+                Menu {
+                    Button { model.sortMode = "recent" } label: {
+                        if model.sortMode == "recent" { Label("Most Recent", systemImage: "checkmark") } else { Text("Most Recent") }
+                    }
+                    Button { model.sortMode = "artist" } label: {
+                        if model.sortMode == "artist" { Label("Artist A\u{2013}Z", systemImage: "checkmark") } else { Text("Artist A\u{2013}Z") }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
+                        .font(.system(size: 16)).foregroundStyle(PC.fg2).frame(width: 40, height: 40)
+                }
+                .accessibilityLabel("Sort")
+                Button { model.refreshNow() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 16)).foregroundStyle(PC.fg2)
+                        .rotationEffect(.degrees(model.refreshing ? 360 : 0))
+                        .animation(model.refreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default,
+                                   value: model.refreshing)
+                        .frame(width: 40, height: 40)
+                }
+                .disabled(model.refreshing)
+                .accessibilityLabel("Refresh")
+            }
+            .padding(.horizontal, 8)
+            if searchOpen {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 14)).foregroundStyle(PC.fg3)
+                    TextField("Search albums or artists\u{2026}", text: $model.query)
+                        .font(.system(size: 14)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !model.query.isEmpty {
+                        Button { model.query = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(PC.fg3)
+                        }
+                        .accessibilityLabel("Clear")
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(PC.bgInset, in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 16).padding(.bottom, 8)
+            }
+        }
     }
 
     private func row(_ album: CriticsPickAlbum) -> some View {

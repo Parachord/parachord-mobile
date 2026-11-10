@@ -112,6 +112,12 @@ struct ContentView: View {
                         tab = .home
                         homePendingRoute = .artistOnTour(name)
                     },
+                    // Single tap on the art (Android parity): open the album.
+                    onAlbum: { title, artist in
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                        tab = .home
+                        homePendingRoute = .album(title: title, artist: artist)
+                    },
                     // Queue-source banner (#209) → open the source page. Pushable
                     // pages go on the Home stack; Collection is a tab, so switch to it.
                     onNavigateToContext: { ctx in
@@ -178,6 +184,12 @@ struct ContentView: View {
                     .transition(.move(edge: .trailing))
                     .zIndex(60)
             }
+        }
+        // Offline banner (Android's NetworkBanner): below the status bar,
+        // pushing the screens down, after 2 s offline. The sidebar and chat
+        // ignore the safe area and cover it, as on Android.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            PCOfflineBanner(isOnline: IosNetworkStatus.shared.isOnline)
         }
         // NOTE: no faux Dynamic Island while the app is in the FOREGROUND — the
         // mini-player already shows what's playing, and a real Dynamic Island is
@@ -668,3 +680,42 @@ private struct PCAddActionModals: ViewModifier {
 }
 
 #Preview { ContentView() }
+
+/// "No internet connection", full width in red below the status bar: Android's
+/// `NetworkBanner`, with the shared text and delay (`OfflineBanner`). It shows
+/// only after the device has been offline for 2 s, so a brief drop doesn't
+/// flash it, and hides as soon as the network is back.
+struct PCOfflineBanner: View {
+    let isOnline: Bool
+    @State private var shown = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if shown {
+                HStack(spacing: 8) {
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(OfflineBanner.shared.MESSAGE)
+                        .font(.system(size: 13, weight: .medium))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color(red: 0xDC / 255, green: 0x26 / 255, blue: 0x26 / 255))
+                .accessibilityElement(children: .combine)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .clipped()
+        .task(id: isOnline) {
+            if isOnline {
+                withAnimation(.easeOut(duration: 0.2)) { shown = false }
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(OfflineBanner.shared.SHOW_DELAY_MS) * 1_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.25)) { shown = true }
+        }
+    }
+}
