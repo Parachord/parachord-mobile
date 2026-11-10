@@ -47,7 +47,9 @@ class ChartsRepository(
     private val songsCache = mutableMapOf<String, Pair<List<ChartSong>, Long>>()
     private val cacheMutex = Mutex()
 
-    suspend fun getAppleMusicAlbums(countryCode: String = "us"): List<ChartAlbum> {
+    suspend fun getAppleMusicAlbums(country: String = "us"): List<ChartAlbum> {
+        // Apple's charts are per storefront; "Global" (blank, Last.fm only) shows the US one.
+        val countryCode = country.ifBlank { "us" }
         val cacheKey = "apple-albums-$countryCode"
         cacheMutex.withLock {
             albumsCache[cacheKey]?.let { (data, ts) ->
@@ -75,7 +77,9 @@ class ChartsRepository(
         }
     }
 
-    suspend fun getAppleMusicSongs(countryCode: String = "us"): List<ChartSong> {
+    suspend fun getAppleMusicSongs(country: String = "us"): List<ChartSong> {
+        // Apple's charts are per storefront; "Global" (blank, Last.fm only) shows the US one.
+        val countryCode = country.ifBlank { "us" }
         val cacheKey = "apple-songs-$countryCode"
         cacheMutex.withLock {
             songsCache[cacheKey]?.let { (data, ts) ->
@@ -103,7 +107,9 @@ class ChartsRepository(
         }
     }
 
-    suspend fun getLastfmCharts(countryCode: String? = null): List<ChartSong> {
+    /** [country] null or blank = Last.fm's global chart (the "Global" picker entry). */
+    suspend fun getLastfmCharts(country: String? = null): List<ChartSong> {
+        val countryCode = country?.takeIf { it.isNotBlank() }
         val cacheKey = "lastfm-${countryCode ?: "global"}"
         cacheMutex.withLock {
             songsCache[cacheKey]?.let { (data, ts) ->

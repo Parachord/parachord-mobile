@@ -112,6 +112,12 @@ struct ContentView: View {
                         tab = .home
                         homePendingRoute = .artistOnTour(name)
                     },
+                    // Single tap on the art (Android parity): open the album.
+                    onAlbum: { title, artist in
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+                        tab = .home
+                        homePendingRoute = .album(title: title, artist: artist)
+                    },
                     // Queue-source banner (#209) → open the source page. Pushable
                     // pages go on the Home stack; Collection is a tab, so switch to it.
                     onNavigateToContext: { ctx in

@@ -48,3 +48,17 @@ val CHARTS_COUNTRIES = listOf(
     ChartCountry("se", "Sweden", "Sweden"),
     ChartCountry("pl", "Poland", "Poland"),
 )
+
+/** Pop of the Tops search box: albums whose title or artist holds [query] (both platforms). */
+fun filterChartAlbums(albums: List<ChartAlbum>, query: String): List<ChartAlbum> {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return albums
+    return albums.filter { it.title.lowercase().contains(q) || it.artist.lowercase().contains(q) }
+}
+
+/** Pop of the Tops search box: songs whose title or artist holds [query] (both platforms). */
+fun filterChartSongs(songs: List<ChartSong>, query: String): List<ChartSong> {
+    val q = query.trim().lowercase()
+    if (q.isEmpty()) return songs
+    return songs.filter { it.title.lowercase().contains(q) || it.artist.lowercase().contains(q) }
+}

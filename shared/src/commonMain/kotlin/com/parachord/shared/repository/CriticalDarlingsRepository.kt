@@ -439,3 +439,18 @@ data class CriticsPickAlbum(
     val spotifyUrl: String? = null,
     val albumArt: String? = null,
 )
+
+/**
+ * Critical Darlings' search box and sort (both platforms): albums whose title
+ * or artist holds [query], in feed order ("recent": the RSS feed is newest
+ * first) or by artist A–Z ("artist").
+ */
+fun filterAndSortCriticsPicks(albums: List<CriticsPickAlbum>, query: String, sortMode: String): List<CriticsPickAlbum> {
+    val q = query.trim().lowercase()
+    val filtered = if (q.isEmpty()) albums
+    else albums.filter { it.title.lowercase().contains(q) || it.artist.lowercase().contains(q) }
+    return when (sortMode) {
+        "artist" -> filtered.sortedBy { it.artist.lowercase() }
+        else -> filtered
+    }
+}

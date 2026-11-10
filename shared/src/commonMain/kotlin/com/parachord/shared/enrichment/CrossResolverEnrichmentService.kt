@@ -66,6 +66,31 @@ class CrossResolverEnrichmentService(
     ) {
         val isEmpty: Boolean
             get() = spotifyId.isNullOrBlank() && appleMusicId.isNullOrBlank() && soundcloudId.isNullOrBlank()
+
+        companion object {
+            /** Only near-certain matches are written to a track row or sent to Achordion. */
+            const val MIN_CONFIDENCE: Double = 0.95
+
+            /**
+             * The IDs to keep from one resolve (both platforms' `resolveByTitleArtist`):
+             * per service, its most confident source at [MIN_CONFIDENCE] or above, and
+             * the ISRC from those sources (#216, desktop precedence #217).
+             */
+            fun fromSources(sources: List<com.parachord.shared.resolver.ResolvedSource>): ResolvedSources {
+                fun pick(name: String) = sources
+                    .filter { it.resolver == name && (it.confidence ?: 0.0) >= MIN_CONFIDENCE }
+                    .maxByOrNull { it.confidence ?: 0.0 }
+                val spotify = pick("spotify")
+                val apple = pick("applemusic")
+                val soundcloud = pick("soundcloud")
+                return ResolvedSources(
+                    spotifyId = spotify?.spotifyId,
+                    appleMusicId = apple?.appleMusicId,
+                    soundcloudId = soundcloud?.soundcloudId,
+                    isrc = com.parachord.shared.resolver.pickTrackIsrc(null, listOfNotNull(spotify, apple, soundcloud)),
+                )
+            }
+        }
     }
 
     companion object {
