@@ -36,7 +36,7 @@ class PlayFailureTest {
 
     @Test
     fun `failures the queue doesn't move on from wait for Play — advancing or not`() {
-        val held = PlayFailure.entries - PlayFailure.EMBED_REFUSED
+        val held = PlayFailure.entries - PlayFailure.EMBED_REFUSED - PlayFailure.NO_SOURCE
         for (failure in held) {
             for (advancing in listOf(false, true)) {
                 for (spinoff in listOf(false, true)) {
@@ -47,6 +47,13 @@ class PlayFailureTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun `a track with no source is skipped while the queue advances`() {
+        assertFalse(failedPlayAwaitsLoad(PlayFailure.NO_SOURCE, advancing = true, spinoffMode = false))
+        assertFalse(failedPlayAwaitsLoad(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = true))
+        assertTrue(failedPlayAwaitsLoad(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = false))
     }
 
     @Test
