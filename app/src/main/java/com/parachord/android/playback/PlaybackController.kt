@@ -425,10 +425,35 @@ class PlaybackController constructor(
     /**
      * The repeat button's cycle (off, all, one, off; shared [nextRepeatMode]).
      * Parachord's own repeat, read by [skipNextInternal]: never ExoPlayer's
-     * `repeatMode`, which loops the silent keep-alive during external playback.
+     * `repeatMode`, which loops the silent keep-alive during external playback
+     * and is set apart from it by [setEngineRepeatMode].
      */
     fun cycleRepeatMode() {
         setRepeatMode(nextRepeatMode(stateHolder.state.value.repeatMode))
+    }
+
+    /**
+     * ExoPlayer's own repeat (ONE loops the silent keep-alive, OFF lets a local
+     * track end), through [EngineRepeatCommand]. Never `ctrl.repeatMode`: the
+     * session's repeat is Parachord's, so that would change the user's repeat.
+     *
+     * The command is granted when the controller connects, and [controller] is
+     * only set once that has happened, so it is available whenever there is a
+     * controller to send it. If it isn't, or the service refuses it, this logs:
+     * the user's repeat must not be touched as a fallback.
+     */
+    private fun setEngineRepeatMode(ctrl: MediaController, mode: Int) {
+        if (!ctrl.isSessionCommandAvailable(EngineRepeatCommand.command)) {
+            Log.w(TAG, "Engine repeat $mode not sent: the session didn't grant the command")
+            return
+        }
+        val result = ctrl.sendCustomCommand(EngineRepeatCommand.command, EngineRepeatCommand.args(mode))
+        result.addListener({
+            val code = try { result.get().resultCode } catch (e: Exception) { null }
+            if (code != androidx.media3.session.SessionResult.RESULT_SUCCESS) {
+                Log.w(TAG, "Engine repeat $mode refused (result $code)")
+            }
+        }, MoreExecutors.directExecutor())
     }
 
     /** Set Parachord's repeat mode (the media session's repeat command). See [cycleRepeatMode]. */
@@ -1024,7 +1049,7 @@ class PlaybackController constructor(
                 // hot local file or SoundCloud stream otherwise jumps against
                 // whatever source preceded it (desktop parity).
                 ctrl.volume = resolverVolumeFraction(routedTrack.resolver)
-                ctrl.repeatMode = Player.REPEAT_MODE_OFF
+                setEngineRepeatMode(ctrl, Player.REPEAT_MODE_OFF)
                 ctrl.setAudioAttributes(
                     androidx.media3.common.AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
@@ -1128,7 +1153,7 @@ class PlaybackController constructor(
                         )
                         .build()
                     ctrl.setMediaItems(listOf(silenceItem))
-                    ctrl.repeatMode = Player.REPEAT_MODE_ONE
+                    setEngineRepeatMode(ctrl, Player.REPEAT_MODE_ONE)
                     ctrl.volume = 0f
                     ctrl.prepare()
                     ctrl.play()

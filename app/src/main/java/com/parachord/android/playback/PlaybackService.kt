@@ -338,6 +338,14 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        // Parachord's repeat → the session's (lock screen, Android Auto). The
+        // wrapper reports it from PlaybackState; this tells listeners it changed.
+        serviceScope.launch {
+            stateHolder.state.map { it.repeatMode }.distinctUntilChanged().collect {
+                wrapper.publishRepeatMode()
+            }
+        }
+
         // Keep the heart and Spinoff in step with the playing track, the
         // collection and the spinoff state, whichever changes (a heart or
         // Spinoff tapped in the app updates the car too).
@@ -455,16 +463,20 @@ class PlaybackService : MediaLibraryService() {
      * the audio stream (Spotify app, MusicKit WebView, ExoPlayer).
      */
     private inner class LibraryCallback : MediaLibrarySession.Callback {
-        /** Offer the heart's and Spinoff's commands and the current layout to every controller (Auto, system UI). */
+        /**
+         * Offer the heart's and Spinoff's commands and the current layout to
+         * every controller (Auto, system UI), and ExoPlayer's own repeat
+         * ([EngineRepeatCommand]) to Parachord's controller only.
+         */
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS
-                .buildUpon()
-                .add(toggleLoveCommand)
-                .add(toggleSpinoffCommand)
-                .build()
+            val commands = EngineRepeatCommand.sessionCommandsFor(
+                controllerPackage = controller.packageName,
+                ownPackage = packageName,
+                extra = listOf(toggleLoveCommand, toggleSpinoffCommand),
+            )
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(commands)
                 .setCustomLayout(customLayoutFor(mediaButtonsState))
@@ -484,6 +496,16 @@ class PlaybackService : MediaLibraryService() {
             if (customCommand.customAction == COMMAND_TOGGLE_SPINOFF) {
                 toggleSpinoffFromMediaButton()
                 return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            if (customCommand.customAction == EngineRepeatCommand.ACTION) {
+                // ExoPlayer itself, not the session's player: the session's
+                // repeat is Parachord's (ExternalPlaybackForwardingPlayer).
+                val engine = player
+                val applied = engine != null && EngineRepeatCommand.apply(engine, args)
+                Log.d(TAG, "Engine repeat ${args.getInt(EngineRepeatCommand.EXTRA_MODE, -1)}: ${if (applied) "set" else "ignored"}")
+                return Futures.immediateFuture(
+                    SessionResult(if (applied) SessionResult.RESULT_SUCCESS else SessionResult.RESULT_ERROR_BAD_VALUE),
+                )
             }
             return super.onCustomCommand(session, controller, customCommand, args)
         }
@@ -1394,8 +1416,7 @@ class PlaybackService : MediaLibraryService() {
          * ExoPlayer-native playback: `onIsPlayingChanged`,
          * `onPlaybackStateChanged`, `onPlayWhenReadyChanged`,
          * `onPositionDiscontinuity`, `onPlayerError`, `onIsLoadingChanged`,
-         * `onRepeatModeChanged`, `onShuffleModeEnabledChanged`,
-         * `onAvailableCommandsChanged`.
+         * `onShuffleModeEnabledChanged`, `onAvailableCommandsChanged`.
          *
          * **What is DELIBERATELY NOT forwarded** — events that would corrupt
          * Auto's queue display by leaking the underlying ExoPlayer's
@@ -1403,7 +1424,10 @@ class PlaybackService : MediaLibraryService() {
          * `onTimelineChanged`, `onMediaItemTransition`, `onTracksChanged`,
          * `onMediaMetadataChanged`. The wrapper synthesizes its own versions
          * of these events in [updateQueueSnapshot] from the real
-         * `QueueManager` state, and Auto must only see those.
+         * `QueueManager` state, and Auto must only see those. Also
+         * `onRepeatModeChanged`: the delegate's repeat is the silence loop's
+         * (`REPEAT_MODE_ONE` during external playback); the session hears
+         * Parachord's repeat from [publishRepeatMode] instead.
          *
          * If a regression brings back the silence-loop-shows-in-Auto bug,
          * look here first — adding a forwarded override that touches the
@@ -1434,9 +1458,6 @@ class PlaybackService : MediaLibraryService() {
             override fun onIsLoadingChanged(isLoading: Boolean) {
                 externalListeners.forEach { it.onIsLoadingChanged(isLoading) }
             }
-            override fun onRepeatModeChanged(repeatMode: Int) {
-                externalListeners.forEach { it.onRepeatModeChanged(repeatMode) }
-            }
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
                 externalListeners.forEach { it.onShuffleModeEnabledChanged(shuffleModeEnabled) }
             }
@@ -1444,8 +1465,8 @@ class PlaybackService : MediaLibraryService() {
                 externalListeners.forEach { it.onAvailableCommandsChanged(availableCommands) }
             }
             // Intentionally NOT overriding: onTimelineChanged,
-            // onMediaItemTransition, onTracksChanged, onMediaMetadataChanged.
-            // See KDoc above.
+            // onMediaItemTransition, onTracksChanged, onMediaMetadataChanged,
+            // onRepeatModeChanged. See KDoc above.
         }
 
         /** True once [delegateForwarder] has been installed on [delegate]. */
@@ -1471,7 +1492,8 @@ class PlaybackService : MediaLibraryService() {
         override fun isCommandAvailable(command: Int): Boolean {
             if (command == COMMAND_GET_TIMELINE ||
                 command == COMMAND_GET_CURRENT_MEDIA_ITEM ||
-                command == COMMAND_SEEK_TO_MEDIA_ITEM
+                command == COMMAND_SEEK_TO_MEDIA_ITEM ||
+                command == COMMAND_SET_REPEAT_MODE
             ) return true
             if (externalMode && command in EXTERNAL_COMMANDS) return true
             return super.isCommandAvailable(command)
@@ -1483,6 +1505,7 @@ class PlaybackService : MediaLibraryService() {
                     COMMAND_GET_TIMELINE,
                     COMMAND_GET_CURRENT_MEDIA_ITEM,
                     COMMAND_SEEK_TO_MEDIA_ITEM,
+                    COMMAND_SET_REPEAT_MODE,
                 )
             if (externalMode) {
                 builder.addAll(
@@ -1651,6 +1674,20 @@ class PlaybackService : MediaLibraryService() {
         override fun seekToPreviousMediaItem() {
             if (externalMode) { playbackController.skipPrevious(); return }
             super.seekToPreviousMediaItem()
+        }
+
+        // ── Repeat ──────────────────────────────────────────────────────
+        // Parachord's repeat (PlaybackState.repeatMode), applied by the
+        // controller when a track ends or Next is pressed. Never the
+        // delegate's: during external playback ExoPlayer loops its silent
+        // keep-alive with REPEAT_MODE_ONE, and for local files it's OFF so the
+        // controller advances the queue itself. The controller sets the
+        // delegate's repeat with EngineRepeatCommand, which bypasses this.
+
+        override fun getRepeatMode(): Int = stateHolder.state.value.repeatMode.toPlayerRepeatMode()
+
+        override fun setRepeatMode(repeatMode: Int) {
+            playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))
         }
 
         // ── Synthetic timeline overrides ────────────────────────────────
@@ -1911,6 +1948,19 @@ class PlaybackService : MediaLibraryService() {
          * pick up the now-known duration. Without this, the head unit shows 0:00
          * until the app is foregrounded or the next track transitions.
          */
+        /**
+         * Tell the session (lock screen, Android Auto) that Parachord's repeat
+         * changed. [PlaybackService] calls it, on the main thread, whenever
+         * [PlaybackState.repeatMode] changes, whether the app's button or the
+         * session's own command changed it.
+         */
+        fun publishRepeatMode() {
+            val mode = repeatMode
+            for (listener in externalListeners) {
+                listener.onRepeatModeChanged(mode)
+            }
+        }
+
         fun publishMetadataRefresh() {
             if (dispatching) return
             val metadata = getMediaMetadata()
@@ -1946,6 +1996,18 @@ class PlaybackService : MediaLibraryService() {
         }
 
         companion object {
+            fun RepeatMode.toPlayerRepeatMode(): Int = when (this) {
+                RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+                RepeatMode.ALL -> Player.REPEAT_MODE_ALL
+                RepeatMode.ONE -> Player.REPEAT_MODE_ONE
+            }
+
+            fun repeatModeFromPlayer(mode: Int): RepeatMode = when (mode) {
+                Player.REPEAT_MODE_ALL -> RepeatMode.ALL
+                Player.REPEAT_MODE_ONE -> RepeatMode.ONE
+                else -> RepeatMode.OFF
+            }
+
             private val EXTERNAL_COMMANDS = setOf(
                 COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_PREVIOUS,
                 COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,

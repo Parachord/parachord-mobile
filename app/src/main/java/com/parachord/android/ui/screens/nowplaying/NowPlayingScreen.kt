@@ -23,6 +23,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RepeatOne
+import com.parachord.android.playback.RepeatMode
 import androidx.compose.material3.BottomSheetScaffold
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -459,31 +462,56 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Playback controls with shuffle
+                // Playback controls with shuffle and repeat. The two sides
+                // take equal widths so play stays centered with two buttons on
+                // the left and one on the right.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 32.dp),
+                        .padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Shuffle (disabled during spinoff)
-                    IconButton(
-                        onClick = { haptic(); viewModel.toggleShuffle() },
-                        enabled = !playbackState.spinoffMode,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            contentColor = if (playbackState.shuffleEnabled) ActiveControlColor else InactiveControlColor,
-                            disabledContentColor = InactiveControlColor.copy(alpha = 0.3f),
-                        ),
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            imageVector = ParachordIcons.Shuffle,
-                            contentDescription = "Shuffle",
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+                        // Shuffle (disabled during spinoff)
+                        IconButton(
+                            onClick = { haptic(); viewModel.toggleShuffle() },
+                            enabled = !playbackState.spinoffMode,
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = if (playbackState.shuffleEnabled) ActiveControlColor else InactiveControlColor,
+                                disabledContentColor = InactiveControlColor.copy(alpha = 0.3f),
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = ParachordIcons.Shuffle,
+                                contentDescription = "Shuffle",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
 
-                    Spacer(modifier = Modifier.weight(1f))
+                        // Repeat: off → all → one → off (PlaybackController.cycleRepeatMode)
+                        val repeatMode = playbackState.repeatMode
+                        IconButton(
+                            onClick = { haptic(); viewModel.cycleRepeatMode() },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = if (repeatMode != RepeatMode.OFF) ActiveControlColor else InactiveControlColor,
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = if (repeatMode == RepeatMode.ONE) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                                contentDescription = when (repeatMode) {
+                                    RepeatMode.OFF -> "Repeat off"
+                                    RepeatMode.ALL -> "Repeat all"
+                                    RepeatMode.ONE -> "Repeat one"
+                                },
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
 
                     // Skip Previous
                     IconButton(
@@ -541,37 +569,41 @@ fun NowPlayingScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    // Context menu (•••) button — opens track actions
-                    // Uses effectiveTrack so actions (add to playlist, collection, etc.)
-                    // reflect the actual streaming track metadata
-                    IconButton(
-                        onClick = {
-                            haptic()
-                            val effective = playbackState.effectiveTrack
-                            if (effective != null) {
-                                contextMenuState.show(
-                                    TrackContextInfo(
-                                        title = effective.title,
-                                        artist = effective.artist,
-                                        album = effective.album,
-                                        artworkUrl = effective.artworkUrl,
-                                        duration = effective.duration,
-                                    ),
-                                    effective,
-                                )
-                            }
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            contentColor = InactiveControlColor,
-                        ),
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreHoriz,
-                            contentDescription = "More actions",
-                            modifier = Modifier.size(24.dp),
-                        )
+                        // Context menu (•••) button — opens track actions
+                        // Uses effectiveTrack so actions (add to playlist, collection, etc.)
+                        // reflect the actual streaming track metadata
+                        IconButton(
+                            onClick = {
+                                haptic()
+                                val effective = playbackState.effectiveTrack
+                                if (effective != null) {
+                                    contextMenuState.show(
+                                        TrackContextInfo(
+                                            title = effective.title,
+                                            artist = effective.artist,
+                                            album = effective.album,
+                                            artworkUrl = effective.artworkUrl,
+                                            duration = effective.duration,
+                                        ),
+                                        effective,
+                                    )
+                                }
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = InactiveControlColor,
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreHoriz,
+                                contentDescription = "More actions",
+                                modifier = Modifier.size(24.dp),
+                            )
+                        }
                     }
                 }
 
