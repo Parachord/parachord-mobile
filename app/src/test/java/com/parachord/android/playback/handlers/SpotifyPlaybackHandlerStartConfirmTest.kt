@@ -25,6 +25,9 @@ import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -58,6 +61,10 @@ class SpotifyPlaybackHandlerStartConfirmTest {
     private val json = headersOf(HttpHeaders.ContentType, "application/json")
     private var playerStatus = HttpStatusCode.NoContent
     private var playCalls = 0
+    private val playBodies = mutableListOf<String>()
+    /** The track `/me/player` reports while playing: ours unless a test says otherwise. */
+    private var playingItemJson = """{"id":"4uvx2HRZqGFmSkBc5JapW2"}"""
+    private var trackJson: String? = null
     private val pausedDevices = mutableListOf<String?>()
     private var devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":false,"is_restricted":false}]}"""
     private lateinit var settingsStore: SettingsStore
@@ -78,11 +85,14 @@ class SpotifyPlaybackHandlerStartConfirmTest {
                 }
                 path.endsWith("/me/player/play") && req.method == HttpMethod.Put -> {
                     playCalls++
+                    playBodies += (req.body as io.ktor.http.content.TextContent).text
                     respond("", HttpStatusCode.NoContent)
                 }
+                path.contains("/v1/tracks/") && req.method == HttpMethod.Get ->
+                    trackJson?.let { respond(it, HttpStatusCode.OK, json) } ?: respond("", HttpStatusCode.NotFound)
                 path.endsWith("/me/player") && req.method == HttpMethod.Get ->
                     if (playerStatus == HttpStatusCode.NoContent) respond("", HttpStatusCode.NoContent)
-                    else respond("""{"is_playing":true,"progress_ms":1200}""", HttpStatusCode.OK, json)
+                    else respond("""{"is_playing":true,"progress_ms":1200,"item":$playingItemJson}""", HttpStatusCode.OK, json)
                 else -> respond("", HttpStatusCode.NoContent)
             }
         }
@@ -105,6 +115,33 @@ class SpotifyPlaybackHandlerStartConfirmTest {
         coEvery { settingsStore.getSpotifyAccessToken() } returns "token"
         coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns null
         coEvery { settingsStore.getResolverVolumeOffsets() } returns emptyMap()
+    }
+
+    @Test fun `the play and its re-send name the track's album and start at the track`() = runBlocking {
+        // Spotify's Android app plays nothing for a bare `uris` play (Nov 2026).
+        trackJson = """{"id":"4uvx2HRZqGFmSkBc5JapW2","album":{"id":"album42"}}"""
+        val h = handler().also { it.isAppVisible = { true } }
+        try {
+            h.play(track)
+            fail("expected SpotifyPlaybackNotStartedException")
+        } catch (_: SpotifyPlaybackNotStartedException) {
+        }
+        assertEquals(2, playBodies.size)
+        for (body in playBodies) {
+            val sent = Json.parseToJsonElement(body).jsonObject
+            assertEquals("spotify:album:album42", sent["context_uri"]!!.jsonPrimitive.content)
+            assertEquals(track.spotifyUri, sent["offset"]!!.jsonObject["uri"]!!.jsonPrimitive.content)
+            assertNull(sent["uris"])
+        }
+    }
+
+    @Test fun `when the album can't be looked up the play names the bare track`() = runBlocking {
+        playerStatus = HttpStatusCode.OK
+        val h = handler()
+        h.play(track)
+        val sent = Json.parseToJsonElement(playBodies.single()).jsonObject
+        assertEquals(track.spotifyUri, sent["uris"]!!.jsonArray.single().jsonPrimitive.content)
+        assertNull(sent["context_uri"])
     }
 
     @Test fun `in the background an accepted play that never starts throws without a re-send`() = runBlocking {
@@ -138,6 +175,42 @@ class SpotifyPlaybackHandlerStartConfirmTest {
         h.play(track)
         assertEquals(1, playCalls)
         assertTrue("the warm path sends no PLAY key", mediaKeys().isEmpty())
+    }
+
+    @Test fun `on the warm path a play Spotify ignores falls back instead of sitting at 0 00`() = runBlocking {
+        // Spotify's phone device already active and playing its own song, a
+        // Parachord screen showing: the warm path used to skip the check, and
+        // the play that never started sat at 0:00 with no fallback.
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns SpotifyPlaybackHandler.LOCAL_DEVICE_ID
+        devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":true,"is_restricted":false}]}"""
+        playerStatus = HttpStatusCode.OK
+        playingItemJson = """{"id":"someoneElsesSong"}"""
+        val h = handler().also { it.isAppVisible = { true } }
+        h.runPrewarm()
+        try {
+            h.play(track)
+            fail("expected SpotifyPlaybackNotStartedException")
+        } catch (_: SpotifyPlaybackNotStartedException) {
+        }
+        assertEquals("the play and one re-send, both on the warm path", 2, playCalls)
+        assertEquals(listOf<String?>("phone"), pausedDevices)
+    }
+
+    @Test fun `on the warm path a play that starts returns normally`() = runBlocking {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns SpotifyPlaybackHandler.LOCAL_DEVICE_ID
+        devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":true,"is_restricted":false}]}"""
+        playerStatus = HttpStatusCode.OK
+        val h = handler().also { it.isAppVisible = { true } }
+        h.runPrewarm()
+        h.play(track)
+        assertEquals(1, playCalls)
+    }
+
+    @Test fun `a relinked track counts as started`() = runBlocking {
+        playerStatus = HttpStatusCode.OK
+        playingItemJson = """{"id":"marketVersion","linked_from":{"id":"4uvx2HRZqGFmSkBc5JapW2"}}"""
+        handler().play(track)
+        assertEquals(1, playCalls)
     }
 
     @Test fun `a prewarm wakes Spotify with PAUSE and never PLAY`() = runBlocking {

@@ -2460,7 +2460,7 @@ class PlaybackController constructor(
             val routed = reselectBestSource(track)
             if (routed.resolver == "spotify" && routed.spotifyUri != null) {
                 Log.d(TAG, "'${track.title}' will play from Spotify — prewarming")
-                router.getSpotifyHandler().prewarm()
+                router.getSpotifyHandler().prewarm(routed.spotifyUri)
             }
         }
     }

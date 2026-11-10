@@ -575,9 +575,14 @@ data class SpTrack(
     @SerialName("external_ids") val externalIds: SpExternalIds? = null,
     /** Spotify's own 0–100 popularity; Search ranks with it (`SearchRanking`). */
     val popularity: Int? = null,
+    /** The track that was asked for, when Spotify substituted this one (relinking). */
+    @SerialName("linked_from") val linkedFrom: SpTrackRef? = null,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name.orEmpty() }
 }
+
+@Serializable
+data class SpTrackRef(val id: String? = null)
 
 /** Spotify `external_ids` — carries the ISRC (present on full track objects from
  *  search + `/v1/tracks/{id}`), the supply side of the ISRC → MBID fallback. */
@@ -629,7 +634,19 @@ fun List<SpImage>?.bestImageUrl(): String? =
 @Serializable data class SpDevicesResponse(val devices: List<SpDevice> = emptyList())
 @Serializable data class SpDevice(val id: String, val name: String, @SerialName("is_active") val isActive: Boolean = false, @SerialName("is_restricted") val isRestricted: Boolean = false, val type: String = "", @SerialName("volume_percent") val volumePercent: Int? = null)
 @Serializable data class SpTransferRequest(@SerialName("device_ids") val deviceIds: List<String>, val play: Boolean = false)
-@Serializable data class SpPlaybackRequest(val uris: List<String>? = null, @SerialName("context_uri") val contextUri: String? = null)
+/**
+ * Body of `PUT /v1/me/player/play`. Null fields are left out of the JSON (the
+ * shared client encodes defaults, which sent `"context_uri": null`). Build a
+ * one-track play with [SpotifyPlayRequests], not with `uris` directly: see there.
+ */
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+@Serializable data class SpPlaybackRequest(
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) val uris: List<String>? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) @SerialName("context_uri") val contextUri: String? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) val offset: SpPlaybackOffset? = null,
+)
+/** Where in [SpPlaybackRequest.contextUri] to start: a track URI in that context. */
+@Serializable data class SpPlaybackOffset(val uri: String)
 @Serializable data class SpPlaybackState(@SerialName("is_playing") val isPlaying: Boolean = false, @SerialName("progress_ms") val progressMs: Long? = null, val item: SpTrack? = null, val device: SpDevice? = null)
 @Serializable data class SpSavedTrack(@SerialName("added_at") val addedAt: String? = null, val track: SpTrack? = null)
 @Serializable data class SpSavedTracksResponse(val items: List<SpSavedTrack> = emptyList(), val total: Int = 0, val offset: Int = 0, val limit: Int = 50, val next: String? = null)
