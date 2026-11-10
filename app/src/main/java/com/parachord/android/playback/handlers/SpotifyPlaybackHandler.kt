@@ -239,6 +239,12 @@ class SpotifyPlaybackHandler constructor(
     private suspend fun attemptPlay(uri: String, flowStart: Long): Boolean {
         val request = playRequests.forTrack(uri)
         lastPlayRequest = request
+        // The ids Spotify may report for this play: the one asked for, and the
+        // album's (relinked) id the offset names.
+        val expectedIds = setOfNotNull(
+            SpotifyPlayRequests.spotifyTrackId(uri),
+            request.offset?.uri?.let { SpotifyPlayRequests.spotifyTrackId(it) },
+        )
         Log.d(TAG, "Play request for $uri: ${request.contextUri?.let { "album $it, offset ${request.offset?.uri}" } ?: "bare uris"} (${System.currentTimeMillis() - flowStart}ms)")
 
         // ── Phase 7: Optimistic warm-path ────────────────────────────
@@ -265,14 +271,15 @@ class SpotifyPlaybackHandler constructor(
                     if (resp.status.isSuccess() || resp.status.value == 204) {
                         Log.d(TAG, "Warm path accepted (${resp.status.value}) in ${System.currentTimeMillis() - flowStart}ms")
                         applyConnectVolume(warmDeviceId)
-                        // A device found by [prewarm] is present but idle, and
-                        // may be one that accepts a play without starting it
-                        // (#452), so confirm as the full flow does.
-                        if (!warmDevice.isActive || !isAppVisible()) {
-                            if (!confirmPlaybackStarted(request, warmDeviceId)) {
-                                playbackNeverStarted = true
-                                return false
-                            }
+                        // Always confirm, even on an active device with a
+                        // screen showing: Spotify can accept a play, drop its
+                        // own song and start nothing (#452, and the bare-`uris`
+                        // play on Spotify 9.2 for Android). Unconfirmed, the
+                        // polling loop re-sent once and then sat at 0:00 with
+                        // no fallback.
+                        if (!confirmPlaybackStarted(request, warmDeviceId, expectedIds)) {
+                            playbackNeverStarted = true
+                            return false
                         }
                         return true
                     }
@@ -339,21 +346,17 @@ class SpotifyPlaybackHandler constructor(
                     applyConnectVolume(targetDevice.id)
                     stickyDefaultLocalIfUnset(targetDevice)
 
-                    // Confirm Spotify actually started when it might not have:
-                    // the device had to be activated, wasn't verified yet, or
-                    // Parachord is in the background (Android Auto, a locked
-                    // phone). Spotify accepts the command even when its player
-                    // can't start — e.g. its process was only bound by Android
-                    // Auto as a media browser — and /me/player then answers 204
-                    // forever. Proceeding optimistically left the car on 0:01
-                    // with no audio and nothing to fall back from (#452).
-                    if (!targetDevice.isActive || !deviceVerified || !isAppVisible()) {
-                        val started = confirmPlaybackStarted(request, targetDevice.id)
-                        deviceVerified = true
-                        if (!started) {
-                            playbackNeverStarted = true
-                            return false
-                        }
+                    // Confirm Spotify actually started our track. It accepts
+                    // the command even when its player can't start — its
+                    // process only bound by Android Auto as a media browser
+                    // (#452), or a bare `uris` play on Spotify 9.2 for Android
+                    // — and proceeding optimistically left the car on 0:01, or
+                    // the phone on 0:00, with nothing to fall back from.
+                    val started = confirmPlaybackStarted(request, targetDevice.id, expectedIds)
+                    deviceVerified = true
+                    if (!started) {
+                        playbackNeverStarted = true
+                        return false
                     }
                     return true
                 }
@@ -431,10 +434,10 @@ class SpotifyPlaybackHandler constructor(
     }
 
     /**
-     * Wait for Spotify to report the play as started. Polls `/me/player` every
-     * 500 ms for up to [CONFIRM_WINDOW_MS]. A 204 ("nothing playing") is a real
-     * answer, not a failure: Spotify accepted the command but its player didn't
-     * start.
+     * Wait for Spotify to report our track playing ([expectedIds]). Polls
+     * `/me/player` every 500 ms for up to [CONFIRM_WINDOW_MS]. A 204 ("nothing
+     * playing") is a real answer, not a failure: Spotify accepted the command
+     * but its player didn't start. Every play is confirmed, warm or cold.
      *
      * With a Parachord screen showing, a play that hasn't started is sent once
      * more and given a second window. In the background (Android Auto, a locked
@@ -445,9 +448,9 @@ class SpotifyPlaybackHandler constructor(
      * On giving up, pauses [deviceId] so a play that starts late doesn't sound
      * over the source the controller falls back to.
      */
-    private suspend fun confirmPlaybackStarted(request: SpPlaybackRequest, deviceId: String?): Boolean {
+    private suspend fun confirmPlaybackStarted(request: SpPlaybackRequest, deviceId: String?, expectedIds: Set<String>): Boolean {
         val started = System.currentTimeMillis()
-        if (pollUntilPlaying()) {
+        if (pollUntilPlaying(expectedIds)) {
             Log.d(TAG, "confirmPlayback: playing after ${System.currentTimeMillis() - started}ms")
             return true
         }
@@ -459,7 +462,7 @@ class SpotifyPlaybackHandler constructor(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "confirmPlayback: re-send failed: ${e.message}")
             }
-            if (pollUntilPlaying()) {
+            if (pollUntilPlaying(expectedIds)) {
                 Log.d(TAG, "confirmPlayback: playing after ${System.currentTimeMillis() - started}ms")
                 return true
             }
@@ -476,17 +479,28 @@ class SpotifyPlaybackHandler constructor(
         return false
     }
 
-    private suspend fun pollUntilPlaying(): Boolean {
+    /**
+     * Polls until Spotify plays one of [expectedIds] (the item's own id, or the
+     * id it was relinked from). Playing alone isn't enough: Spotify still
+     * playing its own song after ignoring the play also reports `is_playing`.
+     */
+    private suspend fun pollUntilPlaying(expectedIds: Set<String>): Boolean {
         repeat((CONFIRM_WINDOW_MS / CONFIRM_POLL_MS).toInt()) {
             delay(CONFIRM_POLL_MS)
             try {
-                if (fetchPlaybackState()?.isPlaying == true) return true
+                val state = fetchPlaybackState()
+                if (state?.isPlaying == true && isExpectedItem(state.item, expectedIds)) return true
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.d(TAG, "confirmPlayback poll failed: ${e.message}")
             }
         }
         return false
+    }
+
+    private fun isExpectedItem(item: com.parachord.shared.api.SpTrack?, expectedIds: Set<String>): Boolean {
+        if (expectedIds.isEmpty()) return true
+        return item?.id in expectedIds || item?.linkedFrom?.id in expectedIds
     }
 
     override suspend fun pause() {

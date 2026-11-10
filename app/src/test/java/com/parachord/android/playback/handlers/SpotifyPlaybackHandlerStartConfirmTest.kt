@@ -62,6 +62,8 @@ class SpotifyPlaybackHandlerStartConfirmTest {
     private var playerStatus = HttpStatusCode.NoContent
     private var playCalls = 0
     private val playBodies = mutableListOf<String>()
+    /** The track `/me/player` reports while playing: ours unless a test says otherwise. */
+    private var playingItemJson = """{"id":"4uvx2HRZqGFmSkBc5JapW2"}"""
     private var trackJson: String? = null
     private val pausedDevices = mutableListOf<String?>()
     private var devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":false,"is_restricted":false}]}"""
@@ -90,7 +92,7 @@ class SpotifyPlaybackHandlerStartConfirmTest {
                     trackJson?.let { respond(it, HttpStatusCode.OK, json) } ?: respond("", HttpStatusCode.NotFound)
                 path.endsWith("/me/player") && req.method == HttpMethod.Get ->
                     if (playerStatus == HttpStatusCode.NoContent) respond("", HttpStatusCode.NoContent)
-                    else respond("""{"is_playing":true,"progress_ms":1200}""", HttpStatusCode.OK, json)
+                    else respond("""{"is_playing":true,"progress_ms":1200,"item":$playingItemJson}""", HttpStatusCode.OK, json)
                 else -> respond("", HttpStatusCode.NoContent)
             }
         }
@@ -173,6 +175,42 @@ class SpotifyPlaybackHandlerStartConfirmTest {
         h.play(track)
         assertEquals(1, playCalls)
         assertTrue("the warm path sends no PLAY key", mediaKeys().isEmpty())
+    }
+
+    @Test fun `on the warm path a play Spotify ignores falls back instead of sitting at 0 00`() = runBlocking {
+        // Spotify's phone device already active and playing its own song, a
+        // Parachord screen showing: the warm path used to skip the check, and
+        // the play that never started sat at 0:00 with no fallback.
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns SpotifyPlaybackHandler.LOCAL_DEVICE_ID
+        devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":true,"is_restricted":false}]}"""
+        playerStatus = HttpStatusCode.OK
+        playingItemJson = """{"id":"someoneElsesSong"}"""
+        val h = handler().also { it.isAppVisible = { true } }
+        h.runPrewarm()
+        try {
+            h.play(track)
+            fail("expected SpotifyPlaybackNotStartedException")
+        } catch (_: SpotifyPlaybackNotStartedException) {
+        }
+        assertEquals("the play and one re-send, both on the warm path", 2, playCalls)
+        assertEquals(listOf<String?>("phone"), pausedDevices)
+    }
+
+    @Test fun `on the warm path a play that starts returns normally`() = runBlocking {
+        coEvery { settingsStore.getPreferredSpotifyDeviceId() } returns SpotifyPlaybackHandler.LOCAL_DEVICE_ID
+        devicesJson = """{"devices":[{"id":"phone","name":"J9a","type":"Smartphone","is_active":true,"is_restricted":false}]}"""
+        playerStatus = HttpStatusCode.OK
+        val h = handler().also { it.isAppVisible = { true } }
+        h.runPrewarm()
+        h.play(track)
+        assertEquals(1, playCalls)
+    }
+
+    @Test fun `a relinked track counts as started`() = runBlocking {
+        playerStatus = HttpStatusCode.OK
+        playingItemJson = """{"id":"marketVersion","linked_from":{"id":"4uvx2HRZqGFmSkBc5JapW2"}}"""
+        handler().play(track)
+        assertEquals(1, playCalls)
     }
 
     @Test fun `a prewarm wakes Spotify with PAUSE and never PLAY`() = runBlocking {

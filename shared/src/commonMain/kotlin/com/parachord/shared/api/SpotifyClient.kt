@@ -575,9 +575,14 @@ data class SpTrack(
     @SerialName("external_ids") val externalIds: SpExternalIds? = null,
     /** Spotify's own 0–100 popularity; Search ranks with it (`SearchRanking`). */
     val popularity: Int? = null,
+    /** The track that was asked for, when Spotify substituted this one (relinking). */
+    @SerialName("linked_from") val linkedFrom: SpTrackRef? = null,
 ) {
     val artistName: String get() = artists.joinToString(", ") { it.name.orEmpty() }
 }
+
+@Serializable
+data class SpTrackRef(val id: String? = null)
 
 /** Spotify `external_ids` — carries the ISRC (present on full track objects from
  *  search + `/v1/tracks/{id}`), the supply side of the ISRC → MBID fallback. */
