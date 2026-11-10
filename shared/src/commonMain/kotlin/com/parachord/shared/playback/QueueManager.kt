@@ -111,6 +111,40 @@ class QueueManager {
         return previous
     }
 
+    /** True when there is a track in Up Next. */
+    val hasNext: Boolean get() = upNext.isNotEmpty()
+
+    /** True when there is a track in play history. */
+    val hasPrevious: Boolean get() = playHistory.isNotEmpty()
+
+    /**
+     * Repeat-all wrap: gather history, [currentTrack] (if any) and Up Next in that
+     * order, return the first to play and queue the rest. With shuffle on, the whole
+     * set is shuffled first and [originalOrder] is the rest in played order.
+     * History is cleared; context and shuffle flag are kept.
+     *
+     * @return The track to play, or null if there was nothing to wrap.
+     */
+    fun wrapToStart(currentTrack: Track?): Track? {
+        val all = buildList {
+            addAll(playHistory)
+            currentTrack?.let { add(it) }
+            addAll(upNext)
+        }
+        if (all.isEmpty()) return null
+
+        val ordered = if (_shuffleEnabled) all.shuffled() else all
+        val first = ordered.first()
+        val rest = ordered.drop(1)
+
+        playHistory.clear()
+        upNext.clear()
+        upNext.addAll(rest)
+        originalOrder = if (_shuffleEnabled && rest.size > 1) all.filter { it !== first }.toList() else null
+        emitSnapshot()
+        return first
+    }
+
     /**
      * User tapped a track in the queue UI.
      * Pushes [currentTrack] to history, removes everything before [index] in upNext,
