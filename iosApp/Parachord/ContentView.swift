@@ -1988,13 +1988,6 @@ final class QueuePlaybackCoordinator {
     // kickStartFirstTrack=false in-app path). Mutually exclusive with Listen Along.
     @ObservationIgnored private var spinoffPool: [Track] = []
     @ObservationIgnored private var preSpinoffContext: PlaybackContext?
-    /// The track now playing was pulled from the spinoff pool (Android's
-    /// `currentIsPoolTrack`). Set when `advanceSpinoff` (or a radio's first
-    /// track) starts a pool track, cleared by any other play. A pool track that
-    /// leaves for the queue goes to history out of the repeat-all lap (Previous
-    /// still reaches it); the first pool pull keeps a non-pool current track
-    /// (the spinoff's seed) in history inside the lap.
-    @ObservationIgnored private var currentIsPoolTrack = false
     // Radio (#256): a deep-link station with a refill URL tops its pool up from
     // that URL as it drains. The shared `PoolRefiller` (Android's) owns the rate
     // limit, the stop after 3 empty refills and the dedup; `refillUrl` is nil for
@@ -2044,8 +2037,7 @@ final class QueuePlaybackCoordinator {
         queueManager.setContext(context: PlaybackContext(type: "spinoff", name: displayName, id: nil))
         // The queue stays (suspended) on iOS: the track that was playing is the
         // seed and stays in the lap; the radio's first track is a pool track.
-        keepSeedInHistory()
-        currentIsPoolTrack = true
+        poolTrackStarting()
         playTrack(pool[0])
         preresolveSpinoffPool()
         syncSnapshot()
@@ -2061,8 +2053,7 @@ final class QueuePlaybackCoordinator {
             return false
         }
         let next = spinoffPool.removeFirst()
-        keepSeedInHistory()
-        currentIsPoolTrack = true
+        poolTrackStarting()
         // Checked once the next track is taken, as on Android: refill when
         // fewer than 3 are left after it.
         if SpinoffSessionKt.spinoffNeedsRefill(poolSize: Int32(spinoffPool.count)) {
@@ -2073,13 +2064,14 @@ final class QueuePlaybackCoordinator {
         return true
     }
 
-    /// The first pool pull: a current track that isn't a pool track (the
-    /// spinoff's seed, or a tapped track) goes to history inside the
-    /// repeat-all lap, as Android does.
-    private func keepSeedInHistory() {
-        guard !currentIsPoolTrack, let seed = currentTrack else { return }
-        queueManager.pushToHistory(track: seed, inQueue: true)
-        NSLog("SPINOFF seed '%@' kept in the queue's history", seed.title)
+    /// A pool track is starting. The shared `QueueManager.poolTrackStarted`
+    /// keeps the seed (the track playing when the first one starts) in the
+    /// repeat-all lap and the pool tracks out of it.
+    private func poolTrackStarting() {
+        if !queueManager.currentIsPoolTrack, let seed = currentTrack {
+            NSLog("SPINOFF seed '%@' kept in the queue's history", seed.title)
+        }
+        queueManager.poolTrackStarted(current: currentTrack)
     }
 
     /// Resolve the pool's next few tracks ahead of time (shared
@@ -2612,7 +2604,6 @@ final class QueuePlaybackCoordinator {
             shuffle: shuffle ?? shuffleEnabled
         )
         playedSinceWrap = false
-        currentIsPoolTrack = false
         syncSnapshot()
         if let track = toPlay {
             playTrack(track)
@@ -2644,17 +2635,17 @@ final class QueuePlaybackCoordinator {
             playedSinceWrap: playedSinceWrap
         )
         NSLog("QUEUE advance \(trigger.name) → \(action.name)")
-        // A spinoff pool track leaving for the queue isn't part of the repeat-all lap.
-        let currentInQueue = !currentIsPoolTrack
-        if !currentInQueue && action != .replayCurrent {
+        // A spinoff pool track leaving for the queue stays out of the
+        // repeat-all lap (the shared QueueManager decides).
+        if queueManager.currentIsPoolTrack && action != .replayCurrent {
             NSLog("QUEUE leaving pool track '%@' out of the queue's lap", currentTrack?.title ?? "")
         }
         var next: Track?
         switch action {
-        case .playNext: next = queueManager.skipNext(currentTrack: currentTrack, currentInQueue: currentInQueue)
+        case .playNext: next = queueManager.skipNext(currentTrack: currentTrack)
         case .replayCurrent: next = currentTrack
         case .wrapToStart:
-            next = queueManager.wrapToStart(currentTrack: currentTrack, currentInQueue: currentInQueue)
+            next = queueManager.wrapToStart(currentTrack: currentTrack)
             playedSinceWrap = false
         default: next = nil
         }
@@ -2662,7 +2653,6 @@ final class QueuePlaybackCoordinator {
             stopAtEndOfQueue(clear: !listenAlong)
             return
         }
-        if action != .replayCurrent { currentIsPoolTrack = false }
         syncSnapshot()
         playTrack(next, advancing: true)
     }
@@ -2689,8 +2679,7 @@ final class QueuePlaybackCoordinator {
         player.stop()
         // The cleared track goes to history, so Previous goes back to it
         // rather than to the track before it.
-        if let last = currentTrack { queueManager.pushToHistory(track: last, inQueue: !currentIsPoolTrack) }
-        currentIsPoolTrack = false
+        if let last = currentTrack { queueManager.pushToHistory(track: last) }
         currentTrack = nil
         syncSnapshot()
     }
@@ -2711,7 +2700,6 @@ final class QueuePlaybackCoordinator {
             seek(to: 0)
             return
         }
-        currentIsPoolTrack = false
         syncSnapshot()
         playTrack(prev)
     }
@@ -2720,10 +2708,8 @@ final class QueuePlaybackCoordinator {
     func playFromQueue(_ index: Int) {
         guard let track = queueManager.playFromQueue(
             index: Int32(index),
-            currentTrack: currentTrack,
-            currentInQueue: !currentIsPoolTrack
+            currentTrack: currentTrack
         ) else { return }
-        currentIsPoolTrack = false
         syncSnapshot()
         playTrack(track)
     }
@@ -3198,7 +3184,8 @@ final class QueuePlaybackCoordinator {
             playbackContext: snap.playbackContext,
             shuffleEnabled: snap.shuffleEnabled,
             originalOrder: queueManager.savedOriginalOrder,
-            playHistoryInQueue: queueManager.historyInQueue)
+            playHistoryInQueue: queueManager.historyInQueue,
+            currentIsPoolTrack: queueManager.currentIsPoolTrack)
         let jsonStr = QueuePersistenceCodec.shared.encode(state: state)
         try? await container.settingsStore.setPersistedQueueState(json: jsonStr)
     }
@@ -3230,9 +3217,9 @@ final class QueuePlaybackCoordinator {
                 restoredOriginalOrder: state.originalOrder,
                 context: state.playbackContext,
                 shuffle: state.shuffleEnabled,
-                restoredHistoryInQueue: state.playHistoryInQueue)
+                restoredHistoryInQueue: state.playHistoryInQueue,
+                restoredCurrentIsPoolTrack: state.currentIsPoolTrack)
             self.playedSinceWrap = false
-            self.currentIsPoolTrack = false
             self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the
             // saved position when it's for this track (#567).

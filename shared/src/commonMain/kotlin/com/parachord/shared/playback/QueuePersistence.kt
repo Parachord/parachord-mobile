@@ -29,6 +29,8 @@ data class PersistedQueueState(
      * saved before it existed: the missing entries count as in the queue.
      */
     val playHistoryInQueue: List<Boolean>? = null,
+    /** The current track was a spinoff pool track (`QueueManager.currentIsPoolTrack`). */
+    val currentIsPoolTrack: Boolean = false,
 )
 
 /**

@@ -21,10 +21,19 @@ data class QueueSnapshot(
  * contains only upcoming tracks. A separate `playHistory` stack enables
  * back-navigation.
  *
- * Each history entry records whether it belongs to the current queue. Previous
- * walks every entry; repeat all ([wrapToStart]) wraps only the queue's own:
- * entries from before a cleared queue ([clearQueue]) and spinoff pool tracks
- * (pushed with `inQueue = false`) aren't part of the lap.
+ * Each history entry records whether it belongs to the current queue (the
+ * repeat-all lap). Previous walks every entry; repeat all ([wrapToStart])
+ * wraps only the lap: entries from before a cleared queue ([clearQueue]) and
+ * spinoff pool tracks aren't in it.
+ *
+ * The spinoff pool plays outside this class, so the platforms report when a
+ * pool track starts ([poolTrackStarted]); every other play goes through a
+ * method here. From that, this class knows whether the current track is a pool
+ * track ([currentIsPoolTrack]) and decides what goes into the lap: the seed (the
+ * track playing when the first pool track starts) goes in, a pool track that
+ * leaves for the queue ([skipNext], [playFromQueue], [wrapToStart],
+ * [pushToHistory]) stays out, and a track reached with Previous is in the lap
+ * only if its history entry was.
  *
  * All mutations emit a new [QueueSnapshot] via [snapshot].
  */
@@ -38,6 +47,13 @@ class QueueManager {
     private var originalOrder: List<Track>? = null
     private var _playbackContext: PlaybackContext? = null
     private var _shuffleEnabled = false
+    private var _currentIsPoolTrack = false
+
+    /**
+     * The current track was pulled from the spinoff pool (see [poolTrackStarted]).
+     * False after any play that goes through this class. Read for persistence.
+     */
+    val currentIsPoolTrack: Boolean get() = _currentIsPoolTrack
 
     private val _snapshot = MutableStateFlow(QueueSnapshot())
     val snapshot: StateFlow<QueueSnapshot> = _snapshot.asStateFlow()
@@ -63,6 +79,7 @@ class QueueManager {
         val remaining = tracks.subList(startIndex + 1, tracks.size).toMutableList()
 
         playHistory.clear()
+        _currentIsPoolTrack = false
         _playbackContext = context
         _shuffleEnabled = shuffle
 
@@ -93,42 +110,63 @@ class QueueManager {
 
     /**
      * Advance to the next track.
-     * Pushes [currentTrack] onto play history and pops the first item from upNext.
-     * [currentInQueue] false (a spinoff pool track) keeps it out of the repeat-all lap.
+     * Pushes [currentTrack] onto play history (out of the lap when it's a pool
+     * track) and pops the first item from upNext.
      *
      * @return The next track, or null if queue is empty.
      */
-    fun skipNext(currentTrack: Track?, currentInQueue: Boolean = true): Track? {
+    fun skipNext(currentTrack: Track?): Track? {
         if (upNext.isEmpty()) return null
-        currentTrack?.let { playHistory.add(Played(it, currentInQueue)) }
+        pushCurrent(currentTrack)
         val next = upNext.removeAt(0)
         emitSnapshot()
         return next
     }
 
     /**
+     * A spinoff pool track is starting; [current] is the track playing now
+     * (null when nothing is, e.g. a radio link that cleared the queue first).
+     * The first pool track keeps [current] (the spinoff's seed, or a tapped
+     * track) in history inside the lap; later ones push nothing, since pool
+     * tracks never join the lap.
+     */
+    fun poolTrackStarted(current: Track?) {
+        if (!_currentIsPoolTrack && current != null) playHistory.add(Played(current, inQueue = true))
+        _currentIsPoolTrack = true
+        emitSnapshot()
+    }
+
+    /** Push the outgoing current track (out of the lap when it's a pool track). */
+    private fun pushCurrent(currentTrack: Track?) {
+        currentTrack?.let { playHistory.add(Played(it, inQueue = !_currentIsPoolTrack)) }
+        _currentIsPoolTrack = false
+    }
+
+    /**
      * Go back to the previous track.
-     * Pops from play history and pushes [currentTrack] to the front of upNext.
+     * Pops from play history and pushes [currentTrack] to the front of upNext,
+     * unless it's a pool track: that would put it in the user's queue. The track
+     * reached is in the lap only if its history entry was.
      *
      * @return The previous track, or null if history is empty.
      */
     fun skipPrevious(currentTrack: Track?): Track? {
         if (playHistory.isEmpty()) return null
-        currentTrack?.let { upNext.add(0, it) }
-        val previous = playHistory.removeAt(playHistory.lastIndex).track
+        if (!_currentIsPoolTrack) currentTrack?.let { upNext.add(0, it) }
+        val previous = playHistory.removeAt(playHistory.lastIndex)
+        _currentIsPoolTrack = !previous.inQueue
         emitSnapshot()
-        return previous
+        return previous.track
     }
 
     /**
      * Put [track] on top of play history without touching Up Next. Used when the
      * queue runs out and playback stops on the last track, which is then cleared:
-     * Previous must still go back to it, not to the track before it. Also used
-     * for a spinoff's seed when the first pool track starts, so the seed stays
-     * in the lap. [inQueue] false (a spinoff pool track) keeps it out of the lap.
+     * Previous must still go back to it, not to the track before it. A pool
+     * track goes in out of the lap.
      */
-    fun pushToHistory(track: Track, inQueue: Boolean = true) {
-        playHistory.add(Played(track, inQueue))
+    fun pushToHistory(track: Track) {
+        pushCurrent(track)
         emitSnapshot()
     }
 
@@ -140,7 +178,7 @@ class QueueManager {
 
     /**
      * Repeat-all wrap: gather this queue's history, [currentTrack] (if any, and
-     * [currentInQueue]) and Up Next in that order, return the first to play and
+     * not a pool track) and Up Next in that order, return the first to play and
      * queue the rest. History from before a cleared queue and spinoff pool tracks
      * aren't wrapped. With shuffle on, the whole set is shuffled first and
      * [originalOrder] is the rest in played order. History is cleared; context
@@ -148,10 +186,10 @@ class QueueManager {
      *
      * @return The track to play, or null if there was nothing to wrap.
      */
-    fun wrapToStart(currentTrack: Track?, currentInQueue: Boolean = true): Track? {
+    fun wrapToStart(currentTrack: Track?): Track? {
         val all = buildList {
             playHistory.forEach { if (it.inQueue) add(it.track) }
-            if (currentInQueue) currentTrack?.let { add(it) }
+            if (!_currentIsPoolTrack) currentTrack?.let { add(it) }
             addAll(upNext)
         }
         if (all.isEmpty()) return null
@@ -161,6 +199,7 @@ class QueueManager {
         val rest = ordered.drop(1)
 
         playHistory.clear()
+        _currentIsPoolTrack = false
         upNext.clear()
         upNext.addAll(rest)
         originalOrder = if (_shuffleEnabled && rest.size > 1) all.filter { it !== first }.toList() else null
@@ -170,12 +209,13 @@ class QueueManager {
 
     /**
      * User tapped a track in the queue UI.
-     * Pushes [currentTrack] to history, removes everything before [index] in upNext,
-     * pops the item at [index] and returns it.
+     * Pushes [currentTrack] to history (out of the lap when it's a pool track),
+     * removes everything before [index] in upNext, pops the item at [index] and
+     * returns it.
      */
-    fun playFromQueue(index: Int, currentTrack: Track?, currentInQueue: Boolean = true): Track? {
+    fun playFromQueue(index: Int, currentTrack: Track?): Track? {
         if (index !in upNext.indices) return null
-        currentTrack?.let { playHistory.add(Played(it, currentInQueue)) }
+        pushCurrent(currentTrack)
         val track = upNext[index]
         val remaining = upNext.subList(index + 1, upNext.size).toList()
         upNext.clear()
@@ -203,10 +243,11 @@ class QueueManager {
     /**
      * Clear the queue. Resets shuffle state and context, but preserves play
      * history for Previous; that history is no longer this queue's, so repeat
-     * all won't wrap into it.
+     * all won't wrap into it. The current track counts as the new queue's.
      */
     fun clearQueue() {
         upNext.clear()
+        _currentIsPoolTrack = false
         for (i in playHistory.indices) {
             if (playHistory[i].inQueue) playHistory[i] = Played(playHistory[i].track, inQueue = false)
         }
@@ -264,6 +305,7 @@ class QueueManager {
      * Called once on startup when persist-queue setting is enabled.
      * [restoredHistoryInQueue] pairs with [restoredHistory]; a missing list or
      * entry (an older saved queue) counts as in the queue.
+     * [restoredCurrentIsPoolTrack]: the restored current track was a pool track.
      */
     fun restoreState(
         restoredUpNext: List<Track>,
@@ -272,7 +314,9 @@ class QueueManager {
         context: PlaybackContext?,
         shuffle: Boolean,
         restoredHistoryInQueue: List<Boolean>? = null,
+        restoredCurrentIsPoolTrack: Boolean = false,
     ) {
+        _currentIsPoolTrack = restoredCurrentIsPoolTrack
         upNext.clear()
         upNext.addAll(restoredUpNext)
         playHistory.clear()
