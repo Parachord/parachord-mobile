@@ -173,10 +173,12 @@ class DjToolExecutor constructor(
     private fun executeShuffle(args: Map<String, Any?>): Map<String, Any?> {
         val enabled = args["enabled"] as? Boolean
             ?: return mapOf("error" to "Missing enabled parameter")
-        val currentState = stateHolder.state.value.shuffleEnabled
-
-        if (currentState != enabled) {
-            playbackController.toggleShuffle()
+        if (!playbackController.setShuffle(enabled)) {
+            return mapOf(
+                "success" to false,
+                "error" to "Shuffle isn't available during a spinoff or Listen Along",
+                "shuffleEnabled" to stateHolder.state.value.shuffleEnabled,
+            )
         }
 
         return mapOf("success" to true, "shuffleEnabled" to enabled)

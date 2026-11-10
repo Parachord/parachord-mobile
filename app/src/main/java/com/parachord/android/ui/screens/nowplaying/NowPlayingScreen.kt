@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
+import com.parachord.shared.playback.shuffleAllowed
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -114,7 +116,7 @@ fun NowPlayingScreen(
     val upNext = playbackState.upNext
     // While listening along, Next catches up to the friend's current song when
     // they're ahead, and is DISABLED when in sync (nothing to advance to).
-    val inListenAlong = playbackState.playbackContext?.type == "listen-along"
+    val inListenAlong = playbackState.playbackContext?.type == LISTEN_ALONG_CONTEXT
     val canAdvanceNext = !inListenAlong || listenAlongCanAdvance
     val scope = rememberCoroutineScope()
     val playlists by viewModel.playlists.collectAsStateWithLifecycle()
@@ -170,7 +172,7 @@ fun NowPlayingScreen(
             QueueSheet(
                 // During listen-along the active queue is cleared — show the
                 // SUSPENDED queue dimmed as "YOUR QUEUE" (it resumes on disconnect).
-                upNext = if (playbackState.playbackContext?.type == "listen-along") suspendedQueue else upNext,
+                upNext = if (playbackState.playbackContext?.type == LISTEN_ALONG_CONTEXT) suspendedQueue else upNext,
                 playbackContext = playbackState.playbackContext,
                 onPlayFromQueue = { viewModel.playFromQueue(it) },
                 onMoveInQueue = { from, to -> viewModel.moveInQueue(from, to) },
@@ -181,7 +183,7 @@ fun NowPlayingScreen(
                 trackResolverConfidences = trackResolverConfidences,
                 trackArtwork = trackArtwork,
                 queueSuspended = playbackState.spinoffMode ||
-                    playbackState.playbackContext?.type == "listen-along",
+                    playbackState.playbackContext?.type == LISTEN_ALONG_CONTEXT,
                 onNavigateToContext = { ctx ->
                     when (ctx.type) {
                         "album" -> {
@@ -480,10 +482,10 @@ fun NowPlayingScreen(
                         horizontalArrangement = Arrangement.Start,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // Shuffle (disabled during spinoff)
+                        // Shuffle (disabled during a spinoff or Listen Along: shared shuffleAllowed)
                         IconButton(
                             onClick = { haptic(); viewModel.toggleShuffle() },
-                            enabled = !playbackState.spinoffMode,
+                            enabled = shuffleAllowed(playbackState.spinoffMode, playbackState.playbackContext?.type),
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = if (playbackState.shuffleEnabled) ActiveControlColor else InactiveControlColor,
                                 disabledContentColor = InactiveControlColor.copy(alpha = 0.3f),

@@ -1,5 +1,6 @@
 package com.parachord.android.playback
 
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -1690,6 +1691,15 @@ class PlaybackService : MediaLibraryService() {
             playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))
         }
 
+        // Parachord's shuffle (its own queue order), never ExoPlayer's. A
+        // media-session shuffle command goes through the controller, which
+        // refuses it during a spinoff or Listen Along (shared shuffleAllowed).
+        override fun getShuffleModeEnabled(): Boolean = stateHolder.state.value.shuffleEnabled
+
+        override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
+            playbackController.setShuffle(shuffleModeEnabled)
+        }
+
         // ── Synthetic timeline overrides ────────────────────────────────
 
         override fun getCurrentTimeline(): Timeline = queueSnapshot.timeline
@@ -1717,7 +1727,7 @@ class PlaybackService : MediaLibraryService() {
             val state = stateHolder.state.value
             return queueSnapshot.items.isNotEmpty() &&
                 state.repeatMode == RepeatMode.ALL &&
-                state.playbackContext?.type != "listen-along"
+                state.playbackContext?.type != LISTEN_ALONG_CONTEXT
         }
 
         override fun getPreviousMediaItemIndex(): Int = C.INDEX_UNSET

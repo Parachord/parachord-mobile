@@ -10,7 +10,13 @@ import com.parachord.shared.playback.AdvanceAction
 import com.parachord.shared.playback.AdvanceTrigger
 import com.parachord.shared.playback.PLAY_NO_SOURCE_MESSAGE
 import com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
+import com.parachord.shared.playback.PlaybackMessages
 import com.parachord.shared.playback.PoolRefiller
+import com.parachord.shared.playback.shuffleAllowed
+import com.parachord.shared.playback.spinoffNeedsRefill
+import com.parachord.shared.playback.spinoffTrack
+import com.parachord.shared.playback.spinoffTracksToPreresolve
 import com.parachord.shared.playback.PreviousAction
 import com.parachord.shared.playback.advanceAction
 import com.parachord.shared.playback.nextRepeatMode
@@ -86,8 +92,6 @@ class PlaybackController constructor(
 ) {
     companion object {
         private const val TAG = "PlaybackController"
-        /** Pool size below which Mode C triggers a refill (matches desktop's < 3). */
-        private const val POOL_REFILL_THRESHOLD = 3
         /**
          * Longest a handler's play may take before the track is given up on.
          * Above Spotify's slowest legitimate cold start (broadcast wait, launch,
@@ -235,7 +239,7 @@ class PlaybackController constructor(
     // stamping) lives in [PoolRefiller] for testability. This holder
     // forwards `refillUrl` and `fetcher` into it on
     // [startPoolBasedSpinoff], triggers it from [skipNextInternal] when
-    // the pool drops below [POOL_REFILL_THRESHOLD], and resets it on
+    // the pool is low ([spinoffNeedsRefill]), and resets it on
     // [exitSpinoff].
     //
     // Reset on every [startPoolBasedSpinoff] entry AND on [exitSpinoff]
@@ -504,14 +508,18 @@ class PlaybackController constructor(
                 val next = spinoffPool.removeAt(0)
                 Log.d(TAG, "Spinoff: playing next '${next.title}' by ${next.artist} (${spinoffPool.size} remaining)")
 
-                // Mode C refill trigger — fire when the pool drops below
-                // POOL_REFILL_THRESHOLD AND we have a refill URL configured.
-                // This is a no-op for Mode B (seed-based) spinoffs since
-                // their refillUrl is null. The PoolRefiller handles
-                // rate-limit + stop-condition gating internally.
-                if (spinoffPool.size < POOL_REFILL_THRESHOLD && poolRefiller.refillUrl != null) {
+                // Mode C refill trigger — fire when the shared rule says the
+                // pool is low AND we have a refill URL configured. This is a
+                // no-op for Mode B (seed-based) spinoffs since their refillUrl
+                // is null. The PoolRefiller handles rate-limit + stop-condition
+                // gating internally.
+                if (spinoffNeedsRefill(spinoffPool.size) && poolRefiller.refillUrl != null) {
                     triggerPoolRefill()
                 }
+                // Pool tracks are metadata only: resolve the next few ahead so
+                // they start quickly (the track itself is resolved on the fly
+                // when it plays if this hasn't finished).
+                preresolveSpinoffPool()
 
                 advanceJob = scope.launch {
                     try {
@@ -534,7 +542,7 @@ class PlaybackController constructor(
         // Listen Along follows the friend: the end-of-track listener above has
         // already started their next track, so repeat (a replay, or a wrap
         // over the history) would replace it. Repeat counts as off there.
-        val listenAlong = state.playbackContext?.type == "listen-along"
+        val listenAlong = state.playbackContext?.type == LISTEN_ALONG_CONTEXT
         val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
         val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
         val next: TrackEntity = when (action) {
@@ -869,15 +877,37 @@ class PlaybackController constructor(
         }
     }
 
-    fun toggleShuffle() {
-        // Shuffle is disabled during spinoff mode (desktop behavior)
-        if (stateHolder.state.value.spinoffMode) return
+    /**
+     * Turn shuffle on or off. Refused (nothing changes) during a spinoff or
+     * Listen Along: the shared [shuffleAllowed] rule. Every shuffle entry
+     * point (Now Playing, the `parachord://shuffle` link, the DJ tool, the
+     * media session) comes through here or [setShuffle].
+     *
+     * Parachord shuffles its own queue; ExoPlayer's shuffle is never used
+     * (the media session's shuffle command lands in [setShuffle] through the
+     * service's forwarding player, which doesn't pass it to ExoPlayer).
+     *
+     * @return false when shuffle isn't allowed right now.
+     */
+    fun toggleShuffle(): Boolean {
+        val state = stateHolder.state.value
+        if (!shuffleAllowed(state.spinoffMode, queueManager.playbackContext?.type)) {
+            Log.d(TAG, "Shuffle refused: spinoff or Listen Along")
+            return false
+        }
         val newState = queueManager.toggleShuffle()
         stateHolder.update { copy(shuffleEnabled = newState) }
-        if (!isExternalPlayback) {
-            controller?.shuffleModeEnabled = false // We manage shuffle ourselves
-        }
         syncQueueState()
+        return true
+    }
+
+    /**
+     * Set shuffle to [enabled]. @return false when it was refused (spinoff or
+     * Listen Along, see [toggleShuffle]); true when shuffle is now [enabled].
+     */
+    fun setShuffle(enabled: Boolean): Boolean {
+        if (queueManager.shuffleEnabled == enabled) return true
+        return toggleShuffle()
     }
 
     fun seekTo(positionMs: Long) {
@@ -1996,7 +2026,7 @@ class PlaybackController constructor(
 
     /**
      * Start spinoff mode: fetch similar tracks for the current track from
-     * Last.fm, shuffle them, resolve each one, and begin playing from the pool.
+     * Last.fm (resolved as they play, not up front) and begin playing from the pool.
      * Matches the desktop's startSpinoff() logic.
      *
      * Thin delegate over [startSpinoffWithSeed] — kept as the in-app entry
@@ -2008,7 +2038,7 @@ class PlaybackController constructor(
         startSpinoffWithSeed(
             seedArtist = track.artist,
             seedTitle = track.title,
-            displayName = "Spinoff from ${track.title} by ${track.artist}",
+            displayName = PlaybackMessages.spinoffFrom(track.title, track.artist),
         )
     }
 
@@ -2065,7 +2095,7 @@ class PlaybackController constructor(
                 val pool = buildSpinoffPool(seed.artist, seed.title)
                 if (pool.isEmpty()) {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, "No similar tracks found for \"${seed.title}\"", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, PlaybackMessages.noSimilarTracks(seed.title), Toast.LENGTH_SHORT).show()
                     }
                     stateHolder.update { copy(spinoffLoading = false, spinoffAvailable = false) }
                     return@launch
@@ -2084,7 +2114,7 @@ class PlaybackController constructor(
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Spinoff: failed to start", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Failed to fetch similar tracks", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, PlaybackMessages.SPINOFF_FETCH_FAILED, Toast.LENGTH_SHORT).show()
                 }
                 stateHolder.update { copy(spinoffLoading = false) }
             }
@@ -2104,68 +2134,66 @@ class PlaybackController constructor(
     /**
      * Build the seed's pool with the shared builder (Last.fm similar tracks,
      * topped up from similar artists' top tracks when there are fewer than 5,
-     * desktop parachord#1281) and resolve each candidate.
+     * desktop parachord#1281) as metadata-only tracks ([spinoffTrack]).
+     *
+     * Nothing is resolved here: a pool track is resolved when it plays
+     * (`playTrackInternalUnsafe` → [resolveOnTheFly]), the next few are
+     * pre-resolved in the background ([preresolveSpinoffPool]), and one that
+     * has no source is skipped (`PlayFailure.NO_SOURCE` during a spinoff).
+     * Resolving every candidate up front took 20 resolver fan-outs before the
+     * spinoff could start.
      *
      * Touches NO playback state, so a caller can run it BEFORE deciding whether
-     * to tear down the user's queue (#397). Returns the resolved pool, possibly
-     * empty (no similar tracks, or none resolvable — e.g. a user with only
-     * Bandcamp connected). A failed similar-tracks request throws
+     * to tear down the user's queue (#397). Returns the pool in the builder's
+     * order (it already shuffled, and its fallback tracks are dealt so no two in
+     * a row share an artist, so don't shuffle again), possibly empty. A failed
+     * similar-tracks request throws
      * [com.parachord.shared.playback.SpinoffFetchFailedException] so the caller
      * reports it as a failure, not as "no similar tracks".
      */
     suspend fun buildSpinoffPool(seedArtist: String, seedTitle: String): List<TrackEntity> =
         withContext(Dispatchers.IO) {
-            // 1. Candidates from the shared pool builder.
             val built = com.parachord.shared.playback.buildSpinoffPool(spinoffLastFm, seedArtist, seedTitle)
             if (built.failed) throw com.parachord.shared.playback.SpinoffFetchFailedException()
-            val candidates = built.tracks
-            if (candidates.isEmpty()) {
-                Log.d(TAG, "Spinoff: no similar tracks found for '$seedTitle'")
-                return@withContext emptyList()
-            }
-            Log.d(TAG, "Spinoff: found ${candidates.size} candidate tracks for '$seedTitle'" +
-                (if (built.usedFallback) " (similar artists' top tracks)" else "") + ", resolving...")
-
-            // 2. Convert to TrackEntities and resolve each, in the pool's order:
-            // the builder already shuffled, and its fallback tracks are dealt so
-            // no two in a row share an artist, so don't shuffle again here.
-            // Skip Last.fm images — they're almost always placeholder/blank.
-            // Album art will be enriched via metadata providers on playback.
-            val resolvedTracks = mutableListOf<TrackEntity>()
-            for (cand in candidates) {
-                val query = "${cand.title} ${cand.artist}"
-                try {
-                    val sources = resolverManager.resolve(
-                        query,
-                        targetTitle = cand.title,
-                        targetArtist = cand.artist,
-                    )
-                    val best = resolverScoring.selectBest(sources) ?: continue
-                    resolvedTracks.add(
-                        TrackEntity(
-                            id = "spinoff_${cand.title}_${cand.artist}".hashCode().toString(),
-                            title = cand.title,
-                            artist = cand.artist,
-                            sourceUrl = best.url,
-                            resolver = best.resolver,
-                            spotifyUri = best.spotifyUri,
-                            spotifyId = best.spotifyId,
-                            soundcloudId = best.soundcloudId,
-                            appleMusicId = best.appleMusicId,
-                        )
-                    )
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w(TAG, "Spinoff: failed to resolve '${cand.title}'", e)
-                }
-            }
-            if (resolvedTracks.isEmpty()) Log.d(TAG, "Spinoff: no tracks could be resolved")
-            else Log.d(TAG, "Spinoff: resolved ${resolvedTracks.size} tracks, ready for playback")
-            resolvedTracks
+            val pool = built.tracks.map { spinoffTrack(it.title, it.artist) }
+            if (pool.isEmpty()) Log.d(TAG, "Spinoff: no similar tracks found for '$seedTitle'")
+            else Log.d(TAG, "Spinoff: ${pool.size} pool tracks for '$seedTitle'" +
+                if (built.usedFallback) " (similar artists' top tracks)" else "")
+            pool
         }
 
     /**
-     * Begin spinoff from an already-resolved, non-empty [pool].
+     * True when [track] resolves to a source that can play now (one that
+     * passes [ResolverScoring.selectBest]). The radio link's probe
+     * ([firstPlayableIndex]) uses it so a station whose first tracks can't
+     * play isn't started (#397). The sources found are cached, so the track
+     * the station starts with doesn't resolve again.
+     */
+    suspend fun isPlayableNow(track: TrackEntity): Boolean = withContext(Dispatchers.IO) {
+        val report = resolverManager.resolveReport(
+            "${track.title} ${track.artist}",
+            targetTitle = track.title,
+            targetArtist = track.artist,
+        )
+        trackResolverCache.putSources(track.title, track.artist, report.sources, report.failed)
+        resolverScoring.selectBest(report.sources) != null
+    }
+
+    /**
+     * Resolve the spinoff pool's next few tracks ([spinoffTracksToPreresolve])
+     * in the background so they're ready to play. Off the priority lane: the
+     * user isn't looking at the pool. Tracks already resolved are skipped by
+     * the cache.
+     */
+    private fun preresolveSpinoffPool() {
+        val ahead = spinoffTracksToPreresolve(spinoffPool)
+        if (ahead.isEmpty()) return
+        trackResolverCache.resolveInBackground(ahead, backfillDb = false, priority = false)
+    }
+
+    /**
+     * Begin spinoff from a non-empty [pool] of metadata-only tracks (see
+     * [buildSpinoffPool]); the next few are pre-resolved here.
      *
      * The user's queue is NOT modified here — only the playback context is saved
      * (desktop behavior). For the deep link, the caller has already torn the
@@ -2199,7 +2227,7 @@ class PlaybackController constructor(
         withContext(Dispatchers.Main) {
             Toast.makeText(
                 context,
-                "Spinning off of $seedTitle - $seedArtist",
+                PlaybackMessages.spinningOff(seedTitle, seedArtist),
                 Toast.LENGTH_SHORT,
             ).show()
         }
@@ -2217,9 +2245,11 @@ class PlaybackController constructor(
             val first = spinoffPool.removeAt(0)
             Log.d(TAG, "Spinoff: kicking off with '${first.title}' by ${first.artist}")
             withContext(Dispatchers.Main) {
+                preresolveSpinoffPool()
                 playTrack(first, context = spinoffContext)
             }
         } else {
+            withContext(Dispatchers.Main) { preresolveSpinoffPool() }
             queueManager.setContext(spinoffContext)
         }
     }
@@ -2227,8 +2257,8 @@ class PlaybackController constructor(
     /**
      * Mode C refill trigger — fire-and-forget fetch + dedup + append.
      *
-     * Called from [skipNextInternal] when the spinoff pool drops below
-     * [POOL_REFILL_THRESHOLD] and a refill URL is configured. The
+     * Called from [skipNextInternal] when the spinoff pool is low
+     * ([spinoffNeedsRefill]) and a refill URL is configured. The
      * actual rate-limit / stop-condition / dedup logic lives in
      * [PoolRefiller.tryRefill] — this method is just the
      * coroutine-launch shim.
@@ -2246,15 +2276,25 @@ class PlaybackController constructor(
         // concurrent modification of [spinoffPool] (a plain mutableListOf,
         // not thread-safe) during toList().
         val snapshot = spinoffPool.toList()
+        val refillUrl = poolRefiller.refillUrl
         scope.launch(Dispatchers.IO) {
             try {
                 val fresh = poolRefiller.tryRefill(snapshot) ?: return@launch
                 // addAll back on Main — same dispatcher as skipNextInternal's
-                // removeAt(0). Pool mutations stay on a single thread.
-                withContext(Dispatchers.Main) {
-                    spinoffPool.addAll(fresh)
-                    Log.d(TAG, "Pool refill: appended ${fresh.size} tracks (pool now ${spinoffPool.size})")
+                // removeAt(0). Pool mutations stay on a single thread. A refill
+                // that finishes after its spinoff ended (or after another
+                // station replaced it) is dropped: it belongs to no pool.
+                val added = withContext(Dispatchers.Main) {
+                    if (!stateHolder.state.value.spinoffMode || poolRefiller.refillUrl != refillUrl) {
+                        Log.d(TAG, "Pool refill: dropped ${fresh.size} tracks, the spinoff it was for has ended")
+                        false
+                    } else {
+                        spinoffPool.addAll(fresh)
+                        Log.d(TAG, "Pool refill: appended ${fresh.size} tracks (pool now ${spinoffPool.size})")
+                        true
+                    }
                 }
+                if (!added) return@launch
                 // Pre-warm resolver cache so they're ready when consumed.
                 // Stays on IO — TrackResolverCache is internally thread-safe.
                 try {
@@ -2309,7 +2349,7 @@ class PlaybackController constructor(
      * tracklist. Mirrors desktop's "externally curated pool" path.
      *
      * [refillUrl], when non-null, is forwarded to [poolRefiller] so the
-     * refill loop fires when `spinoffPool.size < POOL_REFILL_THRESHOLD`.
+     * refill loop fires when the pool is low ([spinoffNeedsRefill]).
      *
      * [displayName] is the station name shown in the banner. Pool-based
      * spinoffs have no source track, so the banner branch (Task 6) renders
