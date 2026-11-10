@@ -1225,29 +1225,23 @@ enum MusicKitDeadline {
 /// first update arrives, so a slow first update never reads as offline. A play
 /// that nothing could start while offline stops on its track (shared
 /// `PlayFailure.START_FAILED`) instead of skipping through the queue, since
-/// every track would fail the same way.
+/// every track would fail the same way. Observable, so `PCOfflineBanner`
+/// (`RootView.swift`) follows it; updates arrive on the main queue.
+@Observable
 final class IosNetworkStatus {
     static let shared = IosNetworkStatus()
-    private let monitor = NWPathMonitor()
-    private let lock = NSLock()
-    private var online = true
-
-    var isOnline: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return online
-    }
+    @ObservationIgnored private let monitor = NWPathMonitor()
+    private(set) var isOnline = true
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             let now = path.status == .satisfied
-            self.lock.lock()
-            let changed = self.online != now
-            self.online = now
-            self.lock.unlock()
-            if changed { NSLog("NETWORK \(now ? "online" : "offline")") }
+            guard self.isOnline != now else { return }
+            self.isOnline = now
+            NSLog("NETWORK \(now ? "online" : "offline")")
         }
-        monitor.start(queue: DispatchQueue(label: "com.parachord.network-status"))
+        monitor.start(queue: .main)
     }
 }
 
