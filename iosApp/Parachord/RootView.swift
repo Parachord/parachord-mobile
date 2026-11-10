@@ -459,6 +459,9 @@ struct ContentView: View {
             dlAck("Playing \(r.name)")
         case "radioPool":
             listenAlong.stop()
+            // End a running spinoff first, so the radio restores the context
+            // from before it, not the old spinoff's.
+            coordinator.exitSpinoff()
             coordinator.beginRadio(pool: r.tracks, displayName: r.name, refillUrl: r.refillUrl)
             dlAck("Starting \(r.name)")
         case "failed":

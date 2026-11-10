@@ -1501,7 +1501,8 @@ class PlaybackService : MediaLibraryService() {
             if (command == COMMAND_GET_TIMELINE ||
                 command == COMMAND_GET_CURRENT_MEDIA_ITEM ||
                 command == COMMAND_SEEK_TO_MEDIA_ITEM ||
-                command == COMMAND_SET_REPEAT_MODE
+                command == COMMAND_SET_REPEAT_MODE ||
+                command == COMMAND_SET_SHUFFLE_MODE
             ) return true
             if (externalMode && command in EXTERNAL_COMMANDS) return true
             return super.isCommandAvailable(command)
@@ -1514,6 +1515,10 @@ class PlaybackService : MediaLibraryService() {
                     COMMAND_GET_CURRENT_MEDIA_ITEM,
                     COMMAND_SEEK_TO_MEDIA_ITEM,
                     COMMAND_SET_REPEAT_MODE,
+                    // Shuffle is Parachord's (setShuffleModeEnabled →
+                    // PlaybackController.setShuffle), so it's offered whatever
+                    // the wrapped ExoPlayer reports.
+                    COMMAND_SET_SHUFFLE_MODE,
                 )
             if (externalMode) {
                 builder.addAll(

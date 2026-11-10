@@ -2103,7 +2103,7 @@ class PlaybackController constructor(
 
                 startSpinoffFromPool(
                     pool = pool,
-                    displayName = displayName ?: "Spinoff from ${seed.title}",
+                    displayName = displayName ?: PlaybackMessages.spinoffFrom(seed.title, seed.artist),
                     seedArtist = seed.artist,
                     seedTitle = seed.title,
                     kickStartFirstTrack = kickStartFirstTrack,
@@ -2166,17 +2166,21 @@ class PlaybackController constructor(
      * True when [track] resolves to a source that can play now (one that
      * passes [ResolverScoring.selectBest]). The radio link's probe
      * ([firstPlayableIndex]) uses it so a station whose first tracks can't
-     * play isn't started (#397). The sources found are cached, so the track
-     * the station starts with doesn't resolve again.
+     * play isn't started (#397). It reads the resolver cache first
+     * ([TrackResolverCache.resolveTrack]), so a track resolved earlier in the
+     * session isn't resolved again, and a fresh resolve is cached, so the
+     * track the station starts with doesn't resolve again either.
      */
     suspend fun isPlayableNow(track: TrackEntity): Boolean = withContext(Dispatchers.IO) {
-        val report = resolverManager.resolveReport(
-            "${track.title} ${track.artist}",
-            targetTitle = track.title,
-            targetArtist = track.artist,
+        val sources = trackResolverCache.resolveTrack(
+            title = track.title,
+            artist = track.artist,
+            spotifyId = track.spotifyId,
+            appleMusicId = track.appleMusicId,
+            soundcloudId = track.soundcloudId,
+            recordingMbid = track.recordingMbid,
         )
-        trackResolverCache.putSources(track.title, track.artist, report.sources, report.failed)
-        resolverScoring.selectBest(report.sources) != null
+        resolverScoring.selectBest(sources) != null
     }
 
     /**
@@ -2206,15 +2210,18 @@ class PlaybackController constructor(
         seedTitle: String,
         kickStartFirstTrack: Boolean,
     ) {
-        // 3. Save previous playback context (queue is NOT modified — desktop behavior).
-        preSpinoffContext = queueManager.playbackContext
-        spinoffSourceTrack = stateHolder.state.value.currentTrack
-
-        // 4. Populate spinoff pool (separate from queue).
-        spinoffPool.clear()
-        spinoffPool.addAll(pool)
-
         val spinoffContext = PlaybackContext(type = "spinoff", name = displayName)
+
+        // Save the previous playback context (the queue is NOT modified —
+        // desktop behavior) and fill the pool on Main: skipNextInternal reads
+        // the pool and the (not thread-safe) QueueManager there, and this
+        // function runs on spinoffJob's IO dispatcher.
+        withContext(Dispatchers.Main) {
+            preSpinoffContext = queueManager.playbackContext
+            spinoffSourceTrack = stateHolder.state.value.currentTrack
+            spinoffPool.clear()
+            spinoffPool.addAll(pool)
+        }
 
         stateHolder.update {
             copy(
@@ -2241,16 +2248,22 @@ class PlaybackController constructor(
         // Non-kick path (in-app spinoff): the current track keeps playing;
         // set the context now so the banner updates immediately, and let
         // skipNextInternal() pull from the pool when the current song ends.
-        if (kickStartFirstTrack && spinoffPool.isNotEmpty()) {
-            val first = spinoffPool.removeAt(0)
-            Log.d(TAG, "Spinoff: kicking off with '${first.title}' by ${first.artist}")
+        if (kickStartFirstTrack) {
             withContext(Dispatchers.Main) {
+                if (spinoffPool.isEmpty()) return@withContext
+                val first = spinoffPool.removeAt(0)
+                Log.d(TAG, "Spinoff: kicking off with '${first.title}' by ${first.artist}")
                 preresolveSpinoffPool()
                 playTrack(first, context = spinoffContext)
             }
         } else {
-            withContext(Dispatchers.Main) { preresolveSpinoffPool() }
-            queueManager.setContext(spinoffContext)
+            withContext(Dispatchers.Main) {
+                preresolveSpinoffPool()
+                queueManager.setContext(spinoffContext)
+                // Publish the context now so the banner ("Spinoff from … by …")
+                // shows at once, not only when the first pool track plays.
+                syncQueueState()
+            }
         }
     }
 
@@ -2295,14 +2308,10 @@ class PlaybackController constructor(
                     }
                 }
                 if (!added) return@launch
-                // Pre-warm resolver cache so they're ready when consumed.
-                // Stays on IO — TrackResolverCache is internally thread-safe.
-                try {
-                    trackResolverCache.resolveInBackground(fresh, backfillDb = false, priority = false)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    Log.w(TAG, "Pool refill pre-warm failed: ${e.message}")
-                }
+                // No bulk pre-warm: refilled tracks resolve when they play.
+                // Pre-resolve only the next few (the pool may have been
+                // nearly empty when the refill landed).
+                withContext(Dispatchers.Main) { preresolveSpinoffPool() }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -2409,6 +2418,9 @@ class PlaybackController constructor(
         // a bare setContext() before playTrack() would get clobbered.
         val first = spinoffPool.removeAt(0)
         Log.d(TAG, "Pool spinoff: kicking off '$displayName' with '${first.title}' by ${first.artist} (${spinoffPool.size} remaining)")
+        // Pool tracks resolve when they play; only the next few are
+        // pre-resolved, as in the in-app spinoff (#177: never the whole pool).
+        preresolveSpinoffPool()
         playTrack(first, context = spinoffContext)
     }
 

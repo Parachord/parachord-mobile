@@ -1992,9 +1992,7 @@ final class QueuePlaybackCoordinator {
     // that URL as it drains. The shared `PoolRefiller` (Android's) owns the rate
     // limit, the stop after 3 empty refills and the dedup; `refillUrl` is nil for
     // the in-app Spinoff button (a finite similar-track pool).
-    // Kotlin's `newSpinoffRefiller()`: Kotlin/Native exports a name starting with
-    // "new" as `doNew…`, since ObjC reserves the `new` method family.
-    @ObservationIgnored private let spinoffRefiller = IosContainer.companion.shared.doNewSpinoffRefiller()
+    @ObservationIgnored private let spinoffRefiller = IosContainer.companion.shared.makeSpinoffRefiller()
     /// Bumped on every spinoff start and exit, so a refill that lands after its
     /// station ended (or another started) is dropped instead of joining a pool
     /// it doesn't belong to.
@@ -2047,16 +2045,19 @@ final class QueuePlaybackCoordinator {
     /// false so the caller falls through to the normal queue ("return to queue").
     private func advanceSpinoff() -> Bool {
         guard spinoffMode else { return false }
+        guard !spinoffPool.isEmpty else {
+            exitSpinoff()
+            return false
+        }
+        let next = spinoffPool.removeFirst()
+        // Checked once the next track is taken, as on Android: refill when
+        // fewer than 3 are left after it.
         if SpinoffSessionKt.spinoffNeedsRefill(poolSize: Int32(spinoffPool.count)) {
             refillSpinoffIfNeeded()   // top up a draining radio
         }
-        if !spinoffPool.isEmpty {
-            playTrack(spinoffPool.removeFirst(), advancing: true)
-            preresolveSpinoffPool()
-            return true
-        }
-        exitSpinoff()
-        return false
+        playTrack(next, advancing: true)
+        preresolveSpinoffPool()
+        return true
     }
 
     /// Resolve the pool's next few tracks ahead of time (shared

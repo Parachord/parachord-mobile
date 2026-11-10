@@ -1623,7 +1623,7 @@ class IosContainer private constructor() {
      * fetcher reading a hosted tracklist URL. Swift can't call the defaulted
      * constructor or set a suspend-lambda property, so it asks for a wired one.
      */
-    fun newSpinoffRefiller(): com.parachord.shared.playback.PoolRefiller =
+    fun makeSpinoffRefiller(): com.parachord.shared.playback.PoolRefiller =
         com.parachord.shared.playback.PoolRefiller().apply {
             fetcher = { url -> protocolInputResolver.resolveByUrl(url)?.tracks ?: emptyList() }
         }

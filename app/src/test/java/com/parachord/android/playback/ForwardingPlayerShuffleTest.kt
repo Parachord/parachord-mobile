@@ -42,6 +42,16 @@ class ForwardingPlayerShuffleTest {
         return Fixture(wrapper, delegate, controller, stateHolder)
     }
 
+    @Test fun `the shuffle command is available`() {
+        // The delegate reports no commands at all, so this can only come from
+        // the wrapper itself.
+        for (external in listOf(false, true)) {
+            val f = fixture(externalMode = external)
+            assertTrue(f.wrapper.isCommandAvailable(Player.COMMAND_SET_SHUFFLE_MODE))
+            assertTrue(f.wrapper.availableCommands.contains(Player.COMMAND_SET_SHUFFLE_MODE))
+        }
+    }
+
     @Test fun `getShuffleModeEnabled reports Parachord's shuffle, not the delegate's`() {
         for (external in listOf(false, true)) {
             val f = fixture(externalMode = external, delegateShuffle = true)
