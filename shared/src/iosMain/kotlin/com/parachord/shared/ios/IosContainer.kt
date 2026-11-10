@@ -3400,11 +3400,6 @@ class IosContainer private constructor() {
         playlistDao.update(p.copy(name = name, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
     }
 
-    suspend fun deletePlaylist(id: String) {
-        playlistTrackDao.deleteByPlaylistId(id)
-        playlistDao.getById(id)?.let { playlistDao.delete(it) }
-    }
-
     /** localPlaylistId -> the providers each playlist EFFECTIVELY syncs with
      *  (override-aware), for the playlists-list source chips. */
     suspend fun getAllPlaylistMirrors(): List<IosPlaylistMirrors> =

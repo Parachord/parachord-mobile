@@ -167,6 +167,7 @@ fun HistoryScreen(
                     onSortChanged = viewModel::setRecentSort,
                     onSearchChanged = viewModel::setRecentSearch,
                     onPlayTrack = viewModel::playRecentTrack,
+                    onRetry = viewModel::refreshRecentTracks,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
                     trackArtwork = trackArtwork,
@@ -519,6 +520,7 @@ private fun RecentlyPlayedTab(
     onSortChanged: (String) -> Unit,
     onSearchChanged: (String) -> Unit,
     onPlayTrack: (Int) -> Unit,
+    onRetry: () -> Unit,
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
     trackArtwork: Map<String, String> = emptyMap(),
@@ -530,7 +532,7 @@ private fun RecentlyPlayedTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(message = recentTracks.message, onRetry = {})
+            is Resource.Error -> ErrorState(message = recentTracks.message, onRetry = onRetry)
             is Resource.Success -> {
                 if (recentTracks.data.isEmpty() && search.isBlank()) {
                     EmptyState(UiMessages.HISTORY_RECENT_EMPTY)
