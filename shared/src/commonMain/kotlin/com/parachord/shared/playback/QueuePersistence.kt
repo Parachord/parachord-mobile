@@ -23,6 +23,21 @@ data class PersistedQueueState(
     val playbackContext: PlaybackContext? = null,
     val shuffleEnabled: Boolean = false,
     val originalOrder: List<Track>? = null,
+    /**
+     * Whether each [playHistory] entry belongs to the queue (repeat all wraps
+     * only those; see `QueueManager.historyInQueue`). Null or short in a blob
+     * saved before it existed: the missing entries count as in the queue.
+     */
+    val playHistoryInQueue: List<Boolean>? = null,
+    /** The current track was a spinoff pool track (`QueueManager.currentIsPoolTrack`). */
+    val currentIsPoolTrack: Boolean = false,
+    /**
+     * Whether each [upNext] entry belongs to the lap (Previous can put an
+     * out-of-lap track there); null or short counts as in the lap.
+     */
+    val upNextInLap: List<Boolean>? = null,
+    /** The current track belongs to the lap (`QueueManager.currentInLap`). */
+    val currentInLap: Boolean = true,
 )
 
 /**

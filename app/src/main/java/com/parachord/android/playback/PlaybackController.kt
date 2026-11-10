@@ -507,6 +507,13 @@ class PlaybackController constructor(
             if (spinoffPool.isNotEmpty()) {
                 val next = spinoffPool.removeAt(0)
                 Log.d(TAG, "Spinoff: playing next '${next.title}' by ${next.artist} (${spinoffPool.size} remaining)")
+                // The shared QueueManager keeps the seed (the track playing
+                // when the first pool track starts) in the repeat-all lap and
+                // the pool tracks out of it.
+                if (!queueManager.currentIsPoolTrack) {
+                    Log.d(TAG, "Spinoff: seed '${stateHolder.state.value.currentTrack?.title}' kept in history")
+                }
+                queueManager.poolTrackStarted(stateHolder.state.value.currentTrack)
 
                 // Mode C refill trigger — fire when the shared rule says the
                 // pool is low AND we have a refill URL configured. This is a
@@ -545,6 +552,12 @@ class PlaybackController constructor(
         val listenAlong = state.playbackContext?.type == LISTEN_ALONG_CONTEXT
         val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
         val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
+        // A track outside the repeat-all lap (a spinoff pool track, history
+        // from before a cleared queue) stays out of it; the shared
+        // QueueManager decides.
+        if (!queueManager.currentInLap && action != AdvanceAction.REPLAY_CURRENT) {
+            Log.d(TAG, "skipNext: '${currentTrack?.title}' isn't in the repeat-all lap; keeping it out")
+        }
         val next: TrackEntity = when (action) {
             AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack)
             AdvanceAction.REPLAY_CURRENT -> currentTrack
@@ -2056,7 +2069,8 @@ class PlaybackController constructor(
      * pool before tearing down the user's queue (#397).
      *
      * [displayName], when non-null, sets the [PlaybackContext.name] directly;
-     * null falls back to `"Spinoff from <title>"` (the historical banner copy).
+     * null falls back to "Spinoff from <title> by <artist>" of the resolved seed
+     * ([PlaybackMessages.spinoffFrom]).
      *
      * [kickStartFirstTrack] controls whether the first pool track plays now
      * (`true`) or the current track keeps playing and `skipNextInternal` pulls
@@ -2255,6 +2269,9 @@ class PlaybackController constructor(
                 Log.d(TAG, "Spinoff: kicking off with '${first.title}' by ${first.artist}")
                 preresolveSpinoffPool()
                 playTrack(first, context = spinoffContext)
+                // playTrack cleared the queue; its first track is a pool
+                // track, so the end of the station doesn't loop it (repeat all).
+                queueManager.poolTrackStarted(null)
             }
         } else {
             withContext(Dispatchers.Main) {
@@ -2422,6 +2439,9 @@ class PlaybackController constructor(
         // pre-resolved, as in the in-app spinoff (#177: never the whole pool).
         preresolveSpinoffPool()
         playTrack(first, context = spinoffContext)
+        // playTrack cleared the queue; its first track is a pool track, so
+        // the end of the station doesn't loop it (repeat all).
+        queueManager.poolTrackStarted(null)
     }
 
     /**

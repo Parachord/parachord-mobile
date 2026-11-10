@@ -2035,6 +2035,9 @@ final class QueuePlaybackCoordinator {
         spinoffRefiller.resetCounters()
         spinoffMode = true
         queueManager.setContext(context: PlaybackContext(type: "spinoff", name: displayName, id: nil))
+        // The queue stays (suspended) on iOS: the track that was playing is the
+        // seed and stays in the lap; the radio's first track is a pool track.
+        poolTrackStarting()
         playTrack(pool[0])
         preresolveSpinoffPool()
         syncSnapshot()
@@ -2050,6 +2053,7 @@ final class QueuePlaybackCoordinator {
             return false
         }
         let next = spinoffPool.removeFirst()
+        poolTrackStarting()
         // Checked once the next track is taken, as on Android: refill when
         // fewer than 3 are left after it.
         if SpinoffSessionKt.spinoffNeedsRefill(poolSize: Int32(spinoffPool.count)) {
@@ -2058,6 +2062,16 @@ final class QueuePlaybackCoordinator {
         playTrack(next, advancing: true)
         preresolveSpinoffPool()
         return true
+    }
+
+    /// A pool track is starting. The shared `QueueManager.poolTrackStarted`
+    /// keeps the seed (the track playing when the first one starts) in the
+    /// repeat-all lap and the pool tracks out of it.
+    private func poolTrackStarting() {
+        if !queueManager.currentIsPoolTrack, let seed = currentTrack {
+            NSLog("SPINOFF seed '%@' kept in history", seed.title)
+        }
+        queueManager.poolTrackStarted(current: currentTrack)
     }
 
     /// Resolve the pool's next few tracks ahead of time (shared
@@ -2621,6 +2635,12 @@ final class QueuePlaybackCoordinator {
             playedSinceWrap: playedSinceWrap
         )
         NSLog("QUEUE advance \(trigger.name) → \(action.name)")
+        // A track outside the repeat-all lap (a spinoff pool track, history
+        // from before a cleared queue) stays out of it; the shared
+        // QueueManager decides.
+        if !queueManager.currentInLap && action != .replayCurrent {
+            NSLog("QUEUE '%@' isn't in the repeat-all lap; keeping it out", currentTrack?.title ?? "")
+        }
         var next: Track?
         switch action {
         case .playNext: next = queueManager.skipNext(currentTrack: currentTrack)
@@ -3164,7 +3184,11 @@ final class QueuePlaybackCoordinator {
             playHistory: queueManager.history,
             playbackContext: snap.playbackContext,
             shuffleEnabled: snap.shuffleEnabled,
-            originalOrder: queueManager.savedOriginalOrder)
+            originalOrder: queueManager.savedOriginalOrder,
+            playHistoryInQueue: queueManager.historyInQueue,
+            currentIsPoolTrack: queueManager.currentIsPoolTrack,
+            upNextInLap: queueManager.upNextInLap,
+            currentInLap: queueManager.currentInLap)
         let jsonStr = QueuePersistenceCodec.shared.encode(state: state)
         try? await container.settingsStore.setPersistedQueueState(json: jsonStr)
     }
@@ -3195,7 +3219,11 @@ final class QueuePlaybackCoordinator {
                 restoredHistory: state.playHistory,
                 restoredOriginalOrder: state.originalOrder,
                 context: state.playbackContext,
-                shuffle: state.shuffleEnabled)
+                shuffle: state.shuffleEnabled,
+                restoredHistoryInQueue: state.playHistoryInQueue,
+                restoredCurrentIsPoolTrack: state.currentIsPoolTrack,
+                restoredUpNextInLap: state.upNextInLap,
+                restoredCurrentInLap: state.currentInLap)
             self.playedSinceWrap = false
             self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the

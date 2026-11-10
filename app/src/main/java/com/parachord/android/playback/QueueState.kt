@@ -36,6 +36,18 @@ data class PersistedQueueState(
     val playbackContext: PlaybackContext? = null,
     val shuffleEnabled: Boolean = false,
     val originalOrder: List<SerializableTrack>? = null,
+    /**
+     * Whether each [playHistory] entry belongs to the queue (repeat all wraps
+     * only those, `QueueManager.historyInQueue`). Null or short in an older
+     * blob: the missing entries count as in the queue.
+     */
+    val playHistoryInQueue: List<Boolean>? = null,
+    /** The current track was a spinoff pool track (`QueueManager.currentIsPoolTrack`). */
+    val currentIsPoolTrack: Boolean = false,
+    /** Whether each [upNext] entry belongs to the lap; null or short = in the lap. */
+    val upNextInLap: List<Boolean>? = null,
+    /** The current track belongs to the lap (`QueueManager.currentInLap`). */
+    val currentInLap: Boolean = true,
 )
 
 fun TrackEntity.toSerializable() = SerializableTrack(
