@@ -1138,11 +1138,31 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
 - **Play on a track no engine holds starts it.** A queue restored paused at
   launch shows its track but loads nothing, and so does a track stopped
   because nothing could play it (the car's Spotify and unplayable-run cases
-  below, and a tapped track an embed refused with nothing else to play it, which
-  is also how an offline Bandcamp or SoundCloud start ends). For both,
+  below, a tapped track an embed refused with nothing else to play it, and a
+  track nothing could start because nothing could reach the network). For both,
   `needsLoadOnPlay` makes `togglePlayPause` (the phone's button, the remote
   play / toggle commands, CarPlay) run `playTrack` instead of resuming whatever
-  the active engine last held. A restored track resumes where it was when the
+  the active engine last held. Which failures stop on the track is the shared
+  `failedPlayAwaitsLoad` (`shared/.../playback/PlayFailure.kt`, Android's rule
+  too): only an embed's refusal while the queue advances or a spinoff runs is
+  skipped. **Offline** (`START_FAILED`): `IosMusicKitPlayer.play` reports
+  `.failed` when the catalog request or `ApplicationMusicPlayer.play()` throws
+  (`.unavailable`, which lets the queue move on, is for not authorized, not in
+  the catalog, or a subscription MusicKit says can't play catalog content), and
+  both calls have a time limit (`MusicKitDeadline`, 20 s and 30 s; a timeout is
+  `START_TIMED_OUT`, and a play that starts after its limit is paused). When
+  nothing plays and an Apple Music start failed, or `IosNetworkStatus`
+  (`NWPathMonitor`) says the device has no network, `playTrack` stops on the
+  track with `PLAY_START_FAILED_MESSAGE`, even while the queue advances or a
+  spinoff runs: the next track would fail the same way, and the queue used to
+  skip through to its end. A failed retry keeps the restored track's resume
+  position. A track with no source that could ever play here (nothing resolved
+  online, or only an Apple Music match without a subscription) still skips, as
+  before; Android stops on that one too. Checked on an iPad in Airplane Mode
+  (Bandcamp and SoundCloud sources, no Apple Music subscription on it): a tapped
+  track and Next each stopped on their track, and Play started it once the
+  network was back. The Apple Music `.failed` path, and whether `play()` can
+  hang offline, haven't been seen on a device. A restored track resumes where it was when the
   app last ran (#567): the 1 s tick saves the position on a pause and every
   15 s while playing (`savePositionIfDue`, shared `PlaybackResumePosition`, its
   own `persisted_queue_position` key), `restoreQueue` reads it for the same

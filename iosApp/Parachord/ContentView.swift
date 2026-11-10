@@ -6,6 +6,7 @@ import UIKit
 import Combine
 import MediaPlayer
 import MusicKit
+import Network
 import AuthenticationServices
 import CryptoKit
 
@@ -1176,6 +1177,80 @@ typealias Track = Shared.Track
 // correct, but the smoke-test card only exercises the read-only
 // `currentStatus` until the capability is enabled on a real device.
 
+/// Runs a MusicKit call with a time limit, so a start that never answers
+/// can't hold a play (and the spinner) forever. MusicKit's calls don't stop
+/// when their task is cancelled, so the call keeps running past the limit;
+/// `onLate` runs if it then succeeds.
+@MainActor
+enum MusicKitDeadline {
+    struct Expired: Error, CustomStringConvertible {
+        let seconds: Double
+        var description: String { "no answer within \(Int(seconds)) s" }
+    }
+
+    static func run<T>(seconds: Double,
+                       onLate: (@MainActor () -> Void)? = nil,
+                       _ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+        let once = Once()
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+            let timer = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                if Task.isCancelled { return }
+                if once.claim() { cont.resume(throwing: Expired(seconds: seconds)) }
+            }
+            Task { @MainActor in
+                do {
+                    let value = try await operation()
+                    timer.cancel()
+                    if once.claim() { cont.resume(returning: value) } else { onLate?() }
+                } catch {
+                    timer.cancel()
+                    if once.claim() { cont.resume(throwing: error) }
+                }
+            }
+        }
+    }
+
+    @MainActor private final class Once {
+        private var done = false
+        func claim() -> Bool {
+            if done { return false }
+            done = true
+            return true
+        }
+    }
+}
+
+/// Whether the device has a network path (`NWPathMonitor`). Online until the
+/// first update arrives, so a slow first update never reads as offline. A play
+/// that nothing could start while offline stops on its track (shared
+/// `PlayFailure.START_FAILED`) instead of skipping through the queue, since
+/// every track would fail the same way.
+final class IosNetworkStatus {
+    static let shared = IosNetworkStatus()
+    private let monitor = NWPathMonitor()
+    private let lock = NSLock()
+    private var online = true
+
+    var isOnline: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return online
+    }
+
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self else { return }
+            let now = path.status == .satisfied
+            self.lock.lock()
+            let changed = self.online != now
+            self.online = now
+            self.lock.unlock()
+            if changed { NSLog("NETWORK \(now ? "online" : "offline")") }
+        }
+        monitor.start(queue: DispatchQueue(label: "com.parachord.network-status"))
+    }
+}
+
 @Observable
 final class IosMusicKitPlayer {
 
@@ -1242,19 +1317,47 @@ final class IosMusicKitPlayer {
         authorizationStatus = status.shortName
     }
 
+    /// How a `play(appleMusicId:)` ended.
+    enum PlayOutcome: Equatable {
+        case started
+        /// Apple Music can't play it here (not authorized, not in the
+        /// catalog, no subscription): the router tries the next source and
+        /// the queue may move on.
+        case unavailable
+        /// Apple Music should have played it and couldn't start: the catalog
+        /// request or the player failed (offline, MusicKit unreachable) or
+        /// took too long. Shared `PlayFailure.START_FAILED` /
+        /// `START_TIMED_OUT`: the coordinator stops on the track for Play.
+        case failed(timedOut: Bool)
+    }
+
+    /// The catalog lookup's limit. Offline it fails at once; this only bounds
+    /// a network that accepts the request and never answers.
+    static let catalogTimeoutSec: Double = 20
+    /// `ApplicationMusicPlayer.play()`'s limit. Online a start takes 1–3 s.
+    static let playTimeoutSec: Double = 30
+
+    /// Bumped on every play, so a MusicKit call that outlived its time limit
+    /// can tell whether a newer play has taken the player since.
+    private var playGeneration = 0
+
     /// Play an Apple Music catalog song by its numeric catalog ID
     /// (the `appleMusicId` field already on `Track`). Resolves the ID
     /// to a `Song` via a catalog request, then hands it to the shared
     /// application player.
-    /// Returns true when playback actually started — the PlaybackRouter uses
-    /// this to decide whether to fall through to the next ranked source.
+    /// Returns `.started` only when playback actually started — the
+    /// PlaybackRouter uses the outcome to decide whether to fall through to
+    /// the next ranked source, and the coordinator whether to stop on the
+    /// track (`.failed`) or let the queue move on (`.unavailable`).
     @MainActor
     @discardableResult
-    func play(appleMusicId: String) async -> Bool {
+    func play(appleMusicId: String) async -> PlayOutcome {
         lastError = nil
+        playGeneration += 1
+        let generation = playGeneration
         guard MusicAuthorization.currentStatus == .authorized else {
             lastError = "Not authorized for Apple Music"
-            return false
+            return .unavailable
         }
         do {
             let song: Song
@@ -1267,10 +1370,12 @@ final class IosMusicKitPlayer {
                     matching: \.id,
                     equalTo: MusicItemID(appleMusicId)
                 )
-                let response = try await request.response()
+                let response = try await MusicKitDeadline.run(seconds: Self.catalogTimeoutSec) {
+                    try await request.response()
+                }
                 guard let fetched = response.items.first else {
                     lastError = "Catalog song \(appleMusicId) not found"
-                    return false
+                    return .unavailable
                 }
                 song = fetched
             }
@@ -1290,7 +1395,16 @@ final class IosMusicKitPlayer {
             duration = 0
             let player = ApplicationMusicPlayer.shared
             player.queue = [song]
-            try await player.play()
+            try await MusicKitDeadline.run(seconds: Self.playTimeoutSec, onLate: { [weak self] in
+                // The play started after its limit, when the coordinator had
+                // already stopped on the track: silence it, unless a newer
+                // play owns the player by now.
+                guard let self, self.playGeneration == generation else { return }
+                NSLog("MUSICKIT play of \(appleMusicId) started after its time limit; pausing it")
+                ApplicationMusicPlayer.shared.pause()
+            }) {
+                try await player.play()
+            }
             nowPlayingTitle = song.title
             isPlaying = true
             duration = song.duration ?? 0
@@ -1299,15 +1413,33 @@ final class IosMusicKitPlayer {
             trackEndHandled = false
             observedPlaying = false
             startPollingIfNeeded()
-            return true
+            return .started
         } catch {
             lastError = "Playback failed: \(error.localizedDescription)"
             // Re-arm so a transient failure can't leave end-detection
             // permanently suppressed for the next successful play.
             trackEndHandled = false
             observedPlaying = false
-            return false
+            let timedOut = error is MusicKitDeadline.Expired
+            NSLog("MUSICKIT play of \(appleMusicId) failed\(timedOut ? " (timed out)" : ""): \(error)")
+            // A subscription that can't play catalog content is Apple Music
+            // being unavailable, not a failed start: the queue may move on.
+            if !timedOut, await Self.subscriptionCantPlayCatalog() {
+                NSLog("MUSICKIT no subscription that plays catalog content")
+                return .unavailable
+            }
+            return .failed(timedOut: timedOut)
         }
+    }
+
+    /// True only when MusicKit says, within 3 s, that this Apple ID can't
+    /// play catalog content. Unknown (offline, no answer) is false.
+    @MainActor
+    private static func subscriptionCantPlayCatalog() async -> Bool {
+        guard let subscription = try? await MusicKitDeadline.run(seconds: 3, {
+            try await MusicSubscription.current
+        }) else { return false }
+        return !subscription.canPlayCatalogContent
     }
 
     @MainActor
@@ -1774,6 +1906,9 @@ final class QueuePlaybackCoordinator {
         var reason = "unplayable"
         /// A Spotify source was tried during the route and didn't start.
         var spotifyFailed = false
+        /// An engine should have started a source and couldn't (Apple Music
+        /// offline, or no answer in time).
+        var startFailure: PlayFailure?
     }
 
     /// The current track is on screen but no engine has it loaded: a queue
@@ -2272,6 +2407,9 @@ final class QueuePlaybackCoordinator {
         // coordinator passes false so we don't get two monitors (a stray resume
         // on the idle Dev player).
         if installLifecycleMonitor {
+            // Start watching the network now, so a play that fails offline
+            // knows it (the monitor's first update arrives asynchronously).
+            _ = IosNetworkStatus.shared
             let monitor = IosAudioSessionMonitor()
             monitor.onShouldResume = { [weak self] in
                 Task { @MainActor in self?.resumeActiveEngine() }
@@ -2354,7 +2492,7 @@ final class QueuePlaybackCoordinator {
         if needsLoadOnPlay, let track = currentTrack, !isStarting {
             let resumeAtSec = restoredResumeAtSec
             restoredResumeAtSec = 0
-            playTrack(track)
+            playTrack(track, aimedAtSec: resumeAtSec)
             if resumeAtSec > 0 { seekOnceStarted(trackId: track.id, toSec: resumeAtSec) }
             return
         }
@@ -2560,7 +2698,12 @@ final class QueuePlaybackCoordinator {
     ///
     /// [advancing]: the queue (or a spinoff) is moving on, so a track no source
     /// can play is skipped rather than reported (desktop `autoSkipIfAdvancing`).
-    private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false) {
+    ///
+    /// [aimedAtSec]: where the caller will seek once it plays (a restored
+    /// track's first play, #567). A failed start keeps it, so the next Play
+    /// still resumes there (Android's `failedLoad`).
+    private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false,
+                           aimedAtSec: Double = 0) {
         currentTrack = track
         needsLoadOnPlay = false
         restoredResumeAtSec = 0
@@ -2654,6 +2797,9 @@ final class QueuePlaybackCoordinator {
                 if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl; refusal.reason = reason }
             }
             router.onSpotifyFailed = { refusal.spotifyFailed = true }
+            router.onStartFailed = { timedOut in
+                if refusal.startFailure == nil { refusal.startFailure = timedOut ? .startTimedOut : .startFailed }
+            }
             // The embeds' lock screen / CarPlay art: the cover the phone shows
             // (the track's own unless it's Last.fm's placeholder, else its
             // resolved sources'), then the playing source's.
@@ -2711,6 +2857,23 @@ final class QueuePlaybackCoordinator {
                 if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
 
             case .noPlayableSource:
+                // Nothing could start because nothing could reach the network:
+                // Apple Music failed to start (offline: MusicKit fails at once),
+                // or the device has no network at all. Stop on the track with
+                // the shared message, advancing or not: every next track would
+                // fail the same way, and the queue would run to its end. Play
+                // loads it again once the network is back (Android's
+                // `PlayFailure.START_FAILED` → `LoadOnPlay` `FAILED`).
+                let startFailure = refusal.startFailure
+                    ?? (IosNetworkStatus.shared.isOnline ? nil : PlayFailure.startFailed)
+                if let startFailure, forcedResolver == nil,
+                   PlayFailureKt.failedPlayAwaitsLoad(failure: startFailure, advancing: advancing, spinoffMode: spinoffMode) {
+                    NSLog("QUEUE '\(track.title)' didn't play (\(startFailure.name)); Play will load it")
+                    await haltActiveEngine()
+                    notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
+                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    return
+                }
                 if refusal.spotifyFailed, forcedResolver == nil, CarPlaySession.shared.isConnected {
                     // In the car, Spotify couldn't start (it isn't running on
                     // the phone, and the car never opens it) and nothing else
@@ -2719,8 +2882,7 @@ final class QueuePlaybackCoordinator {
                     // playlist. Play again retries it once Spotify is open.
                     await haltActiveEngine()
                     notice = Notice(message: CarMessages.shared.OPEN_SPOTIFY_ON_PHONE)
-                    needsLoadOnPlay = true
-                    isStarting = false
+                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
                     return
                 }
                 if refusal.service != nil, refusal.reason == "page" || refusal.reason == "unplayable",
@@ -2733,11 +2895,11 @@ final class QueuePlaybackCoordinator {
                     // banner. Play retries it.
                     await haltActiveEngine()
                     notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
-                    needsLoadOnPlay = true
-                    isStarting = false
+                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
                     return
                 }
-                if let service = refusal.service, !(advancing || spinoffMode) {
+                if let service = refusal.service,
+                   PlayFailureKt.failedPlayAwaitsLoad(failure: .embedRefused, advancing: advancing, spinoffMode: spinoffMode) {
                     // A track SoundCloud's widget won't play, and nothing else
                     // can: say so, with its page on the service (desktop
                     // parachord#1209, Android's snackbar). Halt what was
@@ -2751,8 +2913,7 @@ final class QueuePlaybackCoordinator {
                     // The halted embed holds nothing: Play tries the track
                     // again (it may have been refused for being offline)
                     // rather than "resuming" a stopped page.
-                    needsLoadOnPlay = true
-                    isStarting = false
+                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
                     return
                 }
                 // Resolved but no engine could play it (e.g. Apple-Music-only
@@ -2776,8 +2937,7 @@ final class QueuePlaybackCoordinator {
                         NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
                         await haltActiveEngine()
                         notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
-                        needsLoadOnPlay = true
-                        isStarting = false
+                        awaitLoadOnPlay(aimedAtSec: aimedAtSec)
                         return
                     }
                     skipNext()
@@ -2785,6 +2945,15 @@ final class QueuePlaybackCoordinator {
             }
             isStarting = false
         }
+    }
+
+    /// A play that nothing could start leaves its track on screen for Play
+    /// to load ([needsLoadOnPlay]), at the position that play aimed for.
+    @MainActor
+    private func awaitLoadOnPlay(aimedAtSec: Double) {
+        needsLoadOnPlay = true
+        restoredResumeAtSec = aimedAtSec
+        isStarting = false
     }
 
     /// Stop whichever engine is playing and drop the keepalive, keeping the

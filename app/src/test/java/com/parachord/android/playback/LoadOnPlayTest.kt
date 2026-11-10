@@ -2,7 +2,6 @@ package com.parachord.android.playback
 
 import com.parachord.android.data.db.entity.TrackEntity
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -39,44 +38,6 @@ class LoadOnPlayTest {
     @Test
     fun `nothing is loaded when no track is waiting`() {
         assertNull(loadOnPlayTarget(null, currentTrackId = "t-myth"))
-    }
-
-    // ── failedPlayAwaitsLoad ─────────────────────────────────────────
-
-    @Test
-    fun `a refused track that was tapped waits for Play`() {
-        assertTrue(failedPlayAwaitsLoad(PlayFailure.EMBED_REFUSED, advancing = false, spinoffMode = false))
-    }
-
-    @Test
-    fun `a refused track the queue moved onto is skipped, not held`() {
-        assertFalse(failedPlayAwaitsLoad(PlayFailure.EMBED_REFUSED, advancing = true, spinoffMode = false))
-    }
-
-    @Test
-    fun `a refused track in a spinoff is skipped, not held`() {
-        assertFalse(failedPlayAwaitsLoad(PlayFailure.EMBED_REFUSED, advancing = false, spinoffMode = true))
-    }
-
-    @Test
-    fun `failures the queue doesn't move on from wait for Play, advancing or not`() {
-        val held = listOf(
-            PlayFailure.NO_SOURCE_WITHOUT_SPOTIFY,
-            PlayFailure.START_TIMED_OUT,
-            PlayFailure.START_FAILED,
-            PlayFailure.ERROR,
-            PlayFailure.PLAYER_ERROR,
-        )
-        for (failure in held) {
-            for (advancing in listOf(false, true)) {
-                for (spinoff in listOf(false, true)) {
-                    assertTrue(
-                        "$failure advancing=$advancing spinoff=$spinoff",
-                        failedPlayAwaitsLoad(failure, advancing, spinoff),
-                    )
-                }
-            }
-        }
     }
 
     // ── failedLoad ───────────────────────────────────────────────────
