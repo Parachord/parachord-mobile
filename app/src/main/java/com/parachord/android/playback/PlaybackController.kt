@@ -318,9 +318,15 @@ class PlaybackController constructor(
         }, MoreExecutors.directExecutor())
     }
 
-    /** A play is on its way (an Android Auto tap still loading its tracks): don't restore the saved queue. */
+    /**
+     * A play is on its way (an Android Auto tap still loading its tracks):
+     * don't restore the saved queue, and drop a track waiting to be loaded on
+     * play ([loadOnPlay]), which the media session's play that follows the
+     * tap would otherwise start alongside it.
+     */
     fun notePlayRequested() {
         playRequestedThisRun = true
+        loadOnPlay = null
     }
 
     /**
