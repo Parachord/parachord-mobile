@@ -282,7 +282,7 @@ data class MatchTarget(
  * Bandcamp plugin also copies; keep the lists the same.
  */
 private val VARIANT_WORDS = Regex(
-    "\\b(live|remix(es|ed)?|rmx|cover(s|ed)?|covering|tribute|karaoke|instrumental|acoustic|demo|unplugged|rework|bootleg|mashup|reprise|edit|jam track|sped up|slowed|in the style of)\\b",
+    "\\b(live|medley|remix(es|ed)?|rmx|cover(s|ed)?|covering|tribute|karaoke|instrumental|acoustic|demo|unplugged|rework|bootleg|mashup|reprise|edit|jam track|sped up|slowed|in the style of)\\b",
     RegexOption.IGNORE_CASE,
 )
 
@@ -292,18 +292,41 @@ private fun hasVariantWord(name: String?, target: String?): Boolean {
     return VARIANT_WORDS.findAll(name).any { !t.contains(it.value.lowercase()) }
 }
 
+private val W_SLASH = Regex("\\bw/\\s*")
+private val SONG_JOIN = Regex("[^\\s\\d]\\s*/\\s*[^\\s\\d]")
+
+/**
+ * A title that joins several songs with a slash ("You Never Give Me Your
+ * Money/Sun King/.../Her Majesty") is a medley, which containment accepts for
+ * any song it lists (#582, desktop parachord#1306). Not when the requested
+ * title has a slash itself, a slash between digits ("24/7"), "w/" ("Song (w/
+ * Guest)"), or one inside the requested artist's name ("AC/DC - Back in
+ * Black"). "Song b/w Other" counts: it is two songs. Port of desktop's
+ * `joinsSongs` (`sync-providers/track-variants.js`).
+ */
+fun joinsSongs(title: String?, targetTitle: String?, targetArtist: String?): Boolean {
+    if (targetTitle.orEmpty().contains('/')) return false
+    var s = title.orEmpty().lowercase()
+    val artist = targetArtist.orEmpty().lowercase()
+    if (artist.contains('/')) s = s.split(artist).joinToString(" ")
+    s = s.replace(W_SLASH, " ")
+    return SONG_JOIN.containsMatchIn(s)
+}
+
 /**
  * Is a search result another version of the requested track? A version word
  * counts only when the requested name lacks it, so "Live Forever" and
- * "Take Me Out (Live)" still match themselves. Port of desktop's
- * `isOtherVersion` (parachord#1115).
+ * "Take Me Out (Live)" still match themselves; a title joining songs with a
+ * slash ([joinsSongs]) counts too. Port of desktop's `isOtherVersion`
+ * (parachord#1115, #1306).
  */
 fun isOtherVersion(
     resultTitle: String?,
     resultArtist: String?,
     targetTitle: String?,
     targetArtist: String?,
-): Boolean = hasVariantWord(resultTitle, targetTitle) || hasVariantWord(resultArtist, targetArtist)
+): Boolean = hasVariantWord(resultTitle, targetTitle) || hasVariantWord(resultArtist, targetArtist) ||
+    joinsSongs(resultTitle, targetTitle, targetArtist)
 
 /**
  * Calculate match confidence by comparing the resolver's result against the

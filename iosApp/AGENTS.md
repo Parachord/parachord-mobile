@@ -1040,6 +1040,11 @@ tracks, so this is the only way to play one. Cross-platform details (the
 shared page, desktop's module, previews counted as refused) are in the root
 `CLAUDE.md` → "SoundCloud — the Widget".
 
+- **Which upload resolves is the plugin's choice.** iOS resolves SoundCloud
+  through `soundcloud.axe`'s `resolve`, not Android's native `pickSoundCloudTrack`
+  (#582). **Known gap:** until the plugin skips preview-only tracks and uploaders
+  whose name only contains the artist's (parachord#1307), iOS can resolve a fan
+  podcast such as "Ramones of the Day" for "Judy Is a Punk"; Android doesn't.
 - **The page is shared with Android, byte for byte.** `Resources/soundcloud-widget.html`
   and `Resources/soundcloud-widget-player.js` are copies of
   `app/src/main/assets/js/`; an Android unit test fails if they differ. Edit
