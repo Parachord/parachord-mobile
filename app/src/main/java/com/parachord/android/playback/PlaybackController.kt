@@ -16,6 +16,7 @@ import com.parachord.shared.playback.nextRepeatMode
 import com.parachord.shared.playback.previousAction
 import com.parachord.shared.playback.QueueRestorePolicy
 import com.parachord.shared.playback.failedPlayAwaitsLoad
+import com.parachord.shared.playback.noSourceFailure
 import com.parachord.shared.playback.ResolverVolume
 import com.parachord.android.data.store.SettingsStore
 import android.widget.Toast
@@ -163,6 +164,14 @@ class PlaybackController constructor(
     private var foregroundHeldForPlay = false
 
     /**
+     * A track started playing since the queue was set, restored or last wrapped.
+     * Under repeat all, an unplayable last track wraps only when this is true
+     * ([advanceAction]'s `playedSinceWrap`), so a queue where nothing plays
+     * stops instead of looping forever.
+     */
+    @Volatile private var playedSinceWrap = false
+
+    /**
      * How long to keep the foreground service alive after external playback is paused.
      * After this timeout, the service is fully demoted and the process may be killed.
      */
@@ -278,6 +287,7 @@ class PlaybackController constructor(
                     )
                 })
                 if (restoredTrack != null) {
+                    playedSinceWrap = false
                     val snapshot = queueManager.snapshot.value
                     // Where it was when the app was last running (#567).
                     val resumeAtMs = queuePersistence.savedResumePositionMs(restoredTrack.id)
@@ -372,6 +382,7 @@ class PlaybackController constructor(
         clearUserPauseMark()
         queueManager.clearQueue()
         if (context != null) queueManager.setContext(context)
+        playedSinceWrap = false
         scope.launch { playTrackInternal(track) }
     }
 
@@ -389,6 +400,7 @@ class PlaybackController constructor(
         onUserPlaybackActionListener?.invoke()
         clearUserPauseMark()
         val track = queueManager.setQueue(tracks, startIndex, context, shuffle) ?: return
+        playedSinceWrap = false
         scope.launch { playTrackInternal(track) }
     }
 
@@ -523,11 +535,11 @@ class PlaybackController constructor(
         // over the history) would replace it. Repeat counts as off there.
         val listenAlong = state.playbackContext?.type == "listen-along"
         val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
-        val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null)
+        val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
         val next: TrackEntity = when (action) {
             AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack)
             AdvanceAction.REPLAY_CURRENT -> currentTrack
-            AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack)
+            AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack).also { playedSinceWrap = false }
             AdvanceAction.STOP_AND_CLEAR -> null
         } ?: run {
             stopAtEndOfQueue(clear = !listenAlong)
@@ -567,6 +579,11 @@ class PlaybackController constructor(
     private fun stopAtEndOfQueue(clear: Boolean) {
         Log.d(TAG, if (clear) "skipNext: end of queue, stopping and clearing" else "skipNext: queue empty, stopping playback")
         val wasExternal = isExternalPlayback
+        // Leave external mode first, while the service is still in the
+        // foreground: notifyExternalMode is a startService, which Android
+        // refuses from the background once sendExternalPlaybackStop has
+        // demoted it, leaving the session's player stuck in external mode.
+        if (wasExternal && clear) notifyExternalMode(false)
         if (isExternalPlayback) {
             stopSpotifyStatePolling()
             stopAppleMusicStatePolling()
@@ -579,11 +596,13 @@ class PlaybackController constructor(
             stateHolder.update { copy(isPlaying = false) }
             return
         }
+        // The cleared track goes to history, so Previous goes back to it
+        // rather than to the track before it.
+        stateHolder.state.value.currentTrack?.let { queueManager.pushToHistory(it) }
         // Nothing plays next, so stopping ExoPlayer here (its item, or the
         // silent keep-alive loop during external playback) can't demote the
         // service between two tracks. stop() before clearMediaItems(): an
         // empty playlist on a player that isn't idle goes to STATE_ENDED.
-        if (wasExternal) notifyExternalMode(false)
         controller?.stop()
         controller?.clearMediaItems()
         loadOnPlay = null
@@ -886,8 +905,10 @@ class PlaybackController constructor(
         advancing: Boolean = false,
         userRequested: Boolean = !advancing,
     ) = playMutex.withLock {
+        var completed = false
         try {
             playTrackInternalUnsafe(track, skipReselect, advancing, userRequested)
+            completed = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // Don't swallow cancellation
         } catch (e: Exception) {
@@ -901,6 +922,9 @@ class PlaybackController constructor(
             // track again (the network may be back), as it was asked for.
             val failure = playFailure
             playFailure = null
+            // It (or a fallback source) started: repeat all may wrap past an
+            // unplayable last track again.
+            if (completed && failure == null) playedSinceWrap = true
             if (failure != null &&
                 failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode) &&
                 stateHolder.state.value.currentTrack?.id == track.id
@@ -953,6 +977,9 @@ class PlaybackController constructor(
         // sorted by the user's current priority order, so we pick the best one.
         // Skipped when the user manually picks a source via the resolver dropdown.
         var routedTrack = if (skipReselect) track else reselectBestSource(track)
+        // Set by the on-the-fly resolve below: no source because the resolvers
+        // couldn't answer (#566), not because they found nothing.
+        var resolversCouldNotAnswer = false
 
         // If the track has no resolver and no source URL, try resolving on-the-fly.
         // This handles ephemeral tracks (e.g. weekly playlists, recommendations)
@@ -962,7 +989,9 @@ class PlaybackController constructor(
             routedTrack.soundcloudId == null && routedTrack.appleMusicId == null
         ) {
             Log.d(TAG, "Track '${routedTrack.title}' has no source, resolving on-the-fly")
-            routedTrack = resolveOnTheFly(routedTrack)
+            val resolved = resolveOnTheFly(routedTrack)
+            routedTrack = resolved.track
+            resolversCouldNotAnswer = resolved.resolversCouldNotAnswer
         }
 
         // Spotify already couldn't be woken from the background this session:
@@ -980,12 +1009,14 @@ class PlaybackController constructor(
         val snapshot = queueManager.snapshot.value
 
         if (action == null) {
-            // No source to play it from. Online that's the track (skipped when
-            // the queue is moving on, like a refused embed); offline the
-            // lookup couldn't run, so Play tries it again once back online.
+            // No source to play it from. Online, with the resolvers answering,
+            // that's the track (skipped when the queue is moving on, like a
+            // refused embed); offline, or with resolvers that couldn't answer
+            // (a rate-limit cooldown, a plugin timeout, #566), the lookup didn't
+            // really run, so playback stops on it and Play tries it again.
             val online = networkMonitor.isOnline.value
-            val failure = if (online) PlayFailure.NO_SOURCE else PlayFailure.START_FAILED
-            Log.w(TAG, "No playable source for '${routedTrack.title}' (${if (online) "online" else "offline"})")
+            val failure = noSourceFailure(online, resolversCouldNotAnswer)
+            Log.w(TAG, "No playable source for '${routedTrack.title}' (${if (online) "online" else "offline"}, resolvers couldn't answer: $resolversCouldNotAnswer)")
             playFailure = failure
             stateHolder.update {
                 copy(
@@ -998,7 +1029,7 @@ class PlaybackController constructor(
                     playbackContext = snapshot.playbackContext,
                     shuffleEnabled = snapshot.shuffleEnabled,
                     streamingMetadata = null,
-                    playbackError = if (online) PLAY_NO_SOURCE_MESSAGE else PLAY_START_FAILED_MESSAGE,
+                    playbackError = if (failure == PlayFailure.NO_SOURCE) PLAY_NO_SOURCE_MESSAGE else PLAY_START_FAILED_MESSAGE,
                 )
             }
             // Stop what was playing before it: left playing, its own end of
@@ -2662,9 +2693,11 @@ class PlaybackController constructor(
             Log.d(TAG, "Auto-skip '${track.title}': ${e.serviceName} won't play it")
             stateHolder.update { copy(isPlaying = false, isBuffering = false) }
             // After this advance's job ends: skipNext ignores auto-advance
-            // while an advance is in flight.
+            // while an advance is in flight. Only while this track is still
+            // the current one: a play or Next meanwhile has moved on already.
             scope.launch {
                 delay(600)
+                if (stateHolder.state.value.currentTrack?.id != track.id) return@launch
                 skipNextInternal(AdvanceTrigger.SKIPPED_UNPLAYABLE)
             }
             return
@@ -2733,7 +2766,13 @@ class PlaybackController constructor(
      * been through the resolver pipeline yet. Caches the result in TrackResolverCache
      * so subsequent plays and queue items benefit.
      */
-    private suspend fun resolveOnTheFly(track: TrackEntity): TrackEntity {
+    private class OnTheFlyResolve(
+        val track: TrackEntity,
+        /** Nothing usable came back and a resolver couldn't answer, or the resolve threw (#566). */
+        val resolversCouldNotAnswer: Boolean = false,
+    )
+
+    private suspend fun resolveOnTheFly(track: TrackEntity): OnTheFlyResolve {
         return try {
             val query = "${track.title} ${track.artist}"
             val report = resolverManager.resolveReport(
@@ -2746,17 +2785,19 @@ class PlaybackController constructor(
             )
             val sources = report.sources
             if (sources.isEmpty()) {
-                Log.w(TAG, "No resolver results for '${track.title}' by ${track.artist}")
-                return track
+                Log.w(TAG, "No resolver results for '${track.title}' by ${track.artist}" +
+                    if (report.failed.isNotEmpty()) " (couldn't answer: ${report.failed})" else "")
+                return OnTheFlyResolve(track, resolversCouldNotAnswer = report.failed.isNotEmpty())
             }
 
             // Cache the results so reselectBestSource works for queue tracks too;
             // resolvers that couldn't answer are asked again later (#566).
             trackResolverCache.putSources(track.title, track.artist, sources, report.failed)
 
-            val best = resolverScoring.selectBest(sources) ?: return track
+            val best = resolverScoring.selectBest(sources)
+                ?: return OnTheFlyResolve(track, resolversCouldNotAnswer = report.failed.isNotEmpty())
             Log.d(TAG, "On-the-fly resolved '${track.title}' → ${best.resolver}")
-            track.copy(
+            OnTheFlyResolve(track.copy(
                 resolver = best.resolver,
                 sourceType = best.sourceType,
                 sourceUrl = best.url,
@@ -2766,10 +2807,10 @@ class PlaybackController constructor(
                 appleMusicId = best.appleMusicId,
                 // Walk + validate, desktop-parity precedence (#217).
                 isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, sources),
-            )
+            ))
         } catch (e: Exception) {
             Log.e(TAG, "On-the-fly resolution failed for '${track.title}'", e)
-            track
+            OnTheFlyResolve(track, resolversCouldNotAnswer = true)
         }
     }
 

@@ -45,6 +45,18 @@ enum class PlayFailure {
 fun failedPlayAwaitsLoad(failure: PlayFailure, advancing: Boolean, spinoffMode: Boolean): Boolean =
     !((failure == PlayFailure.EMBED_REFUSED || failure == PlayFailure.NO_SOURCE) && (advancing || spinoffMode))
 
+/**
+ * What a play with no source to route to records. [PlayFailure.NO_SOURCE] (the
+ * queue skips it when moving on) only when the device is [online] and the
+ * resolvers answered with no match. When they couldn't answer
+ * ([resolversCouldNotAnswer]: offline, a rate-limit cooldown, a plugin that timed
+ * out, a resolve that threw; #566) nothing has shown the track has no source, so
+ * it's [PlayFailure.START_FAILED]: playback stops on the track and Play tries it
+ * again.
+ */
+fun noSourceFailure(online: Boolean, resolversCouldNotAnswer: Boolean): PlayFailure =
+    if (online && !resolversCouldNotAnswer) PlayFailure.NO_SOURCE else PlayFailure.START_FAILED
+
 /** What the person is told when a play couldn't start ([PlayFailure.START_FAILED], [PlayFailure.START_TIMED_OUT]). */
 const val PLAY_START_FAILED_MESSAGE = "Couldn't start playing. Check your connection and try again."
 

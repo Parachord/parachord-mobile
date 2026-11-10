@@ -60,4 +60,20 @@ class PlayFailureTest {
     fun `the message names the connection`() {
         assertEquals("Couldn't start playing. Check your connection and try again.", PLAY_START_FAILED_MESSAGE)
     }
+
+    @Test
+    fun `no match from resolvers that answered online is no source`() {
+        assertEquals(PlayFailure.NO_SOURCE, noSourceFailure(online = true, resolversCouldNotAnswer = false))
+    }
+
+    @Test
+    fun `resolvers that couldn't answer are a failed start and not no source`() {
+        assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = true, resolversCouldNotAnswer = true))
+    }
+
+    @Test
+    fun `offline is a failed start`() {
+        assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = false, resolversCouldNotAnswer = false))
+        assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = false, resolversCouldNotAnswer = true))
+    }
 }

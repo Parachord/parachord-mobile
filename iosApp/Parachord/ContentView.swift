@@ -1974,6 +1974,12 @@ final class QueuePlaybackCoordinator {
     /// `advanceAction` (see `advance(_:)`).
     var repeatMode: RepeatMode = .off
 
+    /// A track started playing (`.played`) since the queue was set, restored
+    /// or last wrapped. Under repeat all an unplayable last track wraps only
+    /// when this is true (shared `advanceAction`'s `playedSinceWrap`), so a
+    /// queue where nothing plays stops instead of looping forever.
+    @ObservationIgnored private var playedSinceWrap = false
+
     // ── Spinoff (#231) — Android PlaybackController parity ──────────────────
     // The pool is a SEPARATE hidden list; the user's QueueManager queue is NEVER
     // modified — only the playback CONTEXT is saved + restored — so it resumes
@@ -2540,6 +2546,7 @@ final class QueuePlaybackCoordinator {
             context: context,
             shuffle: shuffle ?? shuffleEnabled
         )
+        playedSinceWrap = false
         syncSnapshot()
         if let track = toPlay {
             playTrack(track)
@@ -2567,14 +2574,17 @@ final class QueuePlaybackCoordinator {
             trigger: trigger,
             repeatMode: listenAlong ? .off : repeatMode,
             hasNext: queueManager.hasNext,
-            hasCurrent: currentTrack != nil
+            hasCurrent: currentTrack != nil,
+            playedSinceWrap: playedSinceWrap
         )
         NSLog("QUEUE advance \(trigger.name) → \(action.name)")
         var next: Track?
         switch action {
         case .playNext: next = queueManager.skipNext(currentTrack: currentTrack)
         case .replayCurrent: next = currentTrack
-        case .wrapToStart: next = queueManager.wrapToStart(currentTrack: currentTrack)
+        case .wrapToStart:
+            next = queueManager.wrapToStart(currentTrack: currentTrack)
+            playedSinceWrap = false
         default: next = nil
         }
         guard let next else {
@@ -2605,6 +2615,9 @@ final class QueuePlaybackCoordinator {
         }
         keepAlive.stop()
         player.stop()
+        // The cleared track goes to history, so Previous goes back to it
+        // rather than to the track before it.
+        if let last = currentTrack { queueManager.pushToHistory(track: last) }
         currentTrack = nil
         syncSnapshot()
     }
@@ -2613,7 +2626,7 @@ final class QueuePlaybackCoordinator {
     /// the track, else it goes back one (shared `previousAction`).
     func skipPrevious() {
         let action = QueueAdvancePolicyKt.previousAction(
-            positionMs: Int64(currentTime * 1000),
+            positionMs: currentTime.isFinite ? Int64(currentTime * 1000) : 0,
             hasPrevious: queueManager.hasPrevious
         )
         guard action == .playPrevious,
@@ -2808,6 +2821,7 @@ final class QueuePlaybackCoordinator {
             switch result {
             case .played(let kind, let playedResolver):
                 unplayableRun.started()
+                playedSinceWrap = true
                 let previousEngine = activeEngine
                 activeEngine = kind
                 await applyEngineHandoff(from: previousEngine, to: kind)
@@ -3114,6 +3128,7 @@ final class QueuePlaybackCoordinator {
                 restoredOriginalOrder: state.originalOrder,
                 context: state.playbackContext,
                 shuffle: state.shuffleEnabled)
+            self.playedSinceWrap = false
             self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the
             // saved position when it's for this track (#567).

@@ -111,6 +111,16 @@ class QueueManager {
         return previous
     }
 
+    /**
+     * Put [track] on top of play history without touching Up Next. Used when the
+     * queue runs out and playback stops on the last track, which is then cleared:
+     * Previous must still go back to it, not to the track before it.
+     */
+    fun pushToHistory(track: Track) {
+        playHistory.add(track)
+        emitSnapshot()
+    }
+
     /** True when there is a track in Up Next. */
     val hasNext: Boolean get() = upNext.isNotEmpty()
 
