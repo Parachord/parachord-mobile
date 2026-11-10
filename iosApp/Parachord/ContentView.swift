@@ -2069,7 +2069,7 @@ final class QueuePlaybackCoordinator {
     /// repeat-all lap and the pool tracks out of it.
     private func poolTrackStarting() {
         if !queueManager.currentIsPoolTrack, let seed = currentTrack {
-            NSLog("SPINOFF seed '%@' kept in the queue's history", seed.title)
+            NSLog("SPINOFF seed '%@' kept in history", seed.title)
         }
         queueManager.poolTrackStarted(current: currentTrack)
     }
@@ -2635,10 +2635,11 @@ final class QueuePlaybackCoordinator {
             playedSinceWrap: playedSinceWrap
         )
         NSLog("QUEUE advance \(trigger.name) → \(action.name)")
-        // A spinoff pool track leaving for the queue stays out of the
-        // repeat-all lap (the shared QueueManager decides).
-        if queueManager.currentIsPoolTrack && action != .replayCurrent {
-            NSLog("QUEUE leaving pool track '%@' out of the queue's lap", currentTrack?.title ?? "")
+        // A track outside the repeat-all lap (a spinoff pool track, history
+        // from before a cleared queue) stays out of it; the shared
+        // QueueManager decides.
+        if !queueManager.currentInLap && action != .replayCurrent {
+            NSLog("QUEUE '%@' isn't in the repeat-all lap; keeping it out", currentTrack?.title ?? "")
         }
         var next: Track?
         switch action {
@@ -3185,7 +3186,9 @@ final class QueuePlaybackCoordinator {
             shuffleEnabled: snap.shuffleEnabled,
             originalOrder: queueManager.savedOriginalOrder,
             playHistoryInQueue: queueManager.historyInQueue,
-            currentIsPoolTrack: queueManager.currentIsPoolTrack)
+            currentIsPoolTrack: queueManager.currentIsPoolTrack,
+            upNextInLap: queueManager.upNextInLap,
+            currentInLap: queueManager.currentInLap)
         let jsonStr = QueuePersistenceCodec.shared.encode(state: state)
         try? await container.settingsStore.setPersistedQueueState(json: jsonStr)
     }
@@ -3218,7 +3221,9 @@ final class QueuePlaybackCoordinator {
                 context: state.playbackContext,
                 shuffle: state.shuffleEnabled,
                 restoredHistoryInQueue: state.playHistoryInQueue,
-                restoredCurrentIsPoolTrack: state.currentIsPoolTrack)
+                restoredCurrentIsPoolTrack: state.currentIsPoolTrack,
+                restoredUpNextInLap: state.upNextInLap,
+                restoredCurrentInLap: state.currentInLap)
             self.playedSinceWrap = false
             self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the

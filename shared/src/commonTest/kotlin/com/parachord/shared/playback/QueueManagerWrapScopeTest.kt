@@ -131,14 +131,14 @@ class QueueManagerWrapScopeTest {
         assertEquals(p3, p.next())
         assertEquals(b, p.next())
         assertEquals(p3, p.previous())
-        assertTrue(q.currentIsPoolTrack)
+        assertFalse(q.currentInLap)
         assertEquals(b, p.next())
         assertEquals(a, p.next())
         assertEquals(listOf(b), q.snapshot.value.upNext)
     }
 
     @Test
-    fun `previous from a pool track goes back to the seed and keeps the pool track out of the queue`() {
+    fun `previous from a pool track goes back to the seed and the pool track stays out of the lap`() {
         val q = QueueManager()
         val p = Player(q)
         p.current = q.setQueue(listOf(a, b), 0)
@@ -146,9 +146,12 @@ class QueueManagerWrapScopeTest {
         assertEquals(p1, p.next())
         assertEquals(a, p.previous())
         assertFalse(q.currentIsPoolTrack)
-        assertEquals(listOf(b), q.snapshot.value.upNext)
+        assertTrue(q.currentInLap)
+        // p1 waits in Up Next, out of the lap, as Previous always did.
+        assertEquals(listOf(p1, b), q.snapshot.value.upNext)
         // The pool goes on; the seed goes back into the lap, once.
         assertEquals(p2, p.next())
+        assertEquals(p1, p.next())
         assertEquals(b, p.next())
         assertEquals(a, p.next())
         assertEquals(listOf(b), q.snapshot.value.upNext)
@@ -208,6 +211,102 @@ class QueueManagerWrapScopeTest {
     }
 
     @Test
+    fun `two previous presses across a cleared queue then two next presses retrace the path`() {
+        val q = QueueManager()
+        val p = Player(q)
+        val a1 = t("a1"); val a2 = t("a2"); val a3 = t("a3"); val bb = t("B")
+        p.current = q.setQueue(listOf(a1, a2, a3), 0)
+        assertEquals(a2, p.next())
+        assertEquals(a3, p.next())
+        // A single track is played: the queue is cleared and B plays.
+        q.clearQueue()
+        p.current = bb
+        assertEquals(a2, p.previous())
+        assertEquals(a1, p.previous())
+        assertEquals(listOf(a2, bb), q.snapshot.value.upNext)
+        assertEquals(a2, p.next())
+        assertEquals(bb, p.next())
+        // The wrap holds only B's queue.
+        assertEquals(bb, p.next())
+        assertTrue(q.snapshot.value.upNext.isEmpty())
+    }
+
+    @Test
+    fun `two previous presses across the pool boundary then two next presses retrace the path`() {
+        val q = QueueManager()
+        val p = Player(q)
+        p.current = q.setQueue(listOf(a, b), 0)
+        p.pool += listOf(p1, p2)
+        assertEquals(p1, p.next())
+        assertEquals(p2, p.next())
+        assertEquals(b, p.next())
+        assertEquals(p2, p.previous())
+        assertEquals(a, p.previous())
+        assertEquals(listOf(p2, b), q.snapshot.value.upNext)
+        assertEquals(p2, p.next())
+        assertEquals(b, p.next())
+        // The wrap has no pool track.
+        assertEquals(a, p.next())
+        assertEquals(listOf(b), q.snapshot.value.upNext)
+    }
+
+    @Test
+    fun `an out-of-lap track in up next is left out of the wrap`() {
+        val q = QueueManager()
+        val p = Player(q)
+        val a1 = t("a1"); val a2 = t("a2"); val a3 = t("a3"); val bb = t("B")
+        p.current = q.setQueue(listOf(a1, a2, a3), 0)
+        p.next(); p.next()
+        q.clearQueue()
+        p.current = bb
+        p.previous(); p.previous()
+        q.addToQueue(listOf(y))
+        assertEquals(listOf(a2, bb, y), q.snapshot.value.upNext)
+        assertEquals(bb, q.wrapToStart(a1))
+        assertEquals(listOf(y), q.snapshot.value.upNext)
+    }
+
+    @Test
+    fun `shuffling up next keeps which tracks are out of the lap`() {
+        val q = QueueManager()
+        val p = Player(q)
+        val a1 = t("a1"); val a2 = t("a2"); val a3 = t("a3"); val bb = t("B")
+        p.current = q.setQueue(listOf(a1, a2, a3), 0)
+        p.next(); p.next()
+        q.clearQueue()
+        p.current = bb
+        p.previous(); p.previous()
+        q.addToQueue(listOf(y))
+        q.toggleShuffle()
+        q.toggleShuffle()
+        assertEquals(listOf(a2, bb, y), q.snapshot.value.upNext)
+        // Removing B and reordering keep the markers with their tracks.
+        q.removeFromQueue(1)
+        q.moveInQueue(1, 0)
+        assertEquals(listOf(y, a2), q.snapshot.value.upNext)
+        assertEquals(y, q.wrapToStart(a1))
+        assertTrue(q.snapshot.value.upNext.isEmpty())
+    }
+
+    @Test
+    fun `a spinoff started on a track reached by previous keeps it reachable`() {
+        val q = QueueManager()
+        val p = Player(q)
+        val a1 = t("a1"); val a2 = t("a2"); val bb = t("B")
+        p.current = q.setQueue(listOf(a1, a2), 0)
+        p.next()
+        q.clearQueue()
+        p.current = bb
+        assertEquals(a1, p.previous())
+        assertFalse(q.currentIsPoolTrack)
+        p.pool += listOf(p1)
+        assertEquals(p1, p.next())
+        assertEquals(a1, q.history.last())
+        assertEquals(false, q.historyInQueue.last())
+        assertEquals(a1, p.previous())
+    }
+
+    @Test
     fun `persistence round trip keeps the flags`() {
         val q = QueueManager()
         q.setQueue(listOf(a, b), 0)
@@ -242,6 +341,44 @@ class QueueManagerWrapScopeTest {
         )
         assertEquals(x, restored.wrapToStart(decoded.currentTrack))
         assertEquals(listOf(y), restored.snapshot.value.upNext)
+    }
+
+    @Test
+    fun `persistence round trip keeps which up next tracks are out of the lap`() {
+        val q = QueueManager()
+        val p = Player(q)
+        val a1 = t("a1"); val a2 = t("a2"); val a3 = t("a3"); val bb = t("B")
+        p.current = q.setQueue(listOf(a1, a2, a3), 0)
+        p.next(); p.next()
+        q.clearQueue()
+        p.current = bb
+        p.previous(); p.previous()
+        val state = PersistedQueueState(
+            currentTrack = p.current,
+            upNext = q.snapshot.value.upNext,
+            playHistory = q.history,
+            playHistoryInQueue = q.historyInQueue,
+            currentIsPoolTrack = q.currentIsPoolTrack,
+            upNextInLap = q.upNextInLap,
+            currentInLap = q.currentInLap,
+        )
+        val decoded = assertNotNull(QueuePersistenceCodec.decode(QueuePersistenceCodec.encode(state)))
+        assertEquals(listOf(false, true), decoded.upNextInLap)
+        assertFalse(decoded.currentInLap)
+        val restored = QueueManager()
+        restored.restoreState(
+            restoredUpNext = decoded.upNext,
+            restoredHistory = decoded.playHistory,
+            restoredOriginalOrder = null,
+            context = null,
+            shuffle = false,
+            restoredHistoryInQueue = decoded.playHistoryInQueue,
+            restoredCurrentIsPoolTrack = decoded.currentIsPoolTrack,
+            restoredUpNextInLap = decoded.upNextInLap,
+            restoredCurrentInLap = decoded.currentInLap,
+        )
+        assertEquals(bb, restored.wrapToStart(decoded.currentTrack))
+        assertTrue(restored.snapshot.value.upNext.isEmpty())
     }
 
     @Test

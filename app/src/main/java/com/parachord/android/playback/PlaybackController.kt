@@ -511,7 +511,7 @@ class PlaybackController constructor(
                 // when the first pool track starts) in the repeat-all lap and
                 // the pool tracks out of it.
                 if (!queueManager.currentIsPoolTrack) {
-                    Log.d(TAG, "Spinoff: seed '${stateHolder.state.value.currentTrack?.title}' kept in the queue's history")
+                    Log.d(TAG, "Spinoff: seed '${stateHolder.state.value.currentTrack?.title}' kept in history")
                 }
                 queueManager.poolTrackStarted(stateHolder.state.value.currentTrack)
 
@@ -552,10 +552,11 @@ class PlaybackController constructor(
         val listenAlong = state.playbackContext?.type == LISTEN_ALONG_CONTEXT
         val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
         val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
-        // A spinoff pool track leaving for the queue stays out of the
-        // repeat-all lap (the shared QueueManager decides).
-        if (queueManager.currentIsPoolTrack && action != AdvanceAction.REPLAY_CURRENT) {
-            Log.d(TAG, "skipNext: leaving pool track '${currentTrack?.title}' out of the queue's lap")
+        // A track outside the repeat-all lap (a spinoff pool track, history
+        // from before a cleared queue) stays out of it; the shared
+        // QueueManager decides.
+        if (!queueManager.currentInLap && action != AdvanceAction.REPLAY_CURRENT) {
+            Log.d(TAG, "skipNext: '${currentTrack?.title}' isn't in the repeat-all lap; keeping it out")
         }
         val next: TrackEntity = when (action) {
             AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack)
