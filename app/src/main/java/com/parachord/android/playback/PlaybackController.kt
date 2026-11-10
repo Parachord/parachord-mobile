@@ -118,6 +118,16 @@ class PlaybackController constructor(
      */
     private var pendingRestoredTrack: TrackEntity? = null
 
+    /** Where [pendingRestoredTrack] starts, in ms (0 = from the top, #567). */
+    private var pendingRestoredPositionMs = 0L
+
+    /**
+     * A queue restored at launch is waiting for its first play. The media
+     * session's play (car, headphones, lock screen) must come here then:
+     * ExoPlayer holds nothing for the restored track.
+     */
+    val hasPendingRestoredTrack: Boolean get() = pendingRestoredTrack != null
+
     /**
      * A play was asked for in this run of the app. The saved queue is only
      * restored while this is false ([QueueRestorePolicy]): Android Auto can
@@ -130,7 +140,7 @@ class PlaybackController constructor(
 
     /**
      * The paused external track the idle timeout stopped, and where it was
-     * paused. Play starts it again there ([resumeAfterIdleStop]); cleared by
+     * paused. Play starts it again there ([playThenSeek]); cleared by
      * any other play (#550).
      */
     private var idleStopped: IdleStoppedPlayback? = null
@@ -147,8 +157,12 @@ class PlaybackController constructor(
      */
     private val IDLE_TIMEOUT_MS = 5L * 60 * 1000 // 5 minutes
 
-    /** How long a play after the idle timeout waits for the track to start before seeking. */
-    private val IDLE_RESUME_SEEK_WAIT_MS = 10_000L
+    /**
+     * How long a resumed play ([playThenSeek]) waits for the track to start
+     * before giving up on the seek. 10 s was too short when the network was
+     * slow or coming back: the song then played from 0:00 (#567).
+     */
+    private val RESUME_SEEK_WAIT_MS = 60_000L
 
     /**
      * Partial WakeLock held during external playback (Spotify/Apple Music) to keep
@@ -254,11 +268,14 @@ class PlaybackController constructor(
                 })
                 if (restoredTrack != null) {
                     val snapshot = queueManager.snapshot.value
+                    // Where it was when the app was last running (#567).
+                    val resumeAtMs = queuePersistence.savedResumePositionMs(restoredTrack.id)
+                    pendingRestoredPositionMs = resumeAtMs
                     stateHolder.update {
                         copy(
                             currentTrack = restoredTrack,
                             isPlaying = false,
-                            position = 0L,
+                            position = resumeAtMs,
                             upNext = snapshot.upNext,
                             playbackContext = snapshot.playbackContext,
                             shuffleEnabled = snapshot.shuffleEnabled,
@@ -692,18 +709,23 @@ class PlaybackController constructor(
         val idleResume = idleResumeTarget(idleStopped, stateHolder.state.value.currentTrack?.id)
         idleStopped = null
         if (idleResume != null) {
-            scope.launch { resumeAfterIdleStop(idleResume) }
+            Log.d(TAG, "Play after the idle timeout: re-playing '${idleResume.track.title}' at ${idleResume.positionMs} ms")
+            scope.launch { playThenSeek(idleResume.track, idleResume.positionMs, skipReselect = true) }
             return
         }
 
         // If we have a pending restored track (app restarted, user taps play),
         // route it through the full playback pipeline instead of calling
         // ctrl.play() on ExoPlayer (which has no real media items, causing
-        // it to auto-advance to the next track in the queue).
+        // it to auto-advance to the next track in the queue). It resumes
+        // where it was when the app was last running (#567).
         val restored = pendingRestoredTrack
         if (restored != null) {
+            val resumeAtMs = pendingRestoredPositionMs
             pendingRestoredTrack = null
-            scope.launch { playTrackInternal(restored) }
+            pendingRestoredPositionMs = 0L
+            Log.d(TAG, "Play on the restored queue: '${restored.title}' at $resumeAtMs ms")
+            scope.launch { playThenSeek(restored, resumeAtMs, skipReselect = false) }
             return
         }
 
@@ -787,6 +809,7 @@ class PlaybackController constructor(
         // play: left set, a later play (after the idle timeout, say) would
         // start the track restored at launch instead.
         pendingRestoredTrack = null
+        pendingRestoredPositionMs = 0L
         // Take the foreground now, while the request's window to start a
         // foreground service is open: the lookup below can outlast it, and
         // without one Android cuts the app's network when it isn't on screen.
@@ -1644,29 +1667,31 @@ class PlaybackController constructor(
     }
 
     /**
-     * Play after the idle timeout: start the stopped track again and, once it
-     * plays, seek to where it was paused. The handler the timeout stopped can't
-     * be resumed, so this is a fresh play of the same source.
+     * Start [track] and, once it plays, seek to [positionMs]: Play after the
+     * idle timeout (#550), whose stopped handler can't be resumed, and Play
+     * on a queue restored at launch (#567). A track that takes a while to
+     * start (a slow or returning network) is waited for, so it still resumes
+     * where it was instead of from 0:00; another track playing meanwhile
+     * cancels the seek.
      */
-    private suspend fun resumeAfterIdleStop(stopped: IdleStoppedPlayback) {
-        Log.d(TAG, "Play after the idle timeout: re-playing '${stopped.track.title}' at ${stopped.positionMs} ms")
-        playTrackInternal(stopped.track, skipReselect = true)
-        if (stopped.positionMs <= 0) return
-        val deadline = System.currentTimeMillis() + IDLE_RESUME_SEEK_WAIT_MS
+    private suspend fun playThenSeek(track: TrackEntity, positionMs: Long, skipReselect: Boolean) {
+        playTrackInternal(track, skipReselect = skipReselect)
+        if (positionMs <= 0) return
+        val deadline = System.currentTimeMillis() + RESUME_SEEK_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
-            if (stateHolder.state.value.currentTrack?.id != stopped.track.id) return
+            if (stateHolder.state.value.currentTrack?.id != track.id) return
             val playing = if (isExternalPlayback) {
                 router.activeExternalHandler?.isPlaying() == true
             } else {
                 controller?.isPlaying == true
             }
             if (playing) {
-                seekTo(stopped.positionMs)
+                seekTo(positionMs)
                 return
             }
             delay(250)
         }
-        Log.d(TAG, "Re-played '${stopped.track.title}' didn't start within ${IDLE_RESUME_SEEK_WAIT_MS} ms; not seeking")
+        Log.d(TAG, "'${track.title}' didn't start within $RESUME_SEEK_WAIT_MS ms; not seeking to $positionMs ms")
     }
 
     private fun cancelIdleTimeout() {

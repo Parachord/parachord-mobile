@@ -1,6 +1,9 @@
 package com.parachord.android.playback
 
 import com.parachord.shared.platform.Log
+import com.parachord.shared.platform.currentTimeMillis
+import com.parachord.shared.playback.PlaybackResumePosition
+import com.parachord.shared.playback.SavedPlaybackPosition
 import com.parachord.android.data.store.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +23,9 @@ import kotlinx.serialization.json.Json
  * Persists and restores queue state across app restarts.
  *
  * Observes [QueueManager.snapshot] + [PlaybackStateHolder.state] (for currentTrack),
- * debounces changes, and serializes to DataStore as JSON. Only active when the
- * "Remember queue" setting is enabled.
+ * debounces changes, and serializes to DataStore as JSON. The current track's
+ * position is saved separately, on a pause and every 15 s while it plays.
+ * Only active when the "Remember queue" setting is enabled.
  */
 class QueuePersistence constructor(
     private val settingsStore: SettingsStore,
@@ -35,6 +39,7 @@ class QueuePersistence constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var observeJob: Job? = null
+    private var positionJob: Job? = null
 
     /**
      * Start observing queue state and auto-saving when the persist setting is on.
@@ -60,7 +65,48 @@ class QueuePersistence constructor(
                     save(currentTrack, snapshot)
                 }
         }
+        positionJob?.cancel()
+        positionJob = scope.launch { savePositionWhileObserving() }
     }
+
+    /**
+     * Saves where the current track is on a pause and every 15 s while it
+     * plays ([PlaybackResumePosition]), apart from the queue, so a queue
+     * restored after Android ends the app resumes the track there (#567).
+     */
+    private suspend fun savePositionWhileObserving() {
+        var wasPlaying = false
+        var lastSavedAt = 0L
+        combine(stateHolder.state, settingsStore.persistQueue) { state, enabled -> state to enabled }
+            .collect { (state, enabled) ->
+                val now = currentTimeMillis()
+                val due = PlaybackResumePosition.shouldSave(wasPlaying, state.isPlaying, now - lastSavedAt)
+                wasPlaying = state.isPlaying
+                val track = state.currentTrack ?: return@collect
+                if (!enabled || !due) return@collect
+                lastSavedAt = now
+                try {
+                    settingsStore.setPersistedPlaybackPosition(
+                        PlaybackResumePosition.encode(
+                            SavedPlaybackPosition(track.id, state.position, state.duration),
+                        ),
+                    )
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.e(TAG, "Failed to save the playback position", e)
+                }
+            }
+    }
+
+    /**
+     * Where the restored track [trackId] should start, in ms; 0 starts it
+     * from the top ([PlaybackResumePosition.resumeAtMs]).
+     */
+    suspend fun savedResumePositionMs(trackId: String): Long =
+        PlaybackResumePosition.resumeAtMs(
+            PlaybackResumePosition.decode(settingsStore.getPersistedPlaybackPosition()),
+            trackId,
+        )
 
     private suspend fun save(
         currentTrack: com.parachord.android.data.db.entity.TrackEntity?,

@@ -1782,6 +1782,14 @@ final class QueuePlaybackCoordinator {
     /// of resuming whatever the active engine last held.
     @ObservationIgnored private var needsLoadOnPlay = false
 
+    /// Where the restored track resumes, in seconds (0 = from the top). Set
+    /// by `restoreQueue`, used by the first play (#567).
+    @ObservationIgnored private var restoredResumeAtSec: Double = 0
+    /// Position saving (`PlaybackResumePosition`): was the last tick playing,
+    /// and when was the position last written.
+    @ObservationIgnored private var positionSaveWasPlaying = false
+    @ObservationIgnored private var positionSavedAtMs: Int64 = 0
+
     /// Resolver ids that open in the browser instead of streaming (stream:false,
     /// e.g. Bandcamp). Seeded with the known default so it holds before the .axe
     /// layer reports; refreshed from plugin capabilities in `init`.
@@ -2298,6 +2306,8 @@ final class QueuePlaybackCoordinator {
                     self.prefetchNextIfNeeded(remainingSec: self.duration - self.currentTime)
                     // Track changes, artwork that resolved late, and drift.
                     self.nowPlaying?.refresh()
+                    // #567: where the track is, for a queue restored after iOS ends the app.
+                    self.savePositionIfDue()
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
@@ -2339,10 +2349,13 @@ final class QueuePlaybackCoordinator {
     /// Engine-agnostic play/pause toggle for the mini player + Now Playing.
     func togglePlayPause() {
         // Nothing loaded for the track on screen (restored queue, or stopped
-        // because no source could play): start it. Restored queues keep no
-        // position, so it starts from the top.
+        // because no source could play): start it. A restored track resumes
+        // where it was when the app last ran (#567).
         if needsLoadOnPlay, let track = currentTrack, !isStarting {
+            let resumeAtSec = restoredResumeAtSec
+            restoredResumeAtSec = 0
             playTrack(track)
+            if resumeAtSec > 0 { seekOnceStarted(trackId: track.id, toSec: resumeAtSec) }
             return
         }
         switch activeEngine {
@@ -2550,6 +2563,7 @@ final class QueuePlaybackCoordinator {
     private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false) {
         currentTrack = track
         needsLoadOnPlay = false
+        restoredResumeAtSec = 0
         // An explicit play (a tap, Play on a stopped track) starts a new run of
         // unplayable tracks; only the queue moving on adds to one.
         if !advancing { unplayableRun.reset() }
@@ -2901,6 +2915,7 @@ final class QueuePlaybackCoordinator {
         guard let jsonStr = try? await container.settingsStore.getPersistedQueueState(),
               let state = QueuePersistenceCodec.shared.decode(jsonStr: jsonStr) else { return }
         if state.upNext.isEmpty && state.currentTrack == nil { return }
+        let savedPosition = try? await container.settingsStore.getPersistedPlaybackPosition()
         await MainActor.run {
             // The reads above wait, and a play can start meanwhile (a deep
             // link, a tap on the phone). Putting the last session's queue back
@@ -2920,9 +2935,55 @@ final class QueuePlaybackCoordinator {
                 context: state.playbackContext,
                 shuffle: state.shuffleEnabled)
             self.currentTrack = state.currentTrack
-            // Shown paused but loaded in no engine: play starts it.
+            // Shown paused but loaded in no engine: play starts it, at the
+            // saved position when it's for this track (#567).
             self.needsLoadOnPlay = state.currentTrack != nil
+            self.restoredResumeAtSec = Double(PlaybackResumePosition.shared.resumeAtMs(
+                saved: PlaybackResumePosition.shared.decode(jsonStr: savedPosition),
+                trackId: state.currentTrack?.id)) / 1000
             self.syncSnapshot()
+        }
+    }
+
+    /// Saves the current track's position on a pause and every 15 s while it
+    /// plays, apart from the queue (shared `PlaybackResumePosition`, #567).
+    /// Called from the 1 s tick.
+    @MainActor
+    private func savePositionIfDue() {
+        let playing = isPlaying
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let due = PlaybackResumePosition.shared.shouldSave(
+            wasPlaying: positionSaveWasPlaying, isPlaying: playing,
+            msSinceLastSave: nowMs - positionSavedAtMs)
+        positionSaveWasPlaying = playing
+        guard due, let track = currentTrack, !needsLoadOnPlay else { return }
+        positionSavedAtMs = nowMs
+        let json = PlaybackResumePosition.shared.encode(position: SavedPlaybackPosition(
+            trackId: track.id,
+            positionMs: Int64(currentTime * 1000),
+            durationMs: Int64(max(duration, 0) * 1000)))
+        let settings = container.settingsStore
+        Task {
+            guard (try? await settings.isPersistQueueEnabled()) == true else { return }
+            try? await settings.setPersistedPlaybackPosition(json: json)
+        }
+    }
+
+    /// Seeks [trackId] to [toSec] once it's playing: the first play of a
+    /// restored queue (#567). Waits up to 60 s, since a slow network can hold
+    /// the start back; another track playing meanwhile cancels it.
+    private func seekOnceStarted(trackId: String, toSec: Double) {
+        Task { @MainActor [weak self] in
+            let deadline = Date().addingTimeInterval(60)
+            while Date() < deadline {
+                guard let self, self.currentTrack?.id == trackId else { return }
+                if self.isPlaying && !self.isStarting {
+                    self.seek(to: toSec)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            NSLog("QUEUE restored track didn't start within 60 s; not seeking")
         }
     }
 }

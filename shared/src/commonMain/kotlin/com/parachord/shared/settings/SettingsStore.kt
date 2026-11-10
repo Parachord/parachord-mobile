@@ -83,6 +83,7 @@ class SettingsStore(
         const val SCROBBLING_ENABLED = "scrobbling_enabled"
         const val PERSIST_QUEUE = "persist_queue"
         const val PERSISTED_QUEUE_STATE = "persisted_queue_state"
+        const val PERSISTED_QUEUE_POSITION = "persisted_queue_position"
         const val LASTFM_USERNAME = "lastfm_username"
         const val LISTENBRAINZ_USERNAME = "listenbrainz_username"
         const val RESOLVER_ORDER = "resolver_order"
@@ -558,7 +559,16 @@ class SettingsStore(
     }
 
     suspend fun clearPersistedQueueState() {
-        ensureMigrated(); kv.remove(PERSISTED_QUEUE_STATE)
+        ensureMigrated(); kv.remove(PERSISTED_QUEUE_STATE); kv.remove(PERSISTED_QUEUE_POSITION)
+    }
+
+    /** Where the saved queue's current track had got to (`PlaybackResumePosition`, #567). */
+    suspend fun getPersistedPlaybackPosition(): String? {
+        ensureMigrated(); return kv.getStringOrNull(PERSISTED_QUEUE_POSITION)
+    }
+
+    suspend fun setPersistedPlaybackPosition(json: String) {
+        ensureMigrated(); kv.setString(PERSISTED_QUEUE_POSITION, json)
     }
 
     // ── Libre.fm session ─────────────────────────────────────────────
