@@ -46,6 +46,43 @@ class OtherVersionMatchTest {
         assertFalse(isOtherVersion("Demons", "X", "Demons", "X"))
     }
 
+    // ── Medleys: desktop's vectors (parachord#1306 / #1307) ─────────────
+    // A title joining several songs with a slash, or naming a medley, is
+    // another version: Bandcamp's "Her Majesty" was a nine-song medley (#582).
+
+    @Test fun aSlashJoinedMedleyIsAnotherVersion() = assertTrue(
+        isOtherVersion("You Never Give Me Your Money/Sun King/The End/Her Majesty", "The Beatles", "Her Majesty", "The Beatles"),
+    )
+
+    @Test fun aMedleyByNameIsAnotherVersion() =
+        assertTrue(isOtherVersion("Abbey Road Medley", "The Beatles", "Her Majesty", "The Beatles"))
+
+    @Test fun anArtistNamedMedleyIsNotAnotherVersion() =
+        assertFalse(isOtherVersion("Brown Eyed Woman", "Bill Medley", "Brown Eyed Woman", "Bill Medley"))
+
+    @Test fun aSlashInTheRequestedArtistIsNotAMedley() =
+        assertFalse(isOtherVersion("AC/DC - Back in Black", "AC/DC", "Back in Black", "AC/DC"))
+
+    @Test fun aSlashBetweenDigitsIsNotAMedley() =
+        assertFalse(isOtherVersion("24/7", "Ghostface Killah", "24/7", "Ghostface Killah"))
+
+    @Test fun withIsNotAMedley() =
+        assertFalse(isOtherVersion("Paranoid (w/ B.o.B)", "Ty Dolla \$ign", "Paranoid", "Ty Dolla \$ign"))
+
+    @Test fun aRequestedSlashIsNotAMedley() =
+        assertFalse(isOtherVersion("Upside Down / Medley", "Diana Ross", "Upside Down / Medley", "Diana Ross"))
+
+    @Test fun backedWithCountsAsTwoSongs() =
+        assertTrue(isOtherVersion("Penny Lane b/w Strawberry Fields Forever", "The Beatles", "Penny Lane", "The Beatles"))
+
+    @Test fun aSoleMedleyIsSkippedForTheSongWhenBothAreThere() {
+        val results = listOf(
+            R("The Beatles", "You Never Give Me Your Money/Sun King/Mean Mr. Mustard/Polythene Pam/She Came in Through the Bathroom Window/Golden Slumbers/Carry That Weight/The End/Her Majesty"),
+            R("The Beatles", "Her Majesty - 2019 Mix"),
+        )
+        assertEquals("Her Majesty - 2019 Mix", pick(results, "The Beatles", "Her Majesty")?.title)
+    }
+
     // ── selectBestMatch name tiers ──────────────────────────────────────
 
     @Test fun prefersTheExactTrackOverALiveVersionRankedAboveIt() {
