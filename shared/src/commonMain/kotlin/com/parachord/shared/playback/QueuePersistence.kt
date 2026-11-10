@@ -23,6 +23,12 @@ data class PersistedQueueState(
     val playbackContext: PlaybackContext? = null,
     val shuffleEnabled: Boolean = false,
     val originalOrder: List<Track>? = null,
+    /**
+     * Whether each [playHistory] entry belongs to the queue (repeat all wraps
+     * only those; see `QueueManager.historyInQueue`). Null or short in a blob
+     * saved before it existed: the missing entries count as in the queue.
+     */
+    val playHistoryInQueue: List<Boolean>? = null,
 )
 
 /**

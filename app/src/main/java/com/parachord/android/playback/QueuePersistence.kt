@@ -117,6 +117,7 @@ class QueuePersistence constructor(
                 currentTrack = currentTrack?.toSerializable(),
                 upNext = snapshot.upNext.map { it.toSerializable() },
                 playHistory = queueManager.history.map { it.toSerializable() },
+                playHistoryInQueue = queueManager.historyInQueue,
                 playbackContext = snapshot.playbackContext,
                 shuffleEnabled = snapshot.shuffleEnabled,
                 originalOrder = queueManager.savedOriginalOrder?.map { it.toSerializable() },
@@ -159,6 +160,7 @@ class QueuePersistence constructor(
                 restoredOriginalOrder = state.originalOrder?.map { it.toTrackEntity() },
                 context = state.playbackContext,
                 shuffle = state.shuffleEnabled,
+                restoredHistoryInQueue = state.playHistoryInQueue,
             )
 
             val track = state.currentTrack?.toTrackEntity()

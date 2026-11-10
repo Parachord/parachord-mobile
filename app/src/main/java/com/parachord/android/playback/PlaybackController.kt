@@ -233,6 +233,16 @@ class PlaybackController constructor(
     /** Previous playback context to restore on exit (queue itself is never modified). */
     private var preSpinoffContext: PlaybackContext? = null
     private var spinoffJob: Job? = null
+    /**
+     * The track now playing was pulled from the spinoff pool. Set when the
+     * spinoff branch of [skipNextInternal] starts a pool track, cleared by any
+     * other play (a queue advance or wrap, a tap, [playTrack], [playQueue],
+     * Previous, a restore). A pool track that leaves for the queue goes to
+     * history out of the repeat-all lap (Previous still reaches it), and the
+     * first pool pull puts a non-pool current track (the spinoff's seed) in
+     * history inside the lap.
+     */
+    @Volatile private var currentIsPoolTrack = false
 
     // ── Pool-based spinoff (Mode C) refill state ────────────────────────
     // The actual refill loop (rate-limit, empty counter, dedup, ID
@@ -293,6 +303,7 @@ class PlaybackController constructor(
                 })
                 if (restoredTrack != null) {
                     playedSinceWrap = false
+                    currentIsPoolTrack = false
                     val snapshot = queueManager.snapshot.value
                     // Where it was when the app was last running (#567).
                     val resumeAtMs = queuePersistence.savedResumePositionMs(restoredTrack.id)
@@ -388,6 +399,7 @@ class PlaybackController constructor(
         queueManager.clearQueue()
         if (context != null) queueManager.setContext(context)
         playedSinceWrap = false
+        currentIsPoolTrack = false
         scope.launch { playTrackInternal(track) }
     }
 
@@ -406,6 +418,7 @@ class PlaybackController constructor(
         clearUserPauseMark()
         val track = queueManager.setQueue(tracks, startIndex, context, shuffle) ?: return
         playedSinceWrap = false
+        currentIsPoolTrack = false
         scope.launch { playTrackInternal(track) }
     }
 
@@ -507,6 +520,15 @@ class PlaybackController constructor(
             if (spinoffPool.isNotEmpty()) {
                 val next = spinoffPool.removeAt(0)
                 Log.d(TAG, "Spinoff: playing next '${next.title}' by ${next.artist} (${spinoffPool.size} remaining)")
+                // The first pool pull: the track playing now is the seed (or a
+                // tapped track), so it stays in the repeat-all lap.
+                if (!currentIsPoolTrack) {
+                    stateHolder.state.value.currentTrack?.let {
+                        queueManager.pushToHistory(it, inQueue = true)
+                        Log.d(TAG, "Spinoff: seed '${it.title}' kept in the queue's history")
+                    }
+                }
+                currentIsPoolTrack = true
 
                 // Mode C refill trigger — fire when the shared rule says the
                 // pool is low AND we have a refill URL configured. This is a
@@ -545,12 +567,17 @@ class PlaybackController constructor(
         val listenAlong = state.playbackContext?.type == LISTEN_ALONG_CONTEXT
         val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
         val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
+        // A spinoff pool track leaving for the queue isn't part of the repeat-all lap.
+        val currentInQueue = !currentIsPoolTrack
+        if (!currentInQueue && action != AdvanceAction.REPLAY_CURRENT) {
+            Log.d(TAG, "skipNext: leaving pool track '${currentTrack?.title}' out of the queue's lap")
+        }
         val next: TrackEntity = when (action) {
-            AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack)
+            AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack, currentInQueue)
             AdvanceAction.REPLAY_CURRENT -> currentTrack
-            AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack).also { playedSinceWrap = false }
+            AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack, currentInQueue).also { playedSinceWrap = false }
             AdvanceAction.STOP_AND_CLEAR -> null
-        } ?: run {
+        }.also { if (it != null && action != AdvanceAction.REPLAY_CURRENT) currentIsPoolTrack = false } ?: run {
             stopAtEndOfQueue(clear = !listenAlong)
             return
         }
@@ -607,7 +634,8 @@ class PlaybackController constructor(
         }
         // The cleared track goes to history, so Previous goes back to it
         // rather than to the track before it.
-        stateHolder.state.value.currentTrack?.let { queueManager.pushToHistory(it) }
+        stateHolder.state.value.currentTrack?.let { queueManager.pushToHistory(it, inQueue = !currentIsPoolTrack) }
+        currentIsPoolTrack = false
         // Nothing plays next, so stopping ExoPlayer here (its item, or the
         // silent keep-alive loop during external playback) can't demote the
         // service between two tracks. stop() before clearMediaItems(): an
@@ -648,6 +676,7 @@ class PlaybackController constructor(
 
         val currentTrack = stateHolder.state.value.currentTrack
         val prev = queueManager.skipPrevious(currentTrack) ?: return
+        currentIsPoolTrack = false
         advanceJob?.cancel()
         advanceJob = scope.launch {
             try {
@@ -662,7 +691,8 @@ class PlaybackController constructor(
     /** User tapped a track in the queue UI — play from that point. */
     fun playFromQueue(index: Int) {
         val currentTrack = stateHolder.state.value.currentTrack
-        val track = queueManager.playFromQueue(index, currentTrack) ?: return
+        val track = queueManager.playFromQueue(index, currentTrack, currentInQueue = !currentIsPoolTrack) ?: return
+        currentIsPoolTrack = false
         advanceJob?.cancel()
         advanceJob = scope.launch {
             try {
@@ -2056,7 +2086,8 @@ class PlaybackController constructor(
      * pool before tearing down the user's queue (#397).
      *
      * [displayName], when non-null, sets the [PlaybackContext.name] directly;
-     * null falls back to `"Spinoff from <title>"` (the historical banner copy).
+     * null falls back to "Spinoff from <title> by <artist>" of the resolved seed
+     * ([PlaybackMessages.spinoffFrom]).
      *
      * [kickStartFirstTrack] controls whether the first pool track plays now
      * (`true`) or the current track keeps playing and `skipNextInternal` pulls
