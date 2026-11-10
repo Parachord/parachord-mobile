@@ -2625,8 +2625,12 @@ final class QueuePlaybackCoordinator {
     /// Previous: past the first few seconds (or with no history) it restarts
     /// the track, else it goes back one (shared `previousAction`).
     func skipPrevious() {
+        // With no current track (the queue ran out and was cleared) the
+        // active engine is stopped but still reports its stale position, which
+        // would read as "past the first seconds" and restart a stopped engine
+        // instead of playing the track just pushed to history.
         let action = QueueAdvancePolicyKt.previousAction(
-            positionMs: currentTime.isFinite ? Int64(currentTime * 1000) : 0,
+            positionMs: (currentTrack != nil && currentTime.isFinite) ? Int64(currentTime * 1000) : 0,
             hasPrevious: queueManager.hasPrevious
         )
         guard action == .playPrevious,

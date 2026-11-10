@@ -2809,6 +2809,7 @@ class PlaybackController constructor(
                 isrc = com.parachord.shared.resolver.pickTrackIsrc(track.isrc, sources),
             ))
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e(TAG, "On-the-fly resolution failed for '${track.title}'", e)
             OnTheFlyResolve(track, resolversCouldNotAnswer = true)
         }
