@@ -31,7 +31,7 @@ data class LoadOnPlay(
         IDLE_STOPPED,
 
         /**
-         * Nothing could play it and the queue didn't move on ([failedPlayAwaitsLoad]):
+         * Nothing could play it and the queue didn't move on ([com.parachord.shared.playback.failedPlayAwaitsLoad]):
          * offline, every source refused, the stream failed. Starts where that
          * play was meant to start, or where the stream stopped ([failedLoad]).
          */
@@ -46,39 +46,8 @@ data class LoadOnPlay(
 internal fun loadOnPlayTarget(pending: LoadOnPlay?, currentTrackId: String?): LoadOnPlay? =
     pending?.takeIf { currentTrackId != null && it.track.id == currentTrackId }
 
-/** How a play ended with nothing playing. */
-enum class PlayFailure {
-    /** An embedded player (SoundCloud, Bandcamp) refused it and no other source could play it. */
-    EMBED_REFUSED,
-
-    /** Spotify can't start from the background and there's no other source. */
-    NO_SOURCE_WITHOUT_SPOTIFY,
-
-    /** The handler didn't start within `PLAY_START_TIMEOUT_MS` (#449). */
-    START_TIMED_OUT,
-
-    /**
-     * The handler gave up without starting it (`PlaybackStartFailedException`):
-     * Apple Music offline, where MusicKit's play fails at once, or MusicKit
-     * that never loaded.
-     */
-    START_FAILED,
-
-    /** The play threw. */
-    ERROR,
-
-    /** ExoPlayer's item failed (a local file or a stream; offline, or the stream dropped). */
-    PLAYER_ERROR,
-}
-
-/**
- * Whether a play that ended with nothing playing leaves its track for Play to
- * load. Not when the queue moves on by itself: a refused track during an
- * advance or a spinoff is skipped (desktop's `autoSkipIfAdvancing`), and Play
- * then belongs to the next track. Every other failure stops on the track.
- */
-internal fun failedPlayAwaitsLoad(failure: PlayFailure, advancing: Boolean, spinoffMode: Boolean): Boolean =
-    !(failure == PlayFailure.EMBED_REFUSED && (advancing || spinoffMode))
+/** How a play ended with nothing playing: shared with iOS (`shared/.../playback/PlayFailure.kt`). */
+typealias PlayFailure = com.parachord.shared.playback.PlayFailure
 
 /**
  * The [LoadOnPlay] for a failed play of [track]. A resume that never started

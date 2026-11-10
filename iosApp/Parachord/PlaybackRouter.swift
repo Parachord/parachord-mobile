@@ -54,6 +54,12 @@ struct PlaybackRouter {
     /// device, rate-limited, Premium needed). The walk then moves on. In the
     /// car the caller uses it to stop on the track instead of skipping it.
     var onSpotifyFailed: (() -> Void)? = nil
+    /// Called when an Apple Music source should have played and couldn't
+    /// start (offline, MusicKit unreachable, no answer in time), with
+    /// whether it timed out. The walk then moves on (a local file can still
+    /// play offline); if nothing plays, the caller stops on the track for
+    /// Play rather than skip it (shared `PlayFailure.START_FAILED`).
+    var onStartFailed: ((_ timedOut: Bool) -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -125,8 +131,14 @@ struct PlaybackRouter {
                 var status = MusicAuthorization.currentStatus
                 if status == .notDetermined { status = await MusicAuthorization.request() }
                 guard status == .authorized else { continue }
-                if await musicKit.play(appleMusicId: id) { return .played(.musicKit, resolver: source.resolver) }
-                // started false (no subscription / transient) → next source
+                switch await musicKit.play(appleMusicId: id) {
+                case .started:
+                    return .played(.musicKit, resolver: source.resolver)
+                case .unavailable:
+                    break   // not in the catalog / no subscription → next source
+                case .failed(let timedOut):
+                    onStartFailed?(timedOut)   // couldn't start → next source
+                }
 
             case "spotify":
                 guard spotify.canPlay, let uri = source.spotifyUri, !uri.isEmpty else { continue }

@@ -6,7 +6,9 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.PowerManager
 import com.parachord.shared.platform.Log
+import com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE
 import com.parachord.shared.playback.QueueRestorePolicy
+import com.parachord.shared.playback.failedPlayAwaitsLoad
 import com.parachord.shared.playback.ResolverVolume
 import com.parachord.android.data.store.SettingsStore
 import android.widget.Toast
@@ -1076,7 +1078,7 @@ class PlaybackController constructor(
                         copy(
                             isPlaying = false,
                             isBuffering = false,
-                            playbackError = "Couldn't start playing. Check your connection and try again.",
+                            playbackError = PLAY_START_FAILED_MESSAGE,
                         )
                     }
                     return
@@ -1092,7 +1094,7 @@ class PlaybackController constructor(
                             playbackError = if (e.alreadyReported) {
                                 playbackError
                             } else {
-                                "Couldn't start playing. Check your connection and try again."
+                                PLAY_START_FAILED_MESSAGE
                             },
                         )
                     }
