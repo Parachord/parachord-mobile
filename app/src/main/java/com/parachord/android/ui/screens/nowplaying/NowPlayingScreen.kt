@@ -464,11 +464,14 @@ fun NowPlayingScreen(
 
                 // Playback controls with shuffle and repeat. The two sides
                 // take equal widths so play stays centered with two buttons on
-                // the left and one on the right.
+                // the left and one on the right. No side padding: the center
+                // takes 168 dp (48 + 72 + 48), so a 360 dp screen leaves exactly
+                // 96 dp a side, the two 48 dp touch targets of shuffle and
+                // repeat. With 16 dp padding repeat was squeezed to ~32 dp and
+                // overlapped shuffle.
                 Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
