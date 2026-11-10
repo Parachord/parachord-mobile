@@ -732,8 +732,15 @@ private struct DeletePlaylistSheet: View {
     private func confirm() {
         working = true
         Task {
-            _ = try? await container.deletePlaylistFromMirrors(id: playlist.id, fromProviders: Array(selected))
+            let unsupported = (try? await container.deletePlaylistFromMirrors(id: playlist.id, fromProviders: Array(selected))) ?? []
             dismiss(); onClose()
+            // Apple Music can't delete a playlist through its API: say it's
+            // still there, as Android's toast does (Phase 6.5, Decision D8).
+            if !unsupported.isEmpty {
+                AppPlayback.shared.coordinator.notice = QueuePlaybackCoordinator.Notice(
+                    message: UiMessages.shared.playlistDeletionUnsupported(providerNames: unsupported),
+                    showInCar: false, seconds: 6)
+            }
         }
     }
 

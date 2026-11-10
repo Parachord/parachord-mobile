@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.chat
 
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -393,13 +394,13 @@ private fun NoProvidersContent(modifier: Modifier = Modifier) {
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "No AI providers configured",
+            text = UiMessages.NO_AI_PROVIDERS,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "Go to Settings \u2192 Plug-Ins to set up ChatGPT, Claude, or Gemini",
+            text = UiMessages.NO_AI_PROVIDERS_HINT,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

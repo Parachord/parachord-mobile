@@ -261,7 +261,8 @@ struct ContentView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .onTapGesture { coordinator.notice = nil }
                 .task(id: n.id) {
-                    try? await Task.sleep(nanoseconds: n.actionLabel == nil ? 3_500_000_000 : 8_000_000_000)
+                    let seconds = n.seconds ?? (n.actionLabel == nil ? 3.5 : 8)
+                    try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
                     if coordinator.notice?.id == n.id {
                         withAnimation(.easeInOut(duration: 0.25)) { coordinator.notice = nil }
                     }

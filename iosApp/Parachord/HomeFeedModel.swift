@@ -98,13 +98,14 @@ final class HomeFeedModel {
         }
         aiLoading = aiAlbums.isEmpty && aiArtists.isEmpty
         aiError = nil
-        // A failed refresh returns nil: keep the cached suggestions, and only
-        // show an error when there's nothing cached to fall back on.
-        if let r = (try? await container.loadAiSuggestions()) ?? nil {
+        // A failed refresh keeps the cached suggestions; with nothing cached
+        // the provider's message shows, as on Android (HomeViewModel).
+        let result = try? await container.loadAiSuggestions()
+        if let r = result?.suggestions {
             aiAlbums = r.albums
             aiArtists = r.artists
         } else if aiAlbums.isEmpty && aiArtists.isEmpty {
-            aiError = "Couldn't load AI suggestions"
+            aiError = result?.error ?? UiMessages.shared.AI_SUGGESTIONS_UNKNOWN_ERROR
         }
         aiLoading = false
     }

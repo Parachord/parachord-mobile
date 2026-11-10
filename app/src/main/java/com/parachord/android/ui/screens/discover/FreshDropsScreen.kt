@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.ui.UiMessages
 import com.parachord.android.ui.screens.artist.releaseTypeBadgeColor
 
 import androidx.compose.animation.animateContentSize
@@ -199,7 +200,7 @@ fun FreshDropsScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedButton(onClick = viewModel::refresh) {
-                            Text("Try Again")
+                            Text(UiMessages.TRY_AGAIN)
                         }
                     }
                 }
@@ -214,11 +215,11 @@ fun FreshDropsScreen(
                     ) {
                         Text(
                             text = if (searchQuery.isNotBlank()) {
-                                "No results for \"$searchQuery\""
+                                UiMessages.noResultsFor(searchQuery)
                             } else if (filterType != "all") {
-                                "No ${filterType}s found"
+                                UiMessages.freshDropsFilterEmpty(filterType)
                             } else {
-                                "No new releases found.\nAdd artists to your library or connect Last.fm/ListenBrainz."
+                                UiMessages.FRESH_DROPS_EMPTY
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

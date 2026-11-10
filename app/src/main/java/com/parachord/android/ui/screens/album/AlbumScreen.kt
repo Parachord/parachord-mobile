@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.album
 
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -214,7 +215,7 @@ fun AlbumScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = "Album not found",
+                        text = UiMessages.ALBUM_NOT_FOUND,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

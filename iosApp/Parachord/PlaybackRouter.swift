@@ -60,6 +60,10 @@ struct PlaybackRouter {
     /// play offline); if nothing plays, the caller stops on the track for
     /// Play rather than skip it (shared `PlayFailure.START_FAILED`).
     var onStartFailed: ((_ timedOut: Bool) -> Void)? = nil
+    /// An Apple Music source was skipped because the app isn't allowed to use
+    /// Apple Music (access denied or restricted). If nothing plays, the caller
+    /// says so (Android's "Sign in to Apple Music to play this track").
+    var onAppleMusicUnauthorized: (() -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -130,7 +134,7 @@ struct PlaybackRouter {
                 // @MainActor, so request() runs on the main actor as required.)
                 var status = MusicAuthorization.currentStatus
                 if status == .notDetermined { status = await MusicAuthorization.request() }
-                guard status == .authorized else { continue }
+                guard status == .authorized else { onAppleMusicUnauthorized?(); continue }
                 switch await musicKit.play(appleMusicId: id) {
                 case .started:
                     return .played(.musicKit, resolver: source.resolver)

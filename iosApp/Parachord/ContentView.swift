@@ -1889,6 +1889,8 @@ final class QueuePlaybackCoordinator {
         /// information that needs nothing from the driver ("Playing via X"),
         /// as Android Auto shows only the errors that stopped playback.
         var showInCar = true
+        /// How long the banner stays; nil is 3.5 s (8 s with an action).
+        var seconds: Double? = nil
     }
     var notice: Notice?
 
@@ -1909,6 +1911,8 @@ final class QueuePlaybackCoordinator {
         /// An engine should have started a source and couldn't (Apple Music
         /// offline, or no answer in time).
         var startFailure: PlayFailure?
+        /// An Apple Music source was skipped: the app may not use Apple Music.
+        var appleMusicUnauthorized = false
     }
 
     /// The current track is on screen but no engine has it loaded: a queue
@@ -2800,6 +2804,7 @@ final class QueuePlaybackCoordinator {
             router.onStartFailed = { timedOut in
                 if refusal.startFailure == nil { refusal.startFailure = timedOut ? .startTimedOut : .startFailed }
             }
+            router.onAppleMusicUnauthorized = { refusal.appleMusicUnauthorized = true }
             // The embeds' lock screen / CarPlay art: the cover the phone shows
             // (the track's own unless it's Last.fm's placeholder, else its
             // resolved sources'), then the playing source's.
@@ -2857,6 +2862,18 @@ final class QueuePlaybackCoordinator {
                 if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
 
             case .noPlayableSource:
+                // Apple Music would play it but the app may not use Apple
+                // Music: stop on the track and say so (Android's sign-in
+                // message, shared). Access is granted in iOS Settings, which
+                // the action opens; Play then tries the track again.
+                if refusal.appleMusicUnauthorized, forcedResolver == nil {
+                    NSLog("QUEUE '\(track.title)' didn't play: Apple Music access not granted")
+                    await haltActiveEngine()
+                    notice = Notice(message: PlayFailureKt.APPLE_MUSIC_SIGN_IN_MESSAGE,
+                                    actionLabel: "Open Settings", actionUrl: UIApplication.openSettingsURLString)
+                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    return
+                }
                 // Nothing could start because nothing could reach the network:
                 // Apple Music failed to start (offline: MusicKit fails at once),
                 // or the device has no network at all. Stop on the track with

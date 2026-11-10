@@ -618,6 +618,9 @@ struct AlbumScreen: View {
                 tracklist
                 if model.isLoading && !model.loaded {
                     PCSkeletonList(count: 8, art: 44)
+                } else if model.loaded && model.detail == nil {
+                    // No provider knew the album (Android's AlbumScreen).
+                    PCEmptyState(message: UiMessages.shared.ALBUM_NOT_FOUND)
                 }
             }
             .padding(.bottom, 130)
@@ -755,6 +758,8 @@ final class ArtistDetailModel {
     var albums: [AlbumSearchResult] = []
     /// Upcoming tour dates (unfiltered — full schedule) for the On Tour tab (#201).
     var tourDates: [ConcertEvent] = []
+    /// The repository's error when the tour dates failed to load with none to show.
+    var tourError: String?
     /// True when the artist has any upcoming dates → the On Tour tab appears (last).
     var isOnTour = false
     var isLoading = false
@@ -825,9 +830,17 @@ final class ArtistDetailModel {
     /// Non-blocking — runs in its own Task so the rest of the page isn't delayed.
     private func loadTourDates() {
         Task {
-            let ev = (try? await container.getArtistEvents(artistName: name)) ?? []
-            tourDates = ev
-            isOnTour = !ev.isEmpty
+            do {
+                let ev = try await container.getArtistEvents(artistName: name)
+                tourDates = ev
+                isOnTour = !ev.isEmpty
+                tourError = nil
+            } catch {
+                // A failed load keeps the dates already shown (it used to
+                // wipe them, hiding the tab); with none, the tab says why,
+                // as Android's OnTourTab ("Failed to load tour dates").
+                if let message = pcLoadErrorMessage(error) { tourError = message }
+            }
         }
     }
 
@@ -1410,7 +1423,7 @@ struct ArtistScreen: View {
     private var onTourTab: some View {
         Group {
             if model.tourDates.isEmpty {
-                Text("No upcoming tour dates").font(.system(size: 14)).foregroundStyle(PC.fg3)
+                Text(model.tourError ?? UiMessages.shared.TOUR_DATES_EMPTY).font(.system(size: 14)).foregroundStyle(PC.fg3)
                     .frame(maxWidth: .infinity).padding(40)
             } else {
                 LazyVStack(spacing: 0) {

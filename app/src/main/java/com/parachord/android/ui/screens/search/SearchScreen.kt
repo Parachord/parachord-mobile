@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.search
 
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -321,7 +322,7 @@ fun SearchScreen(
                             // A throttled MusicBrainz has NOT established that
                             // nothing matched, so don't claim it did (#375).
                             text = if (mbRateLimited) {
-                                "MusicBrainz is rate-limiting requests — retrying…"
+                                UiMessages.MUSICBRAINZ_RATE_LIMITED
                             } else {
                                 "No results for \"$query\""
                             },

@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.ui.UiMessages
 import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
@@ -259,7 +260,7 @@ private fun ArtistsTab(
         is Resource.Error -> ErrorState(message = artists.message, onRetry = onRefresh)
         is Resource.Success -> {
             if (artists.data.isEmpty()) {
-                EmptyState("No recommendations yet.\nListen to more music to get personalized suggestions!")
+                EmptyState(UiMessages.RECOMMENDED_ARTISTS_EMPTY)
             } else {
                 Column {
                     Text(
@@ -376,7 +377,7 @@ private fun SongsTab(
         is Resource.Error -> ErrorState(message = tracks.message, onRetry = onRefresh)
         is Resource.Success -> {
             if (tracks.data.isEmpty()) {
-                EmptyState("No track recommendations yet.\nListen to more music to get personalized suggestions!")
+                EmptyState(UiMessages.RECOMMENDED_TRACKS_EMPTY)
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(tracks.data, key = { "${it.title}-${it.artist}" }) { track ->
@@ -422,7 +423,7 @@ private fun ErrorState(message: String, onRetry: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedButton(onClick = onRetry) {
-                Text("Try Again")
+                Text(UiMessages.TRY_AGAIN)
             }
         }
     }

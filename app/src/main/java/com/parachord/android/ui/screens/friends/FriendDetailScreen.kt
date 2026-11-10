@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.AlbumContextMenu
 import com.parachord.android.ui.components.hapticClickable
@@ -180,8 +181,7 @@ fun FriendDetailScreen(
                 0 -> FriendRecentTab(
                     recentTracks = recentTracks,
                     hiddenMessage = friend?.takeIf { it.hidesListening }?.let {
-                        "${it.displayName} hides their recent listening on Last.fm. " +
-                            "Their top tracks, albums and artists are in the other tabs."
+                        UiMessages.friendHidesListening(it.displayName)
                     },
                     onPlayTrack = viewModel::playRecentTrack,
                     onRetry = viewModel::refresh,
@@ -271,7 +271,7 @@ private fun FriendRecentTab(
         is Resource.Error -> ErrorState(recentTracks.message, onRetry)
         is Resource.Success -> {
             if (recentTracks.data.isEmpty()) {
-                EmptyState(hiddenMessage ?: "No recent listening activity")
+                EmptyState(hiddenMessage ?: UiMessages.FRIEND_RECENT_EMPTY)
             } else {
                 LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(recentTracks.data.size) { index ->
@@ -373,7 +373,7 @@ private fun FriendTopSongsTab(
             is Resource.Error -> ErrorState(tracks.message)
             is Resource.Success -> {
                 if (tracks.data.isEmpty()) {
-                    EmptyState("No listening data for this period")
+                    EmptyState(UiMessages.FRIEND_TRACKS_EMPTY)
                 } else {
                     LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                         items(tracks.data.size) { index ->
@@ -420,7 +420,7 @@ private fun FriendTopAlbumsTab(
             is Resource.Error -> ErrorState(albums.message)
             is Resource.Success -> {
                 if (albums.data.isEmpty()) {
-                    EmptyState("No album data for this period")
+                    EmptyState(UiMessages.FRIEND_ALBUMS_EMPTY)
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
@@ -561,7 +561,7 @@ private fun FriendTopArtistsTab(
             is Resource.Error -> ErrorState(artists.message)
             is Resource.Success -> {
                 if (artists.data.isEmpty()) {
-                    EmptyState("No artist data for this period")
+                    EmptyState(UiMessages.FRIEND_ARTISTS_EMPTY)
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
@@ -665,7 +665,7 @@ private fun ErrorState(message: String, onRetry: (() -> Unit)? = null) {
             if (onRetry != null) {
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(onClick = onRetry) {
-                    Text("Retry")
+                    Text(UiMessages.RETRY)
                 }
             }
         }

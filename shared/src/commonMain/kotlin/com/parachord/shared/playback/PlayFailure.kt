@@ -43,3 +43,10 @@ fun failedPlayAwaitsLoad(failure: PlayFailure, advancing: Boolean, spinoffMode: 
 
 /** What the person is told when a play couldn't start ([PlayFailure.START_FAILED], [PlayFailure.START_TIMED_OUT]). */
 const val PLAY_START_FAILED_MESSAGE = "Couldn't start playing. Check your connection and try again."
+
+/**
+ * What the person is told when Apple Music would play the track but Parachord
+ * isn't allowed to use it (Android: MusicKit authorization failed; iOS: Apple
+ * Music access denied for the app). Play tries the track again.
+ */
+const val APPLE_MUSIC_SIGN_IN_MESSAGE = "Sign in to Apple Music to play this track"

@@ -72,6 +72,8 @@ import com.parachord.shared.model.ChartSong
 import com.parachord.shared.model.RecommendedArtist
 import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
+import com.parachord.shared.model.keepDataOnError
+import com.parachord.shared.model.settle
 import com.parachord.shared.db.DriverFactory
 import com.parachord.shared.db.ParachordDb
 import com.parachord.shared.db.dao.AlbumDao
@@ -611,15 +613,18 @@ class IosContainer private constructor() {
         try { aiRecommendationService.getCachedRecommendations()?.toIos() } catch (e: Exception) { null }
 
     /**
-     * Fresh AI suggestions (a live provider call — 30–60s). Null on any error,
-     * so the caller keeps the cached suggestions it's showing. (It used to
-     * return empty lists, which the Home feed assigned over the cache.)
+     * Fresh AI suggestions (a live provider call — 30–60s). On an error the
+     * result has no suggestions, so the caller keeps the cached ones it's
+     * showing, and the provider's message, which Home shows when nothing is
+     * cached (Android's HomeViewModel). Never throws.
      */
-    suspend fun loadAiSuggestions(): IosAiSuggestions? =
-        try { aiRecommendationService.loadRecommendations().toIos() }
+    suspend fun loadAiSuggestions(): IosAiSuggestionsResult =
+        try { IosAiSuggestionsResult(aiRecommendationService.loadRecommendations().toIos(), null) }
         catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w("IosContainer", "AI suggestions refresh failed: ${e.message}")
-            null
+            // Android's Home shows the provider's message (HomeViewModel).
+            IosAiSuggestionsResult(null, e.message ?: com.parachord.shared.ui.UiMessages.AI_SUGGESTIONS_UNKNOWN_ERROR)
         }
 
     /**
@@ -685,7 +690,10 @@ class IosContainer private constructor() {
      *  the empty string on success, else the error message (so "Sync now" can
      *  surface WHY it failed instead of a generic toast). Safe to call from the
      *  foreground timer (which ignores the result). */
-    suspend fun syncNow(): String {
+    suspend fun syncNow(): String = syncNowOutcome().error
+
+    /** [syncNow] with the run's notices ("ListenBrainz rate-limited…"), for "Sync now". */
+    suspend fun syncNowOutcome(): IosSyncOutcome {
         // CRITICAL (Kotlin/Native): this is a Swift-bridged `suspend` — an
         // exception that escapes it does NOT reach Swift's `try?`; Kotlin/Native
         // aborts the process at the ObjC bridge (Kotlin_ObjCExport_ExceptionAsNSError
@@ -699,16 +707,16 @@ class IosContainer private constructor() {
             val r = syncEngine.syncAll()
             if (r.success) {
                 Log.i("IosSync", "Sync OK")
-                ""
+                IosSyncOutcome("", r.notices)
             } else {
                 Log.w("IosSync", "Sync failed: ${r.error}")
-                r.error ?: "Sync failed"
+                IosSyncOutcome(r.error ?: "Sync failed", r.notices)
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e   // never swallow cooperative cancellation
         } catch (e: Exception) {
             Log.w("IosSync", "Sync threw (swallowed at bridge): ${e.message}")
-            e.message ?: "Sync error"
+            IosSyncOutcome(e.message ?: "Sync error", emptyList())
         }
     }
 
@@ -1627,29 +1635,24 @@ class IosContainer private constructor() {
     // FriendProfileModel is recreated on every open (per-screen @State), so
     // without this each visit re-fetched from scratch. Friend Recently Played
     // stays live (getFriendRecentTracks below — not cached).
+    @Throws(Throwable::class)
     suspend fun getFriendTopTracks(username: String, service: String, period: String): List<HistoryTrack> =
         cachedTopTracks(TOP_TRACKS_FILE, "friend:$username:$service:$period") {
-            var out = emptyList<HistoryTrack>()
-            friendsRepository.getFriendTopTracks(username, service, period).collect { if (it is Resource.Success) out = it.data }
-            out
+            friendsRepository.getFriendTopTracks(username, service, period).shownOrThrow(emptyList())
         }
+    @Throws(Throwable::class)
     suspend fun getFriendTopAlbums(username: String, service: String, period: String): List<HistoryAlbum> =
         cachedTopAlbums(TOP_ALBUMS_FILE, "friend:$username:$service:$period") {
-            var out = emptyList<HistoryAlbum>()
-            friendsRepository.getFriendTopAlbums(username, service, period).collect { if (it is Resource.Success) out = it.data }
-            out
+            friendsRepository.getFriendTopAlbums(username, service, period).shownOrThrow(emptyList())
         }
+    @Throws(Throwable::class)
     suspend fun getFriendTopArtists(username: String, service: String, period: String): List<HistoryArtist> =
         cachedTopArtists(TOP_ARTISTS_FILE, "friend:$username:$service:$period") {
-            var out = emptyList<HistoryArtist>()
-            friendsRepository.getFriendTopArtists(username, service, period).collect { if (it is Resource.Success) out = it.data }
-            out
+            friendsRepository.getFriendTopArtists(username, service, period).shownOrThrow(emptyList())
         }
-    suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> {
-        var out = emptyList<RecentTrack>()
-        friendsRepository.getFriendRecentTracks(username, service).collect { if (it is Resource.Success) out = it.data }
-        return out
-    }
+    @Throws(Throwable::class)
+    suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> =
+        friendsRepository.getFriendRecentTracks(username, service).shownOrThrow(emptyList())
 
     // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
     fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
@@ -1945,13 +1948,9 @@ class IosContainer private constructor() {
 
     /** Artist's upcoming tour dates (unfiltered) for the On Tour tab (#201). Collects
      *  the cached-first Resource flow to its terminal list. */
-    suspend fun getArtistEvents(artistName: String): List<ConcertEvent> {
-        var result = emptyList<ConcertEvent>()
-        concertsRepository.getArtistEvents(artistName).collect { res ->
-            if (res is Resource.Success) result = res.data
-        }
-        return result
-    }
+    @Throws(Throwable::class)
+    suspend fun getArtistEvents(artistName: String): List<ConcertEvent> =
+        concertsRepository.getArtistEvents(artistName).shownOrThrow(emptyList())
 
     /** Whether the artist has upcoming shows near the user's saved concert location
      *  (#201 Now Playing dot). null location → any upcoming show counts. */
@@ -1987,25 +1986,6 @@ class IosContainer private constructor() {
             if (res is Resource.Success) out = res.data
         }
         return out
-    }
-
-    /**
-     * What For You says when no service has anything to recommend, naming the
-     * services the user connected (desktop parachord#1121). Never throws.
-     */
-    @Throws(Throwable::class)
-    suspend fun recommendationsEmptyMessage(): String = try {
-        val lb = settingsStore.getListenBrainzUsername()
-        val lastFm = settingsStore.getLastFmUsername()
-        if (lb == null && lastFm == null) {
-            "Connect Last.fm or ListenBrainz in Settings to get recommendations"
-        } else {
-            com.parachord.shared.repository.emptyRecommendationsMessage(lb != null, lastFm != null)
-        }
-    } catch (e: kotlinx.coroutines.CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        "No recommendations yet."
     }
 
     suspend fun loadRecommendedArtists(): List<RecommendedArtist> {
@@ -2159,24 +2139,43 @@ class IosContainer private constructor() {
      * cached list shows instantly on cold start and fresh data fades in — no
      * iOS-side duplicate cache needed (architecture realignment, plan 2026-06-12).
      */
-    fun criticsPicksFlow(): Flow<List<CriticsPickAlbum>> =
-        criticalDarlingsRepository.getCriticsPicks(false)
-            .mapNotNull { (it as? Resource.Success)?.data }
+    fun criticsPicksFlow(): Flow<Any> =
+        criticalDarlingsRepository.getCriticsPicks(false).forDisplay()
 
     // Same stale-while-revalidate flows for the other curated lists — the repos own
     // their caches; Swift watches these so no iOS-side duplicate cache is needed
     // (architecture realignment, plan 2026-06-12).
-    fun freshDropsFlow(): Flow<List<FreshDrop>> =
-        freshDropsRepository.getFreshDrops(false)
-            .mapNotNull { (it as? Resource.Success)?.data }
+    fun freshDropsFlow(): Flow<Any> =
+        freshDropsRepository.getFreshDrops(false).forDisplay()
 
-    fun recommendedTracksFlow(): Flow<List<RecommendedTrack>> =
-        recommendationsRepository.getRecommendedTracks()
-            .mapNotNull { (it as? Resource.Success)?.data }
+    fun recommendedTracksFlow(): Flow<Any> =
+        recommendationsRepository.getRecommendedTracks().forDisplay()
 
-    fun recommendedArtistsFlow(): Flow<List<RecommendedArtist>> =
-        recommendationsRepository.getRecommendedArtists()
-            .mapNotNull { (it as? Resource.Success)?.data }
+    fun recommendedArtistsFlow(): Flow<Any> =
+        recommendationsRepository.getRecommendedArtists().forDisplay()
+
+    /**
+     * What a screen watching a repository flow shows, for Swift: each list as
+     * it lands, and a [Resource.Error] (its `message` is the repository's text,
+     * the same Android shows) when the load failed with nothing to show. A
+     * failed refresh behind a list emits nothing ([keepDataOnError], shared
+     * with Android). These flows used to keep only successes, so a failed
+     * load left iOS screens loading forever.
+     */
+    private fun <T : Any> Flow<Resource<T>>.forDisplay(): Flow<Any> = flow {
+        var shown: Resource<T> = Resource.Loading
+        collect { next ->
+            if (next is Resource.Loading) return@collect
+            val now = keepDataOnError(shown, next)
+            if (now === shown) return@collect   // a failed refresh kept the list
+            shown = now
+            when (now) {
+                is Resource.Success -> emit(now.data)
+                is Resource.Error -> emit(now)
+                Resource.Loading -> {}
+            }
+        }
+    }
 
     /**
      * Concerts is two-step (recommended artists → personalized events). We build
@@ -2184,7 +2183,7 @@ class IosContainer private constructor() {
      * fresh emissions (it persists to concerts_cache.json). Swift watches this;
      * no iOS-side duplicate cache (fixes the two-caches-fighting bug).
      */
-    fun concertsFlow(locationChanged: Boolean): Flow<List<ConcertEvent>> = flow {
+    fun concertsFlow(locationChanged: Boolean): Flow<Any> = flow {
         // A new location or radius invalidates the cache: it holds the OLD
         // area's events, which used to show for up to 30 min.
         if (locationChanged) concertsRepository.clearLocalEvents()
@@ -2205,12 +2204,12 @@ class IosContainer private constructor() {
         val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
         // Nothing to search with: end the load (an empty answer) unless the cache
         // already painted something.
-        if (artists.isEmpty()) { if (!paintedCache) emit(emptyList()); return@flow }
+        if (artists.isEmpty()) { if (!paintedCache) emit(emptyList<ConcertEvent>()); return@flow }
         val loc = settingsStore.getConcertLocation()
         emitAll(
             concertsRepository.getPersonalizedEvents(
                 artists, lat = loc.latitude, lon = loc.longitude, radiusMiles = loc.radiusMiles,
-            ).mapNotNull { (it as? Resource.Success)?.data },
+            ).forDisplay(),
         )
     }
 
@@ -2337,28 +2336,34 @@ class IosContainer private constructor() {
     private val topCacheMutex = Mutex()
     private val topCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    @Throws(Throwable::class)
     suspend fun loadTopTracks(period: String): List<HistoryTrack> =
         cachedTopTracks(TOP_TRACKS_FILE, period) {
-            var out = emptyList<HistoryTrack>()
-            historyRepository.getTopTracks(period, 50).collect { if (it is Resource.Success) out = it.data }
-            out
+            historyRepository.getTopTracks(period, 50).shownOrThrow(emptyList())
         }
+    @Throws(Throwable::class)
     suspend fun loadTopAlbums(period: String): List<HistoryAlbum> =
         cachedTopAlbums(TOP_ALBUMS_FILE, period) {
-            var out = emptyList<HistoryAlbum>()
-            historyRepository.getTopAlbums(period, 50).collect { if (it is Resource.Success) out = it.data }
-            out
+            historyRepository.getTopAlbums(period, 50).shownOrThrow(emptyList())
         }
+    @Throws(Throwable::class)
     suspend fun loadTopArtists(period: String): List<HistoryArtist> =
         cachedTopArtists(TOP_ARTISTS_FILE, period) {
-            var out = emptyList<HistoryArtist>()
-            historyRepository.getTopArtists(period, 50).collect { if (it is Resource.Success) out = it.data }
-            out
+            historyRepository.getTopArtists(period, 50).shownOrThrow(emptyList())
         }
-    suspend fun loadRecentTracks(): List<RecentTrack> {
-        var out = emptyList<RecentTrack>()
-        historyRepository.getRecentTracks().collect { if (it is Resource.Success) out = it.data }
-        return out
+    @Throws(Throwable::class)
+    suspend fun loadRecentTracks(): List<RecentTrack> =
+        historyRepository.getRecentTracks().shownOrThrow(emptyList())
+
+    /**
+     * The list a repository flow settles on, or [IosLoadException] with the
+     * repository's message when it failed with nothing to show (the same
+     * rule as Android, [settle]). Swift shows that message with a retry.
+     */
+    private suspend fun <T> Flow<Resource<T>>.shownOrThrow(empty: T): T = when (val r = settle()) {
+        is Resource.Success -> r.data
+        is Resource.Error -> throw IosLoadException(r.message)
+        Resource.Loading -> empty
     }
 
     // Three concrete helpers (kotlinx-serialization generics are fragile on
@@ -2376,7 +2381,10 @@ class IosContainer private constructor() {
         readTopTracksCache(file)[key]?.let {
             if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
         }
-        val fresh = fetch()
+        // A failed fetch shows the stale list when there is one, else its error.
+        val fresh = try { fetch() } catch (e: IosLoadException) {
+            readTopTracksCache(file)[key]?.data?.takeIf { it.isNotEmpty() } ?: throw e
+        }
         if (fresh.isEmpty()) return readTopTracksCache(file)[key]?.data ?: emptyList()
         topCacheMutex.withLock {
             val map = readTopTracksCache(file)
@@ -2397,7 +2405,10 @@ class IosContainer private constructor() {
         readTopAlbumsCache(file)[key]?.let {
             if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
         }
-        val fresh = fetch()
+        // A failed fetch shows the stale list when there is one, else its error.
+        val fresh = try { fetch() } catch (e: IosLoadException) {
+            readTopAlbumsCache(file)[key]?.data?.takeIf { it.isNotEmpty() } ?: throw e
+        }
         if (fresh.isEmpty()) return readTopAlbumsCache(file)[key]?.data ?: emptyList()
         topCacheMutex.withLock {
             val map = readTopAlbumsCache(file)
@@ -2418,7 +2429,10 @@ class IosContainer private constructor() {
         readTopArtistsCache(file)[key]?.let {
             if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
         }
-        val fresh = fetch()
+        // A failed fetch shows the stale list when there is one, else its error.
+        val fresh = try { fetch() } catch (e: IosLoadException) {
+            readTopArtistsCache(file)[key]?.data?.takeIf { it.isNotEmpty() } ?: throw e
+        }
         if (fresh.isEmpty()) return readTopArtistsCache(file)[key]?.data ?: emptyList()
         topCacheMutex.withLock {
             val map = readTopArtistsCache(file)
@@ -3712,6 +3726,10 @@ class IosContainer private constructor() {
      * `async let` searches stayed queued at the MusicBrainz gate after the user
      * had typed on, in front of the query they wanted.
      */
+    /** Whether MusicBrainz is throttling us (#375): Search says so instead of "No results". */
+    fun watchMusicBrainzRateLimited(onEach: (Boolean) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(musicBrainzClient.rateLimited) { onEach((it as? Boolean) ?: false) }
+
     fun searchRemote(
         query: String,
         onArtists: (List<IosArtistResult>) -> Unit,
@@ -3868,6 +3886,18 @@ data class IosMigrationReport(val title: String, val body: String, val githubUrl
 data class IosAiAlbumSuggestion(val title: String, val artist: String, val reason: String, val artworkUrl: String?)
 data class IosAiArtistSuggestion(val name: String, val reason: String, val imageUrl: String?)
 data class IosAiSuggestions(val albums: List<IosAiAlbumSuggestion>, val artists: List<IosAiArtistSuggestion>)
+
+/** A fresh AI suggestions load: the suggestions, or why it failed ([error], shown when nothing is cached). */
+data class IosAiSuggestionsResult(val suggestions: IosAiSuggestions?, val error: String?)
+
+/**
+ * A load that failed with nothing to show. Its message is the repository's
+ * (the same text Android shows); Swift reads it with `pcLoadErrorMessage`.
+ */
+class IosLoadException(message: String) : Exception(message)
+
+/** A "Sync now": [error] is empty on success; [notices] are what Android lists after a sync (`FullSyncResult.notices`). */
+data class IosSyncOutcome(val error: String, val notices: List<String>)
 data class IosAnnouncement(
     val id: String,
     val title: String,
