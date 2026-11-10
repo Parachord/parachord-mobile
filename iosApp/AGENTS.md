@@ -1128,7 +1128,9 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   playing.
 - **Play on a track no engine holds starts it.** A queue restored paused at
   launch shows its track but loads nothing, and so does a track stopped
-  because nothing could play it (the car's Spotify case below). For both,
+  because nothing could play it (the car's Spotify and unplayable-run cases
+  below, and a tapped track an embed refused with nothing else to play it, which
+  is also how an offline Bandcamp or SoundCloud start ends). For both,
   `needsLoadOnPlay` makes `togglePlayPause` (the phone's button, the remote
   play / toggle commands, CarPlay) run `playTrack` instead of resuming whatever
   the active engine last held. A restored track resumes where it was when the

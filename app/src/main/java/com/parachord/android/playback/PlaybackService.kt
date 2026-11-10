@@ -1585,10 +1585,12 @@ class PlaybackService : MediaLibraryService() {
                 return
             }
             if (externalMode) { playbackController.togglePlayPause(); return }
-            // A queue restored at launch shows its track, but ExoPlayer holds
-            // nothing: playing it skipped to the (empty) next item and stopped.
-            // The controller starts the track, where it was (#567).
-            if (playbackController.hasPendingRestoredTrack) { playbackController.togglePlayPause(); return }
+            // A track on screen that ExoPlayer doesn't hold: a queue restored
+            // at launch (playing skipped to the empty next item and stopped,
+            // #567), or a track nothing could play (ExoPlayer is idle or in its
+            // error state, where play does nothing). The controller starts it
+            // through the full pipeline, where it was.
+            if (playbackController.needsLoadOnPlay) { playbackController.togglePlayPause(); return }
             super.play()
         }
 
