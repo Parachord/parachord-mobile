@@ -64,22 +64,8 @@ class CriticalDarlingsViewModel constructor(
      * Get filtered and sorted albums based on current search and sort state.
      * Called from the composable as a derived computation.
      */
-    fun filterAndSort(albums: List<CriticsPickAlbum>): List<CriticsPickAlbum> {
-        val query = _searchQuery.value.lowercase().trim()
-        val filtered = if (query.isBlank()) {
-            albums
-        } else {
-            albums.filter {
-                it.title.lowercase().contains(query) ||
-                    it.artist.lowercase().contains(query)
-            }
-        }
-
-        return when (_sortMode.value) {
-            "artist" -> filtered.sortedBy { it.artist.lowercase() }
-            else -> filtered // "recent" — RSS feed is already in chronological order
-        }
-    }
+    fun filterAndSort(albums: List<CriticsPickAlbum>): List<CriticsPickAlbum> =
+        com.parachord.shared.repository.filterAndSortCriticsPicks(albums, _searchQuery.value, _sortMode.value)
 
     private fun loadAlbums(forceRefresh: Boolean = false) {
         // Cancel any in-flight load to avoid duplicate collections

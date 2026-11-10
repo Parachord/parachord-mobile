@@ -1,9 +1,9 @@
-package com.parachord.android.ui.screens.nowplaying
+package com.parachord.shared.playback
 
-import org.junit.Test
-import org.junit.Assert.assertEquals
+import kotlin.test.Test
+import kotlin.test.assertEquals
 
-class AlbumArtGesturesLogicTest {
+class AlbumArtSwipeTest {
 
     private val threshold = 300f          // ~30% of a 1000px screen
     private val velocityThreshold = 600f

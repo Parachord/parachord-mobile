@@ -15,7 +15,8 @@ extension View {
         coordinator: QueuePlaybackCoordinator,
         onGoToArtist: (() -> Void)? = nil,
         onGoToAlbum: (() -> Void)? = nil,
-        onRemoveFromQueue: (() -> Void)? = nil
+        onRemoveFromQueue: (() -> Void)? = nil,
+        onRemoveFromPlaylist: (() -> Void)? = nil
     ) -> some View {
         contextMenu {
             Button { coordinator.playNext(track) } label: {
@@ -55,6 +56,14 @@ extension View {
             // the DB and adds/removes. On the Collection screen the row drops out
             // reactively when removed (the collection flow re-emits). #204
             PCCollectionToggleButton(target: .track(track))
+            // Playlist-detail only (Android `TrackContextMenu` onRemoveFromPlaylist):
+            // removes this row from the open playlist without entering Edit mode.
+            if let onRemoveFromPlaylist {
+                Divider()
+                Button(role: .destructive) { onRemoveFromPlaylist() } label: {
+                    Label("Remove from Playlist", systemImage: "minus.circle")
+                }
+            }
         } preview: {
             // Rich preview: artwork + title/artist (Apple Music style).
             HStack(spacing: 12) {
@@ -71,7 +80,7 @@ extension View {
     }
 
     /// Long-press menu for an ALBUM card (#204, Android `AlbumContextMenu`):
-    /// Play / Queue album, Go to Album / Artist, collection toggle. Play/Queue
+    /// Play / Queue album, Go to Album / Artist, collection toggle, Share. Play/Queue
     /// fetch the album's tracks (MetadataService) and route through the queue.
     func pcAlbumContextMenu(
         title: String, artist: String, artworkUrl: String? = nil,
@@ -86,7 +95,7 @@ extension View {
     }
 
     /// Long-press menu for an ARTIST card (#204, Android `ArtistContextMenu`):
-    /// Play / Queue top songs, Go to Artist, collection toggle.
+    /// Play / Queue top songs, Go to Artist, collection toggle, Share.
     func pcArtistContextMenu(
         name: String, imageUrl: String? = nil,
         coordinator: QueuePlaybackCoordinator,
@@ -268,6 +277,12 @@ private struct PCAlbumMenuItems: View {
         }
         Divider()
         PCCollectionToggleButton(target: .album(title: title, artist: artist, artworkUrl: artworkUrl))
+        // Android `AlbumContextMenu` onShare: an Achordion album link (the
+        // lookup URL when no release-group MBID is known, as on Android).
+        Divider()
+        Button { ShareCoordinator.shared.shareAlbum(title: title, artist: artist, releaseGroupMbid: nil) } label: {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
     }
 
     private func play(queue: Bool) {
@@ -301,6 +316,11 @@ private struct PCArtistMenuItems: View {
         }
         Divider()
         PCCollectionToggleButton(target: .artist(name: name, imageUrl: imageUrl))
+        // Android `ArtistContextMenu` onShare.
+        Divider()
+        Button { ShareCoordinator.shared.shareArtist(name: name, artistMbid: nil) } label: {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
     }
 
     private func play(queue: Bool) {

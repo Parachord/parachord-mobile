@@ -120,7 +120,7 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 ### Discovery
 - **Recommendations**: personalized albums and artists from Last.fm and ListenBrainz, plus an AI-generated feed using your own ChatGPT, Claude or Gemini key.
 - **Fresh Drops** and **Critical Darlings**: curated new releases.
-- **Pop of the Tops**: global chart albums.
+- **Pop of the Tops**: chart albums and songs by country, with songs from Apple Music or Last.fm (including a global Last.fm chart).
 - **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz.
 - **On Tour**: a teal dot next to the artist name when they're playing near you. The radius is configurable.
 - **Friends**: see what your Last.fm and ListenBrainz contacts have been playing, and **Listen Along** with them.

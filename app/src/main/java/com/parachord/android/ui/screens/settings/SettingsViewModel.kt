@@ -14,7 +14,7 @@ import com.parachord.android.data.scanner.MediaScanner
 import com.parachord.android.data.scanner.ScanProgress
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.data.repository.LibraryRepository
-import com.parachord.android.playback.LovesPushService
+import com.parachord.shared.playback.LovesPushService
 import com.parachord.android.playback.QueuePersistence
 import com.parachord.android.playback.handlers.MusicKitWebBridge
 import com.parachord.android.playback.scrobbler.LibreFmScrobbler
