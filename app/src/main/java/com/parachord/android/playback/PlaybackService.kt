@@ -540,6 +540,11 @@ class PlaybackService : MediaLibraryService() {
             val firstId = first?.mediaId
             if (firstId != null && isBrowseTreeMediaId(firstId)) {
                 Log.d(TAG, "onAddMediaItems: dispatching browse-tree action mediaId=$firstId from ${controller.packageName}")
+                // Now, not in the launched dispatch: Media3 calls prepare()
+                // and play() right after this returns, and a track still
+                // waiting to be loaded on play (a restored queue) would
+                // otherwise start too and race the tap.
+                playbackController.notePlayRequested()
                 serviceScope.launch { dispatchBrowseTreeAction(firstId) }
                 // Return a silence-loop placeholder so Media3 can complete
                 // its setMediaItems → play() sequence without erroring out.
@@ -581,6 +586,11 @@ class PlaybackService : MediaLibraryService() {
             val firstId = first?.mediaId
             if (firstId != null && isBrowseTreeMediaId(firstId)) {
                 Log.d(TAG, "onSetMediaItems: dispatching browse-tree action mediaId=$firstId from ${controller.packageName}")
+                // Now, not in the launched dispatch: Media3 calls prepare()
+                // and play() right after this returns, and a track still
+                // waiting to be loaded on play (a restored queue) would
+                // otherwise start too and race the tap.
+                playbackController.notePlayRequested()
                 serviceScope.launch { dispatchBrowseTreeAction(firstId) }
                 return Futures.immediateFuture(
                     MediaSession.MediaItemsWithStartPosition(
@@ -1585,11 +1595,29 @@ class PlaybackService : MediaLibraryService() {
                 return
             }
             if (externalMode) { playbackController.togglePlayPause(); return }
-            // A queue restored at launch shows its track, but ExoPlayer holds
-            // nothing: playing it skipped to the (empty) next item and stopped.
-            // The controller starts the track, where it was (#567).
-            if (playbackController.hasPendingRestoredTrack) { playbackController.togglePlayPause(); return }
+            // A track on screen that ExoPlayer doesn't hold: a queue restored
+            // at launch (playing skipped to the empty next item and stopped,
+            // #567), or a track nothing could play (ExoPlayer is idle or in its
+            // error state, where play does nothing). The controller starts it
+            // through the full pipeline, where it was.
+            if (playbackController.needsLoadOnPlay) { playbackController.togglePlayPause(); return }
             super.play()
+        }
+
+        override fun prepare() {
+            // Media3 answers a session play on an idle player with prepare(),
+            // then play() (Util.handlePlayButtonAction). With a track waiting
+            // for the controller to load it, ExoPlayer holds nothing for that
+            // track (or its failed item): an empty player ends at once, and
+            // STATE_ENDED makes the controller advance the queue, so a
+            // restored track with tracks queued after it skipped to the next.
+            // play() hands the load to the controller; the controller's own
+            // prepare() comes after it has cleared the load.
+            if (playbackController.needsLoadOnPlay) {
+                Log.d(TAG, "Not preparing ExoPlayer: the controller loads the current track on play")
+                return
+            }
+            super.prepare()
         }
 
         override fun pause() {

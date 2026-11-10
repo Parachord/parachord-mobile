@@ -112,21 +112,28 @@ class PlaybackController constructor(
     private var isExternalPlayback = false
 
     /**
-     * Track restored from persistence that hasn't been routed yet.
-     * On first play after restore, we route this track through the full
-     * playback pipeline instead of calling ctrl.play() on the empty ExoPlayer.
+     * The track on screen that nothing holds, which Play starts through the
+     * full pipeline ([togglePlayPause]) instead of resuming ExoPlayer: a
+     * queue restored at launch (#567), a paused external track the idle
+     * timeout stopped (#550), or a track no source could play. Cleared by any
+     * play ([playTrackInternalUnsafe]).
      */
-    private var pendingRestoredTrack: TrackEntity? = null
-
-    /** Where [pendingRestoredTrack] starts, in ms (0 = from the top, #567). */
-    private var pendingRestoredPositionMs = 0L
+    @Volatile private var loadOnPlay: LoadOnPlay? = null
 
     /**
-     * A queue restored at launch is waiting for its first play. The media
-     * session's play (car, headphones, lock screen) must come here then:
-     * ExoPlayer holds nothing for the restored track.
+     * Play has to load the current track ([loadOnPlay]). The media session's
+     * play (car, headphones, lock screen) must come here then: ExoPlayer holds
+     * nothing for it, or a failed item, or only its silent loop.
      */
-    val hasPendingRestoredTrack: Boolean get() = pendingRestoredTrack != null
+    val needsLoadOnPlay: Boolean
+        get() = loadOnPlayTarget(loadOnPlay, stateHolder.state.value.currentTrack?.id) != null
+
+    /**
+     * How the play in progress ended with nothing playing, or null. Set by
+     * the failure exits of [playTrackInternalUnsafe]; a fallback play's own
+     * result replaces it. [playTrackInternal] turns it into [loadOnPlay].
+     */
+    private var playFailure: PlayFailure? = null
 
     /**
      * A play was asked for in this run of the app. The saved queue is only
@@ -137,13 +144,6 @@ class PlaybackController constructor(
 
     /** Completes once [controller] is set; replaced by each [connect] after a [release]. */
     private var connected = kotlinx.coroutines.CompletableDeferred<Unit>()
-
-    /**
-     * The paused external track the idle timeout stopped, and where it was
-     * paused. Play starts it again there ([playThenSeek]); cleared by
-     * any other play (#550).
-     */
-    private var idleStopped: IdleStoppedPlayback? = null
 
     /**
      * The service was put in the foreground at the start of the play in
@@ -270,7 +270,6 @@ class PlaybackController constructor(
                     val snapshot = queueManager.snapshot.value
                     // Where it was when the app was last running (#567).
                     val resumeAtMs = queuePersistence.savedResumePositionMs(restoredTrack.id)
-                    pendingRestoredPositionMs = resumeAtMs
                     stateHolder.update {
                         copy(
                             currentTrack = restoredTrack,
@@ -286,7 +285,7 @@ class PlaybackController constructor(
                     // would make the system notification show a "playing"
                     // track when nothing is actually playing. Our own mini
                     // player reads from stateHolder, not ExoPlayer.
-                    pendingRestoredTrack = restoredTrack
+                    loadOnPlay = LoadOnPlay(restoredTrack, resumeAtMs, skipReselect = false, why = LoadOnPlay.Why.RESTORED)
                     // Play is the likely next tap: have Spotify ready if
                     // that's where this track plays.
                     prewarmSpotifyFor(restoredTrack)
@@ -319,9 +318,15 @@ class PlaybackController constructor(
         }, MoreExecutors.directExecutor())
     }
 
-    /** A play is on its way (an Android Auto tap still loading its tracks): don't restore the saved queue. */
+    /**
+     * A play is on its way (an Android Auto tap still loading its tracks):
+     * don't restore the saved queue, and drop a track waiting to be loaded on
+     * play ([loadOnPlay]), which the media session's play that follows the
+     * tap would otherwise start alongside it.
+     */
     fun notePlayRequested() {
         playRequestedThisRun = true
+        loadOnPlay = null
     }
 
     /**
@@ -607,6 +612,30 @@ class PlaybackController constructor(
     }
 
     fun togglePlayPause() {
+        // Nothing holds the track on screen ([loadOnPlay]): a restored queue,
+        // a paused track the idle timeout stopped, or a track no source could
+        // play. Resuming would play ExoPlayer's silence, its failed item or
+        // nothing, so start the track through the full pipeline, where it was.
+        val load = loadOnPlayTarget(loadOnPlay, stateHolder.state.value.currentTrack?.id)
+        if (load != null && isExternalPlayback && router.activeExternalHandler?.isPlaying() == true) {
+            // Its start timed out but the service started it after all: the
+            // track is playing, so this tap is a pause (the branch below).
+            Log.d(TAG, "togglePlayPause: '${load.track.title}' started late; not loading it again")
+            loadOnPlay = null
+        } else if (load != null) {
+            // A play or an advance in flight is the answer (see below): a
+            // second start would race it.
+            if (playMutex.isLocked || advanceJob?.isActive == true) {
+                Log.d(TAG, "togglePlayPause: '${load.track.title}' waits for a load, but a play is starting")
+                return
+            }
+            loadOnPlay = null
+            clearUserPauseMark()
+            Log.d(TAG, "Play loads '${load.track.title}' (${load.why}) at ${load.positionMs} ms")
+            scope.launch { playThenSeek(load.track, load.positionMs, load.skipReselect) }
+            return
+        }
+
         if (isExternalPlayback) {
             scope.launch {
                 // If an advance is in-flight (auto-advance resolver/routing still running),
@@ -702,33 +731,6 @@ class PlaybackController constructor(
             return
         }
 
-        // The idle timeout stopped a paused external track (Apple Music,
-        // Spotify, an embed). ExoPlayer only holds its silent keep-alive loop,
-        // so ctrl.play() below would "play" silence: start the track again
-        // where it was paused (#550).
-        val idleResume = idleResumeTarget(idleStopped, stateHolder.state.value.currentTrack?.id)
-        idleStopped = null
-        if (idleResume != null) {
-            Log.d(TAG, "Play after the idle timeout: re-playing '${idleResume.track.title}' at ${idleResume.positionMs} ms")
-            scope.launch { playThenSeek(idleResume.track, idleResume.positionMs, skipReselect = true) }
-            return
-        }
-
-        // If we have a pending restored track (app restarted, user taps play),
-        // route it through the full playback pipeline instead of calling
-        // ctrl.play() on ExoPlayer (which has no real media items, causing
-        // it to auto-advance to the next track in the queue). It resumes
-        // where it was when the app was last running (#567).
-        val restored = pendingRestoredTrack
-        if (restored != null) {
-            val resumeAtMs = pendingRestoredPositionMs
-            pendingRestoredTrack = null
-            pendingRestoredPositionMs = 0L
-            Log.d(TAG, "Play on the restored queue: '${restored.title}' at $resumeAtMs ms")
-            scope.launch { playThenSeek(restored, resumeAtMs, skipReselect = false) }
-            return
-        }
-
         val ctrl = controller ?: return
         if (ctrl.isPlaying) {
             markUserPaused()
@@ -784,8 +786,20 @@ class PlaybackController constructor(
             Log.e(TAG, "playTrackInternal failed for '${track.title}': ${e.message}", e)
             // Leave the app in a usable state — show the track in the mini player
             // even though playback failed, so the user can tap play to retry.
-            stateHolder.update { copy(currentTrack = track, isPlaying = false) }
+            stateHolder.update { copy(currentTrack = track, isPlaying = false, isBuffering = false) }
+            playFailure = PlayFailure.ERROR
         } finally {
+            // Nothing plays and the queue isn't moving on: Play loads the
+            // track again (the network may be back), as it was asked for.
+            val failure = playFailure
+            playFailure = null
+            if (failure != null &&
+                failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode) &&
+                stateHolder.state.value.currentTrack?.id == track.id
+            ) {
+                Log.d(TAG, "'${track.title}' didn't play ($failure); Play will load it")
+                loadOnPlay = failedLoad(track, skipReselect, failedAtMs = 0, durationMs = 0)
+            }
             // Promoted at the start, and no route took it over: nothing is playing.
             if (foregroundHeldForPlay && !isExternalPlayback) {
                 Log.d(TAG, "Play of '${track.title}' didn't start; releasing the foreground")
@@ -804,12 +818,12 @@ class PlaybackController constructor(
         playRequestedThisRun = true
         // Cancel any idle timeout — we're actively playing now
         cancelIdleTimeout()
-        idleStopped = null
-        // A restored track waiting for its first play is superseded by any
-        // play: left set, a later play (after the idle timeout, say) would
-        // start the track restored at launch instead.
-        pendingRestoredTrack = null
-        pendingRestoredPositionMs = 0L
+        // A track waiting for Play to load it (restored, idle-stopped, failed)
+        // is superseded by any play: left set, a later Play would start that
+        // track instead. A fallback play (playFromOtherSource) comes through
+        // here too, so its outcome replaces the refused source's.
+        loadOnPlay = null
+        playFailure = null
         // Take the foreground now, while the request's window to start a
         // foreground service is open: the lookup below can outlast it, and
         // without one Android cuts the app's network when it isn't on screen.
@@ -873,7 +887,7 @@ class PlaybackController constructor(
                 stopAppleMusicStatePolling()
                 stopEmbedStatePolling()
 
-                val ctrl = controller ?: return
+                val ctrl = controller ?: run { playFailure = PlayFailure.ERROR; return }
                 // Restore normal ExoPlayer settings after external playback,
                 // at this resolver's balanced level rather than a flat 1f — a
                 // hot local file or SoundCloud stream otherwise jumps against
@@ -1057,6 +1071,7 @@ class PlaybackController constructor(
                     return
                 } catch (e: com.parachord.android.playback.handlers.PlaybackStartTimeoutException) {
                     Log.w(TAG, "'${routedTrack.title}': ${e.message}")
+                    playFailure = PlayFailure.START_TIMED_OUT
                     stateHolder.update {
                         copy(
                             isPlaying = false,
@@ -1144,7 +1159,7 @@ class PlaybackController constructor(
     }
 
     private suspend fun playViaExoPlayer(track: TrackEntity) {
-        val ctrl = controller ?: return
+        val ctrl = controller ?: run { playFailure = PlayFailure.ERROR; return }
         if (isExternalPlayback || foregroundHeldForPlay) sendExternalPlaybackStop()
         foregroundHeldForPlay = false
         isExternalPlayback = false
@@ -1210,6 +1225,25 @@ class PlaybackController constructor(
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (!isExternalPlayback) syncState()
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // ExoPlayer's item failed (a local file, a stream; offline, or
+                // the stream dropped). It sits in its error state, where
+                // play() does nothing: Play loads the track again, where it
+                // stopped. A REMOTE_ERROR is PlaybackService reporting our own
+                // message (a refused track) for the car, not ExoPlayer's.
+                if (isExternalPlayback) return
+                if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_REMOTE_ERROR) return
+                val track = stateHolder.state.value.currentTrack ?: return
+                Log.w(TAG, "ExoPlayer failed on '${track.title}' (${error.errorCodeName}); Play will load it")
+                loadOnPlay = failedLoad(
+                    track,
+                    skipReselect = false,
+                    failedAtMs = ctrl.currentPosition.coerceAtLeast(0L),
+                    durationMs = ctrl.duration.coerceAtLeast(0L),
+                )
+                stateHolder.update { copy(isPlaying = false, isBuffering = false) }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -1660,19 +1694,23 @@ class PlaybackController constructor(
             delay(IDLE_TIMEOUT_MS)
             Log.d(TAG, "Idle timeout reached — cleaning up paused external playback")
             val state = stateHolder.state.value
-            idleStopped = state.currentTrack?.let { IdleStoppedPlayback(it, state.position) }
+            loadOnPlay = state.currentTrack?.let {
+                LoadOnPlay(it, state.position, skipReselect = true, why = LoadOnPlay.Why.IDLE_STOPPED)
+            }
             isExternalPlayback = false
             router.stopExternalPlayback()
         }
     }
 
     /**
-     * Start [track] and, once it plays, seek to [positionMs]: Play after the
-     * idle timeout (#550), whose stopped handler can't be resumed, and Play
-     * on a queue restored at launch (#567). A track that takes a while to
+     * Start [track] and, once it plays, seek to [positionMs]: Play on a
+     * track nothing holds ([loadOnPlay]): after the idle timeout (#550),
+     * whose stopped handler can't be resumed, on a queue restored at launch
+     * (#567), and after a play that failed. A track that takes a while to
      * start (a slow or returning network) is waited for, so it still resumes
      * where it was instead of from 0:00; another track playing meanwhile
-     * cancels the seek.
+     * cancels the seek. When this play fails too, the next Play aims for the
+     * same position.
      */
     private suspend fun playThenSeek(track: TrackEntity, positionMs: Long, skipReselect: Boolean) {
         playTrackInternal(track, skipReselect = skipReselect)
@@ -1680,6 +1718,16 @@ class PlaybackController constructor(
         val deadline = System.currentTimeMillis() + RESUME_SEEK_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
             if (stateHolder.state.value.currentTrack?.id != track.id) return
+            // It failed (now, or ExoPlayer's item a moment later): the next
+            // Play aims where this one did.
+            val failed = loadOnPlay?.takeIf { it.why == LoadOnPlay.Why.FAILED && it.track.id == track.id }
+            if (failed != null) {
+                loadOnPlay = failedLoad(
+                    track, failed.skipReselect, failedAtMs = failed.positionMs, durationMs = 0, aimedAtMs = positionMs,
+                )
+                stateHolder.update { copy(position = positionMs) }
+                return
+            }
             val playing = if (isExternalPlayback) {
                 router.activeExternalHandler?.isPlaying() == true
             } else {
@@ -2408,6 +2456,7 @@ class PlaybackController constructor(
     private suspend fun playWithoutSpotify(track: TrackEntity, advancing: Boolean) {
         if (playFromOtherSource(track, "spotify", advancing) != null) return
         Log.w(TAG, "'${track.title}': Spotify can't start in the background and there's no other source")
+        playFailure = PlayFailure.NO_SOURCE_WITHOUT_SPOTIFY
         stateHolder.update {
             copy(
                 currentTrack = track,
@@ -2485,6 +2534,9 @@ class PlaybackController constructor(
             Toast.makeText(context, "${e.serviceName} can't play this track here. Playing via $label.", Toast.LENGTH_SHORT).show()
             return
         }
+        // Nothing else can play it. Skipped when the queue is moving on,
+        // otherwise Play loads it again ([failedPlayAwaitsLoad]).
+        playFailure = PlayFailure.EMBED_REFUSED
         stopEmbedStatePolling()
         router.stopExternalPlayback()
         sendExternalPlaybackStop()

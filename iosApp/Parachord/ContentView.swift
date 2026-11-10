@@ -2748,6 +2748,10 @@ final class QueuePlaybackCoordinator {
                         actionLabel: refusal.pageUrl == nil ? nil : "Open in \(service)",
                         actionUrl: refusal.pageUrl
                     )
+                    // The halted embed holds nothing: Play tries the track
+                    // again (it may have been refused for being offline)
+                    // rather than "resuming" a stopped page.
+                    needsLoadOnPlay = true
                     isStarting = false
                     return
                 }
