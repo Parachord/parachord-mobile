@@ -37,6 +37,8 @@ struct PCNowPlaying: View {
     var onArtist: (String) -> Void = { _ in }
     /// Same nav path as `onArtist`, but opens the artist's On Tour tab (#201).
     var onArtistOnTour: (String) -> Void = { _ in }
+    /// Open an album (title, artist): a single tap on the art (Android parity).
+    var onAlbum: (String, String) -> Void = { _, _ in }
     /// Navigate to the queue's source page (album / playlist / artist) — #209.
     var onNavigateToContext: (PlaybackContext) -> Void = { _ in }
 
@@ -74,9 +76,26 @@ struct PCNowPlaying: View {
                         // leaving a big gap below the controls (phone stays
                         // top-anchored — these spacers collapse there).
                         if hSize == .regular { Spacer(minLength: 0) }
-                        pcCover(track.flatMap { pcTrackArt($0.artworkUrl, artist: $0.artist, title: $0.title, album: $0.album) },
-                                seed: track?.title ?? "P", size: nil, radius: 14,
-                                resolving: track.map { pcTrackResolving(artist: $0.artist, title: $0.title, album: $0.album) } ?? false)
+                        PCNowPlayingArtGestures(
+                            track: track,
+                            // Android: a single tap opens the track's album.
+                            onSingleTap: track.flatMap { t in
+                                t.album.flatMap { album in
+                                    album.isEmpty || t.artist.isEmpty ? nil : { onAlbum(album, t.artist) }
+                                }
+                            },
+                            onNext: {
+                                if coordinator.playbackContext?.type == "listen-along" {
+                                    if listenAlong.friendIsAhead { listenAlong.advanceToFriend() }
+                                }
+                                else { coordinator.skipNext() }
+                            },
+                            onPrevious: { coordinator.skipPrevious() }
+                        ) {
+                            pcCover(track.flatMap { pcTrackArt($0.artworkUrl, artist: $0.artist, title: $0.title, album: $0.album) },
+                                    seed: track?.title ?? "P", size: nil, radius: 14,
+                                    resolving: track.map { pcTrackResolving(artist: $0.artist, title: $0.title, album: $0.album) } ?? false)
+                        }
                             // Cap the art so the transport, resolver deck and
                             // bottom actions stay on-screen above the Up-Next
                             // peek; larger cap on iPad so it isn't tiny in the
@@ -134,9 +153,13 @@ struct PCNowPlaying: View {
         .offset(y: max(0, dragY))
         .gesture(
             DragGesture()
-                .onChanged { v in if v.translation.height > 0 { dragY = v.translation.height } }
+                // A mostly-sideways drag is the art's swipe-to-skip, not a dismiss.
+                .onChanged { v in
+                    if v.translation.height > 0 && abs(v.translation.width) < v.translation.height { dragY = v.translation.height }
+                }
                 .onEnded { v in
-                    if v.translation.height > 120 { onClose() } else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
+                    if v.translation.height > 120 && abs(v.translation.width) < v.translation.height { onClose() }
+                    else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
                 }
         )
         // Queue lives ON the Now Playing screen (not a system sheet): a scrim
@@ -790,5 +813,128 @@ struct PCQueuePanel: View {
                     else { withAnimation(.spring(duration: 0.3)) { dragY = 0 } }
                 }
         )
+    }
+}
+
+// MARK: - Album-art gestures (Android `AlbumArtWithGestures`)
+
+/// The Now Playing art with Android's gestures: a single tap opens the album,
+/// a double tap loves the track (adds it to the collection, with a heart that
+/// pops where you tapped; nothing when it's already loved), and a horizontal
+/// swipe skips: left for next, right for previous. When a swipe commits is the
+/// shared `decideSwipeCommit` (`AlbumArtSwipe.kt`); a drag that starts within
+/// 16 pt of either edge, or that's more vertical than sideways, is left to the
+/// sheet.
+struct PCNowPlayingArtGestures<Content: View>: View {
+    let track: Track?
+    let onSingleTap: (() -> Void)?
+    let onNext: () -> Void
+    let onPrevious: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var offsetX: CGFloat = 0
+    /// nil until a drag shows its direction; true = this is a swipe.
+    @State private var swiping: Bool?
+    @State private var artWidth: CGFloat = 320
+    @State private var heartAt: CGPoint?
+    @State private var heartScale: CGFloat = 0.5
+    @State private var heartOpacity: Double = 0
+    @State private var isLoved = false
+    @State private var sub: Cancellable?
+    private let container = IosContainer.companion.shared
+
+    /// Android measures the commit distance and the throw against the screen width.
+    private var screenWidth: CGFloat {
+        (UIApplication.shared.connectedScenes.first as? UIWindowScene)?.screen.bounds.width ?? 390
+    }
+
+    var body: some View {
+        content()
+            .offset(x: offsetX)
+            .opacity(1 - Double(min(abs(offsetX) / screenWidth, 1)) * 0.3)
+            .overlay {
+                // Not offset with the art: the heart stays where the finger was.
+                if let p = heartAt {
+                    Image(systemName: "heart.fill")
+                        .font(.system(size: 96))
+                        .foregroundStyle(.white)
+                        .scaleEffect(heartScale)
+                        .opacity(heartOpacity)
+                        .position(p)
+                        .allowsHitTesting(false)
+                }
+            }
+            .background(GeometryReader { g in
+                Color.clear.onAppear { artWidth = g.size.width }
+                    .onChange(of: g.size.width) { _, w in artWidth = w }
+            })
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2, coordinateSpace: .local) { p in love(at: p) }
+            .onTapGesture { onSingleTap?() }
+            .simultaneousGesture(swipe)
+            .task(id: track.map { "\($0.title)\u{1}\($0.artist)" }) { watchLoved() }
+            .onDisappear { sub?.cancel(); sub = nil }
+            .accessibilityAction(named: "Next track") { onNext() }
+            .accessibilityAction(named: "Previous track") { onPrevious() }
+    }
+
+    private var swipe: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { v in
+                if swiping == nil {
+                    let edge = CGFloat(AlbumArtSwipeKt.SWIPE_EDGE_GUARD_PT)
+                    let x = v.startLocation.x
+                    swiping = abs(v.translation.width) > abs(v.translation.height)
+                        && x >= edge && x <= artWidth - edge
+                }
+                if swiping == true { offsetX = v.translation.width }
+            }
+            .onEnded { v in
+                defer { swiping = nil }
+                guard swiping == true else { return }
+                let width = screenWidth
+                let outcome = AlbumArtSwipeKt.decideSwipeCommit(
+                    offsetX: Float(offsetX),
+                    velocity: Float(v.velocity.width),
+                    commitThreshold: Float(width) * AlbumArtSwipeKt.SWIPE_COMMIT_FRACTION,
+                    velocityThreshold: AlbumArtSwipeKt.SWIPE_VELOCITY_THRESHOLD_PT_PER_S)
+                if outcome == .next {
+                    throwArt(to: -width, then: onNext)
+                } else if outcome == .previous {
+                    throwArt(to: width, then: onPrevious)
+                } else {
+                    withAnimation(.spring(duration: 0.3)) { offsetX = 0 }
+                }
+            }
+    }
+
+    /// Slide the art off (200 ms, as Android), skip, then put it back in place.
+    private func throwArt(to x: CGFloat, then action: @escaping () -> Void) {
+        withAnimation(.easeIn(duration: 0.2)) { offsetX = x } completion: {
+            action()
+            offsetX = 0
+        }
+    }
+
+    private func love(at p: CGPoint) {
+        guard let t = track, !isLoved else { return }
+        isLoved = true
+        Task { try? await container.addTrackToCollection(track: t) }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        heartAt = p
+        heartScale = 0.5; heartOpacity = 0
+        withAnimation(.easeOut(duration: 0.15)) { heartScale = 1.5 }
+        withAnimation(.easeOut(duration: 0.1)) { heartOpacity = 1 }
+        withAnimation(.easeOut(duration: 0.1).delay(0.15)) { heartScale = 1.0 }
+        withAnimation(.easeIn(duration: 0.3).delay(0.3)) { heartOpacity = 0 } completion: {
+            if heartAt == p { heartAt = nil }
+        }
+    }
+
+    private func watchLoved() {
+        sub?.cancel()
+        isLoved = false
+        guard let t = track else { return }
+        sub = container.watchTrackInCollection(title: t.title, artist: t.artist) { yes in isLoved = yes.boolValue }
     }
 }

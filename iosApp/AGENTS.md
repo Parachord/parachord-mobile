@@ -1200,7 +1200,8 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   both calls have a time limit (`MusicKitDeadline`, 20 s and 30 s; a timeout is
   `START_TIMED_OUT`, and a play that starts after its limit is paused). When
   nothing plays and an Apple Music start failed, or `IosNetworkStatus`
-  (`NWPathMonitor`) says the device has no network, `playTrack` stops on the
+  (`NWPathMonitor`, which also drives the "No internet connection" banner,
+  `PCOfflineBanner`, after the shared 2 s delay) says the device has no network, `playTrack` stops on the
   track with `PLAY_START_FAILED_MESSAGE`, even while the queue advances or a
   spinoff runs: the next track would fail the same way, and the queue used to
   skip through to its end. A failed retry keeps the restored track's resume
@@ -1424,24 +1425,21 @@ NSHTTPURLResponse`.
 
 ## What's intentionally deferred (don't "fix")
 
-- Full Koin DI graph — `IosContainer` is hand-rolled on purpose until
-  the auth module is needed.
-- Auth token providers: **Spotify is wired** (`SpotifyAuthTokenProvider` +
-  `SpotifyTokenRefresher`, OAuth via `ASWebAuthenticationSession`). Every other
-  realm still returns null — correct for the unauthenticated endpoints in use.
-  Last.fm / others wire their providers in when those features land.
-- The SQLDelight DB + DAOs aren't in the container yet — Library /
-  collection screens need them + an iOS media scanner. **When that lands,
-  wire resolver-ID backfill onto the persistent track rows** — mirror
-  Android's `TrackResolverCache.backfillResolverIds` (`resolveInBackground(...,
-  backfillDb = true)`): after resolving a *library* track, write the discovered
-  `spotifyId` / `appleMusicId` / `soundcloudId` / MBIDs back onto its row so it
-  never re-resolves. **Ephemeral tracks (weekly playlists) intentionally do NOT
-  persist** — Android calls them with `backfillDb = false` and re-resolves each
-  session; the persisted Spotify rate-limit cooldown (`IosContainer`'s
-  `spotifyClient` `loadCooldownEpochMs`/`saveCooldownEpochMs` → KvStore
-  `spotify_rate_limit_cooldown_ms`) is the safety net for that, NOT a standalone
-  resolver cache. Don't build a separate persistent resolver cache for ephemeral
-  tracks — it diverges from Android and is throwaway once row-backfill exists.
-- The "Dev" tab (phase 1–4 platform-actual smoke tests) stays until the
-  real screens cover everything; it has its own playback player.
+- Full Koin DI graph — `IosContainer` is hand-rolled on purpose.
+- Auth providers on the shared `HttpClient`: Spotify (`SpotifyAuthTokenProvider`
+  + `SpotifyTokenRefresher`) and ListenBrainz (`lbTokenProvider`) are wired.
+  Every other realm returns null there; Apple Music, Last.fm, Libre.fm and
+  SoundCloud carry their own credentials (`IosAppleMusicAuthProvider`, the
+  scrobblers' session keys, `SoundCloudAuth`).
+- **No resolver-id backfill onto library rows.** Android writes the ids a
+  resolve finds back onto the track row (`TrackResolverCache.backfillResolverIds`).
+  iOS has the SQLDelight database, a local-files scanner
+  (`MediaLibraryScanner.swift`) and a persisted resolver cache
+  (`IosTrackResolverCache`, the versioned `resolver-cache-v<N>.json`, see
+  above), and that cache is what keeps a resolved track from searching again.
+  The one path that writes ids onto rows is the cross-resolver enrichment
+  (`BackgroundSync.handleEnrichment`, local files only). Don't add a second
+  cache for ephemeral tracks: weekly playlists re-resolve each session on
+  Android too, and the persisted Spotify cooldown is the safety net.
+- `DevSmokeTestView` (the old phase 1–4 smoke tests, with its own player) is
+  only reachable from its `#Preview`; it isn't a tab in the app.

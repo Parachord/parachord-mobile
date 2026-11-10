@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.parachord.shared.network.OfflineBanner
 import kotlinx.coroutines.delay
 
 /**
@@ -42,7 +43,7 @@ fun NetworkBanner(
     var showBanner by remember { mutableStateOf(false) }
     LaunchedEffect(isOnline) {
         if (!isOnline) {
-            delay(2000)
+            delay(OfflineBanner.SHOW_DELAY_MS)
             showBanner = true
         } else {
             showBanner = false
@@ -71,7 +72,7 @@ fun NetworkBanner(
                 modifier = Modifier.size(16.dp),
             )
             Text(
-                text = "No internet connection",
+                text = OfflineBanner.MESSAGE,
                 color = Color.White,
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,

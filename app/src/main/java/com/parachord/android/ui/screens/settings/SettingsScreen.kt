@@ -1190,8 +1190,8 @@ private fun PluginConfigSheet(
     onSongkickApiKeySubmit: (String) -> Unit = {},
     onSongkickDisconnect: () -> Unit = {},
     lovePushEnabled: Map<String, Boolean> = emptyMap(),
-    loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState =
-        com.parachord.android.playback.LovesPushService.BackfillState.Idle,
+    loveBackfillState: com.parachord.shared.playback.LovesPushService.BackfillState =
+        com.parachord.shared.playback.LovesPushService.BackfillState.Idle,
     onLovePushToggle: (service: String, enabled: Boolean) -> Unit = { _, _ -> },
     onLoveBackfillClick: (service: String) -> Unit = {},
     onLoveBackfillDismiss: () -> Unit = {},
@@ -2233,7 +2233,7 @@ private fun LastFmConfig(
     scrobbling: Boolean,
     onScrobblingChanged: (Boolean) -> Unit,
     lovePushEnabled: Map<String, Boolean>,
-    loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState,
+    loveBackfillState: com.parachord.shared.playback.LovesPushService.BackfillState,
     onLovePushToggle: (service: String, enabled: Boolean) -> Unit,
     onLoveBackfillClick: (service: String) -> Unit,
     onLoveBackfillDismiss: () -> Unit,
@@ -2331,7 +2331,7 @@ private fun ListenBrainzConfig(
     scrobbling: Boolean,
     onScrobblingChanged: (Boolean) -> Unit,
     lovePushEnabled: Map<String, Boolean>,
-    loveBackfillState: com.parachord.android.playback.LovesPushService.BackfillState,
+    loveBackfillState: com.parachord.shared.playback.LovesPushService.BackfillState,
     onLovePushToggle: (service: String, enabled: Boolean) -> Unit,
     onLoveBackfillClick: (service: String) -> Unit,
     onLoveBackfillDismiss: () -> Unit,
@@ -2489,7 +2489,7 @@ private fun LovePushControls(
     serviceLabel: String,
     isConnected: Boolean,
     lovePushEnabled: Map<String, Boolean>,
-    backfillState: com.parachord.android.playback.LovesPushService.BackfillState,
+    backfillState: com.parachord.shared.playback.LovesPushService.BackfillState,
     onLovePushToggle: (service: String, enabled: Boolean) -> Unit,
     onBackfillClick: (service: String) -> Unit,
     onBackfillDismiss: () -> Unit,
@@ -2524,9 +2524,9 @@ private fun LovePushControls(
     Spacer(modifier = Modifier.height(12.dp))
 
     val running = backfillState as?
-        com.parachord.android.playback.LovesPushService.BackfillState.Running
+        com.parachord.shared.playback.LovesPushService.BackfillState.Running
     val done = backfillState as?
-        com.parachord.android.playback.LovesPushService.BackfillState.Done
+        com.parachord.shared.playback.LovesPushService.BackfillState.Done
     val isThisServiceRunning = running?.service == serviceId
     val isThisServiceDone = done?.service == serviceId
     val isOtherServiceRunning = running != null && running.service != serviceId

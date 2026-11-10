@@ -1113,7 +1113,8 @@ struct SavedPlaylistDetailView: View {
                         .pcTrackContextMenu(
                             entity, coordinator: coordinator,
                             onGoToArtist: { navArtist = t.trackArtist },
-                            onGoToAlbum: t.trackAlbum.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.trackArtist) } })
+                            onGoToAlbum: t.trackAlbum.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.trackArtist) } },
+                            onRemoveFromPlaylist: { model.removeAt(i) })
                     }
                 }
                 .padding(.bottom, 130)

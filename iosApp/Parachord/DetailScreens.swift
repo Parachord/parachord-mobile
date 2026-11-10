@@ -632,6 +632,7 @@ struct AlbumScreen: View {
             Button("Queue Album") { model.entities.forEach { coordinator.addToQueue($0) } }
             Button("Go to Artist") { navArtist = model.artist }
             Button(model.inCollection ? "Remove from Collection" : "Add to Collection") { model.toggleCollection() }
+            Button("Share") { ShareCoordinator.shared.shareAlbum(title: model.title, artist: model.artist, releaseGroupMbid: nil) }
         }
         .task { await model.load() }
         .onAppear { model.watchCollection() }

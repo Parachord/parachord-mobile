@@ -236,6 +236,17 @@ data class IosPlaylistShare(
     val promptConfirm: String = "",
 )
 
+/** The loved-tracks backfill's progress for the Settings sheets (#125). Idle = empty service. */
+data class IosLoveBackfill(
+    val service: String = "",
+    val running: Boolean = false,
+    val done: Boolean = false,
+    val pushed: Int = 0,
+    val skipped: Int = 0,
+    val failed: Int = 0,
+    val total: Int = 0,
+)
+
 /** Flat share-URL result for the iOS share sheet (#222). */
 data class IosShareResult(
     val url: String,
@@ -479,6 +490,9 @@ class IosContainer private constructor() {
             syncEngine, syncPlaylistLinkDao, syncPlaylistSourceDao,
             mbidEnrichTrack = { trackId, artist, title -> mbidEnrichmentService.enrichInBackground(trackId, artist, title) },
             mbidEnrichBatch = { tracks -> tracks.forEach { mbidEnrichmentService.enrichInBackground(it.id, it.artist, it.title) } },
+            // Loved-tracks push (#125), as on Android: a user's collection add
+            // sends a love to each service whose toggle is on.
+            pushLovedTrack = { track -> lovesPushService.pushLoved(track) },
             tombstones = tombstoneService,
         )
     }
@@ -1783,6 +1797,15 @@ class IosContainer private constructor() {
     suspend fun loadPopOfTheTops(countryCode: String): List<ChartSong> =
         chartsRepository.getAppleMusicSongs(countryCode)
 
+    /** Top songs from [source] ("apple" or "lastfm", Android's Songs-tab picker).
+     *  A blank [countryCode] is Last.fm's global chart. */
+    suspend fun loadPopOfTheTopsSongs(countryCode: String, source: String): List<ChartSong> =
+        if (source == "lastfm") chartsRepository.getLastfmCharts(countryCode)
+        else chartsRepository.getAppleMusicSongs(countryCode)
+
+    /** The chart countries (Android's picker list, shared). */
+    fun chartCountries(): List<com.parachord.shared.model.ChartCountry> = com.parachord.shared.model.CHARTS_COUNTRIES
+
     // ── Metadata (Album + Artist detail) ───────────────────────────────
     // Cascading providers per CLAUDE.md: MusicBrainz (discography/tracklists)
     // → Last.fm (images/bio/similar) → Spotify (art/IDs).
@@ -2139,8 +2162,14 @@ class IosContainer private constructor() {
      * cached list shows instantly on cold start and fresh data fades in — no
      * iOS-side duplicate cache needed (architecture realignment, plan 2026-06-12).
      */
-    fun criticsPicksFlow(): Flow<Any> =
-        criticalDarlingsRepository.getCriticsPicks(false).forDisplay()
+    fun criticsPicksFlow(): Flow<Any> = criticsPicksFlow(forceRefresh = false)
+
+    /** [forceRefresh]: the screen's refresh button (Android's), past the repository's TTL. */
+    fun criticsPicksFlow(forceRefresh: Boolean): Flow<Any> =
+        criticalDarlingsRepository.getCriticsPicks(forceRefresh).forDisplay()
+
+    fun filterAndSortCriticsPicks(albums: List<CriticsPickAlbum>, query: String, sortMode: String): List<CriticsPickAlbum> =
+        com.parachord.shared.repository.filterAndSortCriticsPicks(albums, query, sortMode)
 
     // Same stale-while-revalidate flows for the other curated lists — the repos own
     // their caches; Swift watches these so no iOS-side duplicate cache is needed
@@ -2584,6 +2613,55 @@ class IosContainer private constructor() {
     fun getLastFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLastFmSessionKeyFlow().map { it != null }
 
+    // ── Loved-tracks push to Last.fm / ListenBrainz (#125, shared with Android) ──
+    /** One instance: its backfill progress is what the Settings sheets show. */
+    val lovesPushService: com.parachord.shared.playback.LovesPushService by lazy {
+        com.parachord.shared.playback.LovesPushService(scrobblers, settingsStore)
+    }
+
+    /** The services ("lastfm", "listenbrainz") whose love-push toggle is on. */
+    fun watchLovePushEnabled(onEach: (List<String>) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(settingsStore.getLovePushEnabledFlow()) { value ->
+            @Suppress("UNCHECKED_CAST")
+            val map = value as? Map<String, Boolean> ?: emptyMap()
+            onEach(map.filterValues { it }.keys.sorted())
+        }
+
+    suspend fun setLovePushEnabled(service: String, enabled: Boolean) =
+        settingsStore.setLovePushEnabled(service, enabled)
+
+    /** Backfill progress, flattened for Swift. */
+    fun watchLoveBackfill(onEach: (IosLoveBackfill) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(lovesPushService.backfillState) { value ->
+            onEach(
+                when (value) {
+                    is com.parachord.shared.playback.LovesPushService.BackfillState.Running ->
+                        IosLoveBackfill(value.service, running = true, done = false,
+                            pushed = value.pushed, skipped = value.skipped, failed = value.failed, total = value.total)
+                    is com.parachord.shared.playback.LovesPushService.BackfillState.Done ->
+                        IosLoveBackfill(value.service, running = false, done = true,
+                            pushed = value.pushed, skipped = value.skipped, failed = value.failed, total = 0)
+                    else -> IosLoveBackfill()
+                },
+            )
+        }
+
+    /** Pushes every collection track to [service] (Android `SettingsViewModel.runLoveBackfill`).
+     *  Runs on the app scope so leaving the sheet doesn't stop it. */
+    fun runLoveBackfill(service: String) {
+        appScope.launch {
+            try {
+                val tracks = libraryRepository.getAllTracks().first()
+                lovesPushService.runBackfill(service, tracks)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                com.parachord.shared.platform.Log.w("IosContainer", "Love backfill for $service failed: ${e.message}")
+            }
+        }
+    }
+
+    fun dismissLoveBackfill() = lovesPushService.resetBackfillState()
+
     // ── SoundCloud (OAuth 2.1 + PKCE; the user's own app, else Parachord's) ──
     /** Token exchange + refresh, shared with Android (plain client: no auth plugins). */
     val soundCloudAuth: com.parachord.shared.api.auth.SoundCloudAuth by lazy {
@@ -2987,6 +3065,26 @@ class IosContainer private constructor() {
             appleMusicId?.takeIf { !settingsStore.getAppleMusicUserToken().isNullOrBlank() },
             targetIsrc, targetMbid,
         )
+
+    // ── Cross-resolver enrichment, the slow trickle (shared with Android) ──
+    /** Local-file tracks gain their streaming ids and feed Achordion's link cache.
+     *  Android runs it from WorkManager; iOS from a BGProcessingTask (`BackgroundSync`). */
+    val crossResolverEnrichmentService: com.parachord.shared.enrichment.CrossResolverEnrichmentService by lazy {
+        com.parachord.shared.enrichment.CrossResolverEnrichmentService(
+            trackDao = trackDao,
+            mbidEnrichmentService = mbidEnrichmentService,
+            achordionClient = achordionClient,
+            resolveByTitleArtist = { title, artist ->
+                com.parachord.shared.enrichment.CrossResolverEnrichmentService.ResolvedSources.fromSources(
+                    resolveSources(artist, title, null),
+                )
+            },
+        )
+    }
+
+    /** One slow-trickle run: up to 20 tracks, 3 s apart. Returns how many it visited. */
+    @Throws(Throwable::class)
+    suspend fun runCrossResolverEnrichment(): Int = crossResolverEnrichmentService.runOnce().visited
 
     /**
      * [resolveSources] for `IosTrackResolverCache`: the ranked sources plus which
