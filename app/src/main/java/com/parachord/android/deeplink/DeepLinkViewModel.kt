@@ -262,10 +262,13 @@ class DeepLinkViewModel constructor(
                 }
 
                 is DeepLinkAction.Shuffle -> {
-                    if (queueManager.shuffleEnabled != action.enabled) {
-                        queueManager.toggleShuffle()
+                    // Through the controller, so a spinoff or Listen Along
+                    // refuses it (shared shuffleAllowed) like the button does.
+                    if (playbackController.setShuffle(action.enabled)) {
+                        _navEvents.emit(DeepLinkNavEvent.Toast("Shuffle ${if (action.enabled) "on" else "off"}"))
+                    } else {
+                        _navEvents.emit(DeepLinkNavEvent.Toast(com.parachord.shared.playback.PlaybackMessages.SHUFFLE_UNAVAILABLE))
                     }
-                    _navEvents.emit(DeepLinkNavEvent.Toast("Shuffle ${if (action.enabled) "on" else "off"}"))
                 }
 
                 is DeepLinkAction.Volume -> {

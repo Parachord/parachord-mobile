@@ -77,7 +77,7 @@ final class AppBootstrap {
             onResume: { Task { @MainActor in if !coord.isPlaying { coord.togglePlayPause() } } },
             onSkipNext: { Task { @MainActor in coord.skipNext() } },
             onSkipPrevious: { Task { @MainActor in coord.skipPrevious() } },
-            onSetShuffle: { _ in Task { @MainActor in coord.toggleShuffle() } }
+            onSetShuffle: { on in Task { @MainActor in coord.setShuffle(on.boolValue) } }
         )
     }
 

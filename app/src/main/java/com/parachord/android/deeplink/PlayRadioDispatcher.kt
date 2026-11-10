@@ -1,9 +1,12 @@
 package com.parachord.android.deeplink
 
+import android.util.Log
 import com.parachord.android.playback.PlaybackController
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.ProtocolPlayTeardown
 import com.parachord.shared.deeplink.RadioMode
+import com.parachord.shared.playback.PlaybackMessages
+import com.parachord.shared.playback.firstPlayableIndex
 import com.parachord.shared.playback.resolveSpinoffSeed
 import kotlinx.coroutines.CancellationException
 
@@ -31,8 +34,9 @@ sealed class PlayRadioResult {
  *
  * **Never clear the queue for a radio that won't start.** Both modes resolve
  * EVERYTHING they need before [ProtocolPlayTeardown.prepareForNewPlayback]: Mode C
- * via the handler (resolve → empty-check → teardown), Mode B by resolving the seed
- * AND building the whole pool first. Desktop only guarantees the seed before
+ * via the handler (resolve → empty-check → teardown), Mode B by resolving the seed,
+ * building the pool, and finding a playable track among its first few
+ * ([firstPlayableIndex]; the pool itself is resolved as it plays). Desktop only guarantees the seed before
  * clearing, so a similar-tracks fetch that comes back empty still costs its users
  * their queue; Android builds the pool first, matching iOS and Mode C.
  *
@@ -57,8 +61,10 @@ class PlayRadioDispatcher(
         }
 
     /**
-     * Mode B. Resolve the seed, then build the whole pool, and only then tear the
-     * queue down. Any failure before that point returns WITHOUT touching it.
+     * Mode B. Resolve the seed, build the pool, find the first of its first few
+     * tracks that can play, and only then tear the queue down; the station
+     * starts from that track (the ones before it are dropped). Any failure
+     * before that point returns WITHOUT touching the queue.
      */
     private suspend fun dispatchArtistSeed(
         action: DeepLinkAction.PlayRadio,
@@ -67,14 +73,26 @@ class PlayRadioDispatcher(
         playbackController.setPlaybarLoading(true)
         val (seed, pool) = try {
             val seed = resolveSpinoffSeed(mode.artist, mode.title, playbackController::artistTopTrackTitle)
-                ?: return PlayRadioResult.NoSeed(mode.artist)
+                ?: return PlayRadioResult.NoSeed(mode.artist).also {
+                    Log.d(TAG, "Radio: no seed for '${mode.artist}', queue untouched")
+                }
             val pool = playbackController.buildSpinoffPool(seed.artist, seed.title)
-            if (pool.isEmpty()) return PlayRadioResult.Failed("No similar tracks found for \"${seed.title}\"")
-            seed to pool
+            if (pool.isEmpty()) {
+                Log.d(TAG, "Radio: no similar tracks for '${seed.title}', queue untouched")
+                return PlayRadioResult.Failed(PlaybackMessages.noSimilarTracks(seed.title))
+            }
+            val start = firstPlayableIndex(pool) { playbackController.isPlayableNow(it) }
+            if (start == null) {
+                Log.d(TAG, "Radio: none of the first tracks of ${pool.size} similar to '${seed.title}' can play, queue untouched")
+                return PlayRadioResult.Failed(PlaybackMessages.noPlayableSimilarTracks(seed.title))
+            }
+            Log.d(TAG, "Radio: seed '${seed.title}' by ${seed.artist}, starting at pool track $start ('${pool[start].title}') of ${pool.size}")
+            seed to pool.drop(start)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            return PlayRadioResult.Failed("Couldn't fetch similar tracks")
+            Log.w(TAG, "Radio: similar tracks fetch failed, queue untouched", e)
+            return PlayRadioResult.Failed(PlaybackMessages.SPINOFF_FETCH_FAILED)
         } finally {
             playbackController.setPlaybarLoading(false)
         }
@@ -123,5 +141,9 @@ class PlayRadioDispatcher(
         } finally {
             playbackController.setPlaybarLoading(false)
         }
+    }
+
+    private companion object {
+        const val TAG = "PlayRadioDispatcher"
     }
 }

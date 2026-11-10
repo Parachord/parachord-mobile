@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.hapticClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -101,7 +102,7 @@ fun QueueSheet(
                 }
                 if (playbackContext != null) {
                     val contextLabel = when (playbackContext.type) {
-                        "listen-along" -> "Listening along with ${playbackContext.name}"
+                        LISTEN_ALONG_CONTEXT -> "Listening along with ${playbackContext.name}"
                         // Spinoff covers two flavors: in-app right-click → Spinoff
                         // (name = "Spinoff from {title}") and Mode B/C protocol radio
                         // (id = "pool-based", name = station name e.g. "Radio: Slowdive").
@@ -113,7 +114,7 @@ fun QueueSheet(
                         else -> "Playing from: ${playbackContext.name}"
                     }
                     val contextColor = when (playbackContext.type) {
-                        "listen-along" -> Color(0xFF34D399) // Green, matching desktop
+                        LISTEN_ALONG_CONTEXT -> Color(0xFF34D399) // Green, matching desktop
                         "spinoff" -> Color(0xFFC084FC) // Purple, matching spinoff button
                         else -> PurpleDark
                     }

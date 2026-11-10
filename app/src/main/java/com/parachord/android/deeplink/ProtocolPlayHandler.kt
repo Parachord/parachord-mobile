@@ -170,10 +170,9 @@ class ProtocolPlayHandler constructor(
         // Step 5: hand off to the pool-based spinoff entry point. The
         // controller does its own clearQueue() + spinoff context wiring
         // atomically; refill URL captured for Task 5.
+        // The rest of the pool resolves when it plays; the controller
+        // pre-resolves only the next few (#177: never the whole pool).
         playbackController.startPoolBasedSpinoff(entities, displayName, action.refillUrl)
-        if (entities.size > 1) {
-            trackResolverCache.resolveInBackground(entities.drop(1), backfillDb = false)
-        }
 
         return ProtocolPlayResult.Started(displayName, entities.size)
     }

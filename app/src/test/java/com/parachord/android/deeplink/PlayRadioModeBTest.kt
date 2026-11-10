@@ -37,6 +37,7 @@ class PlayRadioModeBTest {
     ): PlaybackController = mockk(relaxed = true) {
         coEvery { artistTopTrackTitle(any()) } returns topTrack
         coEvery { buildSpinoffPool(any(), any()) } returns pool
+        coEvery { isPlayableNow(any()) } returns true
     }
 
     private fun teardown(): ProtocolPlayTeardown = mockk {
@@ -143,8 +144,38 @@ class PlayRadioModeBTest {
 
         val result = dispatcher(pc, td).dispatch(radio("Slowdive", "Sugar For The Pill"))
 
-        assertEquals(PlayRadioResult.Failed("Couldn't fetch similar tracks"), result)
+        assertEquals(PlayRadioResult.Failed("Failed to fetch similar tracks"), result)
         coVerify(exactly = 0) { td.prepareForNewPlayback() }
+    }
+
+    @Test
+    fun noPlayableTrackAmongTheFirstFive_failsWithoutTearingDown() = runTest {
+        // The pool is metadata only (resolved as it plays): the link checks that
+        // the station can start before it costs the user their queue.
+        val pool = (1..8).map { TrackEntity(id = "p$it", title = "Song $it", artist = "A$it") }
+        val pc = controller(pool = pool)
+        coEvery { pc.isPlayableNow(any()) } returns false
+        val td = teardown()
+
+        val result = dispatcher(pc, td).dispatch(radio("Nobody Real", "Song"))
+
+        assertEquals(PlayRadioResult.Failed("Couldn't find a playable track similar to \"Song\""), result)
+        coVerify(exactly = 5) { pc.isPlayableNow(any()) }
+        coVerify(exactly = 0) { td.prepareForNewPlayback() }
+        coVerify(exactly = 0) { pc.startSpinoffFromPool(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun theStationStartsFromTheFirstPlayableTrack_droppingTheOnesBefore() = runTest {
+        val pool = (1..6).map { TrackEntity(id = "p$it", title = "Song $it", artist = "A$it") }
+        val pc = controller(pool = pool)
+        coEvery { pc.isPlayableNow(any()) } answers { firstArg<TrackEntity>().id == "p3" }
+
+        dispatcher(pc, teardown()).dispatch(radio("Slowdive", "Alison"))
+
+        coVerify {
+            pc.startSpinoffFromPool(pool.drop(2), "Radio: Slowdive – Alison", "Slowdive", "Alison", true)
+        }
     }
 
     @Test

@@ -71,7 +71,10 @@ final class SpinoffController {
             // Don't interrupt the current song — beginSpinoff stashes the pool and
             // the next advance (song-end or Next) pulls from it. Banner includes the
             // artist: "Spinoff from <track> by <artist>".
-            self.coordinator?.beginSpinoff(pool: pool, displayName: "Spinoff from \(title) by \(artist)")
+            guard let c = self.coordinator else { return }
+            c.beginSpinoff(pool: pool, displayName: PlaybackMessages.shared.spinoffFrom(title: title, artist: artist))
+            c.notice = QueuePlaybackCoordinator.Notice(
+                message: PlaybackMessages.shared.spinningOff(title: title, artist: artist), showInCar: false)
         }
     }
 }

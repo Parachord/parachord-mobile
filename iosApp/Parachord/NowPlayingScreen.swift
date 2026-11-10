@@ -85,7 +85,7 @@ struct PCNowPlaying: View {
                                 }
                             },
                             onNext: {
-                                if coordinator.playbackContext?.type == "listen-along" {
+                                if coordinator.playbackContext?.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT {
                                     if listenAlong.friendIsAhead { listenAlong.advanceToFriend() }
                                 }
                                 else { coordinator.skipNext() }
@@ -264,12 +264,14 @@ struct PCNowPlaying: View {
     private var transport: some View {
         // While listening along, Next catches up to the friend's current song when
         // they're ahead, and is DISABLED when you're in sync (nothing to advance to).
-        let inListenAlong = coordinator.playbackContext?.type == "listen-along"
+        let inListenAlong = coordinator.playbackContext?.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT
         let canNext = !inListenAlong || listenAlong.friendIsAhead
         return HStack {
             Button { coordinator.toggleShuffle() } label: {
                 Image(systemName: "shuffle").font(.system(size: 20)).foregroundStyle(.white.opacity(0.55))
             }
+            // Refused during a spinoff or Listen Along (shared `shuffleAllowed`).
+            .disabled(!coordinator.shuffleAllowed)
             Spacer()
             Button { coordinator.skipPrevious() } label: {
                 Image(systemName: "backward.fill").font(.system(size: 26)).foregroundStyle(.white.opacity(0.88))
@@ -347,10 +349,10 @@ struct PCNowPlaying: View {
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            // Desktop's wording for a failed request (parachord#1281).
+            // Shared wording (PlaybackMessages), Android's and desktop's.
             Text(spinoff.lastFetchFailed
-                 ? "Failed to fetch similar tracks"
-                 : "Couldn't find tracks similar to “\(spinoff.lastEmptySeed ?? "")”.")
+                 ? PlaybackMessages.shared.SPINOFF_FETCH_FAILED
+                 : PlaybackMessages.shared.noSimilarTracks(title: spinoff.lastEmptySeed ?? ""))
         }
     }
 
@@ -395,7 +397,7 @@ struct PCNowPlaying: View {
                         // otherwise. Counts the queue that RESUMES — intact upNext
                         // during spinoff, the suspended queue during listen-along
                         // (the active queue there is just the friend's track).
-                        let listeningAlong = coordinator.playbackContext?.type == "listen-along"
+                        let listeningAlong = coordinator.playbackContext?.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT
                         let suspended = coordinator.spinoffMode || listeningAlong
                         let n = listeningAlong ? listenAlong.suspendedQueue.count : coordinator.upNext.count
                         if n > 0 {
@@ -452,7 +454,7 @@ struct PCNowPlaying: View {
         // While listening along, the bottom peek shows "Listening along with X" in
         // green and links to the friend's profile (in addition to the queue's
         // context banner). Otherwise it's the normal Up-Next peek that opens the queue.
-        if let ctx = coordinator.playbackContext, ctx.type == "listen-along" {
+        if let ctx = coordinator.playbackContext, ctx.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT {
             let green = Color(uiColor: UIColor(hex: 0x34D399))
             Button { onNavigateToContext(ctx) } label: {
                 HStack(spacing: 10) {
@@ -630,7 +632,7 @@ struct PCQueuePanel: View {
         // the spinoff pool exhausts / you disconnect. Spinoff never modifies the
         // queue (the pool is separate), so it reads the live upNext; Listen Along
         // replaced the queue with the friend's track, so it reads its saved snapshot.
-        let listeningAlong = coordinator.playbackContext?.type == "listen-along"
+        let listeningAlong = coordinator.playbackContext?.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT
         let suspended = listeningAlong || coordinator.spinoffMode
         let up = listeningAlong ? listenAlong.suspendedQueue : coordinator.upNext
         VStack(spacing: 0) {

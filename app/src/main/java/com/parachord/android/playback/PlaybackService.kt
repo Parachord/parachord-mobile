@@ -1,5 +1,6 @@
 package com.parachord.android.playback
 
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -343,6 +344,13 @@ class PlaybackService : MediaLibraryService() {
         serviceScope.launch {
             stateHolder.state.map { it.repeatMode }.distinctUntilChanged().collect {
                 wrapper.publishRepeatMode()
+            }
+        }
+
+        // Parachord's shuffle → the session's, the same way.
+        serviceScope.launch {
+            stateHolder.state.map { it.shuffleEnabled }.distinctUntilChanged().collect {
+                wrapper.publishShuffleMode()
             }
         }
 
@@ -1416,7 +1424,7 @@ class PlaybackService : MediaLibraryService() {
          * ExoPlayer-native playback: `onIsPlayingChanged`,
          * `onPlaybackStateChanged`, `onPlayWhenReadyChanged`,
          * `onPositionDiscontinuity`, `onPlayerError`, `onIsLoadingChanged`,
-         * `onShuffleModeEnabledChanged`, `onAvailableCommandsChanged`.
+         * `onAvailableCommandsChanged`.
          *
          * **What is DELIBERATELY NOT forwarded** — events that would corrupt
          * Auto's queue display by leaking the underlying ExoPlayer's
@@ -1427,7 +1435,10 @@ class PlaybackService : MediaLibraryService() {
          * `QueueManager` state, and Auto must only see those. Also
          * `onRepeatModeChanged`: the delegate's repeat is the silence loop's
          * (`REPEAT_MODE_ONE` during external playback); the session hears
-         * Parachord's repeat from [publishRepeatMode] instead.
+         * Parachord's repeat from [publishRepeatMode] instead. Likewise
+         * `onShuffleModeEnabledChanged`: Parachord shuffles its own queue and
+         * never sets the delegate's shuffle; the session hears Parachord's
+         * from [publishShuffleMode].
          *
          * If a regression brings back the silence-loop-shows-in-Auto bug,
          * look here first — adding a forwarded override that touches the
@@ -1457,9 +1468,6 @@ class PlaybackService : MediaLibraryService() {
             }
             override fun onIsLoadingChanged(isLoading: Boolean) {
                 externalListeners.forEach { it.onIsLoadingChanged(isLoading) }
-            }
-            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
-                externalListeners.forEach { it.onShuffleModeEnabledChanged(shuffleModeEnabled) }
             }
             override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
                 externalListeners.forEach { it.onAvailableCommandsChanged(availableCommands) }
@@ -1493,7 +1501,8 @@ class PlaybackService : MediaLibraryService() {
             if (command == COMMAND_GET_TIMELINE ||
                 command == COMMAND_GET_CURRENT_MEDIA_ITEM ||
                 command == COMMAND_SEEK_TO_MEDIA_ITEM ||
-                command == COMMAND_SET_REPEAT_MODE
+                command == COMMAND_SET_REPEAT_MODE ||
+                command == COMMAND_SET_SHUFFLE_MODE
             ) return true
             if (externalMode && command in EXTERNAL_COMMANDS) return true
             return super.isCommandAvailable(command)
@@ -1506,6 +1515,10 @@ class PlaybackService : MediaLibraryService() {
                     COMMAND_GET_CURRENT_MEDIA_ITEM,
                     COMMAND_SEEK_TO_MEDIA_ITEM,
                     COMMAND_SET_REPEAT_MODE,
+                    // Shuffle is Parachord's (setShuffleModeEnabled →
+                    // PlaybackController.setShuffle), so it's offered whatever
+                    // the wrapped ExoPlayer reports.
+                    COMMAND_SET_SHUFFLE_MODE,
                 )
             if (externalMode) {
                 builder.addAll(
@@ -1690,6 +1703,19 @@ class PlaybackService : MediaLibraryService() {
             playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))
         }
 
+        // Parachord's shuffle (its own queue order), never ExoPlayer's. A
+        // media-session shuffle command goes through the controller, which
+        // refuses it during a spinoff or Listen Along (shared shuffleAllowed).
+        override fun getShuffleModeEnabled(): Boolean = stateHolder.state.value.shuffleEnabled
+
+        override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
+            // Refused (spinoff / Listen Along): Parachord's shuffle didn't
+            // change, so no state event follows. A MediaController has already
+            // shown the requested value locally; re-publish the real one so the
+            // car or headset doesn't keep showing it.
+            if (!playbackController.setShuffle(shuffleModeEnabled)) publishShuffleMode()
+        }
+
         // ── Synthetic timeline overrides ────────────────────────────────
 
         override fun getCurrentTimeline(): Timeline = queueSnapshot.timeline
@@ -1717,7 +1743,7 @@ class PlaybackService : MediaLibraryService() {
             val state = stateHolder.state.value
             return queueSnapshot.items.isNotEmpty() &&
                 state.repeatMode == RepeatMode.ALL &&
-                state.playbackContext?.type != "listen-along"
+                state.playbackContext?.type != LISTEN_ALONG_CONTEXT
         }
 
         override fun getPreviousMediaItemIndex(): Int = C.INDEX_UNSET
@@ -1977,6 +2003,19 @@ class PlaybackService : MediaLibraryService() {
             val mode = repeatMode
             for (listener in externalListeners) {
                 listener.onRepeatModeChanged(mode)
+            }
+        }
+
+        /**
+         * Tell the session that Parachord's shuffle is [getShuffleModeEnabled].
+         * [PlaybackService] calls it, on the main thread, whenever
+         * [PlaybackState.shuffleEnabled] changes; [setShuffleModeEnabled] calls
+         * it when the controller refused the change.
+         */
+        fun publishShuffleMode() {
+            val enabled = shuffleModeEnabled
+            for (listener in externalListeners) {
+                listener.onShuffleModeEnabledChanged(enabled)
             }
         }
 

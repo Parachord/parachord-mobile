@@ -1,5 +1,6 @@
 package com.parachord.android.ui
 
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import com.parachord.shared.playback.APPLE_MUSIC_SIGN_IN_MESSAGE
 import android.content.Context
 import android.os.PowerManager
@@ -471,7 +472,7 @@ class MainViewModel constructor(
      *  listen-along replaces it. Empty snapshot when nothing was playing. */
     private fun captureSuspendedQueue() {
         val state = playbackState.value
-        if (state.playbackContext?.type == "listen-along") {
+        if (state.playbackContext?.type == LISTEN_ALONG_CONTEXT) {
             suspendedQueue = QueueSuspension(emptyList(), null)
             return
         }
@@ -571,7 +572,7 @@ class MainViewModel constructor(
      */
     private fun playListenAlongTrack(track: TrackEntity) {
         val friendName = _listenAlongFriend.value?.displayName ?: "Friend"
-        val context = PlaybackContext(type = "listen-along", name = friendName)
+        val context = PlaybackContext(type = LISTEN_ALONG_CONTEXT, name = friendName)
         isListenAlongPlayback = true
         playbackController.playTrack(track, context = context)
         isListenAlongPlayback = false
