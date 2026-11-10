@@ -493,14 +493,19 @@ class PlaybackController constructor(
 
         val state = stateHolder.state.value
         val currentTrack = state.currentTrack
-        val action = advanceAction(trigger, state.repeatMode, queueManager.hasNext, currentTrack != null)
+        // Listen Along follows the friend: the end-of-track listener above has
+        // already started their next track, so repeat (a replay, or a wrap
+        // over the history) would replace it. Repeat counts as off there.
+        val listenAlong = state.playbackContext?.type == "listen-along"
+        val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
+        val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null)
         val next: TrackEntity = when (action) {
             AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack)
             AdvanceAction.REPLAY_CURRENT -> currentTrack
             AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack)
             AdvanceAction.STOP_AND_CLEAR -> null
         } ?: run {
-            stopAtEndOfQueue(clear = state.playbackContext?.type != "listen-along")
+            stopAtEndOfQueue(clear = !listenAlong)
             return
         }
         when (action) {
