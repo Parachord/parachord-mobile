@@ -40,9 +40,13 @@ class AppleMusicPlaybackHandlerTimeoutTest {
         coVerify(exactly = 0) { bridge.authorize() }
     }
 
-    @Test fun `an ordinary failure still retries (DRM handshake) and doesn't throw`() = runTest {
+    @Test fun `an ordinary failure still retries (DRM handshake) before giving up`() = runTest {
         val bridge = bridge(timedOut = false)
-        AppleMusicPlaybackHandler(bridge).play(track)
+        try {
+            AppleMusicPlaybackHandler(bridge).play(track)
+            fail("expected PlaybackStartFailedException")
+        } catch (_: PlaybackStartFailedException) {
+        }
         coVerify(atLeast = 2) { bridge.play("1880091921") }
     }
 }

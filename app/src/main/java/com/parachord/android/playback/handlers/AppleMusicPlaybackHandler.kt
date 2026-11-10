@@ -42,54 +42,68 @@ class AppleMusicPlaybackHandler constructor(
     /** Timestamp when play() was called — used for grace period in isOurTrackDone(). */
     private var playStartedAt: Long = 0L
 
+    /**
+     * Start [track] in MusicKit. Returns only once it plays; every way it
+     * gives up throws, so the controller doesn't poll a track that isn't
+     * playing and Play loads it again ([com.parachord.android.playback.LoadOnPlay]):
+     * - [PlaybackStartTimeoutException]: a play hung, and MusicKit was reset.
+     * - [PlaybackStartFailedException]: MusicKit didn't configure (offline, it
+     *   never loaded), sign-in is required, or the play failed through every
+     *   retry. Offline, MusicKit's play fails at once ("Unable to complete
+     *   request for https://api.music.apple.com/…").
+     */
     override suspend fun play(track: TrackEntity) {
         val songId = track.appleMusicId ?: return
         playStartedAt = System.currentTimeMillis()
         // Ensure configured — configure() also restores saved MUT if available
-        if (!musicKitBridge.configured.value) {
-            if (!musicKitBridge.configure()) {
-                Log.w(TAG, "MusicKit configuration failed")
-                return
-            }
+        if (!musicKitBridge.configured.value && !musicKitBridge.configure()) {
+            val why = musicKitBridge.lastConfigureFailure
+            Log.w(TAG, "MusicKit configuration failed ($why)")
+            throw PlaybackStartFailedException(
+                "Apple Music couldn't start: MusicKit didn't configure ($why)",
+                // The bridge has already said the app's key expired.
+                alreadyReported = why == MusicKitConfigureFailure.DEVELOPER_TOKEN_EXPIRED,
+            )
         }
         // If not authorized after configure (no saved MUT or it expired), prompt login
         if (!musicKitBridge.authorized.value) {
             Log.d(TAG, "Not authorized, prompting sign-in")
-            if (!musicKitBridge.authorize()) {
-                Log.w(TAG, "MusicKit authorization required — prompting user")
-                musicKitBridge.emitSignInRequired()
+            if (!musicKitBridge.authorize()) signInRequired()
+        }
+        if (playOnce(songId)) return
+        // Widevine DRM license negotiation can take a moment after auth.
+        // Retry a few times with a short delay before falling back to re-auth.
+        Log.w(TAG, "MusicKit playback failed, retrying after delay (DRM handshake may be in progress)")
+        for (attempt in 1..3) {
+            delay(1000L * attempt)
+            if (playOnce(songId)) {
+                Log.d(TAG, "Play succeeded on retry attempt $attempt")
                 return
             }
         }
-        var success = musicKitBridge.play(songId)
-        if (!success && musicKitBridge.lastPlayTimedOut) {
+        // Retries exhausted — likely an expired user token, re-authorize
+        Log.w(TAG, "MusicKit playback still failing, attempting re-authorization")
+        if (!musicKitBridge.authorize()) signInRequired()
+        if (playOnce(songId)) return
+        throw PlaybackStartFailedException("Apple Music couldn't start: play failed after retries and re-authorization")
+    }
+
+    /** One MusicKit play: true when it started, false when it failed; throws when it hung. */
+    private suspend fun playOnce(songId: String): Boolean {
+        if (musicKitBridge.play(songId)) return true
+        if (musicKitBridge.lastPlayTimedOut) {
             // A hang (typically the network dropping mid-start), not a DRM
             // handshake or an expired token: retrying or prompting sign-in
             // can't help. MusicKit was reset; the next play starts fresh.
             throw PlaybackStartTimeoutException("Apple Music didn't start playing")
         }
-        if (!success) {
-            // Widevine DRM license negotiation can take a moment after auth.
-            // Retry a few times with a short delay before falling back to re-auth.
-            Log.w(TAG, "MusicKit playback failed, retrying after delay (DRM handshake may be in progress)")
-            for (attempt in 1..3) {
-                delay(1000L * attempt)
-                success = musicKitBridge.play(songId)
-                if (success) {
-                    Log.d(TAG, "Play succeeded on retry attempt $attempt")
-                    break
-                }
-            }
-            if (!success) {
-                // Retries exhausted — likely an expired user token, re-authorize
-                Log.w(TAG, "MusicKit playback still failing, attempting re-authorization")
-                if (musicKitBridge.authorize()) {
-                    musicKitBridge.play(songId)
-                } else {
-                    musicKitBridge.emitSignInRequired()
-                }
-            }
-        }
+        return false
+    }
+
+    private fun signInRequired(): Nothing {
+        Log.w(TAG, "MusicKit authorization required — prompting user")
+        musicKitBridge.emitSignInRequired()
+        throw PlaybackStartFailedException("Apple Music couldn't start: sign-in required", alreadyReported = true)
     }
 
     override suspend fun pause() { musicKitBridge.pause() }

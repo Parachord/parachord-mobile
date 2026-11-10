@@ -531,6 +531,13 @@ class MusicKitWebBridge constructor(
      * Returns true if configuration succeeded.
      */
     suspend fun configure(): Boolean {
+        val failure = configureOrFailure()
+        lastConfigureFailure = failure
+        return failure == null
+    }
+
+    /** [configure]'s work: null when MusicKit is configured, else why not. */
+    private suspend fun configureOrFailure(): MusicKitConfigureFailure? {
         if (webView == null) initialize()
         if (withTimeoutOrNull(READY_TIMEOUT_MS) { pageLoaded.await() } == null ||
             withTimeoutOrNull(READY_TIMEOUT_MS) { musicKitReady.await() } == null
@@ -539,13 +546,13 @@ class MusicKitWebBridge constructor(
             // this WebView will never become ready. Start over next time.
             Log.w(TAG, "MusicKit didn't load within ${READY_TIMEOUT_MS}ms — resetting the bridge")
             withContext(Dispatchers.Main) { teardown() }
-            return false
+            return MusicKitConfigureFailure.NOT_LOADED
         }
         Log.d(TAG, "MusicKit JS ready, configuring...")
         val token = settingsStore.getAppleMusicDeveloperToken()
         if (token.isNullOrBlank()) {
             Log.w(TAG, "No Apple Music developer token configured")
-            return false
+            return MusicKitConfigureFailure.NO_DEVELOPER_TOKEN
         }
         if (isTokenExpired(token)) {
             // NOT a sign-in problem. The app's own Apple Music key has
@@ -555,7 +562,7 @@ class MusicKitWebBridge constructor(
             // forever. Report the true cause instead.
             Log.e(TAG, "Apple Music developer token has EXPIRED — needs regeneration (not user sign-in)")
             _developerTokenExpired.tryEmit(Unit)
-            return false
+            return MusicKitConfigureFailure.DEVELOPER_TOKEN_EXPIRED
         }
         // Base64-encode tokens to eliminate injection risk from string
         // interpolation. security: M4/M5
@@ -563,7 +570,7 @@ class MusicKitWebBridge constructor(
         val mutArg = if (savedMut != null) "atob('${b64(savedMut)}')" else "null"
         val result = evaluate("configure(atob('${b64(token)}'), atob('${b64(APP_NAME)}'), $mutArg)")
         Log.d(TAG, "configure() JS result: $result")
-        if (result == null) return false
+        if (result == null) return MusicKitConfigureFailure.REJECTED
         return try {
             val parsed = json.decodeFromString<ConfigureResponse>(cleanJsString(result))
             val success = parsed.success
@@ -575,10 +582,10 @@ class MusicKitWebBridge constructor(
                     _authorized.value = true
                 }
             }
-            success
+            if (success) null else MusicKitConfigureFailure.REJECTED
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse configure response: $result", e)
-            false
+            MusicKitConfigureFailure.REJECTED
         }
     }
 
@@ -705,7 +712,7 @@ class MusicKitWebBridge constructor(
     /** Play a song by Apple Music catalog ID. Returns true on success. */
     suspend fun play(songId: String): Boolean {
         lastPlayTimedOut = false
-        if (!awaitMusicKitReady()) return false
+        if (!awaitPlayer()) return false
         // Ensure the WebView is active before playing. When the screen is off,
         // Android pauses WebViews (JS timers, audio, network). If we try to play
         // a new track without waking the WebView first, MusicKit starts playback
@@ -741,25 +748,25 @@ class MusicKitWebBridge constructor(
 
     /** Pause playback. */
     suspend fun pause() {
-        if (!awaitMusicKitReady()) return
+        if (!awaitPlayer()) return
         evaluate("pause()")
     }
 
     /** Resume playback. */
     suspend fun resume() {
-        if (!awaitMusicKitReady()) return
+        if (!awaitPlayer()) return
         evaluate("resume()")
     }
 
     /** Stop playback. */
     suspend fun stop() {
-        if (!awaitMusicKitReady()) return
+        if (!awaitPlayer()) return
         evaluate("stop()")
     }
 
     /** Seek to position in milliseconds. */
     suspend fun seekTo(positionMs: Long) {
-        if (!awaitMusicKitReady()) return
+        if (!awaitPlayer()) return
         evaluate("seekTo($positionMs)")
     }
 
@@ -974,12 +981,28 @@ class MusicKitWebBridge constructor(
         }
     }
 
+    /**
+     * [awaitMusicKitReady] for the player's controls ([play], [pause],
+     * [resume], [stop], [seekTo]): false at once with no WebView. Nothing is
+     * loading then (never created, or torn down after MusicKit didn't load
+     * offline), so there's no player to control, and waiting the full
+     * [READY_TIMEOUT_MS] for each call made Play after an offline launch take
+     * 40 s before its replay started (resume, then the router's stop).
+     * [configure] creates the WebView again.
+     */
+    private suspend fun awaitPlayer(): Boolean = webView != null && awaitMusicKitReady()
+
     /** Wait for MusicKit JS, at most [READY_TIMEOUT_MS]. False if it never loaded. */
     private suspend fun awaitMusicKitReady(): Boolean {
         if (withTimeoutOrNull(READY_TIMEOUT_MS) { musicKitReady.await() } != null) return true
         Log.w(TAG, "MusicKit JS not ready after ${READY_TIMEOUT_MS}ms")
         return false
     }
+
+    /** Why the last [configure] failed; null after one that succeeded. */
+    @Volatile
+    var lastConfigureFailure: MusicKitConfigureFailure? = null
+        private set
 
     /** True when the last [play] call hung and MusicKit was reset. */
     @Volatile
@@ -1110,3 +1133,18 @@ internal fun redactMusicUserToken(raw: String): String =
     MUSIC_USER_TOKEN_VALUE.replace(raw) { it.groupValues[1] + "<redacted>" }
 
 private val MUSIC_USER_TOKEN_VALUE = Regex("""(musicUserToken\\?"\s*:\s*\\?")[^"\\]*""")
+
+/** Why [MusicKitWebBridge.configure] failed. */
+enum class MusicKitConfigureFailure {
+    /** The page or MusicKit JS didn't load (offline); the bridge was reset. */
+    NOT_LOADED,
+
+    /** No developer token in the build or settings. */
+    NO_DEVELOPER_TOKEN,
+
+    /** The developer token expired; `developerTokenExpired` told the user. */
+    DEVELOPER_TOKEN_EXPIRED,
+
+    /** MusicKit's `configure()` failed, or its answer couldn't be read. */
+    REJECTED,
+}

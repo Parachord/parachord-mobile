@@ -1080,6 +1080,23 @@ class PlaybackController constructor(
                         )
                     }
                     return
+                } catch (e: com.parachord.android.playback.handlers.PlaybackStartFailedException) {
+                    // The handler gave up without starting it (Apple Music
+                    // offline). Play loads it again once the network is back.
+                    Log.w(TAG, "'${routedTrack.title}': ${e.message}")
+                    playFailure = PlayFailure.START_FAILED
+                    stateHolder.update {
+                        copy(
+                            isPlaying = false,
+                            isBuffering = false,
+                            playbackError = if (e.alreadyReported) {
+                                playbackError
+                            } else {
+                                "Couldn't start playing. Check your connection and try again."
+                            },
+                        )
+                    }
+                    return
                 }
 
                 // Start the appropriate state polling based on the handler type

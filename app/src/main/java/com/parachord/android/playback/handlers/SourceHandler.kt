@@ -98,6 +98,16 @@ class LocalFileHandler : SourceHandler {
 class PlaybackStartTimeoutException(message: String) : Exception(message)
 
 /**
+ * A handler gave up without starting the track (Apple Music offline: MusicKit
+ * didn't load, or its play failed through every retry). [com.parachord.android.playback.PlaybackController]
+ * treats it like a timeout: the track stays on screen, and Play loads it
+ * again. [alreadyReported] means the handler has told the user why (the Apple
+ * Music sign-in prompt, its expired-key message), so the controller shows no
+ * message of its own.
+ */
+class PlaybackStartFailedException(message: String, val alreadyReported: Boolean = false) : Exception(message)
+
+/**
  * A service's embedded player won't play this track here (SoundCloud's widget
  * loads a track SoundCloud won't let it embed and never starts it, desktop
  * parachord#1209; Bandcamp's embed doesn't start, #513). [com.parachord.android.playback.PlaybackController] treats
