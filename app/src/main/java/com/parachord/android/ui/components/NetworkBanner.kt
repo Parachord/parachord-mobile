@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Icon
@@ -31,7 +30,8 @@ import kotlinx.coroutines.delay
 
 /**
  * A banner that slides in from the top when the device loses network connectivity.
- * Includes a 2-second debounce to avoid flashing on transient disconnects.
+ * Includes a 2-second debounce to avoid flashing on transient disconnects. It sits
+ * in the Scaffold's content (`MainActivity`), below the status bar.
  */
 @Composable
 fun NetworkBanner(
@@ -60,7 +60,9 @@ fun NetworkBanner(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xFFDC2626))
-                .statusBarsPadding()
+                // No status-bar padding: the Scaffold's inner padding already
+                // puts it below the status bar, and adding it again left a
+                // status bar's height of empty red above the text.
                 .padding(horizontal = 16.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
