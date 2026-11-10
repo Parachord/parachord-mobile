@@ -1697,9 +1697,28 @@ class PlaybackService : MediaLibraryService() {
         override fun getCurrentMediaItemIndex(): Int =
             if (queueSnapshot.currentMediaId != null) 0 else C.INDEX_UNSET
 
-        /** Always 1 when upNext is non-empty (current is at slot 0). */
-        override fun getNextMediaItemIndex(): Int =
-            if (queueSnapshot.items.size > 1) 1 else C.INDEX_UNSET
+        /**
+         * 1 when upNext is non-empty (current is at slot 0). On the last track
+         * under Parachord's repeat all, Next wraps to the start of the queue,
+         * so the next item is slot 0, as Media3 reports for REPEAT_MODE_ALL.
+         */
+        override fun getNextMediaItemIndex(): Int = when {
+            queueSnapshot.items.size > 1 -> 1
+            nextWrapsToStart() -> 0
+            else -> C.INDEX_UNSET
+        }
+
+        /**
+         * The last track of a non-empty queue under Parachord's repeat all:
+         * Next starts the queue again ([com.parachord.shared.playback.advanceAction]).
+         * Listen Along counts repeat as off, as the controller does.
+         */
+        private fun nextWrapsToStart(): Boolean {
+            val state = stateHolder.state.value
+            return queueSnapshot.items.isNotEmpty() &&
+                state.repeatMode == RepeatMode.ALL &&
+                state.playbackContext?.type != "listen-along"
+        }
 
         override fun getPreviousMediaItemIndex(): Int = C.INDEX_UNSET
 
@@ -1725,7 +1744,7 @@ class PlaybackService : MediaLibraryService() {
 
         override fun getMediaItemAt(index: Int): MediaItem = queueSnapshot.items[index]
 
-        override fun hasNextMediaItem(): Boolean = queueSnapshot.items.size > 1
+        override fun hasNextMediaItem(): Boolean = queueSnapshot.items.size > 1 || nextWrapsToStart()
 
         // hasPreviousMediaItem stays false for v1 (no history surface).
         override fun hasPreviousMediaItem(): Boolean = false

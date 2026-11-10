@@ -1,12 +1,16 @@
 package com.parachord.android.playback
 
 import android.app.Application
+import androidx.media3.common.C
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
+import com.parachord.shared.model.Track
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -114,5 +118,30 @@ class ForwardingPlayerRepeatTest {
         installed.captured.onRepeatModeChanged(Player.REPEAT_MODE_ONE)
 
         verify(exactly = 0) { listener.onRepeatModeChanged(any()) }
+    }
+
+    @Test fun `Next wraps on the last track under repeat all`() {
+        val f = fixture(externalMode = true)
+        every { f.delegate.currentTimeline } returns Timeline.EMPTY
+        f.wrapper.updateQueueSnapshot(Track(id = "last", title = "last", artist = "A"), emptyList())
+
+        f.stateHolder.update { copy(repeatMode = RepeatMode.OFF) }
+        assertFalse(f.wrapper.hasNextMediaItem())
+        assertEquals(C.INDEX_UNSET, f.wrapper.nextMediaItemIndex)
+
+        f.stateHolder.update { copy(repeatMode = RepeatMode.ALL) }
+        assertTrue(f.wrapper.hasNextMediaItem())
+        assertEquals(0, f.wrapper.nextMediaItemIndex)
+        assertTrue(f.wrapper.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
+    }
+
+    @Test fun `an empty queue has no Next under repeat all`() {
+        val f = fixture(externalMode = true)
+        every { f.delegate.currentTimeline } returns Timeline.EMPTY
+        f.wrapper.updateQueueSnapshot(null, emptyList())
+        f.stateHolder.update { copy(repeatMode = RepeatMode.ALL) }
+
+        assertFalse(f.wrapper.hasNextMediaItem())
+        assertEquals(C.INDEX_UNSET, f.wrapper.nextMediaItemIndex)
     }
 }
