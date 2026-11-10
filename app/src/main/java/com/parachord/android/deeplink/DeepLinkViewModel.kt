@@ -267,7 +267,7 @@ class DeepLinkViewModel constructor(
                     if (playbackController.setShuffle(action.enabled)) {
                         _navEvents.emit(DeepLinkNavEvent.Toast("Shuffle ${if (action.enabled) "on" else "off"}"))
                     } else {
-                        _navEvents.emit(DeepLinkNavEvent.Toast("Shuffle isn't available during a spinoff or Listen Along"))
+                        _navEvents.emit(DeepLinkNavEvent.Toast(com.parachord.shared.playback.PlaybackMessages.SHUFFLE_UNAVAILABLE))
                     }
                 }
 

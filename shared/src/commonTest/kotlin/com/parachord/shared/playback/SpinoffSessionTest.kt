@@ -74,6 +74,7 @@ class SpinoffSessionTest {
         assertEquals("Spinning off of Myth - Beach House", PlaybackMessages.spinningOff("Myth", "Beach House"))
         assertEquals("Spinoff from Myth by Beach House", PlaybackMessages.spinoffFrom("Myth", "Beach House"))
         assertEquals("Failed to fetch similar tracks", PlaybackMessages.SPINOFF_FETCH_FAILED)
+        assertEquals("Shuffle isn't available during a spinoff or Listen Along", PlaybackMessages.SHUFFLE_UNAVAILABLE)
         assertEquals(
             "Couldn't find a playable track similar to \"Myth\"",
             PlaybackMessages.noPlayableSimilarTracks("Myth"),

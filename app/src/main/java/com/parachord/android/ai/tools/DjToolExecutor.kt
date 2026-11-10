@@ -176,7 +176,7 @@ class DjToolExecutor constructor(
         if (!playbackController.setShuffle(enabled)) {
             return mapOf(
                 "success" to false,
-                "error" to "Shuffle isn't available during a spinoff or Listen Along",
+                "error" to com.parachord.shared.playback.PlaybackMessages.SHUFFLE_UNAVAILABLE,
                 "shuffleEnabled" to stateHolder.state.value.shuffleEnabled,
             )
         }

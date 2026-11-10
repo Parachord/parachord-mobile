@@ -8,4 +8,6 @@ object PlaybackMessages {
     val SPINOFF_FETCH_FAILED: String = SPINOFF_FETCH_FAILED_MESSAGE
     fun noPlayableSimilarTracks(title: String): String =
         "Couldn't find a playable track similar to \"$title\""
+    /** Shuffle was refused: a spinoff or Listen Along is playing ([shuffleAllowed]). */
+    const val SHUFFLE_UNAVAILABLE: String = "Shuffle isn't available during a spinoff or Listen Along"
 }

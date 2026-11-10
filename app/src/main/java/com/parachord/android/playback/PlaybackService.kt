@@ -347,6 +347,13 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        // Parachord's shuffle → the session's, the same way.
+        serviceScope.launch {
+            stateHolder.state.map { it.shuffleEnabled }.distinctUntilChanged().collect {
+                wrapper.publishShuffleMode()
+            }
+        }
+
         // Keep the heart and Spinoff in step with the playing track, the
         // collection and the spinoff state, whichever changes (a heart or
         // Spinoff tapped in the app updates the car too).
@@ -1417,7 +1424,7 @@ class PlaybackService : MediaLibraryService() {
          * ExoPlayer-native playback: `onIsPlayingChanged`,
          * `onPlaybackStateChanged`, `onPlayWhenReadyChanged`,
          * `onPositionDiscontinuity`, `onPlayerError`, `onIsLoadingChanged`,
-         * `onShuffleModeEnabledChanged`, `onAvailableCommandsChanged`.
+         * `onAvailableCommandsChanged`.
          *
          * **What is DELIBERATELY NOT forwarded** — events that would corrupt
          * Auto's queue display by leaking the underlying ExoPlayer's
@@ -1428,7 +1435,10 @@ class PlaybackService : MediaLibraryService() {
          * `QueueManager` state, and Auto must only see those. Also
          * `onRepeatModeChanged`: the delegate's repeat is the silence loop's
          * (`REPEAT_MODE_ONE` during external playback); the session hears
-         * Parachord's repeat from [publishRepeatMode] instead.
+         * Parachord's repeat from [publishRepeatMode] instead. Likewise
+         * `onShuffleModeEnabledChanged`: Parachord shuffles its own queue and
+         * never sets the delegate's shuffle; the session hears Parachord's
+         * from [publishShuffleMode].
          *
          * If a regression brings back the silence-loop-shows-in-Auto bug,
          * look here first — adding a forwarded override that touches the
@@ -1458,9 +1468,6 @@ class PlaybackService : MediaLibraryService() {
             }
             override fun onIsLoadingChanged(isLoading: Boolean) {
                 externalListeners.forEach { it.onIsLoadingChanged(isLoading) }
-            }
-            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
-                externalListeners.forEach { it.onShuffleModeEnabledChanged(shuffleModeEnabled) }
             }
             override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
                 externalListeners.forEach { it.onAvailableCommandsChanged(availableCommands) }
@@ -1697,7 +1704,11 @@ class PlaybackService : MediaLibraryService() {
         override fun getShuffleModeEnabled(): Boolean = stateHolder.state.value.shuffleEnabled
 
         override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
-            playbackController.setShuffle(shuffleModeEnabled)
+            // Refused (spinoff / Listen Along): Parachord's shuffle didn't
+            // change, so no state event follows. A MediaController has already
+            // shown the requested value locally; re-publish the real one so the
+            // car or headset doesn't keep showing it.
+            if (!playbackController.setShuffle(shuffleModeEnabled)) publishShuffleMode()
         }
 
         // ── Synthetic timeline overrides ────────────────────────────────
@@ -1987,6 +1998,19 @@ class PlaybackService : MediaLibraryService() {
             val mode = repeatMode
             for (listener in externalListeners) {
                 listener.onRepeatModeChanged(mode)
+            }
+        }
+
+        /**
+         * Tell the session that Parachord's shuffle is [getShuffleModeEnabled].
+         * [PlaybackService] calls it, on the main thread, whenever
+         * [PlaybackState.shuffleEnabled] changes; [setShuffleModeEnabled] calls
+         * it when the controller refused the change.
+         */
+        fun publishShuffleMode() {
+            val enabled = shuffleModeEnabled
+            for (listener in externalListeners) {
+                listener.onShuffleModeEnabledChanged(enabled)
             }
         }
 
