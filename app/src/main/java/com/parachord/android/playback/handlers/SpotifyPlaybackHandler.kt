@@ -8,6 +8,7 @@ import com.parachord.shared.playback.ResolverVolume
 import android.view.KeyEvent
 import com.parachord.android.auth.OAuthManager
 import com.parachord.shared.api.SpPlaybackRequest
+import com.parachord.shared.api.SpotifyPlayRequests
 import com.parachord.shared.api.SpPlaybackState
 import com.parachord.shared.api.SpDevice
 import com.parachord.shared.api.SpTransferRequest
@@ -106,6 +107,16 @@ class SpotifyPlaybackHandler constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var statePollingJob: Job? = null
+
+    /**
+     * Builds each play as the track's album + an offset: Spotify's Android app
+     * accepts a bare `uris` play and plays nothing (see [SpotifyPlayRequests]).
+     * A property, not a constructor parameter: Koin's `singleOf` ignores defaults.
+     */
+    private val playRequests = SpotifyPlayRequests(lookupTrack = { spotifyClient.getTrack(it) })
+
+    /** The request [attemptPlay] sent, re-sent by the confirm and the polling retry. */
+    private var lastPlayRequest: SpPlaybackRequest? = null
 
     // Cached playback state from Web API polling
     private var cachedIsPlaying = false
@@ -226,6 +237,9 @@ class SpotifyPlaybackHandler constructor(
      * compounding to 27.5s worst case. This flow is single-pass: ~2-5s cold, ~200ms warm.
      */
     private suspend fun attemptPlay(uri: String, flowStart: Long): Boolean {
+        val request = playRequests.forTrack(uri)
+        lastPlayRequest = request
+        Log.d(TAG, "Play request for $uri: ${request.contextUri?.let { "album $it, offset ${request.offset?.uri}" } ?: "bare uris"} (${System.currentTimeMillis() - flowStart}ms)")
 
         // ── Phase 7: Optimistic warm-path ────────────────────────────
         // When device is already verified and we have a preferred device,
@@ -247,15 +261,15 @@ class SpotifyPlaybackHandler constructor(
                 val warmDevice = currentDevices.firstOrNull { it.id == warmDeviceId }
                 if (warmDevice != null) {
                     Log.d(TAG, "Warm path: firing startPlayback directly on device=$warmDeviceId")
-                    val resp = spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = warmDeviceId)
+                    val resp = spotifyClient.startPlayback(request, deviceId = warmDeviceId)
                     if (resp.status.isSuccess() || resp.status.value == 204) {
-                        Log.d(TAG, "Warm path accepted in ${System.currentTimeMillis() - flowStart}ms")
+                        Log.d(TAG, "Warm path accepted (${resp.status.value}) in ${System.currentTimeMillis() - flowStart}ms")
                         applyConnectVolume(warmDeviceId)
                         // A device found by [prewarm] is present but idle, and
                         // may be one that accepts a play without starting it
                         // (#452), so confirm as the full flow does.
                         if (!warmDevice.isActive || !isAppVisible()) {
-                            if (!confirmPlaybackStarted(uri, warmDeviceId)) {
+                            if (!confirmPlaybackStarted(request, warmDeviceId)) {
                                 playbackNeverStarted = true
                                 return false
                             }
@@ -318,10 +332,10 @@ class SpotifyPlaybackHandler constructor(
         val playStart = System.currentTimeMillis()
         for (attempt in 1..2) {
             try {
-                val resp = spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = targetDevice.id)
+                val resp = spotifyClient.startPlayback(request, deviceId = targetDevice.id)
 
                 if (resp.status.isSuccess() || resp.status.value == 204) {
-                    Log.d(TAG, "Playback accepted on '${targetDevice.name}' (attempt $attempt, ${System.currentTimeMillis() - playStart}ms)")
+                    Log.d(TAG, "Playback accepted (${resp.status.value}) on '${targetDevice.name}' (attempt $attempt, ${System.currentTimeMillis() - playStart}ms)")
                     applyConnectVolume(targetDevice.id)
                     stickyDefaultLocalIfUnset(targetDevice)
 
@@ -334,7 +348,7 @@ class SpotifyPlaybackHandler constructor(
                     // forever. Proceeding optimistically left the car on 0:01
                     // with no audio and nothing to fall back from (#452).
                     if (!targetDevice.isActive || !deviceVerified || !isAppVisible()) {
-                        val started = confirmPlaybackStarted(uri, targetDevice.id)
+                        val started = confirmPlaybackStarted(request, targetDevice.id)
                         deviceVerified = true
                         if (!started) {
                             playbackNeverStarted = true
@@ -431,7 +445,7 @@ class SpotifyPlaybackHandler constructor(
      * On giving up, pauses [deviceId] so a play that starts late doesn't sound
      * over the source the controller falls back to.
      */
-    private suspend fun confirmPlaybackStarted(uri: String, deviceId: String?): Boolean {
+    private suspend fun confirmPlaybackStarted(request: SpPlaybackRequest, deviceId: String?): Boolean {
         val started = System.currentTimeMillis()
         if (pollUntilPlaying()) {
             Log.d(TAG, "confirmPlayback: playing after ${System.currentTimeMillis() - started}ms")
@@ -440,7 +454,7 @@ class SpotifyPlaybackHandler constructor(
         if (isAppVisible()) {
             Log.w(TAG, "confirmPlayback: not playing after ${CONFIRM_WINDOW_MS}ms, sending the play again")
             try {
-                spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)), deviceId = deviceId)
+                spotifyClient.startPlayback(request, deviceId = deviceId)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "confirmPlayback: re-send failed: ${e.message}")
@@ -723,8 +737,17 @@ class SpotifyPlaybackHandler constructor(
      * whatever is playing now, which pauses ExoPlayer and MusicKit), and never
      * opens Spotify. A preferred remote device can't be woken, so it's only
      * looked up. Skipped during a rate-limit cooldown and while one is running.
+     *
+     * With [trackUri], also looks up the album the play will send as its
+     * context ([SpotifyPlayRequests]), so the play doesn't wait for it.
      */
-    fun prewarm() {
+    fun prewarm(trackUri: String? = null) {
+        if (trackUri != null) {
+            // The album the play will need (SpotifyPlayRequests): off the play's critical path.
+            scope.launch {
+                if (spotifyClient.rateLimitRemainingMs() == 0L) withAuth { playRequests.prefetch(trackUri) }
+            }
+        }
         if (prewarmJob?.isActive == true) return
         prewarmJob = scope.launch { withAuth { runPrewarm() } }
     }
@@ -1165,7 +1188,7 @@ class SpotifyPlaybackHandler constructor(
                             if (uri != null) {
                                 try {
                                     withAuth {
-                                        spotifyClient.startPlayback(SpPlaybackRequest(uris = listOf(uri)))
+                                        spotifyClient.startPlayback(lastPlayRequest ?: playRequests.forTrack(uri))
                                     }
                                     playStartedAt = System.currentTimeMillis()
                                 } catch (e: Exception) {

@@ -803,6 +803,11 @@ Conformance checklist (audited 2026-06-07):
   type), never an active *remote* phantom. Always wake on the local path,
   except in the car: there it never wakes, never shows the picker and fails at
   once if the phone's device isn't listed (see "Playback in the car").
+- **The play is the track's album + an offset, never bare `uris`.** Spotify's
+  Android app plays nothing for a bare `uris` play (root `CLAUDE.md`), so
+  `startPlayback` asks `IosContainer.spotifyPlayRequest` (shared
+  `SpotifyPlayRequests`) for the body, the same one Android sends. Whether
+  Spotify's iOS app had the same failure wasn't checked.
 - **Single-pass**, single 502 retry after 1s; **cold-device verification**
   (2 polls × 500ms via `getPlaybackStateOrNull`); persist the **synthetic**
   `localDeviceId`, never the real id.

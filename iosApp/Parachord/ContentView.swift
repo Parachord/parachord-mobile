@@ -680,10 +680,15 @@ final class IosSpotifyConnect {
     /// `startPlayback` with a single 502 retry. True on 2xx (204 = success).
     @MainActor
     private func startPlayback(_ client: SpotifyClient, uri: String, deviceId: String) async -> Bool {
+        // The track's album + an offset, not a bare `uris` play: Spotify's
+        // Android app plays nothing for the bare form (shared
+        // `SpotifyPlayRequests`, the same request Android sends).
+        let body = (try? await IosContainer.companion.shared.spotifyPlayRequest(trackUri: uri))
+            ?? SpPlaybackRequest(uris: [uri], contextUri: nil, offset: nil)
         func attempt() async -> Int {
             do {
                 let resp = try await client.startPlayback(
-                    body: SpPlaybackRequest(uris: [uri], contextUri: nil),
+                    body: body,
                     deviceId: deviceId
                 )
                 return Int(resp.status.value)

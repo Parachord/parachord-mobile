@@ -847,6 +847,20 @@ class IosContainer private constructor() {
      *  so a 429/abuse cooldown is visible instead of a mystery "Failed". */
     fun spotifyCooldownRemainingMs(): Long = spotifyClient.rateLimitRemainingMs()
 
+    private val spotifyPlayRequests by lazy {
+        com.parachord.shared.api.SpotifyPlayRequests(lookupTrack = { spotifyClient.getTrack(it) })
+    }
+
+    /**
+     * The Web API play request for one Spotify track: its album + an offset,
+     * or bare `uris` when the album can't be looked up. Spotify's Android app
+     * plays nothing for a bare `uris` play (see `SpotifyPlayRequests`); iOS
+     * sends the same request so the two platforms play alike.
+     */
+    @Throws(Throwable::class)
+    suspend fun spotifyPlayRequest(trackUri: String): com.parachord.shared.api.SpPlaybackRequest =
+        spotifyPlayRequests.forTrack(trackUri)
+
     // ── Sync settings (Phase 1 toggles for the iOS Settings screen) ──────
     suspend fun isSyncEnabled(): Boolean = settingsStore.getSyncSettings().enabled
 
