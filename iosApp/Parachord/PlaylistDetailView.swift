@@ -673,6 +673,8 @@ struct PlaylistsScreen: View {
 private struct DeletePlaylistSheet: View {
     let playlist: Playlist
     let onClose: () -> Void
+    /// After the delete ran (not on Cancel): the playlist screen closes itself.
+    var onDeleted: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     private let container = IosContainer.companion.shared
     @State private var providers: [String] = []
@@ -733,7 +735,7 @@ private struct DeletePlaylistSheet: View {
         working = true
         Task {
             let unsupported = (try? await container.deletePlaylistFromMirrors(id: playlist.id, fromProviders: Array(selected))) ?? []
-            dismiss(); onClose()
+            dismiss(); onClose(); onDeleted?()
             // Apple Music can't delete a playlist through its API: say it's
             // still there, as Android's toast does (Phase 6.5, Decision D8).
             if !unsupported.isEmpty {
@@ -943,7 +945,6 @@ final class SavedPlaylistModel {
         guard !n.isEmpty else { return }
         Task { try? await container.renamePlaylist(id: playlistId, name: n) }
     }
-    func delete() { Task { try? await container.deletePlaylist(id: playlistId) } }
     func removeAt(_ i: Int) { Task { try? await container.removePlaylistTrackAt(id: playlistId, index: Int32(i)) } }
     func move(from: Int, to: Int) { Task { try? await container.movePlaylistTrack(id: playlistId, from: Int32(from), to: Int32(to)) } }
 
@@ -1007,9 +1008,16 @@ struct SavedPlaylistDetailView: View {
             Button("Cancel", role: .cancel) {}
             Button("Save") { model.rename(renameText) }
         }
-        .confirmationDialog("Delete “\(model.name)”?", isPresented: $showDelete, titleVisibility: .visible) {
-            Button("Delete Playlist", role: .destructive) { model.delete(); dismiss() }
-            Button("Cancel", role: .cancel) {}
+        // The same sheet as the playlists list: the playlist is removed from
+        // the services it syncs with too (each a toggle, default on), and
+        // Apple Music's can't-delete is reported. This used to delete the
+        // local row only, so its Spotify / ListenBrainz copies stayed and
+        // could sync it back (Android's playlist screen deletes with sync).
+        .sheet(isPresented: $showDelete) {
+            if let p = model.playlist {
+                DeletePlaylistSheet(playlist: p, onClose: { showDelete = false }, onDeleted: { dismiss() })
+                    .presentationDetents([.medium])
+            }
         }
     }
 

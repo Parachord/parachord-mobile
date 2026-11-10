@@ -270,7 +270,9 @@ an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
 throttle line instead of "No results"), Home's AI suggestions (the provider's
 message), Settings (an invalid ListenBrainz token is refused, not saved), Sync
 now (the run's notices after a successful sync), deleting a playlist Apple
-Music can't delete (a banner), DJ chat with no AI key ("No AI providers
+Music can't delete (a banner; the playlists list and the playlist screen use
+the same `DeletePlaylistSheet`, which also deletes the copies on the services
+the playlist syncs with, each a toggle, as Android deletes with sync), DJ chat with no AI key ("No AI providers
 configured"), and a track only Apple Music could play while the app may not use
 Apple Music (the sign-in message, an "Open Settings" action, stops on the track).
 
