@@ -1001,24 +1001,12 @@ class PlaybackController constructor(
                     playbackError = if (online) PLAY_NO_SOURCE_MESSAGE else PLAY_START_FAILED_MESSAGE,
                 )
             }
-            // Stop what was playing before it, as a refused embed does: left
-            // playing, its own end of track would advance the queue as well
-            // as the skip below (two advances, the second past the next track).
-            if (isExternalPlayback) {
-                stopSpotifyStatePolling()
-                stopAppleMusicStatePolling()
-                stopEmbedStatePolling()
-                router.stopExternalPlayback()
-                sendExternalPlaybackStop()
-                isExternalPlayback = false
-            } else {
-                // Cleared too, or the player would report the previous track's
-                // position for this one. stop() first: emptying a player that
-                // isn't idle ends it, and STATE_ENDED would advance the queue.
-                controller?.stop()
-                controller?.clearMediaItems()
-            }
-            if (!failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)) {
+            // Stop what was playing before it: left playing, its own end of
+            // track would advance the queue as well as the skip below (two
+            // advances, the second past the next track).
+            val autoSkip = !failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)
+            stopBeforeFailedTrack(autoSkip)
+            if (autoSkip) {
                 Log.d(TAG, "Auto-skip '${routedTrack.title}': no playable source")
                 stateHolder.update { copy(playbackError = null) }
                 // After this advance's job ends: skipNext ignores auto-advance
@@ -2668,11 +2656,9 @@ class PlaybackController constructor(
         // Nothing else can play it. Skipped when the queue is moving on,
         // otherwise Play loads it again ([failedPlayAwaitsLoad]).
         playFailure = PlayFailure.EMBED_REFUSED
-        stopEmbedStatePolling()
-        router.stopExternalPlayback()
-        sendExternalPlaybackStop()
-        isExternalPlayback = false
-        if (advancing || stateHolder.state.value.spinoffMode) {
+        val autoSkip = !failedPlayAwaitsLoad(PlayFailure.EMBED_REFUSED, advancing, stateHolder.state.value.spinoffMode)
+        stopBeforeFailedTrack(autoSkip)
+        if (autoSkip) {
             Log.d(TAG, "Auto-skip '${track.title}': ${e.serviceName} won't play it")
             stateHolder.update { copy(isPlaying = false, isBuffering = false) }
             // After this advance's job ends: skipNext ignores auto-advance
@@ -2692,6 +2678,45 @@ class PlaybackController constructor(
                 actionUrl = e.pageUrl,
             ),
         )
+    }
+
+    /**
+     * Stop what was playing before a track that can't play ([failedTrackStop]).
+     * When the queue skips on ([autoSkip]) external playback keeps its mode,
+     * silent loop, wake lock and foreground: dropping the foreground here left
+     * the next track unable to take it back with the screen off (refused
+     * from the background), and Android then stopped the service and cut the
+     * app's network mid-song.
+     */
+    private suspend fun stopBeforeFailedTrack(autoSkip: Boolean) {
+        when (failedTrackStop(isExternalPlayback, autoSkip)) {
+            FailedTrackStop.KEEP_EXTERNAL_FOREGROUND -> {
+                // As a track change does: cancel the polling without releasing
+                // the wake lock, and drop the end-of-track callbacks.
+                spotifyStateJob?.cancel()
+                appleMusicPollingJob?.cancel()
+                embedPollingJob?.cancel()
+                router.getAppleMusicHandler().musicKitBridge.onTrackEnded = null
+                activeEmbedHandler?.onFinished = null
+                activeEmbedHandler = null
+                router.stopExternalPlayback()
+            }
+            FailedTrackStop.LEAVE_EXTERNAL -> {
+                stopSpotifyStatePolling()
+                stopAppleMusicStatePolling()
+                stopEmbedStatePolling()
+                router.stopExternalPlayback()
+                sendExternalPlaybackStop()
+                isExternalPlayback = false
+            }
+            FailedTrackStop.CLEAR_LOCAL_PLAYER -> {
+                // Cleared too, or the player would report the previous track's
+                // position for this one. stop() first: emptying a player that
+                // isn't idle ends it, and STATE_ENDED would advance the queue.
+                controller?.stop()
+                controller?.clearMediaItems()
+            }
+        }
     }
 
     /** The last track an embedded player refused; see [togglePlayPause]. */
