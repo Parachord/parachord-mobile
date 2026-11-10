@@ -30,6 +30,7 @@
 
 - **The in-app Next button stays "catch up to the friend"** on both apps (enabled only while the friend is ahead). Any other Next or Previous (lock screen, car, headphones) ends the session and resumes the user's queue; desktop falls through to the user's queue there. Playing something else ends the session and keeps what the user chose (the suspended queue is discarded).
 - **A friend's track that can't play** shows no error. The session waits for the friend's next track, or plays the held one.
+- **Our song ends and the session doesn't know where the friend is** (the last poll failed, or none has answered yet): it waits for the next poll and doesn't say "hasn't moved on". This is the spec's "nothing is held and the friend has changed" case, widened to "unknown".
 - **Listen Along consumes the end of its own song.** While a session is active the platform asks the session what to do when the song ends and does not also advance the queue. This replaces #583's two interim special cases (repeat counts as off, the end of the queue keeps the track).
 - **`start` with a friend who has no current track** shows the start message and waits for the first poll.
 
@@ -54,7 +55,7 @@
 - Produces:
   - `const val LISTEN_ALONG_POLL_MS = 15_000L`, `const val LISTEN_ALONG_FAILED_POLLS_LIMIT = 4`
   - `data class FriendTrack(val name: String, val artist: String, val album: String?, val artworkUrl: String?) { val key: String }` with `key = name.lowercase() + "|" + artist.lowercase()`
-  - `fun listenAlongTrack(track: FriendTrack): Track`: metadata only, `id = "listen-along:" + track.key`, `duration = 0`, every source field null (today's iOS shape).
+  - `fun listenAlongTrack(track: FriendTrack): Track`: metadata only (title, artist, album, artwork), `id = "listen-along:" + track.key`, `duration = 0`, every source field null (today's iOS shape).
   - `sealed interface ListenAlongPoll { data class Listening(val track: FriendTrack) ; data object NotListening ; data object Failed }`
   - `sealed interface ListenAlongEffect { data class Play(val track: FriendTrack) ; data class Message(val text: String) ; data class End(val restoreQueue: Boolean) }`
   - `class ListenAlongSession(val friendName: String)` (plain, single-threaded; the platform calls it on its main thread). Each method returns `List<ListenAlongEffect>`:
@@ -73,7 +74,7 @@
 Rules (desktop's):
 - `start(current)`: `Message(listeningAlongWith)`, then `Play(current)` when non-null (remember its key).
 - `onPoll(Listening(t), isPlaying)`: clear the failed count and any "end after this song".
-  - Same key as the song we last played: drop any held track.
+  - Same key as the song we last played: drop any held track. If we were waiting after our song ended (below): `Message(hasntMovedOn)`, `End(true)`.
   - A new key while we're playing, or while the user has paused: hold it (replacing an older held track). No effect.
   - A new key, not playing and not user-paused (our song ended and we were waiting, or the last track was unplayable): `Play(t)`.
 - `onPoll(NotListening, isPlaying)`: when playing, mark "end after this song" and drop the held track; otherwise `Message(stoppedListening)`, `End(restoreQueue = true)`.
@@ -81,7 +82,8 @@ Rules (desktop's):
 - `onSongEnded()`:
   - "End after this song" set: `Message(stoppedListening)`, `End(true)`.
   - A held track: `Play(held)`.
-  - Otherwise (the friend is still on the song we just played): `Message(hasntMovedOn)`, `End(true)`.
+  - Nothing held, and the last poll answered with the song we just played: `Message(hasntMovedOn)`, `End(true)`.
+  - Nothing held, and we don't know where the friend is (the last poll failed, or no poll has answered since this song started): no effect. The session waits for the next poll with the track kept on screen: a new key plays, the same key ends with `hasntMovedOn`, not listening or the 4th failed poll ends with `stoppedListening`.
 - `onTrackUnplayable()`: a held track → `Play(held)`; otherwise no effect (wait for the next poll; the session is now "not playing").
 - `onUserPaused()` sets the pause mark; `onUserResumed()` clears it and returns `Play(held)` when a track is held (the platform then doesn't resume the paused one), else nothing.
 - `onCatchUp()`: `Play(held)` when a track is held, else nothing.
@@ -95,7 +97,10 @@ Rules (desktop's):
   - `the same track again changes nothing`: `onPoll(Listening(a), true)` → `[]`, `friendIsAhead` false.
   - `a held track plays when the user resumes`: `onUserPaused()`, `onPoll(Listening(b), false)` → `[]`; `onUserResumed()` → `[Play(b)]`.
   - `resuming with nothing held resumes the paused track`: `onUserPaused()`, `onUserResumed()` → `[]`.
-  - `the friend not moving on ends the session and resumes the queue`: `start(a)`, `onSongEnded()` → `[Message("Ana hasn't moved on - resuming your queue"), End(true)]`.
+  - `the friend not moving on ends the session and resumes the queue`: `start(a)`, `onPoll(Listening(a), true)`, `onSongEnded()` → `[Message("Ana hasn't moved on - resuming your queue"), End(true)]`.
+  - `our song ending after a failed poll waits for the next poll`: `start(a)`, `onPoll(Failed, true)`, `onSongEnded()` → `[]`; `onPoll(Listening(b), false)` → `[Play(b)]`.
+  - `waiting ends when the friend is still on the same track`: `start(a)`, `onPoll(Failed, true)`, `onSongEnded()` → `[]`; `onPoll(Listening(a), false)` → `[Message("Ana hasn't moved on - resuming your queue"), End(true)]`.
+  - `our song ending before any poll answered waits`: `start(a)`, `onSongEnded()` → `[]`.
   - `a friend who goes offline mid-song ends it after the song`: `onPoll(NotListening, true)` → `[]`; `onSongEnded()` → `[Message("Ana stopped listening"), End(true)]`.
   - `a friend who goes offline while nothing plays ends it now`: `onPoll(NotListening, false)` → `[Message("Ana stopped listening"), End(true)]`.
   - `a friend who comes back before the song ends is followed again`: `onPoll(NotListening, true)`, `onPoll(Listening(b), true)`, `onSongEnded()` → `[Play(b)]`.
@@ -154,7 +159,7 @@ Rules (desktop's):
 
 Behaviour:
 - `MainViewModel` holds a `ListenAlongSession?`. `startListenAlong(friend)` creates it, runs `start(current)` and applies the effects; the 15 s loop calls `friendsRepository.pollListenAlong(friend)` and `session.onPoll(result.poll, isPlaying)`, and updates `_listenAlongFriend` from `result.friend`. The old fields (`pendingListenAlongTrack`, `deferredStopFriendName`, `_lastListenAlongKey`) go; `listenAlongFriendIsAhead` reads `session.friendIsAhead`; `advanceToFriend()` calls `onCatchUp()`.
-- Applying effects: `Play(t)` → `playbackController.playTrack(listenAlongTrack(t).copy(album/artwork as given), context = PlaybackContext(LISTEN_ALONG_CONTEXT, friendName))` with the "Listen Along is driving" guard kept; `Message` → the toast flow; `End(restore)` → today's `stopListenAlong` body (cancel the loop, release the wake lock, restore or discard the suspended queue) without its own toast.
+- Applying effects: `Play(t)` → `playbackController.playTrack(listenAlongTrack(t), context = PlaybackContext(LISTEN_ALONG_CONTEXT, friendName))` with the "Listen Along is driving" guard kept; `Message` → the toast flow; `End(restore)` → today's `stopListenAlong` body (cancel the loop, release the wake lock, restore or discard the suspended queue) without its own toast.
 - No up-front resolve: the `resolveWithHints` + `selectBest` block is removed.
 - The controller no longer special-cases Listen Along: remove the repeat-as-OFF and `stopAtEndOfQueue(clear = !listenAlong)` paths. While a session is active `onOwnTrackEnded` returns true.
 - Replace every remaining literal toast in the Listen Along block with `PlaybackMessages`.
