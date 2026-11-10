@@ -6,7 +6,14 @@ import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.PowerManager
 import com.parachord.shared.platform.Log
+import com.parachord.shared.playback.AdvanceAction
+import com.parachord.shared.playback.AdvanceTrigger
+import com.parachord.shared.playback.PLAY_NO_SOURCE_MESSAGE
 import com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE
+import com.parachord.shared.playback.PreviousAction
+import com.parachord.shared.playback.advanceAction
+import com.parachord.shared.playback.nextRepeatMode
+import com.parachord.shared.playback.previousAction
 import com.parachord.shared.playback.QueueRestorePolicy
 import com.parachord.shared.playback.failedPlayAwaitsLoad
 import com.parachord.shared.playback.ResolverVolume
@@ -25,6 +32,7 @@ import com.parachord.shared.api.LastFmClient
 import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.ImageEnrichmentService
 import com.parachord.android.data.metadata.MbidEnrichmentService
+import com.parachord.android.data.network.NetworkMonitor
 import com.parachord.android.playback.handlers.AppleMusicPlaybackHandler
 import com.parachord.android.playback.handlers.EmbedPlaybackRefusedException
 import com.parachord.android.playback.handlers.ExternalPlaybackHandler
@@ -72,6 +80,7 @@ class PlaybackController constructor(
     private val trackResolverCache: TrackResolverCache,
     private val widgetUpdater: MiniPlayerWidgetUpdater,
     private val settingsStore: SettingsStore,
+    private val networkMonitor: NetworkMonitor,
 ) {
     companion object {
         private const val TAG = "PlaybackController"
@@ -410,10 +419,31 @@ class PlaybackController constructor(
     }
 
     fun skipNext() {
-        skipNextInternal(userInitiated = true)
+        skipNextInternal(AdvanceTrigger.NEXT_PRESSED)
     }
 
-    private fun skipNextInternal(userInitiated: Boolean) {
+    /**
+     * The repeat button's cycle (off, all, one, off; shared [nextRepeatMode]).
+     * Parachord's own repeat, read by [skipNextInternal]: never ExoPlayer's
+     * `repeatMode`, which loops the silent keep-alive during external playback.
+     */
+    fun cycleRepeatMode() {
+        setRepeatMode(nextRepeatMode(stateHolder.state.value.repeatMode))
+    }
+
+    /** Set Parachord's repeat mode (the media session's repeat command). See [cycleRepeatMode]. */
+    fun setRepeatMode(mode: RepeatMode) {
+        Log.d(TAG, "Repeat mode: $mode")
+        stateHolder.update { copy(repeatMode = mode) }
+    }
+
+    /**
+     * Move the queue on. [trigger] says why (a track ended, Next, or a track
+     * that couldn't play being skipped); the shared [advanceAction] decides
+     * what happens, after the spinoff pool, which isn't governed by repeat.
+     */
+    private fun skipNextInternal(trigger: AdvanceTrigger) {
+        val userInitiated = trigger == AdvanceTrigger.NEXT_PRESSED
         // If a previous advance is still in-flight (resolver/routing not finished),
         // ignore non-user auto-advance signals to prevent double-skipping.
         if (!userInitiated && advanceJob?.isActive == true) {
@@ -461,22 +491,24 @@ class PlaybackController constructor(
             }
         }
 
-        val currentTrack = stateHolder.state.value.currentTrack
-        val next = queueManager.skipNext(currentTrack)
-        if (next == null) {
-            Log.d(TAG, "skipNext: queue empty, stopping playback")
-            if (isExternalPlayback) {
-                stopSpotifyStatePolling()
-                stopAppleMusicStatePolling()
-                stopEmbedStatePolling()
-                scope.launch { router.stopExternalPlayback() }
-                sendExternalPlaybackStop()
-                isExternalPlayback = false
-            }
-            stateHolder.update { copy(isPlaying = false) }
+        val state = stateHolder.state.value
+        val currentTrack = state.currentTrack
+        val action = advanceAction(trigger, state.repeatMode, queueManager.hasNext, currentTrack != null)
+        val next: TrackEntity = when (action) {
+            AdvanceAction.PLAY_NEXT -> queueManager.skipNext(currentTrack)
+            AdvanceAction.REPLAY_CURRENT -> currentTrack
+            AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack)
+            AdvanceAction.STOP_AND_CLEAR -> null
+        } ?: run {
+            stopAtEndOfQueue(clear = state.playbackContext?.type != "listen-along")
             return
         }
-        Log.d(TAG, "skipNext: advancing to '${next.title}' by ${next.artist}")
+        when (action) {
+            AdvanceAction.REPLAY_CURRENT -> Log.d(TAG, "skipNext: repeat one, replaying '${next.title}'")
+            AdvanceAction.WRAP_TO_START -> Log.d(TAG, "skipNext: repeat all, back to the start: '${next.title}' by ${next.artist}")
+            else -> Log.d(TAG, "skipNext: advancing to '${next.title}' by ${next.artist}")
+        }
+        if (action != AdvanceAction.PLAY_NEXT) syncQueueState()
         advanceJob = scope.launch {
             try {
                 val transitionStart = System.currentTimeMillis()
@@ -495,21 +527,65 @@ class PlaybackController constructor(
         }
     }
 
+    /**
+     * The queue ran out ([AdvanceAction.STOP_AND_CLEAR]): stop, and with
+     * [clear] take the track off screen, so the mini player and the
+     * notification go away and Play has nothing to resume. Listen Along keeps
+     * the track ([clear] false): the friend's next track is starting from the
+     * end-of-track listener, and blanking the screen would flash in between.
+     */
+    private fun stopAtEndOfQueue(clear: Boolean) {
+        Log.d(TAG, if (clear) "skipNext: end of queue, stopping and clearing" else "skipNext: queue empty, stopping playback")
+        val wasExternal = isExternalPlayback
+        if (isExternalPlayback) {
+            stopSpotifyStatePolling()
+            stopAppleMusicStatePolling()
+            stopEmbedStatePolling()
+            scope.launch { router.stopExternalPlayback() }
+            sendExternalPlaybackStop()
+            isExternalPlayback = false
+        }
+        if (!clear) {
+            stateHolder.update { copy(isPlaying = false) }
+            return
+        }
+        // Nothing plays next, so stopping ExoPlayer here (its item, or the
+        // silent keep-alive loop during external playback) can't demote the
+        // service between two tracks. stop() before clearMediaItems(): an
+        // empty playlist on a player that isn't idle goes to STATE_ENDED.
+        if (wasExternal) notifyExternalMode(false)
+        controller?.stop()
+        controller?.clearMediaItems()
+        loadOnPlay = null
+        stateHolder.update {
+            copy(
+                currentTrack = null,
+                isPlaying = false,
+                isBuffering = false,
+                position = 0L,
+                duration = 0L,
+                playbackError = null,
+            )
+        }
+        syncQueueState()
+    }
+
     fun skipPrevious() {
         onUserPlaybackActionListener?.invoke()
-        if (isExternalPlayback) {
-            val position = router.activeExternalHandler?.getPosition()
+        val position = if (isExternalPlayback) {
+            router.activeExternalHandler?.getPosition()
                 ?: router.getSpotifyHandler().getPosition()
-            if (position > 3000) {
-                scope.launch { router.activeExternalHandler?.seekTo(0) }
-                return
-            }
         } else {
-            val ctrl = controller ?: return
-            if (ctrl.currentPosition > 3000) {
-                ctrl.seekTo(0)
-                return
+            (controller ?: return).currentPosition
+        }
+        if (previousAction(position, queueManager.hasPrevious) == PreviousAction.RESTART_CURRENT) {
+            Log.d(TAG, "skipPrevious: restarting the current track (position ${position}ms)")
+            if (isExternalPlayback) {
+                scope.launch { router.activeExternalHandler?.seekTo(0) }
+            } else {
+                controller?.seekTo(0)
             }
+            return
         }
 
         val currentTrack = stateHolder.state.value.currentTrack
@@ -874,8 +950,56 @@ class PlaybackController constructor(
         val snapshot = queueManager.snapshot.value
 
         if (action == null) {
-            Log.w(TAG, "No playback handler for: ${routedTrack.title}")
-            playViaExoPlayer(routedTrack)
+            // No source to play it from. Online that's the track (skipped when
+            // the queue is moving on, like a refused embed); offline the
+            // lookup couldn't run, so Play tries it again once back online.
+            val online = networkMonitor.isOnline.value
+            val failure = if (online) PlayFailure.NO_SOURCE else PlayFailure.START_FAILED
+            Log.w(TAG, "No playable source for '${routedTrack.title}' (${if (online) "online" else "offline"})")
+            playFailure = failure
+            stateHolder.update {
+                copy(
+                    currentTrack = routedTrack,
+                    isPlaying = false,
+                    isBuffering = false,
+                    position = 0L,
+                    duration = routedTrack.duration ?: 0L,
+                    upNext = snapshot.upNext,
+                    playbackContext = snapshot.playbackContext,
+                    shuffleEnabled = snapshot.shuffleEnabled,
+                    streamingMetadata = null,
+                    playbackError = if (online) PLAY_NO_SOURCE_MESSAGE else PLAY_START_FAILED_MESSAGE,
+                )
+            }
+            // Stop what was playing before it, as a refused embed does: left
+            // playing, its own end of track would advance the queue as well
+            // as the skip below (two advances, the second past the next track).
+            if (isExternalPlayback) {
+                stopSpotifyStatePolling()
+                stopAppleMusicStatePolling()
+                stopEmbedStatePolling()
+                router.stopExternalPlayback()
+                sendExternalPlaybackStop()
+                isExternalPlayback = false
+            } else {
+                // Cleared too, or the player would report the previous track's
+                // position for this one. stop() first: emptying a player that
+                // isn't idle ends it, and STATE_ENDED would advance the queue.
+                controller?.stop()
+                controller?.clearMediaItems()
+            }
+            if (!failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)) {
+                Log.d(TAG, "Auto-skip '${routedTrack.title}': no playable source")
+                stateHolder.update { copy(playbackError = null) }
+                // After this advance's job ends: skipNext ignores auto-advance
+                // while an advance is in flight. Only while this track is still
+                // the current one: a play or Next meanwhile has moved on already.
+                scope.launch {
+                    delay(600)
+                    if (stateHolder.state.value.currentTrack?.id != routedTrack.id) return@launch
+                    skipNextInternal(AdvanceTrigger.SKIPPED_UNPLAYABLE)
+                }
+            }
             return
         }
 
@@ -1153,7 +1277,6 @@ class PlaybackController constructor(
         }
     }
 
-    /** Fallback: play directly via ExoPlayer when no handler matches. */
     /**
      * ExoPlayer gain (0f–1f) for [resolverId]'s configured dB offset.
      *
@@ -1175,49 +1298,6 @@ class PlaybackController constructor(
             if (e is kotlinx.coroutines.CancellationException) throw e
             1f
         }
-    }
-
-    private suspend fun playViaExoPlayer(track: TrackEntity) {
-        val ctrl = controller ?: run { playFailure = PlayFailure.ERROR; return }
-        if (isExternalPlayback || foregroundHeldForPlay) sendExternalPlaybackStop()
-        foregroundHeldForPlay = false
-        isExternalPlayback = false
-        notifyExternalMode(false)
-        stopSpotifyStatePolling()
-        stopAppleMusicStatePolling()
-        stopEmbedStatePolling()
-
-        // Restore normal ExoPlayer settings after external playback
-        ctrl.volume = 1f
-        ctrl.repeatMode = Player.REPEAT_MODE_OFF
-        ctrl.volume = resolverVolumeFraction(track.resolver)
-        ctrl.setAudioAttributes(
-            androidx.media3.common.AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                .build(),
-            /* handleAudioFocus= */ true,
-        )
-
-        val mediaItem = track.toAutoMediaItem()
-        ctrl.stop()
-        ctrl.setMediaItems(listOf(mediaItem), 0, 0L)
-        ctrl.prepare()
-        ctrl.play()
-
-        val snapshot = queueManager.snapshot.value
-        stateHolder.update {
-            copy(
-                currentTrack = track,
-                isPlaying = true,
-                position = 0L,
-                upNext = snapshot.upNext,
-                playbackContext = snapshot.playbackContext,
-                shuffleEnabled = snapshot.shuffleEnabled,
-                streamingMetadata = null, // ExoPlayer = no external source mismatch
-            )
-        }
-        enrichArtworkIfMissing(track)
     }
 
     /** Push current queue snapshot to PlaybackState without changing playback fields. */
@@ -1271,8 +1351,10 @@ class PlaybackController constructor(
                     stateHolder.update {
                         copy(isBuffering = playbackState == Player.STATE_BUFFERING)
                     }
-                    if (playbackState == Player.STATE_ENDED) {
-                        skipNextInternal(userInitiated = false)
+                    // No track on screen (the queue ended and was cleared, and
+                    // a session Play prepared the empty player): nothing ended.
+                    if (playbackState == Player.STATE_ENDED && stateHolder.state.value.currentTrack != null) {
+                        skipNextInternal(AdvanceTrigger.TRACK_ENDED)
                     }
                 }
             }
@@ -1357,7 +1439,7 @@ class PlaybackController constructor(
                 // (natural end, Spotify autoplay to different track, or item cleared)
                 if (spotify.isOurTrackDone()) {
                     withContext(Dispatchers.Main) {
-                        skipNextInternal(userInitiated = false)
+                        skipNextInternal(AdvanceTrigger.TRACK_ENDED)
                     }
                     break
                 }
@@ -1411,7 +1493,7 @@ class PlaybackController constructor(
             val nearEnd = positionReset || effectiveDuration == null || effectiveDuration - position < 15_000
             if (nearEnd && trackEndHandled.compareAndSet(false, true)) {
                 Log.d(TAG, "Apple Music track ended (JS callback, pos=$position dur=$effectiveDuration playing=$playing)")
-                scope.launch(Dispatchers.Main) { skipNextInternal(userInitiated = false) }
+                scope.launch(Dispatchers.Main) { skipNextInternal(AdvanceTrigger.TRACK_ENDED) }
             } else if (!nearEnd) {
                 Log.w(TAG, "Ignoring spurious track-ended signal (pos=$position dur=$effectiveDuration) — likely network stall")
             }
@@ -1605,7 +1687,7 @@ class PlaybackController constructor(
                     if (pollSucceeded && handler.isOurTrackDone() && trackEndHandled.compareAndSet(false, true)) {
                         Log.d(TAG, "Apple Music track done (safety net, pos=$position dur=$duration playing=$playing state=$stateName)")
                         withContext(Dispatchers.Main) {
-                            skipNextInternal(userInitiated = false)
+                            skipNextInternal(AdvanceTrigger.TRACK_ENDED)
                         }
                         break
                     } else if (!pollSucceeded && consecutivePollTimeouts >= 6) {
@@ -1658,7 +1740,7 @@ class PlaybackController constructor(
         val trackEndHandled = java.util.concurrent.atomic.AtomicBoolean(false)
         val advance = {
             if (trackEndHandled.compareAndSet(false, true)) {
-                scope.launch(Dispatchers.Main) { skipNextInternal(userInitiated = false) }
+                scope.launch(Dispatchers.Main) { skipNextInternal(AdvanceTrigger.TRACK_ENDED) }
             }
         }
         handler.onFinished = {
@@ -2567,7 +2649,7 @@ class PlaybackController constructor(
             // while an advance is in flight.
             scope.launch {
                 delay(600)
-                skipNextInternal(userInitiated = false)
+                skipNextInternal(AdvanceTrigger.SKIPPED_UNPLAYABLE)
             }
             return
         }
