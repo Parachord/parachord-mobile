@@ -787,15 +787,18 @@ val androidModule = module {
                         )
                         null
                     } catch (e: com.parachord.shared.api.SpotifyRateLimitedException) {
-                        // 429 (rate limit). Silently skip — SpotifyClient already
-                        // logged the first 429 of the cooldown cycle.
-                        null
+                        // 429 / cooldown: Spotify couldn't answer. Rethrown so the
+                        // track isn't cached without Spotify (#566); SpotifyClient
+                        // already logged the first 429 of the cooldown cycle.
+                        throw e
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         com.parachord.shared.platform.Log.w(
                             "ResolverManager",
                             "Spotify resolve failed for '$query': ${e.message}",
                         )
-                        null
+                        throw e
                     }
                 }
             },

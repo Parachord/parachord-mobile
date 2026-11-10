@@ -2898,8 +2898,10 @@ class IosContainer private constructor() {
     /**
      * Spotify resolve lambda — the EXACT old iOS Spotify branch from
      * `resolveSources`: gate on a present access token, then
-     * `spotifyClient.searchTrack("$artist $title")` in a try/catch that
-     * rethrows CancellationException and returns null on other exceptions.
+     * `spotifyClient.searchTrack("$artist $title")`. A sign-in that needs
+     * renewing is "not connected" (null); any other failure (a rate-limit
+     * cooldown, a network error) is thrown, so the coordinator records Spotify
+     * as unable to answer rather than as having no match (#566).
      * Wired once here; reused by the shared coordinator AND
      * [IosResolverCoordinator.resolveSingle].
      */
@@ -2909,9 +2911,7 @@ class IosContainer private constructor() {
         } else {
             try {
                 spotifyClient.searchTrack(query, target)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
+            } catch (e: com.parachord.shared.api.auth.ReauthRequiredException) {
                 null
             }
         }
@@ -2970,6 +2970,27 @@ class IosContainer private constructor() {
             // never sees it. Apply the same gate here: unconnected, Apple Music
             // must not be offered (or ranked first and prompt for authorization
             // at play time) just because a track carries its id.
+            appleMusicId?.takeIf { !settingsStore.getAppleMusicUserToken().isNullOrBlank() },
+            targetIsrc, targetMbid,
+        )
+
+    /**
+     * [resolveSources] for `IosTrackResolverCache`: the ranked sources plus which
+     * resolvers were asked and which couldn't answer (#566), so a resolve that
+     * failed isn't kept as if those services had no match.
+     */
+    @Throws(Throwable::class)
+    suspend fun resolveSourcesReport(
+        artist: String,
+        title: String,
+        album: String?,
+        spotifyId: String?,
+        appleMusicId: String?,
+        targetIsrc: String?,
+        targetMbid: String?,
+    ): com.parachord.shared.resolver.ResolveReport =
+        resolverCoordinator.resolveSourcesReport(
+            artist, title, album, spotifyId,
             appleMusicId?.takeIf { !settingsStore.getAppleMusicUserToken().isNullOrBlank() },
             targetIsrc, targetMbid,
         )
@@ -3098,7 +3119,10 @@ class IosContainer private constructor() {
         Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
     /** Additive single-resolver resolution for [IosTrackResolverCache] when a
-     *  resolver is enabled after a track was already cached (#1). */
+     *  resolver is enabled after a track was already cached (#1). Null is a
+     *  no-match; a throw is a resolver that couldn't answer (#566), delivered
+     *  to Swift's `catch` by @Throws instead of aborting the app. */
+    @Throws(Throwable::class)
     suspend fun resolveSingleResolver(resolverId: String, artist: String, title: String, album: String?): ResolvedSource? =
         resolverCoordinator.resolveSingle(resolverId, artist, title, album)
 

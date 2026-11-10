@@ -2580,7 +2580,7 @@ class PlaybackController constructor(
     private suspend fun resolveOnTheFly(track: TrackEntity): TrackEntity {
         return try {
             val query = "${track.title} ${track.artist}"
-            val sources = resolverManager.resolve(
+            val report = resolverManager.resolveReport(
                 query,
                 targetTitle = track.title,
                 targetArtist = track.artist,
@@ -2588,13 +2588,15 @@ class PlaybackController constructor(
                 targetIsrc = track.isrc,
                 targetMbid = track.recordingMbid,
             )
+            val sources = report.sources
             if (sources.isEmpty()) {
                 Log.w(TAG, "No resolver results for '${track.title}' by ${track.artist}")
                 return track
             }
 
-            // Cache the results so reselectBestSource works for queue tracks too
-            trackResolverCache.putSources(track.title, track.artist, sources)
+            // Cache the results so reselectBestSource works for queue tracks too;
+            // resolvers that couldn't answer are asked again later (#566).
+            trackResolverCache.putSources(track.title, track.artist, sources, report.failed)
 
             val best = resolverScoring.selectBest(sources) ?: return track
             Log.d(TAG, "On-the-fly resolved '${track.title}' → ${best.resolver}")

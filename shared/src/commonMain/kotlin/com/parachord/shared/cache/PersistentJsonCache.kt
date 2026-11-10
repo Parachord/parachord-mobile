@@ -92,6 +92,16 @@ class PersistentJsonCache<V>(
         scheduleSave()
     }
 
+    /** Drop [keys] (and save). */
+    suspend fun remove(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        mutex.withLock {
+            val map = loaded()
+            keys.forEach { map.remove(it) }
+        }
+        scheduleSave()
+    }
+
     private fun scheduleSave() {
         saveJob?.cancel()
         saveJob = scope.launch {

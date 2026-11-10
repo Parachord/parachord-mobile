@@ -482,8 +482,8 @@ class DeepLinkViewModel constructor(
             return
         }
         val track = linked.track
-        val others = try {
-            resolverManager.resolve(
+        val report = try {
+            resolverManager.resolveReport(
                 "${track.title} ${track.artist}",
                 targetTitle = track.title,
                 targetArtist = track.artist,
@@ -491,10 +491,12 @@ class DeepLinkViewModel constructor(
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "Resolving the linked track '${track.title}' failed: ${e.message}")
-            emptyList()
+            null
         }
+        val others = report?.sources.orEmpty()
         val sources = others.filter { it.resolver != linked.source?.resolver } + listOfNotNull(linked.source)
-        if (sources.isNotEmpty()) trackResolverCache.putSources(track.title, track.artist, sources)
+        // Resolvers that couldn't answer are asked again later (#566).
+        if (sources.isNotEmpty()) trackResolverCache.putSources(track.title, track.artist, sources, report?.failed)
         Log.d(TAG, "Linked track '${track.title}' by ${track.artist} from ${linked.source?.resolver}; sources ${sources.map { it.resolver }}")
         playbackController.playTrack(track)
     }

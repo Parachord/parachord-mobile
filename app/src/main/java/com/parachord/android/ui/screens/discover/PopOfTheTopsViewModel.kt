@@ -163,23 +163,12 @@ class PopOfTheTopsViewModel constructor(
             for (song in songs) {
                 val key = trackKey(song.title, song.artist)
                 if (_trackSources.value.containsKey(key)) continue
-                // Check shared cache first (cross-context dedup)
-                val cached = trackResolverCache.getSources(song.title, song.artist)
-                if (cached != null) {
-                    _trackSources.value = _trackSources.value + (key to cached)
-                    trackResolverCache.putSources(song.title, song.artist, cached)
-                    continue
-                }
+                // The shared cache: its sources, a retry of resolvers that
+                // couldn't answer, or a fresh resolve (#566).
                 try {
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${song.artist} - ${song.title}",
-                        spotifyId = song.spotifyId,
-                        targetTitle = song.title,
-                        targetArtist = song.artist,
-                    )
+                    val sources = trackResolverCache.resolveTrack(song.title, song.artist, spotifyId = song.spotifyId)
                     if (sources.isNotEmpty()) {
                         _trackSources.value = _trackSources.value + (key to sources)
-                        trackResolverCache.putSources(song.title, song.artist, sources)
                     }
                 } catch (_: Exception) { /* skip */ }
             }

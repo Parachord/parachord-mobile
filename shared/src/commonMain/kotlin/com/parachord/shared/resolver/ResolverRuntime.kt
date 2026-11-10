@@ -18,6 +18,16 @@ package com.parachord.shared.resolver
  *
  * Both AM mechanisms already pick their best title+artist match via
  * [selectBestMatch], so neither blindly returns the first catalog hit.
+ *
+ * ## Null is an answer; a throw is not (#566)
+ *
+ * Every resolve returns null when the service ANSWERED and has no match (or
+ * isn't connected), and THROWS when it couldn't answer: a network error, a
+ * rate-limit cooldown, a failed or unreadable response, a plugin that threw or
+ * timed out. The coordinator records a thrown resolver as failed
+ * ([ResolveReport.failed]) so the caller retries it later instead of caching
+ * the track as if that service had no match. Desktop does the same: an errored
+ * resolver gets no entry and is asked again, a no-match gets a `noMatch` one.
  */
 interface ResolverRuntime {
     /**
@@ -29,7 +39,8 @@ interface ResolverRuntime {
 
     /**
      * Resolve one native id. Returns null on no-match or not-available
-     * (token absent, plugin not configured, etc.). The coordinator only calls
+     * (token absent, plugin not configured, etc.); throws when the service
+     * couldn't answer (see the class doc). The coordinator only calls
      * this for ids in [nativeResolverIds] that pass the active/exclude gate.
      */
     suspend fun resolveNative(
@@ -61,7 +72,8 @@ interface ResolverRuntime {
 
     /**
      * Resolve one `.axe` id (Android: `PluginManager.resolve`; iOS: JSC
-     * unique-key polling). Returns null on no-match. The coordinator only calls
+     * unique-key polling). Returns null on no-match; throws when the plugin threw,
+     * timed out or its service couldn't be reached. The coordinator only calls
      * this for ids returned by [ResolverGating.axeResolverIds] (minus excludes).
      *
      * [album] is forwarded to the plugin's `resolve(artist, title, album, …)`.

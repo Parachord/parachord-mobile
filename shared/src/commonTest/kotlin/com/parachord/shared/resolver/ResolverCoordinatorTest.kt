@@ -37,6 +37,8 @@ class ResolverCoordinatorTest {
         override val nativeResolverIds: Set<String>,
         private val natives: Map<String, ResolvedSource> = emptyMap(),
         private val axes: Map<String, ResolvedSource> = emptyMap(),
+        /** Ids that throw, as a resolver that couldn't answer does (#566). */
+        private val failing: Set<String> = emptySet(),
     ) : ResolverRuntime {
         val askedNative = mutableListOf<String>()
         val askedAxe = mutableListOf<String>()
@@ -49,6 +51,7 @@ class ResolverCoordinatorTest {
             album: String?,
         ): ResolvedSource? {
             askedNative += resolverId
+            if (resolverId in failing) throw IllegalStateException("offline")
             return natives[resolverId]
         }
 
@@ -60,6 +63,7 @@ class ResolverCoordinatorTest {
             album: String?,
         ): ResolvedSource? {
             askedAxe += resolverId
+            if (resolverId in failing) throw IllegalStateException("plugin timed out")
             return axes[resolverId]
         }
     }
@@ -397,5 +401,73 @@ class ResolverCoordinatorTest {
 
         assertFalse(spotifyAsked)
         assertEquals(setOf("applemusic"), out.map { it.resolver }.toSet()) // spotify hint filtered out
+    }
+
+    // --- #566: a resolver that couldn't answer is not one with no match ---
+
+    @Test
+    fun resolveScoredReport_aThrowingResolverIsFailed_andTheOthersStillAnswer() = runTest {
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic", "soundcloud"),
+            natives = mapOf("soundcloud" to source("soundcloud", matchedTitle = "Clover", matchedArtist = "Tundra 212")),
+            failing = setOf("applemusic", "bandcamp"),
+        )
+        val coord = coordinator(
+            runtime,
+            plugins = listOf(plugin("bandcamp")),
+            spotify = { throw IllegalStateException("rate limited") },
+        )
+        val report = coord.resolveScoredReport("Tundra 212 Clover", targetTitle = "Clover", targetArtist = "Tundra 212")
+        assertEquals(listOf("soundcloud"), report.sources.map { it.resolver })
+        assertEquals(setOf("spotify", "applemusic", "soundcloud", "bandcamp"), report.asked)
+        assertEquals(setOf("spotify", "applemusic", "bandcamp"), report.failed)
+        assertEquals(emptySet(), report.missed)
+    }
+
+    @Test
+    fun resolveScoredReport_aNullAnswerIsAMiss_notAFailure() = runTest {
+        val runtime = FakeRuntime(nativeResolverIds = setOf("applemusic"))
+        val report = coordinator(runtime).resolveScoredReport("q", "Clover", "Tundra 212")
+        assertEquals(emptySet(), report.failed)
+        assertEquals(setOf("spotify", "applemusic"), report.missed)
+    }
+
+    @Test
+    fun resolveScoredReport_onlyResolvers_asksJustThose() = runTest {
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic", "soundcloud"),
+            natives = mapOf("applemusic" to source("applemusic", matchedTitle = "Clover", matchedArtist = "Tundra 212")),
+        )
+        var spotifyAsked = false
+        val report = coordinator(
+            runtime,
+            plugins = listOf(plugin("bandcamp")),
+            spotify = { spotifyAsked = true; null },
+        ).resolveScoredReport("q", "Clover", "Tundra 212", onlyResolvers = setOf("applemusic"))
+        assertEquals(listOf("applemusic"), runtime.askedNative)
+        assertEquals(emptyList(), runtime.askedAxe)
+        assertFalse(spotifyAsked)
+        assertEquals(setOf("applemusic"), report.asked)
+    }
+
+    @Test
+    fun resolveRankedWithHintsReport_keepsTheHint_andReportsTheFailedSearches() = runTest {
+        // The #566 case: every search failed, only the stored Apple Music id is left.
+        val runtime = FakeRuntime(nativeResolverIds = setOf("applemusic", "soundcloud"), failing = setOf("soundcloud"))
+        val report = coordinator(runtime, spotify = { throw IllegalStateException("offline") })
+            .resolveRankedWithHintsReport("q", "Clover", "Tundra 212", appleMusicId = "1880091921")
+        assertEquals(listOf("applemusic"), report.sources.map { it.resolver })
+        assertEquals(setOf("spotify", "soundcloud"), report.failed)
+        // The hinted resolver isn't searched, so it's neither asked nor failed.
+        assertFalse("applemusic" in report.asked)
+    }
+
+    @Test
+    fun resolveSingle_throwsWhenTheResolverCouldNotAnswer() = runTest {
+        val runtime = FakeRuntime(nativeResolverIds = setOf("applemusic"), failing = setOf("applemusic"))
+        val failure = runCatching {
+            coordinator(runtime).resolveSingle("applemusic", "q", "Clover", "Tundra 212", null)
+        }.exceptionOrNull()
+        assertNotNull(failure)
     }
 }

@@ -148,6 +148,7 @@ class SettingsStore(
         // dedup migration, and bumping it here would skip migrations that haven't
         // run yet on a fresh-from-old install.
         const val TRACK_DEDUP_V1_DONE = "track_dedup_v1_done"
+        const val TRACK_SOURCES_STORED_ID_PURGE_DONE = "track_sources_stored_id_purge_566"
         const val ENABLED_SYNC_PROVIDERS = "enabled_sync_providers"
         // N-way multimaster playlist sync (per-user opt-in, default OFF). Gates
         // the WHOLE N-way path — migration bootstrap, shadow mode, propagation.
@@ -548,6 +549,14 @@ class SettingsStore(
     }
     override suspend fun setTrackDedupV1Done() {
         ensureMigrated(); kv.setBoolean(TRACK_DEDUP_V1_DONE, true)
+    }
+
+    /** One-shot drop of saved track sources a failed resolve left (#566). */
+    suspend fun isTrackSourcesStoredIdPurgeDone(): Boolean {
+        ensureMigrated(); return kv.getBoolean(TRACK_SOURCES_STORED_ID_PURGE_DONE, default = false)
+    }
+    suspend fun setTrackSourcesStoredIdPurgeDone() {
+        ensureMigrated(); kv.setBoolean(TRACK_SOURCES_STORED_ID_PURGE_DONE, true)
     }
 
     suspend fun getPersistedQueueState(): String? {
