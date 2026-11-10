@@ -1969,15 +1969,10 @@ final class QueuePlaybackCoordinator {
     /// scrobbles. Nil for normal playback. Set on start, cleared on stop.
     var onTrackFinished: (() -> Void)?
 
-    /// Repeat mode (#221). off → all → one. Honored by AUTO-advance only
-    /// (a track ending) — the manual Next button + lock-screen next always
-    /// advance one track. Repeat is a coordinator concern (not in the shared
-    /// QueueManager), matching Android where ExoPlayer owns repeat.
-    enum RepeatMode { case off, all, one }
+    /// Repeat mode (#221), the shared `RepeatMode`: off → all → one
+    /// (`nextRepeatMode`). What it does at each advance is the shared
+    /// `advanceAction` (see `advance(_:)`).
     var repeatMode: RepeatMode = .off
-    /// Full track list of the current queue, retained so repeat-ALL can wrap
-    /// back to the start when the queue is exhausted.
-    @ObservationIgnored private var originalQueue: [Track] = []
 
     // ── Spinoff (#231) — Android PlaybackController parity ──────────────────
     // The pool is a SEPARATE hidden list; the user's QueueManager queue is NEVER
@@ -2539,7 +2534,6 @@ final class QueuePlaybackCoordinator {
         // spinoff (it's not the pool driving this setQueue). Exclude the spinoff's
         // own context so beginSpinoff's setContext path isn't mistaken for takeover.
         if spinoffMode, context?.type != "spinoff" { exitSpinoff() }
-        originalQueue = tracks   // retained for repeat-ALL wrap (#221)
         let toPlay = queueManager.setQueue(
             tracks: tracks,
             startIndex: Int32(startIndex),
@@ -2552,42 +2546,78 @@ final class QueuePlaybackCoordinator {
         }
     }
 
+    /// Next button, lock screen, CarPlay, chat: move on one track (wraps to
+    /// the start under repeat all, see `advance(_:)`).
     func skipNext() {
-        // Spinoff (#231): pull from the separate pool, bypassing the queue. When the
-        // pool exhausts, advanceSpinoff() exits spinoff and returns false so we fall
-        // through to the user's (never-modified) queue, which resumes here.
+        advance(.nextPressed)
+    }
+
+    /// The one advance path, following the shared `advanceAction` (Android's
+    /// `skipNextInternal` does the same). Listen Along owns a track that ended
+    /// (its hook plays the friend's next song, #246); a spinoff pool comes
+    /// next (#231: on exhaustion it exits and the untouched queue resumes);
+    /// then the queue and repeat mode decide.
+    private func advance(_ trigger: AdvanceTrigger) {
+        if trigger == .trackEnded, let hook = onTrackFinished { hook(); return }
         if advanceSpinoff() { return }
-        guard let next = queueManager.skipNext(currentTrack: currentTrack) else {
-            // Queue exhausted — stop cleanly. Halt whichever engine is active,
-            // drop the external keepalive, then release the session (#322).
-            let engine = activeEngine
-            Task { @MainActor in
-                switch engine {
-                case .musicKit: musicKit.pause()
-                case .spotify: await spotify.pause()
-                case .soundCloud: soundCloud.stop()
-                case .bandcamp: await bandcamp.stop()
-                case .avPlayer, .browser: break
-                }
-            }
-            keepAlive.stop()
-            player.stop()
-            currentTrack = nil
-            syncSnapshot()
+        // Listen Along follows the friend: a replay or a wrap over the history
+        // would replace their next track, so repeat counts as off there.
+        let listenAlong = queueManager.playbackContext?.type == ListenAlongController.listenAlongContext
+        let action = QueueAdvancePolicyKt.advanceAction(
+            trigger: trigger,
+            repeatMode: listenAlong ? .off : repeatMode,
+            hasNext: queueManager.hasNext,
+            hasCurrent: currentTrack != nil
+        )
+        NSLog("QUEUE advance \(trigger.name) → \(action.name)")
+        var next: Track?
+        switch action {
+        case .playNext: next = queueManager.skipNext(currentTrack: currentTrack)
+        case .replayCurrent: next = currentTrack
+        case .wrapToStart: next = queueManager.wrapToStart(currentTrack: currentTrack)
+        default: next = nil
+        }
+        guard let next else {
+            stopAtEndOfQueue(clear: !listenAlong)
             return
         }
         syncSnapshot()
         playTrack(next, advancing: true)
     }
 
-    func skipPrevious() {
-        // Match desktop/Android: if we're more than ~3s into the track,
-        // "previous" restarts the current track instead of going back.
-        if currentTime > 3, currentTrack != nil {
-            seek(to: 0)
+    /// The queue ran out: stop. With [clear] the track leaves the screen and
+    /// the external session is released (#322). Listen Along keeps the track:
+    /// the friend's next one is on its way, and a blank screen would flash.
+    private func stopAtEndOfQueue(clear: Bool) {
+        guard clear else {
+            Task { @MainActor in await haltActiveEngine() }
             return
         }
-        guard let prev = queueManager.skipPrevious(currentTrack: currentTrack) else {
+        let engine = activeEngine
+        Task { @MainActor in
+            switch engine {
+            case .musicKit: musicKit.pause()
+            case .spotify: await spotify.pause()
+            case .soundCloud: soundCloud.stop()
+            case .bandcamp: await bandcamp.stop()
+            case .avPlayer, .browser: break
+            }
+        }
+        keepAlive.stop()
+        player.stop()
+        currentTrack = nil
+        syncSnapshot()
+    }
+
+    /// Previous: past the first few seconds (or with no history) it restarts
+    /// the track, else it goes back one (shared `previousAction`).
+    func skipPrevious() {
+        let action = QueueAdvancePolicyKt.previousAction(
+            positionMs: Int64(currentTime * 1000),
+            hasPrevious: queueManager.hasPrevious
+        )
+        guard action == .playPrevious,
+              let prev = queueManager.skipPrevious(currentTrack: currentTrack) else {
             seek(to: 0)
             return
         }
@@ -2610,53 +2640,14 @@ final class QueuePlaybackCoordinator {
         syncSnapshot()
     }
 
-    /// Cycle repeat OFF → ALL → ONE → OFF (#221).
+    /// Cycle repeat off → all → one → off (#221, shared `nextRepeatMode`).
     func cycleRepeatMode() {
-        repeatMode = switch repeatMode {
-        case .off: .all
-        case .all: .one
-        case .one: .off
-        }
+        repeatMode = QueueAdvancePolicyKt.nextRepeatMode(mode: repeatMode)
     }
 
-    /// Auto-advance when a track ENDS (wired to every engine's onTrackEnded),
-    /// honoring repeat mode. The manual Next button keeps calling skipNext()
-    /// directly so it always advances regardless of repeat.
+    /// A track ENDED (wired to every engine's onTrackEnded).
     func autoAdvance() {
-        // Listen Along owns end-of-track: let the controller pick the friend's
-        // next song so the just-finished one plays fully (and scrobbles), #246.
-        if let hook = onTrackFinished { hook(); return }
-        // Spinoff (#231): the just-finished song was the seed (or a pool track) —
-        // pull the next pool track. On exhaustion this exits spinoff and returns
-        // false, falling through to repeat/queue handling below.
-        if advanceSpinoff() { return }
-        switch repeatMode {
-        case .one:
-            // Replay the just-finished track.
-            if let cur = currentTrack { playTrack(cur, advancing: true) } else { skipNext() }
-        case .all:
-            if let next = queueManager.skipNext(currentTrack: currentTrack) {
-                syncSnapshot()
-                playTrack(next, advancing: true)
-            } else if !originalQueue.isEmpty {
-                setQueue(originalQueue, startIndex: 0)   // wrap to the top
-            } else {
-                let engine = activeEngine
-                Task { @MainActor in
-                    switch engine {
-                    case .musicKit: musicKit.pause()
-                    case .spotify: await spotify.pause()
-                    case .soundCloud: soundCloud.stop()
-                    case .bandcamp: await bandcamp.stop()
-                    case .avPlayer, .browser: break
-                    }
-                }
-                keepAlive.stop()          // #322: drop the external keepalive
-                player.stop(); currentTrack = nil; syncSnapshot()
-            }
-        case .off:
-            skipNext()
-        }
+        advance(.trackEnded)
     }
 
     func clearQueue() {
@@ -2956,7 +2947,7 @@ final class QueuePlaybackCoordinator {
                         awaitLoadOnPlay(aimedAtSec: aimedAtSec)
                         return
                     }
-                    skipNext()
+                    advance(.skippedUnplayable)
                 }
             }
             isStarting = false
