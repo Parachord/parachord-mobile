@@ -1,11 +1,13 @@
-package com.parachord.android.playback
+package com.parachord.shared.playback
 
-import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.shared.deeplink.ProtocolTrack
+import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
+import com.parachord.shared.platform.currentTimeMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
 
 private const val TAG = "PoolRefiller"
 
@@ -30,11 +32,11 @@ private const val TAG = "PoolRefiller"
  *    zero-length fetch result, which then trivially "all dedupes" and
  *    increments the empty counter).
  *  - **Dedup against existing pool:** by `recordingMbid` (lowercase)
- *    →  `(artist|title)` (lowercase). [TrackEntity] has no `isrc`
+ *    →  `(artist|title)` (lowercase). [Track] has no `isrc`
  *    field, so ISRC dedup is documented-not-implemented — fresh tracks
  *    that share an MBID-and-only-MBID with the pool's existing rows
  *    will be filtered, but ISRC-only matches go through (callers can
- *    upgrade if/when [TrackEntity] grows an `isrc` column). If every
+ *    upgrade if/when [Track] grows an `isrc` column). If every
  *    refilled track dedupes, the result counts as empty.
  *  - **State reset:** [resetCounters] clears the empty counter +
  *    last-fetch timestamp. [PlaybackController] calls this from both
@@ -47,10 +49,10 @@ private const val TAG = "PoolRefiller"
  *
  * The [clock] parameter is a `() -> Long` injection seam so tests can
  * advance time deterministically without sleeping. Production callers
- * pass `System::currentTimeMillis`.
+ * pass `::currentTimeMillis`.
  */
 class PoolRefiller(
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = ::currentTimeMillis,
     val rateLimitMs: Long = REFILL_RATE_LIMIT_MS,
     val maxEmpty: Int = REFILL_MAX_EMPTY,
 ) {
@@ -124,7 +126,7 @@ class PoolRefiller(
      * Caller is responsible for actually appending the returned list to
      * the spinoff pool and pre-warming via `TrackResolverCache`.
      */
-    suspend fun tryRefill(currentPoolSnapshot: List<TrackEntity>): List<TrackEntity>? =
+    suspend fun tryRefill(currentPoolSnapshot: List<Track>): List<Track>? =
         refillMutex.withLock {
             if (!canRefill()) return@withLock null
             val url = refillUrl ?: return@withLock null
@@ -155,7 +157,7 @@ class PoolRefiller(
             emptyCount = 0
             val ts = clock()
             val entities = deduped.mapIndexed { idx, t ->
-                TrackEntity(
+                Track(
                     id = "protocol-radio-$ts-$idx",
                     title = t.title,
                     artist = t.artist,
@@ -176,12 +178,12 @@ class PoolRefiller(
          *   1. `recordingMbid` (case-insensitive), then
          *   2. `(artist|title)` (case-insensitive).
          *
-         * [TrackEntity] has no `isrc` field, so ISRC-only dedup is
+         * [Track] has no `isrc` field, so ISRC-only dedup is
          * not implemented — see KDoc on the class.
          */
         fun dedupAgainstPool(
             fresh: List<ProtocolTrack>,
-            pool: List<TrackEntity>,
+            pool: List<Track>,
         ): List<ProtocolTrack> {
             if (fresh.isEmpty()) return emptyList()
             val mbids: Set<String> = pool

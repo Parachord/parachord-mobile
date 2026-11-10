@@ -1,15 +1,15 @@
-package com.parachord.android.playback
+package com.parachord.shared.playback
 
-import com.parachord.android.data.db.entity.TrackEntity
+import com.parachord.shared.model.Track
 import com.parachord.shared.deeplink.ProtocolTrack
 import kotlinx.coroutines.test.runTest
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
-import org.junit.Test
-import java.io.IOException
+import kotlin.concurrent.Volatile
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Unit coverage for [PoolRefiller] — Mode C pool refill loop
@@ -33,7 +33,7 @@ class PoolRefillerTest {
         artist: String = "A",
         title: String = "T",
         mbid: String? = null,
-    ) = TrackEntity(id = id, title = title, artist = artist, recordingMbid = mbid)
+    ) = Track(id = id, title = title, artist = artist, recordingMbid = mbid)
 
     private fun ptrack(
         artist: String = "A",
@@ -89,7 +89,7 @@ class PoolRefillerTest {
         assertFalse(r.canRefill())
         val r2 = r.tryRefill(emptyList())
         assertNull(r2)
-        assertEquals("fetcher must NOT have run again", 1, fetched)
+        assertEquals(1, fetched, "fetcher must NOT have run again")
     }
 
     @Test
@@ -106,7 +106,7 @@ class PoolRefillerTest {
 
         // Advance by exactly 5000ms — boundary is `>=`, so this fires.
         clock.advance(5_000)
-        assertTrue("at boundary canRefill should be true", r.canRefill())
+        assertTrue(r.canRefill(), "at boundary canRefill should be true")
         assertNotNull(r.tryRefill(emptyList()))
         assertEquals(2, fetched)
     }
@@ -114,7 +114,7 @@ class PoolRefillerTest {
     // ── Stop condition (3 consecutive empties) ───────────────────────
 
     @Test
-    fun threeConsecutiveEmpty_stopsRefilling() = runTest {
+    fun `three empty refills stop the loop`() = runTest {
         val clock = FakeClock(initial = 100_000L)
         var fetcherCalls = 0
         val r = buildRefiller(clock = clock, fetcher = {
@@ -136,7 +136,7 @@ class PoolRefillerTest {
         // does NOT run again.
         assertFalse(r.canRefill())
         assertNull(r.tryRefill(emptyList()))
-        assertEquals("fetcher must not have run a 4th time", 3, fetcherCalls)
+        assertEquals(3, fetcherCalls, "fetcher must not have run a 4th time")
     }
 
     @Test
@@ -160,11 +160,11 @@ class PoolRefillerTest {
         val fresh = r.tryRefill(emptyList())
         assertNotNull(fresh)
         assertEquals(1, fresh!!.size)
-        assertEquals("counter reset on fresh", 0, r.emptyCountForTest)
+        assertEquals(0, r.emptyCountForTest, "counter reset on fresh")
         clock.advance(6_000)
 
         assertNull(r.tryRefill(emptyList()))
-        assertEquals("re-incremented to 1, not 3", 1, r.emptyCountForTest)
+        assertEquals(1, r.emptyCountForTest, "re-incremented to 1, not 3")
     }
 
     // ── Error handling ───────────────────────────────────────────────
@@ -173,7 +173,7 @@ class PoolRefillerTest {
     fun fetchThrows_countsAsEmpty() = runTest {
         val clock = FakeClock(initial = 100_000L)
         val r = buildRefiller(clock = clock, fetcher = {
-            throw IOException("boom")
+            throw IllegalStateException("boom")
         })
         assertNull(r.tryRefill(emptyList()))
         assertEquals(1, r.emptyCountForTest)
@@ -183,7 +183,7 @@ class PoolRefillerTest {
     fun fetchThrows_threeConsecutiveErrorsHitStopCondition() = runTest {
         val clock = FakeClock(initial = 100_000L)
         val r = buildRefiller(clock = clock, fetcher = {
-            throw IOException("boom")
+            throw IllegalStateException("boom")
         })
         for (i in 1..3) {
             assertNull(r.tryRefill(emptyList()))
@@ -209,7 +209,7 @@ class PoolRefillerTest {
         })
         val fresh = r.tryRefill(pool)
         assertNotNull(fresh)
-        assertEquals("only the non-mbid-dup should pass", 1, fresh!!.size)
+        assertEquals(1, fresh!!.size, "only the non-mbid-dup should pass")
         assertEquals("Other", fresh[0].artist)
     }
 
