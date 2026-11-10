@@ -66,6 +66,49 @@ class OtherVersionMatchTest {
         assertEquals("Creep - Remastered 2008", pick(results, "Radiohead", "Creep")?.title)
     }
 
+    // ── Remaster labels don't make a title less exact ────────────────────
+    // Spotify labels remastered studio tracks ("- 2016 Remaster"), while a
+    // live album or an outtakes set often carries the bare title. Comparing
+    // raw titles, the exact-name tier picked those editions over the studio
+    // recording (Spotify ids seen on a Pixel 9a, Nov 2026).
+
+    @Test fun aRemasteredStudioTrackIsAnExactMatchForTheBareTitle() {
+        val results = listOf(
+            R("Ramones", "Judy Is a Punk - 2016 Remaster"), // 0vGCxnTwYZFtOAW3oz28kd, the studio recording
+            R("Ramones", "Judy Is a Punk"),                 // 2OVGtm7PQ4uu7YN5BKLzEk, live on "It's Alive"
+        )
+        assertEquals("Judy Is a Punk - 2016 Remaster", pick(results, "Ramones", "Judy Is a Punk")?.title)
+    }
+
+    @Test fun aRemasterBeatsAnOuttakeRankedAboveIt() {
+        val results = listOf(
+            R("The Beatles", "Her Majesty - Takes 1-3"),      // 52hm7o5MPKymBUmSJadwve, 2019 Super Deluxe
+            R("The Beatles", "Her Majesty - Remastered 2009"),
+        )
+        assertEquals("Her Majesty - Remastered 2009", pick(results, "The Beatles", "Her Majesty")?.title)
+    }
+
+    @Test fun remasterLabelsInTheirUsualForms() {
+        for (title in listOf(
+            "Creep - Remastered 2008", "Creep - Remastered", "Creep - 2016 Remaster", "Creep (Remastered)",
+            "Creep (2011 Remaster)", "Creep [Remastered 2009]", "Creep - Remastered Version", "Creep - 2003 Digital Remaster",
+        )) {
+            // The competitor carries no version word, so only the exact tier tells them apart.
+            assertEquals(title, pick(listOf(R("Radiohead", "Creep - Session Takes"), R("Radiohead", title)), "Radiohead", "Creep")?.title, title)
+        }
+    }
+
+    @Test fun aRequestedRemasterStillMatchesItself() {
+        val results = listOf(R("Radiohead", "Creep"), R("Radiohead", "Creep - Remastered 2008"))
+        assertEquals("Creep - Remastered 2008", pick(results, "Radiohead", "Creep - Remastered 2008")?.title)
+    }
+
+    @Test fun onlyATrailingRemasterLabelIsIgnored() {
+        // "Remaster" inside the title is part of the name, not a label.
+        val results = listOf(R("X", "Remaster Me Baby"), R("X", "Remaster"))
+        assertEquals("Remaster", pick(results, "X", "Remaster")?.title)
+    }
+
     @Test fun stillResolvesWhenOnlyOtherVersionsExist() {
         // Tier 5 keeps desktop's behavior: a variant beats no match at all.
         val results = listOf(R("Sparta", "Lines In Sand (Acoustic)"))
