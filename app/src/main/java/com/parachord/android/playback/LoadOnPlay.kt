@@ -57,6 +57,13 @@ enum class PlayFailure {
     /** The handler didn't start within `PLAY_START_TIMEOUT_MS` (#449). */
     START_TIMED_OUT,
 
+    /**
+     * The handler gave up without starting it (`PlaybackStartFailedException`):
+     * Apple Music offline, where MusicKit's play fails at once, or MusicKit
+     * that never loaded.
+     */
+    START_FAILED,
+
     /** The play threw. */
     ERROR,
 

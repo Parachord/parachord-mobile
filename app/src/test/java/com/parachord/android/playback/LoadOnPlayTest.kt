@@ -63,6 +63,7 @@ class LoadOnPlayTest {
         val held = listOf(
             PlayFailure.NO_SOURCE_WITHOUT_SPOTIFY,
             PlayFailure.START_TIMED_OUT,
+            PlayFailure.START_FAILED,
             PlayFailure.ERROR,
             PlayFailure.PLAYER_ERROR,
         )
