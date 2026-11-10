@@ -807,7 +807,11 @@ Conformance checklist (audited 2026-06-07):
   Android app plays nothing for a bare `uris` play (root `CLAUDE.md`), so
   `startPlayback` asks `IosContainer.spotifyPlayRequest` (shared
   `SpotifyPlayRequests`) for the body, the same one Android sends. Whether
-  Spotify's iOS app had the same failure wasn't checked.
+  Spotify's iOS app had the same failure wasn't checked. **Known gap:** Spotify
+  plays on into the album when our track ends and Parachord can't reach the Web
+  API to start the next one or pause. Android then pauses Spotify with a media
+  key (root `CLAUDE.md`, "When Parachord can't reach Spotify"); iOS has no way
+  to send another app a key.
 - **Single-pass**, single 502 retry after 1s; **cold-device verification**
   (2 polls × 500ms via `getPlaybackStateOrNull`); persist the **synthetic**
   `localDeviceId`, never the real id.
