@@ -175,8 +175,9 @@ class PlaybackControllerStoppedTrackTest {
         every { f.router.getSpotifyHandler().getPosition() } returns 90_000L
         controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
         run()
-        // n is first in its queue: nothing before it.
-        f.queueManager.setQueue(listOf(n, b), 0, null, false)
+        // n is first in its queue with nothing before it (a new queue keeps
+        // earlier history since #605, so empty it directly).
+        f.queueManager.restoreState(listOf(b), emptyList(), null, null, false)
         assertFalse(f.queueManager.hasPrevious)
 
         controller.skipPrevious()
