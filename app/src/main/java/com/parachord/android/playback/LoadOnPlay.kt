@@ -74,3 +74,17 @@ internal fun keepsForegroundForAutoSkip(skipPendingForTrack: Boolean, externalPl
  */
 internal fun sessionSeekGoesToController(controllerExternal: Boolean, loadPending: Boolean): Boolean =
     controllerExternal || loadPending
+
+/**
+ * Whether a play that ended with [failure] leaves its track for Play to load
+ * again ([com.parachord.shared.playback.failedPlayAwaitsLoad]), or, when the
+ * car stopped the queue on it instead of skipping it ([stoppedByCar]: the
+ * third unplayable track in a row in Android Auto with no Parachord screen
+ * showing), always: playback stops on that track, and Play tries it again.
+ */
+internal fun failedPlayAwaitsLoadAfterCarStop(
+    failure: PlayFailure,
+    advancing: Boolean,
+    spinoffMode: Boolean,
+    stoppedByCar: Boolean,
+): Boolean = stoppedByCar || com.parachord.shared.playback.failedPlayAwaitsLoad(failure, advancing, spinoffMode)

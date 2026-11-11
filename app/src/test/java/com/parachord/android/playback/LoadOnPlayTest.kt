@@ -71,4 +71,15 @@ class LoadOnPlayTest {
         assertTrue(sessionSeekGoesToController(controllerExternal = true, loadPending = false))
         assertTrue(sessionSeekGoesToController(controllerExternal = false, loadPending = true))
     }
+
+    @Test
+    fun `a track the car stopped on waits for Play even while the queue moves on`() {
+        // Skipped while advancing, unless the car stopped there.
+        assertFalse(failedPlayAwaitsLoadAfterCarStop(PlayFailure.NO_SOURCE, advancing = true, spinoffMode = false, stoppedByCar = false))
+        assertTrue(failedPlayAwaitsLoadAfterCarStop(PlayFailure.NO_SOURCE, advancing = true, spinoffMode = false, stoppedByCar = true))
+        assertTrue(failedPlayAwaitsLoadAfterCarStop(PlayFailure.EMBED_REFUSED, advancing = false, spinoffMode = true, stoppedByCar = true))
+        assertFalse(failedPlayAwaitsLoadAfterCarStop(PlayFailure.EMBED_REFUSED, advancing = false, spinoffMode = true, stoppedByCar = false))
+        // Everything else is the shared rule.
+        assertTrue(failedPlayAwaitsLoadAfterCarStop(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = false, stoppedByCar = false))
+    }
 }

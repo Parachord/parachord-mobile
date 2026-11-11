@@ -480,6 +480,9 @@ class PlaybackService : MediaLibraryService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
+            // Android Auto connecting: the controller's car rules
+            // (CarUnplayableRun) apply while it stays connected.
+            playbackController.carConnections.connected(controller.packageName, controller)
             val commands = EngineRepeatCommand.sessionCommandsFor(
                 controllerPackage = controller.packageName,
                 ownPackage = packageName,
@@ -489,6 +492,13 @@ class PlaybackService : MediaLibraryService() {
                 .setAvailableSessionCommands(commands)
                 .setCustomLayout(customLayoutFor(mediaButtonsState))
                 .build()
+        }
+
+        override fun onDisconnected(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ) {
+            playbackController.carConnections.disconnected(controller)
         }
 
         override fun onCustomCommand(
@@ -1066,6 +1076,9 @@ class PlaybackService : MediaLibraryService() {
         stateObserverJob?.cancel()
         queueSnapshotJob?.cancel()
         serviceScope.cancel()
+        // The session goes with the service, and Media3 may not report each
+        // controller's disconnect: nothing is connected to the car any more.
+        playbackController.carConnections.clear()
         spotifyHandler.disconnect()
         isExternalForeground = false
         mediaSession?.run {

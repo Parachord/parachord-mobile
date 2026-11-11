@@ -5,6 +5,7 @@ import android.net.wifi.WifiManager
 import android.os.PowerManager
 import com.parachord.android.data.network.NetworkMonitor
 import com.parachord.android.resolver.TrackResolverCache
+import com.parachord.android.resolver.ResolverScoring
 import com.parachord.shared.playback.QueueManager
 import io.mockk.every
 import io.mockk.mockk
@@ -26,6 +27,7 @@ internal class PlaybackControllerFixture(
 ) {
     val trackResolverCache: TrackResolverCache = mockk(relaxed = true)
     val networkMonitor: NetworkMonitor = mockk(relaxed = true)
+    val resolverScoring: ResolverScoring = mockk(relaxed = true)
 
     init {
         // Nothing resolved: tracks route by what they carry.
@@ -51,7 +53,7 @@ internal class PlaybackControllerFixture(
         mbidEnrichment = mockk(relaxed = true),
         lastFmClient = mockk(relaxed = true),
         resolverManager = mockk(relaxed = true),
-        resolverScoring = mockk(relaxed = true),
+        resolverScoring = resolverScoring,
         trackResolverCache = trackResolverCache,
         widgetUpdater = mockk(relaxed = true),
         settingsStore = mockk(relaxed = true),
