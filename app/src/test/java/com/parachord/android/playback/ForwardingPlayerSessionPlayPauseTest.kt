@@ -95,6 +95,8 @@ class ForwardingPlayerSessionPlayPauseTest {
 
     @Test fun `a play on a track waiting for a load still goes to togglePlayPause once`() {
         val (wrapper, delegate, controller) = wrapper(external = true, controllerExternal = false, needsLoad = true)
+        // The session answers a play on an idle player with prepare(), then play().
+        wrapper.prepare()
         wrapper.play()
         verify(exactly = 1) { controller.togglePlayPause() }
         verify(exactly = 0) { delegate.play() }

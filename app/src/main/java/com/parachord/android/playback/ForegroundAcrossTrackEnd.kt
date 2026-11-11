@@ -68,10 +68,13 @@ internal const val FOREGROUND_HOLD_IDLE_LIMIT_MS = 30_000L
 
 /**
  * How long it's kept while Listen Along waits for the friend's next track
- * after a local song (the controller's `heldForListener`): as long as an
- * external song held for the listener keeps its foreground, the 5-minute idle
- * timeout. The session's own end (a friend who stopped, failed polls)
- * releases it sooner.
+ * after a local song (the controller's `heldForListener`): 5 minutes, the
+ * length of the idle timeout. The session's own end (a friend who stopped,
+ * failed polls) releases it sooner. An external song held for the listener
+ * has no such limit: the session's player stays in external mode after the
+ * idle timeout, so its foreground stays until the session ends. Once this
+ * limit passes, the friend's next track can't take the foreground from the
+ * background.
  */
 internal const val FOREGROUND_HOLD_LISTENER_LIMIT_MS = 5L * 60 * 1000
 
