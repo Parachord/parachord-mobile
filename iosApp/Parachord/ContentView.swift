@@ -1613,6 +1613,7 @@ final class IosAVPlayer {
     /// The item has played (its clock ran) since `load`, so a failure now is a
     /// stream that failed while playing, not a start that failed.
     private var startedPlaying = false
+    /// Whether a failure was already reported for the loaded item (once each).
     private var failureReported = false
 
     var status: Status = .idle
@@ -1635,11 +1636,11 @@ final class IosAVPlayer {
     /// coordinator's `NowPlayingPublisher` republishes; this player doesn't
     /// touch `MPNowPlayingInfoCenter` or `MPRemoteCommandCenter` itself.
     var onNowPlayingChanged: (() -> Void)?
-    /// Fired once when the item fails AFTER it had started playing (a stream
-    /// that dropped), with where it was and its length, in seconds. A failure
-    /// before it started isn't reported here (the coordinator's start handling
-    /// covers that).
-    var onPlaybackFailed: ((_ atSec: Double, _ durationSec: Double) -> Void)?
+    /// Fired once per loaded item when it fails, with where it was and its
+    /// length, in seconds, and whether it had started playing (a stream that
+    /// dropped) or not (a start that failed: a dead link, a URL that isn't
+    /// media).
+    var onPlaybackFailed: ((_ atSec: Double, _ durationSec: Double, _ started: Bool) -> Void)?
 
     init() {
         configureAudioSession()
@@ -1715,6 +1716,7 @@ final class IosAVPlayer {
         guard let url = URL(string: Self.resolveLocalImportPath(urlString)) else {
             status = .failed
             errorMessage = "Invalid URL"
+            onPlaybackFailed?(0, 0, false)
             return
         }
         teardown()
@@ -1743,7 +1745,7 @@ final class IosAVPlayer {
                     self.status = .failed
                     self.errorMessage = item.error?.localizedDescription
                         ?? "Item failed (unknown)"
-                    self.reportFailureIfPlaying()
+                    self.reportFailure()
                 default:
                     break
                 }
@@ -1774,7 +1776,7 @@ final class IosAVPlayer {
             guard let self else { return }
             let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
             self.errorMessage = error?.localizedDescription ?? "Item failed to play to its end"
-            self.reportFailureIfPlaying()
+            self.reportFailure()
         }
         endObservation = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -1793,15 +1795,16 @@ final class IosAVPlayer {
         errorMessage = nil
     }
 
-    /// The item failed: report it once when it had started playing.
-    private func reportFailureIfPlaying() {
-        guard startedPlaying, !failureReported else { return }
+    /// The item failed: report it once, saying whether it had started playing.
+    private func reportFailure() {
+        guard !failureReported else { return }
         failureReported = true
         let at = currentTime
         let length = duration
         isPlaying = false
-        NSLog("AVPLAYER item failed while playing at %.1f s: %@", at, errorMessage ?? "")
-        onPlaybackFailed?(at, length)
+        NSLog("AVPLAYER item failed %@ at %.1f s: %@", startedPlaying ? "while playing" : "before it started",
+              at, errorMessage ?? "")
+        onPlaybackFailed?(at, length, startedPlaying)
     }
 
     func play() {
@@ -1970,6 +1973,12 @@ final class QueuePlaybackCoordinator {
     /// track that is playing, so a slot made for that track retries the same
     /// source. Set when a play starts; nil when it started without a pick.
     @ObservationIgnored private var playingPick: (trackId: String, resolver: String)?
+
+    /// The latest requested play (`playTrack`): its request number, track,
+    /// where it aimed and its forced resolver. A start that fails on AVPlayer
+    /// before playing builds its slot from this, and only while it's still
+    /// the latest play (a superseded start's failure is ignored).
+    @ObservationIgnored private var latestStart: (request: Int, trackId: String, aimedAtMs: Int64, pickedResolver: String?)?
 
     /// The slot Play would load now: `loadOnPlay` while its track is current.
     private var loadOnPlayTarget: LoadOnPlay? {
@@ -2531,10 +2540,10 @@ final class QueuePlaybackCoordinator {
         self.player.onTrackEnded = { [weak self] in
             self?.autoAdvance()
         }
-        self.player.onPlaybackFailed = { [weak self] atSec, durationSec in
+        self.player.onPlaybackFailed = { [weak self] atSec, durationSec, started in
             // Called on the main queue (the item's KVO hops there; the
             // notification is delivered on `.main`).
-            MainActor.assumeIsolated { self?.avPlaybackFailed(atSec: atSec, durationSec: durationSec) }
+            MainActor.assumeIsolated { self?.avPlaybackFailed(atSec: atSec, durationSec: durationSec, started: started) }
         }
         self.musicKit.onTrackEnded = { [weak self] in
             self?.autoAdvance()
@@ -2550,6 +2559,13 @@ final class QueuePlaybackCoordinator {
             // Bandcamp's track too: this page holds the audio session for it, and
             // WebKit can show this page's lock screen instead of Bandcamp's.
             case "play":
+                // A track no engine holds (its page was halted): Play loads
+                // it, through `togglePlayPause` (which asks the listener and
+                // checks `heldForListener` first).
+                if !self.isPlaying, !self.isStarting, self.loadOnPlayTarget != nil {
+                    self.togglePlayPause()
+                    return
+                }
                 // A user's resume, as `togglePlayPause` reports it.
                 if !self.isPlaying, !self.isStarting, self.onUserAction?(.resume) == true { return }
                 if !self.isPlaying, self.heldForListener { return }
@@ -2644,7 +2660,7 @@ final class QueuePlaybackCoordinator {
     /// track will actually route to Apple Music (has an `appleMusicId`).
     @MainActor
     private func prefetchNextIfNeeded(remainingSec: Double) {
-        guard !prefetchedNextForCurrentTrack,
+        guard !prefetchedNextForCurrentTrack, isPlaying,
               remainingSec > 0, remainingSec <= 15,
               let next = upNext.first else { return }
         prefetchedNextForCurrentTrack = true
@@ -3041,6 +3057,9 @@ final class QueuePlaybackCoordinator {
         heldForListener = false
         playRequestCount += 1
         let deckSwitch = forcedResolver != nil && !fromLoadOnPlay
+        // The start a pre-start AVPlayer failure belongs to (`avPlaybackFailed`).
+        latestStart = (request: playRequestCount, trackId: track.id,
+                       aimedAtMs: Int64(aimedAtSec * 1000), pickedResolver: forcedResolver)
         onTrackStarting?(track)
         // An explicit play (a tap, Play on a stopped track) starts a new run of
         // unplayable tracks; only the queue moving on adds to one.
@@ -3066,16 +3085,31 @@ final class QueuePlaybackCoordinator {
             // including the direct-URL fast path below.
             container.enrichTrackMbidInBackground(track: track)
 
+            let cachedEntry = resolverCache.cached(artist: track.artist, title: track.title, album: track.album)
+            // The resolver this play is forced to. A slot's pick whose source
+            // the cache no longer holds is dropped: the retry re-selects, so
+            // Play can't loop on a source that's gone.
+            var forced = forcedResolver
+            if let f = forced, fromLoadOnPlay,
+               !(cachedEntry ?? []).contains(where: { $0.resolver == f && !$0.noMatch }) {
+                NSLog("QUEUE '%@': picked source %@ is gone; re-selecting", track.title, f)
+                forced = nil
+                latestStart?.pickedResolver = nil
+            }
+
             // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
             // play straight through AVPlayer, no resolver round-trip. Skipped for a
             // forced-resolver switch — the user picked a specific cached source, not
-            // the track's (possibly stale) direct URL. An empty cache entry (the
-            // track's re-resolve on screen found nothing, which is usual for a
-            // direct URL) counts as no entry, so Play on a stopped direct-URL
-            // track (a stream that failed, a restored local file) can still
-            // load its URL instead of resolving to nothing.
-            if forcedResolver == nil, let url = track.sourceUrl, !url.isEmpty,
-               resolverCache.cached(artist: track.artist, title: track.title, album: track.album)?.isEmpty ?? true {
+            // the track's (possibly stale) direct URL. On Play on a stopped track,
+            // an empty cache entry (the re-resolve on screen found nothing, usual
+            // for a local file or a direct stream) counts as no entry when the
+            // track is one AVPlayer plays (`PlaybackRouter.avPlayerResolvers`),
+            // so it loads its URL instead of resolving to nothing. A track whose
+            // URL is a service's page always goes through the resolver.
+            let emptyEntryIsNone = fromLoadOnPlay
+                && (track.resolver.map { PlaybackRouter.avPlayerResolvers.contains($0) } ?? false)
+            if forced == nil, let url = track.sourceUrl, !url.isEmpty,
+               cachedEntry == nil || (emptyEntryIsNone && cachedEntry!.isEmpty) {
                 // Stop the engine that was playing, as the routed path does:
                 // without this a Bandcamp or Apple Music track kept playing under
                 // this one, and kept the lock screen / CarPlay.
@@ -3095,11 +3129,11 @@ final class QueuePlaybackCoordinator {
 
             // Two-layer resolution: cache (background pre-resolved) first,
             // on-the-fly fallback on a miss.
-            var ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album)
+            var ranked = cachedEntry
             // Set when the play-time resolve couldn't answer (#566). A cached
             // entry counts as answered: it held sources when it was resolved.
             var resolversCouldNotAnswer = false
-            if let forced = forcedResolver {
+            if let forced {
                 // Manual deck switch (Android skipReselect=true): honor the user's
                 // explicit pick — play ONLY that resolver's cached source, never
                 // re-gate it back to the auto-best.
@@ -3174,7 +3208,7 @@ final class QueuePlaybackCoordinator {
             case .played(let kind, let playedResolver):
                 unplayableRun.started()
                 playedSinceWrap = true
-                playingPick = forcedResolver.map { (trackId: track.id, resolver: $0) }
+                playingPick = forced.map { (trackId: track.id, resolver: $0) }
                 let previousEngine = activeEngine
                 activeEngine = kind
                 await applyEngineHandoff(from: previousEngine, to: kind)
@@ -3236,7 +3270,7 @@ final class QueuePlaybackCoordinator {
                 }
                 // The slot a stop on this track leaves for Play: where this
                 // play aimed, on the source picked by hand if there was one.
-                let pickedResolver = forcedResolver
+                let pickedResolver = forced
                 // Apple Music would play it but the app may not use Apple
                 // Music: stop on the track and say so (Android's sign-in
                 // message, shared). Access is granted in iOS Settings, which
@@ -3322,9 +3356,7 @@ final class QueuePlaybackCoordinator {
                     if PlayFailureKt.failedPlayAwaitsLoad(failure: noSource, advancing: advancing, spinoffMode: spinoffMode) {
                         NSLog("QUEUE '\(track.title)' has no playable source (\(noSource.name)); Play will load it")
                         await haltActiveEngine()
-                        notice = Notice(message: noSource == .noSource
-                                        ? PlayFailureKt.PLAY_NO_SOURCE_MESSAGE
-                                        : PlayFailureKt.PLAY_START_FAILED_MESSAGE)
+                        notice = Notice(message: PlayFailureKt.PLAY_NO_SOURCE_MESSAGE)
                         awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                         return
                     }
@@ -3365,23 +3397,42 @@ final class QueuePlaybackCoordinator {
         isStarting = false
     }
 
-    /// AVPlayer's item failed after it had started playing (a stream that
-    /// dropped): stop on the track with the shared start-failed message, and
-    /// leave it for Play to start again where it stopped (shared `failedLoad`:
-    /// its first 5 s or last 10 s start over). A failure before it started is
-    /// the start handling's (`startAVPlaybackWhenReady`).
+    /// AVPlayer's item failed. After it had started playing (a stream that
+    /// dropped): stop on the track and leave it for Play to start again where
+    /// it stopped (shared `failedLoad`: its first 5 s or last 10 s start over).
+    /// Before it started (a dead link, a URL that isn't media): stop on the
+    /// track for Play at the position that play aimed for, advancing or not
+    /// (Android's `PLAYER_ERROR`, which `failedPlayAwaitsLoad` always stops
+    /// on), unless a newer play has superseded that start. Either way with
+    /// the shared start-failed message; the player reports each item once.
     @MainActor
-    private func avPlaybackFailed(atSec: Double, durationSec: Double) {
-        guard activeEngine == .avPlayer, !isStarting, let track = currentTrack else { return }
-        let picked = pick(for: track)
+    private func avPlaybackFailed(atSec: Double, durationSec: Double, started: Bool) {
+        guard let track = currentTrack else { return }
         let lengthMs = durationSec > 0 ? Int64(durationSec * 1000) : (track.duration?.int64Value ?? 0)
-        player.stop()
-        loadOnPlay = LoadOnPlayKt.failedLoad(
-            track: track, skipReselect: picked != nil,
-            failedAtMs: Int64(atSec * 1000), durationMs: lengthMs,
-            aimedAtMs: 0, pickedResolver: picked)
-        NSLog("QUEUE '%@' stream failed at %.1f s; Play resumes at %.1f s", track.title, atSec,
-              Double(loadOnPlay?.positionMs ?? 0) / 1000)
+        if started {
+            guard activeEngine == .avPlayer, !isStarting else { return }
+            let picked = pick(for: track)
+            player.stop()
+            loadOnPlay = LoadOnPlayKt.failedLoad(
+                track: track, skipReselect: picked != nil,
+                failedAtMs: Int64(atSec * 1000), durationMs: lengthMs,
+                aimedAtMs: 0, pickedResolver: picked)
+            NSLog("QUEUE '%@' stream failed at %.1f s; Play resumes at %.1f s", track.title, atSec,
+                  Double(loadOnPlay?.positionMs ?? 0) / 1000)
+        } else {
+            guard let start = latestStart, start.request == playRequestCount, start.trackId == track.id else {
+                NSLog("QUEUE an earlier start's AVPlayer failure; ignored")
+                return
+            }
+            latestStart = nil
+            player.stop()
+            loadOnPlay = LoadOnPlayKt.failedLoad(
+                track: track, skipReselect: start.pickedResolver != nil,
+                failedAtMs: 0, durationMs: lengthMs,
+                aimedAtMs: start.aimedAtMs, pickedResolver: start.pickedResolver)
+            NSLog("QUEUE '%@' failed to start on AVPlayer; Play will load it at %.1f s", track.title,
+                  Double(start.aimedAtMs) / 1000)
+        }
         notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
     }
 
@@ -3456,6 +3507,7 @@ final class QueuePlaybackCoordinator {
                     player.play()
                     return
                 }
+                // A failed item is reported by the player (`onPlaybackFailed`).
                 if player.status == .failed { return }
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }

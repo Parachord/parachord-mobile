@@ -41,6 +41,10 @@ enum RouteResult: Equatable {
 
 @MainActor
 struct PlaybackRouter {
+    /// Resolvers whose source is a URL AVPlayer plays itself (a local file, a
+    /// direct stream), not a service's page.
+    static let avPlayerResolvers: Set<String> = ["localfiles", "direct"]
+
     let avPlayer: IosAVPlayer
     let musicKit: IosMusicKitPlayer
     let spotify: IosSpotifyConnect
@@ -121,7 +125,7 @@ struct PlaybackRouter {
                     onRefused?(embed.SERVICE_NAME, pageLink, reason)
                 }
 
-            case "localfiles", "direct":
+            case let resolver where Self.avPlayerResolvers.contains(resolver):
                 guard !source.url.isEmpty else { continue }
                 avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver)
                 return .played(.avPlayer, resolver: source.resolver)
