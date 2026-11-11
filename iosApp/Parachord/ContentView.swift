@@ -3322,27 +3322,24 @@ final class QueuePlaybackCoordinator {
                     awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                // Nothing could start because nothing could reach the network
-                // or answer: Apple Music failed to start (offline: MusicKit
-                // fails at once), the device has no network, or the resolvers
-                // couldn't answer (#566; shared `noSourceFailure`). Stop on the
-                // track with the shared message, advancing or not: every next
-                // track would likely fail the same way, and the queue would run
-                // to its end. Play loads it again (`PlayFailure.START_FAILED`
-                // → `LoadOnPlay` `FAILED`, as Android).
+                // On a deck switch, DON'T stop or skip: the user asked to
+                // change source, not to leave the song, so the current
+                // playback stays as it is.
+                if deckSwitch { break }
+                // What failed. Nothing could start because nothing could reach
+                // the network or answer (Apple Music failed to start, the
+                // device has no network, or the resolvers couldn't answer,
+                // #566; shared `noSourceFailure`): START_FAILED, which stops on
+                // the track advancing or not, since every next track would
+                // likely fail the same way. Otherwise a refused embed, or no
+                // source at all.
                 let noSource = PlayFailureKt.noSourceFailure(
                     online: IosNetworkStatus.shared.isOnline,
                     resolversCouldNotAnswer: refusal.resolversCouldNotAnswer)
-                let startFailure = refusal.startFailure ?? (noSource == .startFailed ? PlayFailure.startFailed : nil)
-                if let startFailure, !deckSwitch,
-                   PlayFailureKt.failedPlayAwaitsLoad(failure: startFailure, advancing: advancing, spinoffMode: spinoffMode) {
-                    NSLog("QUEUE '\(track.title)' didn't play (\(startFailure.name)); Play will load it")
-                    await haltActiveEngine()
-                    notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
-                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
-                    return
-                }
-                if refusal.spotifyFailed, !deckSwitch, CarPlaySession.shared.isConnected {
+                let failure: PlayFailure = refusal.startFailure
+                    ?? (noSource == .startFailed ? .startFailed : (refusal.service != nil ? .embedRefused : noSource))
+                let startFailed = failure == .startFailed || failure == .startTimedOut
+                if !startFailed, refusal.spotifyFailed, CarPlaySession.shared.isConnected {
                     // In the car, Spotify couldn't start (it isn't running on
                     // the phone, and the car never opens it) and nothing else
                     // can play the track: stop on it with Android Auto's
@@ -3353,9 +3350,8 @@ final class QueuePlaybackCoordinator {
                     awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                if refusal.service != nil, refusal.reason == "page" || refusal.reason == "unplayable",
-                   !(advancing || spinoffMode),
-                   !deckSwitch, CarPlaySession.shared.phoneAppNotInFront {
+                if !startFailed, refusal.service != nil, refusal.reason == "page" || refusal.reason == "unplayable",
+                   !(advancing || spinoffMode), CarPlaySession.shared.phoneAppNotInFront {
                     // Tapped in the car with Parachord not in front on the
                     // phone: the embed had no window, or may not have been let
                     // start while locked, so its "only plays on its own site"
@@ -3366,58 +3362,46 @@ final class QueuePlaybackCoordinator {
                     awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                if let service = refusal.service,
-                   PlayFailureKt.failedPlayAwaitsLoad(failure: .embedRefused, advancing: advancing, spinoffMode: spinoffMode) {
-                    // A track SoundCloud's widget won't play, and nothing else
-                    // can: say so, with its page on the service (desktop
-                    // parachord#1209, Android's snackbar). Halt what was
-                    // playing; never open the browser by itself.
+                // Stop or skip, and what to say: the shared rule (#616),
+                // Android's too. The car's run of unplayable tracks is asked
+                // only for a skip: in the car with Parachord not in front on
+                // the phone, the third in a row stops (a car that connected
+                // since the run began starts it over).
+                let session = CarPlaySession.shared
+                let refusedMessage = refusal.service.map {
+                    SoundCloudWidget.shared.refusedMessage(serviceName: $0, title: track.title, reason: refusal.reason)
+                }
+                let outcome = PlayFailureKt.unplayableTrackOutcome(
+                    failure: failure, advancing: advancing, spinoffMode: spinoffMode,
+                    refusedMessage: refusedMessage,
+                    carStopsSkip: { [unplayableRun] in
+                        KotlinBoolean(bool: unplayableRun.failed(carWithoutPhone: session.phoneAppNotInFront,
+                                                                 connection: Int32(session.connectionCount)))
+                    })
+                if let stop = outcome as? UnplayableTrackOutcome.Stop {
+                    if stop.byCar {
+                        NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
+                    } else {
+                        NSLog("QUEUE '\(track.title)' didn't play (\(failure.name)); Play will load it")
+                    }
                     await haltActiveEngine()
-                    notice = Notice(
-                        message: SoundCloudWidget.shared.refusedMessage(serviceName: service, title: track.title, reason: refusal.reason),
-                        actionLabel: refusal.pageUrl == nil ? nil : "Open in \(service)",
-                        actionUrl: refusal.pageUrl
-                    )
-                    // The halted embed holds nothing: Play tries the track
-                    // again (it may have been refused for being offline)
-                    // rather than "resuming" a stopped page.
+                    // A refused embed offers its page on the service (desktop
+                    // parachord#1209, Android's snackbar); never opens the
+                    // browser by itself. The halted embed holds nothing, so
+                    // Play tries the track again (it may have been refused for
+                    // being offline) rather than "resuming" a stopped page.
+                    if failure == .embedRefused, !stop.byCar, let service = refusal.service {
+                        notice = Notice(message: stop.message,
+                                        actionLabel: refusal.pageUrl == nil ? nil : "Open in \(service)",
+                                        actionUrl: refusal.pageUrl)
+                    } else {
+                        notice = Notice(message: stop.message)
+                    }
                     awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                // On a deck switch, DON'T stop or skip: the user asked to
-                // change source, not to leave the song, so the current
-                // playback stays as it is.
-                if !deckSwitch {
-                    // Online with resolvers that answered (`NO_SOURCE`, shared
-                    // `failedPlayAwaitsLoad`): a tapped track stops for Play
-                    // with the shared message; the queue moving on (or a
-                    // spinoff) skips it.
-                    if PlayFailureKt.failedPlayAwaitsLoad(failure: noSource, advancing: advancing, spinoffMode: spinoffMode) {
-                        NSLog("QUEUE '\(track.title)' has no playable source (\(noSource.name)); Play will load it")
-                        await haltActiveEngine()
-                        notice = Notice(message: PlayFailureKt.PLAY_NO_SOURCE_MESSAGE)
-                        awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
-                        return
-                    }
-                    // A car that connected since the run began starts it over
-                    // (the shared run checks the connection number itself).
-                    let session = CarPlaySession.shared
-                    if unplayableRun.failed(carWithoutPhone: session.phoneAppNotInFront,
-                                            connection: Int32(session.connectionCount)) {
-                        // In the car with Parachord not in front on the phone,
-                        // the third track in a row nothing could play: stop on
-                        // it rather than run silently through the queue. Play
-                        // retries it. With the phone app open the queue skips
-                        // on, as on the phone.
-                        NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
-                        await haltActiveEngine()
-                        notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
-                        awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
-                        return
-                    }
-                    NSLog("QUEUE '\(track.title)' has no playable source; skipping (advancing)")
-                    advance(.skippedUnplayable)
-                }
+                NSLog("QUEUE '\(track.title)' has no playable source; skipping (advancing)")
+                advance(.skippedUnplayable)
             }
             isStarting = false
         }

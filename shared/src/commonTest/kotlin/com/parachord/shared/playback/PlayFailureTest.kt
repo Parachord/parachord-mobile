@@ -76,4 +76,57 @@ class PlayFailureTest {
         assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = false, resolversCouldNotAnswer = false))
         assertEquals(PlayFailure.START_FAILED, noSourceFailure(online = false, resolversCouldNotAnswer = true))
     }
+
+    // ── unplayableTrackOutcome (#616) ────────────────────────────────
+
+    private val carMessage = com.parachord.shared.car.CarMessages.OPEN_PARACHORD_ON_PHONE
+
+    @Test
+    fun `a tapped track with no source stops with the no-source message`() {
+        assertEquals(
+            UnplayableTrackOutcome.Stop(PLAY_NO_SOURCE_MESSAGE),
+            unplayableTrackOutcome(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = false) { error("not asked") },
+        )
+    }
+
+    @Test
+    fun `no source while the queue advances or a spinoff runs is skipped`() {
+        assertEquals(UnplayableTrackOutcome.Skip, unplayableTrackOutcome(PlayFailure.NO_SOURCE, advancing = true, spinoffMode = false) { false })
+        assertEquals(UnplayableTrackOutcome.Skip, unplayableTrackOutcome(PlayFailure.NO_SOURCE, advancing = false, spinoffMode = true) { false })
+    }
+
+    @Test
+    fun `a failed start stops on the track advancing or not — without asking the car`() {
+        for (failure in listOf(PlayFailure.START_FAILED, PlayFailure.START_TIMED_OUT, PlayFailure.PLAYER_ERROR, PlayFailure.ERROR)) {
+            for (advancing in listOf(false, true)) {
+                assertEquals(
+                    UnplayableTrackOutcome.Stop(PLAY_START_FAILED_MESSAGE),
+                    unplayableTrackOutcome(failure, advancing, spinoffMode = false) { error("the car is asked only for a skip") },
+                    "$failure advancing=$advancing",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a refused embed that's tapped stops with its own message`() {
+        assertEquals(
+            UnplayableTrackOutcome.Stop("SoundCloud only lets Parachord play a preview of X"),
+            unplayableTrackOutcome(PlayFailure.EMBED_REFUSED, advancing = false, spinoffMode = false,
+                refusedMessage = "SoundCloud only lets Parachord play a preview of X") { error("not asked") },
+        )
+        assertEquals(UnplayableTrackOutcome.Skip, unplayableTrackOutcome(PlayFailure.EMBED_REFUSED, advancing = true, spinoffMode = false) { false })
+    }
+
+    @Test
+    fun `the car turns a skip into a stop with its message`() {
+        var asked = 0
+        val outcome = unplayableTrackOutcome(PlayFailure.NO_SOURCE, advancing = true, spinoffMode = false) { asked++; true }
+        assertEquals(UnplayableTrackOutcome.Stop(carMessage, byCar = true), outcome)
+        assertEquals(1, asked)
+        assertEquals(
+            UnplayableTrackOutcome.Stop(carMessage, byCar = true),
+            unplayableTrackOutcome(PlayFailure.EMBED_REFUSED, advancing = true, spinoffMode = false, refusedMessage = "refused") { true },
+        )
+    }
 }
