@@ -384,6 +384,11 @@ struct ContentView: View {
         var query: [String: String] = [:]
         for item in comps.queryItems ?? [] { if let v = item.value { query[item.name] = v } }
         let container = IosContainer.companion.shared
+        // A play link searches before it plays; marked now, so the saved-queue
+        // restore on a cold start doesn't land on top of it (#604).
+        if container.deepLinkStartsPlayback(scheme: url.scheme, host: comps.host, path: segs, query: query) {
+            coordinator.noteLinkPlayRequested()
+        }
         guard let cmd = container.parseDeepLink(
             scheme: url.scheme, host: comps.host, path: segs, query: query) else { return }
         // Protocol play / radio need async resolution (#256) — the sync parse

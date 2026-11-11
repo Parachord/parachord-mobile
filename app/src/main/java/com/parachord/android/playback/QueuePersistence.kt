@@ -129,10 +129,19 @@ class QueuePersistence constructor(
             trackId,
         )
 
+    /** A queue was restored, or a non-empty one saved, in this run ([QueueRestorePolicy.shouldSave]). */
+    @Volatile private var hadQueueThisRun = false
+
     private suspend fun save(
         currentTrack: com.parachord.android.data.db.entity.TrackEntity?,
         snapshot: QueueSnapshot,
     ) {
+        val isEmpty = currentTrack == null && snapshot.upNext.isEmpty()
+        if (!com.parachord.shared.playback.QueueRestorePolicy.shouldSave(isEmpty, hadQueueThisRun)) {
+            Log.d(TAG, "Not saving an empty queue over the last session's (nothing queued yet this run)")
+            return
+        }
+        if (!isEmpty) hadQueueThisRun = true
         try {
             val state = PersistedQueueState(
                 currentTrack = currentTrack?.toSerializable(),
@@ -191,6 +200,7 @@ class QueuePersistence constructor(
             )
 
             val track = state.currentTrack?.toTrackEntity()
+            hadQueueThisRun = true
             Log.d(TAG, "Restored queue: current=${track?.title}, upNext=${state.upNext.size} tracks")
             track
         } catch (e: Exception) {

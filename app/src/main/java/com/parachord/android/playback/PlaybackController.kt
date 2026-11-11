@@ -523,6 +523,16 @@ class PlaybackController constructor(
     }
 
     /**
+     * A `parachord://` play link arrived (#604): it searches before it plays,
+     * so mark the run now and the saved queue isn't restored over it. Only the
+     * mark: a track waiting to be loaded on play stays, in case the link finds
+     * nothing.
+     */
+    fun noteLinkPlayRequested() {
+        playRequestedThisRun = true
+    }
+
+    /**
      * [connect] if needed and wait (up to [CONNECT_WAIT_MS]) for the
      * controller, so a play Android Auto asks for right after starting the
      * app has one: local files and the silent keepalive go through it.

@@ -137,4 +137,17 @@ object QueueRestorePolicy {
      */
     fun shouldApply(hasCurrentTrack: Boolean, playRequested: Boolean): Boolean =
         !hasCurrentTrack && !playRequested
+
+    /**
+     * Whether the queue as it is now may be written over the saved one. An
+     * empty queue is saved only once this run has had a queue (someone
+     * cleared it, or the queue ran out): a run that starts empty, because its
+     * restore was skipped for a play link that then found nothing (#604),
+     * would otherwise wipe the last session's queue for good.
+     *
+     * @param isEmpty no current track and nothing in Up Next.
+     * @param hadQueueThisRun a queue was restored, or a non-empty one saved, in this run.
+     */
+    fun shouldSave(isEmpty: Boolean, hadQueueThisRun: Boolean): Boolean =
+        !isEmpty || hadQueueThisRun
 }

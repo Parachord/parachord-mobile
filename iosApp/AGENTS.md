@@ -225,6 +225,10 @@ The restore applies the saved queue only if nothing has played yet
 (`QueueRestorePolicy`, shared with Android, checked after it read storage):
 a CarPlay tap waits for the bootstrap, but a deep link or a phone tap doesn't,
 and the old queue used to land on top of it (`QUEUE restore skipped` in the log).
+A `parachord://` play link counts as asked for when it arrives, before its
+search (`RootView.handleDeepLink` → `noteLinkPlayRequested`, shared
+`DeepLinkAction.startsPlayback`, #604), and an empty queue isn't saved over the
+last session's until this run has had one (`QueueRestorePolicy.shouldSave`).
 `RootGate` (behind the splash) and `ContentView` both call it; the phone's
 views keep only UI-session work (friends, collection sync, hosted-playlist
 polling, banners, sheets). Don't move playback start-up back into a view.

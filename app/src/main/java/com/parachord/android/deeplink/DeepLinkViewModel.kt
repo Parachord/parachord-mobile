@@ -2,6 +2,7 @@ package com.parachord.android.deeplink
 
 import android.net.Uri
 import com.parachord.shared.platform.Log
+import com.parachord.shared.deeplink.startsPlayback
 import com.parachord.shared.deeplink.DeepLinkAction
 import com.parachord.shared.deeplink.controlLinkShouldToggle
 import androidx.lifecycle.ViewModel
@@ -110,6 +111,9 @@ class DeepLinkViewModel constructor(
 
     fun handleUri(uri: Uri) {
         val action = deepLinkHandler.parse(uri)
+        // A play link searches before it plays; marked now, so the saved-queue
+        // restore on a cold start doesn't land on top of it (#604).
+        if (action.startsPlayback()) playbackController.noteLinkPlayRequested()
         // Actions that need user approval before executing
         val confirmation = buildConfirmation(action)
         if (confirmation != null) {

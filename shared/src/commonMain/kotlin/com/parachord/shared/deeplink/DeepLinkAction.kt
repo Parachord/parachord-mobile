@@ -161,3 +161,23 @@ object ExternalUrlParser {
         }
     }
 }
+
+/**
+ * Whether the link starts a play (#604). A play link searches before it plays,
+ * so the app marks the run as "a play was asked for" when the link arrives:
+ * otherwise, on a cold start, the saved-queue restore ([com.parachord.shared.playback.QueueRestorePolicy])
+ * found nothing playing yet and put the last session's queue over the link's
+ * track. Navigation, queue edits, transport controls and imports don't count.
+ * Both apps use this.
+ */
+fun DeepLinkAction.startsPlayback(): Boolean = when (this) {
+    is DeepLinkAction.Play,
+    is DeepLinkAction.PlayAlbum,
+    is DeepLinkAction.PlayPlaylist,
+    is DeepLinkAction.PlayRadio,
+    is DeepLinkAction.ListenAlong,
+    is DeepLinkAction.SpotifyTrack,
+    is DeepLinkAction.AppleMusicSong,
+    -> true
+    else -> false
+}
