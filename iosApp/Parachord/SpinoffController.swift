@@ -43,12 +43,6 @@ final class SpinoffController {
         let artist = seed.artist, title = seed.title
         guard !artist.isEmpty, !title.isEmpty else { return }
 
-        // Switching from Listen Along → Spinoff: stop following first (without
-        // resuming the friend's track) so the two modes never overlap.
-        if c.playbackContext?.type == ListenAlongController.listenAlongContext {
-            ListenAlongController.shared.stop(restore: false)
-        }
-
         loading = true
         lastEmptySeed = nil
         lastFetchFailed = false
@@ -72,6 +66,9 @@ final class SpinoffController {
             // the next advance (song-end or Next) pulls from it. Banner includes the
             // artist: "Spinoff from <track> by <artist>".
             guard let c = self.coordinator else { return }
+            // Starting the spinoff ends a Listen Along session silently
+            // (`beginSpinoff` reports it, as Android does once its pool
+            // exists): with no similar tracks the session carries on.
             c.beginSpinoff(pool: pool, displayName: PlaybackMessages.shared.spinoffFrom(title: title, artist: artist))
             c.notice = QueuePlaybackCoordinator.Notice(
                 message: PlaybackMessages.shared.spinningOff(title: title, artist: artist), showInCar: false)

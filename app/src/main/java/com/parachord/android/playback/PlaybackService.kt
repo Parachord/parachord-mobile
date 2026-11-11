@@ -1637,6 +1637,9 @@ class PlaybackService : MediaLibraryService() {
             // error state, where play does nothing). The controller starts it
             // through the full pipeline, where it was.
             if (playbackController.needsLoadOnPlay) { playbackController.togglePlayPause(); return }
+            // A user's resume (lock screen, headphones, the car) that skips
+            // togglePlayPause: the listener may play something else instead.
+            if (playbackController.onSessionPlayPause(play = true)) return
             super.play()
         }
 
@@ -1666,6 +1669,8 @@ class PlaybackService : MediaLibraryService() {
                 return
             }
             if (externalMode) { playbackController.togglePlayPause(); return }
+            // A user's pause that skips togglePlayPause, told to the listener.
+            playbackController.onSessionPlayPause(play = false)
             super.pause()
         }
 
@@ -1700,7 +1705,8 @@ class PlaybackService : MediaLibraryService() {
         override fun getRepeatMode(): Int = stateHolder.state.value.repeatMode.toPlayerRepeatMode()
 
         override fun setRepeatMode(repeatMode: Int) {
-            playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))
+            // Refused (Listen Along): re-publish the real value, as for shuffle.
+            if (!playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))) publishRepeatMode()
         }
 
         // Parachord's shuffle (its own queue order), never ExoPlayer's. A
@@ -1737,7 +1743,8 @@ class PlaybackService : MediaLibraryService() {
         /**
          * The last track of a non-empty queue under Parachord's repeat all:
          * Next starts the queue again ([com.parachord.shared.playback.advanceAction]).
-         * Listen Along counts repeat as off, as the controller does.
+         * Never during Listen Along: the session owns the end of its song, and
+         * repeat can't be changed while it runs.
          */
         private fun nextWrapsToStart(): Boolean {
             val state = stateHolder.state.value

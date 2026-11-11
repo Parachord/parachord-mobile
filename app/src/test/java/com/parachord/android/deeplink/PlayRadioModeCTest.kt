@@ -45,7 +45,7 @@ class PlayRadioModeCTest {
     private fun buildHandler(
         resolver: ProtocolInputResolver = mockk(relaxed = true),
         teardown: ProtocolPlayTeardown = mockk<ProtocolPlayTeardown>().also {
-            coEvery { it.prepareForNewPlayback() } just runs
+            coEvery { it.prepareForNewPlayback(any()) } just runs
         },
         playbackController: PlaybackController = mockk(relaxed = true),
         trackResolverCache: TrackResolverCache = mockk(relaxed = true),
@@ -70,7 +70,7 @@ class PlayRadioModeCTest {
         val resolver = mockk<ProtocolInputResolver>()
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
-        coEvery { td.prepareForNewPlayback() } just runs
+        coEvery { td.prepareForNewPlayback(any()) } just runs
         val handler = buildHandler(resolver = resolver, teardown = td, playbackController = pc)
         val dispatcher = buildDispatcher(pc, td, handler)
 
@@ -104,6 +104,8 @@ class PlayRadioModeCTest {
 
         assertEquals("Inline Pool", nameSlot.captured)
         assertNull(refillSlot.captured)
+        // A radio ends Listen Along silently.
+        coVerify(exactly = 1) { td.prepareForNewPlayback(true) }
     }
 
     @Test
@@ -115,7 +117,7 @@ class PlayRadioModeCTest {
         }
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
-        coEvery { td.prepareForNewPlayback() } just runs
+        coEvery { td.prepareForNewPlayback(any()) } just runs
         val handler = buildHandler(resolver = resolver, teardown = td, playbackController = pc)
         val dispatcher = buildDispatcher(pc, td, handler)
 
@@ -160,7 +162,7 @@ class PlayRadioModeCTest {
         assertTrue(result is PlayRadioResult.Failed)
         // Match handle(PlayAlbum)'s convention exactly: empty-tracks bails
         // BEFORE teardown, so neither teardown nor the controller fire.
-        coVerify(exactly = 0) { td.prepareForNewPlayback() }
+        coVerify(exactly = 0) { td.prepareForNewPlayback(any()) }
         coVerify(exactly = 0) { pc.startPoolBasedSpinoff(any(), any(), any()) }
     }
 
@@ -281,7 +283,7 @@ class PlayRadioModeCTest {
         }
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
-        coEvery { td.prepareForNewPlayback() } just runs
+        coEvery { td.prepareForNewPlayback(any()) } just runs
         val handler = buildHandler(resolver = resolver, teardown = td, playbackController = pc)
         val dispatcher = buildDispatcher(pc, td, handler)
 
@@ -307,7 +309,7 @@ class PlayRadioModeCTest {
         }
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
-        coEvery { td.prepareForNewPlayback() } just runs
+        coEvery { td.prepareForNewPlayback(any()) } just runs
         val handler = buildHandler(resolver = resolver, teardown = td, playbackController = pc)
         val dispatcher = buildDispatcher(pc, td, handler)
 
@@ -360,7 +362,7 @@ class PlayRadioModeCTest {
         }
         val pc = mockk<PlaybackController>(relaxed = true)
         val td = mockk<ProtocolPlayTeardown>()
-        coEvery { td.prepareForNewPlayback() } just runs
+        coEvery { td.prepareForNewPlayback(any()) } just runs
         val handler = buildHandler(resolver = resolver, teardown = td, playbackController = pc)
         val dispatcher = buildDispatcher(pc, td, handler)
 
@@ -372,7 +374,7 @@ class PlayRadioModeCTest {
         )
 
         coVerifyOrder {
-            td.prepareForNewPlayback()
+            td.prepareForNewPlayback(any())
             pc.startPoolBasedSpinoff(any(), any(), any())
         }
     }

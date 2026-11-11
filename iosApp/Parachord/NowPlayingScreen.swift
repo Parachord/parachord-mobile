@@ -306,7 +306,10 @@ struct PCNowPlaying: View {
                 Image(systemName: coordinator.repeatMode == .one ? "repeat.1" : "repeat")
                     .font(.system(size: 20))
                     .foregroundStyle(coordinator.repeatMode == .off ? .white.opacity(0.55) : PC.accent)
+                    .opacity(coordinator.repeatAllowed ? 1 : 0.4)
             }
+            // Refused during Listen Along, as shuffle is.
+            .disabled(!coordinator.repeatAllowed)
         }
         .buttonStyle(.plain)
         .padding(.vertical, 4)

@@ -200,7 +200,7 @@ class DeepLinkViewModel constructor(
                         // would inherit (and then immediately undo) the
                         // prior context. Per issue #120 item D and desktop
                         // parity rules.
-                        protocolPlayTeardown.prepareForNewPlayback()
+                        protocolPlayTeardown.prepareForNewPlayback(endListenAlongSilently = false)
                         val trackEntity = TrackEntity(
                             id = source.url,
                             title = action.title,
@@ -445,8 +445,8 @@ class DeepLinkViewModel constructor(
             is ListenAlongResult.Started -> {
                 // MainActivity collects this and calls
                 // mainViewModel.startListenAlong(friend), which
-                // internally runs stopListenAlong(silent=true) before
-                // starting the new loop — the swap is atomic.
+                // replaces any active session before starting the new
+                // loop — the swap is atomic.
                 _navEvents.emit(DeepLinkNavEvent.StartListenAlong(r.friend))
             }
             is ListenAlongResult.NotPlaying -> {

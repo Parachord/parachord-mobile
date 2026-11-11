@@ -97,7 +97,7 @@ class PlayRadioDispatcher(
             playbackController.setPlaybarLoading(false)
         }
 
-        teardown.prepareForNewPlayback()
+        teardown.prepareForNewPlayback(endListenAlongSilently = true)
         val displayName = action.name
             ?: if (!mode.title.isNullOrBlank()) "Radio: ${mode.artist} – ${mode.title}"
             else "Radio: ${mode.artist}"

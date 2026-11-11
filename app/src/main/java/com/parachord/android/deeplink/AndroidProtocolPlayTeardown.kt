@@ -4,6 +4,8 @@ import com.parachord.android.playback.PlaybackController
 import com.parachord.shared.deeplink.ProtocolPlayTeardown
 import com.parachord.shared.platform.Log
 import kotlin.concurrent.Volatile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private const val TAG = "ProtocolPlayTeardown"
 
@@ -33,18 +35,19 @@ class AndroidProtocolPlayTeardown constructor(
      * isn't running yet either, so there's nothing to stop.
      */
     @Volatile
-    private var listenAlongStopper: () -> Unit = {}
+    private var listenAlongStopper: (silently: Boolean) -> Unit = {}
 
     /**
      * Wire the listen-along stopper from `MainActivity` (or `MainViewModel.init`).
      * Call once after `MainViewModel` is constructed; subsequent calls
-     * replace the previous stopper.
+     * replace the previous stopper. Its argument is
+     * [ProtocolPlayTeardown.prepareForNewPlayback]'s `endListenAlongSilently`.
      */
-    fun setListenAlongStopper(stop: () -> Unit) {
+    fun setListenAlongStopper(stop: (silently: Boolean) -> Unit) {
         listenAlongStopper = stop
     }
 
-    override suspend fun prepareForNewPlayback() {
+    override suspend fun prepareForNewPlayback(endListenAlongSilently: Boolean) {
         // 1. Exit spinoff — must run BEFORE queue clear / new context. If
         //    we let `handlePlay`'s internal exit run, it executes AFTER the
         //    new context is set and undoes our work.
@@ -56,8 +59,9 @@ class AndroidProtocolPlayTeardown constructor(
 
         // 2. Stop listen-along — without this, the next ticker poll
         //    reverts the new track to whatever the followed user is on.
+        //    The session is main-thread only.
         try {
-            listenAlongStopper()
+            withContext(Dispatchers.Main.immediate) { listenAlongStopper(endListenAlongSilently) }
         } catch (e: Exception) {
             Log.w(TAG, "stopListenAlong failed: ${e.message}")
         }

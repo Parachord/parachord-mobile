@@ -498,12 +498,15 @@ fun NowPlayingScreen(
                             )
                         }
 
-                        // Repeat: off → all → one → off (PlaybackController.cycleRepeatMode)
+                        // Repeat: off → all → one → off (PlaybackController.cycleRepeatMode).
+                        // Disabled during Listen Along, which follows the friend instead.
                         val repeatMode = playbackState.repeatMode
                         IconButton(
                             onClick = { haptic(); viewModel.cycleRepeatMode() },
+                            enabled = !inListenAlong,
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = if (repeatMode != RepeatMode.OFF) ActiveControlColor else InactiveControlColor,
+                                disabledContentColor = InactiveControlColor.copy(alpha = 0.3f),
                             ),
                         ) {
                             Icon(

@@ -76,6 +76,30 @@ class ForwardingPlayerRepeatTest {
         verify { f.controller.setRepeatMode(RepeatMode.OFF) }
     }
 
+    @Test fun `a refused repeat re-publishes the current value`() {
+        // Refused during Listen Along: only this event puts the car's button back.
+        val f = fixture()
+        every { f.controller.setRepeatMode(any()) } returns false
+        val listener = mockk<Player.Listener>(relaxed = true)
+        f.wrapper.addListener(listener)
+
+        f.wrapper.repeatMode = Player.REPEAT_MODE_ALL
+
+        verify(exactly = 1) { listener.onRepeatModeChanged(Player.REPEAT_MODE_OFF) }
+        verify(exactly = 0) { listener.onRepeatModeChanged(Player.REPEAT_MODE_ALL) }
+    }
+
+    @Test fun `an accepted repeat is left to the state collector`() {
+        val f = fixture()
+        every { f.controller.setRepeatMode(any()) } returns true
+        val listener = mockk<Player.Listener>(relaxed = true)
+        f.wrapper.addListener(listener)
+
+        f.wrapper.repeatMode = Player.REPEAT_MODE_ALL
+
+        verify(exactly = 0) { listener.onRepeatModeChanged(any()) }
+    }
+
     @Test fun `setRepeatMode does not touch the delegate`() {
         for (external in listOf(false, true)) {
             val f = fixture(externalMode = external)

@@ -16,7 +16,11 @@ import com.parachord.shared.model.Resource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.platform.randomUUID
+import com.parachord.shared.playback.ListenAlongPoll
+import com.parachord.shared.playback.ListenAlongPollResult
+import com.parachord.shared.playback.listenAlongPollOf
 import com.parachord.shared.settings.SettingsStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -103,51 +107,90 @@ class FriendsRepository(
     suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
         withContext(Dispatchers.Default) {
             try {
-                when (service) {
-                    "listenbrainz" -> {
-                        val listen = listenBrainzClient.getPlayingNow(user) ?: return@withContext null
-                        buildTransientFriend(
-                            service = service,
-                            user = user,
-                            trackName = listen.trackName,
-                            trackArtist = listen.artistName,
-                            trackAlbum = listen.releaseName,
-                            artworkUrl = null,
-                        )
-                    }
-                    "lastfm" -> {
-                        val response = lastFmClient.getUserRecentTracks(
-                            user = user,
-                            apiKey = lastFmApiKey,
-                            limit = 1,
-                        )
-                        val first = response.recenttracks?.track?.firstOrNull() ?: return@withContext null
-                        // Only treat the row as "now playing" when Last.fm
-                        // explicitly flags it. Unlike refreshLastFmActivity()
-                        // we don't sanity-check against a recent scrobble
-                        // here — the deeplink path is one-shot and the user
-                        // is already opting in by sharing the link; even a
-                        // slightly stale flag is acceptable, and the polling
-                        // loop will recover on the next tick.
-                        if (first.attr?.nowplaying != "true") return@withContext null
-                        val artist = first.artist?.name?.takeIf { it.isNotBlank() }
-                            ?: return@withContext null
-                        val title = first.name.takeIf { it.isNotBlank() }
-                            ?: return@withContext null
-                        buildTransientFriend(
-                            service = service,
-                            user = user,
-                            trackName = title,
-                            trackArtist = artist,
-                            trackAlbum = first.album?.name?.takeIf { it.isNotBlank() },
-                            artworkUrl = first.image.bestImageUrl(),
-                        )
-                    }
-                    else -> null
-                }
+                transientNowPlaying(service, user, strict = false)
             } catch (e: Exception) {
                 Log.w(TAG, "fetchTransientFriendNowPlaying failed for $service:$user", e)
                 null
+            }
+        }
+
+    /**
+     * [fetchTransientFriendNowPlaying]'s lookup. With [strict] a failed request throws
+     * (the ListenBrainz client's own swallowing is bypassed) so the Listen Along poll can
+     * tell it from "not listening"; without it the client answers null as before.
+     */
+    private suspend fun transientNowPlaying(service: String, user: String, strict: Boolean): Friend? {
+        return when (service) {
+            "listenbrainz" -> {
+                val listen = (if (strict) listenBrainzClient.getPlayingNowOrThrow(user)
+                else listenBrainzClient.getPlayingNow(user)) ?: return null
+                buildTransientFriend(
+                    service = service,
+                    user = user,
+                    trackName = listen.trackName,
+                    trackArtist = listen.artistName,
+                    trackAlbum = listen.releaseName,
+                    artworkUrl = null,
+                )
+            }
+            "lastfm" -> {
+                val response = lastFmClient.getUserRecentTracks(
+                    user = user,
+                    apiKey = lastFmApiKey,
+                    limit = 1,
+                )
+                val first = response.recenttracks?.track?.firstOrNull() ?: return null
+                // Only treat the row as "now playing" when Last.fm
+                // explicitly flags it. Unlike refreshLastFmActivity()
+                // we don't sanity-check against a recent scrobble
+                // here — the deeplink path is one-shot and the user
+                // is already opting in by sharing the link; even a
+                // slightly stale flag is acceptable, and the polling
+                // loop will recover on the next tick.
+                if (first.attr?.nowplaying != "true") return null
+                val artist = first.artist?.name?.takeIf { it.isNotBlank() } ?: return null
+                val title = first.name.takeIf { it.isNotBlank() } ?: return null
+                buildTransientFriend(
+                    service = service,
+                    user = user,
+                    trackName = title,
+                    trackArtist = artist,
+                    trackAlbum = first.album?.name?.takeIf { it.isNotBlank() },
+                    artworkUrl = first.image.bestImageUrl(),
+                )
+            }
+            else -> null
+        }
+    }
+
+    /**
+     * One Listen Along poll of [friend] (#585): what they're playing, that they aren't
+     * playing anything, or that the request couldn't answer. A failed request is never
+     * reported as "not listening". [ListenAlongPollResult.friend] is the refreshed friend
+     * (null on [ListenAlongPoll.Failed], or when a saved friend's row is gone). For a
+     * transient friend (a `parachord://listen-along` link) a [ListenAlongPoll.NotListening]
+     * result carries the friend that was passed in.
+     */
+    suspend fun pollListenAlong(friend: Friend): ListenAlongPollResult =
+        withContext(Dispatchers.Default) {
+            try {
+                if (friend.transient) {
+                    val now = transientNowPlaying(friend.service, friend.username, strict = true)
+                    ListenAlongPollResult(listenAlongPollOf(now), now ?: friend)
+                } else {
+                    refreshActivity(friend, strict = true)
+                    val fresh = friendDao.getFriendById(friend.id)
+                    ListenAlongPollResult(listenAlongPollOf(fresh), fresh)
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (e is LastFmHiddenListeningException) {
+                    // A transient friend's hidden profile: an answer, not a failure.
+                    ListenAlongPollResult(ListenAlongPoll.NotListening, friend)
+                } else {
+                    Log.w(TAG, "Listen Along poll failed for ${friend.service}:${friend.username}", e)
+                    ListenAlongPollResult(ListenAlongPoll.Failed, null)
+                }
             }
         }
 
@@ -440,10 +483,7 @@ class FriendsRepository(
      */
     suspend fun refreshFriendActivity(friend: Friend) = withContext(Dispatchers.Default) {
         try {
-            when (friend.service) {
-                "lastfm" -> refreshLastFmActivity(friend)
-                "listenbrainz" -> refreshListenBrainzActivity(friend)
-            }
+            refreshActivity(friend, strict = false)
         } catch (e: LastFmRateLimitedException) {
             // Expected transient under load — the [LastFmClient] rate-limit
             // gate is doing its job (cooldown is active, short-circuiting
@@ -456,6 +496,14 @@ class FriendsRepository(
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "Failed to refresh activity for ${friend.username}", e)
+        }
+    }
+
+    /** The refresh itself; [strict] makes a failed ListenBrainz request throw instead of caching "nothing playing". */
+    private suspend fun refreshActivity(friend: Friend, strict: Boolean) {
+        when (friend.service) {
+            "lastfm" -> refreshLastFmActivity(friend)
+            "listenbrainz" -> refreshListenBrainzActivity(friend, strict)
         }
     }
 
@@ -558,8 +606,9 @@ class FriendsRepository(
         )
     }
 
-    private suspend fun refreshListenBrainzActivity(friend: Friend) {
-        val listens = listenBrainzClient.getRecentListens(friend.username, count = 1)
+    private suspend fun refreshListenBrainzActivity(friend: Friend, strict: Boolean) {
+        val listens = if (strict) listenBrainzClient.getRecentListensOrThrow(friend.username, count = 1)
+        else listenBrainzClient.getRecentListens(friend.username, count = 1)
         val listen = listens.firstOrNull()
         friendDao.updateCachedTrack(
             id = friend.id,

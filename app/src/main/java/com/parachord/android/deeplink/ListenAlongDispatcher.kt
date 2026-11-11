@@ -57,8 +57,8 @@ sealed class ListenAlongResult {
  * [ProtocolPlayTeardown.prepareForNewPlayback] runs three steps:
  * exit-spinoff, stop-listen-along, clear-queue. Using it here would
  * stop a possibly-active listen-along loop right before
- * `MainViewModel.startListenAlong` (which itself starts by calling
- * `stopListenAlong(silent=true)`) — a stop+start race where the
+ * `MainViewModel.startListenAlong` (which itself replaces any active
+ * session, keeping the suspended queue) — a stop+start race where the
  * dying loop's last poll tick can clobber the new friend's track.
  * [ProtocolPlayTeardown.prepareForListenAlongHandover] runs only steps
  * 1 and 3, leaving the listen-along stop to `startListenAlong`.

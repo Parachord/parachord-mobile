@@ -64,7 +64,8 @@ class ProtocolPlayHandlerTest {
         val handler = buildHandler(teardown = teardown, playbackController = playback)
         handler.handle(DeepLinkAction.PlayAlbum(ProtocolPlayInput(spotify = "spotify:album:abc")))
         coVerifyOrder {
-            teardown.prepareForNewPlayback()
+            // A play link ends Listen Along with its message (not silently).
+            teardown.prepareForNewPlayback(false)
             playback.playTrack(any(), any())
         }
     }
@@ -78,7 +79,7 @@ class ProtocolPlayHandlerTest {
         )
         val result = handler.handle(DeepLinkAction.PlayAlbum(ProtocolPlayInput(spotify = "spotify:album:abc")))
         assertTrue(result is ProtocolPlayResult.Failed)
-        coVerify(exactly = 0) { teardown.prepareForNewPlayback() }
+        coVerify(exactly = 0) { teardown.prepareForNewPlayback(any()) }
     }
 
     @Test
@@ -93,7 +94,7 @@ class ProtocolPlayHandlerTest {
         val handler = buildHandler(resolver = resolver, teardown = teardown)
         val result = handler.handle(DeepLinkAction.PlayAlbum(ProtocolPlayInput(spotify = "spotify:album:abc")))
         assertTrue(result is ProtocolPlayResult.Failed)
-        coVerify(exactly = 0) { teardown.prepareForNewPlayback() }
+        coVerify(exactly = 0) { teardown.prepareForNewPlayback(any()) }
     }
 
     @Test

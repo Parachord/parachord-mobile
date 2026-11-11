@@ -321,7 +321,8 @@ class QueueManager {
      * [restoredHistoryInQueue] and [restoredUpNextInLap] pair with
      * [restoredHistory] and [restoredUpNext]; a missing list or entry (an older
      * saved queue) counts as in the lap. [restoredCurrentInLap] and
-     * [restoredCurrentIsPoolTrack] describe the restored current track.
+     * [restoredCurrentIsPoolTrack] describe the restored current track. A Listen Along
+     * [context] isn't restored (no session runs after a restart).
      */
     fun restoreState(
         restoredUpNext: List<Track>,
@@ -345,7 +346,9 @@ class QueueManager {
             playHistory.add(Entry(track, restoredHistoryInQueue?.getOrNull(i) ?: true))
         }
         originalOrder = restoredOriginalOrder
-        _playbackContext = context
+        // No Listen Along session survives a restart, so its context doesn't either:
+        // left on, repeat would stay refused and Now Playing's Next disabled.
+        _playbackContext = context?.takeUnless { it.type == LISTEN_ALONG_CONTEXT }
         _shuffleEnabled = shuffle
         emitSnapshot()
     }

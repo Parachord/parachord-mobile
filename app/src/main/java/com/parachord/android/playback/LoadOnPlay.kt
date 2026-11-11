@@ -46,6 +46,19 @@ data class LoadOnPlay(
 internal fun loadOnPlayTarget(pending: LoadOnPlay?, currentTrackId: String?): LoadOnPlay? =
     pending?.takeIf { currentTrackId != null && it.track.id == currentTrackId }
 
+/**
+ * What the idle timeout leaves for Play when it stops the paused external
+ * [current] track at [positionMs]: a slot already [pending] for that track
+ * (a failed play, which re-chooses its source; a queue given back paused),
+ * else [LoadOnPlay.Why.IDLE_STOPPED], which keeps the source and resumes
+ * where it was paused.
+ */
+internal fun idleTimeoutLoad(pending: LoadOnPlay?, current: TrackEntity?, positionMs: Long): LoadOnPlay? {
+    if (current == null) return null
+    loadOnPlayTarget(pending, current.id)?.let { return it }
+    return LoadOnPlay(current, positionMs, skipReselect = true, why = LoadOnPlay.Why.IDLE_STOPPED)
+}
+
 /** How a play ended with nothing playing: shared with iOS (`shared/.../playback/PlayFailure.kt`). */
 typealias PlayFailure = com.parachord.shared.playback.PlayFailure
 
@@ -91,10 +104,13 @@ internal enum class FailedTrackStop {
 /**
  * [FailedTrackStop] for a track that can't play: [isExternal] when an external
  * handler (Spotify, Apple Music, an embed) was playing before it, [autoSkip]
- * when the queue skips past it ([com.parachord.shared.playback.failedPlayAwaitsLoad] false).
+ * when the queue skips past it ([com.parachord.shared.playback.failedPlayAwaitsLoad] false),
+ * [followed] when a listener drives the track and plays its next one
+ * ([PlaybackController.drivesTrack], Listen Along): both keep the foreground,
+ * so the next track can start with the screen off.
  */
-internal fun failedTrackStop(isExternal: Boolean, autoSkip: Boolean): FailedTrackStop = when {
+internal fun failedTrackStop(isExternal: Boolean, autoSkip: Boolean, followed: Boolean = false): FailedTrackStop = when {
     !isExternal -> FailedTrackStop.CLEAR_LOCAL_PLAYER
-    autoSkip -> FailedTrackStop.KEEP_EXTERNAL_FOREGROUND
+    autoSkip || followed -> FailedTrackStop.KEEP_EXTERNAL_FOREGROUND
     else -> FailedTrackStop.LEAVE_EXTERNAL
 }

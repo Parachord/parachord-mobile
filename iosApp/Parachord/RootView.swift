@@ -424,7 +424,7 @@ struct ContentView: View {
         }
         switch r.kind {
         case "play":
-            listenAlong.stop()
+            // setQueue ends a Listen Along session (the user played something else).
             coordinator.exitSpinoff()
             // A plugin-looked-up link (#502) brings its sources; keep them.
             if let first = r.tracks.first, !r.sources.isEmpty {
@@ -452,13 +452,14 @@ struct ContentView: View {
         }
         switch r.kind {
         case "play":
-            listenAlong.stop()
+            // setQueue ends a Listen Along session (the user played something else).
             coordinator.exitSpinoff()
             coordinator.setQueue(r.tracks, startIndex: 0,
                                  context: PlaybackContext(type: "playlist", name: r.name, id: nil))
             dlAck("Playing \(r.name)")
         case "radioPool":
-            listenAlong.stop()
+            // A radio ends a Listen Along session silently, dropping its
+            // suspended queue (`beginRadio` reports it as a spinoff starting).
             // End a running spinoff first, so the radio restores the context
             // from before it, not the old spinoff's.
             coordinator.exitSpinoff()

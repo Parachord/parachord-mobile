@@ -142,8 +142,9 @@ class ProtocolPlayHandler constructor(
             ?: "Radio"
 
         // Step 2: teardown — matches handle(PlayAlbum/PlayPlaylist) ordering
-        // (only fire after we know we have something to play).
-        teardown.prepareForNewPlayback()
+        // (only fire after we know we have something to play). A radio ends
+        // Listen Along silently.
+        teardown.prepareForNewPlayback(endListenAlongSilently = true)
 
         // Step 3: build TrackEntity list with stable protocol-radio-{ts}-{idx} IDs.
         val ts = currentTimeMillis()
@@ -195,7 +196,9 @@ class ProtocolPlayHandler constructor(
         }
 
         // Step 2: teardown — spinoff → listen-along → queue clear, in order.
-        teardown.prepareForNewPlayback()
+        // A play link is the user playing something else: Listen Along ends
+        // with its message.
+        teardown.prepareForNewPlayback(endListenAlongSilently = false)
 
         // Step 3: build TrackEntity list with stable IDs.
         val ts = currentTimeMillis()
