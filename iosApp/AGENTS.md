@@ -327,9 +327,17 @@ there**, so several gaps only surface on iOS:
   `.axe` or `resolver-loader.js`.** `applemusic.axe` calls
   `window.iTunesRateLimiter.fetch(url)` for its no-auth iTunes Search. The
   desktop/Android hosts define it; iOS must too (added to `BOOTSTRAP_JS` as a
-  passthrough — JSC has no `setTimeout` for a real throttle gap, so throttle a
-  layer up in `IosTrackResolverCache`). If a `.axe` errors with "undefined is
-  not an object (evaluating 'window.X')", X is a missing host global — add it.
+  passthrough; throttling happens a layer up in `IosTrackResolverCache`). If a
+  `.axe` errors with "undefined is not an object (evaluating 'window.X')", X is
+  a missing host global — add it.
+- **`setTimeout` / `clearTimeout` are host globals too** (#606). JSC has no
+  timers; `listenbrainz.axe` waits between retries with one. `BOOTSTRAP_JS`
+  defines them over `NativeBridge.setTimeout(id, ms)`, which Swift attaches
+  (`DispatchQueue.main.asyncAfter`, then `window.__timerFire(id)` on the
+  context's thread).
+- **Plugin requests carry Parachord's User-Agent** unless the plugin sets one
+  (`performFetch`); plugins now call `api.listenbrainz.org`, and MetaBrainz
+  blocks clients that don't identify themselves.
 - **The Apple Music hooks are host globals too.** `applemusic.axe` calls
   `window.appleMusicSearchWithMusicKit` / `appleMusicLookupSong` /
   `appleMusicLookupAlbum` / `appleMusicLookupPlaylist` before iTunes (whose

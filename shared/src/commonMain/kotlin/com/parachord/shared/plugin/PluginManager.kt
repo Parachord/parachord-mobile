@@ -21,6 +21,9 @@ private const val LOOKUP_POLL_INTERVAL_MS = 100L
 /** Album search/lookup polls a little past the catalog loader's 8s step cap, so
  *  the loader's timeout (not the poll) decides when a slow catalog gives up. */
 private const val ALBUM_POLL_ATTEMPTS = 85
+/** A recommendation provider gets 20 s, desktop's `CACHE_TTL.recommendationProvider`:
+ *  nobody waits on it, and ListenBrainz's own retries can take several seconds. */
+private const val RECOMMENDATION_POLL_ATTEMPTS = 200
 
 /**
  * Central wrapper for .axe plugin loading and execution.
@@ -484,6 +487,37 @@ class PluginManager constructor(
         // The poll returns the JSON-stringified answer: a quoted URL.
         return runCatching { Json.parseToJsonElement(raw).jsonPrimitive.contentOrNull }.getOrNull()
             ?.takeIf { it.isNotBlank() }
+    }
+
+    // ── Recommendations (capabilities.recommendations, #606) ───────────
+
+    /**
+     * Loaded plugins that can recommend music (`capabilities.recommendations`,
+     * desktop parachord#1309), as (id, name) in [plugins] order (by name).
+     * Content resolvers and meta-services alike.
+     */
+    suspend fun recommendationResolvers(): List<Pair<String, String>> {
+        ensureInitialized()
+        return plugins.value.filter { it.capabilities["recommendations"] == true }.map { it.id to it.name }
+    }
+
+    /**
+     * One plugin's `getRecommendations(config)`, through the resolver-loader:
+     * the raw JSON array of sections (`[]` is a miss). The plugin reads the
+     * config the host wrote into it ([resolverConfigProvider]).
+     *
+     * Throws when the plugin threw or didn't answer in time: the contract says
+     * a failed request throws and a miss is an empty answer, so a network blip
+     * is never read as "this service has nothing for you".
+     */
+    suspend fun getRecommendations(resolverId: String): String {
+        ensureInitialized()
+        return pollAsync(
+            "rec",
+            "await window.__resolverLoader.getRecommendations('${escapeForJs(resolverId)}')",
+            attempts = RECOMMENDATION_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        ) ?: "[]"
     }
 
     /**

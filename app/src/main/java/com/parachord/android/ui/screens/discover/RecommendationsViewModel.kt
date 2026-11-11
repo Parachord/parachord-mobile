@@ -163,6 +163,10 @@ class RecommendationsViewModel constructor(
         album = album,
         duration = duration,
         artworkUrl = artworkUrl,
+        // The ids the service sent (ListenBrainz's recording MBID): the exact-id
+        // match tier and scrobbles use them with no mapper lookup (#606).
+        recordingMbid = recordingMbid,
+        isrc = isrc,
     )
 
     /**
