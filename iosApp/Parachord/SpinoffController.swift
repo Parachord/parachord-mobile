@@ -43,10 +43,10 @@ final class SpinoffController {
         let artist = seed.artist, title = seed.title
         guard !artist.isEmpty, !title.isEmpty else { return }
 
-        // Switching from Listen Along → Spinoff: stop following first (without
-        // resuming the friend's track) so the two modes never overlap.
+        // Switching from Listen Along → Spinoff: end the session silently and
+        // drop the suspended queue, so the two modes never overlap.
         if c.playbackContext?.type == ListenAlongController.listenAlongContext {
-            ListenAlongController.shared.stop(restore: false)
+            ListenAlongController.shared.endSilently()
         }
 
         loading = true

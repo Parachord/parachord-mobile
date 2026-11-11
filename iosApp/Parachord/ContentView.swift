@@ -1859,6 +1859,17 @@ final class IosAVPlayer {
 // the right engine (AVPlayer / MusicKit / Spotify Connect), with unified
 // engine-agnostic now-playing state for the UI.
 
+/// A user's playback action the coordinator reports to its listener
+/// (`QueuePlaybackCoordinator.onUserAction`), Android's `UserPlaybackAction`.
+enum UserPlaybackAction {
+    /// Next or Previous (the lock screen, CarPlay, headphones, the mini player).
+    case skip
+    /// The user started something else (a queue, a queue row).
+    case playSomethingElse
+    case pause
+    case resume
+}
+
 @Observable
 final class QueuePlaybackCoordinator {
 
@@ -1963,11 +1974,28 @@ final class QueuePlaybackCoordinator {
     /// panel's "Playing from: …" context banner/link. Nil for ad-hoc queues.
     var playbackContext: PlaybackContext?
 
-    /// Listen Along (#235/#246): when set, a NATURAL track-end defers to this hook
-    /// (the controller plays the friend's next track) instead of the single-track
-    /// queue just stopping — so each listen-along song plays to its end and
-    /// scrobbles. Nil for normal playback. Set on start, cleared on stop.
-    var onTrackFinished: (() -> Void)?
+    /// Called when the current track ENDED (`.trackEnded` only, not an
+    /// unplayable track being skipped). True means the listener (Listen Along)
+    /// handled it: the queue doesn't advance, replay (repeat one) or wrap
+    /// (repeat all). If the listener started no play, the ended track stays on
+    /// screen, not playing (`holdEndedTrack`).
+    @ObservationIgnored var onTrackFinished: (() -> Bool)?
+
+    /// Called when `track` couldn't play (no source, a start that failed or
+    /// timed out, an embed refused with no fallback). True means the listener
+    /// handled it: no notice and no skip. Play still loads the track unless the
+    /// listener plays another.
+    @ObservationIgnored var onTrackUnplayable: ((Track) -> Bool)?
+
+    /// Called for a user's playback action, before the coordinator acts on it.
+    /// The result matters for `.skip` and `.resume` only: true means the
+    /// listener started playback itself, so the coordinator doesn't also skip
+    /// or resume.
+    @ObservationIgnored var onUserAction: ((UserPlaybackAction) -> Bool)?
+
+    /// Counts requested plays (`playTrack`), so a hook that answers can be told
+    /// apart from one that started a play.
+    @ObservationIgnored private var playRequestCount = 0
 
     /// Repeat mode (#221), the shared `RepeatMode`: off → all → one
     /// (`nextRepeatMode`). What it does at each advance is the shared
@@ -2434,12 +2462,17 @@ final class QueuePlaybackCoordinator {
             switch command {
             // Bandcamp's track too: this page holds the audio session for it, and
             // WebKit can show this page's lock screen instead of Bandcamp's.
-            case "play": Task { @MainActor in
-                if self.activeEngine == .bandcamp { self.bandcamp.play() } else { self.soundCloud.play() }
-            }
-            case "pause": Task { @MainActor in
-                if self.activeEngine == .bandcamp { self.bandcamp.pause() } else { self.soundCloud.pause() }
-            }
+            case "play":
+                // A user's resume, as `togglePlayPause` reports it.
+                if !self.isPlaying, !self.isStarting, self.onUserAction?(.resume) == true { return }
+                Task { @MainActor in
+                    if self.activeEngine == .bandcamp { self.bandcamp.play() } else { self.soundCloud.play() }
+                }
+            case "pause":
+                if self.isPlaying { _ = self.onUserAction?(.pause) }
+                Task { @MainActor in
+                    if self.activeEngine == .bandcamp { self.bandcamp.pause() } else { self.soundCloud.pause() }
+                }
             case "next": self.skipNext()
             case "previous": self.skipPrevious()
             default: break
@@ -2547,6 +2580,11 @@ final class QueuePlaybackCoordinator {
 
     /// Engine-agnostic play/pause toggle for the mini player + Now Playing.
     func togglePlayPause() {
+        // A resume (nothing playing or starting): the listener may play
+        // something else instead (Listen Along's held friend track).
+        let wasPlaying = isPlaying
+        if !wasPlaying, !isStarting, onUserAction?(.resume) == true { return }
+        if wasPlaying { _ = onUserAction?(.pause) }
         // Nothing loaded for the track on screen (restored queue, or stopped
         // because no source could play): start it. A restored track resumes
         // where it was when the app last ran (#567).
@@ -2597,6 +2635,8 @@ final class QueuePlaybackCoordinator {
         // spinoff (it's not the pool driving this setQueue). Exclude the spinoff's
         // own context so beginSpinoff's setContext path isn't mistaken for takeover.
         if spinoffMode, context?.type != "spinoff" { exitSpinoff() }
+        // The user playing something else ends a Listen Along session at once.
+        if context?.type != ListenAlongController.listenAlongContext { _ = onUserAction?(.playSomethingElse) }
         let toPlay = queueManager.setQueue(
             tracks: tracks,
             startIndex: Int32(startIndex),
@@ -2613,23 +2653,29 @@ final class QueuePlaybackCoordinator {
     /// Next button, lock screen, CarPlay, chat: move on one track (wraps to
     /// the start under repeat all, see `advance(_:)`).
     func skipNext() {
+        // The listener took over (Listen Along restored the user's queue):
+        // that play is the answer, so don't skip it as well.
+        if onUserAction?(.skip) == true { return }
         advance(.nextPressed)
     }
 
     /// The one advance path, following the shared `advanceAction` (Android's
-    /// `skipNextInternal` does the same). Listen Along owns a track that ended
-    /// (its hook plays the friend's next song, #246); a spinoff pool comes
-    /// next (#231: on exhaustion it exits and the untouched queue resumes);
-    /// then the queue and repeat mode decide.
+    /// `skipNextInternal` does the same). A listener (Listen Along) owns a
+    /// track that ended (`onTrackFinished`); a spinoff pool comes next (#231:
+    /// on exhaustion it exits and the untouched queue resumes); then the queue
+    /// and repeat mode decide.
     private func advance(_ trigger: AdvanceTrigger) {
-        if trigger == .trackEnded, let hook = onTrackFinished { hook(); return }
+        if trigger == .trackEnded, let hook = onTrackFinished {
+            let requestsBefore = playRequestCount
+            if hook() {
+                if playRequestCount == requestsBefore { holdEndedTrack() }
+                return
+            }
+        }
         if advanceSpinoff() { return }
-        // Listen Along follows the friend: a replay or a wrap over the history
-        // would replace their next track, so repeat counts as off there.
-        let listenAlong = queueManager.playbackContext?.type == ListenAlongController.listenAlongContext
         let action = QueueAdvancePolicyKt.advanceAction(
             trigger: trigger,
-            repeatMode: listenAlong ? .off : repeatMode,
+            repeatMode: repeatMode,
             hasNext: queueManager.hasNext,
             hasCurrent: currentTrack != nil,
             playedSinceWrap: playedSinceWrap
@@ -2651,26 +2697,61 @@ final class QueuePlaybackCoordinator {
         default: next = nil
         }
         guard let next else {
-            stopAtEndOfQueue(clear: !listenAlong)
+            stopAtEndOfQueue()
             return
         }
         syncSnapshot()
         playTrack(next, advancing: true)
     }
 
-    /// The queue ran out: stop. With [clear] the track leaves the screen and
-    /// the external session is released (#322). Listen Along keeps the track:
-    /// the friend's next one is on its way, and a blank screen would flash.
-    private func stopAtEndOfQueue(clear: Bool) {
-        guard clear else {
-            Task { @MainActor in await haltActiveEngine() }
-            return
+    /// The listener (Listen Along) handled the end of the current track and
+    /// started no play (it waits for its next poll): the track stays on screen,
+    /// not playing, and nothing advances or clears. Its engine is paused (so
+    /// Spotify can't run on into the album's next song) but the silent
+    /// keepalive and the embeds' audio hold stay, so the app keeps running in
+    /// the background and the next poll can still start the friend's track.
+    /// Play loads the track again. Dropped if a play was requested meanwhile.
+    private func holdEndedTrack() {
+        guard let track = currentTrack else { return }
+        NSLog("QUEUE '%@' ended; holding it on screen", track.title)
+        let requests = playRequestCount
+        Task { @MainActor in
+            guard playRequestCount == requests, currentTrack?.id == track.id else { return }
+            await holdForListener()
+            guard playRequestCount == requests else { return }
+            awaitLoadOnPlay(aimedAtSec: 0)
         }
+    }
+
+    /// Pause whichever engine is playing for a listener waiting to play its
+    /// next track, keeping the keepalive running (unlike `haltActiveEngine`).
+    @MainActor
+    private func holdForListener() async {
+        switch activeEngine {
+        case .avPlayer: player.pause()
+        case .musicKit: musicKit.pause()
+        case .spotify: await spotify.pause(); spotifyPlaying = false
+        case .soundCloud: soundCloud.pause()
+        case .bandcamp: bandcamp.pause()
+        case .browser: break
+        }
+    }
+
+    /// Stop and take the current track off screen, as at the end of the queue
+    /// (it goes to history, so Previous reaches it). For a listener whose
+    /// session ended at a song's end with nothing to go back to.
+    func stopAndClear() {
+        stopAtEndOfQueue()
+    }
+
+    /// The queue ran out: stop. The track leaves the screen and the external
+    /// session is released (#322).
+    private func stopAtEndOfQueue() {
         let engine = activeEngine
         Task { @MainActor in
             switch engine {
             case .musicKit: musicKit.pause()
-            case .spotify: await spotify.pause()
+            case .spotify: await spotify.pause(); spotifyPlaying = false
             case .soundCloud: soundCloud.stop()
             case .bandcamp: await bandcamp.stop()
             case .avPlayer, .browser: break
@@ -2688,6 +2769,7 @@ final class QueuePlaybackCoordinator {
     /// Previous: past the first few seconds (or with no history) it restarts
     /// the track, else it goes back one (shared `previousAction`).
     func skipPrevious() {
+        if onUserAction?(.skip) == true { return }
         // With no current track (the queue ran out and was cleared) the
         // active engine is stopped but still reports its stale position, which
         // would read as "past the first seconds" and restart a stopped engine
@@ -2711,6 +2793,7 @@ final class QueuePlaybackCoordinator {
             index: Int32(index),
             currentTrack: currentTrack
         ) else { return }
+        _ = onUserAction?(.playSomethingElse)
         syncSnapshot()
         playTrack(track)
     }
@@ -2741,8 +2824,19 @@ final class QueuePlaybackCoordinator {
         return toggleShuffle()
     }
 
+    /// Whether repeat may change now: not during Listen Along, which follows
+    /// the friend rather than the queue.
+    var repeatAllowed: Bool {
+        playbackContext?.type != ListenAlongController.listenAlongContext
+    }
+
     /// Cycle repeat off → all → one → off (#221, shared `nextRepeatMode`).
+    /// Refused during Listen Along (`repeatAllowed`).
     func cycleRepeatMode() {
+        guard repeatAllowed else {
+            NSLog("REPEAT refused: Listen Along")
+            return
+        }
         repeatMode = QueueAdvancePolicyKt.nextRepeatMode(mode: repeatMode)
     }
 
@@ -2802,6 +2896,7 @@ final class QueuePlaybackCoordinator {
         currentTrack = track
         needsLoadOnPlay = false
         restoredResumeAtSec = 0
+        playRequestCount += 1
         // An explicit play (a tap, Play on a stopped track) starts a new run of
         // unplayable tracks; only the queue moving on adds to one.
         if !advancing { unplayableRun.reset() }
@@ -2954,6 +3049,20 @@ final class QueuePlaybackCoordinator {
                 if let u = URL(string: url) { _ = await UIApplication.shared.open(u) }
 
             case .noPlayableSource:
+                // A listener's own track (Listen Along's): it decides what
+                // comes next, with no notice and no skip. Play loads the track
+                // again unless the listener started another play.
+                if forcedResolver == nil, let hook = onTrackUnplayable {
+                    let requestsBefore = playRequestCount
+                    if hook(track) {
+                        if playRequestCount == requestsBefore {
+                            await holdForListener()
+                            if Task.isCancelled { return }
+                            awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                        }
+                        return
+                    }
+                }
                 // Apple Music would play it but the app may not use Apple
                 // Music: stop on the track and say so (Android's sign-in
                 // message, shared). Access is granted in iOS Settings, which

@@ -1,61 +1,70 @@
 import SwiftUI
 import Shared
 
-/// Listen Along (#235) — follow a friend's now-playing in real time. iOS port of
-/// Android's `MainViewModel` listen-along loop.
+/// Listen Along (#235, #585): follow what a friend is playing. iOS's side of the
+/// shared `ListenAlongSession` (Android's `ListenAlongDriver` is the other): the
+/// session decides, this controller polls, plays, shows messages, and tells the
+/// session what the coordinator reports through its hooks (`onTrackFinished`,
+/// `onTrackUnplayable`, `onUserAction`).
 ///
-/// Behavior: play the friend's current track, then poll every 15s and follow
-/// track changes. Polling stays alive in the background because audio is playing
-/// (the app's `audio` background mode), so no explicit wake-lock is needed —
-/// once playback stops, the OS may suspend us, which is fine.
-///
-/// Two deliberate v1 simplifications vs. Android (tracked follow-ups):
-///  • On a friend track-change we switch within the 15s poll window rather than
-///    deferring to the current song's end (Android queues a "pending" track and
-///    swaps at end via an onTrackEnded hook the iOS coordinator doesn't expose).
-///  • A friend going offline stops *following* but lets the current song finish
-///    naturally (we don't cut playback), approximating Android's deferred stop.
-///
-/// User-control safety: every queue replacement is gated on the coordinator's
-/// context STILL being "listen-along". The moment the user plays anything else,
-/// the next poll sees a different context and stops following — so listen-along
-/// never hijacks a track the user chose.
+/// The user's queue is suspended while a session runs (shown dimmed as
+/// "YOUR QUEUE") and comes back, or is dropped, when the session ends.
+/// Polling keeps running in the background because audio plays (the app's
+/// `audio` background mode and the coordinator's silent keepalive).
 @MainActor
 @Observable
 final class ListenAlongController {
-    /// App-wide instance — bound to the coordinator once at the ContentView root,
-    /// triggered from the sidebar, Collection friend rows, and the deep link.
+    /// App-wide instance — bound to the coordinator once at app start
+    /// (`AppBootstrap`), triggered from the sidebar, friend rows and the deep link.
     static let shared = ListenAlongController()
     nonisolated static let listenAlongContext = SpinoffSessionKt.LISTEN_ALONG_CONTEXT
 
     private let container = IosContainer.companion.shared
-    private weak var coordinator: QueuePlaybackCoordinator?
-    private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private weak var coordinator: QueuePlaybackCoordinator?
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
 
-    /// The friend currently being listened-along with (drives UI affordances).
+    /// The friend being listened along with (drives UI affordances), refreshed by each poll.
     var friend: Friend?
-    /// Track key of the last track we started, so we don't re-issue the same one.
-    private var lastTrackKey: String?
+    /// The friend is on a song we haven't played: Now Playing's Next catches up.
+    private(set) var friendIsAhead = false
 
-    func bind(_ c: QueuePlaybackCoordinator) { coordinator = c }
+    @ObservationIgnored private var session: ListenAlongSession?
+    /// The id of the track the session last played (`listenAlongTrack`).
+    @ObservationIgnored private var playingId: String?
+    /// True while the controller itself starts a play, so it isn't read as the user's.
+    @ObservationIgnored private var driving = false
+    /// Our song has ended and nothing has played since (the session waits for a
+    /// poll), or the end is being handled right now.
+    @ObservationIgnored private var atSongEnd = false
 
-    func isActive(_ f: Friend) -> Bool { friend?.id == f.id }
+    /// The user's queue at the moment Listen Along began. Captured ONCE on
+    /// entering Listen Along; kept when switching friends; cleared on end.
+    private struct QueueSuspension { let tracks: [Track]; let context: PlaybackContext? }
+    private var suspended: QueueSuspension?
 
-    /// While listening along: true when the friend has moved to a track DIFFERENT
-    /// from the one we're playing — i.e. there's a newer song to catch up to, so
-    /// Now Playing's Next button is enabled. False when in sync (nothing to advance
-    /// to → Next disabled).
-    var friendIsAhead: Bool {
-        guard let f = friend, f.isOnAir,
-              let name = f.cachedTrackName, let artist = f.cachedTrackArtist else { return false }
-        return "\(name.lowercased())|\(artist.lowercased())" != lastTrackKey
+    /// The user's suspended queue — shown dimmed as "YOUR QUEUE" while listening along.
+    var suspendedQueue: [Track] { suspended?.tracks ?? [] }
+
+    func bind(_ c: QueuePlaybackCoordinator) {
+        coordinator = c
+        // The coordinator calls these on the main thread.
+        c.onTrackFinished = { [weak self] in
+            MainActor.assumeIsolated { self?.ownTrackEnded() ?? false }
+        }
+        c.onTrackUnplayable = { [weak self] track in
+            MainActor.assumeIsolated { self?.trackUnplayable(track) ?? false }
+        }
+        c.onUserAction = { [weak self] action in
+            MainActor.assumeIsolated { self?.userAction(action) ?? false }
+        }
     }
 
-    /// Catch up to the friend's CURRENT track (Now Playing's Next button while
-    /// listening along). No-op when already in sync.
+    func isActive(_ f: Friend) -> Bool { session != nil && friend?.id == f.id }
+
+    /// Catch up to the friend's current track (Now Playing's Next while listening along).
     func advanceToFriend() {
-        guard let f = friend else { return }
-        playCurrent(f)
+        guard let s = session else { return }
+        apply(s, s.onCatchUp())
     }
 
     /// Toggle: start listening along with `f`, or stop if already on `f`.
@@ -63,147 +72,190 @@ final class ListenAlongController {
         if isActive(f) { stop() } else { start(f) }
     }
 
-    /// True when the friend went offline — let the current song finish, then stop.
-    private var pendingOffline = false
-
-    /// The user's queue at the moment listen-along began — restored on disconnect
-    /// (desktop "YOUR QUEUE" suspend/resume). Captured ONCE on entering listen-along
-    /// from a normal queue; preserved across friend-switches; cleared on restore.
-    private struct QueueSuspension { let tracks: [Track]; let context: PlaybackContext? }
-    private var suspended: QueueSuspension?
-
-    /// The user's suspended queue — shown dimmed as "YOUR QUEUE" in the queue panel
-    /// while listening along (it resumes on disconnect).
-    var suspendedQueue: [Track] { suspended?.tracks ?? [] }
-
+    /// Start following `f`. Starting with another friend replaces the session
+    /// (the old one isn't told) and keeps the same suspended queue.
     func start(_ f: Friend) {
-        // Tear down any prior listen-along poll WITHOUT restoring the suspended
-        // queue — switching friends stays in listen-along and keeps the same
-        // suspension; only a full stop/disconnect resumes it.
+        guard let c = coordinator else { return }
         pollTask?.cancel(); pollTask = nil
-        coordinator?.onTrackFinished = nil
-        // Switching from a Spinoff → Listen Along: exit the spinoff first so its
-        // separate pool tears down and the saved context is restored before we
-        // suspend for listen-along (the two modes are mutually exclusive) (#231).
-        coordinator?.exitSpinoff()
-        // Suspend the user's queue the FIRST time we enter listen-along.
-        if suspended == nil { captureSuspension() }
+        // Switching from a Spinoff: exit it first so its pool tears down and the
+        // saved context is restored before we suspend the queue (#231).
+        c.exitSpinoff()
+        if suspended == nil { captureSuspension(c) }
         friend = f
-        lastTrackKey = nil
-        pendingOffline = false
-        // Defer track switches to the current song's END so each song plays fully
-        // and scrobbles (#246). The coordinator calls this when a track finishes.
-        coordinator?.onTrackFinished = { [weak self] in Task { @MainActor in await self?.onSongEnded() } }
-        playCurrent(f)
+        let s = ListenAlongSession(friendName: f.displayName)
+        session = s
+        playingId = nil
+        atSongEnd = false
+        let current = (ListenAlongSessionKt.listenAlongPollOf(friend: f) as? ListenAlongPollListening)?.track
+        NSLog("LISTEN_ALONG start '%@' (current: %@)", f.displayName, current?.key ?? "none")
+        apply(s, s.start(current: current))
+        guard session === s else { return }
         pollTask = Task { @MainActor [weak self] in
+            let interval = UInt64(ListenAlongSessionKt.LISTEN_ALONG_POLL_MS) * 1_000_000
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                try? await Task.sleep(nanoseconds: interval)
                 if Task.isCancelled { break }
-                await self?.pollOnce()
+                await self?.pollOnce(s)
             }
         }
     }
 
-    /// Stop listening along. `restore: true` (manual stop, friend offline, friend
-    /// idle at song-end) RESUMES the user's suspended queue. `restore: false` (the
-    /// user took control by playing something else) DISCARDS the suspension so we
-    /// don't clobber the playback they just chose.
-    func stop(restore: Bool = true) {
-        pollTask?.cancel()
-        pollTask = nil
-        coordinator?.onTrackFinished = nil
-        friend = nil
-        lastTrackKey = nil
-        pendingOffline = false
-        if restore { restoreSuspension() } else { suspended = nil }
+    /// The Listen Along toggle / stop button.
+    func stop() {
+        guard let s = session else { return }
+        apply(s, s.onUserStopped())
     }
 
-    /// Snapshot the user's current queue (current track + up-next + context) before
-    /// listen-along replaces it. Stores an empty snapshot when nothing was playing
-    /// (or we're somehow already in listen-along) so restore just clears.
-    private func captureSuspension() {
-        guard let c = coordinator, c.playbackContext?.type != Self.listenAlongContext else {
+    /// Something else takes over (a Spinoff, a radio link): end with no message
+    /// and drop the suspended queue.
+    func endSilently() {
+        guard session != nil else { return }
+        NSLog("LISTEN_ALONG ended silently")
+        _ = end(restore: false)
+    }
+
+    // MARK: - Coordinator hooks
+
+    /// Our song ended. True (handled) whenever the session is following and the
+    /// current track is its track; the coordinator then doesn't advance.
+    private func ownTrackEnded() -> Bool {
+        guard let s = session, isOurTrack(coordinator?.currentTrack?.id) else { return false }
+        NSLog("LISTEN_ALONG our song ended")
+        atSongEnd = true
+        apply(s, s.onSongEnded())
+        return true
+    }
+
+    /// Our track couldn't play. True when it's ours: no notice, no skip.
+    private func trackUnplayable(_ track: Track) -> Bool {
+        guard let s = session, isOurTrack(track.id) else { return false }
+        NSLog("LISTEN_ALONG '%@' unplayable; waiting for the friend's next track", track.title)
+        apply(s, s.onTrackUnplayable())
+        return true
+    }
+
+    /// A user's playback action, before the coordinator acts on it. True when a
+    /// play was started here (a restored queue, or the held friend track on a
+    /// resume), so the coordinator doesn't also act on the skip or the resume.
+    private func userAction(_ action: UserPlaybackAction) -> Bool {
+        if driving { return false }
+        guard let s = session else { return false }
+        NSLog("LISTEN_ALONG user action %@", String(describing: action))
+        switch action {
+        case .skip: return apply(s, s.onUserSkipped())
+        case .playSomethingElse: apply(s, s.onUserPlayedSomethingElse()); return false
+        case .pause: apply(s, s.onUserPaused()); return false
+        case .resume: return apply(s, s.onUserResumed())
+        }
+    }
+
+    // MARK: - Polling
+
+    private func pollOnce(_ s: ListenAlongSession) async {
+        guard session === s, let f = friend else { return }
+        let result: ListenAlongPollResult
+        do {
+            result = try await container.pollListenAlong(friend: f)
+        } catch {
+            if Task.isCancelled { return }
+            result = ListenAlongPollResult(poll: ListenAlongPollFailed.shared, friend: nil)
+        }
+        // Cancelled, or the session ended or was replaced while the poll ran.
+        if Task.isCancelled || session !== s { return }
+        if let fresh = result.friend_ { friend = fresh }
+        let playing = ourSongIsPlaying()
+        NSLog("LISTEN_ALONG poll %@ (our song playing: %@)", pollName(result.poll), playing ? "yes" : "no")
+        apply(s, s.onPoll(result: result.poll, isPlaying: playing))
+    }
+
+    private func pollName(_ p: ListenAlongPoll) -> String {
+        if let l = p as? ListenAlongPollListening { return "listening '\(l.track.key)'" }
+        if p is ListenAlongPollNotListening { return "not listening" }
+        return "failed"
+    }
+
+    /// Whether Listen Along's OWN song plays: false until the session has played
+    /// something (the user's queue can be playing while we wait for the friend's
+    /// first song); true while a play starts (the only plays while a session runs
+    /// are its own: any other ends it); else whether our track is the one playing.
+    private func ourSongIsPlaying() -> Bool {
+        guard let ours = playingId, let c = coordinator else { return false }
+        if c.isStarting { return true }
+        return c.isPlaying && c.currentTrack?.id == ours
+    }
+
+    private func isOurTrack(_ id: String?) -> Bool { id != nil && id == playingId }
+
+    // MARK: - Effects
+
+    /// Applies `effects` in order; returns true when one of them started a play.
+    @discardableResult
+    private func apply(_ s: ListenAlongSession, _ effects: [ListenAlongEffect]) -> Bool {
+        var started = false
+        for effect in effects {
+            if let play = effect as? ListenAlongEffectPlay {
+                let track = ListenAlongSessionKt.listenAlongTrack(track: play.track)
+                NSLog("LISTEN_ALONG play '%@'", track.title)
+                playingId = track.id
+                atSongEnd = false
+                driving = true
+                coordinator?.setQueue([track], startIndex: 0, context: listenAlongContext(s))
+                driving = false
+                started = true
+            } else if let message = effect as? ListenAlongEffectMessage {
+                NSLog("LISTEN_ALONG notice '%@'", message.text)
+                coordinator?.notice = QueuePlaybackCoordinator.Notice(message: message.text, showInCar: false)
+            } else if let endEffect = effect as? ListenAlongEffectEnd {
+                if end(restore: endEffect.restoreQueue) { started = true }
+            }
+        }
+        friendIsAhead = session?.friendIsAhead == true
+        return started
+    }
+
+    /// The Listen Along context. Its `id` carries the friend's identity
+    /// ("friendId|username|service") so the Now Playing / queue banner can link
+    /// to their profile (#235).
+    private func listenAlongContext(_ s: ListenAlongSession) -> PlaybackContext {
+        let id = friend.map { "\($0.id)|\($0.username)|\($0.service)" }
+        return PlaybackContext(type: Self.listenAlongContext, name: s.friendName, id: id)
+    }
+
+    /// Ends the session; with `restore` the suspended queue plays again from its
+    /// first track. True when it did.
+    private func end(restore: Bool) -> Bool {
+        pollTask?.cancel(); pollTask = nil
+        session = nil
+        playingId = nil
+        friend = nil
+        friendIsAhead = false
+        let endedAtSongEnd = atSongEnd
+        atSongEnd = false
+        let s = suspended
+        suspended = nil
+        NSLog("LISTEN_ALONG ended (restore: %@)", restore ? "yes" : "no")
+        guard restore, let s, let c = coordinator else { return false }
+        if s.tracks.isEmpty {
+            // Nothing to go back to. At the end of our song this is the end of
+            // the queue: the track comes off screen. Otherwise (the toggle, a
+            // skip, the friend gone while paused) the track is left as it is.
+            c.clearQueue()
+            if endedAtSongEnd { c.stopAndClear() }
+            return false
+        }
+        driving = true
+        c.setQueue(s.tracks, startIndex: 0, context: s.context)
+        driving = false
+        return true
+    }
+
+    /// Snapshot the user's queue (current track + up next + context) before
+    /// Listen Along replaces it; empty when nothing was queued.
+    private func captureSuspension(_ c: QueuePlaybackCoordinator) {
+        guard c.playbackContext?.type != Self.listenAlongContext else {
             suspended = QueueSuspension(tracks: [], context: nil); return
         }
         let tracks = (c.currentTrack.map { [$0] } ?? []) + c.upNext
         suspended = QueueSuspension(tracks: tracks, context: c.playbackContext)
-    }
-
-    /// Resume the suspended queue on disconnect — re-queue from the track that was
-    /// current (it restarts from the top; exact position restore is a follow-up).
-    /// Clears playback when the user had nothing queued.
-    private func restoreSuspension() {
-        guard let s = suspended, let c = coordinator else { return }
-        suspended = nil
-        if s.tracks.isEmpty { c.clearQueue(); return }
-        c.setQueue(s.tracks, startIndex: 0, context: s.context)
-    }
-
-    /// 15s poll: keep `friend` fresh (the "pending" track the NEXT song jumps to)
-    /// and bail if the user took control. Does NOT switch playback mid-song — the
-    /// current song plays to its end (so it scrobbles), then onSongEnded() jumps to
-    /// the friend's latest track.
-    private func pollOnce() async {
-        guard let f = friend else { return }
-        if let ctx = coordinator?.playbackContext, ctx.type != Self.listenAlongContext {
-            stop(restore: false)  // user took control — keep their choice, don't resume our queue
-            return
-        }
-        let refreshed: Friend?
-        if f.transient {
-            refreshed = (try? await container.fetchTransientFriendNowPlaying(service: f.service, user: f.username)) ?? nil
-        } else {
-            refreshed = (try? await container.refreshFriendActivity(friend: f)) ?? nil
-        }
-        guard let r = refreshed else { pendingOffline = true; return }
-        friend = r
-        pendingOffline = !r.isOnAir
-    }
-
-    /// The current listen-along song just finished (and scrobbled). Jump to the
-    /// friend's LATEST track — or stop if they went offline / the user took over.
-    private func onSongEnded() async {
-        if let ctx = coordinator?.playbackContext, ctx.type != Self.listenAlongContext {
-            stop(restore: false)  // user took control before this track ended — keep their choice
-            return
-        }
-        guard let f = friend, !pendingOffline, f.isOnAir,
-              let name = f.cachedTrackName, let artist = f.cachedTrackArtist else { stop(); return }
-        // If the friend is STILL on the song we just finished (they haven't moved
-        // on), do NOT repeat it — end the listen-along session. Android parity:
-        // playFriendCurrentTrack dedups on the same trackKey (no replay) and
-        // onTrackEnded has no pending track to play, so the session just ends.
-        let currentKey = "\(name.lowercased())|\(artist.lowercased())"
-        if currentKey == lastTrackKey { stop(); return }
-        // Friend moved to a NEW track — follow it.
-        playCurrent(f)
-    }
-
-    private func playCurrent(_ f: Friend) {
-        guard let name = f.cachedTrackName, let artist = f.cachedTrackArtist else { return }
-        let key = "\(name.lowercased())|\(artist.lowercased())"
-        if key == lastTrackKey { return }   // same track still playing — nothing to do
-        lastTrackKey = key
-        let track = Self.makeTrack(f, name: name, artist: artist, key: key)
-        // Encode the friend's identity in `id` ("friendId|username|service") so the
-        // Now Playing / queue context banner can link to their profile (#235).
-        coordinator?.setQueue(
-            [track], startIndex: 0,
-            context: PlaybackContext(type: Self.listenAlongContext, name: f.displayName,
-                                     id: "\(f.id)|\(f.username)|\(f.service)"))
-    }
-
-    /// Metadata-only Track — the coordinator resolves it through the normal
-    /// resolver pipeline at play time (cache → on-the-fly).
-    private static func makeTrack(_ f: Friend, name: String, artist: String, key: String) -> Track {
-        Track(
-            id: "listen-along:\(key)", title: name, artist: artist,
-            album: f.cachedTrackAlbum, albumId: nil, duration: 0,
-            artworkUrl: f.cachedTrackArtworkUrl,
-            sourceType: nil, sourceUrl: nil, addedAt: 0,
-            resolver: nil, spotifyUri: nil, soundcloudId: nil,
-            spotifyId: nil, appleMusicId: nil, isrc: nil, recordingMbid: nil,
-            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
-        )
     }
 }
