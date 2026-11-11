@@ -257,6 +257,104 @@ class PlaybackControllerStoppedTrackTest {
         assertFalse(controller.holdsForegroundForPlay)
     }
 
+    // ── C2. The foreground across a skip after a natural track end ──────
+
+    @Test
+    fun `a local track ending into a skipped track holds the foreground for the next one`() {
+        // A local track was playing (nothing external) and ends by itself,
+        // with no Parachord screen showing: nobody asked for the next play,
+        // so no play-start hold ran.
+        f.queueManager.setQueue(listOf(a, n, b), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        assertEquals("n", state.currentTrack?.id)
+        assertTrue("taken for the skip", controller.holdsForegroundForPlay)
+
+        pastTheGap()
+        // b's route (external playback) took it over.
+        routed("b")
+        assertEquals("b", state.currentTrack?.id)
+        assertFalse(controller.holdsForegroundForPlay)
+    }
+
+    @Test
+    fun `with a Parachord screen showing the skip takes no foreground`() {
+        val screen = mockk<android.app.Activity>(relaxed = true)
+        com.parachord.android.app.CurrentActivityHolder.onActivityResumed(screen)
+        try {
+            f.queueManager.setQueue(listOf(a, n, b), 0, null, false)
+            f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+
+            controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+            run()
+            assertEquals("n", state.currentTrack?.id)
+            assertFalse(controller.holdsForegroundForPlay)
+        } finally {
+            com.parachord.android.app.CurrentActivityHolder.onActivityPaused(screen)
+        }
+    }
+
+    @Test
+    fun `a foreground held for a skip after a natural end is released when the queue ends`() {
+        f.queueManager.setQueue(listOf(a, n), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        assertTrue(controller.holdsForegroundForPlay)
+
+        pastTheGap()
+        assertNull(state.currentTrack)
+        assertFalse(controller.holdsForegroundForPlay)
+    }
+
+    @Test
+    fun `after external playback the skip keeps the external foreground and takes no hold`() {
+        controller.playQueue(listOf(a, n, b))
+        run()
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        assertEquals("n", state.currentTrack?.id)
+        assertFalse(controller.holdsForegroundForPlay)
+    }
+
+    // ── F. A manual pick survives a mid-play failure ───────────────────
+
+    @Test
+    fun `a stream that fails after a manual pick keeps the pick for Play`() {
+        val picked = a.copy(resolver = "soundcloud", sourceUrl = "https://example.com/a.mp3")
+        every { f.trackResolverCache.trackSources } returns kotlinx.coroutines.flow.MutableStateFlow(
+            mapOf(
+                com.parachord.android.resolver.trackKey(a.title, a.artist) to listOf(
+                    com.parachord.shared.resolver.ResolvedSource(url = "https://example.com/a.mp3", sourceType = "stream", resolver = "soundcloud"),
+                ),
+            ),
+        )
+        f.stateHolder.update { copy(currentTrack = a) }
+        controller.switchSource("soundcloud")
+        run()
+        routed("a")
+
+        controller.onLocalPlayerFailed(positionMs = 60_000, durationMs = 200_000)
+
+        assertEquals(LoadOnPlay.Why.FAILED, controller.pendingLoad?.why)
+        assertTrue(controller.pendingLoad!!.skipReselect)
+        assertEquals(picked.resolver, controller.pendingLoad?.track?.resolver)
+    }
+
+    @Test
+    fun `a stream that fails after an ordinary play re-chooses its source`() {
+        controller.playTrack(a)
+        run()
+
+        controller.onLocalPlayerFailed(positionMs = 60_000, durationMs = 200_000)
+
+        assertEquals(LoadOnPlay.Why.FAILED, controller.pendingLoad?.why)
+        assertFalse(controller.pendingLoad!!.skipReselect)
+    }
+
     // ── D. playedSinceWrap ─────────────────────────────────────────────
 
     @Test

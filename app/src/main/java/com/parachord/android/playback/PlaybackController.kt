@@ -62,6 +62,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -145,6 +146,13 @@ class PlaybackController constructor(
      * play ([playTrackInternalUnsafe]).
      */
     @Volatile private var loadOnPlay: LoadOnPlay? = null
+        set(value) {
+            field = value
+            loadOnPlaySlot.value = value
+        }
+
+    /** [loadOnPlay], observable, for [needsLoadOnPlayFlow]. */
+    private val loadOnPlaySlot = kotlinx.coroutines.flow.MutableStateFlow<LoadOnPlay?>(null)
 
     /**
      * Play has to load the current track ([loadOnPlay]). The media session's
@@ -153,6 +161,16 @@ class PlaybackController constructor(
      */
     val needsLoadOnPlay: Boolean
         get() = loadOnPlayTarget(loadOnPlay, stateHolder.state.value.currentTrack?.id) != null
+
+    /**
+     * [needsLoadOnPlay] as it changes, for the media session: Next and
+     * Previous are offered (and reach the controller) while it's true, even
+     * with ExoPlayer empty and out of external mode.
+     */
+    val needsLoadOnPlayFlow: kotlinx.coroutines.flow.Flow<Boolean>
+        get() = kotlinx.coroutines.flow.combine(loadOnPlaySlot, stateHolder.state) { slot, state ->
+            loadOnPlayTarget(slot, state.currentTrack?.id) != null
+        }.distinctUntilChanged()
 
     /**
      * How the play in progress ended with nothing playing, or null. Set by
@@ -1343,6 +1361,30 @@ class PlaybackController constructor(
         queuePersistence.savePositionNow(slot.track.id, slot.positionMs, stateHolder.state.value.duration)
     }
 
+    /**
+     * ExoPlayer's item for the current track failed at [positionMs]: Play
+     * loads the track again, where it stopped, keeping a source the user
+     * picked ([manualPickTrackId]), as iOS does.
+     */
+    @androidx.annotation.VisibleForTesting
+    internal fun onLocalPlayerFailed(positionMs: Long, durationMs: Long) {
+        val track = stateHolder.state.value.currentTrack ?: return
+        loadOnPlay = failedLoad(
+            track,
+            skipReselect = manualPickTrackId == track.id,
+            failedAtMs = positionMs,
+            durationMs = durationMs,
+        )
+        stateHolder.update { copy(isPlaying = false, isBuffering = false) }
+    }
+
+    /**
+     * The track whose play kept its source (`skipReselect`: a source the user
+     * picked, a fallback after a refused one); null after any other play. A
+     * failure mid-play keeps that source for the retry ([onLocalPlayerFailed]).
+     */
+    private var manualPickTrackId: String? = null
+
     /** The slot Play would load, for tests. */
     @androidx.annotation.VisibleForTesting
     internal val pendingLoad: LoadOnPlay?
@@ -1456,6 +1498,7 @@ class PlaybackController constructor(
         carStoppedPlay = false
         failureNotice = null
         heldForListener = false
+        manualPickTrackId = if (skipReselect) track.id else null
         playsBegun++
         // Overtakes a skip waiting on the previous track (the skip's own play
         // comes through here too, after the skip has run).
@@ -1552,6 +1595,7 @@ class PlaybackController constructor(
             // track would advance the queue as well as the skip below (two
             // advances, the second past the next track).
             val followed = !skipWanted && drivesTrack?.invoke(routedTrack) == true
+            if (autoSkip) holdForegroundForAutoSkip(routedTrack)
             stopBeforeFailedTrack(autoSkip, followed)
             if (followed) holdForListener()
             if (autoSkip) {
@@ -1893,15 +1937,8 @@ class PlaybackController constructor(
                 // message (a refused track) for the car, not ExoPlayer's.
                 if (isExternalPlayback) return
                 if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_REMOTE_ERROR) return
-                val track = stateHolder.state.value.currentTrack ?: return
-                Log.w(TAG, "ExoPlayer failed on '${track.title}' (${error.errorCodeName}); Play will load it")
-                loadOnPlay = failedLoad(
-                    track,
-                    skipReselect = false,
-                    failedAtMs = ctrl.currentPosition.coerceAtLeast(0L),
-                    durationMs = ctrl.duration.coerceAtLeast(0L),
-                )
-                stateHolder.update { copy(isPlaying = false, isBuffering = false) }
+                Log.w(TAG, "ExoPlayer failed (${error.errorCodeName}); Play will load the track")
+                onLocalPlayerFailed(ctrl.currentPosition.coerceAtLeast(0L), ctrl.duration.coerceAtLeast(0L))
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -3235,6 +3272,7 @@ class PlaybackController constructor(
         val carStop = skipWanted && carStopsAutoSkip(track)
         val autoSkip = skipWanted && !carStop
         val followed = !skipWanted && drivesTrack?.invoke(track) == true
+        if (autoSkip) holdForegroundForAutoSkip(track)
         stopBeforeFailedTrack(autoSkip, followed)
         if (followed) holdForListener()
         if (carStop) {
@@ -3327,6 +3365,21 @@ class PlaybackController constructor(
                 releaseForegroundHeldForPlay("auto-skip did nothing")
             }
         }
+    }
+
+    /**
+     * Take the foreground for a skip past [track] when the track before it was
+     * local and no Parachord screen is showing ([shouldHoldForegroundForAutoSkip]):
+     * before ExoPlayer is emptied, while the service is still in the
+     * foreground. Kept like the play-start hold ([foregroundHeldForPlay]): the
+     * next track's route takes it over, and the end of the queue, a dropped
+     * skip or a skip that did nothing releases it ([scheduleAutoSkip]).
+     */
+    private fun holdForegroundForAutoSkip(track: TrackEntity) {
+        if (!shouldHoldForegroundForAutoSkip(isAppVisible(), isExternalPlayback, foregroundHeldForPlay)) return
+        Log.d(TAG, "Holding the foreground across the skip past '${track.title}'")
+        sendExternalPlaybackStart(track)
+        foregroundHeldForPlay = true
     }
 
     /** Drop a scheduled auto-skip ([scheduleAutoSkip]). */

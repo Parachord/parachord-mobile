@@ -347,6 +347,15 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        // A track waiting for Play to load it: Next and Previous are offered
+        // and go to the controller (ExoPlayer is empty then), so the car can
+        // get past it.
+        serviceScope.launch {
+            playbackController.needsLoadOnPlayFlow.collect {
+                wrapper.publishAvailableCommands()
+            }
+        }
+
         // Parachord's shuffle → the session's, the same way.
         serviceScope.launch {
             stateHolder.state.map { it.shuffleEnabled }.distinctUntilChanged().collect {
@@ -1518,6 +1527,7 @@ class PlaybackService : MediaLibraryService() {
                 command == COMMAND_SET_SHUFFLE_MODE
             ) return true
             if (externalMode && command in EXTERNAL_COMMANDS) return true
+            if (skipsGoToController && command in SKIP_COMMANDS) return true
             return super.isCommandAvailable(command)
         }
 
@@ -1533,13 +1543,26 @@ class PlaybackService : MediaLibraryService() {
                     // the wrapped ExoPlayer reports.
                     COMMAND_SET_SHUFFLE_MODE,
                 )
-            if (externalMode) {
+            if (skipsGoToController) {
                 builder.addAll(
                     COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_PREVIOUS,
                     COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
                 )
             }
             return builder.build()
+        }
+
+        /**
+         * Tell the session the commands changed: [needsLoadOnPlayFlow] adds or
+         * drops Next and Previous ([skipsGoToController]) with no ExoPlayer
+         * event to carry it. Main thread.
+         */
+        fun publishAvailableCommands() {
+            if (dispatching) return
+            val commands = availableCommands
+            for (listener in externalListeners) {
+                listener.onAvailableCommandsChanged(commands)
+            }
         }
 
         /**
@@ -1687,23 +1710,31 @@ class PlaybackService : MediaLibraryService() {
             super.pause()
         }
 
+        // Next and Previous go to the controller's queue in external mode, and
+        // while a track waits for Play to load it (needsLoadOnPlay: restored,
+        // stopped after failing, the car's unplayable-run stop): ExoPlayer is
+        // empty then, so its own Next did nothing and the car couldn't get
+        // past the track. A local track that plays still goes to ExoPlayer (#608).
+        private val skipsGoToController: Boolean
+            get() = externalMode || playbackController.needsLoadOnPlay
+
         override fun seekToNext() {
-            if (externalMode) { playbackController.skipNext(); return }
+            if (skipsGoToController) { playbackController.skipNext(); return }
             super.seekToNext()
         }
 
         override fun seekToPrevious() {
-            if (externalMode) { playbackController.skipPrevious(); return }
+            if (skipsGoToController) { playbackController.skipPrevious(); return }
             super.seekToPrevious()
         }
 
         override fun seekToNextMediaItem() {
-            if (externalMode) { playbackController.skipNext(); return }
+            if (skipsGoToController) { playbackController.skipNext(); return }
             super.seekToNextMediaItem()
         }
 
         override fun seekToPreviousMediaItem() {
-            if (externalMode) { playbackController.skipPrevious(); return }
+            if (skipsGoToController) { playbackController.skipPrevious(); return }
             super.seekToPreviousMediaItem()
         }
 
@@ -2095,6 +2126,10 @@ class PlaybackService : MediaLibraryService() {
                 else -> RepeatMode.OFF
             }
 
+            private val SKIP_COMMANDS = setOf(
+                COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_PREVIOUS,
+                COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+            )
             private val EXTERNAL_COMMANDS = setOf(
                 COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_PREVIOUS,
                 COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
