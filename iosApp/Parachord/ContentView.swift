@@ -1609,6 +1609,11 @@ final class IosAVPlayer {
     private var timeObserver: Any?
     private var statusObservation: NSKeyValueObservation?
     private var endObservation: NSObjectProtocol?
+    private var failedObservation: NSObjectProtocol?
+    /// The item has played (its clock ran) since `load`, so a failure now is a
+    /// stream that failed while playing, not a start that failed.
+    private var startedPlaying = false
+    private var failureReported = false
 
     var status: Status = .idle
     var isPlaying = false
@@ -1630,6 +1635,11 @@ final class IosAVPlayer {
     /// coordinator's `NowPlayingPublisher` republishes; this player doesn't
     /// touch `MPNowPlayingInfoCenter` or `MPRemoteCommandCenter` itself.
     var onNowPlayingChanged: (() -> Void)?
+    /// Fired once when the item fails AFTER it had started playing (a stream
+    /// that dropped), with where it was and its length, in seconds. A failure
+    /// before it started isn't reported here (the coordinator's start handling
+    /// covers that).
+    var onPlaybackFailed: ((_ atSec: Double, _ durationSec: Double) -> Void)?
 
     init() {
         configureAudioSession()
@@ -1733,6 +1743,7 @@ final class IosAVPlayer {
                     self.status = .failed
                     self.errorMessage = item.error?.localizedDescription
                         ?? "Item failed (unknown)"
+                    self.reportFailureIfPlaying()
                 default:
                     break
                 }
@@ -1753,6 +1764,17 @@ final class IosAVPlayer {
                 self.duration = d
             }
             self.isPlaying = newPlayer.timeControlStatus == .playing
+            if self.isPlaying, self.currentTime > 0 { self.startedPlaying = true }
+        }
+        failedObservation = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let error = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            self.errorMessage = error?.localizedDescription ?? "Item failed to play to its end"
+            self.reportFailureIfPlaying()
         }
         endObservation = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -1769,6 +1791,17 @@ final class IosAVPlayer {
         loadedURL = url
         status = .loading
         errorMessage = nil
+    }
+
+    /// The item failed: report it once when it had started playing.
+    private func reportFailureIfPlaying() {
+        guard startedPlaying, !failureReported else { return }
+        failureReported = true
+        let at = currentTime
+        let length = duration
+        isPlaying = false
+        NSLog("AVPLAYER item failed while playing at %.1f s: %@", at, errorMessage ?? "")
+        onPlaybackFailed?(at, length)
     }
 
     func play() {
@@ -1828,6 +1861,12 @@ final class IosAVPlayer {
             NotificationCenter.default.removeObserver(endObs)
             endObservation = nil
         }
+        if let failedObs = failedObservation {
+            NotificationCenter.default.removeObserver(failedObs)
+            failedObservation = nil
+        }
+        startedPlaying = false
+        failureReported = false
         player?.pause()
         player = nil
         isPlaying = false
@@ -1896,9 +1935,9 @@ final class QueuePlaybackCoordinator {
     /// Tracks in a row no source could play. In the car with no phone window
     /// it stops playback on the third (`CAR_UNPLAYABLE_RUN_LIMIT`) instead of
     /// skipping through the whole queue; see `CarUnplayableRun`. Counted from
-    /// the car's connect (`unplayableRunConnection`) and the last explicit play.
+    /// the car's connect (`CarPlaySession.connectionCount`, which the shared
+    /// run checks itself) and the last explicit play.
     @ObservationIgnored private let unplayableRun = CarUnplayableRun(limit: CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT)
-    @ObservationIgnored private var unplayableRunConnection = 0
 
     /// The first source an embedded player refused during one route.
     private final class EmbedRefusal {
@@ -1912,17 +1951,36 @@ final class QueuePlaybackCoordinator {
         var startFailure: PlayFailure?
         /// An Apple Music source was skipped: the app may not use Apple Music.
         var appleMusicUnauthorized = false
+        /// Nothing usable came back from the play-time resolve and a resolver
+        /// couldn't answer, or the resolve threw (#566): the lookup didn't
+        /// really run, so the track isn't known to have no source.
+        var resolversCouldNotAnswer = false
     }
 
-    /// The current track is on screen but no engine has it loaded: a queue
-    /// restored paused at launch, or a track that stopped because nothing
-    /// could play it. Play / toggle then starts it through `playTrack` instead
-    /// of resuming whatever the active engine last held.
-    @ObservationIgnored private var needsLoadOnPlay = false
+    /// A track on screen that no engine holds (the shared `LoadOnPlay`, as
+    /// Android's slot): a queue restored paused at launch or given back
+    /// paused (`RESTORED`), or a track that stopped because nothing could play
+    /// it (`FAILED`). Play loads it through `playTrack` at its position, with
+    /// its picked resolver, instead of resuming whatever the active engine last
+    /// held. Only while its track is the current one (`loadOnPlayTarget`).
+    /// Observed: `currentTime` / `duration` show the slot's position.
+    private var loadOnPlay: LoadOnPlay?
 
-    /// Where the restored track resumes, in seconds (0 = from the top). Set
-    /// by `restoreQueue`, used by the first play (#567).
-    @ObservationIgnored private var restoredResumeAtSec: Double = 0
+    /// The resolver the person picked by hand (the Now Playing deck) for the
+    /// track that is playing, so a slot made for that track retries the same
+    /// source. Set when a play starts; nil when it started without a pick.
+    @ObservationIgnored private var playingPick: (trackId: String, resolver: String)?
+
+    /// The slot Play would load now: `loadOnPlay` while its track is current.
+    private var loadOnPlayTarget: LoadOnPlay? {
+        LoadOnPlayKt.loadOnPlayTarget(pending: loadOnPlay, currentTrackId: currentTrack?.id)
+    }
+
+    /// The hand-picked resolver of `track`'s current play, if any.
+    private func pick(for track: Track) -> String? {
+        guard let p = playingPick, p.trackId == track.id else { return nil }
+        return p.resolver
+    }
     /// Position saving (`PlaybackResumePosition`): was the last tick playing,
     /// and when was the position last written.
     @ObservationIgnored private var positionSaveWasPlaying = false
@@ -2233,6 +2291,8 @@ final class QueuePlaybackCoordinator {
         }
     }
     var currentTime: Double {
+        // A track no engine holds shows where Play will start it.
+        if let load = loadOnPlayTarget, !isStarting { return Double(load.positionMs) / 1000 }
         switch activeEngine {
         case .avPlayer: return player.currentTime
         case .musicKit: return musicKit.currentTime
@@ -2243,6 +2303,9 @@ final class QueuePlaybackCoordinator {
         }
     }
     var duration: Double {
+        if let load = loadOnPlayTarget, !isStarting {
+            return Double(load.track.duration?.int64Value ?? 0) / 1000
+        }
         switch activeEngine {
         case .avPlayer: return player.duration
         case .musicKit: return musicKit.duration
@@ -2256,6 +2319,15 @@ final class QueuePlaybackCoordinator {
     /// Engine-agnostic seek (scrubber). Routes to the active engine — AVPlayer
     /// inline, MusicKit / Spotify on the main actor (the latter via the Web API).
     func seek(to seconds: Double) {
+        // A track no engine holds: move where Play starts it (shown and saved),
+        // without touching an engine that holds nothing (Android's seek on a slot).
+        if let load = loadOnPlayTarget, !isStarting {
+            var ms = Int64(max(seconds, 0) * 1000)
+            if let length = load.track.duration?.int64Value, length > 0 { ms = min(ms, length) }
+            setLoadOnPlayPosition(load.doCopy(track: load.track, positionMs: ms, skipReselect: load.skipReselect,
+                                              why: load.why, pickedResolver: load.pickedResolver))
+            return
+        }
         switch activeEngine {
         case .avPlayer:
             player.seek(to: seconds)
@@ -2459,6 +2531,11 @@ final class QueuePlaybackCoordinator {
         self.player.onTrackEnded = { [weak self] in
             self?.autoAdvance()
         }
+        self.player.onPlaybackFailed = { [weak self] atSec, durationSec in
+            // Called on the main queue (the item's KVO hops there; the
+            // notification is delivered on `.main`).
+            MainActor.assumeIsolated { self?.avPlaybackFailed(atSec: atSec, durationSec: durationSec) }
+        }
         self.musicKit.onTrackEnded = { [weak self] in
             self?.autoAdvance()
         }
@@ -2602,15 +2679,20 @@ final class QueuePlaybackCoordinator {
             NSLog("QUEUE play ignored: '%@' is held for Listen Along", currentTrack?.title ?? "")
             return
         }
-        // Nothing loaded for the track on screen (restored queue, or stopped
-        // because no source could play): start it. A restored track resumes
-        // where it was when the app last ran (#567).
-        if needsLoadOnPlay, let track = currentTrack, !isStarting {
-            let resumeAtSec = restoredResumeAtSec
-            restoredResumeAtSec = 0
-            playTrack(track, aimedAtSec: resumeAtSec)
-            if resumeAtSec > 0 { seekOnceStarted(trackId: track.id, toSec: resumeAtSec) }
-            return
+        // Nothing loaded for the track on screen (the shared `LoadOnPlay`: a
+        // restored queue, or stopped because nothing could play it): start it
+        // at the slot's position (#567), on the source picked by hand if one was.
+        if !isStarting {
+            if let load = loadOnPlayTarget {
+                let resumeAtSec = Double(load.positionMs) / 1000
+                NSLog("QUEUE Play loads '%@' (%@) at %.1f s%@", load.track.title, load.why.name, resumeAtSec,
+                      load.pickedResolver.map { " on \($0)" } ?? "")
+                playTrack(load.track, forcedResolver: load.pickedResolver, aimedAtSec: resumeAtSec, fromLoadOnPlay: true)
+                if resumeAtSec > 0 { seekOnceStarted(trackId: load.track.id, toSec: resumeAtSec) }
+                return
+            }
+            // A slot for a track that's no longer current is stale.
+            loadOnPlay = nil
         }
         switch activeEngine {
         case .avPlayer:
@@ -2733,7 +2815,7 @@ final class QueuePlaybackCoordinator {
         guard let track = currentTrack else { return }
         NSLog("QUEUE '%@' ended; holding it on screen", track.title)
         heldForListener = true
-        needsLoadOnPlay = false
+        loadOnPlay = nil
         let requests = playRequestCount
         Task { @MainActor in
             guard playRequestCount == requests, currentTrack?.id == track.id else { return }
@@ -2746,7 +2828,10 @@ final class QueuePlaybackCoordinator {
     func releaseListenerHold() {
         guard heldForListener else { return }
         heldForListener = false
-        needsLoadOnPlay = currentTrack != nil
+        loadOnPlay = currentTrack.map { track in
+            let picked = pick(for: track)
+            return LoadOnPlay(track: track, positionMs: 0, skipReselect: picked != nil, why: .failed, pickedResolver: picked)
+        }
     }
 
     /// Pause whichever engine is playing for a listener waiting to play its
@@ -2800,13 +2885,25 @@ final class QueuePlaybackCoordinator {
         // active engine is stopped but still reports its stale position, which
         // would read as "past the first seconds" and restart a stopped engine
         // instead of playing the track just pushed to history.
+        // A track no engine holds measures from its slot's position (shared
+        // `positionForPrevious`), not from an engine that holds nothing.
+        let slot = loadOnPlayTarget
+        let playerPositionMs: Int64 = (currentTrack != nil && currentTime.isFinite) ? Int64(currentTime * 1000) : 0
         let action = QueueAdvancePolicyKt.previousAction(
-            positionMs: (currentTrack != nil && currentTime.isFinite) ? Int64(currentTime * 1000) : 0,
+            positionMs: LoadOnPlayKt.positionForPrevious(
+                playerPositionMs: playerPositionMs, pending: loadOnPlay, currentTrackId: currentTrack?.id),
             hasPrevious: queueManager.hasPrevious
         )
         guard action == .playPrevious,
               let prev = queueManager.skipPrevious(currentTrack: currentTrack) else {
-            seek(to: 0)
+            if let slot {
+                // Restart without playing: Play then starts it from the top,
+                // and a relaunch doesn't bring the old position back.
+                NSLog("QUEUE Previous restarts '%@' from the top; nothing plays", slot.track.title)
+                setLoadOnPlayPosition(slot.restartedFromTop())
+            } else {
+                seek(to: 0)
+            }
             return
         }
         syncSnapshot()
@@ -2878,7 +2975,7 @@ final class QueuePlaybackCoordinator {
 
     /// Give a queue back paused: `tracks` become the queue in `context`, the
     /// first one is on screen, paused, with nothing loaded, and Play starts it
-    /// (`needsLoadOnPlay`, as for the queue restored at launch). For a listener
+    /// (a `RESTORED` `loadOnPlay`, as for the queue restored at launch). For a listener
     /// whose session ended while the user had paused.
     func setQueuePaused(_ tracks: [Track], context: PlaybackContext?) {
         guard let track = queueManager.setQueue(
@@ -2886,9 +2983,8 @@ final class QueuePlaybackCoordinator {
         NSLog("QUEUE given back paused at '%@'", track.title)
         playedSinceWrap = false
         heldForListener = false
-        restoredResumeAtSec = 0
         currentTrack = track
-        needsLoadOnPlay = true
+        loadOnPlay = LoadOnPlay(track: track, positionMs: 0, skipReselect: false, why: .restored, pickedResolver: nil)
         syncSnapshot()
     }
 
@@ -2932,14 +3028,19 @@ final class QueuePlaybackCoordinator {
     ///
     /// [aimedAtSec]: where the caller will seek once it plays (a restored
     /// track's first play, #567). A failed start keeps it, so the next Play
-    /// still resumes there (Android's `failedLoad`).
+    /// still resumes there (the shared `failedLoad`).
+    ///
+    /// [fromLoadOnPlay]: Play on a track no engine holds. Its [forcedResolver]
+    /// is the slot's picked resolver, a retry rather than a deck switch, so a
+    /// failure stops on the track for Play like any other (a failed deck
+    /// switch leaves the playback that was going on as it was).
     private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false,
-                           aimedAtSec: Double = 0) {
+                           aimedAtSec: Double = 0, fromLoadOnPlay: Bool = false) {
         currentTrack = track
-        needsLoadOnPlay = false
+        loadOnPlay = nil
         heldForListener = false
-        restoredResumeAtSec = 0
         playRequestCount += 1
+        let deckSwitch = forcedResolver != nil && !fromLoadOnPlay
         onTrackStarting?(track)
         // An explicit play (a tap, Play on a stopped track) starts a new run of
         // unplayable tracks; only the queue moving on adds to one.
@@ -2968,9 +3069,13 @@ final class QueuePlaybackCoordinator {
             // Direct-URL fast path (e.g. already-resolved / Dev sample tracks):
             // play straight through AVPlayer, no resolver round-trip. Skipped for a
             // forced-resolver switch — the user picked a specific cached source, not
-            // the track's (possibly stale) direct URL.
+            // the track's (possibly stale) direct URL. An empty cache entry (the
+            // track's re-resolve on screen found nothing, which is usual for a
+            // direct URL) counts as no entry, so Play on a stopped direct-URL
+            // track (a stream that failed, a restored local file) can still
+            // load its URL instead of resolving to nothing.
             if forcedResolver == nil, let url = track.sourceUrl, !url.isEmpty,
-               resolverCache.cached(artist: track.artist, title: track.title, album: track.album) == nil {
+               resolverCache.cached(artist: track.artist, title: track.title, album: track.album)?.isEmpty ?? true {
                 // Stop the engine that was playing, as the routed path does:
                 // without this a Bandcamp or Apple Music track kept playing under
                 // this one, and kept the lock screen / CarPlay.
@@ -2982,6 +3087,7 @@ final class QueuePlaybackCoordinator {
                 if Task.isCancelled { return }
                 activeEngine = .avPlayer
                 player.load(url: url, title: track.title, artist: track.artist, resolver: "direct")
+                playingPick = nil
                 startAVPlaybackWhenReady()
                 isStarting = false
                 return
@@ -2990,19 +3096,37 @@ final class QueuePlaybackCoordinator {
             // Two-layer resolution: cache (background pre-resolved) first,
             // on-the-fly fallback on a miss.
             var ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album)
+            // Set when the play-time resolve couldn't answer (#566). A cached
+            // entry counts as answered: it held sources when it was resolved.
+            var resolversCouldNotAnswer = false
             if let forced = forcedResolver {
                 // Manual deck switch (Android skipReselect=true): honor the user's
                 // explicit pick — play ONLY that resolver's cached source, never
                 // re-gate it back to the auto-best.
                 ranked = (ranked ?? []).filter { $0.resolver == forced && !$0.noMatch }
             } else if ranked == nil || ranked!.isEmpty {
-                ranked = (try? await container.resolveSources(
-                    artist: track.artist, title: track.title, album: track.album,
-                    // Play-time fallback also benefits from the #211 hint when the
-                    // track already carries streaming IDs.
-                    spotifyId: track.spotifyId, appleMusicId: track.appleMusicId,
-                    // #402: an exact ISRC / recording-MBID match scores 1.0.
-                    targetIsrc: track.isrc, targetMbid: track.recordingMbid)) ?? []
+                do {
+                    let report = try await container.resolveSourcesReport(
+                        artist: track.artist, title: track.title, album: track.album,
+                        // Play-time fallback also benefits from the #211 hint when the
+                        // track already carries streaming IDs.
+                        spotifyId: track.spotifyId, appleMusicId: track.appleMusicId,
+                        // #402: an exact ISRC / recording-MBID match scores 1.0.
+                        targetIsrc: track.isrc, targetMbid: track.recordingMbid)
+                    ranked = report.sources
+                    // Nothing came back and a resolver couldn't answer (a
+                    // Spotify cooldown, a plugin timeout): not a miss (#566).
+                    resolversCouldNotAnswer = report.sources.isEmpty && !report.failed.isEmpty
+                    if resolversCouldNotAnswer {
+                        NSLog("QUEUE '%@': resolvers couldn't answer (%@)", track.title,
+                              report.failed.sorted().joined(separator: ", "))
+                    }
+                } catch {
+                    if Task.isCancelled { return }
+                    NSLog("QUEUE '%@': the play-time resolve failed: %@", track.title, String(describing: error))
+                    ranked = []
+                    resolversCouldNotAnswer = true
+                }
             } else {
                 // Android parity (PlaybackController.reselectBestSource → selectBest):
                 // re-apply the LIVE active-resolver gate to CACHED sources on every
@@ -3026,6 +3150,7 @@ final class QueuePlaybackCoordinator {
             // An embedded player (SoundCloud's widget) refusing a source is a
             // failed source: the router moves on to the next one (#495).
             let refusal = EmbedRefusal()
+            refusal.resolversCouldNotAnswer = resolversCouldNotAnswer
             var router = self.router
             router.onRefused = { service, pageUrl, reason in
                 if refusal.service == nil { refusal.service = service; refusal.pageUrl = pageUrl; refusal.reason = reason }
@@ -3049,6 +3174,7 @@ final class QueuePlaybackCoordinator {
             case .played(let kind, let playedResolver):
                 unplayableRun.started()
                 playedSinceWrap = true
+                playingPick = forcedResolver.map { (trackId: track.id, resolver: $0) }
                 let previousEngine = activeEngine
                 activeEngine = kind
                 await applyEngineHandoff(from: previousEngine, to: kind)
@@ -3097,7 +3223,7 @@ final class QueuePlaybackCoordinator {
                 // comes next, with no notice and no skip. Unless it started
                 // another play, the track is held for it: Play does nothing
                 // until the friend's next track plays or the session ends.
-                if forcedResolver == nil, let hook = onTrackUnplayable {
+                if !deckSwitch, let hook = onTrackUnplayable {
                     let requestsBefore = playRequestCount
                     if hook(track) {
                         if playRequestCount == requestsBefore {
@@ -3108,36 +3234,42 @@ final class QueuePlaybackCoordinator {
                         return
                     }
                 }
+                // The slot a stop on this track leaves for Play: where this
+                // play aimed, on the source picked by hand if there was one.
+                let pickedResolver = forcedResolver
                 // Apple Music would play it but the app may not use Apple
                 // Music: stop on the track and say so (Android's sign-in
                 // message, shared). Access is granted in iOS Settings, which
                 // the action opens; Play then tries the track again.
-                if refusal.appleMusicUnauthorized, forcedResolver == nil {
+                if refusal.appleMusicUnauthorized, !deckSwitch {
                     NSLog("QUEUE '\(track.title)' didn't play: Apple Music access not granted")
                     await haltActiveEngine()
                     notice = Notice(message: PlayFailureKt.APPLE_MUSIC_SIGN_IN_MESSAGE,
                                     actionLabel: "Open Settings", actionUrl: UIApplication.openSettingsURLString)
-                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                // Nothing could start because nothing could reach the network:
-                // Apple Music failed to start (offline: MusicKit fails at once),
-                // or the device has no network at all. Stop on the track with
-                // the shared message, advancing or not: every next track would
-                // fail the same way, and the queue would run to its end. Play
-                // loads it again once the network is back (Android's
-                // `PlayFailure.START_FAILED` → `LoadOnPlay` `FAILED`).
-                let startFailure = refusal.startFailure
-                    ?? (IosNetworkStatus.shared.isOnline ? nil : PlayFailure.startFailed)
-                if let startFailure, forcedResolver == nil,
+                // Nothing could start because nothing could reach the network
+                // or answer: Apple Music failed to start (offline: MusicKit
+                // fails at once), the device has no network, or the resolvers
+                // couldn't answer (#566; shared `noSourceFailure`). Stop on the
+                // track with the shared message, advancing or not: every next
+                // track would likely fail the same way, and the queue would run
+                // to its end. Play loads it again (`PlayFailure.START_FAILED`
+                // → `LoadOnPlay` `FAILED`, as Android).
+                let noSource = PlayFailureKt.noSourceFailure(
+                    online: IosNetworkStatus.shared.isOnline,
+                    resolversCouldNotAnswer: refusal.resolversCouldNotAnswer)
+                let startFailure = refusal.startFailure ?? (noSource == .startFailed ? PlayFailure.startFailed : nil)
+                if let startFailure, !deckSwitch,
                    PlayFailureKt.failedPlayAwaitsLoad(failure: startFailure, advancing: advancing, spinoffMode: spinoffMode) {
                     NSLog("QUEUE '\(track.title)' didn't play (\(startFailure.name)); Play will load it")
                     await haltActiveEngine()
                     notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
-                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                if refusal.spotifyFailed, forcedResolver == nil, CarPlaySession.shared.isConnected {
+                if refusal.spotifyFailed, !deckSwitch, CarPlaySession.shared.isConnected {
                     // In the car, Spotify couldn't start (it isn't running on
                     // the phone, and the car never opens it) and nothing else
                     // can play the track: stop on it with Android Auto's
@@ -3145,12 +3277,12 @@ final class QueuePlaybackCoordinator {
                     // playlist. Play again retries it once Spotify is open.
                     await haltActiveEngine()
                     notice = Notice(message: CarMessages.shared.OPEN_SPOTIFY_ON_PHONE)
-                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
                 if refusal.service != nil, refusal.reason == "page" || refusal.reason == "unplayable",
                    !(advancing || spinoffMode),
-                   forcedResolver == nil, CarPlaySession.shared.phoneAppNotInFront {
+                   !deckSwitch, CarPlaySession.shared.phoneAppNotInFront {
                     // Tapped in the car with Parachord not in front on the
                     // phone: the embed had no window, or may not have been let
                     // start while locked, so its "only plays on its own site"
@@ -3158,7 +3290,7 @@ final class QueuePlaybackCoordinator {
                     // banner. Play retries it.
                     await haltActiveEngine()
                     notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
-                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
                 if let service = refusal.service,
@@ -3176,22 +3308,31 @@ final class QueuePlaybackCoordinator {
                     // The halted embed holds nothing: Play tries the track
                     // again (it may have been refused for being offline)
                     // rather than "resuming" a stopped page.
-                    awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
-                // Resolved but no engine could play it (e.g. Apple-Music-only
-                // match with no subscription) — advance to the next track. On a
-                // forced deck switch, DON'T skip: the user asked to change source,
-                // not to skip the song — leave the current playback as-is.
-                if forcedResolver == nil {
-                    // A car that connected since the run began starts it over:
-                    // failures on the phone before it don't count.
-                    let session = CarPlaySession.shared
-                    if session.connectionCount != unplayableRunConnection {
-                        unplayableRunConnection = session.connectionCount
-                        unplayableRun.reset()
+                // On a deck switch, DON'T stop or skip: the user asked to
+                // change source, not to leave the song, so the current
+                // playback stays as it is.
+                if !deckSwitch {
+                    // Online with resolvers that answered (`NO_SOURCE`, shared
+                    // `failedPlayAwaitsLoad`): a tapped track stops for Play
+                    // with the shared message; the queue moving on (or a
+                    // spinoff) skips it.
+                    if PlayFailureKt.failedPlayAwaitsLoad(failure: noSource, advancing: advancing, spinoffMode: spinoffMode) {
+                        NSLog("QUEUE '\(track.title)' has no playable source (\(noSource.name)); Play will load it")
+                        await haltActiveEngine()
+                        notice = Notice(message: noSource == .noSource
+                                        ? PlayFailureKt.PLAY_NO_SOURCE_MESSAGE
+                                        : PlayFailureKt.PLAY_START_FAILED_MESSAGE)
+                        awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
+                        return
                     }
-                    if unplayableRun.failed(carWithoutPhone: session.phoneAppNotInFront) {
+                    // A car that connected since the run began starts it over
+                    // (the shared run checks the connection number itself).
+                    let session = CarPlaySession.shared
+                    if unplayableRun.failed(carWithoutPhone: session.phoneAppNotInFront,
+                                            connection: Int32(session.connectionCount)) {
                         // In the car with Parachord not in front on the phone,
                         // the third track in a row nothing could play: stop on
                         // it rather than run silently through the queue. Play
@@ -3200,9 +3341,10 @@ final class QueuePlaybackCoordinator {
                         NSLog("CARPLAY stopped on '\(track.title)': \(CarUnplayableRunKt.CAR_UNPLAYABLE_RUN_LIMIT) tracks in a row had no playable source")
                         await haltActiveEngine()
                         notice = Notice(message: CarMessages.shared.OPEN_PARACHORD_ON_PHONE)
-                        awaitLoadOnPlay(aimedAtSec: aimedAtSec)
+                        awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                         return
                     }
+                    NSLog("QUEUE '\(track.title)' has no playable source; skipping (advancing)")
                     advance(.skippedUnplayable)
                 }
             }
@@ -3211,12 +3353,36 @@ final class QueuePlaybackCoordinator {
     }
 
     /// A play that nothing could start leaves its track on screen for Play
-    /// to load ([needsLoadOnPlay]), at the position that play aimed for.
+    /// to load (a `FAILED` `loadOnPlay`), at the position that play aimed
+    /// for, on the source picked by hand if there was one. The play never
+    /// started, so there's no failure position (shared `failedLoad`).
     @MainActor
-    private func awaitLoadOnPlay(aimedAtSec: Double) {
-        needsLoadOnPlay = true
-        restoredResumeAtSec = aimedAtSec
+    private func awaitLoadOnPlay(_ track: Track, aimedAtSec: Double, pickedResolver: String?) {
+        loadOnPlay = LoadOnPlayKt.failedLoad(
+            track: track, skipReselect: pickedResolver != nil,
+            failedAtMs: 0, durationMs: track.duration?.int64Value ?? 0,
+            aimedAtMs: Int64(aimedAtSec * 1000), pickedResolver: pickedResolver)
         isStarting = false
+    }
+
+    /// AVPlayer's item failed after it had started playing (a stream that
+    /// dropped): stop on the track with the shared start-failed message, and
+    /// leave it for Play to start again where it stopped (shared `failedLoad`:
+    /// its first 5 s or last 10 s start over). A failure before it started is
+    /// the start handling's (`startAVPlaybackWhenReady`).
+    @MainActor
+    private func avPlaybackFailed(atSec: Double, durationSec: Double) {
+        guard activeEngine == .avPlayer, !isStarting, let track = currentTrack else { return }
+        let picked = pick(for: track)
+        let lengthMs = durationSec > 0 ? Int64(durationSec * 1000) : (track.duration?.int64Value ?? 0)
+        player.stop()
+        loadOnPlay = LoadOnPlayKt.failedLoad(
+            track: track, skipReselect: picked != nil,
+            failedAtMs: Int64(atSec * 1000), durationMs: lengthMs,
+            aimedAtMs: 0, pickedResolver: picked)
+        NSLog("QUEUE '%@' stream failed at %.1f s; Play resumes at %.1f s", track.title, atSec,
+              Double(loadOnPlay?.positionMs ?? 0) / 1000)
+        notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
     }
 
     /// Stop whichever engine is playing and drop the keepalive, keeping the
@@ -3382,10 +3548,14 @@ final class QueuePlaybackCoordinator {
             self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the
             // saved position when it's for this track (#567).
-            self.needsLoadOnPlay = state.currentTrack != nil
-            self.restoredResumeAtSec = Double(PlaybackResumePosition.shared.resumeAtMs(
-                saved: PlaybackResumePosition.shared.decode(jsonStr: savedPosition),
-                trackId: state.currentTrack?.id)) / 1000
+            self.loadOnPlay = state.currentTrack.map { track in
+                LoadOnPlay(
+                    track: track,
+                    positionMs: PlaybackResumePosition.shared.resumeAtMs(
+                        saved: PlaybackResumePosition.shared.decode(jsonStr: savedPosition),
+                        trackId: track.id),
+                    skipReselect: false, why: .restored, pickedResolver: nil)
+            }
             self.syncSnapshot()
         }
     }
@@ -3401,17 +3571,33 @@ final class QueuePlaybackCoordinator {
             wasPlaying: positionSaveWasPlaying, isPlaying: playing,
             msSinceLastSave: nowMs - positionSavedAtMs)
         positionSaveWasPlaying = playing
-        guard due, let track = currentTrack, !needsLoadOnPlay else { return }
+        // A track no engine holds keeps the position its slot saved.
+        guard due, let track = currentTrack, loadOnPlayTarget == nil else { return }
         positionSavedAtMs = nowMs
+        savePosition(trackId: track.id, positionMs: Int64(currentTime * 1000),
+                     durationMs: Int64(max(duration, 0) * 1000))
+    }
+
+    /// Writes the saved resume position (`persisted_queue_position`), when
+    /// "Remember queue" is on.
+    private func savePosition(trackId: String, positionMs: Int64, durationMs: Int64) {
         let json = PlaybackResumePosition.shared.encode(position: SavedPlaybackPosition(
-            trackId: track.id,
-            positionMs: Int64(currentTime * 1000),
-            durationMs: Int64(max(duration, 0) * 1000)))
+            trackId: trackId, positionMs: positionMs, durationMs: durationMs))
         let settings = container.settingsStore
         Task {
             guard (try? await settings.isPersistQueueEnabled()) == true else { return }
             try? await settings.setPersistedPlaybackPosition(json: json)
         }
+    }
+
+    /// Moves where Play starts the track no engine holds (Previous restarting
+    /// it, a seek): the slot, the shown position (`currentTime` reads the
+    /// slot) and the saved one, so a relaunch doesn't bring the old one back.
+    private func setLoadOnPlayPosition(_ load: LoadOnPlay) {
+        loadOnPlay = load
+        NSLog("QUEUE '%@' will start at %.1f s", load.track.title, Double(load.positionMs) / 1000)
+        savePosition(trackId: load.track.id, positionMs: load.positionMs,
+                     durationMs: load.track.duration?.int64Value ?? 0)
     }
 
     /// Seeks [trackId] to [toSec] once it's playing: the first play of a
