@@ -56,6 +56,7 @@ import org.koin.android.ext.android.inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
@@ -103,7 +104,16 @@ class PlaybackService : MediaLibraryService() {
     private var mediaSession: MediaLibrarySession? = null
     private var player: ExoPlayer? = null
     private var forwardingPlayer: ExternalPlaybackForwardingPlayer? = null
+    /**
+     * The service holds the foreground itself and Media3's notification
+     * updates aren't passed on: during external playback
+     * ([promoteToForeground]), and from a local track's end to the next
+     * track ([keepForegroundAcrossLocalTrackEnd]).
+     */
     private var isExternalForeground = false
+
+    /** Lets go of a foreground the service holds with nothing using it ([startForegroundHoldWatchdog]). */
+    private var foregroundHoldWatchdog: Job? = null
 
     /**
      * Last external-playback duration we pushed a metadata refresh for. External
@@ -299,6 +309,10 @@ class PlaybackService : MediaLibraryService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         player = exoPlayer
+        // Registered before the session, so it runs ahead of the session's
+        // own listener and PlaybackController's: at a local track's end the
+        // service is still in the foreground here.
+        exoPlayer.addListener(foregroundKeeper)
 
         // Wrap ExoPlayer in a ForwardingPlayer that reports external playback
         // state (position, duration, artwork) to the MediaSession. During
@@ -1143,15 +1157,109 @@ class PlaybackService : MediaLibraryService() {
                 // system media controls (notification shade, lock screen) show
                 // correct progress without needing to override position on
                 // the ForwardingPlayer (which MediaSession only reads once).
+                // Only while ExoPlayer plays the silent loop: while a foreground
+                // is held across a local track's end, ExoPlayer holds the local
+                // track, and this would seek the next one to where the last
+                // one ended.
                 val externalPos = state.position
                 val p = player
-                if (p != null && externalPos > 0 && externalPos < 600_000) {
+                if (p != null && externalPos > 0 && externalPos < 600_000 &&
+                    isSilenceKeepAliveUri(p.currentMediaItem?.localConfiguration?.uri?.toString())
+                ) {
                     val currentPos = p.currentPosition
                     // Only seek if the positions diverge significantly (avoid
                     // seek spam that could cause progress bar flicker)
                     if (kotlin.math.abs(currentPos - externalPos) > 2000) {
                         p.seekTo(externalPos)
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * Keeps the foreground across a local track's end (#614) and hands it
+     * back to Media3 once ExoPlayer plays a track again.
+     */
+    private val foregroundKeeper = object : Player.Listener {
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) keepForegroundAcrossLocalTrackEnd()
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) handForegroundBackIfExoPlayerPlaysTrack()
+        }
+    }
+
+    /**
+     * ExoPlayer has ended a local track by itself. Media3 takes the service
+     * out of the foreground next (its player isn't playing), and Android 12+
+     * doesn't let an app that isn't on screen start one again: the next
+     * track couldn't take it back (#614). When something follows and no
+     * Parachord screen shows ([PlaybackController.keepForegroundAtLocalTrackEnd]),
+     * the service keeps Media3's foreground as its own instead: no new start,
+     * Media3's updates aren't passed on, and the next track's route takes it
+     * over (an external route keeps it, a local track hands it back to Media3
+     * once it plays, [handForegroundBackIfExoPlayerPlaysTrack]).
+     */
+    private fun keepForegroundAcrossLocalTrackEnd() {
+        if (isExternalForeground) return
+        val p = player ?: return
+        // The silent loop repeats and never ends; checked anyway.
+        if (isSilenceKeepAliveUri(p.currentMediaItem?.localConfiguration?.uri?.toString())) return
+        // Only a foreground the service is in can be kept.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+        ) return
+        if (!playbackController.keepForegroundAtLocalTrackEnd()) return
+        Log.d(TAG, "Local track ended; keeping the foreground for the next track")
+        isExternalForeground = true
+        startForegroundHoldWatchdog()
+    }
+
+    /**
+     * ExoPlayer plays a track itself (not the silent loop of external
+     * playback) while the service holds the foreground: a local track after
+     * a local or external one, started by the queue with no screen showing
+     * ([localPlayKeepsHeldForeground]). Media3's updates are passed on again;
+     * the service stays in the foreground throughout, so Media3 only updates
+     * it (allowed from the background) and lets it go at the next pause or end.
+     */
+    private fun handForegroundBackIfExoPlayerPlaysTrack() {
+        if (!isExternalForeground) return
+        val p = player ?: return
+        if (isSilenceKeepAliveUri(p.currentMediaItem?.localConfiguration?.uri?.toString())) return
+        Log.d(TAG, "ExoPlayer is playing a track; handing the foreground back to Media3")
+        isExternalForeground = false
+        foregroundHoldWatchdog?.cancel()
+        foregroundHoldWatchdog = null
+    }
+
+    /**
+     * While the service holds the foreground, let it go after
+     * [FOREGROUND_HOLD_IDLE_LIMIT_MS] with no external playback and no play,
+     * advance or skip under way ([nextForegroundHoldIdleMs]): a stalled advance,
+     * or a local track that never started, can't leave a foreground service
+     * running with nothing playing.
+     */
+    private fun startForegroundHoldWatchdog() {
+        foregroundHoldWatchdog?.cancel()
+        foregroundHoldWatchdog = serviceScope.launch {
+            var idleMs = 0L
+            while (isExternalForeground) {
+                delay(FOREGROUND_HOLD_CHECK_MS)
+                if (!isExternalForeground) break
+                idleMs = nextForegroundHoldIdleMs(
+                    idleMs,
+                    FOREGROUND_HOLD_CHECK_MS,
+                    externalMode = forwardingPlayer?.externalMode == true,
+                    transitionInProgress = playbackController.foregroundTransitionInProgress,
+                )
+                if (idleMs >= FOREGROUND_HOLD_IDLE_LIMIT_MS) {
+                    Log.d(TAG, "Nothing played for ${idleMs / 1000} s; letting the held foreground go")
+                    playbackController.foregroundHoldExpired()
+                    demoteFromForeground()
+                    break
                 }
             }
         }
@@ -1189,6 +1297,7 @@ class PlaybackService : MediaLibraryService() {
                 else 0,
             )
             isExternalForeground = true
+            startForegroundHoldWatchdog()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start foreground", e)
         }
@@ -1224,6 +1333,8 @@ class PlaybackService : MediaLibraryService() {
         if (!isExternalForeground) return
         Log.d(TAG, "Demoting from external playback foreground")
         isExternalForeground = false
+        foregroundHoldWatchdog?.cancel()
+        foregroundHoldWatchdog = null
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }
 
@@ -1416,6 +1527,27 @@ class PlaybackService : MediaLibraryService() {
 
         /** When true, next/prev commands are available and routed to PlaybackController. */
         var externalMode = false
+
+        /**
+         * The session's play or pause goes to the controller's
+         * togglePlayPause only while both this player and the controller
+         * are external ([sessionPlayPauseGoesToController]): [externalMode]
+         * arrives by an intent and can lag the controller.
+         */
+        private fun playPauseGoesToController(): Boolean =
+            sessionPlayPauseGoesToController(externalMode, playbackController.isExternalPlaybackActive)
+
+        /** Set while a session play or pause is with [PlaybackController.togglePlayPause]. */
+        private var inControllerPlayPause = false
+
+        private fun toggleOnController() {
+            inControllerPlayPause = true
+            try {
+                playbackController.togglePlayPause()
+            } finally {
+                inControllerPlayPause = false
+            }
+        }
 
         @Volatile
         private var queueSnapshot: QueueSnapshotState = QueueSnapshotState.EMPTY
@@ -1662,17 +1794,22 @@ class PlaybackService : MediaLibraryService() {
             // Media3 sees the playing state event and re-issues PLAY through
             // the MediaSession, which lands here. Without the guard, our
             // togglePlayPause's resume branch would re-start playback.
-            if (externalMode && playbackController.wasRecentlyUserPaused()) {
+            // A play that comes back while this one is with the controller
+            // goes to ExoPlayer: a backstop only, the routing below never
+            // sends the controller's own play back to it.
+            if (inControllerPlayPause) { super.play(); return }
+            val external = playPauseGoesToController()
+            if (external && playbackController.wasRecentlyUserPaused()) {
                 Log.w(TAG, "Suppressing wrapper.play() — recent user pause (sincePauseMs=${playbackController.msSinceLastUserPause()})")
                 return
             }
-            if (externalMode) { playbackController.togglePlayPause(); return }
+            if (external) { toggleOnController(); return }
             // A track on screen that ExoPlayer doesn't hold: a queue restored
             // at launch (playing skipped to the empty next item and stopped,
             // #567), or a track nothing could play (ExoPlayer is idle or in its
             // error state, where play does nothing). The controller starts it
             // through the full pipeline, where it was.
-            if (playbackController.needsLoadOnPlay) { playbackController.togglePlayPause(); return }
+            if (playbackController.needsLoadOnPlay) { toggleOnController(); return }
             // A user's resume (lock screen, headphones, the car) that skips
             // togglePlayPause: the listener may play something else instead.
             if (playbackController.onSessionPlayPause(play = true)) return
@@ -1700,11 +1837,13 @@ class PlaybackService : MediaLibraryService() {
             // resume-when-paused. So a wrapper.pause() that arrives while
             // we're already paused (e.g. spurious MediaSession command during
             // a BT route change) would flip us to PLAYING. Suppress it.
-            if (externalMode && !stateHolder.state.value.isPlaying) {
+            if (inControllerPlayPause) { super.pause(); return }
+            val external = playPauseGoesToController()
+            if (external && !stateHolder.state.value.isPlaying) {
                 Log.w(TAG, "Suppressing wrapper.pause() — already paused (toggle would resume)")
                 return
             }
-            if (externalMode) { playbackController.togglePlayPause(); return }
+            if (external) { toggleOnController(); return }
             // A user's pause that skips togglePlayPause, told to the listener.
             playbackController.onSessionPlayPause(play = false)
             super.pause()

@@ -31,6 +31,7 @@ class ForwardingPlayerSessionPlayPauseTest {
         every { controller.needsLoadOnPlay } returns needsLoad
         every { controller.wasRecentlyUserPaused() } returns false
         every { controller.onSessionPlayPause(true) } returns listenerTakesResume
+        every { controller.isExternalPlaybackActive } returns external
         val stateHolder = PlaybackStateHolder()
         stateHolder.update { copy(isPlaying = true) }
         val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
@@ -68,6 +69,42 @@ class ForwardingPlayerSessionPlayPauseTest {
         extWrapper.pause()
         extWrapper.play()
         verify(exactly = 0) { extController.onSessionPlayPause(any()) }
+    }
+
+    @Test fun `external mode left on while the controller is already local sends play and pause to ExoPlayer`() {
+        val (wrapper, delegate, controller) = wrapper()
+        wrapper.externalMode = true
+        // The controller's own ctrl.play() for a local track, arriving before
+        // the external-mode-off intent: togglePlayPause would answer it with
+        // ctrl.play() again, on the main thread, forever (an ANR on a Pixel 9a).
+        wrapper.play()
+        verify(exactly = 0) { controller.togglePlayPause() }
+        verify(exactly = 1) { delegate.play() }
+        wrapper.pause()
+        verify(exactly = 0) { controller.togglePlayPause() }
+        verify(exactly = 1) { delegate.pause() }
+    }
+
+    @Test fun `external mode on both sides sends play and pause to togglePlayPause`() {
+        val (wrapper, delegate, controller) = wrapper(external = true)
+        wrapper.pause()
+        wrapper.play()
+        verify(exactly = 2) { controller.togglePlayPause() }
+        verify(exactly = 0) { delegate.play() }
+        verify(exactly = 0) { delegate.pause() }
+    }
+
+    @Test fun `a session play that comes back during togglePlayPause goes to ExoPlayer once`() {
+        val (wrapper, delegate, controller) = wrapper(external = true)
+        var calls = 0
+        every { controller.togglePlayPause() } answers {
+            calls++
+            // The controller's play echoed synchronously through the session.
+            wrapper.play()
+        }
+        wrapper.play()
+        assertEquals(1, calls)
+        verify(exactly = 1) { delegate.play() }
     }
 
     @Test fun `sessionPlayPauseAction reports a user's resume and pause only`() {

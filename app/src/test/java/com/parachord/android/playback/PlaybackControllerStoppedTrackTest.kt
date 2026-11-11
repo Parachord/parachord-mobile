@@ -320,6 +320,90 @@ class PlaybackControllerStoppedTrackTest {
         assertFalse(controller.holdsForegroundForPlay)
     }
 
+    // ── C3. The foreground kept at a local track's end (#614) ──────────
+
+    @Test
+    fun `a local track ending into the next track keeps the foreground until its route takes it`() {
+        f.queueManager.setQueue(listOf(a, b), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+
+        assertTrue(controller.keepForegroundAtLocalTrackEnd())
+        assertTrue(controller.holdsForegroundForPlay)
+
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        // b's route (external playback) took it over.
+        routed("b")
+        assertFalse(controller.holdsForegroundForPlay)
+    }
+
+    @Test
+    fun `a local track ending into a skipped track keeps the foreground across the skip`() {
+        f.queueManager.setQueue(listOf(a, n, b), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+
+        assertTrue(controller.keepForegroundAtLocalTrackEnd())
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        assertEquals("n", state.currentTrack?.id)
+        assertTrue("kept across the skip gap", controller.holdsForegroundForPlay)
+
+        pastTheGap()
+        routed("b")
+        assertFalse(controller.holdsForegroundForPlay)
+    }
+
+    @Test
+    fun `the last local track ending keeps no foreground`() {
+        f.queueManager.setQueue(listOf(a), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+
+        assertFalse(controller.keepForegroundAtLocalTrackEnd())
+        assertFalse(controller.holdsForegroundForPlay)
+    }
+
+    @Test
+    fun `the last local track under repeat one or all keeps the foreground`() {
+        f.queueManager.setQueue(listOf(a), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true, repeatMode = com.parachord.shared.playback.RepeatMode.ONE) }
+        assertTrue(controller.keepForegroundAtLocalTrackEnd())
+
+        controller.foregroundHoldExpired()
+        assertFalse(controller.holdsForegroundForPlay)
+        f.stateHolder.update { copy(repeatMode = com.parachord.shared.playback.RepeatMode.ALL) }
+        assertTrue(controller.keepForegroundAtLocalTrackEnd())
+    }
+
+    @Test
+    fun `a track Listen Along drives keeps the foreground for what the session plays`() {
+        f.queueManager.setQueue(listOf(a), 0, null, false)
+        f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+        controller.drivesTrack = { it.id == "a" }
+
+        assertTrue(controller.keepForegroundAtLocalTrackEnd())
+    }
+
+    @Test
+    fun `with a Parachord screen showing a local track's end keeps no foreground`() {
+        val screen = mockk<android.app.Activity>(relaxed = true)
+        com.parachord.android.app.CurrentActivityHolder.onActivityResumed(screen)
+        try {
+            f.queueManager.setQueue(listOf(a, b), 0, null, false)
+            f.stateHolder.update { copy(currentTrack = a, isPlaying = true) }
+            assertFalse(controller.keepForegroundAtLocalTrackEnd())
+        } finally {
+            com.parachord.android.app.CurrentActivityHolder.onActivityPaused(screen)
+        }
+    }
+
+    @Test
+    fun `during external playback a track's end keeps no extra foreground`() {
+        controller.playQueue(listOf(a, b))
+        run()
+        assertTrue(controller.isExternalPlaybackActive)
+        assertFalse(controller.keepForegroundAtLocalTrackEnd())
+    }
+
     // ── F. A manual pick survives a mid-play failure ───────────────────
 
     @Test
