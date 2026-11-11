@@ -14,7 +14,6 @@ import android.os.PowerManager
 import com.parachord.shared.platform.Log
 import com.parachord.shared.playback.AdvanceAction
 import com.parachord.shared.playback.AdvanceTrigger
-import com.parachord.shared.playback.PLAY_NO_SOURCE_MESSAGE
 import com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE
 import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import com.parachord.shared.playback.PlaybackMessages
@@ -28,8 +27,9 @@ import com.parachord.shared.playback.advanceAction
 import com.parachord.shared.playback.nextRepeatMode
 import com.parachord.shared.playback.previousAction
 import com.parachord.shared.playback.QueueRestorePolicy
-import com.parachord.shared.playback.failedPlayAwaitsLoad
 import com.parachord.shared.playback.noSourceFailure
+import com.parachord.shared.playback.UnplayableTrackOutcome
+import com.parachord.shared.playback.unplayableTrackOutcome
 import com.parachord.shared.playback.ResolverVolume
 import com.parachord.android.data.store.SettingsStore
 import android.widget.Toast
@@ -1574,12 +1574,15 @@ class PlaybackController constructor(
             val failure = noSourceFailure(online, resolversCouldNotAnswer)
             Log.w(TAG, "No playable source for '${routedTrack.title}' (${if (online) "online" else "offline"}, resolvers couldn't answer: $resolversCouldNotAnswer)")
             playFailure = failure
-            // Skip it, or (the car's third in a row) stop here: decided before
-            // the track is published, so the car gets one message, not the
+            // Skip it, stop for Play, or (the car's third in a row) stop here,
+            // and what to say (the shared rule, #616): decided before the
+            // track is published, so the car gets one message, not the
             // phone's and then its own.
-            val skipWanted = !failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)
-            val carStop = skipWanted && carStopsAutoSkip(routedTrack)
-            val autoSkip = skipWanted && !carStop
+            val carConnection = carConnectionForStop()
+            val outcome = unplayableTrackOutcome(failure, advancing, stateHolder.state.value.spinoffMode) {
+                carStopsAutoSkip(routedTrack, carConnection)
+            }
+            val autoSkip = outcome is UnplayableTrackOutcome.Skip
             stateHolder.update {
                 copy(
                     currentTrack = routedTrack,
@@ -1591,24 +1594,19 @@ class PlaybackController constructor(
                     playbackContext = snapshot.playbackContext,
                     shuffleEnabled = snapshot.shuffleEnabled,
                     streamingMetadata = null,
-                    playbackError = when {
-                        // The car shows why, instead of the phone's "no playable source".
-                        carStop -> com.parachord.shared.car.CarMessages.OPEN_PARACHORD_ON_PHONE
-                        failure == PlayFailure.NO_SOURCE -> PLAY_NO_SOURCE_MESSAGE
-                        else -> PLAY_START_FAILED_MESSAGE
-                    },
+                    playbackError = (outcome as? UnplayableTrackOutcome.Stop)?.message,
                 )
             }
             // Stop what was playing before it: left playing, its own end of
             // track would advance the queue as well as the skip below (two
             // advances, the second past the next track).
-            val followed = !skipWanted && drivesTrack?.invoke(routedTrack) == true
+            val followed = outcome is UnplayableTrackOutcome.Stop && !outcome.byCar &&
+                drivesTrack?.invoke(routedTrack) == true
             if (autoSkip) holdForegroundForAutoSkip(routedTrack)
             stopBeforeFailedTrack(autoSkip, followed)
             if (followed) holdForListener()
             if (autoSkip) {
                 Log.d(TAG, "Auto-skip '${routedTrack.title}': no playable source")
-                stateHolder.update { copy(playbackError = null) }
                 scheduleAutoSkip(routedTrack)
             }
             return
@@ -3285,30 +3283,28 @@ class PlaybackController constructor(
             return
         }
         // Nothing else can play it. Skipped when the queue is moving on,
-        // otherwise Play loads it again ([failedPlayAwaitsLoad]).
+        // otherwise Play loads it again (the shared [unplayableTrackOutcome]).
         playFailure = PlayFailure.EMBED_REFUSED
-        val skipWanted = !failedPlayAwaitsLoad(PlayFailure.EMBED_REFUSED, advancing, stateHolder.state.value.spinoffMode)
-        val carStop = skipWanted && carStopsAutoSkip(track)
-        val autoSkip = skipWanted && !carStop
-        val followed = !skipWanted && drivesTrack?.invoke(track) == true
+        val carConnection = carConnectionForStop()
+        val outcome = unplayableTrackOutcome(
+            PlayFailure.EMBED_REFUSED, advancing, stateHolder.state.value.spinoffMode,
+            refusedMessage = com.parachord.shared.playback.SoundCloudWidget.refusedMessage(e.serviceName, track.title, e.reason),
+        ) { carStopsAutoSkip(track, carConnection) }
+        val autoSkip = outcome is UnplayableTrackOutcome.Skip
+        val followed = outcome is UnplayableTrackOutcome.Stop && !outcome.byCar && drivesTrack?.invoke(track) == true
         if (autoSkip) holdForegroundForAutoSkip(track)
         stopBeforeFailedTrack(autoSkip, followed)
         if (followed) holdForListener()
-        if (carStop) {
-            // The car shows why; no "Open in …" snackbar on the phone.
-            stateHolder.update {
-                copy(isPlaying = false, isBuffering = false, playbackError = com.parachord.shared.car.CarMessages.OPEN_PARACHORD_ON_PHONE)
-            }
-            return
-        }
-        if (autoSkip) {
+        if (outcome !is UnplayableTrackOutcome.Stop) {
             Log.d(TAG, "Auto-skip '${track.title}': ${e.serviceName} won't play it")
             stateHolder.update { copy(isPlaying = false, isBuffering = false) }
             scheduleAutoSkip(track)
             return
         }
-        val message = com.parachord.shared.playback.SoundCloudWidget.refusedMessage(e.serviceName, track.title, e.reason)
-        stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = message) }
+        stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = outcome.message) }
+        // The car shows why; no "Open in …" snackbar on the phone.
+        if (outcome.byCar) return
+        val message = outcome.message
         // Shown by playTrackInternal unless onTrackUnplayable takes the track.
         failureNotice = PlaybackNotice(
             message = message,
@@ -3326,11 +3322,8 @@ class PlaybackController constructor(
      * the queue skips on. A track a listener drives (Listen Along) isn't counted.
      * True marks the play [carStoppedPlay], so Play loads the track again.
      */
-    private suspend fun carStopsAutoSkip(track: TrackEntity): Boolean {
+    private fun carStopsAutoSkip(track: TrackEntity, connection: Int?): Boolean {
         if (drivesTrack?.invoke(track) == true) return false
-        // A tracked controller can outlive the car (Media3 reports no
-        // disconnect for a legacy browser): Android Auto's own state may veto it.
-        val connection = carConnections.confirmed(carConnectionState)
         val stop = if (connection == null) {
             carRun.failed(carWithoutPhone = false)
         } else {
@@ -3342,6 +3335,15 @@ class PlaybackController constructor(
         }
         return stop
     }
+
+    /**
+     * The car connection [carStopsAutoSkip] counts against, or null with no
+     * car. Read before the shared [unplayableTrackOutcome] asks, since that
+     * asks without suspending. A tracked controller can outlive the car
+     * (Media3 reports no disconnect for a legacy browser): Android Auto's own
+     * state may veto it.
+     */
+    private suspend fun carConnectionForStop(): Int? = carConnections.confirmed(carConnectionState)
 
     /** A failed play's snackbar, held until [playTrackInternal] knows whether to show it. */
     private var failureNotice: PlaybackNotice? = null

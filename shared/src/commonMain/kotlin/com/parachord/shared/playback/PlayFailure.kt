@@ -69,3 +69,52 @@ const val APPLE_MUSIC_SIGN_IN_MESSAGE = "Sign in to Apple Music to play this tra
 
 /** What the person is told when no resolver found a playable source ([PlayFailure.NO_SOURCE]). */
 const val PLAY_NO_SOURCE_MESSAGE = "Couldn't find a playable source for this track."
+
+/** What a play that ended with nothing playing does: [unplayableTrackOutcome]. */
+sealed class UnplayableTrackOutcome {
+    /** The queue moves on to the next track. */
+    data object Skip : UnplayableTrackOutcome()
+
+    /**
+     * Playback stops on the track, with [message]; Play loads it again.
+     * [byCar] is the car's stop (the run of unplayable tracks), which shows
+     * the car's message and no action on the phone.
+     */
+    data class Stop(val message: String, val byCar: Boolean = false) : UnplayableTrackOutcome()
+}
+
+/**
+ * Stop or skip, and what to say, for a track nothing played (#616). The one
+ * order both apps follow:
+ *
+ * 1. [failedPlayAwaitsLoad]: a failure that leaves the track for Play stops on it;
+ * 2. otherwise the queue would skip it, and [carStopsSkip] may stop it instead
+ *    (the car's run of unplayable tracks; asked only here, since it counts);
+ * 3. the message: the car's, [refusedMessage] for a refused embed,
+ *    [PLAY_NO_SOURCE_MESSAGE] for no source, else [PLAY_START_FAILED_MESSAGE].
+ *
+ * Use [noSourceFailure] for a track with no source. Cases only one platform
+ * has (Listen Along's own track, Apple Music not authorized, Spotify or an
+ * embed tapped in the car) stay with the caller, before this.
+ */
+fun unplayableTrackOutcome(
+    failure: PlayFailure,
+    advancing: Boolean,
+    spinoffMode: Boolean,
+    refusedMessage: String? = null,
+    carStopsSkip: () -> Boolean,
+): UnplayableTrackOutcome {
+    if (!failedPlayAwaitsLoad(failure, advancing, spinoffMode)) {
+        return if (carStopsSkip()) {
+            UnplayableTrackOutcome.Stop(com.parachord.shared.car.CarMessages.OPEN_PARACHORD_ON_PHONE, byCar = true)
+        } else {
+            UnplayableTrackOutcome.Skip
+        }
+    }
+    val message = when (failure) {
+        PlayFailure.EMBED_REFUSED -> refusedMessage ?: PLAY_START_FAILED_MESSAGE
+        PlayFailure.NO_SOURCE -> PLAY_NO_SOURCE_MESSAGE
+        else -> PLAY_START_FAILED_MESSAGE
+    }
+    return UnplayableTrackOutcome.Stop(message)
+}
