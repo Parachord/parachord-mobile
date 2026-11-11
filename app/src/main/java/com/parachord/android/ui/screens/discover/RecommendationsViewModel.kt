@@ -81,6 +81,13 @@ class RecommendationsViewModel constructor(
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> =
         trackResolverCache.trackResolverConfidences
 
+    /**
+     * Covers from each song's resolved sources, keyed by title|artist (shared
+     * cache). The recommending plugins send no cover, so a row shows this one,
+     * as History and Search do.
+     */
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
+
     /** The current load's collectors — cancelled before a reload so they don't stack. */
     private var loadJob: Job? = null
 
