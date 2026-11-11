@@ -99,6 +99,27 @@ class QueuePersistence constructor(
     }
 
     /**
+     * Save [positionMs] as where [trackId] is now, at once: for a track
+     * nothing plays (a restored or failed one) whose position the person
+     * changed (Previous restarting it, a seek), which the observer above never
+     * saves (it saves on a pause and while playing). Without it, the next
+     * launch would resume at the old position.
+     */
+    fun savePositionNow(trackId: String, positionMs: Long, durationMs: Long) {
+        scope.launch {
+            try {
+                if (!settingsStore.isPersistQueueEnabled()) return@launch
+                settingsStore.setPersistedPlaybackPosition(
+                    PlaybackResumePosition.encode(SavedPlaybackPosition(trackId, positionMs, durationMs)),
+                )
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e(TAG, "Failed to save the playback position", e)
+            }
+        }
+    }
+
+    /**
      * Where the restored track [trackId] should start, in ms; 0 starts it
      * from the top ([PlaybackResumePosition.resumeAtMs]).
      */

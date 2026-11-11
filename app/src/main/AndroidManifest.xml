@@ -23,6 +23,8 @@
     -->
     <queries>
         <package android:name="com.spotify.music" />
+        <!-- Android Auto's car-connection state (CarConnections.confirmed). -->
+        <provider android:authorities="androidx.car.app.connection" />
     </queries>
 
     <application

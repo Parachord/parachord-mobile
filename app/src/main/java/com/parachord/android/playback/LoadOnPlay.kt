@@ -1,87 +1,7 @@
 package com.parachord.android.playback
 
-import com.parachord.android.data.db.entity.TrackEntity
-import com.parachord.shared.playback.PlaybackResumePosition
-import com.parachord.shared.playback.SavedPlaybackPosition
-
-/**
- * A track on screen that nothing holds, which Play has to start through the
- * whole pipeline (`PlaybackController.togglePlayPause`, and the media
- * session's play through `PlaybackService`). ExoPlayer holds its silent
- * keep-alive loop, a failed item or nothing, so resuming it does nothing.
- * iOS's `needsLoadOnPlay` is the same idea.
- */
-data class LoadOnPlay(
-    val track: TrackEntity,
-    /** Where Play starts it, in ms (0 = from the top). */
-    val positionMs: Long,
-    /** Keep the source the track had (a manual pick) instead of choosing again. */
-    val skipReselect: Boolean,
-    val why: Why,
-) {
-    enum class Why {
-        /** The queue restored at launch (#567): starts where the app last was. */
-        RESTORED,
-
-        /**
-         * The idle timeout stopped a paused external track (#550): Apple
-         * Music, Spotify or an embed, 5 minutes after the pause. Starts where
-         * it was paused.
-         */
-        IDLE_STOPPED,
-
-        /**
-         * Nothing could play it and the queue didn't move on ([com.parachord.shared.playback.failedPlayAwaitsLoad]):
-         * offline, every source refused, the stream failed. Starts where that
-         * play was meant to start, or where the stream stopped ([failedLoad]).
-         */
-        FAILED,
-    }
-}
-
-/**
- * What Play should load: [pending], when its track is still the current one;
- * null when nothing is waiting or another track has been played since.
- */
-internal fun loadOnPlayTarget(pending: LoadOnPlay?, currentTrackId: String?): LoadOnPlay? =
-    pending?.takeIf { currentTrackId != null && it.track.id == currentTrackId }
-
-/**
- * What the idle timeout leaves for Play when it stops the paused external
- * [current] track at [positionMs]: a slot already [pending] for that track
- * (a failed play, which re-chooses its source; a queue given back paused),
- * else [LoadOnPlay.Why.IDLE_STOPPED], which keeps the source and resumes
- * where it was paused.
- */
-internal fun idleTimeoutLoad(pending: LoadOnPlay?, current: TrackEntity?, positionMs: Long): LoadOnPlay? {
-    if (current == null) return null
-    loadOnPlayTarget(pending, current.id)?.let { return it }
-    return LoadOnPlay(current, positionMs, skipReselect = true, why = LoadOnPlay.Why.IDLE_STOPPED)
-}
-
 /** How a play ended with nothing playing: shared with iOS (`shared/.../playback/PlayFailure.kt`). */
 typealias PlayFailure = com.parachord.shared.playback.PlayFailure
-
-/**
- * The [LoadOnPlay] for a failed play of [track]. A resume that never started
- * (after the idle timeout, a restored queue) keeps the position it aimed for,
- * [aimedAtMs]. A stream that failed while playing starts again where it
- * stopped, [failedAtMs], by the rules a restored track follows
- * ([PlaybackResumePosition]): its first 5 s or last 10 s start over.
- */
-internal fun failedLoad(
-    track: TrackEntity,
-    skipReselect: Boolean,
-    failedAtMs: Long,
-    durationMs: Long,
-    aimedAtMs: Long = 0,
-): LoadOnPlay {
-    val atFailure = PlaybackResumePosition.resumeAtMs(
-        SavedPlaybackPosition(track.id, failedAtMs, durationMs),
-        track.id,
-    )
-    return LoadOnPlay(track, maxOf(atFailure, aimedAtMs), skipReselect, LoadOnPlay.Why.FAILED)
-}
 
 /** How the controller stops what was playing before a track that can't play ([failedTrackStop]). */
 internal enum class FailedTrackStop {
@@ -114,3 +34,57 @@ internal fun failedTrackStop(isExternal: Boolean, autoSkip: Boolean, followed: B
     autoSkip || followed -> FailedTrackStop.KEEP_EXTERNAL_FOREGROUND
     else -> FailedTrackStop.LEAVE_EXTERNAL
 }
+
+/**
+ * Play or Pause does nothing while the queue is about to skip past the track
+ * on screen ([pendingTrackId], the track [PlaybackController]'s 600 ms
+ * auto-skip is waiting on): playing it again would re-play a track that
+ * can't play, and the skip would then start the next one without it.
+ */
+internal fun autoSkipPendingFor(pendingTrackId: String?, currentTrackId: String?): Boolean =
+    pendingTrackId != null && pendingTrackId == currentTrackId
+
+/**
+ * Whether a play that ended with [failure] (null: it started) marks the
+ * queue as played (`playedSinceWrap`). Only for the queue it belongs to: a
+ * new queue set while it was in flight ([queueAtStart] != [queueNow]) hasn't
+ * played anything yet.
+ */
+internal fun playMarksQueuePlayed(completed: Boolean, failure: PlayFailure?, queueAtStart: Int, queueNow: Int): Boolean =
+    completed && failure == null && queueAtStart == queueNow
+
+/**
+ * Whether the foreground a play took as it started ([shouldPromoteAtPlayStart])
+ * stays for the next track when nothing played: only when the queue skips past
+ * this track ([skipPendingForTrack]) and no external playback owns the
+ * foreground. Released here, the next track would have to promote from the
+ * background, which Android refuses with the screen off.
+ */
+internal fun keepsForegroundForAutoSkip(skipPendingForTrack: Boolean, externalPlayback: Boolean): Boolean =
+    skipPendingForTrack && !externalPlayback
+
+/**
+ * Whether the media session's seek goes to [PlaybackController.seekTo]
+ * ([controllerExternal]: an external engine plays; [loadPending]: the track
+ * waits for Play to load it, so the seek moves where Play starts) instead of
+ * ExoPlayer. Decided by the controller's own state, never the session
+ * player's external flag: when the two disagreed (external mode left on
+ * after a failed track), the controller sent its seek to the session, which
+ * sent it back, forever (#607).
+ */
+internal fun sessionSeekGoesToController(controllerExternal: Boolean, loadPending: Boolean): Boolean =
+    controllerExternal || loadPending
+
+/**
+ * Whether a play that ended with [failure] leaves its track for Play to load
+ * again ([com.parachord.shared.playback.failedPlayAwaitsLoad]), or, when the
+ * car stopped the queue on it instead of skipping it ([stoppedByCar]: the
+ * third unplayable track in a row in Android Auto with no Parachord screen
+ * showing), always: playback stops on that track, and Play tries it again.
+ */
+internal fun failedPlayAwaitsLoadAfterCarStop(
+    failure: PlayFailure,
+    advancing: Boolean,
+    spinoffMode: Boolean,
+    stoppedByCar: Boolean,
+): Boolean = stoppedByCar || com.parachord.shared.playback.failedPlayAwaitsLoad(failure, advancing, spinoffMode)

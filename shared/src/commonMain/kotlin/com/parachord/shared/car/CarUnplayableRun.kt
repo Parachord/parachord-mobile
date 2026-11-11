@@ -8,14 +8,17 @@ package com.parachord.shared.car
 const val CAR_UNPLAYABLE_RUN_LIMIT = 3
 
 /**
- * Counts tracks in a row that had no source that could play them, so a car
- * doesn't silently run through a whole queue it can't play (CarPlay with the
- * phone app in the background can't play Bandcamp or SoundCloud).
+ * Counts tracks in a row the queue skipped because nothing could play them,
+ * so a car doesn't silently run through a whole queue it can't play (CarPlay
+ * with the phone app in the background can't play Bandcamp or SoundCloud).
+ * Used by CarPlay and Android Auto alike.
  *
  * Only failures count. Any track that starts resets the run, and so does
- * [reset]: the platform calls it when a car connects and on every explicit
- * play (a tap, not the queue moving on), so failures on the phone before the
- * car connected, or before the person picked something new, don't count.
+ * [reset]: the platform calls it on every explicit play (a tap, not the queue
+ * moving on). A car connecting starts it over too: the platform passes its
+ * count of car connections to [failed], which resets on a new one. So
+ * failures on the phone before the car connected, or before the person
+ * picked something new, don't count.
  * Playback stops only while a car is connected and the phone app isn't in
  * front (`carWithoutPhone`: locked, behind another app, or never shown), when
  * nobody can act on the phone; otherwise the queue skips on as on the phone.
@@ -24,12 +27,14 @@ class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
     var count: Int = 0
         private set
 
+    private var lastConnection: Int? = null
+
     /** A track started playing. */
     fun started() {
         count = 0
     }
 
-    /** A car connected, or the person started something themselves. */
+    /** The person started something themselves (or a car connected, for callers that don't pass a connection number). */
     fun reset() {
         count = 0
     }
@@ -47,5 +52,18 @@ class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
             return true
         }
         return false
+    }
+
+    /**
+     * As [failed], but a [connection] number different from the last one seen
+     * (the platform's count of car connections) starts the run over first, so
+     * failures from an earlier connection never count towards this one.
+     */
+    fun failed(carWithoutPhone: Boolean, connection: Int): Boolean {
+        if (lastConnection != connection) {
+            lastConnection = connection
+            count = 0
+        }
+        return failed(carWithoutPhone)
     }
 }

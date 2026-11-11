@@ -3,8 +3,8 @@ package com.parachord.shared.playback
 /**
  * How a play ended with nothing playing. Android's `PlaybackController` and
  * iOS's `QueuePlaybackCoordinator` both record one and ask
- * [failedPlayAwaitsLoad] whether Play should load the track again
- * (Android's `LoadOnPlay` `FAILED`, iOS's `needsLoadOnPlay`).
+ * [failedPlayAwaitsLoad] whether Play should load the track again (the
+ * shared [LoadOnPlay] slot, `FAILED`).
  */
 enum class PlayFailure {
     /** An embedded player (SoundCloud, Bandcamp) refused it and no other source could play it. */

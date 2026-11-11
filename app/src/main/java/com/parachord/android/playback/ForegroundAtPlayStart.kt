@@ -20,3 +20,22 @@ package com.parachord.android.playback
  */
 internal fun shouldPromoteAtPlayStart(userRequested: Boolean, appVisible: Boolean, externalPlayback: Boolean): Boolean =
     userRequested && !appVisible && !externalPlayback
+
+/**
+ * Whether the queue's skip past a track that can't play takes the foreground
+ * first, kept for the next track like the play-start hold
+ * ([shouldPromoteAtPlayStart]). The track before it was local (no external
+ * playback holds the foreground), and once ExoPlayer has nothing to play
+ * Media3 lets the foreground go; the next track's play, started by the queue
+ * from the background, then can't take it back, and Android cuts the app's
+ * network. A natural track end asked for nothing, so the play-start hold
+ * never ran for it. Media3 lets go as soon as the local track ENDS, though,
+ * which is before this is asked, so on a natural end with the screen off the
+ * request is refused (#614).
+ *
+ * - [appVisible]: with a Parachord screen showing, a later start is allowed.
+ * - [externalPlayback]: external playback keeps its own foreground across the skip.
+ * - [alreadyHeld]: a play-start hold is already kept for the skip.
+ */
+internal fun shouldHoldForegroundForAutoSkip(appVisible: Boolean, externalPlayback: Boolean, alreadyHeld: Boolean): Boolean =
+    !appVisible && !externalPlayback && !alreadyHeld
