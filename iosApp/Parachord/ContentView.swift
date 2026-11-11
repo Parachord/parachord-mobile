@@ -3796,8 +3796,20 @@ enum JsPolyfills {
             }
         }
 
+        // Timers (`setTimeout` in IosJsRuntime's bootstrap): JavaScriptCore has
+        // none, and listenbrainz.axe waits between retries with one (its
+        // getRecommendations, #606). Fires `window.__timerFire(id)` on the
+        // JSContext's thread (main), like the fetch callback.
+        let setTimeout: @convention(block) (Double, Double) -> Void = { timerId, ms in
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, ms) / 1000) {
+                let fire = context.objectForKeyedSubscript("__timerFire")
+                if let fire, !fire.isUndefined { fire.call(withArguments: [timerId]) }
+            }
+        }
+
         bridge.setObject(resolveMbidForLove, forKeyedSubscript: "resolveMbidForLove" as NSString)
         bridge.setObject(appleMusicCatalogGet, forKeyedSubscript: "appleMusicCatalogGet" as NSString)
+        bridge.setObject(setTimeout, forKeyedSubscript: "setTimeout" as NSString)
         context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
     }
 
@@ -3843,6 +3855,13 @@ enum JsPolyfills {
            let parsed = try? JSONSerialization.jsonObject(with: headersData),
            let headers = parsed as? [String: String] {
             for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        }
+        // Parachord's User-Agent unless the plugin set its own: plugins now
+        // ask api.listenbrainz.org (#606), and MetaBrainz blocks clients that
+        // don't identify themselves. Android's plugin fetch inherits it from
+        // the shared OkHttp client.
+        if request.value(forHTTPHeaderField: "User-Agent") == nil {
+            request.setValue(IosContainer.companion.shared.appConfig.userAgent, forHTTPHeaderField: "User-Agent")
         }
         if !body.isEmpty { request.httpBody = body.data(using: .utf8) }
         Task.detached {

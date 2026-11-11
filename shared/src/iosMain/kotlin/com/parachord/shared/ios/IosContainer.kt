@@ -2026,12 +2026,11 @@ class IosContainer private constructor() {
     // ── Recommendations ("For You") ────────────────────────────────────
     // The other curated repos (Critical Darlings, Fresh Drops) need the iOS DB
     // (ImageEnrichmentService's DAOs / TrackDao) and stay blocked until it
-    // lands. Recommendations only needs ListenBrainz + MetadataService. Disk
-    // cache is a no-op for now (stale-while-revalidate optimization only).
+    // lands. Recommendations come from the plugins that declare the capability
+    // (lastfm.axe, listenbrainz.axe; #606), plus MetadataService for artist photos.
     val recommendationsRepository: RecommendationsRepository by lazy {
         RecommendationsRepository(
-            httpClient = httpClient,
-            listenBrainzClient = listenBrainzClient,
+            source = com.parachord.shared.repository.PluginRecommendationSource(pluginManager),
             settingsStore = settingsStore,
             // Spotify-free: RecommendationsRepository's only MetadataService use
             // is getArtistInfo per recommended artist (artist images/bios) — a
@@ -2874,7 +2873,12 @@ class IosContainer private constructor() {
         PluginManager(PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios").apply {
             // soundcloud.axe searches, resolves and looks up URLs only with the
             // sign-in token in its config (desktop's getResolverConfig).
-            resolverConfigProvider = { mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) }
+            // lastfm.axe and listenbrainz.axe read the username for
+            // getRecommendations (#606).
+            resolverConfigProvider = {
+                mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore)
+            }
         }
     }
 

@@ -39,15 +39,6 @@ data class LbReleaseStat(
     val artworkUrl: String? = null,
 )
 
-/** A recommended track from a ListenBrainz recommendation playlist. */
-data class LbRecommendedTrack(
-    val title: String,
-    val artist: String,
-    val album: String? = null,
-    /** Track length in milliseconds, from the playlist's JSPF `duration`; null when absent. */
-    val durationMs: Long? = null,
-)
-
 /** A playlist "created for" a user by ListenBrainz. */
 data class LbCreatedForPlaylist(
     val id: String,

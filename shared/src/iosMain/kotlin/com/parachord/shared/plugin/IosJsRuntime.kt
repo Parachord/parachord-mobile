@@ -181,6 +181,28 @@ class IosJsRuntime : JsRuntime {
                     window.Headers.prototype.set = function(k, v) { this._h[String(k).toLowerCase()] = v; };
                 }
 
+                // setTimeout / clearTimeout: JSC has no timers. listenbrainz.axe
+                // waits between retries with setTimeout (getRecommendations,
+                // #606); without one a 429 or 503 became a ReferenceError.
+                // NativeBridge.setTimeout (Swift) calls __timerFire(id) on the
+                // context's thread once the delay has passed.
+                if (typeof setTimeout === 'undefined' && typeof NativeBridge.setTimeout === 'function') {
+                    window.__timers = {};
+                    var __timerIdCounter = 0;
+                    window.setTimeout = function(fn, ms) {
+                        var id = ++__timerIdCounter;
+                        var args = Array.prototype.slice.call(arguments, 2);
+                        window.__timers[id] = function() { if (typeof fn === 'function') fn.apply(null, args); };
+                        NativeBridge.setTimeout(id, Number(ms) || 0);
+                        return id;
+                    };
+                    window.clearTimeout = function(id) { delete window.__timers[id]; };
+                    window.__timerFire = function(id) {
+                        var fire = window.__timers[id];
+                        if (fire) { delete window.__timers[id]; fire(); }
+                    };
+                }
+
                 // async fetch → NativeBridge.fetchAsync, resolved via __fetchCallbacks
                 window.__fetchCallbacks = {};
                 var __fetchIdCounter = 0;
@@ -229,9 +251,8 @@ class IosJsRuntime : JsRuntime {
                 // it never surfaced because the NATIVE applemusic resolver runs
                 // (native-first), so the .axe resolve() is never invoked. iOS is
                 // .axe-only, so the plugin host must supply it. Passthrough —
-                // JSC has no setTimeout for an inter-request gap, and request
-                // throttling is handled a layer up by IosTrackResolverCache's
-                // concurrency cap.
+                // request throttling is handled a layer up by
+                // IosTrackResolverCache's concurrency cap.
                 window.iTunesRateLimiter = {
                     fetch: function(url, options) { return window.fetch(url, options); }
                 };

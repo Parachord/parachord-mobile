@@ -983,51 +983,6 @@ class ListenBrainzClient(
     }
 
     /**
-     * Find a "Recommended" or weekly playlist for a user and return its tracks.
-     * Empty when ListenBrainz hasn't made one yet; THROWS when a request fails,
-     * so the caller can tell a failure from "nothing to recommend" and not
-     * replace saved recommendations with an outage.
-     */
-    suspend fun getRecommendationPlaylistTracks(username: String): List<LbRecommendedTrack> {
-        val response = httpClient.get("$BASE_URL/1/user/$username/playlists/createdfor")
-        if (!response.status.isSuccess()) {
-            throw IllegalStateException("recommendation playlists: HTTP ${response.status.value}")
-        }
-        val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
-        val recPlaylistMbid = parsed.playlists.firstNotNullOfOrNull { wrapper ->
-            val pl = wrapper.playlist ?: return@firstNotNullOfOrNull null
-            val title = pl.title.orEmpty()
-            if (title.contains("Recommended", ignoreCase = true) ||
-                title.contains("Weekly Exploration", ignoreCase = true) ||
-                title.contains("Weekly Jams", ignoreCase = true)
-            ) {
-                pl.identifier?.substringAfterLast("/")?.ifBlank { null }
-            } else null
-        } ?: run {
-            Log.d(TAG, "No recommendation playlists found for $username")
-            return emptyList()
-        }
-
-        // Fetch the actual playlist tracks (lighter shape — just title/creator/release).
-        val plResponse = httpClient.get("$BASE_URL/1/playlist/$recPlaylistMbid")
-        if (!plResponse.status.isSuccess()) {
-            throw IllegalStateException("recommendation playlist $recPlaylistMbid: HTTP ${plResponse.status.value}")
-        }
-        val plParsed = json.decodeFromString<PlaylistDetailWire>(plResponse.bodyAsText())
-        return plParsed.playlist?.track.orEmpty().map { track ->
-            val ext = track.extension?.jspfTrack
-            LbRecommendedTrack(
-                title = track.title.orEmpty(),
-                artist = track.creator.orEmpty(),
-                album = ext?.releaseName?.ifBlank { null },
-                // JSPF `duration` is milliseconds. Desktop reads it too, so
-                // ListenBrainz rows show a length like Last.fm's do.
-                durationMs = track.duration?.takeIf { it > 0 },
-            )
-        }
-    }
-
-    /**
      * POST `/1/popularity/{kind}` (`artist`, `release-group`, `recording`): the
      * total listen count for each id, null when ListenBrainz has none. One
      * batched request, no account needed. Search ranks with it (desktop

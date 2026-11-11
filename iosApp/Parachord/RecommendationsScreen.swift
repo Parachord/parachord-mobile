@@ -79,7 +79,9 @@ final class RecommendationsModel {
             album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
             sourceType: nil, sourceUrl: nil, addedAt: 0,
             resolver: nil, spotifyUri: nil, soundcloudId: nil,
-            spotifyId: nil, appleMusicId: nil, isrc: nil, recordingMbid: nil,
+            // The ids the service sent (ListenBrainz's recording MBID): the
+            // exact-id match tier and scrobbles use them with no lookup (#606).
+            spotifyId: nil, appleMusicId: nil, isrc: t.isrc, recordingMbid: t.recordingMbid,
             artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
         )
     }

@@ -930,13 +930,13 @@ val androidModule = module {
             lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
         )
     }
-    // RecommendationsRepository — shared (Ktor for Last.fm web endpoint, file I/O via lambdas).
+    // RecommendationsRepository — shared. The recommendations come from the
+    // plugins that declare the capability (#606); file I/O via lambdas.
     single {
         val context = androidContext()
         val cacheFile = java.io.File(context.filesDir, "recommendations_cache.json")
         com.parachord.shared.repository.RecommendationsRepository(
-            httpClient = get(),
-            listenBrainzClient = get(),
+            source = com.parachord.shared.repository.PluginRecommendationSource(get()),
             settingsStore = get(),
             metadataService = get(),
             cacheRead = {
@@ -1122,9 +1122,15 @@ val androidModule = module {
             get<PluginFileAccess>(), get<JsBridge>(),
             appVersion = com.parachord.android.BuildConfig.VERSION_NAME, platform = "android",
         ).apply {
-            // soundcloud.axe's URL / playlist lookups need the sign-in token.
+            // soundcloud.axe's URL / playlist lookups need the sign-in token;
+            // lastfm.axe and listenbrainz.axe read the username for
+            // getRecommendations (#606).
             val soundCloudAuth = get<com.parachord.shared.api.auth.SoundCloudAuth>()
-            resolverConfigProvider = { mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) }
+            val settingsStore = get<com.parachord.shared.settings.SettingsStore>()
+            resolverConfigProvider = {
+                mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore)
+            }
         }
     }
     single {
