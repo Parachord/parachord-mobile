@@ -71,6 +71,9 @@ struct PlaybackRouter {
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
+    /// The play this walk is for, given to an AVPlayer item it loads so the
+    /// item's failure is booked against this play only (`IosAVPlayer.load(tag:)`).
+    var avLoadTag: Int = 0
 
     /// Walk the ranked sources; start the first engine-available one.
     func play(ranked: [ResolvedSource], title: String, artist: String, album: String? = nil,
@@ -127,7 +130,7 @@ struct PlaybackRouter {
 
             case let resolver where Self.avPlayerResolvers.contains(resolver):
                 guard !source.url.isEmpty else { continue }
-                avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver)
+                avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver, tag: avLoadTag)
                 return .played(.avPlayer, resolver: source.resolver)
 
             case "applemusic":
