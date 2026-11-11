@@ -139,6 +139,14 @@ class PlaybackController constructor(
     private var isExternalPlayback = false
 
     /**
+     * An external engine plays (Spotify, Apple Music, an embed), by the
+     * controller's own state. The session's player routes play and pause by
+     * it as well as its own external mode ([sessionPlayPauseGoesToController]).
+     */
+    val isExternalPlaybackActive: Boolean
+        get() = isExternalPlayback
+
+    /**
      * The track on screen that nothing holds, which Play starts through the
      * full pipeline ([togglePlayPause]) instead of resuming ExoPlayer: a
      * queue restored at launch (#567), a paused external track the idle
@@ -1608,7 +1616,18 @@ class PlaybackController constructor(
 
         when (action) {
             is PlaybackAction.ExoPlayerItem -> {
-                if (isExternalPlayback || foregroundHeldForPlay) sendExternalPlaybackStop()
+                if (isExternalPlayback || foregroundHeldForPlay) {
+                    if (localPlayKeepsHeldForeground(isAppVisible())) {
+                        // No screen showing: dropped here, the foreground
+                        // couldn't be started again for this track (#614),
+                        // whoever asked for the play (Listen Along's plays
+                        // count as user-requested). PlaybackService keeps it
+                        // until ExoPlayer plays, then hands it to Media3.
+                        Log.d(TAG, "Keeping the foreground until '${routedTrack.title}' plays locally")
+                    } else {
+                        sendExternalPlaybackStop()
+                    }
+                }
                 foregroundHeldForPlay = false
                 isExternalPlayback = false
                 notifyExternalMode(false)
@@ -3374,10 +3393,12 @@ class PlaybackController constructor(
      * route takes it over, and the end of the queue, a dropped skip or a skip
      * that did nothing releases it ([scheduleAutoSkip]).
      *
-     * After a local track that ended by itself with the screen off this is
-     * refused today (#614): Media3 has already let the foreground go when
-     * ExoPlayer ended, and Android won't give it back to a background start.
-     * It works when the service is still in the foreground at this point.
+     * After a local track that ended by itself with the screen off, the
+     * service already kept the foreground at the end
+     * ([keepForegroundAtLocalTrackEnd]), so this finds it held and the skip
+     * carries it to the next track. Asked for here instead, it's only granted
+     * while Android still allows a start (Media3 has let it go once ExoPlayer
+     * ended, #614).
      */
     private fun holdForegroundForAutoSkip(track: TrackEntity) {
         if (!shouldHoldForegroundForAutoSkip(isAppVisible(), isExternalPlayback, foregroundHeldForPlay)) return
@@ -3404,6 +3425,66 @@ class PlaybackController constructor(
         if (isExternalPlayback) return
         Log.d(TAG, "Releasing the play-start foreground: $why")
         sendExternalPlaybackStop()
+    }
+
+    /**
+     * ExoPlayer has just ended the current track by itself
+     * ([Player.STATE_ENDED]), before Media3 lets the foreground go: whether
+     * [PlaybackService] keeps it for what plays next
+     * ([shouldKeepForegroundAtLocalTrackEnd]). Without it the next track,
+     * started by the queue from the background, can't take the foreground
+     * back (#614). True marks it held like the play-start hold
+     * ([foregroundHeldForPlay]): the next track's route takes it over (an
+     * external route keeps it, a local one hands it to Media3 once it plays),
+     * and the end of the queue, a queue given back paused or a skip that's
+     * dropped releases it. Called by the service on the main thread, from its
+     * own listener on ExoPlayer, which runs ahead of this controller's.
+     */
+    internal fun keepForegroundAtLocalTrackEnd(): Boolean {
+        val current = stateHolder.state.value.currentTrack ?: return false
+        if (!shouldKeepForegroundAtLocalTrackEnd(isAppVisible(), isExternalPlayback, somethingFollows(current))) return false
+        Log.d(TAG, "'${current.title}' ended with no Parachord screen showing; keeping the foreground for what plays next")
+        foregroundHeldForPlay = true
+        return true
+    }
+
+    /**
+     * Whether something plays after [current] ends by itself: Listen Along
+     * drives it (the session decides, and its end releases the foreground),
+     * a spinoff pool has a track, or the queue does ([advanceAction] for a
+     * track end: a next track, repeat one, or repeat all wrapping).
+     */
+    private fun somethingFollows(current: TrackEntity): Boolean {
+        if (drivesTrack?.invoke(current) == true) return true
+        val state = stateHolder.state.value
+        if (state.spinoffMode && spinoffPool.isNotEmpty()) return true
+        return advanceAction(AdvanceTrigger.TRACK_ENDED, state.repeatMode, queueManager.hasNext, true, playedSinceWrap) !=
+            AdvanceAction.STOP_AND_CLEAR
+    }
+
+    /**
+     * A play, an advance or a skip is under way, which a foreground the
+     * service holds itself waits for ([nextForegroundHoldIdleMs]).
+     */
+    internal val foregroundTransitionInProgress: Boolean
+        get() = isPlayStarting || autoSkipPendingTrackId != null
+
+    /**
+     * Listen Along waits for its next track with the ended one on screen
+     * ([heldForListener]): a foreground the service holds is kept for it up
+     * to [FOREGROUND_HOLD_LISTENER_LIMIT_MS] ([foregroundHoldExpired]).
+     */
+    internal val foregroundHeldForListener: Boolean
+        get() = heldForListener
+
+    /**
+     * The service let go of a foreground it held with nothing playing or
+     * starting for [FOREGROUND_HOLD_IDLE_LIMIT_MS]: nothing holds it now.
+     */
+    internal fun foregroundHoldExpired() {
+        if (!foregroundHeldForPlay) return
+        Log.d(TAG, "The held foreground went unused; released")
+        foregroundHeldForPlay = false
     }
 
     /**

@@ -64,6 +64,26 @@ internal fun keepsForegroundForAutoSkip(skipPendingForTrack: Boolean, externalPl
     skipPendingForTrack && !externalPlayback
 
 /**
+ * Whether the media session's play or pause goes to
+ * [PlaybackController.togglePlayPause] (an external engine plays) instead of
+ * ExoPlayer: only when the session's player is in external mode AND the
+ * controller plays externally. The external-mode flag reaches the session's
+ * player by an intent, after the controller has switched, so for a moment
+ * the two can disagree. When they did (external mode still on, the
+ * controller already local: a local track played after an external one),
+ * the controller's own `ctrl.play()` came back as a session play, went to
+ * togglePlayPause, whose local branch called `ctrl.play()` again, on the
+ * main thread, until the app stopped responding (seen on a Pixel 9a, Nov
+ * 2026). togglePlayPause calls the session's play or pause only on its local
+ * branch, so routing by the controller's state too can't loop. With external
+ * mode still off for a moment after the controller went external, the play
+ * reaches ExoPlayer, which is what starts the silent loop. The seek twin is
+ * [sessionSeekGoesToController] (#607).
+ */
+internal fun sessionPlayPauseGoesToController(sessionExternalMode: Boolean, controllerExternal: Boolean): Boolean =
+    sessionExternalMode && controllerExternal
+
+/**
  * Whether the media session's seek goes to [PlaybackController.seekTo]
  * ([controllerExternal]: an external engine plays; [loadPending]: the track
  * waits for Play to load it, so the seek moves where Play starts) instead of
