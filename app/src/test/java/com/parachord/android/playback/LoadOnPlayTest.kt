@@ -72,6 +72,18 @@ class LoadOnPlayTest {
     // ── failedTrackStop ──────────────────────────────────────────────
 
     @Test
+    fun `a followed track that fails keeps external mode and the foreground`() {
+        assertEquals(
+            FailedTrackStop.KEEP_EXTERNAL_FOREGROUND,
+            failedTrackStop(isExternal = true, autoSkip = false, followed = true),
+        )
+        assertEquals(
+            FailedTrackStop.CLEAR_LOCAL_PLAYER,
+            failedTrackStop(isExternal = false, autoSkip = false, followed = true),
+        )
+    }
+
+    @Test
     fun `an external track before a skipped one keeps the foreground`() {
         // Screen off: dropping it here left the next track unable to take it back.
         assertEquals(FailedTrackStop.KEEP_EXTERNAL_FOREGROUND, failedTrackStop(isExternal = true, autoSkip = true))

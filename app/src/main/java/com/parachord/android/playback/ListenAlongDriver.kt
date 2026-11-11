@@ -26,6 +26,12 @@ class ListenAlongDriver(
     private val restoreQueue: (List<TrackEntity>, PlaybackContext?) -> Unit,
     /** Nothing was queued before Listen Along ([PlaybackController.clearQueue]). */
     private val clearQueue: () -> Unit,
+    /**
+     * The session ended at the end of its song with nothing to go back to:
+     * stop and take the track off screen, as at the end of the queue
+     * ([PlaybackController.stopAndClear]).
+     */
+    private val stopAndClear: () -> Unit,
     private val showMessage: (String) -> Unit,
     /** The session is over: stop polling, release the wake lock. */
     private val onEnded: () -> Unit,
@@ -40,6 +46,12 @@ class ListenAlongDriver(
 
     /** True while the driver itself starts a play, so it isn't read as the user's. */
     private var driving = false
+
+    /**
+     * Our song has ended and nothing has played since (the session waits for
+     * a poll), or the end is being handled right now ([onOwnTrackEnded]).
+     */
+    private var atSongEnd = false
 
     private val _friendIsAhead = MutableStateFlow(false)
 
@@ -78,11 +90,30 @@ class ListenAlongDriver(
         apply(s, s.start(current))
     }
 
-    /** A poll answered; [isPlaying] is true while our track plays or is starting. */
-    fun onPoll(result: ListenAlongPoll, isPlaying: Boolean) {
+    /**
+     * A poll answered. [isPlaying], [isPlayStarting] and [currentTrackId] are
+     * the controller's; the session hears whether OUR song plays
+     * ([ourSongIsPlaying]), not the user's own queue.
+     */
+    fun onPoll(result: ListenAlongPoll, isPlaying: Boolean, isPlayStarting: Boolean, currentTrackId: String?) {
         val s = session ?: return
-        apply(s, s.onPoll(result, isPlaying))
+        apply(s, s.onPoll(result, ourSongIsPlaying(isPlaying, isPlayStarting, currentTrackId)))
     }
+
+    /**
+     * False until the session has played something (the user's queue can be
+     * playing while we wait for the friend's first song); while a play starts
+     * after ours, true (the only plays while a session runs are its own: any
+     * other ends it); else whether our track is the one playing.
+     */
+    private fun ourSongIsPlaying(isPlaying: Boolean, isPlayStarting: Boolean, currentTrackId: String?): Boolean {
+        val ours = playingId ?: return false
+        if (isPlayStarting) return true
+        return isPlaying && currentTrackId == ours
+    }
+
+    /** [PlaybackController.drivesTrack]: true when [trackId] is the session's track. */
+    fun drivesTrack(trackId: String): Boolean = session != null && isOurTrack(trackId)
 
     /**
      * [PlaybackController.onOwnTrackEnded]: our song ended. True (handled)
@@ -91,6 +122,7 @@ class ListenAlongDriver(
     fun onOwnTrackEnded(currentTrackId: String?): Boolean {
         val s = session ?: return false
         if (!isOurTrack(currentTrackId)) return false
+        atSongEnd = true
         apply(s, s.onSongEnded())
         return true
     }
@@ -148,6 +180,7 @@ class ListenAlongDriver(
                 is ListenAlongEffect.Play -> {
                     val track = listenAlongTrack(effect.track)
                     playingId = track.id
+                    atSongEnd = false
                     driving = true
                     try {
                         play(track, PlaybackContext(type = LISTEN_ALONG_CONTEXT, name = s.friendName))
@@ -168,6 +201,8 @@ class ListenAlongDriver(
     private fun end(restore: Boolean): Boolean {
         session = null
         playingId = null
+        val endedAtSongEnd = atSongEnd
+        atSongEnd = false
         _friendIsAhead.value = false
         val s = suspension
         suspension = null
@@ -175,7 +210,11 @@ class ListenAlongDriver(
         onEnded()
         if (!restore || s == null) return false
         if (s.tracks.isEmpty()) {
+            // Nothing to go back to. At the end of our song this is the end of
+            // the queue: the track comes off screen. Otherwise (the toggle, a
+            // skip, the friend gone while paused) the track is left as it is.
             clearQueue()
+            if (endedAtSongEnd) stopAndClear()
             return false
         }
         restoreQueue(s.tracks, s.context)

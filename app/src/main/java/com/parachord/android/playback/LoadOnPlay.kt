@@ -91,10 +91,13 @@ internal enum class FailedTrackStop {
 /**
  * [FailedTrackStop] for a track that can't play: [isExternal] when an external
  * handler (Spotify, Apple Music, an embed) was playing before it, [autoSkip]
- * when the queue skips past it ([com.parachord.shared.playback.failedPlayAwaitsLoad] false).
+ * when the queue skips past it ([com.parachord.shared.playback.failedPlayAwaitsLoad] false),
+ * [followed] when a listener drives the track and plays its next one
+ * ([PlaybackController.drivesTrack], Listen Along): both keep the foreground,
+ * so the next track can start with the screen off.
  */
-internal fun failedTrackStop(isExternal: Boolean, autoSkip: Boolean): FailedTrackStop = when {
+internal fun failedTrackStop(isExternal: Boolean, autoSkip: Boolean, followed: Boolean = false): FailedTrackStop = when {
     !isExternal -> FailedTrackStop.CLEAR_LOCAL_PLAYER
-    autoSkip -> FailedTrackStop.KEEP_EXTERNAL_FOREGROUND
+    autoSkip || followed -> FailedTrackStop.KEEP_EXTERNAL_FOREGROUND
     else -> FailedTrackStop.LEAVE_EXTERNAL
 }

@@ -1637,6 +1637,9 @@ class PlaybackService : MediaLibraryService() {
             // error state, where play does nothing). The controller starts it
             // through the full pipeline, where it was.
             if (playbackController.needsLoadOnPlay) { playbackController.togglePlayPause(); return }
+            // A user's resume (lock screen, headphones, the car) that skips
+            // togglePlayPause: the listener may play something else instead.
+            if (playbackController.onSessionPlayPause(play = true)) return
             super.play()
         }
 
@@ -1666,6 +1669,8 @@ class PlaybackService : MediaLibraryService() {
                 return
             }
             if (externalMode) { playbackController.togglePlayPause(); return }
+            // A user's pause that skips togglePlayPause, told to the listener.
+            playbackController.onSessionPlayPause(play = false)
             super.pause()
         }
 

@@ -38,6 +38,7 @@ class ListenAlongDriverTest {
                 currentId = tracks.first().id
             },
             clearQueue = { calls += "clear" },
+            stopAndClear = { calls += "stopAndClear"; currentId = null },
             showMessage = { messages += it },
             onEnded = { ended++ },
         )
@@ -47,6 +48,10 @@ class ListenAlongDriverTest {
     private val b = FriendTrack("Song B", "Artist", null, null)
     private val mine = listOf(TrackEntity(id = "1", title = "Mine 1", artist = "Me"), TrackEntity(id = "2", title = "Mine 2", artist = "Me"))
     private val myContext = PlaybackContext(type = "playlist", name = "My list")
+
+    /** A poll while our track is (or isn't) playing, nothing starting. */
+    private fun poll(result: ListenAlongPoll, playing: Boolean) =
+        driver.onPoll(result, isPlaying = playing, isPlayStarting = false, currentTrackId = currentId)
 
     private fun startWithA() {
         driver.start("Pat", a, mine, myContext)
@@ -67,7 +72,7 @@ class ListenAlongDriverTest {
     @Test
     fun `a new song while ours plays is held and plays when ours ends`() {
         startWithA()
-        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = true)
+        poll(ListenAlongPoll.Listening(b), true)
         assertTrue(calls.isEmpty())
         assertTrue(driver.friendIsAhead.value)
         assertTrue(driver.onOwnTrackEnded(currentId))
@@ -78,7 +83,7 @@ class ListenAlongDriverTest {
     @Test
     fun `the song ending with the friend still on it restores the queue once from its first track`() {
         startWithA()
-        driver.onPoll(ListenAlongPoll.Listening(a), isPlaying = true)
+        poll(ListenAlongPoll.Listening(a), true)
         assertTrue(driver.onOwnTrackEnded(currentId))
         assertEquals(listOf("restore Mine 1, Mine 2 in My list"), calls)
         assertEquals(listOf(PlaybackMessages.hasntMovedOn("Pat")), messages)
@@ -95,7 +100,7 @@ class ListenAlongDriverTest {
         assertTrue(driver.onOwnTrackEnded(currentId))
         assertTrue(calls.isEmpty())
         assertTrue(driver.isActive)
-        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = false)
+        poll(ListenAlongPoll.Listening(b), false)
         assertEquals(listOf("play Song B for Pat"), calls)
     }
 
@@ -109,7 +114,7 @@ class ListenAlongDriverTest {
     @Test
     fun `an unplayable track of ours is handled and plays a held track`() {
         startWithA()
-        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = true)
+        poll(ListenAlongPoll.Listening(b), true)
         assertTrue(driver.onTrackUnplayable(currentId!!))
         assertEquals(listOf("play Song B for Pat"), calls)
     }
@@ -145,7 +150,7 @@ class ListenAlongDriverTest {
     fun `while paused a new song is held, and resume plays it instead`() {
         startWithA()
         driver.onUserAction(UserPlaybackAction.PAUSE)
-        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = false)
+        poll(ListenAlongPoll.Listening(b), false)
         assertTrue(calls.isEmpty())
         assertTrue(driver.onUserAction(UserPlaybackAction.RESUME))
         assertEquals(listOf("play Song B for Pat"), calls)
@@ -157,7 +162,7 @@ class ListenAlongDriverTest {
     @Test
     fun `catch up plays the held song`() {
         startWithA()
-        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = true)
+        poll(ListenAlongPoll.Listening(b), true)
         driver.catchUp()
         assertEquals(listOf("play Song B for Pat"), calls)
     }
@@ -200,10 +205,68 @@ class ListenAlongDriverTest {
     @Test
     fun `not listening mid-song finishes the song, then restores`() {
         startWithA()
-        driver.onPoll(ListenAlongPoll.NotListening, isPlaying = true)
+        poll(ListenAlongPoll.NotListening, true)
         assertTrue(calls.isEmpty())
         assertTrue(driver.onOwnTrackEnded(currentId))
         assertEquals(listOf(PlaybackMessages.stoppedListening("Pat")), messages)
         assertEquals(listOf("restore Mine 1, Mine 2 in My list"), calls)
+    }
+
+    @Test
+    fun `with no friend track yet the user's own queue playing doesn't hold the friend's song`() {
+        // The friend's cached row said nothing (stale on-air): the user's song keeps playing.
+        driver.start("Pat", null, mine, myContext)
+        currentId = "1"
+        calls.clear()
+        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = true, isPlayStarting = false, currentTrackId = "1")
+        assertEquals(listOf("play Song B for Pat"), calls)
+        // The user's own song ending isn't ours.
+        assertFalse(driver.onOwnTrackEnded("1"))
+    }
+
+    @Test
+    fun `a play of ours still starting counts as playing`() {
+        startWithA()
+        driver.onPoll(ListenAlongPoll.Listening(b), isPlaying = false, isPlayStarting = true, currentTrackId = "something-before")
+        assertTrue(calls.isEmpty())
+        assertTrue(driver.friendIsAhead.value)
+    }
+
+    @Test
+    fun `a song ending with nothing to go back to clears the track`() {
+        driver.start("Pat", a, emptyList(), null)
+        calls.clear()
+        messages.clear()
+        poll(ListenAlongPoll.Listening(a), true)
+        assertTrue(driver.onOwnTrackEnded(currentId))
+        assertEquals(listOf("clear", "stopAndClear"), calls)
+        assertEquals(listOf(PlaybackMessages.hasntMovedOn("Pat")), messages)
+    }
+
+    @Test
+    fun `waiting after the song then the friend leaving clears the track too`() {
+        driver.start("Pat", a, emptyList(), null)
+        calls.clear()
+        assertTrue(driver.onOwnTrackEnded(currentId))   // no news: waits
+        assertTrue(calls.isEmpty())
+        poll(ListenAlongPoll.NotListening, false)
+        assertEquals(listOf("clear", "stopAndClear"), calls)
+    }
+
+    @Test
+    fun `the toggle with nothing to go back to leaves the playing track`() {
+        driver.start("Pat", a, emptyList(), null)
+        calls.clear()
+        driver.stop()
+        assertEquals(listOf("clear"), calls)
+    }
+
+    @Test
+    fun `the session drives only its own track`() {
+        startWithA()
+        assertTrue(driver.drivesTrack(currentId!!))
+        assertFalse(driver.drivesTrack("other"))
+        driver.endSilently()
+        assertFalse(driver.drivesTrack(listenAlongTrack(a).id))
     }
 }

@@ -114,6 +114,7 @@ class MainViewModel constructor(
             listenAlong.onOwnTrackEnded(playbackStateHolder.state.value.currentTrack?.id)
         }
         playbackController.onTrackUnplayable = { track -> listenAlong.onTrackUnplayable(track.id) }
+        playbackController.drivesTrack = { track -> listenAlong.drivesTrack(track.id) }
         playbackController.onUserAction = { action -> listenAlong.onUserAction(action) }
 
         // Initialize .axe plugin system and sync updates from marketplace
@@ -304,6 +305,7 @@ class MainViewModel constructor(
         play = { track, ctx -> playbackController.playTrack(track, context = ctx) },
         restoreQueue = { tracks, ctx -> playbackController.playQueue(tracks, 0, ctx) },
         clearQueue = { playbackController.clearQueue() },
+        stopAndClear = { playbackController.stopAndClear() },
         showMessage = { text ->
             Log.d(TAG, "Listen along: $text")
             viewModelScope.launch { _toastEvents.emit(text) }
@@ -347,7 +349,6 @@ class MainViewModel constructor(
             queueTracks = listOfNotNull(state.currentTrack) + state.upNext,
             queueContext = state.playbackContext,
         )
-        if (!listenAlong.isActive) return
 
         listenAlongJob = viewModelScope.launch {
             while (isActive && listenAlong.isActive) {
@@ -356,11 +357,11 @@ class MainViewModel constructor(
                 // request is ListenAlongPoll.Failed, not "not listening".
                 val result = friendsRepository.pollListenAlong(friend)
                 result.friend?.let { _listenAlongFriend.value = it }
-                // A track still resolving or starting counts as playing, or a
-                // poll landing during a slow start would replace it.
-                val playing = playbackState.value.isPlaying || playbackController.isPlayStarting
-                Log.d(TAG, "Listen along poll: ${result.poll} (playing=$playing)")
-                listenAlong.onPoll(result.poll, playing)
+                // The driver works out whether OUR song plays (a play still
+                // starting counts, the user's own queue doesn't).
+                val now = playbackState.value
+                Log.d(TAG, "Listen along poll: ${result.poll} (playing=${now.isPlaying}, starting=${playbackController.isPlayStarting})")
+                listenAlong.onPoll(result.poll, now.isPlaying, playbackController.isPlayStarting, now.currentTrack?.id)
             }
         }
     }

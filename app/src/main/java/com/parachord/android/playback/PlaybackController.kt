@@ -248,10 +248,38 @@ class PlaybackController constructor(
     var onUserAction: ((UserPlaybackAction) -> Boolean)? = null
 
     /**
-     * Counts [playTrack] / [playQueue] calls, so [skipNextInternal] can tell
-     * whether [onOwnTrackEnded] started a play.
+     * True when the listener drives [track] (Listen Along's own track): it
+     * takes the track's failure through [onTrackUnplayable], so a failed play
+     * of it keeps external mode and the foreground ([holdForListener]) instead
+     * of leaving them, and the listener's next track can still start with the
+     * screen off.
+     */
+    var drivesTrack: ((TrackEntity) -> Boolean)? = null
+
+    // Threading: the hooks, [playRequestCount] and [playLaunchesPending] are
+    // main-thread only. Every entry point that fires a hook or counts a play
+    // ([playTrack], [playQueue], [playFromQueue], [skipNext], [skipPrevious],
+    // [togglePlayPause]) runs on the main thread: called from another thread
+    // it re-posts itself there ([onMain]). Main callers run inline, so the
+    // listener still hears PLAY_SOMETHING_ELSE before their play replaces
+    // the track.
+
+    /**
+     * Counts requested plays ([playTrack], [playQueue], [playFromQueue], a
+     * skip), so [skipNextInternal] can tell whether [onOwnTrackEnded] started
+     * one and [holdEndedTrack] can drop its stop when one came meanwhile.
      */
     private var playRequestCount = 0
+
+    /**
+     * False off the main thread, after posting [retry] there: an entry point
+     * starts with `if (!onMain { … }) return`.
+     */
+    private inline fun onMain(crossinline retry: () -> Unit): Boolean {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return true
+        scope.launch(Dispatchers.Main) { retry() }
+        return false
+    }
 
     /**
      * True while a play is under way: the play lock is held, an advance is in
@@ -421,6 +449,7 @@ class PlaybackController constructor(
 
     /** Play a single track immediately (clears the queue). */
     fun playTrack(track: TrackEntity, context: PlaybackContext? = null) {
+        if (!onMain { playTrack(track, context) }) return
         playRequestedThisRun = true
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         playRequestCount++
@@ -453,6 +482,7 @@ class PlaybackController constructor(
         context: PlaybackContext? = null,
         shuffle: Boolean = queueManager.shuffleEnabled,
     ) {
+        if (!onMain { playQueue(tracks, startIndex, context, shuffle) }) return
         playRequestedThisRun = true
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         playRequestCount++
@@ -489,6 +519,7 @@ class PlaybackController constructor(
     }
 
     fun skipNext() {
+        if (!onMain { skipNext() }) return
         skipNextInternal(AdvanceTrigger.NEXT_PRESSED)
     }
 
@@ -558,6 +589,7 @@ class PlaybackController constructor(
         }
 
         if (userInitiated) {
+            playRequestCount++
             // The listener took over (Listen Along restored the user's queue):
             // that play is the answer, so don't skip it as well.
             if (onUserAction?.invoke(UserPlaybackAction.SKIP) == true) return
@@ -664,8 +696,9 @@ class PlaybackController constructor(
      * without the foreground Android cuts the app's network with the screen
      * off), but its handler is stopped, so Spotify can't run on into the
      * album's next song, and the session shows paused. The stop waits for the
-     * play lock and is dropped if a play was requested meanwhile, so it can't
-     * race the next track's start.
+     * play lock and is dropped if a play was requested meanwhile (any entry
+     * point that counts in [playRequestCount]) or the track changed, so it
+     * can't race the next track's start.
      */
     private fun holdEndedTrack() {
         val track = stateHolder.state.value.currentTrack ?: return
@@ -677,12 +710,33 @@ class PlaybackController constructor(
             playMutex.withLock {
                 if (playRequestCount != requests || stateHolder.state.value.currentTrack?.id != track.id) return@withLock
                 stopBeforeFailedTrack(autoSkip = true)
-                // Nothing polls until the next play, which takes them again.
-                releaseExternalPlaybackWakeLock()
-                sendSilencePlayback(pause = true)
-                startIdleTimeout()
+                holdForListener()
             }
         }
+    }
+
+    /**
+     * Nothing plays while a listener ([drivesTrack], [onOwnTrackEnded]) waits
+     * to play its next track: external mode and the foreground stay (the
+     * handler is already stopped), nothing polls until the next play takes
+     * the locks again, the session shows paused, and the idle timeout cleans
+     * up if nothing comes.
+     */
+    private fun holdForListener() {
+        if (!isExternalPlayback) return
+        releaseExternalPlaybackWakeLock()
+        sendSilencePlayback(pause = true)
+        startIdleTimeout()
+    }
+
+    /**
+     * Stop and take the current track off screen, as at the end of the queue
+     * (it goes to history, so Previous reaches it). For a listener whose
+     * session ended at a song's end with nothing to go back to.
+     */
+    fun stopAndClear() {
+        if (!onMain { stopAndClear() }) return
+        stopAtEndOfQueue()
     }
 
     /**
@@ -729,6 +783,8 @@ class PlaybackController constructor(
     }
 
     fun skipPrevious() {
+        if (!onMain { skipPrevious() }) return
+        playRequestCount++
         // The listener took over (Listen Along restored the user's queue).
         if (onUserAction?.invoke(UserPlaybackAction.SKIP) == true) return
         val position = if (isExternalPlayback) {
@@ -762,6 +818,8 @@ class PlaybackController constructor(
 
     /** User tapped a track in the queue UI — play from that point. */
     fun playFromQueue(index: Int) {
+        if (!onMain { playFromQueue(index) }) return
+        playRequestCount++
         val currentTrack = stateHolder.state.value.currentTrack
         val track = queueManager.playFromQueue(index, currentTrack) ?: return
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
@@ -850,6 +908,7 @@ class PlaybackController constructor(
     }
 
     fun togglePlayPause() {
+        if (!onMain { togglePlayPause() }) return
         // A resume (nothing playing or starting): the listener may play
         // something else instead (Listen Along's held friend track). A play
         // command while a play starts is that play's own echo, not the user.
@@ -988,6 +1047,20 @@ class PlaybackController constructor(
             clearUserPauseMark()
             ctrl.play()
         }
+    }
+
+    /**
+     * The media session's play or pause on the local player, which reaches
+     * ExoPlayer without [togglePlayPause] (lock screen, headphones, the car):
+     * tells [onUserAction] as [togglePlayPause] does
+     * ([sessionPlayPauseAction]). @return true when the listener started
+     * something else instead of the resume, so the caller doesn't resume.
+     */
+    fun onSessionPlayPause(play: Boolean): Boolean {
+        val action = sessionPlayPauseAction(play, stateHolder.state.value.isPlaying, isPlayStarting) ?: return false
+        val handled = onUserAction?.invoke(action) == true
+        if (handled) clearUserPauseMark()
+        return handled && action == UserPlaybackAction.RESUME
     }
 
     /**
@@ -1191,7 +1264,9 @@ class PlaybackController constructor(
             // track would advance the queue as well as the skip below (two
             // advances, the second past the next track).
             val autoSkip = !failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)
-            stopBeforeFailedTrack(autoSkip)
+            val followed = !autoSkip && drivesTrack?.invoke(routedTrack) == true
+            stopBeforeFailedTrack(autoSkip, followed)
+            if (followed) holdForListener()
             if (autoSkip) {
                 Log.d(TAG, "Auto-skip '${routedTrack.title}': no playable source")
                 stateHolder.update { copy(playbackError = null) }
@@ -2875,7 +2950,9 @@ class PlaybackController constructor(
         // otherwise Play loads it again ([failedPlayAwaitsLoad]).
         playFailure = PlayFailure.EMBED_REFUSED
         val autoSkip = !failedPlayAwaitsLoad(PlayFailure.EMBED_REFUSED, advancing, stateHolder.state.value.spinoffMode)
-        stopBeforeFailedTrack(autoSkip)
+        val followed = !autoSkip && drivesTrack?.invoke(track) == true
+        stopBeforeFailedTrack(autoSkip, followed)
+        if (followed) holdForListener()
         if (autoSkip) {
             Log.d(TAG, "Auto-skip '${track.title}': ${e.serviceName} won't play it")
             stateHolder.update { copy(isPlaying = false, isBuffering = false) }
@@ -2910,8 +2987,8 @@ class PlaybackController constructor(
      * from the background), and Android then stopped the service and cut the
      * app's network mid-song.
      */
-    private suspend fun stopBeforeFailedTrack(autoSkip: Boolean) {
-        when (failedTrackStop(isExternalPlayback, autoSkip)) {
+    private suspend fun stopBeforeFailedTrack(autoSkip: Boolean, followed: Boolean = false) {
+        when (failedTrackStop(isExternalPlayback, autoSkip, followed)) {
             FailedTrackStop.KEEP_EXTERNAL_FOREGROUND -> {
                 // As a track change does: cancel the polling without releasing
                 // the wake lock, and drop the end-of-track callbacks.
