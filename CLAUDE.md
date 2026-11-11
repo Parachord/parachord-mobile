@@ -373,6 +373,8 @@ Results are cached in `TrackResolverCache.putSources()` so subsequent plays of t
 
 Resolver badges in the UI must reflect match confidence, matching the desktop's approach:
 
+**One shared rule (#592): `ResolverBadges` (`shared/.../resolver/ResolverBadges.kt`).** Android's `TrackResolverCache.trackResolvers` / `trackResolverConfidences` and iOS's `ResolverBadgeRow` both use `ResolverBadges.badges(sources, order, active, disabled)`, as desktop's list views draw them: playable sources only (not `noMatch`, at or above the 0.60 floor), from resolvers the user has on (in the active list when there is one; not disabled: desktop badges only `playbackResolvers`), one badge per resolver (its best source), in the user's order then confidence. The dim check is `ResolverBadges.isDimmed` (at or below `DIM_AT_OR_BELOW`, 0.80); desktop dims below 0.95 since May 2026. iOS greys out a row with `hasPlayableSource`.
+
 1. **Filter noMatch from display.** Sources with confidence < `MIN_CONFIDENCE_THRESHOLD` (0.60) are excluded from the resolver icon list entirely. A wrong-song Spotify result (0.50 confidence) must not show a Spotify badge — otherwise the user sees a Spotify icon but tapping plays a local file (or nothing), which is confusing.
 
 2. **Dim low-confidence icons.** Sources with confidence ≤ 0.80 render at 60% opacity (`alpha 0.6`). Full-confidence matches (> 0.80) render at full opacity. This gives users a visual signal about match quality.

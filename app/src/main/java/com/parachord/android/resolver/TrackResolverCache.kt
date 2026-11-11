@@ -1,5 +1,6 @@
 package com.parachord.android.resolver
 
+import com.parachord.shared.resolver.ResolverBadges
 import com.parachord.shared.platform.Log
 import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.MbidEnrichmentService
@@ -308,39 +309,33 @@ class TrackResolverCache constructor(
     }
 
     /**
-     * Resolver badge names for UI display, sorted by user-configured priority order.
-     * This ensures the highest-priority resolver (the one that will actually play)
-     * appears first in the icon row, matching user expectations.
+     * The badges each track row shows (shared [ResolverBadges], #592, as
+     * desktop draws them): playable sources only, from resolvers the user has
+     * on, one per resolver, in the user's order. The leftmost is the one that
+     * plays.
      */
-    val trackResolvers: StateFlow<Map<String, List<String>>> =
+    private val trackBadges: StateFlow<Map<String, List<com.parachord.shared.resolver.ResolverBadge>>> =
         combine(
             _trackSources,
             settingsStore.getResolverOrderFlow(),
-        ) { sources, resolverOrder ->
-            sources.mapValues { (_, v) ->
-                // Filter out noMatch sources (below confidence threshold) from UI display,
-                // matching desktop's noMatch sentinel filtering.
-                val aboveThreshold = v.filter {
-                    (it.confidence ?: 0.0) >= ResolverScoring.MIN_CONFIDENCE_THRESHOLD
-                }
-                val resolvers = aboveThreshold.map { it.resolver }.distinct()
-                if (resolverOrder.isEmpty()) resolvers
-                else resolvers.sortedBy { r ->
-                    val idx = resolverOrder.indexOf(r)
-                    if (idx == -1) resolverOrder.size else idx
-                }
-            }
+            settingsStore.getActiveResolversFlow(),
+            settingsStore.getDisabledPluginsFlow(),
+        ) { sources, resolverOrder, active, disabled ->
+            sources.mapValues { (_, v) -> ResolverBadges.badges(v, resolverOrder, active, disabled.toList()) }
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
+    /** Resolver badge names per track key ("title|artist"), leftmost first ([trackBadges]). */
+    val trackResolvers: StateFlow<Map<String, List<String>>> =
+        trackBadges.map { badges -> badges.mapValues { (_, v) -> v.map { it.resolver } } }
+            .stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
     /**
-     * Confidence scores for UI display, keyed by "title|artist" → resolver → confidence.
-     * Matches the desktop's approach: confidence <= 0.8 → dimmed (opacity 0.6).
+     * Each badge's confidence per track key, for dimming
+     * ([ResolverBadges.DIM_AT_OR_BELOW]): the best source of that resolver.
      */
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> =
-        _trackSources.map { sources ->
-            sources.mapValues { (_, v) ->
-                v.associate { it.resolver to (it.confidence?.toFloat() ?: 1f) }
-            }
+        trackBadges.map { badges ->
+            badges.mapValues { (_, v) -> v.associate { it.resolver to it.confidence.toFloat() } }
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     /**

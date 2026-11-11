@@ -5,12 +5,9 @@ import Shared
 // MARK: - Resolver icon squares (matches Android's ResolverIconSquare/Row)
 //
 // Small brand-colored rounded squares (NOT text capsules) — the same visual
-// language as Android/desktop. Confidence-aware per CLAUDE.md "Resolver Badge
-// Display":
-//   1. filter noMatch / confidence < 0.60
-//   2. dim icons with confidence <= 0.80 to 0.6 alpha
-//   3. sort by resolver priority (canonical order), then confidence desc —
-//      the leftmost square is the source that will actually play
+// language as Android/desktop. Which badges show, in what order and how dim,
+// is the shared `ResolverBadges` rule (#592; CLAUDE.md "Resolver Badge
+// Display"); the leftmost square is the source that will actually play.
 //
 // Display-only, like Android (the track ROW handles playback). iOS has no
 // brand-logo assets, so each square shows the resolver initial in white; the
@@ -52,7 +49,7 @@ struct ResolverIconSquare: View {
             .overlay(
                 Text(glyph).font(.system(size: size * 0.55, weight: .bold)).foregroundStyle(.white)
             )
-            .opacity(confidence > 0.8 ? 1 : 0.6)
+            .opacity(ResolverBadges.shared.isDimmed(confidence: confidence) ? 0.6 : 1)
     }
 }
 
@@ -64,35 +61,26 @@ struct ResolverBadgeRow: View {
     // ResolverScoring.CANONICAL_RESOLVER_ORDER).
     private static let canonical = ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"]
 
-    private var visible: [ResolvedSource] {
-        // Sort by the user's CONFIGURED resolver priority order (Android parity:
-        // ResolverIconRow reads LocalResolverOrder), falling back to canonical.
-        // Reading ResolverPrefs.shared here makes the row re-sort reactively when
-        // the user reorders/enables resolvers in Settings.
+    /// The badges, by the shared rule (`ResolverBadges`, #592, Android's and
+    /// desktop's): playable sources only, from resolvers the user has on, one
+    /// per resolver, in the user's order (canonical when there's none).
+    /// Reading ResolverPrefs.shared here makes the row re-sort reactively when
+    /// the user reorders or enables resolvers in Settings.
+    private var visible: [ResolverBadge] {
         let userOrder = ResolverPrefs.shared.order
-        let order = userOrder.isEmpty ? Self.canonical : userOrder
-        let active = ResolverPrefs.shared.active
-        let disabled = ResolverPrefs.shared.disabled
-        return sources
-            .filter { !$0.noMatch && ($0.confidence?.doubleValue ?? 0) >= 0.60 }
-            // Don't badge a resolver the user has turned OFF (it can't be played),
-            // matching what selectRanked feeds playback. Empty active = all on.
-            .filter { (active.isEmpty || active.contains($0.resolver)) && !disabled.contains($0.resolver) }
-            .sorted { a, b in
-                let pa = order.firstIndex(of: a.resolver) ?? order.count
-                let pb = order.firstIndex(of: b.resolver) ?? order.count
-                if pa != pb { return pa < pb }
-                return (a.confidence?.doubleValue ?? 0) > (b.confidence?.doubleValue ?? 0)
-            }
+        return ResolverBadges.shared.badges(
+            sources: sources,
+            order: userOrder.isEmpty ? Self.canonical : userOrder,
+            active: Array(ResolverPrefs.shared.active),
+            disabled: Array(ResolverPrefs.shared.disabled))
     }
 
     @State private var shown = false
 
     var body: some View {
         HStack(spacing: 3) {
-            ForEach(Array(visible.enumerated()), id: \.offset) { _, source in
-                ResolverIconSquare(resolver: source.resolver, size: size,
-                                   confidence: source.confidence?.doubleValue ?? 1)
+            ForEach(Array(visible.enumerated()), id: \.offset) { _, badge in
+                ResolverIconSquare(resolver: badge.resolver, size: size, confidence: badge.confidence)
             }
         }
         // Fade the badges IN when resolution lands instead of hard-popping in.

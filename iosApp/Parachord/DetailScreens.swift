@@ -65,7 +65,7 @@ func pcTrack(from t: TrackSearchResult) -> Track {
 @MainActor
 func pcTrackNoMatch(artist: String, title: String, album: String?) -> Bool {
     guard let s = IosTrackResolverCache.shared.cached(artist: artist, title: title, album: album) else { return false }
-    return !s.contains { !$0.noMatch && ($0.confidence?.doubleValue ?? 0) >= 0.60 }
+    return !ResolverBadges.shared.hasPlayableSource(sources: s)
 }
 
 /// Whether this track is actively re-resolving with no art yet — drives the art
