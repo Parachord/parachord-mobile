@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.view.View
 import com.parachord.shared.platform.Log
 import android.widget.RemoteViews
 import com.parachord.android.R
@@ -21,7 +22,9 @@ import java.net.URL
  * AppWidgetProvider for the Parachord mini player home screen widget.
  *
  * Shows album art, track title, artist, play/pause, skip previous/next,
- * and a progress bar — matching the in-app mini player style.
+ * and a progress bar — matching the in-app mini player style. With nothing
+ * playing it shows the Parachord logo in the art slot and placeholder bars
+ * where the title and artist go.
  *
  * Button presses are sent as broadcast intents that this receiver handles
  * directly by forwarding media commands to the MediaSession via
@@ -47,8 +50,14 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
         ): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_mini_player)
 
+            // Nothing playing: the Parachord logo and placeholder bars
+            // instead of a blank cover and "Not playing".
+            val idle = title == null
+            views.setViewVisibility(R.id.widget_idle_info, if (idle) View.VISIBLE else View.GONE)
+            views.setViewVisibility(R.id.widget_track_info, if (idle) View.GONE else View.VISIBLE)
+
             // Track info
-            views.setTextViewText(R.id.widget_title, title ?: "Not playing")
+            views.setTextViewText(R.id.widget_title, title ?: "")
             views.setTextViewText(R.id.widget_artist, artist ?: "")
 
             // Play/pause icon
@@ -66,10 +75,10 @@ class MiniPlayerWidgetProvider : AppWidgetProvider() {
             )
 
             // Album artwork
-            if (artworkBitmap != null) {
-                views.setImageViewBitmap(R.id.widget_artwork, artworkBitmap)
-            } else {
-                views.setImageViewResource(R.id.widget_artwork, R.drawable.widget_art_placeholder)
+            when {
+                idle -> views.setImageViewResource(R.id.widget_artwork, R.drawable.widget_art_logo)
+                artworkBitmap != null -> views.setImageViewBitmap(R.id.widget_artwork, artworkBitmap)
+                else -> views.setImageViewResource(R.id.widget_artwork, R.drawable.widget_art_placeholder)
             }
 
             // Button intents

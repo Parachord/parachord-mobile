@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The title's placeholder bar on the widget when nothing is playing.
+     Translucent white rather than the app's skeleton grey: the widget's
+     background is see-through, and the grey vanished against it. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#40FFFFFF" />
+    <corners android:radius="4dp" />
+</shape>

@@ -22,41 +22,38 @@ import kotlin.math.abs
  * 15 distinct color palettes, 6 gradient pattern variants.
  */
 
-private data class GradientPalette(
-    val colors: List<Color>,
-)
-
-private val palettes = listOf(
+/** The three colors of each palette, as ARGB. */
+private val palettes: List<IntArray> = listOf(
     // Deep blue / red
-    GradientPalette(listOf(Color(0xFF1A1A2E), Color(0xFF16213E), Color(0xFF0F3460))),
+    intArrayOf(0xFF1A1A2E.toInt(), 0xFF16213E.toInt(), 0xFF0F3460.toInt()),
     // Ocean blues
-    GradientPalette(listOf(Color(0xFF1E3A5F), Color(0xFF3D5A80), Color(0xFF98C1D9))),
+    intArrayOf(0xFF1E3A5F.toInt(), 0xFF3D5A80.toInt(), 0xFF98C1D9.toInt()),
     // Forest green
-    GradientPalette(listOf(Color(0xFF1B4332), Color(0xFF2D6A4F), Color(0xFF40916C))),
+    intArrayOf(0xFF1B4332.toInt(), 0xFF2D6A4F.toInt(), 0xFF40916C.toInt()),
     // Warm amber
-    GradientPalette(listOf(Color(0xFF3E2723), Color(0xFF5D4037), Color(0xFF8D6E63))),
+    intArrayOf(0xFF3E2723.toInt(), 0xFF5D4037.toInt(), 0xFF8D6E63.toInt()),
     // Plum/purple
-    GradientPalette(listOf(Color(0xFF2D1B69), Color(0xFF4A2C82), Color(0xFF6C3FA0))),
+    intArrayOf(0xFF2D1B69.toInt(), 0xFF4A2C82.toInt(), 0xFF6C3FA0.toInt()),
     // Teal
-    GradientPalette(listOf(Color(0xFF0D3B3E), Color(0xFF1A5C5E), Color(0xFF2E8B8B))),
+    intArrayOf(0xFF0D3B3E.toInt(), 0xFF1A5C5E.toInt(), 0xFF2E8B8B.toInt()),
     // Slate/charcoal
-    GradientPalette(listOf(Color(0xFF1A1A2E), Color(0xFF2D2D44), Color(0xFF3F3F5C))),
+    intArrayOf(0xFF1A1A2E.toInt(), 0xFF2D2D44.toInt(), 0xFF3F3F5C.toInt()),
     // Crimson
-    GradientPalette(listOf(Color(0xFF2E0A1E), Color(0xFF5C1A3A), Color(0xFF8B2252))),
+    intArrayOf(0xFF2E0A1E.toInt(), 0xFF5C1A3A.toInt(), 0xFF8B2252.toInt()),
     // Olive
-    GradientPalette(listOf(Color(0xFF2C3E1E), Color(0xFF4A5E30), Color(0xFF6B7F45))),
+    intArrayOf(0xFF2C3E1E.toInt(), 0xFF4A5E30.toInt(), 0xFF6B7F45.toInt()),
     // Midnight
-    GradientPalette(listOf(Color(0xFF0A0E27), Color(0xFF141B41), Color(0xFF1E2A5A))),
+    intArrayOf(0xFF0A0E27.toInt(), 0xFF141B41.toInt(), 0xFF1E2A5A.toInt()),
     // Rust
-    GradientPalette(listOf(Color(0xFF3E1E0E), Color(0xFF6B3420), Color(0xFF984A32))),
+    intArrayOf(0xFF3E1E0E.toInt(), 0xFF6B3420.toInt(), 0xFF984A32.toInt()),
     // Sage
-    GradientPalette(listOf(Color(0xFF283828), Color(0xFF3E5A3E), Color(0xFF5A7A5A))),
+    intArrayOf(0xFF283828.toInt(), 0xFF3E5A3E.toInt(), 0xFF5A7A5A.toInt()),
     // Steel blue
-    GradientPalette(listOf(Color(0xFF1A2A3E), Color(0xFF2A3E5A), Color(0xFF3E5A7A))),
+    intArrayOf(0xFF1A2A3E.toInt(), 0xFF2A3E5A.toInt(), 0xFF3E5A7A.toInt()),
     // Bronze
-    GradientPalette(listOf(Color(0xFF2E1E0E), Color(0xFF5A3E1E), Color(0xFF7A5A2E))),
+    intArrayOf(0xFF2E1E0E.toInt(), 0xFF5A3E1E.toInt(), 0xFF7A5A2E.toInt()),
     // Indigo night
-    GradientPalette(listOf(Color(0xFF0E0A2E), Color(0xFF1E1A5A), Color(0xFF2E2A7A))),
+    intArrayOf(0xFF0E0A2E.toInt(), 0xFF1E1A5A.toInt(), 0xFF2E2A7A.toInt()),
 )
 
 /**
@@ -73,7 +70,7 @@ private fun stableHash(name: String): Int {
 /**
  * Extract initials from a name (max 2 characters).
  */
-private fun getInitials(name: String): String {
+internal fun placeholderInitials(name: String): String {
     val words = name.trim().split("\\s+".toRegex())
     return when {
         words.size >= 2 -> "${words[0].first().uppercaseChar()}${words[1].first().uppercaseChar()}"
@@ -84,21 +81,34 @@ private fun getInitials(name: String): String {
 }
 
 /**
- * Create a deterministic gradient brush from a name string.
+ * The placeholder's gradient for a name, independent of how it's drawn: the
+ * palette's colors (ARGB) and which of the six patterns. Compose draws it here
+ * ([gradientForName]); the home-screen widget draws the same into a bitmap
+ * (`widget/WidgetArtPlaceholder.kt`).
+ */
+internal class PlaceholderGradient(val colors: IntArray, val pattern: Int)
+
+internal fun placeholderGradient(name: String): PlaceholderGradient {
+    val hash = stableHash(name)
+    return PlaceholderGradient(palettes[hash % palettes.size], (hash / palettes.size) % 6)
+}
+
+/**
+ * Create a deterministic gradient brush from a name string. Offsets are in
+ * pixels, as Compose takes them.
  */
 fun gradientForName(name: String): Brush {
-    val hash = stableHash(name)
-    val palette = palettes[hash % palettes.size]
-    val patternIndex = (hash / palettes.size) % 6
+    val gradient = placeholderGradient(name)
+    val colors = gradient.colors.map { Color(it) }
 
-    return when (patternIndex) {
-        0 -> Brush.linearGradient(palette.colors, start = Offset.Zero, end = Offset(1000f, 1000f))
-        1 -> Brush.radialGradient(palette.colors, center = Offset(500f, 500f), radius = 700f)
-        2 -> Brush.linearGradient(palette.colors, start = Offset(0f, 1000f), end = Offset(1000f, 0f))
-        3 -> Brush.radialGradient(palette.colors.reversed(), center = Offset(300f, 300f), radius = 800f)
-        4 -> Brush.linearGradient(palette.colors, start = Offset(0f, 0f), end = Offset(0f, 1000f))
+    return when (gradient.pattern) {
+        0 -> Brush.linearGradient(colors, start = Offset.Zero, end = Offset(1000f, 1000f))
+        1 -> Brush.radialGradient(colors, center = Offset(500f, 500f), radius = 700f)
+        2 -> Brush.linearGradient(colors, start = Offset(0f, 1000f), end = Offset(1000f, 0f))
+        3 -> Brush.radialGradient(colors.reversed(), center = Offset(300f, 300f), radius = 800f)
+        4 -> Brush.linearGradient(colors, start = Offset(0f, 0f), end = Offset(0f, 1000f))
         else -> Brush.linearGradient(
-            palette.colors + palette.colors.reversed(),
+            colors + colors.reversed(),
             start = Offset(0f, 500f),
             end = Offset(1000f, 500f),
         )
@@ -116,7 +126,7 @@ fun GradientPlaceholder(
     fontSize: TextUnit = 18.sp,
 ) {
     val brush = remember(name) { gradientForName(name) }
-    val initials = remember(name) { getInitials(name) }
+    val initials = remember(name) { placeholderInitials(name) }
 
     Box(
         modifier = modifier.background(brush),

@@ -1222,7 +1222,7 @@ val androidModule = module {
 
     // ── Widget ───────────────────────────────────────────────────────
 
-    single { MiniPlayerWidgetUpdater(get(), get(), lazy { get<PlaybackController>() }) }
+    single { MiniPlayerWidgetUpdater(get(), get(), lazy { get<PlaybackController>() }, get()) }
 
     // ── ViewModels ───────────────────────────────────────────────────
 
