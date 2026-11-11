@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's art slot when nothing is playing: the Parachord logo (the
+     launcher icon's foreground) on the brand background. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/widget_art_placeholder" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

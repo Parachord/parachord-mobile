@@ -13,13 +13,16 @@ import com.parachord.shared.platform.Log
 import android.util.LruCache
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.PlaybackStateHolder
+import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.playback.effectiveTrack
+import com.parachord.android.resolver.TrackResolverCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
@@ -35,6 +38,7 @@ class MiniPlayerWidgetUpdater constructor(
     private val context: Context,
     private val stateHolder: PlaybackStateHolder,
     private val playbackControllerLazy: Lazy<PlaybackController>,
+    private val trackResolverCache: TrackResolverCache,
 ) {
     companion object {
         private const val TAG = "WidgetUpdater"
@@ -54,7 +58,8 @@ class MiniPlayerWidgetUpdater constructor(
 
     /** Simple in-memory cache for decoded artwork bitmaps keyed by URL. */
     private val artworkCache = LruCache<String, Bitmap>(5)
-    private var lastArtworkUrl: String? = null
+    /** The cover URL and placeholder name the shown artwork is for. */
+    private var lastArtworkKey: Pair<String?, String>? = null
 
     private val mediaActionReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
@@ -79,7 +84,9 @@ class MiniPlayerWidgetUpdater constructor(
         }
 
         observeJob = scope.launch {
-            stateHolder.state.collectLatest { state ->
+            combine(stateHolder.state, trackResolverCache.trackArtwork) { state, trackArtwork ->
+                state to trackArtwork
+            }.collectLatest { (state, trackArtwork) ->
                 // Use effectiveTrack (currentTrack overlaid with streaming
                 // metadata from Spotify Connect / Apple Music MusicKit) so
                 // the widget shows the same title/artist/artwork that the
@@ -105,23 +112,28 @@ class MiniPlayerWidgetUpdater constructor(
                 lastIsPlaying = isPlaying
                 lastProgress = progress
 
-                // Fetch artwork in a separate job so collectLatest doesn't
-                // cancel the network request when the next position update arrives.
-                val artworkUrl = track?.artworkUrl
-                if (artworkUrl != lastArtworkUrl) {
-                    lastArtworkUrl = artworkUrl
+                // The cover by the mini player's chain (effectiveArtwork: the
+                // streaming service's, the track's own, then its resolved
+                // sources'). Until it loads, or when there's none, the app's
+                // placeholder: a gradient with the artist's initials, as the
+                // mini player shows. Fetched in a separate job so collectLatest
+                // doesn't cancel the request when the next position update arrives.
+                val artworkUrl = state.effectiveArtwork(trackArtwork)
+                val placeholderName = artist?.takeIf { it.isNotBlank() } ?: title.orEmpty()
+                val key = if (track == null) null else artworkUrl to placeholderName
+                if (key != lastArtworkKey) {
+                    lastArtworkKey = key
                     artworkFetchJob?.cancel()
-                    if (artworkUrl != null) {
+                    lastArtworkBitmap = if (track == null) null else placeholder(placeholderName)
+                    if (key != null && artworkUrl != null) {
                         artworkFetchJob = scope.launch {
-                            val bitmap = fetchArtwork(artworkUrl)
-                            // Only apply if this is still the current artwork URL
-                            if (lastArtworkUrl == artworkUrl) {
+                            val bitmap = fetchArtwork(artworkUrl) ?: return@launch
+                            // Only apply if this is still the current artwork
+                            if (lastArtworkKey == key) {
                                 lastArtworkBitmap = bitmap
                                 pushUpdate()
                             }
                         }
-                    } else {
-                        lastArtworkBitmap = null
                     }
                 }
 
@@ -163,17 +175,33 @@ class MiniPlayerWidgetUpdater constructor(
         }
     }
 
+    /** The app's placeholder for [name] at the widget's art size (48dp). */
+    private fun placeholder(name: String): Bitmap {
+        val cacheKey = "placeholder:$name"
+        artworkCache.get(cacheKey)?.let { return it }
+        val density = context.resources.displayMetrics.density
+        // The mini player's initials are 35% of the art size, in sp.
+        val fontPx = 48f * 0.35f * context.resources.displayMetrics.scaledDensity
+        return widgetArtPlaceholder(name, (48 * density).toInt(), fontPx)
+            .also { artworkCache.put(cacheKey, it) }
+    }
+
     private suspend fun fetchArtwork(url: String): Bitmap? = withContext(Dispatchers.IO) {
         // Check cache first
         artworkCache.get(url)?.let { return@withContext it }
 
         try {
-            val connection = URL(url).openConnection()
-            connection.connectTimeout = 5000
-            connection.readTimeout = 5000
-            val stream = connection.getInputStream()
-            val original = BitmapFactory.decodeStream(stream)
-            stream.close()
+            // Local files' covers are content:// (MediaStore album art) or
+            // file:// (embedded art) addresses, which URL can't open.
+            val uri = android.net.Uri.parse(url)
+            val stream = when (uri.scheme?.lowercase()) {
+                "content", "file", "android.resource" -> context.contentResolver.openInputStream(uri)
+                else -> URL(url).openConnection().apply {
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }.getInputStream()
+            } ?: return@withContext null
+            val original = stream.use { BitmapFactory.decodeStream(it) }
 
             // Scale down for widget display (48dp ~ 144px at xxxhdpi)
             val scaled = if (original != null && (original.width > 200 || original.height > 200)) {
