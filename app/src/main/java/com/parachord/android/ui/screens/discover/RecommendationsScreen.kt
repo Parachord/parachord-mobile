@@ -84,6 +84,7 @@ fun RecommendationsScreen(
     val sourceCounts by viewModel.sourceCounts.collectAsState()
     val trackResolvers by viewModel.trackResolvers.collectAsState()
     val trackResolverConfidences by viewModel.trackResolverConfidences.collectAsState()
+    val trackArtwork by viewModel.trackArtwork.collectAsState()
 
     // Auto-refresh when returning to this screen
     LifecycleResumeEffect(Unit) {
@@ -133,6 +134,7 @@ fun RecommendationsScreen(
                     tracks = recommendedTracks,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
+                    trackArtwork = trackArtwork,
                     onRefresh = viewModel::refresh,
                     onPlayTrack = viewModel::playTrack,
                     onTrackVisible = viewModel::resolveVisibleTrack,
@@ -364,6 +366,7 @@ private fun SongsTab(
     tracks: Resource<List<RecommendedTrack>>,
     trackResolvers: Map<String, List<String>>,
     trackResolverConfidences: Map<String, Map<String, Float>>,
+    trackArtwork: Map<String, String>,
     onRefresh: () -> Unit,
     onPlayTrack: (RecommendedTrack) -> Unit = {},
     onTrackVisible: (RecommendedTrack) -> Unit = {},
@@ -390,7 +393,8 @@ private fun SongsTab(
                             title = track.title,
                             artist = track.artist,
                             album = track.album,
-                            artworkUrl = track.artworkUrl,
+                            // The plugins send no cover: use the resolved sources' cover.
+                            artworkUrl = track.artworkUrl ?: trackArtwork[resolverKey],
                             duration = track.duration,
                             // Content resolver badges (Spotify, Apple Music, …) from the
                             // shared resolver cache — NOT metadata source labels.
