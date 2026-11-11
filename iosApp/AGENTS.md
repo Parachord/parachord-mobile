@@ -1227,11 +1227,11 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   when it re-selects. A failed deck switch (a forced resolver that isn't a
   slot's retry, `deckSwitch`) still leaves the playback that was going on as it
   was. **The direct-URL shortcut** (a track's `sourceUrl` with no cache entry)
-  also takes an empty cache entry on Play on a stopped local-file or direct
-  track (`emptyEntryIsNone`, `PlaybackRouter.avPlayerResolvers`); a track whose
-  URL is a service's page always goes through the resolver. **Known gap:** after
-  a start failure of such a page-URL track that has no cache entry at all, each
-  Play repeats the failure until the track has been resolved once.
+  is only for a track with no resolver (an XSPF location, a direct stream, a
+  sample) or one AVPlayer plays itself (`PlaybackRouter.avPlayerResolvers`); a
+  track that names a service carries that service's page as its URL and always
+  goes through the resolver. It also takes an empty cache entry on Play on a
+  stopped local-file or direct track (`emptyEntryIsNone`).
 
   Which failures stop on the track is the shared `failedPlayAwaitsLoad`
   (`shared/.../playback/PlayFailure.kt`, Android's rule too): only an embed's
@@ -1251,11 +1251,17 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   skip through to its end. A failed retry keeps the restored track's resume
   position. **AVPlayer failures** (`IosAVPlayer.onPlaybackFailed`, once per
   item, from the item's `.failed` status or `AVPlayerItemFailedToPlayToEndTime`)
-  go to `avPlaybackFailed`: before it started (a dead link, a URL that isn't
-  media) it stops on the track at the position that play aimed for, advancing
-  or not, unless a newer play superseded that start (`latestStart`); after it
-  started it stops on the track and Play resumes where it stopped, under the
-  5 s / 10 s rule. Both show `PLAY_START_FAILED_MESSAGE`. Airplane Mode was
+  go to `avPlaybackFailed`, booked only against the play that loaded the item:
+  each `load(tag:)` carries the play's number (`playRequestCount`, through
+  `PlaybackRouter.avLoadTag` on the routed path), a failure from an earlier play
+  is ignored, and the player reports only for the item still loaded. Without
+  this, a slow URL that failed while the next track resolved left a slot on the
+  next track, and Pause then restarted it. Before it started (a dead link, a URL
+  that isn't media) it stops on the track at the position that play aimed for,
+  advancing or not; a URL that fails as it loads (`avFailedLoad`) isn't then
+  taken as played by the routed path. After it started it stops on the track
+  and Play resumes where it stopped, under the 5 s / 10 s rule. A play that
+  starts clears any slot left on its track. Both show `PLAY_START_FAILED_MESSAGE`. Airplane Mode was
   checked on an iPad for an earlier version of this (Bandcamp and SoundCloud
   sources: a tapped track and Next each stopped on their track, and Play
   started it once the network was back). The Apple Music `.failed` path, and
