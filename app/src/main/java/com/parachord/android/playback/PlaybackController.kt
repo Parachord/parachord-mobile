@@ -201,6 +201,13 @@ class PlaybackController constructor(
     private var autoSkipJob: Job? = null
 
     /**
+     * Counts plays that began ([playTrackInternalUnsafe] started), so a
+     * scheduled auto-skip can tell a play that began from a request that
+     * played nothing (Previous restarting the track).
+     */
+    private var playsBegun = 0
+
+    /**
      * How long to keep the foreground service alive after external playback is paused.
      * After this timeout, the service is fully demoted and the process may be killed.
      */
@@ -901,7 +908,11 @@ class PlaybackController constructor(
                 ?: router.getSpotifyHandler().getPosition()
             else -> (controller ?: return).currentPosition
         }
-        val position = positionForPrevious(playerPosition, slot, stateHolder.state.value.currentTrack?.id)
+        // A track the queue is skipping past never played: Previous goes to
+        // the track before it (an external handler's stale position would read
+        // as "restart", which plays nothing).
+        val skipping = autoSkipPendingFor(autoSkipPendingTrackId, stateHolder.state.value.currentTrack?.id)
+        val position = if (skipping) 0L else positionForPrevious(playerPosition, slot, stateHolder.state.value.currentTrack?.id)
         if (previousAction(position, queueManager.hasPrevious) == PreviousAction.RESTART_CURRENT) {
             Log.d(TAG, "skipPrevious: restarting the current track (position ${position}ms)")
             if (slot != null) {
@@ -1243,7 +1254,12 @@ class PlaybackController constructor(
     val ownsSessionSeek: Boolean
         get() = sessionSeekGoesToController(isExternalPlayback, needsLoadOnPlay)
 
-    /** Set while [seekTo] seeks the session's player, so a seek that comes back can't loop (#607). */
+    /**
+     * Set while [seekTo] seeks the session's player. A backstop only: the fix
+     * for the #607 loop is the session player's routing by [ownsSessionSeek],
+     * which never sends this path's seek back here. The guard drops a seek
+     * that comes back synchronously anyway.
+     */
     private var seekingSessionPlayer = false
 
     fun seekTo(positionMs: Long) {
@@ -1251,7 +1267,9 @@ class PlaybackController constructor(
         // has it to seek. Move where Play starts it, and the shown position.
         val slot = stoppedTrackSlot()
         if (slot != null) {
-            moveSlot(slot.copy(positionMs = positionMs.coerceAtLeast(0L)))
+            val duration = stateHolder.state.value.duration
+            val clamped = if (duration > 0) positionMs.coerceIn(0L, duration) else positionMs.coerceAtLeast(0L)
+            moveSlot(slot.copy(positionMs = clamped))
             return
         }
         if (isExternalPlayback) {
@@ -1403,6 +1421,7 @@ class PlaybackController constructor(
         playFailure = null
         failureNotice = null
         heldForListener = false
+        playsBegun++
         // Overtakes a skip waiting on the previous track (the skip's own play
         // comes through here too, after the skip has run).
         clearPendingAutoSkip()
@@ -3204,12 +3223,17 @@ class PlaybackController constructor(
     private fun scheduleAutoSkip(track: TrackEntity) {
         autoSkipJob?.cancel()
         autoSkipPendingTrackId = track.id
-        val requests = playRequestCount
+        val begun = playsBegun
         autoSkipJob = scope.launch {
             delay(AUTO_SKIP_DELAY_MS)
             autoSkipPendingTrackId = null
             autoSkipJob = null
-            if (stateHolder.state.value.currentTrack?.id != track.id || playRequestCount != requests) {
+            // Dropped only when another play began or is on its way (a tapped
+            // track still resolving), or the track changed. A request that
+            // played nothing (Previous restarting this track) doesn't count:
+            // dropping the skip then would strand the queue on a track that
+            // can't play.
+            if (stateHolder.state.value.currentTrack?.id != track.id || playsBegun != begun || isPlayStarting) {
                 Log.d(TAG, "Auto-skip of '${track.title}' dropped: something else was played")
                 // A play in flight takes the kept foreground over; with none,
                 // nothing will.
@@ -3217,6 +3241,11 @@ class PlaybackController constructor(
                 return@launch
             }
             skipNextInternal(AdvanceTrigger.SKIPPED_UNPLAYABLE)
+            // The skip did nothing (another advance owned it, or a hook took
+            // it) and nothing is starting: the foreground kept for it goes.
+            if (stateHolder.state.value.currentTrack?.id == track.id && !isPlayStarting) {
+                releaseForegroundHeldForPlay("auto-skip did nothing")
+            }
         }
     }
 

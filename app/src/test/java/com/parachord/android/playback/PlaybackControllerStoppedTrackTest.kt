@@ -147,6 +147,71 @@ class PlaybackControllerStoppedTrackTest {
         assertEquals("b", state.currentTrack?.id)
     }
 
+    @Test
+    fun `previous during the auto skip gap goes to the track before even with a stale external position`() {
+        controller.playQueue(listOf(a, n, b))
+        run()
+        every { f.router.activeExternalHandler } returns null
+        // A stale Spotify position, which would read as "restart the track".
+        every { f.router.getSpotifyHandler().getPosition() } returns 90_000L
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        assertEquals("n", state.currentTrack?.id)
+
+        controller.skipPrevious()
+        run()
+        pastTheGap()
+
+        routedTimes("a", 2)
+        assertEquals("a", state.currentTrack?.id)
+        routedTimes("b", 0)
+    }
+
+    @Test
+    fun `previous during the gap with nothing before the track still lets the skip run`() {
+        controller.playQueue(listOf(a, n, b))
+        run()
+        every { f.router.activeExternalHandler } returns null
+        every { f.router.getSpotifyHandler().getPosition() } returns 90_000L
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        // n is first in its queue: nothing before it.
+        f.queueManager.setQueue(listOf(n, b), 0, null, false)
+        assertFalse(f.queueManager.hasPrevious)
+
+        controller.skipPrevious()
+        run()
+        assertEquals("n", state.currentTrack?.id)
+        pastTheGap()
+
+        routedTimes("n", 1)
+        routedTimes("b", 1)
+        assertEquals("b", state.currentTrack?.id)
+    }
+
+    @Test
+    fun `a tapped play still resolving after the gap is not skipped past`() {
+        controller.playQueue(listOf(a, n, b))
+        run()
+        controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+        run()
+        val gate = CompletableDeferred<Unit>()
+        coEvery { f.router.route(match { it.id == "c" }) } coAnswers {
+            gate.await()
+            PlaybackAction.ExternalPlayback(handler)
+        }
+
+        controller.playTrack(c)
+        run()
+        pastTheGap()
+        gate.complete(Unit)
+        run()
+
+        routedTimes("c", 1)
+        routedTimes("b", 0)
+        assertEquals("c", state.currentTrack?.id)
+    }
+
     // ── C. The play-start foreground across an auto-skip ───────────────
 
     @Test
