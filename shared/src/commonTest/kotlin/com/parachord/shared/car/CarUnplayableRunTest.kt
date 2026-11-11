@@ -67,4 +67,21 @@ class CarUnplayableRunTest {
     fun `the limit is three`() {
         assertEquals(3, CAR_UNPLAYABLE_RUN_LIMIT)
     }
+
+    @Test
+    fun `a new car connection starts the run over`() {
+        val run = CarUnplayableRun()
+        assertFalse(run.failed(carWithoutPhone = true, connection = 1))
+        assertFalse(run.failed(carWithoutPhone = true, connection = 1))
+        assertFalse(run.failed(carWithoutPhone = true, connection = 2))
+        assertEquals(1, run.count)
+    }
+
+    @Test
+    fun `the same connection keeps counting`() {
+        val run = CarUnplayableRun()
+        assertFalse(run.failed(carWithoutPhone = true, connection = 1))
+        assertFalse(run.failed(carWithoutPhone = true, connection = 1))
+        assertTrue(run.failed(carWithoutPhone = true, connection = 1))
+    }
 }

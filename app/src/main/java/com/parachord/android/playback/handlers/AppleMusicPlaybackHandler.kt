@@ -45,7 +45,7 @@ class AppleMusicPlaybackHandler constructor(
     /**
      * Start [track] in MusicKit. Returns only once it plays; every way it
      * gives up throws, so the controller doesn't poll a track that isn't
-     * playing and Play loads it again ([com.parachord.android.playback.LoadOnPlay]):
+     * playing and Play loads it again ([com.parachord.shared.playback.LoadOnPlay]):
      * - [PlaybackStartTimeoutException]: a play hung, and MusicKit was reset.
      * - [PlaybackStartFailedException]: MusicKit didn't configure (offline, it
      *   never loaded), sign-in is required, or the play failed through every

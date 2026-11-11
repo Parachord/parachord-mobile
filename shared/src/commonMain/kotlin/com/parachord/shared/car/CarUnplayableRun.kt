@@ -24,6 +24,8 @@ class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
     var count: Int = 0
         private set
 
+    private var lastConnection: Int? = null
+
     /** A track started playing. */
     fun started() {
         count = 0
@@ -47,5 +49,18 @@ class CarUnplayableRun(private val limit: Int = CAR_UNPLAYABLE_RUN_LIMIT) {
             return true
         }
         return false
+    }
+
+    /**
+     * As [failed], but a [connection] number different from the last one seen
+     * (the platform's count of car connections) starts the run over first, so
+     * failures from an earlier connection never count towards this one.
+     */
+    fun failed(carWithoutPhone: Boolean, connection: Int): Boolean {
+        if (lastConnection != connection) {
+            lastConnection = connection
+            count = 0
+        }
+        return failed(carWithoutPhone)
     }
 }
