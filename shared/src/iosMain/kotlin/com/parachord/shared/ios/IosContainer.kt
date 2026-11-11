@@ -1,5 +1,6 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.deeplink.startsPlayback
 import com.parachord.shared.playback.ListenAlongPollResult
 import com.parachord.shared.playback.ResolverVolume
 
@@ -1248,6 +1249,22 @@ class IosContainer private constructor() {
     suspend fun findFriendForLink(key: String): Friend? = friendsRepository.findFriendForLink(key)
 
     // ── Deep links (#228) ───────────────────────────────────────────────
+    /**
+     * Whether a `parachord://` link starts a play (shared
+     * [com.parachord.shared.deeplink.startsPlayback], #604). Swift marks the
+     * run as soon as one arrives, so the saved-queue restore doesn't land on
+     * top of it while it searches.
+     */
+    fun deepLinkStartsPlayback(
+        scheme: String?,
+        host: String?,
+        path: List<String>,
+        query: Map<String, String>,
+    ): Boolean {
+        if (scheme != "parachord") return false
+        return DeepLinkParser.parse(SimpleDeepLinkUri(scheme, host, path, query)).startsPlayback()
+    }
+
     /**
      * Parse a `parachord://` URL into a flat [IosDeepLinkCommand] for Swift to
      * dispatch. Swift extracts scheme/host/path/query via `URLComponents`

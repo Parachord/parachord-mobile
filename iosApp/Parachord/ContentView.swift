@@ -2026,6 +2026,16 @@ final class QueuePlaybackCoordinator {
     /// track. Resolution is async, so the window is real on a slow lookup.
     @ObservationIgnored private var playTask: Task<Void, Never>?
 
+    /// A `parachord://` play link arrived in this run (#604). It searches
+    /// before it plays, so `playTask` is still nil while it does; the restore
+    /// checks this too, so it doesn't put the last session's queue over the
+    /// link's track.
+    @ObservationIgnored private var linkPlayRequested = false
+
+    /// Mark the run before a play link's search (#604). Only the mark: a
+    /// restored track waiting for Play stays, in case the link finds nothing.
+    func noteLinkPlayRequested() { linkPlayRequested = true }
+
     /// 1s engine-agnostic tick that pushes the playback snapshot to the shared
     /// ScrobbleManager (#193). Cancelled with the coordinator.
     @ObservationIgnored private var scrobblePublishTask: Task<Void, Never>?
@@ -3577,9 +3587,19 @@ final class QueuePlaybackCoordinator {
         }
     }
 
+    /// A queue was restored, or a non-empty one saved, in this run (shared
+    /// `QueueRestorePolicy.shouldSave`, #604).
+    @ObservationIgnored private var hadQueueThisRun = false
+
     private func saveQueueNow() async {
         guard (try? await container.settingsStore.isPersistQueueEnabled()) == true else { return }
         guard let snap = queueManager.snapshot.value as? QueueSnapshot else { return }
+        // An empty queue isn't written over the last session's until this run
+        // has had one: a run whose restore a play link skipped, and the link
+        // then found nothing, would wipe it for good.
+        let isEmpty = currentTrack == nil && snap.upNext.isEmpty
+        guard QueueRestorePolicy.shared.shouldSave(isEmpty: isEmpty, hadQueueThisRun: hadQueueThisRun) else { return }
+        if !isEmpty { hadQueueThisRun = true }
         let state = PersistedQueueState(
             currentTrack: currentTrack,
             upNext: snap.upNext,
@@ -3611,7 +3631,7 @@ final class QueuePlaybackCoordinator {
             // CarPlay taps wait for the bootstrap, so they never race this.
             guard QueueRestorePolicy.shared.shouldApply(
                 hasCurrentTrack: self.currentTrack != nil,
-                playRequested: self.playTask != nil
+                playRequested: self.playTask != nil || self.linkPlayRequested
             ) else {
                 NSLog("QUEUE restore skipped: something is already playing")
                 return
@@ -3627,6 +3647,7 @@ final class QueuePlaybackCoordinator {
                 restoredUpNextInLap: state.upNextInLap,
                 restoredCurrentInLap: state.currentInLap)
             self.playedSinceWrap = false
+            self.hadQueueThisRun = true
             self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the
             // saved position when it's for this track (#567).
