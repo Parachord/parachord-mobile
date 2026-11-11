@@ -167,7 +167,9 @@ class FriendsRepository(
      * One Listen Along poll of [friend] (#585): what they're playing, that they aren't
      * playing anything, or that the request couldn't answer. A failed request is never
      * reported as "not listening". [ListenAlongPollResult.friend] is the refreshed friend
-     * (null on [ListenAlongPoll.Failed], or when a saved friend's row is gone).
+     * (null on [ListenAlongPoll.Failed], or when a saved friend's row is gone). For a
+     * transient friend (a `parachord://listen-along` link) a [ListenAlongPoll.NotListening]
+     * result carries the friend that was passed in.
      */
     suspend fun pollListenAlong(friend: Friend): ListenAlongPollResult =
         withContext(Dispatchers.Default) {

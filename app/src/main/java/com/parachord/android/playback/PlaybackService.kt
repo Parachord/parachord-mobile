@@ -1743,7 +1743,8 @@ class PlaybackService : MediaLibraryService() {
         /**
          * The last track of a non-empty queue under Parachord's repeat all:
          * Next starts the queue again ([com.parachord.shared.playback.advanceAction]).
-         * Listen Along counts repeat as off, as the controller does.
+         * Never during Listen Along: the session owns the end of its song, and
+         * repeat can't be changed while it runs.
          */
         private fun nextWrapsToStart(): Boolean {
             val state = stateHolder.state.value

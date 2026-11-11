@@ -1576,7 +1576,7 @@ class IosContainer private constructor() {
         duration = 0, artworkUrl = null, sourceType = null, sourceUrl = null, addedAt = 0,
     )
 
-    /** Refresh one saved friend's cached now-playing + re-read the row (listen-along poll). */
+    /** Refresh one saved friend's cached now-playing + re-read the row (the friend's profile). */
     suspend fun refreshFriendActivity(friend: Friend): Friend? {
         friendsRepository.refreshFriendActivity(friend)
         return friendsRepository.getFriendById(friend.id)
@@ -1666,8 +1666,8 @@ class IosContainer private constructor() {
     /**
      * The queue context for a play started from the car list [parentId] titled
      * [title], so the phone's Now Playing names where it came from and a running
-     * Listen Along sees that the person took over (it only checks a non-null
-     * context). Playlists keep their id so the phone can open them. Any other
+     * Listen Along sees that the person took over (any queue set with a context
+     * other than Listen Along's ends it). Playlists keep their id so the phone can open them. Any other
      * list gets a neutral "carplay" context named [title], never another list's name.
      */
     fun carPlaybackContext(parentId: String, title: String): com.parachord.shared.playback.PlaybackContext {

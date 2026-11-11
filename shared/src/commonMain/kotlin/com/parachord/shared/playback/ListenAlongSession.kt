@@ -106,7 +106,11 @@ class ListenAlongSession(val friendName: String) {
         effects
     }
 
-    /** A poll answered; [isPlaying] is whether Listen Along's song is playing right now. */
+    /**
+     * A poll answered. [isPlaying] must be true while Listen Along's own song is playing
+     * OR starting / loading (resolving, the engine starting it); the platform computes it
+     * for its own track only, never for the user's queue playing before the first song.
+     */
     fun onPoll(result: ListenAlongPoll, isPlaying: Boolean): List<ListenAlongEffect> = guarded {
         when (result) {
             is ListenAlongPoll.Listening -> {
