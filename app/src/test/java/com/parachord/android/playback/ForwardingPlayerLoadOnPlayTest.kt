@@ -54,4 +54,33 @@ class ForwardingPlayerLoadOnPlayTest {
         verify(exactly = 1) { delegate.play() }
         verify(exactly = 0) { controller.togglePlayPause() }
     }
+
+    // ── The session's seek (#607) ─────────────────────────────────────
+
+    @Test fun `a seek in external mode goes to ExoPlayer when the controller doesn't own it`() {
+        // A failed track or the idle timeout: the controller left external
+        // playback, the session's player stayed in external mode. Forwarding
+        // to the controller sent its own seek back through the session forever.
+        val (wrapper, delegate, controller) = wrapper(needsLoad = false)
+        every { controller.ownsSessionSeek } returns false
+        wrapper.externalMode = true
+
+        wrapper.seekTo(30_000L)
+
+        verify(exactly = 0) { controller.seekTo(any()) }
+        verify(exactly = 1) { delegate.seekTo(30_000L) }
+    }
+
+    @Test fun `a seek the controller owns goes to it in either mode`() {
+        for (external in listOf(true, false)) {
+            val (wrapper, delegate, controller) = wrapper(needsLoad = true)
+            every { controller.ownsSessionSeek } returns true
+            wrapper.externalMode = external
+
+            wrapper.seekTo(30_000L)
+
+            verify(exactly = 1) { controller.seekTo(30_000L) }
+            verify(exactly = 0) { delegate.seekTo(any<Long>()) }
+        }
+    }
 }

@@ -1786,9 +1786,18 @@ class PlaybackService : MediaLibraryService() {
          * The lock screen / notification scrubber, and Android Auto's. Without
          * this it sought inside the silence loop, so no external engine (Spotify,
          * Apple Music, SoundCloud, Bandcamp) ever heard about it.
+         *
+         * Routed by the controller's own state ([PlaybackController.ownsSessionSeek]),
+         * not by [externalMode]: after a failed track or the idle timeout the
+         * controller leaves external playback while this player stays in
+         * external mode (so the session's Play still reaches the controller),
+         * and the controller's local seek, sent through the session, came back
+         * here and was forwarded to it again, forever (#607). A track waiting
+         * for Play to load it gets the seek too, in either mode: it moves
+         * where Play starts.
          */
         override fun seekTo(positionMs: Long) {
-            if (externalMode) {
+            if (playbackController.ownsSessionSeek) {
                 playbackController.seekTo(positionMs)
                 return
             }

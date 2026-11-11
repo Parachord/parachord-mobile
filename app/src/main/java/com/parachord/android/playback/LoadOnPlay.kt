@@ -34,3 +34,43 @@ internal fun failedTrackStop(isExternal: Boolean, autoSkip: Boolean, followed: B
     autoSkip || followed -> FailedTrackStop.KEEP_EXTERNAL_FOREGROUND
     else -> FailedTrackStop.LEAVE_EXTERNAL
 }
+
+/**
+ * Play or Pause does nothing while the queue is about to skip past the track
+ * on screen ([pendingTrackId], the track [PlaybackController]'s 600 ms
+ * auto-skip is waiting on): playing it again would re-play a track that
+ * can't play, and the skip would then start the next one without it.
+ */
+internal fun autoSkipPendingFor(pendingTrackId: String?, currentTrackId: String?): Boolean =
+    pendingTrackId != null && pendingTrackId == currentTrackId
+
+/**
+ * Whether a play that ended with [failure] (null: it started) marks the
+ * queue as played (`playedSinceWrap`). Only for the queue it belongs to: a
+ * new queue set while it was in flight ([queueAtStart] != [queueNow]) hasn't
+ * played anything yet.
+ */
+internal fun playMarksQueuePlayed(completed: Boolean, failure: PlayFailure?, queueAtStart: Int, queueNow: Int): Boolean =
+    completed && failure == null && queueAtStart == queueNow
+
+/**
+ * Whether the foreground a play took as it started ([shouldPromoteAtPlayStart])
+ * stays for the next track when nothing played: only when the queue skips past
+ * this track ([skipPendingForTrack]) and no external playback owns the
+ * foreground. Released here, the next track would have to promote from the
+ * background, which Android refuses with the screen off.
+ */
+internal fun keepsForegroundForAutoSkip(skipPendingForTrack: Boolean, externalPlayback: Boolean): Boolean =
+    skipPendingForTrack && !externalPlayback
+
+/**
+ * Whether the media session's seek goes to [PlaybackController.seekTo]
+ * ([controllerExternal]: an external engine plays; [loadPending]: the track
+ * waits for Play to load it, so the seek moves where Play starts) instead of
+ * ExoPlayer. Decided by the controller's own state, never the session
+ * player's external flag: when the two disagreed (external mode left on
+ * after a failed track), the controller sent its seek to the session, which
+ * sent it back, forever (#607).
+ */
+internal fun sessionSeekGoesToController(controllerExternal: Boolean, loadPending: Boolean): Boolean =
+    controllerExternal || loadPending

@@ -7,7 +7,6 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.shared.playback.AdvanceTrigger
 import com.parachord.shared.playback.QueueManager
 import com.parachord.shared.playback.RepeatMode
-import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -41,23 +40,7 @@ class PlaybackControllerListenerHooksTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(StandardTestDispatcher())
-        controller = PlaybackController(
-            context = mockk(relaxed = true),
-            stateHolder = stateHolder,
-            router = mockk(relaxed = true),
-            queueManager = queueManager,
-            queuePersistence = mockk(relaxed = true),
-            scrobbleManager = mockk(relaxed = true),
-            imageEnrichment = mockk(relaxed = true),
-            mbidEnrichment = mockk(relaxed = true),
-            lastFmClient = mockk(relaxed = true),
-            resolverManager = mockk(relaxed = true),
-            resolverScoring = mockk(relaxed = true),
-            trackResolverCache = mockk(relaxed = true),
-            widgetUpdater = mockk(relaxed = true),
-            settingsStore = mockk(relaxed = true),
-            networkMonitor = mockk(relaxed = true),
-        )
+        controller = PlaybackControllerFixture(stateHolder, queueManager).controller
         // The queue is a, b; a is current and has just ended.
         val current = queueManager.setQueue(listOf(a, b), 0, null, false)
         stateHolder.update { copy(currentTrack = current, isPlaying = true, upNext = listOf(b)) }
