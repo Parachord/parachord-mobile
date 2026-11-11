@@ -46,6 +46,19 @@ data class LoadOnPlay(
 internal fun loadOnPlayTarget(pending: LoadOnPlay?, currentTrackId: String?): LoadOnPlay? =
     pending?.takeIf { currentTrackId != null && it.track.id == currentTrackId }
 
+/**
+ * What the idle timeout leaves for Play when it stops the paused external
+ * [current] track at [positionMs]: a slot already [pending] for that track
+ * (a failed play, which re-chooses its source; a queue given back paused),
+ * else [LoadOnPlay.Why.IDLE_STOPPED], which keeps the source and resumes
+ * where it was paused.
+ */
+internal fun idleTimeoutLoad(pending: LoadOnPlay?, current: TrackEntity?, positionMs: Long): LoadOnPlay? {
+    if (current == null) return null
+    loadOnPlayTarget(pending, current.id)?.let { return it }
+    return LoadOnPlay(current, positionMs, skipReselect = true, why = LoadOnPlay.Why.IDLE_STOPPED)
+}
+
 /** How a play ended with nothing playing: shared with iOS (`shared/.../playback/PlayFailure.kt`). */
 typealias PlayFailure = com.parachord.shared.playback.PlayFailure
 

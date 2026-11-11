@@ -41,7 +41,7 @@ class PlayRadioModeBTest {
     }
 
     private fun teardown(): ProtocolPlayTeardown = mockk {
-        coEvery { prepareForNewPlayback() } just runs
+        coEvery { prepareForNewPlayback(any()) } just runs
     }
 
     /** Mode B never uses the protocol handler — strict, so any call fails the test. */
@@ -63,7 +63,8 @@ class PlayRadioModeBTest {
         assertEquals(PlayRadioResult.StartedModeB("Radio: Slowdive – Sugar For The Pill"), result)
         coVerifyOrder {
             pc.buildSpinoffPool("Slowdive", "Sugar For The Pill")
-            td.prepareForNewPlayback()
+            // A radio ends Listen Along silently.
+            td.prepareForNewPlayback(true)
             pc.startSpinoffFromPool(
                 pool = listOf(track),
                 displayName = "Radio: Slowdive – Sugar For The Pill",
@@ -94,7 +95,7 @@ class PlayRadioModeBTest {
         coVerifyOrder {
             pc.artistTopTrackTitle("Slowdive")
             pc.buildSpinoffPool("Slowdive", "When the Sun Hits")
-            td.prepareForNewPlayback()
+            td.prepareForNewPlayback(any())
             pc.startSpinoffFromPool(any(), "Radio: Slowdive", "Slowdive", "When the Sun Hits", true)
         }
     }
@@ -116,7 +117,7 @@ class PlayRadioModeBTest {
         val result = dispatcher(pc, td).dispatch(radio("Nobody"))
 
         assertEquals(PlayRadioResult.NoSeed("Nobody"), result)
-        coVerify(exactly = 0) { td.prepareForNewPlayback() }
+        coVerify(exactly = 0) { td.prepareForNewPlayback(any()) }
         coVerify(exactly = 0) { pc.buildSpinoffPool(any(), any()) }
         coVerify(exactly = 0) { pc.startSpinoffFromPool(any(), any(), any(), any(), any()) }
     }
@@ -132,7 +133,7 @@ class PlayRadioModeBTest {
         val result = dispatcher(pc, td).dispatch(radio("Slowdive", "Sugar For The Pill"))
 
         assertEquals(PlayRadioResult.Failed("No similar tracks found for \"Sugar For The Pill\""), result)
-        coVerify(exactly = 0) { td.prepareForNewPlayback() }
+        coVerify(exactly = 0) { td.prepareForNewPlayback(any()) }
         coVerify(exactly = 0) { pc.startSpinoffFromPool(any(), any(), any(), any(), any()) }
     }
 
@@ -145,7 +146,7 @@ class PlayRadioModeBTest {
         val result = dispatcher(pc, td).dispatch(radio("Slowdive", "Sugar For The Pill"))
 
         assertEquals(PlayRadioResult.Failed("Failed to fetch similar tracks"), result)
-        coVerify(exactly = 0) { td.prepareForNewPlayback() }
+        coVerify(exactly = 0) { td.prepareForNewPlayback(any()) }
     }
 
     @Test
@@ -161,7 +162,7 @@ class PlayRadioModeBTest {
 
         assertEquals(PlayRadioResult.Failed("Couldn't find a playable track similar to \"Song\""), result)
         coVerify(exactly = 5) { pc.isPlayableNow(any()) }
-        coVerify(exactly = 0) { td.prepareForNewPlayback() }
+        coVerify(exactly = 0) { td.prepareForNewPlayback(any()) }
         coVerify(exactly = 0) { pc.startSpinoffFromPool(any(), any(), any(), any(), any()) }
     }
 

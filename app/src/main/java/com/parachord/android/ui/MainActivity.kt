@@ -353,7 +353,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
     val protocolTeardown: com.parachord.android.deeplink.AndroidProtocolPlayTeardown =
         org.koin.compose.koinInject()
     LaunchedEffect(mainViewModel) {
-        protocolTeardown.setListenAlongStopper { mainViewModel.endListenAlongSilently() }
+        protocolTeardown.setListenAlongStopper { silently -> mainViewModel.listenAlongTakenOver(silently) }
     }
 
     // Process pending deep links from the Activity (intent handling).

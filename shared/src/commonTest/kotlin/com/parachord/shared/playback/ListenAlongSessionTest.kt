@@ -131,6 +131,46 @@ class ListenAlongSessionTest {
     }
 
     @Test
+    fun `a friend who goes offline while nothing plays restores and starts the queue`() {
+        val s = started()
+        val end = s.onPoll(ListenAlongPoll.NotListening, false).filterIsInstance<ListenAlongEffect.End>().single()
+        assertTrue(end.restoreQueue)
+        assertTrue(end.startPlayback)
+    }
+
+    @Test
+    fun `a friend who goes offline while the user paused gives the queue back paused`() {
+        val s = started()
+        s.onUserPaused()
+        assertEquals(
+            listOf(ListenAlongEffect.Message(stopped), ListenAlongEffect.End(restoreQueue = true, startPlayback = false)),
+            s.onPoll(ListenAlongPoll.NotListening, false),
+        )
+    }
+
+    @Test
+    fun `the fourth failed poll while the user paused gives the queue back paused`() {
+        val s = started()
+        s.onUserPaused()
+        repeat(3) { assertEquals(emptyList(), s.onPoll(ListenAlongPoll.Failed, false)) }
+        assertEquals(
+            listOf(ListenAlongEffect.Message(stopped), ListenAlongEffect.End(restoreQueue = true, startPlayback = false)),
+            s.onPoll(ListenAlongPoll.Failed, false),
+        )
+    }
+
+    @Test
+    fun `a user who paused and resumed gets the queue back playing`() {
+        val s = started()
+        s.onUserPaused()
+        s.onUserResumed()
+        assertEquals(
+            listOf(ListenAlongEffect.Message(stopped), ListenAlongEffect.End(restoreQueue = true, startPlayback = true)),
+            s.onPoll(ListenAlongPoll.NotListening, false),
+        )
+    }
+
+    @Test
     fun `a friend who comes back before the song ends is followed again`() {
         val s = started()
         s.onPoll(ListenAlongPoll.NotListening, true)

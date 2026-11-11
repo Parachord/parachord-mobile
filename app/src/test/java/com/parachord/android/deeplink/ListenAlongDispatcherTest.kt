@@ -70,7 +70,7 @@ class ListenAlongDispatcherTest {
         repo: FriendsRepository = mockk(relaxed = true),
         td: ProtocolPlayTeardown = mockk<ProtocolPlayTeardown>().also {
             coEvery { it.prepareForListenAlongHandover() } just runs
-            coEvery { it.prepareForNewPlayback() } just runs
+            coEvery { it.prepareForNewPlayback(any()) } just runs
         },
     ): Pair<ListenAlongDispatcher, ProtocolPlayTeardown> =
         ListenAlongDispatcher(repo, td) to td
@@ -92,7 +92,7 @@ class ListenAlongDispatcherTest {
         coVerify(exactly = 1) { teardown.prepareForListenAlongHandover() }
         // Critically: NOT the full prepareForNewPlayback (would race with
         // MainViewModel.startListenAlong's own stopListenAlong).
-        coVerify(exactly = 0) { teardown.prepareForNewPlayback() }
+        coVerify(exactly = 0) { teardown.prepareForNewPlayback(any()) }
     }
 
     @Test

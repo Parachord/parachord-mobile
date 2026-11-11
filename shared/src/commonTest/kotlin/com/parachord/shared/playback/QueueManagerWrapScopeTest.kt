@@ -416,4 +416,28 @@ class QueueManagerWrapScopeTest {
         assertEquals(b, restored.wrapToStart(c))
         assertEquals(listOf(c), restored.snapshot.value.upNext)
     }
+
+    @Test
+    fun `a restored listen along context is dropped and others are kept`() {
+        val restored = QueueManager()
+        restored.restoreState(
+            restoredUpNext = listOf(b),
+            restoredHistory = emptyList(),
+            restoredOriginalOrder = null,
+            context = PlaybackContext(type = LISTEN_ALONG_CONTEXT, name = "Pat"),
+            shuffle = false,
+        )
+        assertNull(restored.playbackContext)
+        assertNull(restored.snapshot.value.playbackContext)
+
+        val playlist = PlaybackContext(type = "playlist", name = "Mine")
+        restored.restoreState(
+            restoredUpNext = listOf(b),
+            restoredHistory = emptyList(),
+            restoredOriginalOrder = null,
+            context = playlist,
+            shuffle = false,
+        )
+        assertEquals(playlist, restored.playbackContext)
+    }
 }

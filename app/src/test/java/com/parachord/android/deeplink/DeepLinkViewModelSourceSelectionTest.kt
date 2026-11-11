@@ -153,7 +153,7 @@ class DeepLinkViewModelSourceSelectionTest {
 
         assertEquals(listOf("Could not find: Swapmeet - Mount Zero"), toasts)
         verify(exactly = 0) { playbackController.playTrack(any(), any()) }
-        coVerify(exactly = 0) { teardown.prepareForNewPlayback() }
+        coVerify(exactly = 0) { teardown.prepareForNewPlayback(any()) }
     }
 
     @Test

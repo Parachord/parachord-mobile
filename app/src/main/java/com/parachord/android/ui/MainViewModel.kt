@@ -27,8 +27,11 @@ import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
 import com.parachord.android.playback.PlaybackState
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.playback.effectiveTrack
-import com.parachord.android.playback.ListenAlongDriver
+import com.parachord.shared.model.Track
 import com.parachord.shared.playback.LISTEN_ALONG_POLL_MS
+import com.parachord.shared.playback.ListenAlongHost
+import com.parachord.shared.playback.ListenAlongPlatform
+import com.parachord.shared.playback.ListenAlongSuspendedQueue
 import com.parachord.shared.playback.ListenAlongPoll
 import com.parachord.shared.playback.listenAlongPollOf
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -110,12 +113,11 @@ class MainViewModel constructor(
     init {
         playbackController.connect()
         // Listen Along drives playback through the controller's hooks.
-        playbackController.onOwnTrackEnded = {
-            listenAlong.onOwnTrackEnded(playbackStateHolder.state.value.currentTrack?.id)
-        }
+        playbackController.onOwnTrackEnded = { listenAlong.onOwnTrackEnded() }
         playbackController.onTrackUnplayable = { track -> listenAlong.onTrackUnplayable(track.id) }
         playbackController.drivesTrack = { track -> listenAlong.drivesTrack(track.id) }
         playbackController.onUserAction = { action -> listenAlong.onUserAction(action) }
+        playbackController.onTrackStarting = { track -> listenAlong.onTrackStarting(track.id) }
 
         // Initialize .axe plugin system and sync updates from marketplace
         viewModelScope.launch {
@@ -256,7 +258,7 @@ class MainViewModel constructor(
         _importError.value = null
     }
 
-    // ── Listen Along (the shared ListenAlongSession, through ListenAlongDriver) ──
+    // ── Listen Along (the shared ListenAlongHost) ──
 
     private var listenAlongJob: Job? = null
     private val _listenAlongFriend = MutableStateFlow<FriendEntity?>(null)
@@ -296,29 +298,61 @@ class MainViewModel constructor(
         }
     }
 
-    /**
-     * The session and the user's suspended queue. Its messages are the shared
-     * [com.parachord.shared.playback.PlaybackMessages]; its plays are
-     * metadata-only tracks that the pipeline resolves on the fly.
-     */
-    private val listenAlong = ListenAlongDriver(
-        play = { track, ctx -> playbackController.playTrack(track, context = ctx) },
-        restoreQueue = { tracks, ctx -> playbackController.playQueue(tracks, 0, ctx) },
-        clearQueue = { playbackController.clearQueue() },
-        stopAndClear = { playbackController.stopAndClear() },
-        showMessage = { text ->
-            Log.d(TAG, "Listen along: $text")
-            viewModelScope.launch { _toastEvents.emit(text) }
-        },
-        onEnded = { onListenAlongEnded() },
-    )
+    private val _listenAlongSuspendedQueue = MutableStateFlow<List<TrackEntity>>(emptyList())
 
     /** Shown dimmed as "YOUR QUEUE" in the queue sheet while listening along. */
-    val listenAlongSuspendedQueue: StateFlow<List<TrackEntity>> = listenAlong.suspendedQueue
+    val listenAlongSuspendedQueue: StateFlow<List<TrackEntity>> = _listenAlongSuspendedQueue
+
+    private val _listenAlongFriendIsAhead = MutableStateFlow(false)
 
     /** While listening along: true when the friend is on a song we haven't
      *  played, so Now Playing's Next is enabled (catch up); false in sync. */
-    val listenAlongFriendIsAhead: StateFlow<Boolean> = listenAlong.friendIsAhead
+    val listenAlongFriendIsAhead: StateFlow<Boolean> = _listenAlongFriendIsAhead
+
+    /**
+     * The shared Listen Along host, over [playbackController]. Its messages
+     * are the shared [com.parachord.shared.playback.PlaybackMessages]; its
+     * plays are metadata-only tracks that the pipeline resolves on the fly.
+     */
+    private val listenAlong: ListenAlongHost = ListenAlongHost(object : ListenAlongPlatform {
+        override fun play(track: Track, context: PlaybackContext) =
+            playbackController.playTrack(track, context = context)
+
+        override fun currentQueue(): ListenAlongSuspendedQueue {
+            val state = playbackStateHolder.state.value
+            return ListenAlongSuspendedQueue(listOfNotNull(state.currentTrack) + state.upNext, state.playbackContext)
+        }
+
+        override fun exitSpinoff() = playbackController.exitSpinoff()
+
+        override fun restoreQueue(queue: ListenAlongSuspendedQueue, startPlayback: Boolean) {
+            if (startPlayback) {
+                playbackController.playQueue(queue.tracks, 0, queue.context)
+            } else {
+                playbackController.restoreQueuePaused(queue.tracks, queue.context)
+            }
+        }
+
+        override fun clearQueue() = playbackController.clearQueue()
+        override fun stopAndClear() = playbackController.stopAndClear()
+
+        override fun showMessage(text: String) {
+            Log.d(TAG, "Listen along: $text")
+            viewModelScope.launch { _toastEvents.emit(text) }
+        }
+
+        override fun releaseHold() = playbackController.releaseListenerHold()
+        override fun ended() = onListenAlongEnded()
+
+        override fun stateChanged() {
+            _listenAlongFriendIsAhead.value = listenAlong.friendIsAhead
+            _listenAlongSuspendedQueue.value = listenAlong.suspendedQueue
+        }
+
+        override fun isPlaying() = playbackStateHolder.state.value.isPlaying
+        override fun isPlayStarting() = playbackController.isPlayStarting
+        override fun currentTrackId() = playbackStateHolder.state.value.currentTrack?.id
+    })
 
     /** Catch up to the friend's song (Now Playing's Next while listening along). */
     fun advanceToFriend() {
@@ -328,7 +362,8 @@ class MainViewModel constructor(
     /**
      * Start listening along with [friend]: play what they're playing now, then
      * poll every [LISTEN_ALONG_POLL_MS] and let the session decide. Switching
-     * friends replaces the session and keeps the user's suspended queue.
+     * friends replaces the session and keeps the user's suspended queue; a
+     * running spinoff ends first.
      */
     fun startListenAlong(friend: FriendEntity) {
         listenAlongJob?.cancel()
@@ -341,14 +376,8 @@ class MainViewModel constructor(
             Log.d(TAG, "Acquired WakeLock for listen-along polling")
         }
 
-        val state = playbackState.value
         val current = (listenAlongPollOf(friend) as? ListenAlongPoll.Listening)?.track
-        listenAlong.start(
-            friendName = friend.displayName,
-            current = current,
-            queueTracks = listOfNotNull(state.currentTrack) + state.upNext,
-            queueContext = state.playbackContext,
-        )
+        listenAlong.start(friend.displayName, current)
 
         listenAlongJob = viewModelScope.launch {
             while (isActive && listenAlong.isActive) {
@@ -357,11 +386,8 @@ class MainViewModel constructor(
                 // request is ListenAlongPoll.Failed, not "not listening".
                 val result = friendsRepository.pollListenAlong(friend)
                 result.friend?.let { _listenAlongFriend.value = it }
-                // The driver works out whether OUR song plays (a play still
-                // starting counts, the user's own queue doesn't).
-                val now = playbackState.value
-                Log.d(TAG, "Listen along poll: ${result.poll} (playing=${now.isPlaying}, starting=${playbackController.isPlayStarting})")
-                listenAlong.onPoll(result.poll, now.isPlaying, playbackController.isPlayStarting, now.currentTrack?.id)
+                Log.d(TAG, "Listen along poll: ${result.poll} (playing=${playbackState.value.isPlaying}, starting=${playbackController.isPlayStarting})")
+                listenAlong.onPoll(result.poll)
             }
         }
     }
@@ -371,9 +397,13 @@ class MainViewModel constructor(
         listenAlong.stop()
     }
 
-    /** A `parachord://` link takes over: end with no message, dropping the suspended queue. */
-    fun endListenAlongSilently() {
-        listenAlong.endSilently()
+    /**
+     * A `parachord://` link takes over: a radio link [silently] (no message),
+     * a play link as the user playing something else (the message shows).
+     * Either way the suspended queue is dropped.
+     */
+    fun listenAlongTakenOver(silently: Boolean) {
+        listenAlong.takeOver(silently)
     }
 
     /** The session ended (any way): stop polling and release the wake lock. */

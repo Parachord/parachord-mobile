@@ -67,8 +67,12 @@ sealed interface ListenAlongEffect {
     /** Show [text] to the user. */
     data class Message(val text: String) : ListenAlongEffect
 
-    /** The session is over; when [restoreQueue] the user's own queue resumes, else their new choice stands. */
-    data class End(val restoreQueue: Boolean) : ListenAlongEffect
+    /**
+     * The session is over; when [restoreQueue] the user's own queue comes back, else their
+     * new choice stands. [startPlayback] false: the queue comes back paused (its first track
+     * on screen, Play starts it), for a friend who went quiet while the user had paused.
+     */
+    data class End(val restoreQueue: Boolean, val startPlayback: Boolean = true) : ListenAlongEffect
 }
 
 /**
@@ -211,11 +215,12 @@ class ListenAlongSession(val friendName: String) {
             held = null
             return emptyList()
         }
-        return end(PlaybackMessages.stoppedListening(friendName))
+        // A paused user gets their queue back paused: a paused phone doesn't start by itself.
+        return end(PlaybackMessages.stoppedListening(friendName), startPlayback = !userPaused)
     }
 
-    private fun end(message: String): List<ListenAlongEffect> =
-        listOf(ListenAlongEffect.Message(message), ListenAlongEffect.End(restoreQueue = true))
+    private fun end(message: String, startPlayback: Boolean = true): List<ListenAlongEffect> =
+        listOf(ListenAlongEffect.Message(message), ListenAlongEffect.End(restoreQueue = true, startPlayback = startPlayback))
 
     private fun userEnded(restoreQueue: Boolean): List<ListenAlongEffect> = listOf(
         ListenAlongEffect.Message(PlaybackMessages.stoppedListeningAlongWith(friendName)),

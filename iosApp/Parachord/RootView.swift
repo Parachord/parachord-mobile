@@ -458,8 +458,8 @@ struct ContentView: View {
                                  context: PlaybackContext(type: "playlist", name: r.name, id: nil))
             dlAck("Playing \(r.name)")
         case "radioPool":
-            // A radio ends a Listen Along session silently, dropping its suspended queue.
-            listenAlong.endSilently()
+            // A radio ends a Listen Along session silently, dropping its
+            // suspended queue (`beginRadio` reports it as a spinoff starting).
             // End a running spinoff first, so the radio restores the context
             // from before it, not the old spinoff's.
             coordinator.exitSpinoff()

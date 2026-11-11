@@ -1859,17 +1859,6 @@ final class IosAVPlayer {
 // the right engine (AVPlayer / MusicKit / Spotify Connect), with unified
 // engine-agnostic now-playing state for the UI.
 
-/// A user's playback action the coordinator reports to its listener
-/// (`QueuePlaybackCoordinator.onUserAction`), Android's `UserPlaybackAction`.
-enum UserPlaybackAction {
-    /// Next or Previous (the lock screen, CarPlay, headphones, the mini player).
-    case skip
-    /// The user started something else (a queue, a queue row).
-    case playSomethingElse
-    case pause
-    case resume
-}
-
 @Observable
 final class QueuePlaybackCoordinator {
 
@@ -1987,10 +1976,11 @@ final class QueuePlaybackCoordinator {
     /// listener plays another.
     @ObservationIgnored var onTrackUnplayable: ((Track) -> Bool)?
 
-    /// Called for a user's playback action, before the coordinator acts on it.
-    /// The result matters for `.skip` and `.resume` only: true means the
-    /// listener started playback itself, so the coordinator doesn't also skip
-    /// or resume.
+    /// Called for a user's playback action (the shared `UserPlaybackAction`),
+    /// before the coordinator acts on it. The result matters for `.skip` and
+    /// `.resume` only: true means the coordinator mustn't act on it (the
+    /// listener started playback itself, stopped and cleared the track, or
+    /// holds it).
     @ObservationIgnored var onUserAction: ((UserPlaybackAction) -> Bool)?
 
     /// Called as any play of `track` starts (`playTrack`), so the listener
@@ -2049,7 +2039,10 @@ final class QueuePlaybackCoordinator {
     /// pool plays. No-op on an empty pool.
     func beginSpinoff(pool: [Track], displayName: String) {
         guard !pool.isEmpty else { return }
-        preSpinoffContext = playbackContext
+        // A spinoff ends Listen Along (silently; its suspended queue is
+        // dropped), so a Listen Along context isn't one to come back to.
+        _ = onUserAction?(.spinoffStarted)
+        preSpinoffContext = Self.contextToRestore(playbackContext)
         spinoffPool = pool
         spinoffGeneration += 1
         spinoffRefiller.refillUrl = nil
@@ -2066,7 +2059,8 @@ final class QueuePlaybackCoordinator {
     /// the current song playing and has a finite pool.
     func beginRadio(pool: [Track], displayName: String, refillUrl: String?) {
         guard !pool.isEmpty else { return }
-        preSpinoffContext = playbackContext
+        _ = onUserAction?(.spinoffStarted)
+        preSpinoffContext = Self.contextToRestore(playbackContext)
         spinoffPool = Array(pool.dropFirst())
         spinoffGeneration += 1
         spinoffRefiller.refillUrl = refillUrl
@@ -2149,6 +2143,12 @@ final class QueuePlaybackCoordinator {
             NSLog("SPINOFF refill: appended %d tracks (pool now %d)", fresh.count, self.spinoffPool.count)
             self.preresolveSpinoffPool()
         }
+    }
+
+    /// The context a spinoff gives back when it ends: never a Listen Along
+    /// one, whose session the spinoff ended (Android's `startSpinoffFromPool`).
+    private static func contextToRestore(_ context: PlaybackContext?) -> PlaybackContext? {
+        context?.type == ListenAlongController.listenAlongContext ? nil : context
     }
 
     /// Exit spinoff: drop the pool, restore the saved context. The queue was never
@@ -2873,6 +2873,22 @@ final class QueuePlaybackCoordinator {
 
     func clearQueue() {
         queueManager.clearQueue()
+        syncSnapshot()
+    }
+
+    /// Give a queue back paused: `tracks` become the queue in `context`, the
+    /// first one is on screen, paused, with nothing loaded, and Play starts it
+    /// (`needsLoadOnPlay`, as for the queue restored at launch). For a listener
+    /// whose session ended while the user had paused.
+    func setQueuePaused(_ tracks: [Track], context: PlaybackContext?) {
+        guard let track = queueManager.setQueue(
+            tracks: tracks, startIndex: 0, context: context, shuffle: shuffleEnabled) else { return }
+        NSLog("QUEUE given back paused at '%@'", track.title)
+        playedSinceWrap = false
+        heldForListener = false
+        restoredResumeAtSec = 0
+        currentTrack = track
+        needsLoadOnPlay = true
         syncSnapshot()
     }
 

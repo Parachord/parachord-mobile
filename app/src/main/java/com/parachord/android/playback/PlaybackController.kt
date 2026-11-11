@@ -242,8 +242,9 @@ class PlaybackController constructor(
     /**
      * Called for a user's playback action, before the controller acts on it.
      * The return value matters for [UserPlaybackAction.SKIP] and
-     * [UserPlaybackAction.RESUME] only: true means the listener started
-     * playback itself, so the controller doesn't also skip or resume.
+     * [UserPlaybackAction.RESUME] only: true means the controller mustn't
+     * skip or resume as well (the listener started playback itself, stopped
+     * and cleared the track, or holds it).
      */
     var onUserAction: ((UserPlaybackAction) -> Boolean)? = null
 
@@ -256,13 +257,20 @@ class PlaybackController constructor(
      */
     var drivesTrack: ((TrackEntity) -> Boolean)? = null
 
-    // Threading: the hooks, [playRequestCount] and [playLaunchesPending] are
-    // main-thread only. Every entry point that fires a hook or counts a play
-    // ([playTrack], [playQueue], [playFromQueue], [skipNext], [skipPrevious],
-    // [togglePlayPause]) runs on the main thread: called from another thread
-    // it re-posts itself there ([onMain]). Main callers run inline, so the
-    // listener still hears PLAY_SOMETHING_ELSE before their play replaces
-    // the track.
+    /**
+     * Called as a play of [track] starts ([playTrackInternal]), so the listener
+     * knows its track is playing again.
+     */
+    var onTrackStarting: ((TrackEntity) -> Unit)? = null
+
+    // Threading: call the controller on the main thread. The hooks,
+    // [playRequestCount], [playLaunchesPending] and [heldForListener] are
+    // main-thread only, and every entry point that fires a hook or counts a
+    // play ([playTrack], [playQueue], [playFromQueue], [skipNext],
+    // [skipPrevious], [togglePlayPause], [stopAndClear]) logs an error when
+    // called from another thread ([checkMainThread]). It doesn't re-post
+    // itself: re-posting only some entry points reorders a mixed sequence
+    // from one thread (clearQueue inline, playTrack later).
 
     /**
      * Counts requested plays ([playTrack], [playQueue], [playFromQueue], a
@@ -272,13 +280,19 @@ class PlaybackController constructor(
     private var playRequestCount = 0
 
     /**
-     * False off the main thread, after posting [retry] there: an entry point
-     * starts with `if (!onMain { … }) return`.
+     * The track on screen is held for the listener (it ended, or couldn't
+     * play, and the listener waits to play its next track): Play does
+     * nothing until the listener plays something or lets go
+     * ([releaseListenerHold]). Cleared by any play.
      */
-    private inline fun onMain(crossinline retry: () -> Unit): Boolean {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return true
-        scope.launch(Dispatchers.Main) { retry() }
-        return false
+    private var heldForListener = false
+
+    /** Logs an error when [entryPoint] runs off the main thread (see the threading note above). */
+    private fun checkMainThread(entryPoint: String) {
+        val looper = android.os.Looper.myLooper()
+        if (looper != android.os.Looper.getMainLooper()) {
+            Log.e(TAG, "$entryPoint called off the main thread (${Thread.currentThread().name}); call the controller on the main thread")
+        }
     }
 
     /**
@@ -449,7 +463,7 @@ class PlaybackController constructor(
 
     /** Play a single track immediately (clears the queue). */
     fun playTrack(track: TrackEntity, context: PlaybackContext? = null) {
-        if (!onMain { playTrack(track, context) }) return
+        checkMainThread("playTrack")
         playRequestedThisRun = true
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         playRequestCount++
@@ -482,7 +496,7 @@ class PlaybackController constructor(
         context: PlaybackContext? = null,
         shuffle: Boolean = queueManager.shuffleEnabled,
     ) {
-        if (!onMain { playQueue(tracks, startIndex, context, shuffle) }) return
+        checkMainThread("playQueue")
         playRequestedThisRun = true
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         playRequestCount++
@@ -519,7 +533,7 @@ class PlaybackController constructor(
     }
 
     fun skipNext() {
-        if (!onMain { skipNext() }) return
+        checkMainThread("skipNext")
         skipNextInternal(AdvanceTrigger.NEXT_PRESSED)
     }
 
@@ -579,7 +593,8 @@ class PlaybackController constructor(
      * that couldn't play being skipped); the shared [advanceAction] decides
      * what happens, after the spinoff pool, which isn't governed by repeat.
      */
-    private fun skipNextInternal(trigger: AdvanceTrigger) {
+    @androidx.annotation.VisibleForTesting
+    internal fun skipNextInternal(trigger: AdvanceTrigger) {
         val userInitiated = trigger == AdvanceTrigger.NEXT_PRESSED
         // If a previous advance is still in-flight (resolver/routing not finished),
         // ignore non-user auto-advance signals to prevent double-skipping.
@@ -698,13 +713,22 @@ class PlaybackController constructor(
      * album's next song, and the session shows paused. The stop waits for the
      * play lock and is dropped if a play was requested meanwhile (any entry
      * point that counts in [playRequestCount]) or the track changed, so it
-     * can't race the next track's start.
+     * can't race the next track's start. Play does nothing meanwhile
+     * ([heldForListener]): an ended local player would replay the track from
+     * the start, an external one re-play it or resume its finished stream.
      */
     private fun holdEndedTrack() {
         val track = stateHolder.state.value.currentTrack ?: return
         Log.d(TAG, "'${track.title}' ended; holding it on screen")
+        heldForListener = true
         stateHolder.update { copy(isPlaying = false, isBuffering = false) }
-        if (!isExternalPlayback) return
+        if (!isExternalPlayback) {
+            // An ended ExoPlayer keeps playWhenReady, so the seek to the start
+            // that Media3 sends ahead of a session play (a media key, the lock
+            // screen) would replay the track: drop it.
+            controller?.pause()
+            return
+        }
         val requests = playRequestCount
         scope.launch {
             playMutex.withLock {
@@ -735,8 +759,53 @@ class PlaybackController constructor(
      * session ended at a song's end with nothing to go back to.
      */
     fun stopAndClear() {
-        if (!onMain { stopAndClear() }) return
+        checkMainThread("stopAndClear")
         stopAtEndOfQueue()
+    }
+
+    /**
+     * The listener let go of a held track ([heldForListener]) without playing
+     * anything else: Play on it does what it does on any stopped track again
+     * (re-plays it, or loads it when its play failed).
+     */
+    fun releaseListenerHold() {
+        if (!heldForListener) return
+        Log.d(TAG, "Listener let go of '${stateHolder.state.value.currentTrack?.title}'")
+        heldForListener = false
+    }
+
+    /**
+     * Give a queue back paused: [tracks] become the queue in [context], the
+     * first one is on screen, paused, with nothing loaded, and Play starts it
+     * ([loadOnPlay], as for the queue restored at launch). For a listener
+     * whose session ended while the user had paused.
+     */
+    fun restoreQueuePaused(tracks: List<TrackEntity>, context: PlaybackContext?) {
+        checkMainThread("restoreQueuePaused")
+        val track = queueManager.setQueue(tracks, 0, context, queueManager.shuffleEnabled) ?: return
+        playedSinceWrap = false
+        heldForListener = false
+        Log.d(TAG, "Queue given back paused at '${track.title}'")
+        // The paused local item belongs to the track being replaced: drop it,
+        // so the session's play can't resume it. A paused external handler is
+        // left as it is (keeping external mode and the foreground); the next
+        // play replaces it, and the idle timeout cleans up if none comes.
+        if (!isExternalPlayback) {
+            controller?.stop()
+            controller?.clearMediaItems()
+        }
+        loadOnPlay = LoadOnPlay(track, 0L, skipReselect = false, why = LoadOnPlay.Why.RESTORED)
+        stateHolder.update {
+            copy(
+                currentTrack = track,
+                isPlaying = false,
+                isBuffering = false,
+                position = 0L,
+                duration = 0L,
+                playbackError = null,
+            )
+        }
+        syncQueueState()
     }
 
     /**
@@ -769,6 +838,7 @@ class PlaybackController constructor(
         controller?.stop()
         controller?.clearMediaItems()
         loadOnPlay = null
+        heldForListener = false
         stateHolder.update {
             copy(
                 currentTrack = null,
@@ -783,7 +853,7 @@ class PlaybackController constructor(
     }
 
     fun skipPrevious() {
-        if (!onMain { skipPrevious() }) return
+        checkMainThread("skipPrevious")
         playRequestCount++
         // The listener took over (Listen Along restored the user's queue).
         if (onUserAction?.invoke(UserPlaybackAction.SKIP) == true) return
@@ -818,7 +888,7 @@ class PlaybackController constructor(
 
     /** User tapped a track in the queue UI — play from that point. */
     fun playFromQueue(index: Int) {
-        if (!onMain { playFromQueue(index) }) return
+        checkMainThread("playFromQueue")
         playRequestCount++
         val currentTrack = stateHolder.state.value.currentTrack
         val track = queueManager.playFromQueue(index, currentTrack) ?: return
@@ -908,7 +978,7 @@ class PlaybackController constructor(
     }
 
     fun togglePlayPause() {
-        if (!onMain { togglePlayPause() }) return
+        checkMainThread("togglePlayPause")
         // A resume (nothing playing or starting): the listener may play
         // something else instead (Listen Along's held friend track). A play
         // command while a play starts is that play's own echo, not the user.
@@ -916,6 +986,13 @@ class PlaybackController constructor(
             onUserAction?.invoke(UserPlaybackAction.RESUME) == true
         ) {
             clearUserPauseMark()
+            return
+        }
+        // Held for the listener: nothing to resume, and the track isn't
+        // replayed or reloaded (also while the hold's own stop runs, when a
+        // play counts as starting and the listener isn't asked).
+        if (!stateHolder.state.value.isPlaying && heldForListener) {
+            Log.d(TAG, "togglePlayPause: '${stateHolder.state.value.currentTrack?.title}' is held for the listener; ignoring play")
             return
         }
         // Nothing holds the track on screen ([loadOnPlay]): a restored queue,
@@ -1053,10 +1130,16 @@ class PlaybackController constructor(
      * The media session's play or pause on the local player, which reaches
      * ExoPlayer without [togglePlayPause] (lock screen, headphones, the car):
      * tells [onUserAction] as [togglePlayPause] does
-     * ([sessionPlayPauseAction]). @return true when the listener started
-     * something else instead of the resume, so the caller doesn't resume.
+     * ([sessionPlayPauseAction]). @return true when the caller mustn't resume:
+     * the listener started something else instead, or holds the track.
      */
     fun onSessionPlayPause(play: Boolean): Boolean {
+        // Held for the listener ([heldForListener]): an ended ExoPlayer would
+        // replay the track from the start.
+        if (play && heldForListener && !stateHolder.state.value.isPlaying) {
+            Log.d(TAG, "Session play: '${stateHolder.state.value.currentTrack?.title}' is held for the listener; ignoring")
+            return true
+        }
         val action = sessionPlayPauseAction(play, stateHolder.state.value.isPlaying, isPlayStarting) ?: return false
         val handled = onUserAction?.invoke(action) == true
         if (handled) clearUserPauseMark()
@@ -1148,9 +1231,13 @@ class PlaybackController constructor(
             ) {
                 Log.d(TAG, "'${track.title}' didn't play ($failure); Play will load it")
                 loadOnPlay = failedLoad(track, skipReselect, failedAtMs = 0, durationMs = 0)
-                // The listener takes it (Listen Along): no message about it.
+                // The listener takes it (Listen Along): no message about it,
+                // and unless it played another track, Play does nothing while
+                // it waits ([heldForListener]) instead of loading this one.
+                val requestsBefore = playRequestCount
                 if (onTrackUnplayable?.invoke(track) == true) {
                     Log.d(TAG, "'${track.title}': the listener handles the failed play")
+                    if (playRequestCount == requestsBefore) heldForListener = true
                     failureNotice = null
                     if (stateHolder.state.value.currentTrack?.id == track.id) {
                         stateHolder.update { copy(playbackError = null) }
@@ -1184,6 +1271,8 @@ class PlaybackController constructor(
         loadOnPlay = null
         playFailure = null
         failureNotice = null
+        heldForListener = false
+        onTrackStarting?.invoke(track)
         // Take the foreground now, while the request's window to start a
         // foreground service is open: the lookup below can outlast it, and
         // without one Android cuts the app's network when it isn't on screen.
@@ -2074,9 +2163,10 @@ class PlaybackController constructor(
             delay(IDLE_TIMEOUT_MS)
             Log.d(TAG, "Idle timeout reached — cleaning up paused external playback")
             val state = stateHolder.state.value
-            loadOnPlay = state.currentTrack?.let {
-                LoadOnPlay(it, state.position, skipReselect = true, why = LoadOnPlay.Why.IDLE_STOPPED)
-            }
+            // A slot already set for this track says how to load it (a failed
+            // play re-chooses its source; a queue given back paused starts
+            // from the top): keep it.
+            loadOnPlay = idleTimeoutLoad(loadOnPlay, state.currentTrack, state.position)
             isExternalPlayback = false
             router.stopExternalPlayback()
         }
@@ -2587,8 +2677,9 @@ class PlaybackController constructor(
         // than "Spun off from $title by $artist".
         spinoffSourceTrack = null
 
-        // Save previous playback context (queue is NOT modified — desktop behavior)
-        preSpinoffContext = queueManager.playbackContext
+        // Save previous playback context (queue is NOT modified — desktop behavior).
+        // Never a Listen Along one: the session has ended by now.
+        preSpinoffContext = queueManager.playbackContext?.takeUnless { it.type == LISTEN_ALONG_CONTEXT }
 
         spinoffPool.addAll(initialPool)
 

@@ -200,7 +200,7 @@ class DeepLinkViewModel constructor(
                         // would inherit (and then immediately undo) the
                         // prior context. Per issue #120 item D and desktop
                         // parity rules.
-                        protocolPlayTeardown.prepareForNewPlayback()
+                        protocolPlayTeardown.prepareForNewPlayback(endListenAlongSilently = false)
                         val trackEntity = TrackEntity(
                             id = source.url,
                             title = action.title,

@@ -15,11 +15,15 @@ package com.parachord.shared.deeplink
  * 1. **Exit spinoff** (`PlaybackController.exitSpinoff()`).
  *    Spinoff queues are derived state; if we leave them attached, the
  *    new context inherits the old spinoff parent and refill behavior.
- * 2. **Exit listen-along** (`MainViewModel.stopListenAlong()`).
- *    The listen-along ticker keeps mirroring the followed user's track
- *    changes; if we don't stop it before queue replacement, the next
- *    poll tick reverts our newly-set track to whatever the followed
- *    user is on.
+ * 2. **Exit listen-along** (`MainViewModel.listenAlongTakenOver(silently)`,
+ *    the shared `ListenAlongHost.takeOver`). The listen-along ticker keeps
+ *    mirroring the followed user's track changes; if we don't stop it
+ *    before queue replacement, the next poll tick reverts our newly-set
+ *    track to whatever the followed user is on. It must end here, before
+ *    the link's first track resolves, not when that track starts: a poll in
+ *    between could start the friend's song. A play link (track, album,
+ *    playlist) is the user playing something else, so "Stopped listening
+ *    along with X" shows; a radio link ends it silently.
  * 3. **Clear the queue** (`QueueManager.clearQueue()`).
  *    Wipes the prior context's tracks so the new ones aren't appended.
  *
@@ -33,8 +37,11 @@ interface ProtocolPlayTeardown {
      * → queue clear). Idempotent: safe to call when no spinoff,
      * listen-along, or queue is active. Suspending so callers can wait
      * for the queue clear to settle before submitting new tracks.
+     *
+     * @param endListenAlongSilently true for a radio link (no message), false
+     *   for a play link (the user played something else: the message shows).
      */
-    suspend fun prepareForNewPlayback()
+    suspend fun prepareForNewPlayback(endListenAlongSilently: Boolean)
 
     /**
      * Half-teardown for `parachord://listen-along` friend-A → friend-B
