@@ -1019,8 +1019,8 @@ turns the `appleMusicId` string into a playable MusicKit `Song` via
 resolver cache does NOT cover (it stores the `appleMusicId`, but a `Song` is an
 iOS-only type it can't hold). So `QueuePlaybackCoordinator.prefetchNextIfNeeded`
 (driven off the 1s engine-agnostic tick) warms the next queued track's `Song`
-~15s before the boundary — Android's pre-resolve-early pattern
-(`PlaybackController.kt:1273`) applied to the MusicKit fetch — and `play()` uses
+in the last 30 s (the shared `NextTrackPreparation.shouldPrepareNext` window,
+Android's, #594) — and `play()` uses
 the cached `Song` (`IosMusicKitPlayer.prefetchedSong`, keyed by id) to skip the
 round-trip. Measured AM start dropped ~3.1s → ~2.3s. A catalog lookup is a plain
 REST call that never touches `ApplicationMusicPlayer`, so pre-fetching mid-playback

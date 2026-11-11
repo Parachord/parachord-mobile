@@ -9,7 +9,6 @@ import io.mockk.mockk
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.Json
 import com.parachord.shared.playback.PlaybackResumePosition
 import com.parachord.shared.playback.SavedPlaybackPosition
 import org.junit.Assert.assertEquals
@@ -30,11 +29,12 @@ class QueuePersistenceSaveTest {
     @Test fun `position updates don't save the queue`() = runBlocking {
         val settingsStore = mockk<SettingsStore>(relaxed = true)
         every { settingsStore.persistQueue } returns flowOf(true)
+        coEvery { settingsStore.isPersistQueueEnabled() } returns true
         coEvery { settingsStore.setPersistedQueueState(any()) } returns Unit
         val stateHolder = PlaybackStateHolder()
         stateHolder.update { copy(currentTrack = track) }
 
-        val persistence = QueuePersistence(settingsStore, QueueManager(), stateHolder, Json)
+        val persistence = QueuePersistence(settingsStore, QueueManager(), stateHolder)
         persistence.startObserving()
         delay(800)
         coVerify(exactly = 1) { settingsStore.setPersistedQueueState(any()) }
@@ -57,12 +57,13 @@ class QueuePersistenceSaveTest {
     @Test fun `a pause saves the position, not the queue`() = runBlocking {
         val settingsStore = mockk<SettingsStore>(relaxed = true)
         every { settingsStore.persistQueue } returns flowOf(true)
+        coEvery { settingsStore.isPersistQueueEnabled() } returns true
         val saved = mutableListOf<String>()
         coEvery { settingsStore.setPersistedPlaybackPosition(capture(saved)) } returns Unit
         val stateHolder = PlaybackStateHolder()
         stateHolder.update { copy(currentTrack = track, isPlaying = true, position = 1_000L, duration = 200_000L) }
 
-        val persistence = QueuePersistence(settingsStore, QueueManager(), stateHolder, Json)
+        val persistence = QueuePersistence(settingsStore, QueueManager(), stateHolder)
         persistence.startObserving()
         delay(800)
         saved.clear() // the first playing update counts as 15 s since no save
