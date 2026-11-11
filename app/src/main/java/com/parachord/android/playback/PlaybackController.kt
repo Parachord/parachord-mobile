@@ -554,7 +554,8 @@ class PlaybackController constructor(
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         playRequestCount++
         clearUserPauseMark()
-        queueManager.clearQueue()
+        // The track it replaces goes to history, so Previous reaches it (#605).
+        queueManager.clearQueue(outgoing = stateHolder.state.value.currentTrack, next = track)
         if (context != null) queueManager.setContext(context)
         playedSinceWrap = false
         queueGeneration++
@@ -588,7 +589,9 @@ class PlaybackController constructor(
         onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         playRequestCount++
         clearUserPauseMark()
-        val track = queueManager.setQueue(tracks, startIndex, context, shuffle) ?: return
+        val track = queueManager.setQueue(
+            tracks, startIndex, context, shuffle, outgoing = stateHolder.state.value.currentTrack,
+        ) ?: return
         playedSinceWrap = false
         queueGeneration++
         launchPlay { playTrackInternal(track) }
@@ -870,7 +873,9 @@ class PlaybackController constructor(
      */
     fun restoreQueuePaused(tracks: List<TrackEntity>, context: PlaybackContext?) {
         checkMainThread("restoreQueuePaused")
-        val track = queueManager.setQueue(tracks, 0, context, queueManager.shuffleEnabled) ?: return
+        val track = queueManager.setQueue(
+            tracks, 0, context, queueManager.shuffleEnabled, outgoing = stateHolder.state.value.currentTrack,
+        ) ?: return
         playedSinceWrap = false
         queueGeneration++
         heldForListener = false

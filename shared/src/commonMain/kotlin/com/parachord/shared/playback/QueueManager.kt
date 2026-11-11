@@ -70,6 +70,45 @@ class QueueManager {
     /** Push the outgoing current track to history with its flag. */
     private fun pushCurrent(currentTrack: Track?) {
         currentTrack?.let { playHistory.add(Entry(it, _currentInLap)) }
+        trimHistory()
+    }
+
+    /**
+     * A play from outside the queue's order is replacing [outgoing] with
+     * [next] (#605): [outgoing] goes to history, out of the lap, so Previous
+     * reaches it but repeat all doesn't wrap it. Nothing when it's the same
+     * track played again.
+     */
+    private fun leaveForNewPlay(outgoing: Track?, next: Track?) {
+        if (outgoing == null || outgoing.id == next?.id) return
+        playHistory.add(Entry(outgoing, inLap = false))
+        trimHistory()
+    }
+
+    /** History is no longer this queue's: Previous still reaches it, repeat all doesn't wrap it. */
+    private fun leaveLap() {
+        for (i in playHistory.indices) {
+            if (playHistory[i].inLap) playHistory[i] = Entry(playHistory[i].track, inLap = false)
+        }
+    }
+
+    /**
+     * Keep history at most [MAX_HISTORY] entries, dropping the oldest from
+     * earlier queues first. It outlives each queue (#605) and is saved with
+     * it, so it would otherwise grow without end. The current lap is never
+     * trimmed, so repeat all always has it.
+     */
+    private fun trimHistory() {
+        var excess = playHistory.size - MAX_HISTORY
+        var i = 0
+        while (excess > 0 && i < playHistory.size) {
+            if (!playHistory[i].inLap) {
+                playHistory.removeAt(i)
+                excess--
+            } else {
+                i++
+            }
+        }
     }
 
     /**
@@ -79,6 +118,10 @@ class QueueManager {
      * and puts everything after it into [upNext]. If shuffle is enabled,
      * shuffles upNext and saves original order.
      *
+     * The earlier history stays, out of the new queue's lap: Previous still
+     * reaches it, repeat all doesn't wrap it (#605). [outgoing], the track
+     * the new queue replaces, goes on top of it.
+     *
      * @return The track at [startIndex] to play immediately.
      */
     fun setQueue(
@@ -86,13 +129,15 @@ class QueueManager {
         startIndex: Int,
         context: PlaybackContext? = null,
         shuffle: Boolean = false,
+        outgoing: Track? = null,
     ): Track? {
         if (tracks.isEmpty() || startIndex !in tracks.indices) return null
 
         val trackToPlay = tracks[startIndex]
         val remaining = tracks.subList(startIndex + 1, tracks.size).toMutableList()
 
-        playHistory.clear()
+        leaveLap()
+        leaveForNewPlay(outgoing, trackToPlay)
         becomeCurrent(null)
         _playbackContext = context
         _shuffleEnabled = shuffle
@@ -252,13 +297,16 @@ class QueueManager {
      * Clear the queue. Resets shuffle state and context, but preserves play
      * history for Previous; that history is no longer this queue's, so repeat
      * all won't wrap into it. The current track counts as the new queue's.
+     *
+     * For a single-track play ([outgoing] replaced by [next]), the outgoing
+     * track goes on top of history, out of the lap, so Previous reaches it
+     * (#605). Without them (the Clear queue button) the current track stays.
      */
-    fun clearQueue() {
+    fun clearQueue(outgoing: Track? = null, next: Track? = null) {
         upNext.clear()
         becomeCurrent(null)
-        for (i in playHistory.indices) {
-            if (playHistory[i].inLap) playHistory[i] = Entry(playHistory[i].track, inLap = false)
-        }
+        leaveLap()
+        leaveForNewPlay(outgoing, next)
         originalOrder = null
         _playbackContext = null
         emitSnapshot()
@@ -360,4 +408,10 @@ class QueueManager {
             shuffleEnabled = _shuffleEnabled,
         )
     }
+
+    companion object {
+        /** The most history entries kept ([trimHistory]). */
+        const val MAX_HISTORY = 200
+    }
+
 }

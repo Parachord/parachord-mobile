@@ -2769,11 +2769,13 @@ final class QueuePlaybackCoordinator {
         if spinoffMode, context?.type != "spinoff" { exitSpinoff() }
         // The user playing something else ends a Listen Along session at once.
         if context?.type != ListenAlongController.listenAlongContext { _ = onUserAction?(.playSomethingElse) }
+        // The track it replaces goes to history, so Previous reaches it (#605).
         let toPlay = queueManager.setQueue(
             tracks: tracks,
             startIndex: Int32(startIndex),
             context: context,
-            shuffle: shuffle ?? shuffleEnabled
+            shuffle: shuffle ?? shuffleEnabled,
+            outgoing: currentTrack
         )
         playedSinceWrap = false
         syncSnapshot()
@@ -3002,7 +3004,7 @@ final class QueuePlaybackCoordinator {
     }
 
     func clearQueue() {
-        queueManager.clearQueue()
+        queueManager.clearQueue(outgoing: nil, next: nil)
         syncSnapshot()
     }
 
@@ -3012,7 +3014,8 @@ final class QueuePlaybackCoordinator {
     /// whose session ended while the user had paused.
     func setQueuePaused(_ tracks: [Track], context: PlaybackContext?) {
         guard let track = queueManager.setQueue(
-            tracks: tracks, startIndex: 0, context: context, shuffle: shuffleEnabled) else { return }
+            tracks: tracks, startIndex: 0, context: context, shuffle: shuffleEnabled,
+            outgoing: currentTrack) else { return }
         NSLog("QUEUE given back paused at '%@'", track.title)
         playedSinceWrap = false
         heldForListener = false

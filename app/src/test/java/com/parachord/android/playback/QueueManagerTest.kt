@@ -46,14 +46,16 @@ class QueueManagerTest {
     }
 
     @Test
-    fun `setQueue clears previous history`() {
+    fun `setQueue keeps earlier history out of the new queue's lap`() {
         val tracks = listOf(track("1"), track("2"), track("3"))
         queueManager.setQueue(tracks, 0)
         queueManager.skipNext(track("1")) // builds history
         assertEquals(1, queueManager.history.size)
 
-        queueManager.setQueue(tracks, 0) // new queue clears history
-        assertTrue(queueManager.history.isEmpty())
+        // A new queue keeps it for Previous (#605), out of the repeat-all lap.
+        queueManager.setQueue(tracks, 0)
+        assertEquals(listOf("1"), queueManager.history.map { it.id })
+        assertEquals(listOf(false), queueManager.historyInQueue)
     }
 
     @Test
