@@ -3368,12 +3368,16 @@ class PlaybackController constructor(
     }
 
     /**
-     * Take the foreground for a skip past [track] when the track before it was
-     * local and no Parachord screen is showing ([shouldHoldForegroundForAutoSkip]):
-     * before ExoPlayer is emptied, while the service is still in the
-     * foreground. Kept like the play-start hold ([foregroundHeldForPlay]): the
-     * next track's route takes it over, and the end of the queue, a dropped
-     * skip or a skip that did nothing releases it ([scheduleAutoSkip]).
+     * Ask for the foreground for a skip past [track] when the track before it
+     * was local and no Parachord screen is showing ([shouldHoldForegroundForAutoSkip]).
+     * Kept like the play-start hold ([foregroundHeldForPlay]): the next track's
+     * route takes it over, and the end of the queue, a dropped skip or a skip
+     * that did nothing releases it ([scheduleAutoSkip]).
+     *
+     * After a local track that ended by itself with the screen off this is
+     * refused today (#614): Media3 has already let the foreground go when
+     * ExoPlayer ended, and Android won't give it back to a background start.
+     * It works when the service is still in the foreground at this point.
      */
     private fun holdForegroundForAutoSkip(track: TrackEntity) {
         if (!shouldHoldForegroundForAutoSkip(isAppVisible(), isExternalPlayback, foregroundHeldForPlay)) return
