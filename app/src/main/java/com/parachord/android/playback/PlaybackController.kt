@@ -165,7 +165,15 @@ class PlaybackController constructor(
      * Whether Android Auto is connected ([CarConnections.current]); reported
      * by [PlaybackService] as controllers connect and disconnect.
      */
-    val carConnections = CarConnections()
+    internal val carConnections = CarConnections()
+
+    /**
+     * Android Auto's car-connection state (0 no car, 1 native, 2 projection;
+     * null when unknown), read from its content provider
+     * ([queryCarConnectionState]). Asked only while [carConnections] tracks a
+     * car, as the "skip, or stop here?" decision is made; tests replace it.
+     */
+    internal var carConnectionState: suspend () -> Int? = { queryCarConnectionState(context) }
 
     /**
      * Tracks in a row the queue skipped past, so Android Auto stops after
@@ -1515,6 +1523,12 @@ class PlaybackController constructor(
             val failure = noSourceFailure(online, resolversCouldNotAnswer)
             Log.w(TAG, "No playable source for '${routedTrack.title}' (${if (online) "online" else "offline"}, resolvers couldn't answer: $resolversCouldNotAnswer)")
             playFailure = failure
+            // Skip it, or (the car's third in a row) stop here: decided before
+            // the track is published, so the car gets one message, not the
+            // phone's and then its own.
+            val skipWanted = !failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)
+            val carStop = skipWanted && carStopsAutoSkip(routedTrack)
+            val autoSkip = skipWanted && !carStop
             stateHolder.update {
                 copy(
                     currentTrack = routedTrack,
@@ -1526,22 +1540,20 @@ class PlaybackController constructor(
                     playbackContext = snapshot.playbackContext,
                     shuffleEnabled = snapshot.shuffleEnabled,
                     streamingMetadata = null,
-                    playbackError = if (failure == PlayFailure.NO_SOURCE) PLAY_NO_SOURCE_MESSAGE else PLAY_START_FAILED_MESSAGE,
+                    playbackError = when {
+                        // The car shows why, instead of the phone's "no playable source".
+                        carStop -> com.parachord.shared.car.CarMessages.OPEN_PARACHORD_ON_PHONE
+                        failure == PlayFailure.NO_SOURCE -> PLAY_NO_SOURCE_MESSAGE
+                        else -> PLAY_START_FAILED_MESSAGE
+                    },
                 )
             }
             // Stop what was playing before it: left playing, its own end of
             // track would advance the queue as well as the skip below (two
             // advances, the second past the next track).
-            val skipWanted = !failedPlayAwaitsLoad(failure, advancing, stateHolder.state.value.spinoffMode)
-            val carStop = skipWanted && carStopsAutoSkip(routedTrack)
-            val autoSkip = skipWanted && !carStop
             val followed = !skipWanted && drivesTrack?.invoke(routedTrack) == true
             stopBeforeFailedTrack(autoSkip, followed)
             if (followed) holdForListener()
-            if (carStop) {
-                // The car shows why, instead of the phone's "no playable source".
-                stateHolder.update { copy(playbackError = com.parachord.shared.car.CarMessages.OPEN_PARACHORD_ON_PHONE) }
-            }
             if (autoSkip) {
                 Log.d(TAG, "Auto-skip '${routedTrack.title}': no playable source")
                 stateHolder.update { copy(playbackError = null) }
@@ -3253,13 +3265,15 @@ class PlaybackController constructor(
      * car stops here instead (the shared [com.parachord.shared.car.CarUnplayableRun]).
      * Counts the failure; true on the run's third in a row while Android Auto
      * is connected and no Parachord screen is showing, when nobody can act on
-     * the phone. Not in the car, or with a screen showing, it only counts and
+     * the phone ([CarConnections.confirmed]). Not in the car, or with a screen showing, it only counts and
      * the queue skips on. A track a listener drives (Listen Along) isn't counted.
      * True marks the play [carStoppedPlay], so Play loads the track again.
      */
-    private fun carStopsAutoSkip(track: TrackEntity): Boolean {
+    private suspend fun carStopsAutoSkip(track: TrackEntity): Boolean {
         if (drivesTrack?.invoke(track) == true) return false
-        val connection = carConnections.current
+        // A tracked controller can outlive the car (Media3 reports no
+        // disconnect for a legacy browser): Android Auto's own state may veto it.
+        val connection = carConnections.confirmed(carConnectionState)
         val stop = if (connection == null) {
             carRun.failed(carWithoutPhone = false)
         } else {

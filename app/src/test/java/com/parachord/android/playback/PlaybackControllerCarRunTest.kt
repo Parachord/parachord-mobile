@@ -11,7 +11,11 @@ import com.parachord.shared.playback.AdvanceTrigger
 import com.parachord.shared.playback.LoadOnPlay
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
+import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -23,6 +27,8 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -78,7 +84,13 @@ class PlaybackControllerCarRunTest {
         coEvery { f.resolverScoring.selectBest(any(), any()) } returns null
         // No Parachord screen showing.
         CurrentActivityHolder.onActivityPaused(screen)
+        // Android Auto's own state can't be read (as on an emulator).
+        controller.carConnectionState = { stateAsked++; carState }
     }
+
+    /** What Android Auto's car-connection provider answers (null: unreadable). */
+    private var carState: Int? = null
+    private var stateAsked = 0
 
     @After
     fun tearDown() {
@@ -258,4 +270,92 @@ class PlaybackControllerCarRunTest {
         run()
         routedTimes("n4", 2)
     }
+
+    // ── Android Auto's own car-connection state ─────────────────────
+
+    @Test
+    fun `after the car is gone the queue skips again`() {
+        // Tracked still (no disconnect reported), but Android Auto says no car.
+        carConnects()
+        carState = 0
+        playThenAdvance(a, n1, n2, n3, n4, b)
+
+        routedTimes("b", 1)
+        assertEquals("b", state.currentTrack?.id)
+        assertNotEquals(CarMessages.OPEN_PARACHORD_ON_PHONE, state.playbackError)
+        assertNull(controller.carConnections.current)
+    }
+
+    @Test
+    fun `a provider that cannot be read falls back to the tracked connection`() {
+        carConnects()
+        carState = null
+        playThenAdvance(a, n1, n2, n3, b)
+
+        assertTrue(stateAsked > 0)
+        routedTimes("b", 0)
+        assertStoppedOn("n3")
+    }
+
+    @Test
+    fun `android auto projecting keeps the stop`() {
+        carConnects()
+        carState = 2
+        playThenAdvance(a, n1, n2, n3, b)
+
+        routedTimes("b", 0)
+        assertStoppedOn("n3")
+    }
+
+    @Test
+    fun `the provider is not asked when no car was ever connected`() {
+        playThenAdvance(a, n1, n2, n3, b)
+
+        assertEquals(0, stateAsked)
+        routedTimes("b", 1)
+    }
+
+    // ── What counts ──────────────────────────────────────────────────
+
+    @Test
+    fun `a spinoff pool track that auto skips counts toward the run`() {
+        mockkStatic(Toast::class)
+        every { Toast.makeText(any(), any<CharSequence>(), any()) } returns mockk(relaxed = true)
+        try {
+            carConnects()
+            controller.playQueue(listOf(a, b))
+            run()
+            val scope = CoroutineScope(dispatcher)
+            scope.launch {
+                controller.startSpinoffFromPool(listOf(n1, n2, n3, c), "Spinoff", "X", "A", kickStartFirstTrack = false)
+            }
+            run()
+            assertTrue(state.spinoffMode)
+            controller.skipNextInternal(AdvanceTrigger.TRACK_ENDED)
+            run()
+            pastAllGaps()
+
+            routedTimes("c", 0)
+            routedTimes("b", 0)
+            assertStoppedOn("n3")
+            scope.cancel()
+        } finally {
+            unmockkStatic(Toast::class)
+        }
+    }
+
+    @Test
+    fun `a track a listener drives does not count and still skips`() {
+        // Listen Along's tracks: n1 and n2. Counted, n3 would be the third.
+        controller.drivesTrack = { it.id == "n1" || it.id == "n2" }
+        carConnects()
+        playThenAdvance(a, n1, n2, n3, n4, b)
+
+        routedTimes("n1", 1)
+        routedTimes("n2", 1)
+        routedTimes("b", 1)
+        assertEquals("b", state.currentTrack?.id)
+        assertNotEquals(CarMessages.OPEN_PARACHORD_ON_PHONE, state.playbackError)
+    }
 }
+
