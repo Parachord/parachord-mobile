@@ -3,7 +3,7 @@
     "id": "lastfm",
     "name": "Last.fm",
     "type": "meta-service",
-    "version": "1.0.0",
+    "version": "1.1.1",
     "author": "Parachord Team",
     "description": "Personalized music recommendations powered by your Last.fm listening history",
     "icon": "🎧",
@@ -34,5 +34,8 @@
         "advanced": true
       }
     }
+  },
+  "implementation": {
+    "getRecommendations": "async function (config) {\n    const username = config && config.username;\n    if (!username) return { sections: [] };\n    // A failed request THROWS (the page keeps the other providers and re-asks\n    // next visit — an empty answer is never cached): a network blip must not\n    // read as \"Last.fm has nothing for you\". The recommended-station JSON\n    // answers 404 for a user with no recommendations — that is a miss ([]).\n    const response = await fetch(`https://www.last.fm/player/station/user/${encodeURIComponent(username)}/recommended`);\n    if (!response.ok) {\n      if (response.status === 404) return { sections: [] };\n      throw new Error(`Failed to fetch Last.fm recommendations: ${response.status}`);\n    }\n    const data = await response.json();\n    const playlist = (data && data.playlist) || [];\n    const items = [];\n    for (const track of playlist) {\n      const artist = (track && track.artists && track.artists[0]) || {};\n      const title = (track && (track.name || track._name)) || null;\n      if (!title) continue;\n      items.push({\n        type: 'song',\n        // spelling_id is Last.fm's stable id; without one there is no id at\n        // all — the model falls back to trackSlug(artist, title), so two songs\n        // sharing a title by different artists never share an id.\n        id: (track && track.spelling_id) || undefined,\n        name: title,\n        artist: artist.name || artist._name || 'Unknown Artist',\n        duration: (track && track.duration) || null\n      });\n    }\n    return { sections: [{ items }] };\n  }"
   }
 }
