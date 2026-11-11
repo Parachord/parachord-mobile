@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 /**
  * Whether a play that ended with nothing playing stops on its track for Play
- * to load again (Android's `LoadOnPlay` `FAILED`, iOS's `needsLoadOnPlay`).
+ * to load again (the shared [LoadOnPlay] slot, `FAILED`, on both apps).
  * Offline, an Apple Music start fails (`START_FAILED`): the queue used to skip
  * through every track on iOS, each failing the same way.
  */

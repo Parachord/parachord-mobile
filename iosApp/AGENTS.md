@@ -375,7 +375,7 @@ there**, so several gaps only surface on iOS:
 
 `QueuePlaybackCoordinator` moves the queue through one `advance(_ trigger: AdvanceTrigger)` that follows the shared `advanceAction` (root `CLAUDE.md` → "Queue advance and repeat"). `skipNext` is `advance(.nextPressed)` and a track end is `advance(.trackEnded)`; Listen Along owns an ended track first, then a spinoff pool, then the queue and repeat mode decide. The Swift `RepeatMode` enum and `originalQueue` are gone: repeat is `QueuePlaybackCoordinator.repeatMode`, of the shared `RepeatMode` type; repeat all wraps the queue through `QueueManager.wrapToStart` (so added tracks come round), and Next on the last track wraps under repeat all. Only this queue's tracks wrap: history from before a Clear queue and spinoff pool tracks stay reachable by Previous and Next but never wrap (the shared `QueueManager` keeps each track's lap flag in history, Up Next and the current track). The coordinator only reports a pool track starting (`poolTrackStarting` → shared `QueueManager.poolTrackStarted(current:)`, from `advanceSpinoff` and `beginRadio`); the shared `QueueManager` keeps the seed in the lap and the pool tracks out (root `CLAUDE.md` → "Queue advance and repeat"). Unlike Android, a radio link keeps the user's queue suspended under it, so the track that was playing is its seed and the queue resumes after the station. An unplayable last track wraps too, but only when a track has played (`.played`) since the queue was set, restored or last wrapped (`playedSinceWrap`), so a queue where nothing plays stops. At the end of the queue with repeat off the cleared track goes to history (`QueueManager.pushToHistory`), so Previous goes back to it. During Listen Along the session takes the end of its own song first (`onTrackFinished`), so repeat never replays or wraps it, and repeat can't be changed (`repeatAllowed`). Don't add a Swift-side copy of any of this.
 
-A track with no playable source skips through `advance(.skippedUnplayable)` (or stops with `START_FAILED` offline); iOS doesn't record `PlayFailure.NO_SOURCE` yet. See root `CLAUDE.md` → "Queue advance and repeat" → "A track with no source skips, per platform".
+A track with no playable source follows the shared rule, as on Android (root `CLAUDE.md` → "Queue advance and repeat" → "A track with no source: one rule on both apps"): `playTrack`'s `.noPlayableSource` branch asks `noSourceFailure` (offline, or the play-time resolve couldn't answer, #566: `resolveSourcesReport`) and `failedPlayAwaitsLoad`. A tapped track with no source stops for Play with `PLAY_NO_SOURCE_MESSAGE`; during an advance or a spinoff it skips through `advance(.skippedUnplayable)`. `START_FAILED` stops on the track with `PLAY_START_FAILED_MESSAGE`, advancing or not. Previous on a track no engine holds measures from its slot (`positionForPrevious`) and past 3 s restarts it without playing (`restartedFromTop`); see "Now Playing and remote commands" → "Play on a track no engine holds starts it".
 
 ### Spinoff + Listen Along on iOS — coordinator-level, not a queue swap
 
@@ -1206,40 +1206,66 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   check, so a newer start during the handoff still sees the engine that was
   playing.
 - **Play on a track no engine holds starts it.** A queue restored paused at
-  launch shows its track but loads nothing, and so does a track stopped
-  because nothing could play it (the car's Spotify and unplayable-run cases
-  below, a tapped track an embed refused with nothing else to play it, and a
-  track nothing could start because nothing could reach the network). For both,
-  `needsLoadOnPlay` makes `togglePlayPause` (the phone's button, the remote
-  play / toggle commands, CarPlay) run `playTrack` instead of resuming whatever
-  the active engine last held. Which failures stop on the track is the shared
-  `failedPlayAwaitsLoad` (`shared/.../playback/PlayFailure.kt`, Android's rule
-  too): only an embed's refusal while the queue advances or a spinoff runs is
-  skipped. **Offline** (`START_FAILED`): `IosMusicKitPlayer.play` reports
+  launch (or given back paused, `setQueuePaused`) shows its track but loads
+  nothing, and so does a track stopped because nothing could play it (the
+  car's Spotify and unplayable-run cases below, a tapped track an embed
+  refused with nothing else to play it, a tapped track with no source, a track
+  nothing could start because nothing could reach the network, a stream
+  AVPlayer couldn't start or that failed while playing). Each leaves the
+  shared `LoadOnPlay` in `loadOnPlay` (`RESTORED` or `FAILED`, built with the
+  shared `failedLoad`, root `CLAUDE.md` → "Play loads a track nothing holds"),
+  and it applies only while its track is the current one (`loadOnPlayTarget`).
+  `togglePlayPause` (the phone's button, the remote play / toggle commands,
+  CarPlay, the embed pages' play) then runs `playTrack(…, fromLoadOnPlay: true)`
+  at the slot's position (`seekOnceStarted`) instead of resuming whatever the
+  active engine last held. While a slot is set, `currentTime` / `duration`
+  show it, a seek moves it (clamped to the track's length) and Previous past
+  3 s sets it to 0 (`setLoadOnPlayPosition`, which also saves the resume
+  position); no engine is touched. **The source:** a slot keeps the resolver
+  picked by hand on the Now Playing deck (`pickedResolver`, from `playingPick`),
+  and the retry is forced to it unless the cache no longer holds that source,
+  when it re-selects. A failed deck switch (a forced resolver that isn't a
+  slot's retry, `deckSwitch`) still leaves the playback that was going on as it
+  was. **The direct-URL shortcut** (a track's `sourceUrl` with no cache entry)
+  also takes an empty cache entry on Play on a stopped local-file or direct
+  track (`emptyEntryIsNone`, `PlaybackRouter.avPlayerResolvers`); a track whose
+  URL is a service's page always goes through the resolver. **Known gap:** after
+  a start failure of such a page-URL track that has no cache entry at all, each
+  Play repeats the failure until the track has been resolved once.
+
+  Which failures stop on the track is the shared `failedPlayAwaitsLoad`
+  (`shared/.../playback/PlayFailure.kt`, Android's rule too): only an embed's
+  refusal or a track with no source (`NO_SOURCE`) while the queue advances or a
+  spinoff runs is skipped. **Offline** (`START_FAILED`): `IosMusicKitPlayer.play` reports
   `.failed` when the catalog request or `ApplicationMusicPlayer.play()` throws
   (`.unavailable`, which lets the queue move on, is for not authorized, not in
   the catalog, or a subscription MusicKit says can't play catalog content), and
   both calls have a time limit (`MusicKitDeadline`, 20 s and 30 s; a timeout is
   `START_TIMED_OUT`, and a play that starts after its limit is paused). When
-  nothing plays and an Apple Music start failed, or `IosNetworkStatus`
+  nothing plays and an Apple Music start failed, `IosNetworkStatus`
   (`NWPathMonitor`, which also drives the "No internet connection" banner,
-  `PCOfflineBanner`, after the shared 2 s delay) says the device has no network, `playTrack` stops on the
+  `PCOfflineBanner`, after the shared 2 s delay) says the device has no network,
+  or the play-time resolve couldn't answer (#566), `playTrack` stops on the
   track with `PLAY_START_FAILED_MESSAGE`, even while the queue advances or a
   spinoff runs: the next track would fail the same way, and the queue used to
   skip through to its end. A failed retry keeps the restored track's resume
-  position. A track with no source that could ever play here (nothing resolved
-  online, or only an Apple Music match without a subscription) still skips, as
-  before; Android stops on that one too. Checked on an iPad in Airplane Mode
-  (Bandcamp and SoundCloud sources, no Apple Music subscription on it): a tapped
-  track and Next each stopped on their track, and Play started it once the
-  network was back. The Apple Music `.failed` path, and whether `play()` can
-  hang offline, haven't been seen on a device. A restored track resumes where it was when the
+  position. **AVPlayer failures** (`IosAVPlayer.onPlaybackFailed`, once per
+  item, from the item's `.failed` status or `AVPlayerItemFailedToPlayToEndTime`)
+  go to `avPlaybackFailed`: before it started (a dead link, a URL that isn't
+  media) it stops on the track at the position that play aimed for, advancing
+  or not, unless a newer play superseded that start (`latestStart`); after it
+  started it stops on the track and Play resumes where it stopped, under the
+  5 s / 10 s rule. Both show `PLAY_START_FAILED_MESSAGE`. Airplane Mode was
+  checked on an iPad for an earlier version of this (Bandcamp and SoundCloud
+  sources: a tapped track and Next each stopped on their track, and Play
+  started it once the network was back). The Apple Music `.failed` path, and
+  whether `play()` can hang offline, haven't been seen on a device. A restored track resumes where it was when the
   app last ran (#567): the 1 s tick saves the position on a pause and every
   15 s while playing (`savePositionIfDue`, shared `PlaybackResumePosition`, its
-  own `persisted_queue_position` key), `restoreQueue` reads it for the same
-  track id, and the first play seeks there once the track plays
-  (`seekOnceStarted`, up to 60 s). Under 5 s in, or within 10 s of the end,
-  it starts from the top.
+  own `persisted_queue_position` key; not while a slot is set, which saves its
+  own), `restoreQueue` reads it for the same track id into a `RESTORED` slot,
+  and the first play seeks there once the track plays (`seekOnceStarted`, up
+  to 60 s). Under 5 s in, or within 10 s of the end, it starts from the top.
 - **Checking it in the simulator.** The lock screen can't be photographed with
   `simctl`, but `mediaremoted` logs what it publishes:
   `xcrun simctl spawn booted log stream --level debug --predicate 'process == "mediaremoted"'`
@@ -1290,10 +1316,12 @@ rules change; with it false every path is the phone's.
 - **A run of unplayable tracks stops.** When the car launched the app and the
   phone never showed it, a Bandcamp or SoundCloud-only playlist can't play a
   single track, and on a locked phone their fresh starts may fail too; the queue
-  used to skip silently to its end. `CarUnplayableRun` (shared) counts tracks in
-  a row that no source could play. A track that starts, an explicit play (a tap,
-  or Play on a stopped track; not the queue moving on) and a car connecting
-  (`CarPlaySession.connectionCount`) each start the run over. While
+  used to skip silently to its end. `CarUnplayableRun` (shared, Android Auto
+  uses it too) counts tracks in a row the queue skipped because no source could
+  play them. A track that starts, an explicit play (a tap, or Play on a stopped
+  track; not the queue moving on) and a car connecting each start the run over:
+  `failed(carWithoutPhone:connection:)` is given `CarPlaySession.connectionCount`
+  and resets itself when it changes. While
   `phoneAppNotInFront` (car connected, Parachord not in front on the phone:
   locked, behind another app or never shown; wider than `blocksEmbeds`) the third
   (`CAR_UNPLAYABLE_RUN_LIMIT`) stops on that track, as the Spotify case does,
