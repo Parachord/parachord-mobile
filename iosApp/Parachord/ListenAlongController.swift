@@ -57,6 +57,12 @@ final class ListenAlongController {
         c.onUserAction = { [weak self] action in
             MainActor.assumeIsolated { self?.userAction(action) ?? false }
         }
+        c.onTrackStarting = { [weak self] track in
+            MainActor.assumeIsolated {
+                // Our track is playing again: it's no longer at its end.
+                if self?.isOurTrack(track.id) == true { self?.atSongEnd = false }
+            }
+        }
     }
 
     func isActive(_ f: Friend) -> Bool { session != nil && friend?.id == f.id }
@@ -83,9 +89,10 @@ final class ListenAlongController {
         if suspended == nil { captureSuspension(c) }
         friend = f
         let s = ListenAlongSession(friendName: f.displayName)
+        // A friend switch keeps `playingId` / `atSongEnd` (Android's
+        // `ListenAlongDriver.start`): the old friend's song still playing stays
+        // ours, so it's held over and its end is consumed. `end` resets them.
         session = s
-        playingId = nil
-        atSongEnd = false
         let current = (ListenAlongSessionKt.listenAlongPollOf(friend: f) as? ListenAlongPollListening)?.track
         NSLog("LISTEN_ALONG start '%@' (current: %@)", f.displayName, current?.key ?? "none")
         apply(s, s.start(current: current))
@@ -163,15 +170,7 @@ final class ListenAlongController {
         // Cancelled, or the session ended or was replaced while the poll ran.
         if Task.isCancelled || session !== s { return }
         if let fresh = result.friend_ { friend = fresh }
-        let playing = ourSongIsPlaying()
-        NSLog("LISTEN_ALONG poll %@ (our song playing: %@)", pollName(result.poll), playing ? "yes" : "no")
-        apply(s, s.onPoll(result: result.poll, isPlaying: playing))
-    }
-
-    private func pollName(_ p: ListenAlongPoll) -> String {
-        if let l = p as? ListenAlongPollListening { return "listening '\(l.track.key)'" }
-        if p is ListenAlongPollNotListening { return "not listening" }
-        return "failed"
+        apply(s, s.onPoll(result: result.poll, isPlaying: ourSongIsPlaying()))
     }
 
     /// Whether Listen Along's OWN song plays: false until the session has played
@@ -234,6 +233,9 @@ final class ListenAlongController {
         let s = suspended
         suspended = nil
         NSLog("LISTEN_ALONG ended (restore: %@)", restore ? "yes" : "no")
+        // A track held for the session (waiting for the friend's next one)
+        // is let go: Play loads it again unless what follows replaces it.
+        coordinator?.releaseListenerHold()
         guard restore, let s, let c = coordinator else { return false }
         if s.tracks.isEmpty {
             // Nothing to go back to. At the end of our song this is the end of

@@ -44,10 +44,10 @@ final class SpinoffController {
         guard !artist.isEmpty, !title.isEmpty else { return }
 
         // Switching from Listen Along → Spinoff: end the session silently and
-        // drop the suspended queue, so the two modes never overlap.
-        if c.playbackContext?.type == ListenAlongController.listenAlongContext {
-            ListenAlongController.shared.endSilently()
-        }
+        // drop the suspended queue, so the two modes never overlap. Whatever
+        // the context: a session still waiting for the friend's first track
+        // leaves the user's own queue (and its context) playing.
+        ListenAlongController.shared.endSilently()
 
         loading = true
         lastEmptySeed = nil

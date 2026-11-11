@@ -1993,9 +1993,19 @@ final class QueuePlaybackCoordinator {
     /// or resume.
     @ObservationIgnored var onUserAction: ((UserPlaybackAction) -> Bool)?
 
+    /// Called as any play of `track` starts (`playTrack`), so the listener
+    /// knows its track is playing again.
+    @ObservationIgnored var onTrackStarting: ((Track) -> Void)?
+
     /// Counts requested plays (`playTrack`), so a hook that answers can be told
     /// apart from one that started a play.
     @ObservationIgnored private var playRequestCount = 0
+
+    /// The track on screen is held for the listener (Listen Along waiting for
+    /// the friend's next track, after its song ended or couldn't play): Play
+    /// does nothing until the listener plays something or lets go
+    /// (`releaseListenerHold`). Cleared by any play.
+    @ObservationIgnored private var heldForListener = false
 
     /// Repeat mode (#221), the shared `RepeatMode`: off → all → one
     /// (`nextRepeatMode`). What it does at each advance is the shared
@@ -2465,6 +2475,7 @@ final class QueuePlaybackCoordinator {
             case "play":
                 // A user's resume, as `togglePlayPause` reports it.
                 if !self.isPlaying, !self.isStarting, self.onUserAction?(.resume) == true { return }
+                if !self.isPlaying, self.heldForListener { return }
                 Task { @MainActor in
                     if self.activeEngine == .bandcamp { self.bandcamp.play() } else { self.soundCloud.play() }
                 }
@@ -2585,6 +2596,12 @@ final class QueuePlaybackCoordinator {
         let wasPlaying = isPlaying
         if !wasPlaying, !isStarting, onUserAction?(.resume) == true { return }
         if wasPlaying { _ = onUserAction?(.pause) }
+        // Held for the listener: nothing to resume, and the track isn't
+        // replayed (Android plays only its silent loop there).
+        if !wasPlaying, heldForListener {
+            NSLog("QUEUE play ignored: '%@' is held for Listen Along", currentTrack?.title ?? "")
+            return
+        }
         // Nothing loaded for the track on screen (restored queue, or stopped
         // because no source could play): start it. A restored track resumes
         // where it was when the app last ran (#567).
@@ -2710,17 +2727,26 @@ final class QueuePlaybackCoordinator {
     /// Spotify can't run on into the album's next song) but the silent
     /// keepalive and the embeds' audio hold stay, so the app keeps running in
     /// the background and the next poll can still start the friend's track.
-    /// Play loads the track again. Dropped if a play was requested meanwhile.
+    /// Play does nothing meanwhile (`heldForListener`). The pause is dropped if
+    /// a play was requested meanwhile.
     private func holdEndedTrack() {
         guard let track = currentTrack else { return }
         NSLog("QUEUE '%@' ended; holding it on screen", track.title)
+        heldForListener = true
+        needsLoadOnPlay = false
         let requests = playRequestCount
         Task { @MainActor in
             guard playRequestCount == requests, currentTrack?.id == track.id else { return }
             await holdForListener()
-            guard playRequestCount == requests else { return }
-            awaitLoadOnPlay(aimedAtSec: 0)
         }
+    }
+
+    /// The listener let go of a held track (its session ended without playing
+    /// anything else): Play loads the track again, as for any stopped track.
+    func releaseListenerHold() {
+        guard heldForListener else { return }
+        heldForListener = false
+        needsLoadOnPlay = currentTrack != nil
     }
 
     /// Pause whichever engine is playing for a listener waiting to play its
@@ -2895,8 +2921,10 @@ final class QueuePlaybackCoordinator {
                            aimedAtSec: Double = 0) {
         currentTrack = track
         needsLoadOnPlay = false
+        heldForListener = false
         restoredResumeAtSec = 0
         playRequestCount += 1
+        onTrackStarting?(track)
         // An explicit play (a tap, Play on a stopped track) starts a new run of
         // unplayable tracks; only the queue moving on adds to one.
         if !advancing { unplayableRun.reset() }
@@ -3050,15 +3078,16 @@ final class QueuePlaybackCoordinator {
 
             case .noPlayableSource:
                 // A listener's own track (Listen Along's): it decides what
-                // comes next, with no notice and no skip. Play loads the track
-                // again unless the listener started another play.
+                // comes next, with no notice and no skip. Unless it started
+                // another play, the track is held for it: Play does nothing
+                // until the friend's next track plays or the session ends.
                 if forcedResolver == nil, let hook = onTrackUnplayable {
                     let requestsBefore = playRequestCount
                     if hook(track) {
                         if playRequestCount == requestsBefore {
+                            heldForListener = true
+                            isStarting = false
                             await holdForListener()
-                            if Task.isCancelled { return }
-                            awaitLoadOnPlay(aimedAtSec: aimedAtSec)
                         }
                         return
                     }
