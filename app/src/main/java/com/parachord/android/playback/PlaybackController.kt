@@ -1617,11 +1617,12 @@ class PlaybackController constructor(
         when (action) {
             is PlaybackAction.ExoPlayerItem -> {
                 if (isExternalPlayback || foregroundHeldForPlay) {
-                    if (localPlayKeepsHeldForeground(userRequested, isAppVisible())) {
-                        // The queue moving on with no screen showing: dropped
-                        // here, the foreground couldn't be started again for
-                        // this track (#614). PlaybackService keeps it until
-                        // ExoPlayer plays, then hands it to Media3.
+                    if (localPlayKeepsHeldForeground(isAppVisible())) {
+                        // No screen showing: dropped here, the foreground
+                        // couldn't be started again for this track (#614),
+                        // whoever asked for the play (Listen Along's plays
+                        // count as user-requested). PlaybackService keeps it
+                        // until ExoPlayer plays, then hands it to Media3.
                         Log.d(TAG, "Keeping the foreground until '${routedTrack.title}' plays locally")
                     } else {
                         sendExternalPlaybackStop()
@@ -3467,6 +3468,14 @@ class PlaybackController constructor(
      */
     internal val foregroundTransitionInProgress: Boolean
         get() = isPlayStarting || autoSkipPendingTrackId != null
+
+    /**
+     * Listen Along waits for its next track with the ended one on screen
+     * ([heldForListener]): a foreground the service holds is kept for it up
+     * to [FOREGROUND_HOLD_LISTENER_LIMIT_MS] ([foregroundHoldExpired]).
+     */
+    internal val foregroundHeldForListener: Boolean
+        get() = heldForListener
 
     /**
      * The service let go of a foreground it held with nothing playing or

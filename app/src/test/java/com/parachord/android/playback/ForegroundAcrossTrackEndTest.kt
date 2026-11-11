@@ -18,11 +18,9 @@ class ForegroundAcrossTrackEndTest {
         assertFalse(shouldKeepForegroundAtLocalTrackEnd(appVisible = false, externalPlayback = false, somethingFollows = false))
     }
 
-    @Test fun `only the queue moving on in the background keeps a held foreground into a local play`() {
-        assertTrue(localPlayKeepsHeldForeground(userRequested = false, appVisible = false))
-        assertFalse(localPlayKeepsHeldForeground(userRequested = true, appVisible = false))
-        assertFalse(localPlayKeepsHeldForeground(userRequested = false, appVisible = true))
-        assertFalse(localPlayKeepsHeldForeground(userRequested = true, appVisible = true))
+    @Test fun `a local play keeps a held foreground whenever no screen shows`() {
+        assertTrue(localPlayKeepsHeldForeground(appVisible = false))
+        assertFalse(localPlayKeepsHeldForeground(appVisible = true))
     }
 
     @Test fun `the silent keep-alive loop is an app resource, a track never is`() {
@@ -34,13 +32,20 @@ class ForegroundAcrossTrackEndTest {
 
     @Test fun `a held foreground idles only with nothing external and nothing starting`() {
         val step = FOREGROUND_HOLD_CHECK_MS
-        assertEquals(step, nextForegroundHoldIdleMs(0, step, externalMode = false, transitionInProgress = false))
-        assertEquals(0L, nextForegroundHoldIdleMs(25_000, step, externalMode = true, transitionInProgress = false))
-        assertEquals(0L, nextForegroundHoldIdleMs(25_000, step, externalMode = false, transitionInProgress = true))
+        assertEquals(step, nextForegroundHoldIdleMs(0, step, external = false, transitionInProgress = false))
+        assertEquals(0L, nextForegroundHoldIdleMs(25_000, step, external = true, transitionInProgress = false))
+        assertEquals(0L, nextForegroundHoldIdleMs(25_000, step, external = false, transitionInProgress = true))
         // Six idle checks reach the limit.
         var idle = 0L
-        repeat(6) { idle = nextForegroundHoldIdleMs(idle, step, externalMode = false, transitionInProgress = false) }
-        assertTrue(idle >= FOREGROUND_HOLD_IDLE_LIMIT_MS)
+        repeat(6) { idle = nextForegroundHoldIdleMs(idle, step, external = false, transitionInProgress = false) }
+        assertTrue(foregroundHoldExpired(idle, listenerWaiting = false))
+        assertFalse(foregroundHoldExpired(idle - step, listenerWaiting = false))
+    }
+
+    @Test fun `a Listen Along wait keeps the held foreground up to the idle timeout`() {
+        assertFalse(foregroundHoldExpired(FOREGROUND_HOLD_IDLE_LIMIT_MS, listenerWaiting = true))
+        assertFalse(foregroundHoldExpired(4 * 60_000L, listenerWaiting = true))
+        assertTrue(foregroundHoldExpired(5 * 60_000L, listenerWaiting = true))
     }
 
     @Test fun `session play and pause go to the controller only when both are external`() {

@@ -22,7 +22,12 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class)
 class ForwardingPlayerSessionPlayPauseTest {
 
-    private fun wrapper(external: Boolean = false, needsLoad: Boolean = false, listenerTakesResume: Boolean = false):
+    private fun wrapper(
+        external: Boolean = false,
+        needsLoad: Boolean = false,
+        listenerTakesResume: Boolean = false,
+        controllerExternal: Boolean = external,
+    ):
         Triple<PlaybackService.ExternalPlaybackForwardingPlayer, androidx.media3.exoplayer.ExoPlayer, PlaybackController> {
         val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
         every { delegate.playbackState } returns Player.STATE_READY
@@ -31,7 +36,7 @@ class ForwardingPlayerSessionPlayPauseTest {
         every { controller.needsLoadOnPlay } returns needsLoad
         every { controller.wasRecentlyUserPaused() } returns false
         every { controller.onSessionPlayPause(true) } returns listenerTakesResume
-        every { controller.isExternalPlaybackActive } returns external
+        every { controller.isExternalPlaybackActive } returns controllerExternal
         val stateHolder = PlaybackStateHolder()
         stateHolder.update { copy(isPlaying = true) }
         val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, stateHolder)
@@ -83,6 +88,32 @@ class ForwardingPlayerSessionPlayPauseTest {
         wrapper.pause()
         verify(exactly = 0) { controller.togglePlayPause() }
         verify(exactly = 1) { delegate.pause() }
+    }
+
+    // ── External mode left on while the controller is local (#550 idle
+    //    timeout, a LEAVE_EXTERNAL failure, Listen Along's hold) ─────────
+
+    @Test fun `a play on a track waiting for a load still goes to togglePlayPause once`() {
+        val (wrapper, delegate, controller) = wrapper(external = true, controllerExternal = false, needsLoad = true)
+        wrapper.play()
+        verify(exactly = 1) { controller.togglePlayPause() }
+        verify(exactly = 0) { delegate.play() }
+        verify(exactly = 0) { delegate.prepare() }
+    }
+
+    @Test fun `a play the listener holds is told to it and doesn't resume ExoPlayer`() {
+        val (wrapper, delegate, controller) = wrapper(external = true, controllerExternal = false, listenerTakesResume = true)
+        wrapper.play()
+        verify(exactly = 1) { controller.onSessionPlayPause(true) }
+        verify(exactly = 0) { controller.togglePlayPause() }
+        verify(exactly = 0) { delegate.play() }
+    }
+
+    @Test fun `a play with no slot and a local controller goes to ExoPlayer once and never loops`() {
+        val (wrapper, delegate, controller) = wrapper(external = true, controllerExternal = false)
+        wrapper.play()
+        verify(exactly = 1) { delegate.play() }
+        verify(exactly = 0) { controller.togglePlayPause() }
     }
 
     @Test fun `external mode on both sides sends play and pause to togglePlayPause`() {

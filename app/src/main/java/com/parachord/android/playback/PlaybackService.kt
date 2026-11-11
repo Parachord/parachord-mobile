@@ -1207,7 +1207,10 @@ class PlaybackService : MediaLibraryService() {
         val p = player ?: return
         // The silent loop repeats and never ends; checked anyway.
         if (isSilenceKeepAliveUri(p.currentMediaItem?.localConfiguration?.uri?.toString())) return
-        // Only a foreground the service is in can be kept.
+        // Only a foreground the service is in can be kept. Below API 29 it
+        // can't be read, and nothing needs it: Android 8–11 has no limit on
+        // starting a foreground service from the background, so a hold there
+        // is only a no-op that the next track's start replaces.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
             foregroundServiceType == ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
         ) return
@@ -1220,7 +1223,7 @@ class PlaybackService : MediaLibraryService() {
     /**
      * ExoPlayer plays a track itself (not the silent loop of external
      * playback) while the service holds the foreground: a local track after
-     * a local or external one, started by the queue with no screen showing
+     * a local or external one, started with no screen showing
      * ([localPlayKeepsHeldForeground]). Media3's updates are passed on again;
      * the service stays in the foreground throughout, so Media3 only updates
      * it (allowed from the background) and lets it go at the next pause or end.
@@ -1236,11 +1239,19 @@ class PlaybackService : MediaLibraryService() {
     }
 
     /**
-     * While the service holds the foreground, let it go after
-     * [FOREGROUND_HOLD_IDLE_LIMIT_MS] with no external playback and no play,
-     * advance or skip under way ([nextForegroundHoldIdleMs]): a stalled advance,
-     * or a local track that never started, can't leave a foreground service
-     * running with nothing playing.
+     * While the service holds the foreground, let it go once nothing has
+     * used it for [FOREGROUND_HOLD_IDLE_LIMIT_MS] (no external playback, no
+     * play, advance or skip under way), or [FOREGROUND_HOLD_LISTENER_LIMIT_MS]
+     * while Listen Along waits for its next track ([foregroundHoldExpired]): a
+     * stalled advance, or a local track that never starts, can't leave a
+     * foreground service running with nothing playing.
+     *
+     * "External" is either flag: the controller's own state, so an external
+     * mode on the session's player that arrived late (or a refused MODE_ON)
+     * can't demote mid-song; or the session player's external mode, which
+     * stays on after the idle timeout stops a paused external track (the
+     * notification and the lock screen's Play stay, as before). It counts as
+     * idle only when both say nothing external plays.
      */
     private fun startForegroundHoldWatchdog() {
         foregroundHoldWatchdog?.cancel()
@@ -1252,10 +1263,10 @@ class PlaybackService : MediaLibraryService() {
                 idleMs = nextForegroundHoldIdleMs(
                     idleMs,
                     FOREGROUND_HOLD_CHECK_MS,
-                    externalMode = forwardingPlayer?.externalMode == true,
+                    external = forwardingPlayer?.externalMode == true || playbackController.isExternalPlaybackActive,
                     transitionInProgress = playbackController.foregroundTransitionInProgress,
                 )
-                if (idleMs >= FOREGROUND_HOLD_IDLE_LIMIT_MS) {
+                if (foregroundHoldExpired(idleMs, playbackController.foregroundHeldForListener)) {
                     Log.d(TAG, "Nothing played for ${idleMs / 1000} s; letting the held foreground go")
                     playbackController.foregroundHoldExpired()
                     demoteFromForeground()

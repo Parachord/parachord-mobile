@@ -35,16 +35,17 @@ internal fun shouldKeepForegroundAtLocalTrackEnd(
 
 /**
  * Whether a local (ExoPlayer) play leaves the foreground the service holds
- * itself (external playback's, or one kept across a track's end) in place
- * until ExoPlayer plays, instead of dropping it first. Dropped, Media3 has to
- * start the foreground again for the local track, which Android refuses from
- * the background. Only for a play nobody asked for (the queue moving on) with
- * no Parachord screen showing: a user's request opens a window in which
- * Media3's start is allowed, and with a screen showing it's allowed anyway,
- * so those keep dropping it as before.
+ * itself (external playback's, a play-start hold, or one kept across a
+ * track's end) in place until ExoPlayer plays, instead of dropping it first.
+ * Dropped, Media3 has to start the foreground again for the local track,
+ * which Android refuses from the background. Kept whenever no Parachord
+ * screen shows, whoever asked for the play: plays that count as
+ * user-requested aren't always a person's (Listen Along's `playTrack` and
+ * `playQueue`), and with the service still in the foreground Media3's own
+ * start is an allowed update either way, so dropping first gains nothing.
+ * With a screen showing a later start is allowed, and it drops as before.
  */
-internal fun localPlayKeepsHeldForeground(userRequested: Boolean, appVisible: Boolean): Boolean =
-    !userRequested && !appVisible
+internal fun localPlayKeepsHeldForeground(appVisible: Boolean): Boolean = !appVisible
 
 /**
  * The silent keep-alive loop external playback plays on ExoPlayer is an app
@@ -66,16 +67,33 @@ internal const val FOREGROUND_HOLD_CHECK_MS = 5_000L
 internal const val FOREGROUND_HOLD_IDLE_LIMIT_MS = 30_000L
 
 /**
+ * How long it's kept while Listen Along waits for the friend's next track
+ * after a local song (the controller's `heldForListener`): as long as an
+ * external song held for the listener keeps its foreground, the 5-minute idle
+ * timeout. The session's own end (a friend who stopped, failed polls)
+ * releases it sooner.
+ */
+internal const val FOREGROUND_HOLD_LISTENER_LIMIT_MS = 5L * 60 * 1000
+
+/**
  * How long a foreground the service holds itself has been idle after one
- * more check: reset while external playback runs ([externalMode], whose own
- * pause and idle timeout manage it) or a play, an advance or a skip is under
- * way ([transitionInProgress]); otherwise [idleMs] plus [stepMs]. The hold
- * goes once this reaches [FOREGROUND_HOLD_IDLE_LIMIT_MS], so it can't outlive
- * a stalled advance with nothing playing.
+ * more check: reset while external playback runs ([external]: its own pause
+ * and idle timeout manage it) or a play, an advance or a skip is under way
+ * ([transitionInProgress]); otherwise [idleMs] plus [stepMs].
  */
 internal fun nextForegroundHoldIdleMs(
     idleMs: Long,
     stepMs: Long,
-    externalMode: Boolean,
+    external: Boolean,
     transitionInProgress: Boolean,
-): Long = if (externalMode || transitionInProgress) 0L else idleMs + stepMs
+): Long = if (external || transitionInProgress) 0L else idleMs + stepMs
+
+/**
+ * Whether the service lets go of a foreground it holds after [idleMs] of
+ * nothing using it: [FOREGROUND_HOLD_IDLE_LIMIT_MS], or
+ * [FOREGROUND_HOLD_LISTENER_LIMIT_MS] while Listen Along waits for its next
+ * track ([listenerWaiting]). So it can't outlive a stalled advance, or a local
+ * track that never starts, with nothing playing.
+ */
+internal fun foregroundHoldExpired(idleMs: Long, listenerWaiting: Boolean): Boolean =
+    idleMs >= if (listenerWaiting) FOREGROUND_HOLD_LISTENER_LIMIT_MS else FOREGROUND_HOLD_IDLE_LIMIT_MS
