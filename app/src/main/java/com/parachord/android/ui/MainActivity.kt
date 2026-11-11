@@ -353,7 +353,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
     val protocolTeardown: com.parachord.android.deeplink.AndroidProtocolPlayTeardown =
         org.koin.compose.koinInject()
     LaunchedEffect(mainViewModel) {
-        protocolTeardown.setListenAlongStopper { mainViewModel.stopListenAlong(silent = true) }
+        protocolTeardown.setListenAlongStopper { mainViewModel.endListenAlongSilently() }
     }
 
     // Process pending deep links from the Activity (intent handling).
@@ -417,8 +417,8 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                     // The dispatcher already ran the listen-along
                     // handover teardown (exit-spinoff + clear-queue,
                     // skipping listen-along stop). startListenAlong
-                    // calls stopListenAlong(silent=true) at its top so
-                    // the swap from any active friend is atomic.
+                    // replaces any active session and keeps the
+                    // suspended queue, so the swap is atomic.
                     mainViewModel.startListenAlong(event.friend)
                 }
             }

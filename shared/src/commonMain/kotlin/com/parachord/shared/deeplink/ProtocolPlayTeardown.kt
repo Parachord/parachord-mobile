@@ -41,8 +41,8 @@ interface ProtocolPlayTeardown {
      * handover. Runs steps **(1) exit spinoff** and **(3) clear queue**,
      * but DELIBERATELY SKIPS step (2) "stop listen-along".
      *
-     * The reason: `MainViewModel.startListenAlong(friend)` already calls
-     * `stopListenAlong(silent = true)` at its top, so the swap is atomic.
+     * The reason: `MainViewModel.startListenAlong(friend)` already replaces
+     * any active session (keeping the suspended queue), so the swap is atomic.
      * Calling [prepareForNewPlayback] here would tear down the very
      * listen-along loop we're about to replace — a stop+start race that
      * occasionally lets the dying loop's last poll tick clobber the new

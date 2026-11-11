@@ -219,11 +219,50 @@ class PlaybackController constructor(
     // Spotify: Manages its own audio focus as a separate app.
     // ExoPlayer: handleAudioFocus=true handles it when ExoPlayer is playing.
 
-    /** Listener called when a track naturally completes (auto-advance, not user skip). */
-    var onTrackEndedListener: (() -> Unit)? = null
+    // ── Hooks (Listen Along drives playback through these; the controller
+    //    knows nothing about friends or sessions) ─────────────────────────
 
-    /** Listener called when the user manually changes playback (skip, play different track). */
-    var onUserPlaybackActionListener: (() -> Unit)? = null
+    /**
+     * Called when the current track ENDED ([AdvanceTrigger.TRACK_ENDED] only,
+     * not an unplayable track being skipped). True means the listener handled
+     * it: the queue doesn't advance, replay (repeat one) or wrap (repeat all).
+     * If the listener started no play, the ended track stays on screen, not
+     * playing ([holdEndedTrack]).
+     */
+    var onOwnTrackEnded: (() -> Boolean)? = null
+
+    /**
+     * Called when [track] couldn't play and playback stopped on it (no source,
+     * a start that failed or timed out, an embed refused with no fallback).
+     * True means the listener handled it: no error message or snackbar. Play
+     * still loads the track ([loadOnPlay]) unless the listener plays another.
+     */
+    var onTrackUnplayable: ((TrackEntity) -> Boolean)? = null
+
+    /**
+     * Called for a user's playback action, before the controller acts on it.
+     * The return value matters for [UserPlaybackAction.SKIP] and
+     * [UserPlaybackAction.RESUME] only: true means the listener started
+     * playback itself, so the controller doesn't also skip or resume.
+     */
+    var onUserAction: ((UserPlaybackAction) -> Boolean)? = null
+
+    /**
+     * Counts [playTrack] / [playQueue] calls, so [skipNextInternal] can tell
+     * whether [onOwnTrackEnded] started a play.
+     */
+    private var playRequestCount = 0
+
+    /**
+     * True while a play is under way: the play lock is held, an advance is in
+     * flight, or a [playTrack] / [playQueue] hasn't reached the lock yet. A
+     * track that's resolving or starting counts as playing for Listen Along's
+     * polls.
+     */
+    val isPlayStarting: Boolean
+        get() = playMutex.isLocked || advanceJob?.isActive == true || playLaunchesPending > 0
+
+    private var playLaunchesPending = 0
 
     // ── Spinoff state ──────────────────────────────────────────────────────
     /** Separate pool of resolved similar tracks (NOT in the queue — desktop behavior). */
@@ -383,12 +422,25 @@ class PlaybackController constructor(
     /** Play a single track immediately (clears the queue). */
     fun playTrack(track: TrackEntity, context: PlaybackContext? = null) {
         playRequestedThisRun = true
-        onUserPlaybackActionListener?.invoke()
+        onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
+        playRequestCount++
         clearUserPauseMark()
         queueManager.clearQueue()
         if (context != null) queueManager.setContext(context)
         playedSinceWrap = false
-        scope.launch { playTrackInternal(track) }
+        launchPlay { playTrackInternal(track) }
+    }
+
+    /** Launch a requested play, counted in [isPlayStarting] until it ends. */
+    private fun launchPlay(block: suspend () -> Unit) {
+        playLaunchesPending++
+        scope.launch {
+            try {
+                block()
+            } finally {
+                playLaunchesPending--
+            }
+        }
     }
 
     /**
@@ -402,11 +454,12 @@ class PlaybackController constructor(
         shuffle: Boolean = queueManager.shuffleEnabled,
     ) {
         playRequestedThisRun = true
-        onUserPlaybackActionListener?.invoke()
+        onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
+        playRequestCount++
         clearUserPauseMark()
         val track = queueManager.setQueue(tracks, startIndex, context, shuffle) ?: return
         playedSinceWrap = false
-        scope.launch { playTrackInternal(track) }
+        launchPlay { playTrackInternal(track) }
     }
 
     /** Append tracks to the end of the queue. */
@@ -473,10 +526,21 @@ class PlaybackController constructor(
         }, MoreExecutors.directExecutor())
     }
 
-    /** Set Parachord's repeat mode (the media session's repeat command). See [cycleRepeatMode]. */
-    fun setRepeatMode(mode: RepeatMode) {
+    /**
+     * Set Parachord's repeat mode (the media session's repeat command). See
+     * [cycleRepeatMode]. Refused during Listen Along, which follows the friend
+     * rather than the queue (the Now Playing button is disabled there too).
+     *
+     * @return false when it was refused.
+     */
+    fun setRepeatMode(mode: RepeatMode): Boolean {
+        if (queueManager.playbackContext?.type == LISTEN_ALONG_CONTEXT) {
+            Log.d(TAG, "Repeat refused: Listen Along")
+            return false
+        }
         Log.d(TAG, "Repeat mode: $mode")
         stateHolder.update { copy(repeatMode = mode) }
+        return true
     }
 
     /**
@@ -494,9 +558,15 @@ class PlaybackController constructor(
         }
 
         if (userInitiated) {
-            onUserPlaybackActionListener?.invoke()
-        } else {
-            onTrackEndedListener?.invoke()
+            // The listener took over (Listen Along restored the user's queue):
+            // that play is the answer, so don't skip it as well.
+            if (onUserAction?.invoke(UserPlaybackAction.SKIP) == true) return
+        } else if (trigger == AdvanceTrigger.TRACK_ENDED) {
+            val requestsBefore = playRequestCount
+            if (onOwnTrackEnded?.invoke() == true) {
+                if (playRequestCount == requestsBefore) holdEndedTrack()
+                return
+            }
         }
 
         // Cancel any in-flight advance — user skip takes priority
@@ -546,12 +616,7 @@ class PlaybackController constructor(
 
         val state = stateHolder.state.value
         val currentTrack = state.currentTrack
-        // Listen Along follows the friend: the end-of-track listener above has
-        // already started their next track, so repeat (a replay, or a wrap
-        // over the history) would replace it. Repeat counts as off there.
-        val listenAlong = state.playbackContext?.type == LISTEN_ALONG_CONTEXT
-        val repeatMode = if (listenAlong) RepeatMode.OFF else state.repeatMode
-        val action = advanceAction(trigger, repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
+        val action = advanceAction(trigger, state.repeatMode, queueManager.hasNext, currentTrack != null, playedSinceWrap)
         // A track outside the repeat-all lap (a spinoff pool track, history
         // from before a cleared queue) stays out of it; the shared
         // QueueManager decides.
@@ -564,7 +629,7 @@ class PlaybackController constructor(
             AdvanceAction.WRAP_TO_START -> queueManager.wrapToStart(currentTrack).also { playedSinceWrap = false }
             AdvanceAction.STOP_AND_CLEAR -> null
         } ?: run {
-            stopAtEndOfQueue(clear = !listenAlong)
+            stopAtEndOfQueue()
             return
         }
         when (action) {
@@ -592,31 +657,53 @@ class PlaybackController constructor(
     }
 
     /**
-     * The queue ran out ([AdvanceAction.STOP_AND_CLEAR]): stop, and with
-     * [clear] take the track off screen, so the mini player and the
-     * notification go away and Play has nothing to resume. Listen Along keeps
-     * the track ([clear] false): the friend's next track is starting from the
-     * end-of-track listener, and blanking the screen would flash in between.
+     * [onOwnTrackEnded] handled the end of the current track and started no
+     * play (Listen Along waits for its next poll): the track stays on screen,
+     * not playing, and nothing advances or clears. External playback keeps
+     * its mode and foreground (the next track, or Play, picks up from there;
+     * without the foreground Android cuts the app's network with the screen
+     * off), but its handler is stopped, so Spotify can't run on into the
+     * album's next song, and the session shows paused. The stop waits for the
+     * play lock and is dropped if a play was requested meanwhile, so it can't
+     * race the next track's start.
      */
-    private fun stopAtEndOfQueue(clear: Boolean) {
-        Log.d(TAG, if (clear) "skipNext: end of queue, stopping and clearing" else "skipNext: queue empty, stopping playback")
-        val wasExternal = isExternalPlayback
+    private fun holdEndedTrack() {
+        val track = stateHolder.state.value.currentTrack ?: return
+        Log.d(TAG, "'${track.title}' ended; holding it on screen")
+        stateHolder.update { copy(isPlaying = false, isBuffering = false) }
+        if (!isExternalPlayback) return
+        val requests = playRequestCount
+        scope.launch {
+            playMutex.withLock {
+                if (playRequestCount != requests || stateHolder.state.value.currentTrack?.id != track.id) return@withLock
+                stopBeforeFailedTrack(autoSkip = true)
+                // Nothing polls until the next play, which takes them again.
+                releaseExternalPlaybackWakeLock()
+                sendSilencePlayback(pause = true)
+                startIdleTimeout()
+            }
+        }
+    }
+
+    /**
+     * The queue ran out ([AdvanceAction.STOP_AND_CLEAR]): stop and take the
+     * track off screen, so the mini player and the notification go away and
+     * Play has nothing to resume.
+     */
+    private fun stopAtEndOfQueue() {
+        Log.d(TAG, "skipNext: end of queue, stopping and clearing")
         // Leave external mode first, while the service is still in the
         // foreground: notifyExternalMode is a startService, which Android
         // refuses from the background once sendExternalPlaybackStop has
         // demoted it, leaving the session's player stuck in external mode.
-        if (wasExternal && clear) notifyExternalMode(false)
         if (isExternalPlayback) {
+            notifyExternalMode(false)
             stopSpotifyStatePolling()
             stopAppleMusicStatePolling()
             stopEmbedStatePolling()
             scope.launch { router.stopExternalPlayback() }
             sendExternalPlaybackStop()
             isExternalPlayback = false
-        }
-        if (!clear) {
-            stateHolder.update { copy(isPlaying = false) }
-            return
         }
         // The cleared track goes to history, so Previous goes back to it
         // rather than to the track before it.
@@ -642,7 +729,8 @@ class PlaybackController constructor(
     }
 
     fun skipPrevious() {
-        onUserPlaybackActionListener?.invoke()
+        // The listener took over (Listen Along restored the user's queue).
+        if (onUserAction?.invoke(UserPlaybackAction.SKIP) == true) return
         val position = if (isExternalPlayback) {
             router.activeExternalHandler?.getPosition()
                 ?: router.getSpotifyHandler().getPosition()
@@ -676,6 +764,7 @@ class PlaybackController constructor(
     fun playFromQueue(index: Int) {
         val currentTrack = stateHolder.state.value.currentTrack
         val track = queueManager.playFromQueue(index, currentTrack) ?: return
+        onUserAction?.invoke(UserPlaybackAction.PLAY_SOMETHING_ELSE)
         advanceJob?.cancel()
         advanceJob = scope.launch {
             try {
@@ -761,6 +850,15 @@ class PlaybackController constructor(
     }
 
     fun togglePlayPause() {
+        // A resume (nothing playing or starting): the listener may play
+        // something else instead (Listen Along's held friend track). A play
+        // command while a play starts is that play's own echo, not the user.
+        if (!stateHolder.state.value.isPlaying && !isPlayStarting &&
+            onUserAction?.invoke(UserPlaybackAction.RESUME) == true
+        ) {
+            clearUserPauseMark()
+            return
+        }
         // Nothing holds the track on screen ([loadOnPlay]): a restored queue,
         // a paused track the idle timeout stopped, or a track no source could
         // play. Resuming would play ExoPlayer's silence, its failed item or
@@ -828,6 +926,7 @@ class PlaybackController constructor(
                 val isCurrentlyPlaying = handler.isPlaying()
                 if (isCurrentlyPlaying) {
                     markUserPaused()
+                    onUserAction?.invoke(UserPlaybackAction.PAUSE)
                     handler.pause()
                     stateHolder.update { copy(isPlaying = false) }
                     // Stop polling and release WakeLock — no need to keep the CPU
@@ -883,6 +982,7 @@ class PlaybackController constructor(
         val ctrl = controller ?: return
         if (ctrl.isPlaying) {
             markUserPaused()
+            onUserAction?.invoke(UserPlaybackAction.PAUSE)
             ctrl.pause()
         } else {
             clearUserPauseMark()
@@ -975,7 +1075,17 @@ class PlaybackController constructor(
             ) {
                 Log.d(TAG, "'${track.title}' didn't play ($failure); Play will load it")
                 loadOnPlay = failedLoad(track, skipReselect, failedAtMs = 0, durationMs = 0)
+                // The listener takes it (Listen Along): no message about it.
+                if (onTrackUnplayable?.invoke(track) == true) {
+                    Log.d(TAG, "'${track.title}': the listener handles the failed play")
+                    failureNotice = null
+                    if (stateHolder.state.value.currentTrack?.id == track.id) {
+                        stateHolder.update { copy(playbackError = null) }
+                    }
+                }
             }
+            failureNotice?.let { _notices.tryEmit(it) }
+            failureNotice = null
             // Promoted at the start, and no route took it over: nothing is playing.
             if (foregroundHeldForPlay && !isExternalPlayback) {
                 Log.d(TAG, "Play of '${track.title}' didn't start; releasing the foreground")
@@ -1000,6 +1110,7 @@ class PlaybackController constructor(
         // here too, so its outcome replaces the refused source's.
         loadOnPlay = null
         playFailure = null
+        failureNotice = null
         // Take the foreground now, while the request's window to start a
         // foreground service is open: the lookup below can outlast it, and
         // without one Android cuts the app's network when it isn't on screen.
@@ -2231,7 +2342,10 @@ class PlaybackController constructor(
         // the pool and the (not thread-safe) QueueManager there, and this
         // function runs on spinoffJob's IO dispatcher.
         withContext(Dispatchers.Main) {
-            preSpinoffContext = queueManager.playbackContext
+            // A spinoff ends Listen Along (silently; the suspended queue is
+            // dropped), so its context isn't one to come back to.
+            onUserAction?.invoke(UserPlaybackAction.SPINOFF_STARTED)
+            preSpinoffContext = queueManager.playbackContext?.takeUnless { it.type == LISTEN_ALONG_CONTEXT }
             spinoffSourceTrack = stateHolder.state.value.currentTrack
             spinoffPool.clear()
             spinoffPool.addAll(pool)
@@ -2777,14 +2891,16 @@ class PlaybackController constructor(
         }
         val message = com.parachord.shared.playback.SoundCloudWidget.refusedMessage(e.serviceName, track.title, e.reason)
         stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = message) }
-        _notices.tryEmit(
-            PlaybackNotice(
-                message = message,
-                actionLabel = e.pageUrl?.let { "Open in ${e.serviceName}" },
-                actionUrl = e.pageUrl,
-            ),
+        // Shown by playTrackInternal unless onTrackUnplayable takes the track.
+        failureNotice = PlaybackNotice(
+            message = message,
+            actionLabel = e.pageUrl?.let { "Open in ${e.serviceName}" },
+            actionUrl = e.pageUrl,
         )
     }
+
+    /** A failed play's snackbar, held until [playTrackInternal] knows whether to show it. */
+    private var failureNotice: PlaybackNotice? = null
 
     /**
      * Stop what was playing before a track that can't play ([failedTrackStop]).

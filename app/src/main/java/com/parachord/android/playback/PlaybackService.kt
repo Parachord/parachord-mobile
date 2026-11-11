@@ -1700,7 +1700,8 @@ class PlaybackService : MediaLibraryService() {
         override fun getRepeatMode(): Int = stateHolder.state.value.repeatMode.toPlayerRepeatMode()
 
         override fun setRepeatMode(repeatMode: Int) {
-            playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))
+            // Refused (Listen Along): re-publish the real value, as for shuffle.
+            if (!playbackController.setRepeatMode(repeatModeFromPlayer(repeatMode))) publishRepeatMode()
         }
 
         // Parachord's shuffle (its own queue order), never ExoPlayer's. A
