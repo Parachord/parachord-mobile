@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.library
 
+import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -453,6 +454,7 @@ fun CollectionScreen(
                         } else {
                             LazyColumn(state = trackListState, modifier = Modifier.fillMaxSize()) {
                                 items(sortedTracks, key = { it.id }) { track ->
+                                    ResolveWhileVisible(track.id) { viewModel.resolveVisible(track) }
                                     TrackRow(
                                         title = track.title,
                                         artist = track.artist,

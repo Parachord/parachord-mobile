@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import android.Manifest
 import android.os.Build
@@ -674,6 +675,7 @@ fun HomeScreen(
                 if (recentTracks.isNotEmpty()) {
                     item { SectionHeader("Recent Loves") }
                     items(recentTracks.take(10), key = { it.id }) { track ->
+                        ResolveWhileVisible(track.id) { viewModel.resolveVisible(track) }
                         TrackRow(
                             title = track.title,
                             artist = track.artist,

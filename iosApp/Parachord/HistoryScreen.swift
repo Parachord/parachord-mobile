@@ -222,6 +222,7 @@ struct HistoryScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(artist: t.artist, title: t.title, album: t.album, index: i) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })
@@ -313,6 +314,7 @@ struct HistoryScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(artist: t.artist, title: t.title, album: t.album, index: i) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = t.artist },
                     onGoToAlbum: t.album.map { a in { navAlbum = PCAlbumRef(title: a, artist: t.artist) } })

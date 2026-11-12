@@ -349,6 +349,7 @@ struct SearchView: View {
         }
         .buttonStyle(.plain)
         .onAppear { resolverCache.resolve(ResolveRequest(artist: track.artist, title: track.title, album: track.album), order: index) }
+        .onDisappear { IosTrackResolverCache.shared.leave(artist: track.artist, title: track.title) }
         .pcTrackContextMenu(
             track, coordinator: coordinator,
             onGoToArtist: { navArtist = PCArtistRef(name: track.artist) },

@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.history
 
+import com.parachord.android.ui.components.ResolveWhileVisible
+import kotlinx.coroutines.Job
 import com.parachord.shared.format.playCountLabel
 import com.parachord.shared.format.RelativeTime
 import com.parachord.shared.ui.UiMessages
@@ -138,6 +140,7 @@ fun HistoryScreen(
                     selectedPeriod = selectedPeriod,
                     onPeriodChanged = viewModel::setPeriod,
                     onPlayTrack = viewModel::playTopTrack,
+                    onTrackVisible = viewModel::resolveVisible,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
                     trackArtwork = trackArtwork,
@@ -170,6 +173,7 @@ fun HistoryScreen(
                     onSortChanged = viewModel::setRecentSort,
                     onSearchChanged = viewModel::setRecentSearch,
                     onPlayTrack = viewModel::playRecentTrack,
+                    onTrackVisible = viewModel::resolveVisible,
                     onRetry = viewModel::refreshRecentTracks,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
@@ -215,6 +219,7 @@ private fun TopSongsTab(
     selectedPeriod: String,
     onPeriodChanged: (String) -> Unit,
     onPlayTrack: (Int) -> Unit,
+    onTrackVisible: (title: String, artist: String) -> Job? = { _, _ -> null },
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
     trackArtwork: Map<String, String> = emptyMap(),
@@ -235,6 +240,9 @@ private fun TopSongsTab(
                     LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                         items(tracks.data.size) { index ->
                             val track = tracks.data[index]
+                            ResolveWhileVisible(trackKey(track.title, track.artist)) {
+                                onTrackVisible(track.title, track.artist)
+                            }
                             TrackRow(
                                 title = track.title,
                                 artist = "${track.artist}  •  ${playCountLabel(track.playCount)}",
@@ -528,6 +536,7 @@ private fun RecentlyPlayedTab(
     onSortChanged: (String) -> Unit,
     onSearchChanged: (String) -> Unit,
     onPlayTrack: (Int) -> Unit,
+    onTrackVisible: (title: String, artist: String) -> Job? = { _, _ -> null },
     onRetry: () -> Unit,
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
@@ -562,6 +571,9 @@ private fun RecentlyPlayedTab(
                     } else {
                         LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
                             items(recentTracks.data.size) { index ->
+                                recentTracks.data[index].let { t ->
+                                    ResolveWhileVisible(trackKey(t.title, t.artist)) { onTrackVisible(t.title, t.artist) }
+                                }
                                 RecentTrackRow(
                                     track = recentTracks.data[index],
                                     resolvers = trackResolvers["${recentTracks.data[index].title.lowercase().trim()}|${recentTracks.data[index].artist.lowercase().trim()}"]?.ifEmpty { null },

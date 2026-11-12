@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.friends
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -224,38 +226,22 @@ class FriendDetailViewModel constructor(
         )
     }
 
-    private fun resolveTracksInBackground(tracks: List<HistoryTrack>) {
-        viewModelScope.launch {
-            for (track in tracks) {
-                val key = trackKey(track.title, track.artist)
-                if (_trackSources.value.containsKey(key)) continue
-                // The shared cache: its sources, a retry of resolvers that
-                // couldn't answer, or a fresh resolve (#566).
-                try {
-                    val sources = trackResolverCache.resolveTrack(track.title, track.artist)
-                    if (sources.isNotEmpty()) {
-                        _trackSources.value = _trackSources.value + (key to sources)
-                    }
-                } catch (_: Exception) { /* skip */ }
+    /**
+     * Resolves one row (a recent or top track) while it's on screen (#181); see
+     * ResolveWhileVisible. The shared cache answers from memory when it can,
+     * retries resolvers that couldn't answer, or resolves afresh (#566).
+     */
+    fun resolveVisible(title: String, artist: String): Job = viewModelScope.launch {
+        val key = trackKey(title, artist)
+        if (_trackSources.value.containsKey(key)) return@launch
+        try {
+            val sources = trackResolverCache.resolveTrackForRow(title, artist)
+            if (sources.isNotEmpty()) {
+                _trackSources.value = _trackSources.value + (key to sources)
             }
-        }
-    }
-
-    private fun resolveRecentTracksInBackground(tracks: List<RecentTrack>) {
-        viewModelScope.launch {
-            for (track in tracks) {
-                val key = trackKey(track.title, track.artist)
-                if (_trackSources.value.containsKey(key)) continue
-                // The shared cache: its sources, a retry of resolvers that
-                // couldn't answer, or a fresh resolve (#566).
-                try {
-                    val sources = trackResolverCache.resolveTrack(track.title, track.artist)
-                    if (sources.isNotEmpty()) {
-                        _trackSources.value = _trackSources.value + (key to sources)
-                    }
-                } catch (_: Exception) { /* skip */ }
-            }
-        }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) { /* skip */ }
     }
 
     private fun loadRecentTracks(friend: FriendEntity) {
@@ -263,7 +249,6 @@ class FriendDetailViewModel constructor(
             friendsRepository.getFriendRecentTracks(friend.username, friend.service)
                 .collect {
                     _recentTracks.value = it
-                    if (it is Resource.Success) resolveRecentTracksInBackground(it.data)
                 }
             // The fetch records whether the profile hides its recent listening
             // (desktop parachord#1140); re-read so the Recent tab can say so.
@@ -279,7 +264,6 @@ class FriendDetailViewModel constructor(
             }
                 .collect {
                     _topTracks.value = it
-                    if (it is Resource.Success) resolveTracksInBackground(it.data)
                 }
         }
         viewModelScope.launch {

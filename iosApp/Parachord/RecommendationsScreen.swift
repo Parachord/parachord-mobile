@@ -256,6 +256,7 @@ struct RecommendationsScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(pair.track, index: index) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: pair.track.artist, title: pair.track.title) }
                 .pcTrackContextMenu(
                     pair.entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = pair.track.artist },

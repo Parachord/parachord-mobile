@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.android.ui.components.ResolveWhileVisible
+import kotlinx.coroutines.Job
 import com.parachord.shared.format.playCountLabel
 import com.parachord.shared.format.RelativeTime
 import com.parachord.shared.ui.UiMessages
@@ -186,6 +188,7 @@ fun FriendDetailScreen(
                         UiMessages.friendHidesListening(it.displayName)
                     },
                     onPlayTrack = viewModel::playRecentTrack,
+                    onTrackVisible = viewModel::resolveVisible,
                     onRetry = viewModel::refresh,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
@@ -196,6 +199,7 @@ fun FriendDetailScreen(
                     selectedPeriod = selectedPeriod,
                     onPeriodChanged = viewModel::setPeriod,
                     onPlayTrack = viewModel::playTopTrack,
+                    onTrackVisible = viewModel::resolveVisible,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
                     trackArtwork = trackArtwork,
@@ -260,6 +264,7 @@ private fun FriendRecentTab(
     recentTracks: Resource<List<RecentTrack>>,
     hiddenMessage: String? = null,
     onPlayTrack: (Int) -> Unit,
+    onTrackVisible: (title: String, artist: String) -> Job? = { _, _ -> null },
     onRetry: () -> Unit = {},
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
@@ -280,6 +285,7 @@ private fun FriendRecentTab(
                     items(recentTracks.data.size) { index ->
                         val track = recentTracks.data[index]
                         val key = "${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"
+                        ResolveWhileVisible(key) { onTrackVisible(track.title, track.artist) }
                         RecentTrackRow(
                             track = track,
                             resolvers = trackResolvers[key],
@@ -361,6 +367,7 @@ private fun FriendTopSongsTab(
     selectedPeriod: String,
     onPeriodChanged: (String) -> Unit,
     onPlayTrack: (Int) -> Unit,
+    onTrackVisible: (title: String, artist: String) -> Job? = { _, _ -> null },
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
     trackArtwork: Map<String, String> = emptyMap(),
@@ -382,6 +389,7 @@ private fun FriendTopSongsTab(
                         items(tracks.data.size) { index ->
                             val track = tracks.data[index]
                             val key = "${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"
+                            ResolveWhileVisible(key) { onTrackVisible(track.title, track.artist) }
                             TrackRow(
                                 title = track.title,
                                 artist = "${track.artist}  •  ${playCountLabel(track.playCount)}",

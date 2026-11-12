@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import kotlinx.coroutines.Job
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.data.db.entity.PlaylistEntity
@@ -67,25 +68,19 @@ class NowPlayingViewModel constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /**
+     * Resolves one queue row while it's on screen (#181); see ResolveWhileVisible.
+     * The playing track and the next few are resolved by the playback controller.
+     */
+    fun resolveVisibleQueueTrack(track: TrackEntity): Job =
+        trackResolverCache.resolveInBackground(listOf(track), backfillDb = false)
+
     /** Whether the currently playing artist is on tour. */
     private val _isOnTour = MutableStateFlow(false)
     val isOnTour: StateFlow<Boolean> = _isOnTour.asStateFlow()
     private var lastCheckedArtist: String? = null
 
     init {
-        // Resolve queue tracks in background as they change (concurrent, deduplicated)
-        viewModelScope.launch {
-            playbackState.collect { state ->
-                val allTracks = buildList {
-                    state.currentTrack?.let { add(it) }
-                    addAll(state.upNext)
-                }
-                if (allTracks.isNotEmpty()) {
-                    trackResolverCache.resolveInBackground(allTracks, backfillDb = false)
-                }
-            }
-        }
-
         // Check if current artist is on tour near the user's selected area
         viewModelScope.launch {
             playbackState

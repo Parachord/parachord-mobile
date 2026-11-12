@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.android.ui.components.ResolveWhileVisible
+import kotlinx.coroutines.Job
 import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.hapticClickable
@@ -58,6 +60,8 @@ fun QueueSheet(
     onRemoveFromQueue: (Int) -> Unit,
     onClearQueue: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Starts resolving a row while it's on screen; the job is cancelled when the row leaves. */
+    onTrackVisible: (TrackEntity) -> Job? = { null },
     /** User-configured resolver priority order for sorting resolver icons. */
     resolverOrder: List<String> = emptyList(),
     /** Resolver names from the full resolver pipeline, keyed by "title|artist". */
@@ -156,6 +160,7 @@ fun QueueSheet(
                     items = upNext,
                     key = { index, track -> "${track.id}-$index" },
                 ) { index, track ->
+                    ResolveWhileVisible(track.id) { onTrackVisible(track) }
                     QueueTrackRow(
                         track = track,
                         index = index,

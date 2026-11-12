@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.components.ResolveWhileVisible
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -197,8 +198,9 @@ fun WeeklyPlaylistScreen(
                     val resolverKey = "${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"
                     // Visibility-scoped resolution (#177): resolve a row only once
                     // it scrolls into view (LazyColumn composes viewport + overscan),
-                    // not the whole list on open. The cache dedups, so re-scroll is free.
-                    LaunchedEffect(track.id) { viewModel.resolveVisibleTrack(track) }
+                    // not the whole list on open, and cancel it when the row leaves.
+                    // The cache dedups, so re-scroll is free.
+                    ResolveWhileVisible(track.id) { viewModel.resolveVisibleTrack(track) }
                     TrackRow(
                         title = track.title,
                         artist = track.artist,

@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.album
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -61,14 +63,6 @@ class AlbumViewModel constructor(
     private val _trackSources = MutableStateFlow<Map<String, List<ResolvedSource>>>(emptyMap())
 
     /**
-     * Track keys a [resolveTracksInBackground] pass is resolving. A catalog list
-     * and MusicBrainz's matching list a moment later (#486) each start a pass;
-     * without this the second would search every track again while the first
-     * is still running. Touched on the main thread only.
-     */
-    private val resolving = mutableSetOf<String>()
-
-    /**
      * Resolver badge names for UI display — sorted by user priority.
      * Uses shared cache (already sorted) merged with local album-specific results.
      */
@@ -125,8 +119,6 @@ class AlbumViewModel constructor(
                         detail
                     }
                     _albumDetail.value = enriched
-                    // Kick off resolver resolution on each update (idempotent — already-resolved tracks are skipped)
-                    resolveTracksInBackground(enriched.tracks)
                 }
                 // Every provider has answered. The cover search below can take
                 // a while and mustn't keep the page in its loading state.
@@ -157,24 +149,24 @@ class AlbumViewModel constructor(
         }
     }
 
-    private fun resolveTracksInBackground(tracks: List<TrackSearchResult>) {
-        viewModelScope.launch {
-            for (track in tracks) {
-                val key = trackKey(track.title, track.artist)
-                if (_trackSources.value.containsKey(key) || key in resolving) continue
-                if (!resolving.add(key)) continue
-                try {
-                    // The shared cache: its sources, a retry of resolvers that
-                    // couldn't answer, or a fresh resolve (#566).
-                    val sources = trackResolverCache.resolveTrack(track.title, track.artist, spotifyId = track.spotifyId)
-                    if (sources.isNotEmpty()) {
-                        _trackSources.value = _trackSources.value + (key to sources)
-                    }
-                } catch (_: Exception) { /* skip */ } finally {
-                    resolving.remove(key)
-                }
+    /**
+     * Resolves one row while it's on screen (#181); see ResolveWhileVisible. A row
+     * keeps its key when the catalog's list is replaced by MusicBrainz's matching
+     * one (#486), so it isn't searched again, and the shared cache dedups the rest.
+     */
+    fun resolveVisible(track: TrackSearchResult): Job = viewModelScope.launch {
+        val key = trackKey(track.title, track.artist)
+        if (_trackSources.value.containsKey(key)) return@launch
+        try {
+            // The shared cache: its sources, a retry of resolvers that
+            // couldn't answer, or a fresh resolve (#566).
+            val sources = trackResolverCache.resolveTrackForRow(track.title, track.artist, spotifyId = track.spotifyId)
+            if (sources.isNotEmpty()) {
+                _trackSources.value = _trackSources.value + (key to sources)
             }
-        }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) { /* skip */ }
     }
 
     fun playTrack(index: Int) {

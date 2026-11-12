@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import kotlinx.coroutines.Job
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -127,7 +128,8 @@ class WeeklyPlaylistViewModel constructor(
 
     /**
      * Resolve a single track the moment its row becomes visible (driven by
-     * the LazyColumn item's `LaunchedEffect`). Mirrors the desktop's
+     * the row's `ResolveWhileVisible`, which cancels the returned job when the
+     * row scrolls away or the screen closes). Mirrors the desktop's
      * `ResolutionScheduler.updateVisibility` — resolve only the viewport +
      * overscan, not the whole list on open. Submitting per-row is safe
      * because [TrackResolverCache.resolveInBackground] dedups by track key
@@ -135,9 +137,8 @@ class WeeklyPlaylistViewModel constructor(
      * resolved row is free. `backfillDb = false` because weekly playlists
      * are ephemeral, metadata-only LB tracks with no DB row to backfill.
      */
-    fun resolveVisibleTrack(track: TrackEntity) {
+    fun resolveVisibleTrack(track: TrackEntity): Job =
         trackResolverCache.resolveInBackground(listOf(track), backfillDb = false)
-    }
 
     fun playAll(startIndex: Int = 0) {
         val trackList = tracks.value

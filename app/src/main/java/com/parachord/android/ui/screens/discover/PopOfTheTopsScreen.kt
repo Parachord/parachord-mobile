@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.ResolveWhileVisible
+import kotlinx.coroutines.Job
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -150,6 +152,7 @@ fun PopOfTheTopsScreen(
                     searchQuery = searchQuery,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
+                    onSongVisible = viewModel::resolveVisible,
                     onCountryChange = viewModel::setCountry,
                     onSourceChange = viewModel::setSongsSource,
                     onSearchQueryChange = viewModel::setSearchQuery,
@@ -548,6 +551,7 @@ private fun SongsTab(
     searchQuery: String,
     trackResolvers: Map<String, List<String>>,
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
+    onSongVisible: (ChartSong) -> Job? = { null },
     onCountryChange: (String) -> Unit,
     onSourceChange: (String) -> Unit,
     onSearchQueryChange: (String) -> Unit,
@@ -584,6 +588,7 @@ private fun SongsTab(
             ) {
                 items(songs, key = { it.id }) { song ->
                     val key = "${song.title.lowercase().trim()}|${song.artist.lowercase().trim()}"
+                    ResolveWhileVisible(key) { onSongVisible(song) }
                     TrackRow(
                         title = song.title,
                         artist = song.artist,

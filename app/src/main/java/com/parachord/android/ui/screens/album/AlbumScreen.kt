@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.album
 
+import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -327,6 +328,9 @@ fun AlbumScreen(
                         detail.tracks,
                         key = { idx, t -> "track-$idx-${t.title}" },
                     ) { index, track ->
+                        ResolveWhileVisible("${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}") {
+                            viewModel.resolveVisible(track)
+                        }
                         TrackRow(
                             title = track.title,
                             artist = track.artist,

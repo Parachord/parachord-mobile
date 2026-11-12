@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import kotlinx.coroutines.Job
 import com.parachord.shared.ui.UiMessages
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
@@ -75,6 +76,28 @@ class PlaylistDetailViewModel constructor(
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
 
+    /**
+     * Resolves one playlist row while it's on screen (#181); see ResolveWhileVisible.
+     * The row's coordinates let [TrackResolverCache] backfill resolver ids onto the
+     * DB row, so later opens of a synced playlist show every badge from the first
+     * render. The playlist the user just opened is the most visible list there is,
+     * so it takes the priority lane.
+     */
+    fun resolveVisible(pt: PlaylistTrackEntity): Job =
+        trackResolverCache.resolvePlaylistTracksInBackground(listOf(pt.toTrackInfo()), priority = true)
+
+    private fun PlaylistTrackEntity.toTrackInfo() = PlaylistTrackInfo(
+        title = trackTitle,
+        artist = trackArtist,
+        spotifyId = trackSpotifyId,
+        appleMusicId = trackAppleMusicId,
+        soundcloudId = trackSoundcloudId,
+        isrc = trackIsrc,
+        recordingMbid = trackRecordingMbid,
+        playlistId = playlistId,
+        position = position,
+    )
+
     /** True when the remote playlist (Spotify) has changes not yet pulled locally. */
     private val _hasRemoteUpdate = MutableStateFlow(false)
     val hasRemoteUpdate: StateFlow<Boolean> = _hasRemoteUpdate.asStateFlow()
@@ -84,39 +107,6 @@ class PlaylistDetailViewModel constructor(
     val isPulling: StateFlow<Boolean> = _isPulling.asStateFlow()
 
     init {
-        // Run full resolver pipeline against playlist tracks in background (concurrent, deduplicated)
-        viewModelScope.launch {
-            tracks.collect { trackList ->
-                if (trackList.isNotEmpty()) {
-                    trackResolverCache.resolvePlaylistTracksInBackground(
-                        trackList.map { pt ->
-                            PlaylistTrackInfo(
-                                title = pt.trackTitle,
-                                artist = pt.trackArtist,
-                                spotifyId = pt.trackSpotifyId,
-                                appleMusicId = pt.trackAppleMusicId,
-                                soundcloudId = pt.trackSoundcloudId,
-                                isrc = pt.trackIsrc,
-                                recordingMbid = pt.trackRecordingMbid,
-                                // Pass row coords so TrackResolverCache can
-                                // backfill resolver IDs onto the DB row —
-                                // subsequent opens of a Spotify-synced
-                                // playlist show all resolver badges from
-                                // the first render, not just the Spotify one.
-                                playlistId = pt.playlistId,
-                                position = pt.position,
-                            )
-                        },
-                        // The playlist the user just opened is the most
-                        // user-visible track list possible — it goes on
-                        // the priority lane so it doesn't sit behind any
-                        // background sweeps already in flight.
-                        priority = true,
-                    )
-                }
-            }
-        }
-
         // Generate the mosaic / enrich track art when the playlist has no
         // cover. Required for hosted XSPF imports — XSPF doesn't carry per-
         // track image data, so without this the detail screen would always

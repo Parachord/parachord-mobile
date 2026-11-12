@@ -154,14 +154,14 @@ class RecommendationsViewModel constructor(
     }
 
     /**
-     * Resolve one recommended track once its row is visible (#177). The shared
-     * cache dedups by title|artist and bounds concurrency, so scrolling back or
+     * Resolve one recommended track while its row is visible (#177); the job is
+     * cancelled when the row leaves (see ResolveWhileVisible). The shared cache
+     * dedups by title|artist and bounds concurrency, so scrolling back or
      * reopening the screen is free. backfillDb = false: these rows aren't in
      * the library.
      */
-    fun resolveVisibleTrack(track: RecommendedTrack) {
+    fun resolveVisibleTrack(track: RecommendedTrack): Job =
         trackResolverCache.resolveInBackground(listOf(track.toEntity()), backfillDb = false)
-    }
 
     private fun RecommendedTrack.toEntity() = TrackEntity(
         id = "rec-${title.hashCode()}-${artist.hashCode()}",

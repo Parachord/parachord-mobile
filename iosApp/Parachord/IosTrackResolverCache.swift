@@ -288,6 +288,16 @@ final class IosTrackResolverCache {
         if changed { scheduleSave() }
     }
 
+    /// A row left the screen (#181): drop its track's queued, not-yet-started
+    /// work, as desktop's `ResolutionScheduler.updateVisibility` aborts rows that
+    /// scroll away. A resolve already running finishes. Call from the row's
+    /// `.onDisappear`, beside the `.onAppear` that submitted it; the row asks
+    /// again if it comes back.
+    func leave(artist: String, title: String) {
+        let a = artist.lowercased(), t = title.lowercased()
+        queue.removeAll { $0.req.artist.lowercased() == a && $0.req.title.lowercased() == t }
+    }
+
     /// Batch convenience — submits each request with `order` = its array index,
     /// so a list passed top-to-bottom resolves top-down.
     func resolveInBackground(_ requests: [ResolveRequest]) {

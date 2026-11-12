@@ -285,6 +285,7 @@ struct CollectionView: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { resolverCache.resolve(ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: i) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(t, coordinator: coordinator,
                     onGoToArtist: { path.append(.artist(t.artist)) },
                     onGoToAlbum: t.album.map { a in { path.append(.album(title: a, artist: t.artist)) } })
