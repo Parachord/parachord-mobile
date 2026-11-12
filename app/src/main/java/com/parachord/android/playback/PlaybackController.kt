@@ -301,7 +301,9 @@ class PlaybackController constructor(
 
     /**
      * Called when [track] couldn't play and playback stopped on it (no source,
-     * a start that failed or timed out, an embed refused with no fallback).
+     * a start that failed or timed out, an embed refused with no fallback), or,
+     * for a track the listener drives, when the local player failed partway
+     * through ([onLocalPlayerFailed], #618).
      * True means the listener handled it: no error message or snackbar. Play
      * still loads the track ([loadOnPlay]) unless the listener plays another.
      */
@@ -1382,6 +1384,12 @@ class PlaybackController constructor(
      * ExoPlayer's item for the current track failed at [positionMs]: Play
      * loads the track again, where it stopped, keeping a source the user
      * picked ([manualPickTrackId]), as iOS does.
+     *
+     * A track the listener drives (Listen Along's own) goes to the listener
+     * instead, as a track that couldn't start does (#618): no message, and
+     * Play does nothing while it waits for the friend's next track
+     * ([heldForListener]). A failure while a play is still starting is left to
+     * that play, which reports it the same way.
      */
     @androidx.annotation.VisibleForTesting
     internal fun onLocalPlayerFailed(positionMs: Long, durationMs: Long) {
@@ -1393,6 +1401,15 @@ class PlaybackController constructor(
             durationMs = durationMs,
         )
         stateHolder.update { copy(isPlaying = false, isBuffering = false) }
+        if (isPlayStarting || drivesTrack?.invoke(track) != true) return
+        val requestsBefore = playRequestCount
+        if (onTrackUnplayable?.invoke(track) == true) {
+            Log.d(TAG, "'${track.title}' failed while playing: the listener handles it")
+            if (playRequestCount == requestsBefore) heldForListener = true
+            if (stateHolder.state.value.currentTrack?.id == track.id) {
+                stateHolder.update { copy(playbackError = null) }
+            }
+        }
     }
 
     /**
