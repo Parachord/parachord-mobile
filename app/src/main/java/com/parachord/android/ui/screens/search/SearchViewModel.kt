@@ -17,27 +17,21 @@ import com.parachord.android.resolver.ResolvedSource
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
-import com.parachord.shared.metadata.SearchArtistList
 import com.parachord.shared.metadata.SearchArtwork
-import com.parachord.shared.metadata.SearchRanking
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.coroutineScope
+import com.parachord.shared.search.SearchSession
+import com.parachord.shared.search.SearchState
+import com.parachord.shared.search.asSearchCatalog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-@OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
 class SearchViewModel constructor(
     private val repository: LibraryRepository,
     private val metadataService: MetadataService,
@@ -57,38 +51,46 @@ class SearchViewModel constructor(
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
-    private val debouncedQuery = _query.debounce(300)
+    /**
+     * The screen's rules, shared with iOS (#590): searches from two characters,
+     * 300 ms after the last keystroke, cancelling the superseded search; local
+     * tracks + albums, the three remote categories and covers for rows without
+     * one. The remote tracks resolve here once their search finishes.
+     */
+    private val session = SearchSession(
+        scope = viewModelScope,
+        catalog = metadataService.asSearchCatalog(),
+        artwork = searchArtwork,
+        localTracks = { q -> repository.searchTracks(q) },
+        localAlbums = { q -> repository.searchAlbums(q) },
+        resolvedTrackArt = { title, artist ->
+            trackResolverCache.trackArtwork.map { it[trackKey(title, artist)] }.filterNotNull().first()
+        },
+        onRemoteTracksSettled = ::resolveTracksInBackground,
+    )
 
-    // Local library results (instant, from Room)
-    val localTrackResults: StateFlow<List<TrackEntity>> = debouncedQuery
-        .flatMapLatest { q ->
-            if (q.isBlank()) flowOf(emptyList()) else repository.searchTracks(q)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private fun <T> fromSession(pick: (SearchState) -> T): StateFlow<T> =
+        session.state.map(pick).distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, pick(session.state.value))
 
-    val localAlbumResults: StateFlow<List<AlbumEntity>> = debouncedQuery
-        .flatMapLatest { q ->
-            if (q.isBlank()) flowOf(emptyList()) else repository.searchAlbums("%$q%")
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    // Local library results
+    val localTrackResults: StateFlow<List<TrackEntity>> = fromSession { it.localTracks }
+    val localAlbumResults: StateFlow<List<AlbumEntity>> = fromSession { it.localAlbums }
 
     // Remote results from cascading metadata providers
-    private val _remoteTrackResults = MutableStateFlow<List<TrackSearchResult>>(emptyList())
-    val remoteTrackResults: StateFlow<List<TrackSearchResult>> = _remoteTrackResults.asStateFlow()
-
-    private val _remoteAlbumResults = MutableStateFlow<List<AlbumSearchResult>>(emptyList())
-    val remoteAlbumResults: StateFlow<List<AlbumSearchResult>> = _remoteAlbumResults.asStateFlow()
-
-    private val _artistResults = MutableStateFlow<List<ArtistInfo>>(emptyList())
-    val artistResults: StateFlow<List<ArtistInfo>> = _artistResults.asStateFlow()
+    val remoteTrackResults: StateFlow<List<TrackSearchResult>> = fromSession { it.remoteTracks }
+    val remoteAlbumResults: StateFlow<List<AlbumSearchResult>> = fromSession { it.remoteAlbums }
+    val artistResults: StateFlow<List<ArtistInfo>> = fromSession { it.artists }
 
     /** True when MusicBrainz is throttling us and the client's retries didn't
      *  clear it. The screen shows this INSTEAD of "No results" — a throttled
      *  search has not established that nothing matched (#375). */
     val musicBrainzRateLimited: StateFlow<Boolean> = musicBrainzClient.rateLimited
 
-    private val _isSearchingRemote = MutableStateFlow(false)
-    val isSearchingRemote: StateFlow<Boolean> = _isSearchingRemote.asStateFlow()
+    val isSearchingRemote: StateFlow<Boolean> = fromSession { it.isSearching }
+
+    /** The remote search has finished, so empty lists mean no results. */
+    val hasSearched: StateFlow<Boolean> = fromSession { it.hasSearched }
 
     /** Cached resolved sources for remote tracks, keyed by "title|artist" */
     private val _trackSources = MutableStateFlow<Map<String, List<ResolvedSource>>>(emptyMap())
@@ -102,38 +104,15 @@ class SearchViewModel constructor(
 
     /**
      * Covers found for rows that came without a usable one ([SearchArtwork]),
-     * keyed by [artKey]. A row keeps the first cover found for it.
+     * keyed by [SearchSession.artKey]. A row keeps the first cover found for it.
      */
-    private val _searchArt = MutableStateFlow<Map<String, String>>(emptyMap())
-    val searchArt: StateFlow<Map<String, String>> = _searchArt.asStateFlow()
-
-    /** The current query's cover lookups; cancelled when the query changes. */
-    private var artJob = kotlinx.coroutines.SupervisorJob()
-    private val artRequested = mutableSetOf<String>()
+    val searchArt: StateFlow<Map<String, String>> = fromSession { it.art }
 
     // Search history
     val searchHistory: StateFlow<List<SearchHistoryEntity>> = searchHistoryDao.getRecent()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
-        // Launch remote search whenever the debounced query changes. collectLatest
-        // cancels the running search when a newer query arrives, so its
-        // MusicBrainz requests leave the 1 req/s queue instead of holding up the
-        // query the user wants (#475).
-        viewModelScope.launch {
-            debouncedQuery.collectLatest { q ->
-                resetSearchArt()
-                if (q.isBlank()) {
-                    _remoteTrackResults.value = emptyList()
-                    _remoteAlbumResults.value = emptyList()
-                    _artistResults.value = emptyList()
-                    _isSearchingRemote.value = false
-                    _trackSources.value = emptyMap()
-                } else {
-                    searchRemote(q)
-                }
-            }
-        }
         // Pre-resolve local search results so resolver badges appear and playback is instant
         viewModelScope.launch {
             localTrackResults.collect { tracks ->
@@ -146,6 +125,8 @@ class SearchViewModel constructor(
 
     fun onQueryChange(newQuery: String) {
         _query.value = newQuery
+        if (!SearchSession.isSearchable(newQuery)) _trackSources.value = emptyMap()
+        session.query(newQuery)
     }
 
     fun playLocalTrack(track: TrackEntity) {
@@ -162,7 +143,7 @@ class SearchViewModel constructor(
      * in the background (desktop's priority lane).
      */
     fun playSearchTrack(track: TrackSearchResult) {
-        val results = _remoteTrackResults.value
+        val results = session.state.value.remoteTracks
         val index = results.indexOf(track)
         if (index < 0) return
         val queue = results.drop(index).map { it.toPlayable() }
@@ -181,7 +162,7 @@ class SearchViewModel constructor(
         album = album,
         duration = duration,
         artworkUrl = artworkUrl
-            ?: _searchArt.value[artKey("track", title, artist)]
+            ?: session.state.value.art[SearchSession.trackArtKey(title, artist)]
             ?: trackResolverCache.trackArtwork.value[trackKey(title, artist)],
         spotifyId = spotifyId,
         recordingMbid = mbid,
@@ -242,125 +223,8 @@ class SearchViewModel constructor(
         }
     }
 
-    /**
-     * The three categories run at once, and each one's rows show as its
-     * providers answer (#475, desktop parachord#1186): Spotify and Last.fm in a
-     * few hundred ms, MusicBrainz seconds later through its 1 req/s gate. Each
-     * list is re-ranked using fuzzy matching (desktop formula: 60% fuzzy + 40%
-     * source) every time it grows.
-     */
-    private suspend fun searchRemote(query: String) {
-        _isSearchingRemote.value = true
-        // MusicBrainz's artists plus those the services' rows name (desktop).
-        val artistList = SearchArtistList(query)
-        try {
-            coroutineScope {
-                launch {
-                    var ranked = emptyList<TrackSearchResult>()
-                    metadataService.searchTracksProgressively(query).collect { tracks ->
-                        ranked = SearchRanking.rankTracks(query, tracks)
-                        _remoteTrackResults.value = ranked
-                        ranked.take(SearchArtwork.LIMIT).forEach(::findTrackArt)
-                        showArtists(artistList.withTracks(ranked))
-                    }
-                    resolveTracksInBackground(ranked)
-                }
-                launch {
-                    metadataService.searchAlbumsProgressively(query).collect { albums ->
-                        val ranked = SearchRanking.rankAlbums(query, albums)
-                        _remoteAlbumResults.value = ranked
-                        ranked.take(SearchArtwork.LIMIT).forEach(::findAlbumArt)
-                        showArtists(artistList.withAlbums(ranked))
-                    }
-                }
-                launch {
-                    metadataService.searchArtistsProgressively(query).collect { artists ->
-                        showArtists(artistList.withMusicBrainz(artists))
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            // Silently fail — local results still available
-        } finally {
-            _isSearchingRemote.value = false
-        }
-    }
-
-    private fun showArtists(ranked: List<ArtistInfo>) {
-        _artistResults.value = ranked
-        ranked.take(SearchArtwork.LIMIT).forEach(::findArtistImage)
-    }
-
-    // ── Covers for rows without one (desktop fetchSearchAlbumArt) ──────
-
-    private fun resetSearchArt() {
-        artJob.cancel()
-        artJob = kotlinx.coroutines.SupervisorJob()
-        artRequested.clear()
-        _searchArt.value = emptyMap()
-    }
-
-    /**
-     * A track's cover: its album's Cover Art Archive cover (MusicBrainz's
-     * rows), else, after [SearchArtwork.FALLBACK_MS], a merged provider row's
-     * cover or the art of the source the track resolved to (search rows are
-     * resolved in the background, which is where their badges come from).
-     */
-    private fun findTrackArt(track: TrackSearchResult) {
-        if (!track.artworkUrl.isNullOrBlank()) return
-        val toCheck = track.artworkCandidates.filter(SearchArtwork::needsCheck)
-        val service = track.artworkCandidates.firstOrNull { !SearchArtwork.needsCheck(it) }
-        val resolved = trackKey(track.title, track.artist)
-        lookUpArt(artKey("track", track.title, track.artist)) {
-            searchArtwork.settle(toCheck) {
-                service ?: trackResolverCache.trackArtwork.map { it[resolved] }.filterNotNull().first()
-            }
-        }
-    }
-
-    /**
-     * An album's cover: MusicBrainz's Cover Art Archive covers once checked,
-     * else a merged provider row's cover.
-     */
-    private fun findAlbumArt(album: AlbumSearchResult) {
-        val all = listOfNotNull(album.artworkUrl) + album.artworkCandidates
-        // A provider's own cover shows as it is.
-        if (all.isEmpty() || !SearchArtwork.needsCheck(all.first())) return
-        lookUpArt(artKey("album", album.title, album.artist)) {
-            searchArtwork.settle(all.filter(SearchArtwork::needsCheck)) {
-                all.firstOrNull { !SearchArtwork.needsCheck(it) }
-            }
-        }
-    }
-
-    /** An artist's photo when the search row had none (desktop SearchArtistCard). */
-    private fun findArtistImage(artist: ArtistInfo) {
-        if (!artist.imageUrl.isNullOrBlank()) return
-        lookUpArt(artKey("artist", artist.name)) { searchArtwork.lookup { metadataService.getArtistImage(artist.name) } }
-    }
-
-    private fun lookUpArt(key: String, find: suspend () -> String?) {
-        if (!artRequested.add(key)) return
-        viewModelScope.launch(artJob) {
-            val url = try {
-                find()
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                null
-            } ?: return@launch
-            _searchArt.value = _searchArt.value + (key to url)
-        }
-    }
-
     override fun onCleared() {
-        artJob.cancel()
+        session.close()
         super.onCleared()
-    }
-
-    companion object {
-        /** [searchArt]'s key for a row: `kind` is track, album or artist. */
-        fun artKey(kind: String, name: String, artist: String = ""): String =
-            "$kind|${name.lowercase().trim()}|${artist.lowercase().trim()}"
     }
 }

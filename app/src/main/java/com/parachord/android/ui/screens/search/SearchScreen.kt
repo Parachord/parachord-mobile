@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.search
 
+import com.parachord.shared.search.SearchSession
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -74,6 +75,7 @@ fun SearchScreen(
     val searchArt by viewModel.searchArt.collectAsStateWithLifecycle()
     val trackArtwork by viewModel.trackArtwork.collectAsStateWithLifecycle()
     val isSearchingRemote by viewModel.isSearchingRemote.collectAsStateWithLifecycle()
+    val hasSearched by viewModel.hasSearched.collectAsStateWithLifecycle()
     val mbRateLimited by viewModel.musicBrainzRateLimited.collectAsStateWithLifecycle()
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val trackResolvers by viewModel.trackResolvers.collectAsState()
@@ -125,8 +127,9 @@ fun SearchScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Results inline (no expanding overlay)
-        if (query.isNotBlank()) {
+        // Results inline (no expanding overlay), from two characters (#590)
+        val searchable = SearchSession.isSearchable(query)
+        if (searchable) {
             val hasAnyResults = localTracks.isNotEmpty() || localAlbums.isNotEmpty() ||
                 remoteTracks.isNotEmpty() || remoteAlbums.isNotEmpty() || artists.isNotEmpty()
             // Shimmer only while nothing has arrived: categories now land one at a
@@ -162,14 +165,65 @@ fun SearchScreen(
                     }
                 }
 
+                // ---- Local Library Albums ----
+                if (localAlbums.isNotEmpty()) {
+                    item {
+                        if (localTracks.isNotEmpty()) HorizontalDivider()
+                        SectionHeader("Library Albums")
+                    }
+                    items(localAlbums.take(5), key = { "local-album-${it.id}" }) { album ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.saveHistoryEntry(
+                                        resultType = "album",
+                                        resultName = album.title,
+                                        resultArtist = album.artist,
+                                        artworkUrl = album.artworkUrl,
+                                    )
+                                    onNavigateToAlbum(album.title, album.artist)
+                                }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            AlbumArtCard(
+                                artworkUrl = album.artworkUrl,
+                                size = 48.dp,
+                                cornerRadius = 4.dp,
+                                elevation = 1.dp,
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = album.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = buildString {
+                                        append(album.artist)
+                                        album.year?.let { append(" \u2022 $it") }
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // ---- Artists ----
                 if (artists.isNotEmpty()) {
                     item {
-                        if (localTracks.isNotEmpty()) HorizontalDivider()
+                        if (localTracks.isNotEmpty() || localAlbums.isNotEmpty()) HorizontalDivider()
                         SectionHeader("Artists")
                     }
                     items(artists, key = { "artist-${it.name}" }) { artist ->
-                        val image = artist.imageUrl ?: searchArt[SearchViewModel.artKey("artist", artist.name)]
+                        val image = artist.imageUrl ?: searchArt[SearchSession.artistArtKey(artist.name)]
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -232,14 +286,14 @@ fun SearchScreen(
                 // ---- Remote Tracks ----
                 if (remoteTracks.isNotEmpty()) {
                     item {
-                        if (localTracks.isNotEmpty() || artists.isNotEmpty()) HorizontalDivider()
+                        if (localTracks.isNotEmpty() || localAlbums.isNotEmpty() || artists.isNotEmpty()) HorizontalDivider()
                         SectionHeader("Tracks")
                     }
                     items(remoteTracks, key = { "remote-track-${it.title}-${it.artist}" }) { track ->
                         // Its own cover, the one found for it, or (any row, as History
                         // does) the cover of the source it resolved to.
                         val art = track.artworkUrl
-                            ?: searchArt[SearchViewModel.artKey("track", track.title, track.artist)]
+                            ?: searchArt[SearchSession.trackArtKey(track.title, track.artist)]
                             ?: trackArtwork[com.parachord.android.resolver.trackKey(track.title, track.artist)]
                         TrackRow(
                             title = track.title,
@@ -270,7 +324,7 @@ fun SearchScreen(
                     items(remoteAlbums, key = { "remote-album-${it.title}-${it.artist}" }) { album ->
                         // A checked cover once there is one; until then (and past the
                         // first rows) the row's own, which may not load.
-                        val art = searchArt[SearchViewModel.artKey("album", album.title, album.artist)] ?: album.artworkUrl
+                        val art = searchArt[SearchSession.albumArtKey(album.title, album.artist)] ?: album.artworkUrl
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -316,7 +370,7 @@ fun SearchScreen(
                 }
 
                 // ---- No results ----
-                if (query.isNotBlank() && !hasAnyResults && !isSearchingRemote) {
+                if (hasSearched && !hasAnyResults && !isSearchingRemote) {
                     item {
                         Text(
                             // A throttled MusicBrainz has NOT established that
@@ -336,7 +390,7 @@ fun SearchScreen(
         }
 
         // Show search history on the page when query is empty (like desktop)
-        if (query.isBlank() && searchHistory.isNotEmpty()) {
+        if (!searchable && searchHistory.isNotEmpty()) {
             SearchHistoryContent(
                 history = searchHistory,
                 onEntryClick = { entry ->
