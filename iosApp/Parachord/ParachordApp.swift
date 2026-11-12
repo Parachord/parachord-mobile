@@ -62,10 +62,13 @@ private struct RootGate: View {
             // playlists whose art isn't already a file:// mosaic. Android parity:
             // ParachordApplication.onCreate. Fire-and-forget.
             Task { try? await IosContainer.companion.shared.regeneratePlaylistMosaics() }
+            // Desktop's idle background pre-resolution, while the app is active.
+            BackgroundResolveSweeper.shared.setActive(scenePhase == .active)
         }
         // Re-queue the background sync whenever we leave the foreground (Apple's
         // recommended scheduling point).
         .onChange(of: scenePhase) { _, phase in
+            if ready { BackgroundResolveSweeper.shared.setActive(phase == .active) }
             if phase == .background {
                 BackgroundSync.schedule()
                 IosTrackResolverCache.shared.flushPendingSave()

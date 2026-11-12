@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Shared
 
 // MARK: - Track resolver cache (playback-loop phase, two-layer resolution)
@@ -288,6 +289,30 @@ final class IosTrackResolverCache {
         if changed { scheduleSave() }
     }
 
+    /// Nothing queued or running. The background sweep asks for its next
+    /// batch only then (desktop's scheduler calls back when its queue drains).
+    var isIdle: Bool { queue.isEmpty && activeWorkers == 0 }
+
+    /// "title|artist" (lowercased, trimmed) of every cached track with a
+    /// playable source: `SweepItem.key`, so the sweep skips them.
+    var playableSweepKeys: Set<String> {
+        var keys = Set<String>()
+        for (key, sources) in cache where ResolverBadges.shared.hasPlayableSource(sources: sources) {
+            let parts = key.components(separatedBy: "\u{1}")
+            guard parts.count >= 2 else { continue }
+            keys.insert("\(parts[1].trimmingCharacters(in: .whitespaces))|\(parts[0].trimmingCharacters(in: .whitespaces))")
+        }
+        return keys
+    }
+
+    /// The background sweep's batch: queued behind every row on screen.
+    func resolveBackground(_ requests: [ResolveRequest]) {
+        for (i, req) in requests.enumerated() { resolve(req, order: Self.backgroundOrder + i) }
+    }
+
+    /// Sweep work sorts after any visible row's `order`.
+    private static let backgroundOrder = 1_000_000
+
     /// A row left the screen (#181): drop its track's queued, not-yet-started
     /// work, as desktop's `ResolutionScheduler.updateVisibility` aborts rows that
     /// scroll away. A resolve already running finishes. Call from the row's
@@ -378,5 +403,101 @@ final class IosTrackResolverCache {
                 self.pump()
             }
         }
+    }
+}
+
+
+// MARK: - Background resolve sweep
+
+/// Desktop's idle background pre-resolution, driven by the shared
+/// `BackgroundResolveSweep` rules: while the app is active and nothing else is
+/// resolving, the collection's tracks, then the playlists', that have no source
+/// yet are resolved a small batch at a time, queued behind every row on screen.
+/// Results are saved like any other resolve, so the next look is cached.
+/// Touches pause it for a few seconds (desktop's activity gate).
+@MainActor
+final class BackgroundResolveSweeper: NSObject, UIGestureRecognizerDelegate {
+    static let shared = BackgroundResolveSweeper()
+
+    private var sweep: BackgroundResolveSweep?
+    private var task: Task<Void, Never>?
+    private var lastActivityMs: Int64 = 0
+    private var touchWatcher: TouchWatcher?
+
+    /// Run while the app is active; stop when it isn't.
+    func setActive(_ active: Bool) {
+        guard active else {
+            task?.cancel()
+            task = nil
+            return
+        }
+        guard task == nil else { return }
+        installTouchWatcher()
+        let sweep = self.sweep ?? IosContainer.companion.shared.makeBackgroundResolveSweep()
+        self.sweep = sweep
+        task = Task { @MainActor [weak self] in await self?.run(sweep) }
+    }
+
+    private func run(_ sweep: BackgroundResolveSweep) async {
+        let cache = IosTrackResolverCache.shared
+        while !Task.isCancelled {
+            let prefs = ResolverPrefs.shared
+            let anyOn = prefs.active.isEmpty || prefs.active.contains { !prefs.disabled.contains($0) }
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            let step: SweepStep
+            do {
+                step = try await sweep.next(nowMs: now, lastActivityMs: lastActivityMs,
+                                            anyResolverOn: anyOn, playableKeys: cache.playableSweepKeys)
+            } catch {
+                step = SweepStepWait(ms: BackgroundResolveSweep.companion.NOTHING_TO_DO_WAIT_MS)
+            }
+            if let wait = step as? SweepStepWait {
+                try? await Task.sleep(nanoseconds: UInt64(max(wait.ms, 0)) * 1_000_000)
+            } else if let batch = step as? SweepStepResolve {
+                cache.resolveBackground(batch.items.map {
+                    ResolveRequest(artist: $0.artist, title: $0.title, album: $0.album)
+                })
+                // Ask again only once the cache is idle.
+                while !Task.isCancelled && !cache.isIdle {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+    }
+
+    /// Notes every touch on the app's window without taking it.
+    private func installTouchWatcher() {
+        guard touchWatcher == nil,
+              let window = UIApplication.shared.connectedScenes
+                .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first
+        else { return }
+        let watcher = TouchWatcher { [weak self] in
+            self?.lastActivityMs = Int64(Date().timeIntervalSince1970 * 1000)
+        }
+        watcher.delegate = self
+        window.addGestureRecognizer(watcher)
+        touchWatcher = watcher
+    }
+
+    nonisolated func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                                       shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+}
+
+/// A gesture recognizer that only reports that a touch began, then fails, so
+/// the app's own gestures and controls get every touch.
+private final class TouchWatcher: UIGestureRecognizer {
+    private let onTouch: () -> Void
+
+    init(onTouch: @escaping () -> Void) {
+        self.onTouch = onTouch
+        super.init(target: nil, action: nil)
+        cancelsTouchesInView = false
+        delaysTouchesBegan = false
+        delaysTouchesEnded = false
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        onTouch()
+        state = .failed
     }
 }
