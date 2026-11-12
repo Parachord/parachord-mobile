@@ -80,6 +80,8 @@ class DeepLinkViewModelSourceSelectionTest {
         coEvery { resolverManager.resolve(any(), any(), any(), any(), any(), any()) } returns sources.toList()
     }
 
+    private val lockedLinkNotifier = mockk<LockedLinkNotifier>(relaxed = true)
+
     private fun viewModel() = DeepLinkViewModel(
         deepLinkHandler = deepLinkHandler,
         externalLinkResolver = mockk(relaxed = true),
@@ -97,6 +99,7 @@ class DeepLinkViewModelSourceSelectionTest {
         friendsRepository = mockk(relaxed = true),
         pluginManager = mockk(relaxed = true),
         trackResolverCache = mockk(relaxed = true),
+        lockedLinkNotifier = lockedLinkNotifier,
     )
 
     /** Runs [action] through the entry point the app uses, returning the toasts it emitted. */
