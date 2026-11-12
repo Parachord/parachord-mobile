@@ -2,7 +2,6 @@ package com.parachord.android.ui
 
 import com.parachord.shared.playback.APPLE_MUSIC_SIGN_IN_MESSAGE
 import android.content.Context
-import android.os.PowerManager
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,7 +12,6 @@ import com.parachord.android.data.network.NetworkMonitor
 import com.parachord.android.data.repository.FriendsRepository
 import com.parachord.android.data.repository.ConcertsRepository
 import com.parachord.android.data.repository.LibraryRepository
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -28,12 +26,6 @@ import com.parachord.android.playback.PlaybackState
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.playback.effectiveTrack
 import com.parachord.shared.model.Track
-import com.parachord.shared.playback.LISTEN_ALONG_POLL_MS
-import com.parachord.shared.playback.ListenAlongHost
-import com.parachord.shared.playback.ListenAlongPlatform
-import com.parachord.shared.playback.ListenAlongSuspendedQueue
-import com.parachord.shared.playback.ListenAlongPoll
-import com.parachord.shared.playback.listenAlongPollOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -57,6 +49,7 @@ class MainViewModel constructor(
     private val networkMonitor: NetworkMonitor,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
     private val pluginSyncService: com.parachord.android.plugin.PluginSyncService,
+    private val listenAlongManager: com.parachord.android.playback.ListenAlongManager,
     trackResolverCache: com.parachord.android.resolver.TrackResolverCache,
 ) : ViewModel() {
 
@@ -112,12 +105,6 @@ class MainViewModel constructor(
 
     init {
         playbackController.connect()
-        // Listen Along drives playback through the controller's hooks.
-        playbackController.onOwnTrackEnded = { listenAlong.onOwnTrackEnded() }
-        playbackController.onTrackUnplayable = { track -> listenAlong.onTrackUnplayable(track.id) }
-        playbackController.drivesTrack = { track -> listenAlong.drivesTrack(track.id) }
-        playbackController.onUserAction = { action -> listenAlong.onUserAction(action) }
-        playbackController.onTrackStarting = { track -> listenAlong.onTrackStarting(track.id) }
 
         // Initialize .axe plugin system and sync updates from marketplace
         viewModelScope.launch {
@@ -258,18 +245,11 @@ class MainViewModel constructor(
         _importError.value = null
     }
 
-    // ── Listen Along (the shared ListenAlongHost) ──
+    // ── Listen Along (ListenAlongManager, #611) ──
 
-    private var listenAlongJob: Job? = null
-    private val _listenAlongFriend = MutableStateFlow<FriendEntity?>(null)
-    val listenAlongFriend: StateFlow<FriendEntity?> = _listenAlongFriend
-
-    /** WakeLock to keep listen-along polling active when the screen is off. */
-    private val listenAlongWakeLock: PowerManager.WakeLock by lazy {
-        (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Parachord::ListenAlong")
-            .apply { setReferenceCounted(false) }
-    }
+    // The session lives in [ListenAlongManager], as long as the process (#611):
+    // Back closing this screen no longer ends it. This only observes it.
+    val listenAlongFriend: StateFlow<FriendEntity?> = listenAlongManager.friend
 
     /** Toast events for the Activity to observe and show. */
     private val _toastEvents = kotlinx.coroutines.flow.MutableSharedFlow<String>()
@@ -298,124 +278,29 @@ class MainViewModel constructor(
         }
     }
 
-    private val _listenAlongSuspendedQueue = MutableStateFlow<List<TrackEntity>>(emptyList())
-
     /** Shown dimmed as "YOUR QUEUE" in the queue sheet while listening along. */
-    val listenAlongSuspendedQueue: StateFlow<List<TrackEntity>> = _listenAlongSuspendedQueue
-
-    private val _listenAlongFriendIsAhead = MutableStateFlow(false)
+    val listenAlongSuspendedQueue: StateFlow<List<TrackEntity>> = listenAlongManager.suspendedQueue
 
     /** While listening along: true when the friend is on a song we haven't
      *  played, so Now Playing's Next is enabled (catch up); false in sync. */
-    val listenAlongFriendIsAhead: StateFlow<Boolean> = _listenAlongFriendIsAhead
+    val listenAlongFriendIsAhead: StateFlow<Boolean> = listenAlongManager.friendIsAhead
 
-    /**
-     * The shared Listen Along host, over [playbackController]. Its messages
-     * are the shared [com.parachord.shared.playback.PlaybackMessages]; its
-     * plays are metadata-only tracks that the pipeline resolves on the fly.
-     */
-    private val listenAlong: ListenAlongHost = ListenAlongHost(object : ListenAlongPlatform {
-        override fun play(track: Track, context: PlaybackContext) =
-            playbackController.playTrack(track, context = context)
-
-        override fun currentQueue(): ListenAlongSuspendedQueue {
-            val state = playbackStateHolder.state.value
-            return ListenAlongSuspendedQueue(listOfNotNull(state.currentTrack) + state.upNext, state.playbackContext)
-        }
-
-        override fun exitSpinoff() = playbackController.exitSpinoff()
-
-        override fun restoreQueue(queue: ListenAlongSuspendedQueue, startPlayback: Boolean) {
-            if (startPlayback) {
-                playbackController.playQueue(queue.tracks, 0, queue.context)
-            } else {
-                playbackController.restoreQueuePaused(queue.tracks, queue.context)
-            }
-        }
-
-        override fun clearQueue() = playbackController.clearQueue()
-        override fun stopAndClear() = playbackController.stopAndClear()
-
-        override fun showMessage(text: String) {
-            Log.d(TAG, "Listen along: $text")
-            viewModelScope.launch { _toastEvents.emit(text) }
-        }
-
-        override fun releaseHold() = playbackController.releaseListenerHold()
-        override fun ended() = onListenAlongEnded()
-
-        override fun stateChanged() {
-            _listenAlongFriendIsAhead.value = listenAlong.friendIsAhead
-            _listenAlongSuspendedQueue.value = listenAlong.suspendedQueue
-        }
-
-        override fun isPlaying() = playbackStateHolder.state.value.isPlaying
-        override fun isPlayStarting() = playbackController.isPlayStarting
-        override fun currentTrackId() = playbackStateHolder.state.value.currentTrack?.id
-    })
+    init {
+        // The session's messages show as toasts while this screen is up.
+        viewModelScope.launch { listenAlongManager.messages.collect { _toastEvents.emit(it) } }
+    }
 
     /** Catch up to the friend's song (Now Playing's Next while listening along). */
-    fun advanceToFriend() {
-        listenAlong.catchUp()
-    }
+    fun advanceToFriend() = listenAlongManager.catchUp()
 
-    /**
-     * Start listening along with [friend]: play what they're playing now, then
-     * poll every [LISTEN_ALONG_POLL_MS] and let the session decide. Switching
-     * friends replaces the session and keeps the user's suspended queue; a
-     * running spinoff ends first.
-     */
-    fun startListenAlong(friend: FriendEntity) {
-        listenAlongJob?.cancel()
-        listenAlongJob = null
-        _listenAlongFriend.value = friend
-
-        // Keep CPU awake so polling continues with the screen off
-        if (!listenAlongWakeLock.isHeld) {
-            listenAlongWakeLock.acquire(2 * 60 * 60 * 1000L) // 2h safety timeout
-            Log.d(TAG, "Acquired WakeLock for listen-along polling")
-        }
-
-        val current = (listenAlongPollOf(friend) as? ListenAlongPoll.Listening)?.track
-        listenAlong.start(friend.displayName, current)
-
-        listenAlongJob = viewModelScope.launch {
-            while (isActive && listenAlong.isActive) {
-                delay(LISTEN_ALONG_POLL_MS)
-                // Saved and transient (deep-link) friends alike; a failed
-                // request is ListenAlongPoll.Failed, not "not listening".
-                val result = friendsRepository.pollListenAlong(friend)
-                result.friend?.let { _listenAlongFriend.value = it }
-                Log.d(TAG, "Listen along poll: ${result.poll} (playing=${playbackState.value.isPlaying}, starting=${playbackController.isPlayStarting})")
-                listenAlong.onPoll(result.poll)
-            }
-        }
-    }
+    /** Start listening along with [friend] (replaces any running session). */
+    fun startListenAlong(friend: FriendEntity) = listenAlongManager.start(friend)
 
     /** The Listen Along toggle / stop button: the user's queue comes back. */
-    fun stopListenAlong() {
-        listenAlong.stop()
-    }
+    fun stopListenAlong() = listenAlongManager.stop()
 
-    /**
-     * A `parachord://` link takes over: a radio link [silently] (no message),
-     * a play link as the user playing something else (the message shows).
-     * Either way the suspended queue is dropped.
-     */
-    fun listenAlongTakenOver(silently: Boolean) {
-        listenAlong.takeOver(silently)
-    }
-
-    /** The session ended (any way): stop polling and release the wake lock. */
-    private fun onListenAlongEnded() {
-        listenAlongJob?.cancel()
-        listenAlongJob = null
-        _listenAlongFriend.value = null
-        if (listenAlongWakeLock.isHeld) {
-            listenAlongWakeLock.release()
-            Log.d(TAG, "Released WakeLock for listen-along polling")
-        }
-    }
+    /** A `parachord://` link takes over (see [ListenAlongManager.takeOver]). */
+    fun listenAlongTakenOver(silently: Boolean) = listenAlongManager.takeOver(silently)
 
     // ── Unpin Friend ──────────────────────────────────────────────
 
@@ -425,9 +310,9 @@ class MainViewModel constructor(
         }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        stopListenAlong()
-        playbackController.release()
-    }
+    // No onCleared teardown: playback and Listen Along belong to the playback
+    // service (PlaybackService.onCreate connects the controller), not to this
+    // screen. Releasing the controller here when Back closed the app stopped
+    // the external engine's polling and its foreground, so the queue stopped
+    // advancing and Android cut the app's network (#611).
 }

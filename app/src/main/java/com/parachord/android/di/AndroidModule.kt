@@ -1126,6 +1126,16 @@ val androidModule = module {
     }
     single { com.parachord.android.deeplink.AndroidProtocolPlayTeardown(playbackController = get()) }
     single<com.parachord.shared.deeplink.ProtocolPlayTeardown> { get<com.parachord.android.deeplink.AndroidProtocolPlayTeardown>() }
+    // Listen Along lives as long as the process, not a screen (#611).
+    single {
+        com.parachord.android.playback.ListenAlongManager(
+            context = androidContext(),
+            playbackController = get(),
+            stateHolder = get(),
+            friendsRepository = get(),
+            teardown = get(),
+        )
+    }
     single {
         com.parachord.android.deeplink.ProtocolPlayHandler(
             resolver = get(),
