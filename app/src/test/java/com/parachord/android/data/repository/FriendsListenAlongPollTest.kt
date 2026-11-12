@@ -106,6 +106,33 @@ class FriendsListenAlongPollTest {
         assertEquals(ListenAlongPoll.NotListening, r.repo.pollListenAlong(transient("listenbrainz")).poll)
     }
 
+    private fun lbListenAt(ts: Long) =
+        """[{"listened_at":$ts,"track_metadata":{"artist_name":"Portishead","track_name":"Roads","release_name":"Dummy"}}]"""
+
+    @Test
+    fun `transient ListenBrainz between songs uses the latest listen as a saved friend does`() = runBlocking {
+        // #610: a station's playing-now is empty between songs; its latest
+        // listen a minute ago keeps it on air, the same answer a saved friend gets.
+        val r = rig { _, query ->
+            if ("playing-now" in query) respond(ListenBrainzHost("[]"), HttpStatusCode.OK, json)
+            else respond(ListenBrainzHost(lbListenAt(now - 60)), HttpStatusCode.OK, json)
+        }
+        val listening = ListenAlongPoll.Listening(FriendTrack("Roads", "Portishead", "Dummy", null))
+        assertEquals(listening, r.repo.pollListenAlong(transient("listenbrainz")).poll)
+        val f = saved("listenbrainz")
+        r.dao.upsert(f)
+        assertEquals(listening, r.repo.pollListenAlong(f).poll)
+    }
+
+    @Test
+    fun `transient ListenBrainz with an old latest listen is not listening`() = runBlocking {
+        val r = rig { _, query ->
+            if ("playing-now" in query) respond(ListenBrainzHost("[]"), HttpStatusCode.OK, json)
+            else respond(ListenBrainzHost(lbListenAt(now - 3600)), HttpStatusCode.OK, json)
+        }
+        assertEquals(ListenAlongPoll.NotListening, r.repo.pollListenAlong(transient("listenbrainz")).poll)
+    }
+
     @Test
     fun `transient ListenBrainz HTTP 500 is failed`() = runBlocking {
         val r = rig { _, _ -> respondError(HttpStatusCode.InternalServerError) }
@@ -132,8 +159,28 @@ class FriendsListenAlongPollTest {
     }
 
     @Test
-    fun `transient Last-fm with nothing now playing is not listening`() = runBlocking {
-        val r = rig { _, _ -> respond(lastFmBody(false), HttpStatusCode.OK, json) }
+    fun `transient Last-fm with nothing now playing and no recent scrobble is not listening`() = runBlocking {
+        val r = rig { _, _ -> respond(lastFmBody(false, scrobbledAgo = 3600), HttpStatusCode.OK, json) }
+        assertEquals(ListenAlongPoll.NotListening, r.repo.pollListenAlong(transient("lastfm")).poll)
+    }
+
+    @Test
+    fun `transient Last-fm between songs counts its last scrobble as a saved friend does`() = runBlocking {
+        // #610: no now-playing row, but a scrobble a minute ago: on air for 10 minutes.
+        val r = rig { _, _ -> respond(lastFmBody(false, scrobbledAgo = 60), HttpStatusCode.OK, json) }
+        assertEquals(
+            ListenAlongPoll.Listening(FriendTrack("Glory Box", "Portishead", "Dummy", null)),
+            r.repo.pollListenAlong(transient("lastfm")).poll,
+        )
+        val f = saved("lastfm")
+        r.dao.upsert(f)
+        assertEquals(r.repo.pollListenAlong(transient("lastfm")).poll, r.repo.pollListenAlong(f).poll)
+    }
+
+    @Test
+    fun `transient Last-fm now-playing flag with no recent scrobble is not listening`() = runBlocking {
+        // Last.fm leaves the flag on a row for hours after someone stops.
+        val r = rig { _, _ -> respond(lastFmBody(true, scrobbledAgo = 7200), HttpStatusCode.OK, json) }
         assertEquals(ListenAlongPoll.NotListening, r.repo.pollListenAlong(transient("lastfm")).poll)
     }
 
