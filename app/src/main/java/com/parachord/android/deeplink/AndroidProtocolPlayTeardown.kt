@@ -88,17 +88,11 @@ class AndroidProtocolPlayTeardown constructor(
 
         // Step 2 (stop listen-along) is INTENTIONALLY OMITTED — see
         // [ProtocolPlayTeardown.prepareForListenAlongHandover] KDoc.
-        // MainViewModel.startListenAlong handles its own swap.
+        // ListenAlongManager.start handles its own swap.
 
-        // Step 3 — clear the queue. Without this, the previous context's
-        // tracks remain queued behind the listen-along ticker's first
-        // play, then surface as soon as the user is no longer in sync
-        // with the friend. Mirrors the desktop's listen-along entry
-        // path which also wipes the queue.
-        try {
-            playbackController.clearQueue()
-        } catch (e: Exception) {
-            Log.w(TAG, "clearQueue failed: ${e.message}")
-        }
+        // No queue clear (#613): the session sets the user's queue aside for
+        // its length and gives the whole of it back when it ends, as an
+        // in-app start does (and iOS's link start). Clearing it here left only
+        // the current track to come back.
     }
 }
