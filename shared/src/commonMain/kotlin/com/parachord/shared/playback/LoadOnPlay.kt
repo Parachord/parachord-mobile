@@ -93,3 +93,13 @@ fun positionForPrevious(playerPositionMs: Long, pending: LoadOnPlay?, currentTra
 
 /** The same slot at position 0: what Previous leaves when it restarts the track. */
 fun LoadOnPlay.restartedFromTop(): LoadOnPlay = copy(positionMs = 0)
+
+/**
+ * Whether Play has nothing to start (#617): no track on screen (the queue
+ * ended with repeat off and the track was cleared, or the queue was cleared),
+ * nothing playing and nothing starting. The lock screen, the car or a headset
+ * can still send Play then; resuming the last engine would report "playing"
+ * with nothing loaded, or restart a stale track. Play does nothing instead.
+ */
+fun playStartsNothing(hasCurrentTrack: Boolean, isPlaying: Boolean, isStarting: Boolean): Boolean =
+    !hasCurrentTrack && !isPlaying && !isStarting

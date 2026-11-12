@@ -1108,6 +1108,17 @@ class PlaybackController constructor(
             Log.d(TAG, "togglePlayPause: '${stateHolder.state.value.currentTrack?.title}' is held for the listener; ignoring play")
             return
         }
+        // No track on screen (the queue ended and the track was cleared):
+        // nothing to start, so don't resume the last engine (shared, #617).
+        if (com.parachord.shared.playback.playStartsNothing(
+                hasCurrentTrack = stateHolder.state.value.currentTrack != null,
+                isPlaying = stateHolder.state.value.isPlaying,
+                isStarting = isPlayStarting,
+            )
+        ) {
+            Log.d(TAG, "togglePlayPause: no track; ignoring play")
+            return
+        }
         // Nothing holds the track on screen ([loadOnPlay]): a restored queue,
         // a paused track the idle timeout stopped, or a track no source could
         // play. Resuming would play ExoPlayer's silence, its failed item or

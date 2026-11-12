@@ -3,6 +3,7 @@ package com.parachord.shared.playback
 import com.parachord.shared.model.Track
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -118,5 +119,15 @@ class LoadOnPlayTest {
     fun `restarting a slot keeps everything but the position`() {
         val slot = LoadOnPlay(myth, 120_000, skipReselect = true, why = LoadOnPlay.Why.FAILED, pickedResolver = "spotify")
         assertEquals(slot.copy(positionMs = 0), slot.restartedFromTop())
+    }
+
+    /** #617: Play after the queue ended (the track was cleared) does nothing. */
+    @Test
+    fun playWithNoTrackOnScreenStartsNothing() {
+        assertTrue(playStartsNothing(hasCurrentTrack = false, isPlaying = false, isStarting = false))
+        assertFalse(playStartsNothing(hasCurrentTrack = true, isPlaying = false, isStarting = false))
+        // A play still starting, or one playing, is left to the toggle (a pause).
+        assertFalse(playStartsNothing(hasCurrentTrack = false, isPlaying = false, isStarting = true))
+        assertFalse(playStartsNothing(hasCurrentTrack = false, isPlaying = true, isStarting = false))
     }
 }
