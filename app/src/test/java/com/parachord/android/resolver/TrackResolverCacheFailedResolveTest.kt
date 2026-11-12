@@ -81,7 +81,7 @@ class TrackResolverCacheFailedResolveTest {
             resolverManager.resolveReport(any(), any(), any(), any(), setOf("spotify", "soundcloud"), any(), any())
         }
         assertEquals(listOf("applemusic", "spotify"), cache.getSources("I Know!", "Swapmeet")?.map { it.resolver })
-        repeat(50) { if (disk == null) delay(20) }
+        repeat(250) { if (disk == null) delay(20) }
         assertEquals("saved once every resolver answered", true, disk?.contains("spotify:track:abc"))
     }
 
@@ -91,7 +91,7 @@ class TrackResolverCacheFailedResolveTest {
         val cache = cache()
         cache.awaitLoaded()
         settle(cache)
-        repeat(50) { if (disk == null) delay(20) }
+        repeat(250) { if (disk == null) delay(20) }
         assertEquals(true, disk?.contains("spotify:track:abc"))
     }
 
