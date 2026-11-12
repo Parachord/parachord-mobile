@@ -54,10 +54,28 @@ Section 9 of the desktop map lists which pieces are pure: almost all of `amazon-
 | `webSession.fetch(id, request)` → `{ status, headers, text }` | A request outside the page carrying the session's cookies | `amazon-dmls.js` `net` calls |
 | `webSession.state(id)` → `{ url, cookieNames }` | What the plugin needs to judge sign-in and walls | `isSignedIn` inputs |
 | `webSession.signIn(id, url, { done })` | Shows the session in a visible window until the plugin's `done({ url, cookieNames, stableTicks })` says so, or the person closes it | `openLogin` |
-| `webSession.clear(id)` | Sign out: drop the session's cookies and storage | `signOut` |
+| `webSession.clear(id)` | Sign out: drop the session's cookies and storage (only its own cookie domains on Android, whose WebViews share one cookie jar) | `signOut` |
 | `drm.play(track)`: the host calls the plugin's `getPlaybackManifest(track, config)` → `{ manifest, type: "dash", drm: "widevine"\|"fairplay", context }` and `relayLicense(challengeB64, context)` → licence; it reports `onPlaybackEvent(event, track)` back so the plugin sends telemetry | Host-owned playback with plugin-supplied manifest and licence | `widevine-bridge.js` + `amazon-dmls.js` + `amazon-telemetry.js` |
 
 The plugin keeps desktop's behaviour: replay-first templates (24 h), one page flow at a time, the breaker, the plan gate and the prompt rules. Each host keeps only what's physically per-platform: the web view, the capture hook, the cookie store, the player and the quality-to-track-selection mapping.
+
+**Sign-in: the plugin decides, the host shows and stores.** The plugin never sees a password or a cookie value.
+
+| The plugin decides | The host does |
+|---|---|
+| The page that starts sign-in (`https://music.amazon.com/`) | Shows it in a visible window (Android Activity, iOS sheet) sharing the hidden session's cookies |
+| When sign-in is finished: on `music.amazon.com`, past every wall (`/ap/*`, 2FA, the profile picker at `/identity/who-is-listening`), steady for 2 ticks, with an auth cookie present (desktop's `signInLanded`) | Each second, reports `{ url, cookieNames, stableTicks }` to the plugin's `done()`; closes the window when it answers yes. Closing it first ends the flow as not signed in |
+| Signed in or not: which cookie names count (`at-main`, `sess-at-main`, `at-acb`) | `webSession.state()`: the current URL and cookie **names** only |
+| A page load that hit a wall mid-session throws `not-signed-in` | Returns each load's final URL |
+| Sign-out: the final telemetry event, then clear the session | `webSession.clear()` |
+| The status text ("Signed in", "Sign in", "Prime: no playback") | A generic Sign in / Sign out row drawn from the plugin's status |
+
+- **The cookies reach Amazon only through the host.** The host attaches them to `webSession.fetch` (`config.json`, the `dmls` manifest and licence, telemetry). The person types the password, does 2FA and picks the profile on Amazon's own pages.
+- **When to show the sign-in window.** Desktop's rules (`src/renderer/lib/amazon-signin-prompt.js`) are: background lookups never prompt; retry quietly before prompting; 10 minutes of quiet after a decline. They move into the plugin as a pure method. The host calls it with what only the app knows: whether the person is looking at the app, whether the action was explicit, and when they last declined. The plugin answers prompt, retry quietly, or skip.
+- **Cookie isolation differs per platform.** Desktop gives Amazon its own partition (`persist:amazon-music`), so sign-out wipes it whole.
+  - **iOS** can match it with a dedicated `WKWebsiteDataStore(forIdentifier:)` (iOS 17+).
+  - **Android** has one cookie jar (`CookieManager`) for every WebView in the app, shared with Apple Music's MusicKit page. So Android's `webSession.clear()` must delete only that session's own domains (`amazon.com`, `music.amazon.com` and their subdomains), never `removeAllCookies`, or signing out of Amazon would also sign you out of Apple Music.
+  - The session therefore declares its cookie domains (`webSession.open(id, { cookieDomains })`). `state()` reports only those domains' cookie names, and `clear()` removes only them.
 
 **Resolver-loader prerequisite.** `resolver-loader.js` builds each plugin method separately (`new Function('return ' + fnString)()`), so methods share nothing, and today every helper is copied into each method that uses it. Moving about 60 helpers into the plugin needs a plugin-level library evaluated once and handed to every method (for example `implementation._lib`, exposed as `this.lib`). Mobile's two copies of `resolver-loader.js` take the same change; a test already keeps them identical to desktop's.
 
