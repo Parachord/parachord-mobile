@@ -101,7 +101,8 @@ class TrackResolverCacheFailedResolveTest {
         first.awaitLoaded()
         first.putSources("I Know!", "Swapmeet", listOf(amHint))
         first.putSources("Poor Advice", "Basht.", listOf(spotify.copy(artworkUrl = "s.jpg")))
-        repeat(50) { if (disk?.contains("s.jpg") != true) delay(20) }
+        // Up to 5 s for the debounced save: a slow CI runner took over 1 s.
+        repeat(250) { if (disk?.contains("s.jpg") != true) delay(20) }
 
         val second = cache()
         second.awaitLoaded()
