@@ -281,44 +281,16 @@ class LibraryViewModel constructor(
     }
 
     /** Fetch an artist's top tracks from metadata providers, resolve, and play. */
+    /** Album and top-songs queues, shared with iOS (#588). */
+    private val catalogQueues = com.parachord.shared.playback.CatalogQueues(metadataService)
+
     fun playArtistTopSongs(artistName: String) {
         viewModelScope.launch {
             try {
-                Log.d("LibraryVM", "Play top songs: fetching for '$artistName'")
-                val topTracks = metadataService.getArtistTopTracks(artistName, limit = 10)
-                Log.d("LibraryVM", "Play top songs: got ${topTracks.size} tracks")
-                if (topTracks.isEmpty()) return@launch
-                val entities = topTracks.mapNotNull { track ->
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.artist} - ${track.title}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-                    TrackEntity(
-                        id = "top-${track.title.hashCode()}-${track.artist.hashCode()}",
-                        title = track.title,
-                        artist = track.artist,
-                        album = track.album,
-                        duration = track.duration,
-                        artworkUrl = track.artworkUrl,
-                        sourceType = best.sourceType,
-                        sourceUrl = best.url,
-                        resolver = best.resolver,
-                        spotifyUri = best.spotifyUri,
-                        soundcloudId = best.soundcloudId,
-                        appleMusicId = best.appleMusicId,
-                    )
-                }
-                if (entities.isNotEmpty()) {
-                    playbackController.playQueue(
-                        entities,
-                        startIndex = 0,
-                        context = PlaybackContext(type = "artist", name = artistName),
-                    )
-                }
+                val queue = catalogQueues.artistTopSongs(artistName) ?: return@launch
+                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e("LibraryVM", "Failed to play top songs for '$artistName'", e)
             }
         }
@@ -328,39 +300,10 @@ class LibraryViewModel constructor(
     fun queueArtistTopSongs(artistName: String) {
         viewModelScope.launch {
             try {
-                Log.d("LibraryVM", "Queue top songs: fetching for '$artistName'")
-                val topTracks = metadataService.getArtistTopTracks(artistName, limit = 10)
-                Log.d("LibraryVM", "Queue top songs: got ${topTracks.size} tracks")
-                if (topTracks.isEmpty()) return@launch
-                val entities = topTracks.mapNotNull { track ->
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.artist} - ${track.title}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    Log.d("LibraryVM", "Queue top songs: resolved '${track.title}' → ${sources.size} sources")
-                    val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-                    TrackEntity(
-                        id = "top-${track.title.hashCode()}-${track.artist.hashCode()}",
-                        title = track.title,
-                        artist = track.artist,
-                        album = track.album,
-                        duration = track.duration,
-                        artworkUrl = track.artworkUrl,
-                        sourceType = best.sourceType,
-                        sourceUrl = best.url,
-                        resolver = best.resolver,
-                        spotifyUri = best.spotifyUri,
-                        soundcloudId = best.soundcloudId,
-                        appleMusicId = best.appleMusicId,
-                    )
-                }
-                Log.d("LibraryVM", "Queue top songs: resolved ${entities.size}/${topTracks.size} tracks")
-                if (entities.isNotEmpty()) {
-                    playbackController.addToQueue(entities)
-                }
+                val queue = catalogQueues.artistTopSongs(artistName) ?: return@launch
+                playbackController.addToQueue(queue.tracks)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e("LibraryVM", "Failed to queue top songs for '$artistName'", e)
             }
         }

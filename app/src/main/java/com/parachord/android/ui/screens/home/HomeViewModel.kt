@@ -498,34 +498,16 @@ class HomeViewModel constructor(
 
     // ── Artist actions ─────────────────────────────────────────────
 
+    /** Album and top-songs queues, shared with iOS (#588). */
+    private val catalogQueues = com.parachord.shared.playback.CatalogQueues(metadataService)
+
     fun playArtistTopSongs(artistName: String) {
         viewModelScope.launch {
             try {
-                val topTracks = metadataService.getArtistTopTracks(artistName, limit = 10)
-                if (topTracks.isEmpty()) return@launch
-                val entities = topTracks.mapNotNull { track ->
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.artist} - ${track.title}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-                    TrackEntity(
-                        id = "top-${track.title.hashCode()}-${track.artist.hashCode()}",
-                        title = track.title, artist = track.artist, album = track.album,
-                        duration = track.duration, artworkUrl = track.artworkUrl,
-                        sourceType = best.sourceType, sourceUrl = best.url, resolver = best.resolver,
-                        spotifyUri = best.spotifyUri, soundcloudId = best.soundcloudId, appleMusicId = best.appleMusicId,
-                    )
-                }
-                if (entities.isNotEmpty()) {
-                    playbackController.playQueue(
-                        entities, startIndex = 0,
-                        context = PlaybackContext(type = "artist", name = artistName),
-                    )
-                }
+                val queue = catalogQueues.artistTopSongs(artistName) ?: return@launch
+                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e("HomeVM", "Failed to play top songs for '$artistName'", e)
             }
         }
@@ -534,26 +516,10 @@ class HomeViewModel constructor(
     fun queueArtistTopSongs(artistName: String) {
         viewModelScope.launch {
             try {
-                val topTracks = metadataService.getArtistTopTracks(artistName, limit = 10)
-                if (topTracks.isEmpty()) return@launch
-                val entities = topTracks.mapNotNull { track ->
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.artist} - ${track.title}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-                    TrackEntity(
-                        id = "top-${track.title.hashCode()}-${track.artist.hashCode()}",
-                        title = track.title, artist = track.artist, album = track.album,
-                        duration = track.duration, artworkUrl = track.artworkUrl,
-                        sourceType = best.sourceType, sourceUrl = best.url, resolver = best.resolver,
-                        spotifyUri = best.spotifyUri, soundcloudId = best.soundcloudId, appleMusicId = best.appleMusicId,
-                    )
-                }
-                if (entities.isNotEmpty()) playbackController.addToQueue(entities)
+                val queue = catalogQueues.artistTopSongs(artistName) ?: return@launch
+                playbackController.addToQueue(queue.tracks)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e("HomeVM", "Failed to queue top songs for '$artistName'", e)
             }
         }
@@ -602,38 +568,10 @@ class HomeViewModel constructor(
     fun queueAlbumByName(albumTitle: String, artistName: String) {
         viewModelScope.launch {
             try {
-                val detail = metadataService.loadAlbumTrackList(albumTitle, artistName)
-                if (detail == null || detail.tracks.isEmpty()) {
-                    Log.w("HomeVM", "No tracks found for album '$albumTitle' by '$artistName'")
-                    return@launch
-                }
-                val entities = detail.tracks.mapNotNull { track ->
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.artist} - ${track.title}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-                    TrackEntity(
-                        id = "resolved-${track.title.hashCode()}-${track.artist.hashCode()}-${albumTitle.hashCode()}",
-                        title = track.title,
-                        artist = track.artist,
-                        album = albumTitle,
-                        duration = track.duration,
-                        artworkUrl = track.artworkUrl ?: detail.artworkUrl,
-                        sourceType = best.sourceType,
-                        sourceUrl = best.url,
-                        resolver = best.resolver,
-                        spotifyUri = best.spotifyUri,
-                        soundcloudId = best.soundcloudId,
-                        appleMusicId = best.appleMusicId,
-                    )
-                }
-                if (entities.isNotEmpty()) {
-                    playbackController.addToQueue(entities)
-                }
+                val queue = catalogQueues.album(albumTitle, artistName) ?: return@launch
+                playbackController.addToQueue(queue.tracks)
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e("HomeVM", "Failed to queue album '$albumTitle'", e)
             }
         }

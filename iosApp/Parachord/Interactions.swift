@@ -287,14 +287,13 @@ private struct PCAlbumMenuItems: View {
 
     private func play(queue: Bool) {
         Task {
-            guard let detail = try? await container.albumTrackList(albumTitle: title, artistName: artist) else { return }
-            let entities = detail.tracks.map { pcTrack(from: $0) }
-            guard !entities.isEmpty else { return }
-            let ctx = PlaybackContext(type: "album", name: title, id: "\(title)|\(artist)")
+            // Shared with Android (#588): metadata-only tracks that resolve
+            // when they play, and the album page's context.
+            guard let q = try? await container.albumQueue(title: title, artist: artist) else { return }
             if queue {
-                entities.forEach { coordinator.addToQueue($0) }
+                q.tracks.forEach { coordinator.addToQueue($0) }
             } else {
-                coordinator.setQueue(entities, startIndex: 0, context: ctx)
+                coordinator.setQueue(q.tracks, startIndex: 0, context: q.context)
             }
         }
     }
@@ -325,14 +324,12 @@ private struct PCArtistMenuItems: View {
 
     private func play(queue: Bool) {
         Task {
-            let top = (try? await container.getArtistTopTracks(artistName: name)) ?? []
-            let entities = top.map { pcTrack(from: $0) }
-            guard !entities.isEmpty else { return }
-            let ctx = PlaybackContext(type: "artist", name: name, id: name)
+            // Shared with Android (#588).
+            guard let q = try? await container.artistTopSongsQueue(name: name) else { return }
             if queue {
-                entities.forEach { coordinator.addToQueue($0) }
+                q.tracks.forEach { coordinator.addToQueue($0) }
             } else {
-                coordinator.setQueue(entities, startIndex: 0, context: ctx)
+                coordinator.setQueue(q.tracks, startIndex: 0, context: q.context)
             }
         }
     }
