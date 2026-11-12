@@ -27,9 +27,8 @@ import com.parachord.shared.metadata.DiscogsProvider
 import com.parachord.shared.metadata.LastFmProvider
 import com.parachord.shared.metadata.WikipediaProvider
 import com.parachord.shared.metadata.MetadataService
-import com.parachord.shared.metadata.SearchArtistList
 import com.parachord.shared.metadata.SearchPopularity
-import com.parachord.shared.metadata.SearchRanking
+import com.parachord.shared.search.asSearchCatalog
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MbidEnrichmentService
 import com.parachord.shared.model.Album
@@ -3700,72 +3699,51 @@ class IosContainer private constructor() {
         chatPlaybackBridge.current = ChatPlaybackSnapshot(currentTrack, isPlaying, upNext, shuffleEnabled)
     }
 
-    /** Local DB tracks matching title/artist (the "Library" section). */
-    suspend fun searchLocalTracks(query: String): List<Track> =
-        if (query.isBlank()) emptyList() else try { trackDao.searchOnce(query) } catch (e: Exception) { emptyList() }
-
-    /**
-     * The remote half of Search (#475, desktop parachord#1186): artists, tracks
-     * and albums run at once, and each callback fires (on the main thread) every
-     * time that category's providers add rows, so Spotify's and Last.fm's show
-     * before MusicBrainz's 1 req/s gate lets its requests through. Each list
-     * is ranked like Android's ([SearchRanking]). [onDone]
-     * fires once all three have finished, but not after [Cancellable.cancel].
-     *
-     * Cancel the handle when the query changes. Cancelling a Swift `Task` does
-     * not cancel the coroutine behind a Kotlin suspend call, so the old
-     * `async let` searches stayed queued at the MusicBrainz gate after the user
-     * had typed on, in front of the query they wanted.
-     */
     /** Whether MusicBrainz is throttling us (#375): Search says so instead of "No results". */
     fun watchMusicBrainzRateLimited(onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(musicBrainzClient.rateLimited) { onEach((it as? Boolean) ?: false) }
 
-    fun searchRemote(
-        query: String,
-        onArtists: (List<IosArtistResult>) -> Unit,
-        onTracks: (List<TrackSearchResult>) -> Unit,
-        onAlbums: (List<AlbumSearchResult>) -> Unit,
-        onDone: () -> Unit,
-    ): Cancellable {
-        val job = appScope.launch {
-            if (query.isNotBlank()) {
-                // MusicBrainz's artists plus those the services' rows name (desktop).
-                val artistList = SearchArtistList(query)
-                fun showArtists(ranked: List<ArtistInfo>) =
-                    onArtists(ranked.map { IosArtistResult(it.name, it.imageUrl, it.mbid) })
-                try {
-                    coroutineScope {
-                        launch {
-                            metadataService.searchArtistsProgressively(query, 10).collect { artists ->
-                                showArtists(artistList.withMusicBrainz(artists))
-                            }
-                        }
-                        launch {
-                            metadataService.searchTracksProgressively(query, 20).collect {
-                                val ranked = SearchRanking.rankTracks(query, it)
-                                onTracks(ranked)
-                                showArtists(artistList.withTracks(ranked))
-                            }
-                        }
-                        launch {
-                            metadataService.searchAlbumsProgressively(query, 10).collect {
-                                val ranked = SearchRanking.rankAlbums(query, it)
-                                onAlbums(ranked)
-                                showArtists(artistList.withAlbums(ranked))
-                            }
-                        }
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.w("IosContainer", "search failed: ${e.message}")
-                }
-            }
-            onDone()
-        }
-        return Cancellable { job.cancel() }
+    /** Search covers for rows without one; one instance, so checked URLs are remembered across queries. */
+    private val searchArtwork: com.parachord.shared.metadata.SearchArtwork by lazy {
+        com.parachord.shared.metadata.SearchArtwork(servesImage = { url -> imageEnrichmentService.verifyArtUrl(url) })
     }
+
+    /**
+     * The Search screen's session, with Android's rules (#590): from two
+     * characters, 300 ms after the last keystroke, a new keystroke cancelling
+     * the running search (so its MusicBrainz requests leave the 1 req/s queue,
+     * #475); local tracks + albums, the three remote categories as their
+     * providers answer, and covers for rows without one. Hand it the field's
+     * text with `query(text:)`, watch it with [watchSearch], `close()` it when
+     * the screen goes. The rows on screen resolve in Swift (visibility-scoped).
+     */
+    fun makeSearchSession(): com.parachord.shared.search.SearchSession =
+        com.parachord.shared.search.SearchSession(
+            scope = appScope,
+            catalog = metadataService.asSearchCatalog(),
+            artwork = searchArtwork,
+            localTracks = { q -> trackDao.search(q) },
+            localAlbums = { q -> albumDao.search(q) },
+        )
+
+    /** [makeSearchSession]'s state, flattened for Swift, on the main thread. */
+    fun watchSearch(session: com.parachord.shared.search.SearchSession, onEach: (IosSearchState) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(session.state) { value ->
+            val s = value as? com.parachord.shared.search.SearchState ?: return@watch
+            onEach(
+                IosSearchState(
+                    query = s.query,
+                    localTracks = s.localTracks,
+                    localAlbums = s.localAlbums,
+                    artists = s.artists.map { IosArtistResult(it.name, it.imageUrl, it.mbid) },
+                    remoteTracks = s.remoteTracks,
+                    remoteAlbums = s.remoteAlbums,
+                    art = s.art,
+                    isSearching = s.isSearching,
+                    hasSearched = s.hasSearched,
+                ),
+            )
+        }
 
     // Search history (shared SearchHistoryDao; mirrors Android's save-on-select +
     // dedup-by-query + trim-to-limit).
@@ -3922,6 +3900,20 @@ private fun MigrationPlanSummary.toIosSummary(): IosMigrationSummary = IosMigrat
     hasChanges = hasChanges,
     errorCount = errorCount,
     cycles = cycles,
+)
+
+/** The Search screen's state for Swift ([com.parachord.shared.search.SearchState], artists flattened). */
+data class IosSearchState(
+    val query: String,
+    val localTracks: List<Track>,
+    val localAlbums: List<Album>,
+    val artists: List<IosArtistResult>,
+    val remoteTracks: List<TrackSearchResult>,
+    val remoteAlbums: List<AlbumSearchResult>,
+    /** Covers found for rows without one, keyed by `SearchSession.trackArtKey` / `albumArtKey` / `artistArtKey`. */
+    val art: Map<String, String>,
+    val isSearching: Boolean,
+    val hasSearched: Boolean,
 )
 
 /** Flat artist result for the #233 search screen (MetadataService cascade →

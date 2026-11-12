@@ -431,7 +431,11 @@ resolver that couldn't answer, so Swift catches it rather than reading a nil.
 
 When Library / Search / other list screens land, wire them the same way
 (`.onAppear { resolve(req, order: index) }`); don't bulk-submit and don't
-drop the index.
+drop the index. Search does: its rules (two characters, the 300 ms debounce,
+library tracks + albums, covers for rows without one) come from the shared
+`SearchSession` (#590, see the root `CLAUDE.md`), but its rows resolve here,
+as they appear, where Android resolves the remote tracks once their search
+finishes.
 
 ### The disk cache is schema-VERSIONED — bump on any `ResolvedSource` shape change
 

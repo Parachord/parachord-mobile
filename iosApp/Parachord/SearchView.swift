@@ -3,10 +3,11 @@ import Shared
 
 // MARK: - Search (#233 — full Android parity)
 //
-// Android's SearchViewModel/SearchScreen is the source of truth: a debounced
-// query drives local DB tracks ("Library"), plus remote artists / tracks /
-// albums from the shared MetadataService cascade, with resolver badges + tap-to-
-// play + context menus; when the query is empty it shows Search History (recent
+// The rules come from the shared SearchSession (#590), as on Android: a
+// debounced query (two characters or more) drives local DB tracks ("Library")
+// and albums ("Library Albums"), plus remote artists / tracks / albums from the
+// shared MetadataService cascade, with resolver badges + tap-to-play + context
+// menus; below two characters it shows Search History (recent
 // searches, tap to re-run, swipe/X to delete, Clear All). Result section order
 // matches Android (Library → Artists → Tracks → Albums); the search-field +
 // Recent-Searches visuals follow the iOS design (screens.jsx SearchScreen).
@@ -22,9 +23,13 @@ final class SearchViewModel {
 
     var query: String = ""
     var localTracks: [Track] = []
+    var localAlbums: [Album] = []
     var artists: [IosArtistResult] = []
     var remoteTracks: [TrackSearchResult] = []
     var remoteAlbums: [AlbumSearchResult] = []
+    /// Covers found for rows that came without one, keyed by
+    /// `SearchSession.companion.trackArtKey` / `albumArtKey` / `artistArtKey`.
+    var art: [String: String] = [:]
     var isSearching = false
     var hasSearched = false
     var history: [SearchHistory] = []
@@ -33,15 +38,22 @@ final class SearchViewModel {
     var musicBrainzRateLimited = false
     private var rateLimitWatcher: Cancellable?
 
-    private var searchTask: Task<Void, Never>?
-    /// The remote search runs in Kotlin's scope, so cancelling `searchTask`
-    /// doesn't stop it; this handle does (#475).
-    private var remoteSearch: Cancellable?
+    /// The shared session (#590) holds the rules: two characters, 300 ms
+    /// debounce, a keystroke cancelling the running search in Kotlin (#475),
+    /// local tracks + albums, the remote categories and covers for rows
+    /// without one. The rows on screen resolve here, as they appear.
+    private let session: SearchSession
+    private var sessionWatcher: Cancellable?
     private var historyWatcher: Cancellable?
 
-    /// Start watching search history (idempotent). Called from the view's
-    /// `.task`; the appScope-backed watcher lives with the (tab-persistent) VM,
-    /// matching the FlowWatcher lifecycle used by Discover/Curated screens.
+    init() {
+        session = IosContainer.companion.shared.makeSearchSession()
+    }
+
+    /// Start watching search history and the session (idempotent). Called from
+    /// the view's `.task`; the appScope-backed watchers live with the
+    /// (tab-persistent) VM, matching the FlowWatcher lifecycle used by
+    /// Discover/Curated screens.
     func start() {
         guard historyWatcher == nil else { return }
         historyWatcher = container.watchSearchHistory { [weak self] items in
@@ -50,55 +62,49 @@ final class SearchViewModel {
         rateLimitWatcher = container.watchMusicBrainzRateLimited { [weak self] limited in
             Task { @MainActor in self?.musicBrainzRateLimited = limited.boolValue }
         }
+        sessionWatcher = container.watchSearch(session: session) { [weak self] state in
+            guard let self else { return }
+            self.localTracks = state.localTracks
+            self.localAlbums = state.localAlbums
+            self.artists = state.artists
+            self.remoteTracks = state.remoteTracks
+            self.remoteAlbums = state.remoteAlbums
+            self.art = state.art
+            self.isSearching = state.isSearching
+            self.hasSearched = state.hasSearched
+        }
     }
 
-    /// Mirror Android/desktop: results show once the query is >1 char; below
-    /// that we show Recent Searches.
-    var showResults: Bool { query.trimmingCharacters(in: .whitespaces).count > 1 }
+    /// Results show once the query searches (two characters, as desktop);
+    /// below that we show Recent Searches.
+    var showResults: Bool { SearchSession.companion.isSearchable(text: query) }
 
-    /// Debounced (300ms, matching Android's `.debounce(300)`). Cancels the
-    /// in-flight request on each keystroke so stale results never render.
+    var hasAnyResults: Bool {
+        !localTracks.isEmpty || !localAlbums.isEmpty || !artists.isEmpty
+            || !remoteTracks.isEmpty || !remoteAlbums.isEmpty
+    }
+
     func onQueryChange(_ newValue: String) {
         query = newValue
-        searchTask?.cancel()
-        remoteSearch?.cancel()
-        remoteSearch = nil
-        let q = newValue.trimmingCharacters(in: .whitespaces)
-        guard q.count > 1 else {
-            localTracks = []; artists = []; remoteTracks = []; remoteAlbums = []
-            hasSearched = false; isSearching = false
-            return
-        }
-        searchTask = Task {
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            if Task.isCancelled { return }
-            await run(q)
-        }
+        session.query(text: newValue)
     }
 
-    /// The local DB search plus the three remote categories, all at once. Each
-    /// remote category shows as its providers answer (#475): Spotify's and
-    /// Last.fm's rows in a few hundred ms, MusicBrainz's seconds later.
-    private func run(_ q: String) async {
-        isSearching = true
-        // A callback from a search the user has typed past is dropped.
-        let isCurrent: () -> Bool = { [weak self] in
-            self?.query.trimmingCharacters(in: .whitespaces) == q
-        }
-        remoteSearch = container.searchRemote(
-            query: q,
-            onArtists: { [weak self] a in if isCurrent() { self?.artists = a } },
-            onTracks: { [weak self] t in if isCurrent() { self?.remoteTracks = t } },
-            onAlbums: { [weak self] b in if isCurrent() { self?.remoteAlbums = b } },
-            onDone: { [weak self] in
-                guard isCurrent() else { return }
-                self?.hasSearched = true
-                self?.isSearching = false
-            }
-        )
-        let l = (try? await container.searchLocalTracks(query: q)) ?? []
-        if Task.isCancelled { return }
-        localTracks = l
+    /// A result row came on screen: the shared session looks up its cover if
+    /// it has none (#590), as for the first rows. Android does the same.
+    func trackShown(_ t: TrackSearchResult) { session.trackShown(track: t) }
+    func albumShown(_ a: AlbumSearchResult) { session.albumShown(album: a) }
+    func artistShown(_ a: IosArtistResult) { session.artistShown(name: a.name, imageUrl: a.imageUrl) }
+
+    func trackArt(_ t: TrackSearchResult) -> String? {
+        t.artworkUrl ?? art[SearchSession.companion.trackArtKey(title: t.title, artist: t.artist)]
+    }
+
+    func albumArt(_ a: AlbumSearchResult) -> String? {
+        art[SearchSession.companion.albumArtKey(title: a.title, artist: a.artist)] ?? a.artworkUrl
+    }
+
+    func artistImage(_ a: IosArtistResult) -> String? {
+        a.imageUrl ?? art[SearchSession.companion.artistArtKey(name: a.name)]
     }
 
     /// Metadata-only shared `Track` from a remote search hit (the 19-param
@@ -106,7 +112,7 @@ final class SearchViewModel {
     func makeTrack(_ t: TrackSearchResult) -> Track {
         Track(
             id: "\(t.title)|\(t.artist)", title: t.title, artist: t.artist,
-            album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
+            album: t.album, albumId: nil, duration: t.duration, artworkUrl: trackArt(t),
             sourceType: nil, sourceUrl: nil, addedAt: 0,
             resolver: nil, spotifyUri: nil, soundcloudId: nil,
             spotifyId: t.spotifyId, appleMusicId: nil, isrc: nil, recordingMbid: t.mbid,
@@ -253,11 +259,9 @@ struct SearchView: View {
 
     @ViewBuilder
     private var resultsList: some View {
-        if model.isSearching && model.localTracks.isEmpty && model.artists.isEmpty
-            && model.remoteTracks.isEmpty && model.remoteAlbums.isEmpty {
+        if !model.hasAnyResults && !model.hasSearched {
             Spacer(); ProgressView(); Spacer()
-        } else if model.hasSearched && model.localTracks.isEmpty && model.artists.isEmpty
-            && model.remoteTracks.isEmpty && model.remoteAlbums.isEmpty {
+        } else if !model.hasAnyResults {
             Spacer()
             if model.musicBrainzRateLimited {
                 // A throttled MusicBrainz hasn't shown that nothing matched.
@@ -279,10 +283,16 @@ struct SearchView: View {
                                      artwork: track.artworkUrl)
                         }
                     }
+                    if !model.localAlbums.isEmpty {
+                        sectionHeader("Library Albums")
+                        ForEach(Array(model.localAlbums.prefix(5)), id: \.id) { album in
+                            localAlbumRow(album)
+                        }
+                    }
                     if !model.artists.isEmpty {
                         sectionHeader("Artists")
                         ForEach(Array(model.artists.enumerated()), id: \.offset) { _, artist in
-                            artistRow(artist)
+                            artistRow(artist).onAppear { model.artistShown(artist) }
                         }
                     }
                     if !model.remoteTracks.isEmpty {
@@ -294,13 +304,14 @@ struct SearchView: View {
                             let (t, entity) = pair
                             trackRow(entity, index: i, queue: entities,
                                      resultType: "track", resultName: t.title, resultArtist: t.artist,
-                                     artwork: t.artworkUrl)
+                                     artwork: entity.artworkUrl)
+                                .onAppear { model.trackShown(t) }
                         }
                     }
                     if !model.remoteAlbums.isEmpty {
                         sectionHeader("Albums")
                         ForEach(Array(model.remoteAlbums.enumerated()), id: \.offset) { _, album in
-                            albumRow(album)
+                            albumRow(album).onAppear { model.albumShown(album) }
                         }
                     }
                 }
@@ -345,9 +356,9 @@ struct SearchView: View {
     }
 
     private func artistRow(_ artist: IosArtistResult) -> some View {
-        // A row without a photo asks the artist-photo chain, as desktop's
-        // search artist cards do.
-        let image = artist.imageUrl ?? ArtistImageCache.shared.image(for: artist.name)
+        // A row without a photo gets one from the artist-photo chain (the
+        // shared session looks it up, as desktop's search artist cards do).
+        let image = model.artistImage(artist)
         return Button {
             model.saveHistory(type: "artist", name: artist.name, artist: nil, artwork: image)
             // MusicBrainz rows carry the artist's id, so the page skips
@@ -363,16 +374,39 @@ struct SearchView: View {
             .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onAppear { if artist.imageUrl == nil { ArtistImageCache.shared.fetch(artist.name) } }
     }
 
-    private func albumRow(_ album: AlbumSearchResult) -> some View {
+    private func localAlbumRow(_ album: Album) -> some View {
         Button {
             model.saveHistory(type: "album", name: album.title, artist: album.artist, artwork: album.artworkUrl)
             navAlbum = PCAlbumRef(title: album.title, artist: album.artist)
         } label: {
             HStack(spacing: 12) {
                 pcCover(album.artworkUrl, seed: album.title + album.artist, size: 44, radius: 6, artist: album.artist, album: album.title)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(album.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                    Text(localAlbumSubtitle(album)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PC.fg3)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+
+    private func localAlbumSubtitle(_ a: Album) -> String {
+        if let y = a.year { return "\(y.intValue) · \(a.artist)" }
+        return a.artist
+    }
+
+    private func albumRow(_ album: AlbumSearchResult) -> some View {
+        let art = model.albumArt(album)
+        return Button {
+            model.saveHistory(type: "album", name: album.title, artist: album.artist, artwork: art)
+            navAlbum = PCAlbumRef(title: album.title, artist: album.artist)
+        } label: {
+            HStack(spacing: 12) {
+                pcCover(art, seed: album.title + album.artist, size: 44, radius: 6, artist: album.artist, album: album.title)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                     Text(albumSubtitle(album)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
