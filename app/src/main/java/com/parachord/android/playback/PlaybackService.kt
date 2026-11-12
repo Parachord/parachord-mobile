@@ -350,6 +350,13 @@ class PlaybackService : MediaLibraryService() {
         // either side triggers a re-emit. Runs on Dispatchers.Main per
         // Media3 main-thread invariant — wrapper.updateQueueSnapshot fires
         // listeners synchronously.
+        // The failed track's kept notification goes once that track isn't shown (#619).
+        serviceScope.launch {
+            stateHolder.state.map { it.currentTrack?.id to it.playbackError }.distinctUntilChanged().collect { (id, error) ->
+                dropKeptNotificationIfStale(id, error)
+            }
+        }
+
         // A track that couldn't start (#446) → the car screen's error message.
         serviceScope.launch {
             stateHolder.state.map { it.playbackError }.distinctUntilChanged().collect { message ->
@@ -427,7 +434,13 @@ class PlaybackService : MediaLibraryService() {
                 promoteToForeground(title, artist, artworkUrl)
             }
             ACTION_EXTERNAL_PLAYBACK_STOP -> {
-                demoteFromForeground()
+                // A play that failed and stopped on its track (#619): keep
+                // Parachord's notification for it, so the lock screen and the
+                // shade show the track that failed, not the app it last played
+                // through (Spotify keeps its own paused player there).
+                val state = stateHolder.state.value
+                val failed = state.currentTrack?.takeIf { state.playbackError != null && !state.isPlaying }
+                demoteFromForeground(keepNotificationFor = failed)
             }
             ACTION_EXTERNAL_MODE_ON -> {
                 forwardingPlayer?.externalMode = true
@@ -1335,13 +1348,50 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun demoteFromForeground() {
+    /**
+     * Leave the foreground. Its notification goes too, unless
+     * [keepNotificationFor] is a track that failed to play: then it stays,
+     * not playing, naming that track (#619). The next play's notification
+     * replaces it (same id).
+     */
+    private fun demoteFromForeground(keepNotificationFor: TrackEntity? = null) {
         if (!isExternalForeground) return
         Log.d(TAG, "Demoting from external playback foreground")
         isExternalForeground = false
         foregroundHoldWatchdog?.cancel()
         foregroundHoldWatchdog = null
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        if (keepNotificationFor == null) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            return
+        }
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
+        currentArtworkUrl = null
+        currentArtworkBitmap = null
+        getSystemService(NotificationManager::class.java)?.notify(
+            NOTIFICATION_ID,
+            buildNotification(keepNotificationFor.title, keepNotificationFor.artist, isPlaying = false),
+        )
+        keptFailedTrackId = keepNotificationFor.id
+        Log.d(TAG, "Kept the notification for '${keepNotificationFor.title}', which failed to play")
+    }
+
+    /**
+     * The track a kept notification names ([demoteFromForeground]); null when
+     * none is kept. The notification goes as soon as the current track changes
+     * or its error clears: a later play that can't post its own notification
+     * (a link with the phone locked can't start the foreground) would otherwise
+     * leave it naming the failed track while another one plays.
+     */
+    @Volatile private var keptFailedTrackId: String? = null
+
+    private fun dropKeptNotificationIfStale(currentTrackId: String?, error: String?) {
+        val kept = keptFailedTrackId ?: return
+        if (currentTrackId == kept && error != null) return
+        keptFailedTrackId = null
+        // A foreground notification (the next play's) has already replaced it.
+        if (isExternalForeground) return
+        getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        Log.d(TAG, "Removed the failed track's notification (the track changed)")
     }
 
     /**
