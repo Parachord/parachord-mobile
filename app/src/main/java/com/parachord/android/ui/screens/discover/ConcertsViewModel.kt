@@ -3,19 +3,13 @@ package com.parachord.android.ui.screens.discover
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.parachord.android.BuildConfig
 import com.parachord.shared.api.GeoLocation
 import com.parachord.shared.api.GeoLocationClient
-import com.parachord.shared.api.LastFmClient
-import com.parachord.shared.api.ListenBrainzClient
-import com.parachord.android.data.db.dao.ArtistDao
-import com.parachord.android.data.db.dao.TrackDao
-import com.parachord.android.data.db.dao.AlbumDao
 import com.parachord.android.data.location.DeviceLocationProvider
-import com.parachord.android.data.repository.ConcertArtist
 import com.parachord.android.data.repository.ConcertEvent
 import com.parachord.android.data.repository.ConcertsRepository
 import com.parachord.shared.model.Resource
+import com.parachord.shared.repository.ConcertArtistSeedSource
 import com.parachord.android.data.store.SettingsStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -24,23 +18,17 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 class ConcertsViewModel constructor(
     private val concertsRepository: ConcertsRepository,
     private val settingsStore: SettingsStore,
     private val geoLocationClient: GeoLocationClient,
     private val deviceLocationProvider: DeviceLocationProvider,
-    private val artistDao: ArtistDao,
-    private val trackDao: TrackDao,
-    private val albumDao: AlbumDao,
-    private val lastFmClient: LastFmClient,
-    private val listenBrainzClient: ListenBrainzClient,
+    private val concertArtistSeed: ConcertArtistSeedSource,
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "ConcertsVM"
-        private const val MAX_ARTISTS = 40 // Match desktop's max artist count
     }
 
     private val _events = MutableStateFlow<Resource<List<ConcertEvent>>>(
@@ -232,22 +220,13 @@ class ConcertsViewModel constructor(
         loadJob = viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                // Gather artists from collection and listening history
-                val artists = gatherArtists()
+                // The shared seed: collection, library and 6-month history (#589)
+                val artists = concertArtistSeed.gather()
                 Log.d(TAG, "Gathered ${artists.size} artists for concert search")
 
                 if (artists.isEmpty()) {
-                    // Fall back to local events by location if no library artists
-                    val loc = settingsStore.getConcertLocation()
-                    val lat = loc.latitude
-                    val lon = loc.longitude
-                    if (lat != null && lon != null) {
-                        concertsRepository.getLocalEvents(
-                            lat, lon, loc.radiusMiles, forceRefresh,
-                        ).collect { _events.value = it }
-                    } else {
-                        _events.value = Resource.Success(emptyList())
-                    }
+                    // No artists to search with: no concerts, as on iOS and desktop.
+                    _events.value = Resource.Success(emptyList())
                 } else {
                     // Personalized: search for user's artists' concerts
                     val loc = settingsStore.getConcertLocation()
@@ -265,117 +244,5 @@ class ConcertsViewModel constructor(
                 _isRefreshing.value = false
             }
         }
-    }
-
-    /**
-     * Gather artists from user's collection and listening history.
-     * Matches desktop's gatherConcertsArtists():
-     * 1. Collection artists (explicit artist entries)
-     * 2. Library artists (from collection tracks & albums)
-     * 3. History artists (Last.fm + ListenBrainz top artists, 6-month period)
-     * De-duplicated by lowercase name, round-robin interleaved, max 40 artists.
-     */
-    private suspend fun gatherArtists(): List<ConcertArtist> {
-        val collectionArtists = mutableListOf<ConcertArtist>()
-        val libraryArtists = mutableListOf<ConcertArtist>()
-        val historyArtists = mutableListOf<ConcertArtist>()
-
-        try {
-            // 1. Collection artists (explicit artist entries in collection)
-            val artists = artistDao.getAll().first()
-            for (a in artists) {
-                collectionArtists.add(ConcertArtist(a.name, "collection", a.imageUrl))
-            }
-
-            // 2. Library artists (from tracks and albums in collection)
-            val seenLibrary = collectionArtists.map { it.name.lowercase() }.toMutableSet()
-            val tracks = trackDao.getAll().first()
-            for (t in tracks) {
-                val name = t.artist
-                if (name.lowercase() !in seenLibrary) {
-                    seenLibrary.add(name.lowercase())
-                    libraryArtists.add(ConcertArtist(name, "library"))
-                }
-            }
-            val albums = albumDao.getAll().first()
-            for (a in albums) {
-                val name = a.artist
-                if (name.lowercase() !in seenLibrary) {
-                    seenLibrary.add(name.lowercase())
-                    libraryArtists.add(ConcertArtist(name, "library"))
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to gather collection/library artists", e)
-        }
-
-        // 3. History artists from Last.fm + ListenBrainz (6-month period, limit 40)
-        try {
-            val lastfmUsername = settingsStore.getLastFmUsername()
-            if (lastfmUsername != null) {
-                val response = lastFmClient.getUserTopArtists(
-                    user = lastfmUsername,
-                    period = "6month",
-                    limit = 40,
-                    apiKey = BuildConfig.LASTFM_API_KEY,
-                )
-                response.topartists?.artist?.forEach { a ->
-                    historyArtists.add(ConcertArtist(a.name, "history"))
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch Last.fm top artists", e)
-        }
-
-        try {
-            val lbUsername = settingsStore.getListenBrainzUsername()
-            if (lbUsername != null) {
-                val lbArtists = listenBrainzClient.getUserTopArtists(
-                    username = lbUsername,
-                    range = "half_yearly",
-                    count = 40,
-                )
-                for (a in lbArtists) {
-                    historyArtists.add(ConcertArtist(a.name, "history"))
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch ListenBrainz top artists", e)
-        }
-
-        // Interleave sources for fair representation (matching desktop's round-robin)
-        return interleaveAndDedupe(collectionArtists, libraryArtists, historyArtists)
-    }
-
-    /**
-     * Round-robin interleave artists from multiple sources, de-duplicate by name,
-     * max [MAX_ARTISTS] total (matching desktop behavior).
-     */
-    private fun interleaveAndDedupe(
-        vararg sources: List<ConcertArtist>,
-    ): List<ConcertArtist> {
-        val result = mutableListOf<ConcertArtist>()
-        val seen = mutableSetOf<String>()
-        val iterators = sources.map { it.iterator() }.toMutableList()
-
-        while (result.size < MAX_ARTISTS && iterators.any { it.hasNext() }) {
-            val toRemove = mutableListOf<Iterator<ConcertArtist>>()
-            for (iter in iterators) {
-                if (result.size >= MAX_ARTISTS) break
-                // Skip to next unseen artist in this source
-                while (iter.hasNext()) {
-                    val artist = iter.next()
-                    val key = artist.name.lowercase()
-                    if (key !in seen) {
-                        seen.add(key)
-                        result.add(artist)
-                        break
-                    }
-                }
-                if (!iter.hasNext()) toRemove.add(iter)
-            }
-            iterators.removeAll(toRemove)
-        }
-        return result
     }
 }
