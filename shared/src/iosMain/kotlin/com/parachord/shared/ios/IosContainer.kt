@@ -3170,6 +3170,29 @@ class IosContainer private constructor() {
         )
 
     /**
+     * What a track with nothing resolved plays right away (#587, Android's
+     * `routeByStoredIds`): the sources its stored Spotify / Apple Music IDs
+     * stand for, ranked with the live active gate, when the shared
+     * [com.parachord.shared.resolver.SourceReselection.shouldRerouteToStoredId]
+     * says to route by them. Empty means resolve first, as before.
+     */
+    @Throws(Throwable::class)
+    suspend fun storedIdRoute(track: Track): List<com.parachord.shared.resolver.ResolvedSource> {
+        val candidates = com.parachord.shared.resolver.SourceReselection.storedIdSources(
+            track,
+            spotifyConnected = !settingsStore.getSpotifyAccessToken().isNullOrBlank(),
+            appleMusicConnected = !settingsStore.getAppleMusicUserToken().isNullOrBlank(),
+        )
+        if (candidates.isEmpty()) return emptyList()
+        val ranked = resolverScoring.selectRanked(candidates, null)
+        val best = ranked.firstOrNull() ?: return emptyList()
+        val reroute = com.parachord.shared.resolver.SourceReselection.shouldRerouteToStoredId(
+            track.resolver, best.resolver, settingsStore.getResolverOrder(),
+        )
+        return if (reroute) ranked else emptyList()
+    }
+
+    /**
      * Enable [resolverId] after the user connected it somewhere other than
      * Settings → Plug-ins (Apple Music from the Sync tab), as desktop's connect
      * does: add it to `active_resolvers` and insert it into the priority order at

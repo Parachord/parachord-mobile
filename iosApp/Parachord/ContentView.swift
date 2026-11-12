@@ -2413,17 +2413,15 @@ final class QueuePlaybackCoordinator {
         }
     }
 
-    /// Resolvers that resolved the current track above the confidence floor,
-    /// in ranked order (deduped) — the deck's selectable sources.
+    /// The deck's selectable sources: resolvers with a source for the current
+    /// track that can play, in the user's resolver order (as Android's).
     @MainActor func availableResolvers() -> [String] {
         guard let t = currentTrack,
               let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
         else { return [] }
-        var seen = Set<String>(); var out: [String] = []
-        for s in srcs where (s.confidence?.doubleValue ?? 0) >= 0.6 {
-            if seen.insert(s.resolver).inserted { out.append(s.resolver) }
-        }
-        return out
+        // Sources that can play, one per resolver, in the user's order (shared, #587).
+        return SourceReselection.shared.switchableSources(sources: srcs, order: ResolverPrefs.shared.order)
+            .map { $0.resolver }
     }
 
     /// Hand the shared process audio session off when the active engine changes
@@ -3178,7 +3176,20 @@ final class QueuePlaybackCoordinator {
                 // Manual deck switch (Android skipReselect=true): honor the user's
                 // explicit pick — play ONLY that resolver's cached source, never
                 // re-gate it back to the auto-best.
-                ranked = (ranked ?? []).filter { $0.resolver == forced && !$0.noMatch }
+                // Its best source that can play (shared with Android, #587).
+                ranked = SourceReselection.shared.sourceForSwitch(sources: ranked ?? [], resolver: forced).map { [$0] } ?? []
+            } else if ranked == nil || ranked!.isEmpty,
+                      let stored = try? await container.storedIdRoute(track: track), !stored.isEmpty {
+                // Nothing resolved yet (a cold start from CarPlay, a restored
+                // queue): play at once from the IDs the track carries, in the
+                // user's order, and resolve fully in the background so its
+                // badges show and the next play has every source. Shared with
+                // Android (`SourceReselection`, #587).
+                NSLog("QUEUE '%@': nothing resolved yet; routing by stored IDs (%@)", track.title,
+                      stored.map { $0.resolver }.joined(separator: ", "))
+                ranked = stored
+                resolverCache.resolve(ResolveRequest(artist: track.artist, title: track.title, album: track.album,
+                                                     spotifyId: track.spotifyId), order: 0)
             } else if ranked == nil || ranked!.isEmpty {
                 do {
                     let report = try await container.resolveSourcesReport(

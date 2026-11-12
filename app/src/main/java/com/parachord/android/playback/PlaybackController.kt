@@ -3122,14 +3122,14 @@ class PlaybackController constructor(
      * a stored ID was validated when it was written.
      */
     private suspend fun routeByStoredIds(track: TrackEntity): TrackEntity {
-        val candidates = storedIdSources(
+        val candidates = com.parachord.shared.resolver.SourceReselection.storedIdSources(
             track,
             spotifyConnected = !settingsStore.getSpotifyAccessToken().isNullOrBlank(),
             appleMusicConnected = !settingsStore.getAppleMusicUserToken().isNullOrBlank(),
         )
         if (candidates.isEmpty()) return track
         val best = resolverScoring.selectBest(candidates) ?: return track
-        if (!shouldRerouteToStoredId(track.resolver, best.resolver, settingsStore.getResolverOrder())) return track
+        if (!com.parachord.shared.resolver.SourceReselection.shouldRerouteToStoredId(track.resolver, best.resolver, settingsStore.getResolverOrder())) return track
         Log.d(TAG, "Routed '${track.title}' by stored IDs: ${track.resolver} → ${best.resolver} (user priority, nothing resolved yet)")
         return track.copy(
             resolver = best.resolver,
@@ -3154,7 +3154,9 @@ class PlaybackController constructor(
             val cachedSources = trackResolverCache.trackSources.value[key]
             if (cachedSources.isNullOrEmpty()) return@launch
 
-            val source = cachedSources.firstOrNull { it.resolver == resolver } ?: return@launch
+            // Its best source that can play: a noMatch or below-floor source isn't offered (#587).
+            val source = com.parachord.shared.resolver.SourceReselection.sourceForSwitch(cachedSources, resolver)
+                ?: return@launch
 
             Log.d(TAG, "Manual source switch for '${track.title}': ${track.resolver} → $resolver")
             // Clear all resolver-specific fields, then set only the chosen resolver's.
@@ -3681,43 +3683,4 @@ class PlaybackController constructor(
             true
         }
     }
-}
-
-/**
- * The sources a track's stored streaming IDs stand for, among connected
- * services: Spotify (URI or ID) and Apple Music (a catalog ID only, #265).
- * Trusted like [com.parachord.android.resolver.ResolverManager.resolveWithHints]
- * trusts them: a stored ID was validated when it was written.
- */
-internal fun storedIdSources(
-    track: TrackEntity,
-    spotifyConnected: Boolean,
-    appleMusicConnected: Boolean,
-): List<com.parachord.shared.resolver.ResolvedSource> = buildList {
-    val spotifyUri = track.spotifyUri ?: track.spotifyId?.let { "spotify:track:$it" }
-    if (spotifyUri != null && spotifyConnected) {
-        add(com.parachord.shared.resolver.ResolvedSource(
-            url = spotifyUri, sourceType = "spotify", resolver = "spotify",
-            spotifyUri = spotifyUri, spotifyId = track.spotifyId ?: spotifyUri.substringAfterLast(':'),
-            confidence = 1.0,
-        ))
-    }
-    if (appleMusicConnected && com.parachord.shared.resolver.isAppleMusicCatalogId(track.appleMusicId)) {
-        add(com.parachord.shared.resolver.ResolvedSource(
-            url = "applemusic:song:${track.appleMusicId}", sourceType = "applemusic", resolver = "applemusic",
-            appleMusicId = track.appleMusicId, confidence = 1.0,
-        ))
-    }
-}
-
-/**
- * Whether to move a track from its stored [current] resolver to [best], the
- * top stored-ID source. A resolver the stored IDs don't cover (a local file,
- * SoundCloud, Bandcamp) keeps the track unless [best] ranks above it in [order].
- */
-internal fun shouldRerouteToStoredId(current: String?, best: String, order: List<String>): Boolean {
-    if (best == current) return false
-    if (current == null || current == "spotify" || current == "applemusic") return true
-    val rank = { id: String -> order.indexOf(id).let { if (it < 0) Int.MAX_VALUE else it } }
-    return rank(best) < rank(current)
 }

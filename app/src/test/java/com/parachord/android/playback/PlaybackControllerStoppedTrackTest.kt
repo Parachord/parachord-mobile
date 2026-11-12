@@ -413,7 +413,7 @@ class PlaybackControllerStoppedTrackTest {
         every { f.trackResolverCache.trackSources } returns kotlinx.coroutines.flow.MutableStateFlow(
             mapOf(
                 com.parachord.android.resolver.trackKey(a.title, a.artist) to listOf(
-                    com.parachord.shared.resolver.ResolvedSource(url = "https://example.com/a.mp3", sourceType = "stream", resolver = "soundcloud"),
+                    com.parachord.shared.resolver.ResolvedSource(url = "https://example.com/a.mp3", sourceType = "stream", resolver = "soundcloud", confidence = 0.95),
                 ),
             ),
         )

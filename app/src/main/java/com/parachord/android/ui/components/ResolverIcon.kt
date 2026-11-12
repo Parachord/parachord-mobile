@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.parachord.android.R
-import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.ui.theme.LocalResolverOrder
 
 /**
@@ -604,7 +603,8 @@ fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) 
  * listing all available sources, matching the desktop's "Play from" menu.
  *
  * Only shows the chevron affordance when multiple sources are available.
- * Sources below the confidence threshold (noMatch) are filtered out.
+ * Offers only sources that can play, one per resolver, in the user's order
+ * (`SourceReselection.switchableSources`, shared with iOS).
  *
  * @param currentResolver The resolver currently playing this track
  * @param availableSources All resolved sources for this track (from TrackResolverCache)
@@ -618,13 +618,11 @@ fun ResolverSourceDropdown(
     modifier: Modifier = Modifier,
 ) {
     val resolverOrder = LocalResolverOrder.current
-    // Filter out noMatch sources (below confidence threshold)
-    val validSources = remember(availableSources) {
-        availableSources.filter {
-            (it.confidence ?: 0.0) >= ResolverScoring.MIN_CONFIDENCE_THRESHOLD
-        }
+    // Sources that can play, one per resolver, in the user's order (shared, #587).
+    val offered = remember(availableSources, resolverOrder) {
+        com.parachord.shared.resolver.SourceReselection.switchableSources(availableSources, resolverOrder)
     }
-    val hasMultipleSources = validSources.size > 1
+    val hasMultipleSources = offered.size > 1
 
     var expanded by remember { mutableStateOf(false) }
     val chevronRotation by animateFloatAsState(
@@ -681,22 +679,7 @@ fun ResolverSourceDropdown(
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             )
 
-            // Sort sources: by user resolver order first, then confidence descending
-            val sorted = remember(validSources, resolverOrder) {
-                if (resolverOrder.isNotEmpty()) {
-                    validSources.sortedWith(compareBy<com.parachord.android.resolver.ResolvedSource> { s ->
-                        resolverOrder.indexOf(s.resolver).let { if (it == -1) resolverOrder.size else it }
-                    }.thenByDescending { s -> s.confidence ?: 0.9 })
-                } else {
-                    validSources.sortedByDescending { s -> s.confidence ?: 0.9 }
-                }
-            }
-            // Deduplicate by resolver (keep first/best per resolver)
-            val deduped = remember(sorted) {
-                sorted.distinctBy { it.resolver }
-            }
-
-            deduped.forEach { source ->
+            offered.forEach { source ->
                 val isActive = source.resolver == currentResolver
                 val iconColor = ResolverIconColors.forResolver(source.resolver)
 
