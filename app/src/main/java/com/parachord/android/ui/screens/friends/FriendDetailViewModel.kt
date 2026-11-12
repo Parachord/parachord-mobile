@@ -58,7 +58,7 @@ class FriendDetailViewModel constructor(
     private val _friend = MutableStateFlow<FriendEntity?>(null)
     val friend: StateFlow<FriendEntity?> = _friend
 
-    val selectedPeriod = MutableStateFlow(link.period ?: "1month")
+    val selectedPeriod = MutableStateFlow(link.period ?: com.parachord.shared.format.DEFAULT_HISTORY_PERIOD)
 
     private val _recentTracks = MutableStateFlow<Resource<List<RecentTrack>>>(Resource.Loading)
     val recentTracks: StateFlow<Resource<List<RecentTrack>>> = _recentTracks

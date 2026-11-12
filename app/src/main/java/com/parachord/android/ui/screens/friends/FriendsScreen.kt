@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.shared.format.RelativeTime
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -289,7 +290,7 @@ private fun FriendRow(
                             friend.cachedTrackArtist?.let { append("  ·  $it") }
                             if (friend.cachedTrackTimestamp > 0) {
                                 append("  ·  ")
-                                append(formatTimeAgo(friend.cachedTrackTimestamp))
+                                append(RelativeTime.agoSeconds(friend.cachedTrackTimestamp))
                             }
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -314,19 +315,6 @@ private fun FriendRow(
                 )
             }
         }
-    }
-}
-
-private fun formatTimeAgo(timestampSeconds: Long): String {
-    val now = System.currentTimeMillis() / 1000
-    val diff = now - timestampSeconds
-    return when {
-        diff < 60 -> "Just now"
-        diff < 3600 -> "${diff / 60}m ago"
-        diff < 86400 -> "${diff / 3600}h ago"
-        diff < 172800 -> "Yesterday"
-        diff < 604800 -> "${diff / 86400}d ago"
-        else -> "${diff / 604800}w ago"
     }
 }
 
