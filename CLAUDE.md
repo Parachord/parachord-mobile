@@ -951,6 +951,16 @@ To reactively check if an album is in the user's collection (for toggle UI in co
 
 **AlbumEntity ID format:** `"album-${title.hashCode()}-${artist.hashCode()}"`
 
+### Shared formatters and Collection sorts (#593)
+
+Text and list rules that both apps show come from shared code, following desktop:
+- **Time ago:** `RelativeTime.ago` (milliseconds) and `agoSeconds` (Last.fm and ListenBrainz timestamps) in `shared/.../format/Formatters.kt`, desktop's `formatTimeAgo`. It shows "Just now", "5m ago", "3h ago" and "2d ago", then the date: "Mar 4", or "Mar 4, 2025" in an earlier year. It's used for listens, friends' last plays and a playlist's "Last updated".
+- **Play counts:** `playCountLabel` shows the full number ("1 play", "1234 plays").
+- **History period:** History and a friend's profile open on `DEFAULT_HISTORY_PERIOD` (`7day`).
+- **Collection sorts:** the sort orders, their labels ("A-Z", desktop's hyphen) and their defaults are in `shared/.../library/CollectionSort.kt`, together with the filter and the stable sort (`CollectionSort.tracks` / `albums` / `artists` / `friends`). Android's `ui/screens/library/CollectionSort.kt` is typealiases; iOS's `CollectionView` aliases the same enums. A sort's `name` is what's saved, so don't rename one.
+
+The sync screen's "Last synced" text is still written per platform (#591).
+
 ### Singleton Repository Caching
 
 `@Singleton` repositories persist across ViewModel lifecycles. If a repository caches API results in memory (like `WeeklyPlaylistsRepository`), the cache outlives individual screens and can become stale.

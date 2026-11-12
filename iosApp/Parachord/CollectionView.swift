@@ -15,60 +15,11 @@ import Shared
 // until #194 wires SyncEngine.onTrackRemoved into the facade.
 // See docs/plans/2026-06-17-ios-collection-195.md.
 
-// ── Sort options (mirror Android CollectionSort.kt) ───────────────────
-enum CollectionTrackSort: String, CaseIterable {
-    // rawValue = Android TrackSort.name → the persisted choice (#250) is
-    // consistent across platforms.
-    case titleAsc = "TITLE_ASC", titleDesc = "TITLE_DESC", artist = "ARTIST",
-         album = "ALBUM", duration = "DURATION", recent = "RECENT"
-    var label: String {
-        switch self {
-        case .titleAsc: return "Title A–Z"
-        case .titleDesc: return "Title Z–A"
-        case .artist: return "Artist Name"
-        case .album: return "Album Name"
-        case .duration: return "Duration"
-        case .recent: return "Recently Added"
-        }
-    }
-}
-
-enum CollectionAlbumSort: String, CaseIterable {
-    case alphaAsc = "ALPHA_ASC", alphaDesc = "ALPHA_DESC", artist = "ARTIST", recent = "RECENT"
-    var label: String {
-        switch self {
-        case .alphaAsc: return "A–Z"
-        case .alphaDesc: return "Z–A"
-        case .artist: return "Artist Name"
-        case .recent: return "Recently Added"
-        }
-    }
-}
-
-enum CollectionArtistSort: String, CaseIterable {
-    case alphaAsc = "ALPHA_ASC", alphaDesc = "ALPHA_DESC", recent = "RECENT"
-    var label: String {
-        switch self {
-        case .alphaAsc: return "A–Z"
-        case .alphaDesc: return "Z–A"
-        case .recent: return "Recently Added"
-        }
-    }
-}
-
-enum CollectionFriendSort: String, CaseIterable {
-    case alphaAsc = "ALPHA_ASC", alphaDesc = "ALPHA_DESC", recent = "RECENT",
-         active = "ACTIVE", onAir = "ON_AIR"
-    var label: String {
-        switch self {
-        case .alphaAsc: return "A–Z"
-        case .alphaDesc: return "Z–A"
-        case .recent: return "Recently Added"
-        case .active: return "Recently Active"
-        case .onAir: return "On Air Now"
-        }
-    }
-}
+// ── Sort options: the shared CollectionSort (#593), Android's too ─────
+typealias CollectionTrackSort = TrackSort
+typealias CollectionAlbumSort = AlbumSort
+typealias CollectionArtistSort = ArtistSort
+typealias CollectionFriendSort = FriendSort
 
 @MainActor @Observable
 final class CollectionModel {
@@ -88,17 +39,17 @@ final class CollectionModel {
     // Android enum .name, kept consistent across platforms. `loadingSorts`
     // suppresses the echo-write while loadSorts() applies the stored value.
     private var loadingSorts = false
-    var trackSort: CollectionTrackSort = .recent {
-        didSet { if !loadingSorts { Task { try? await container.setTracksSort(sort: trackSort.rawValue) } } }
+    var trackSort: CollectionTrackSort = TrackSort.companion.DEFAULT {
+        didSet { if !loadingSorts { Task { try? await container.setTracksSort(sort: trackSort.name) } } }
     }
-    var albumSort: CollectionAlbumSort = .recent {
-        didSet { if !loadingSorts { Task { try? await container.setAlbumsSort(sort: albumSort.rawValue) } } }
+    var albumSort: CollectionAlbumSort = AlbumSort.companion.DEFAULT {
+        didSet { if !loadingSorts { Task { try? await container.setAlbumsSort(sort: albumSort.name) } } }
     }
-    var artistSort: CollectionArtistSort = .alphaAsc {
-        didSet { if !loadingSorts { Task { try? await container.setArtistsSort(sort: artistSort.rawValue) } } }
+    var artistSort: CollectionArtistSort = ArtistSort.companion.DEFAULT {
+        didSet { if !loadingSorts { Task { try? await container.setArtistsSort(sort: artistSort.name) } } }
     }
-    var friendSort: CollectionFriendSort = .alphaAsc {
-        didSet { if !loadingSorts { Task { try? await container.setFriendsSort(sort: friendSort.rawValue) } } }
+    var friendSort: CollectionFriendSort = FriendSort.companion.DEFAULT {
+        didSet { if !loadingSorts { Task { try? await container.setFriendsSort(sort: friendSort.name) } } }
     }
 
     // Free-text filter shared across tabs (mirrors LibraryViewModel._searchQuery).
@@ -125,10 +76,10 @@ final class CollectionModel {
     private func loadSorts() {
         Task { @MainActor in
             loadingSorts = true
-            if let s = (try? await container.getTracksSort()) ?? nil, let v = CollectionTrackSort(rawValue: s) { trackSort = v }
-            if let s = (try? await container.getAlbumsSort()) ?? nil, let v = CollectionAlbumSort(rawValue: s) { albumSort = v }
-            if let s = (try? await container.getArtistsSort()) ?? nil, let v = CollectionArtistSort(rawValue: s) { artistSort = v }
-            if let s = (try? await container.getFriendsSort()) ?? nil, let v = CollectionFriendSort(rawValue: s) { friendSort = v }
+            if let s = (try? await container.getTracksSort()) ?? nil { trackSort = TrackSort.companion.fromName(name: s) }
+            if let s = (try? await container.getAlbumsSort()) ?? nil { albumSort = AlbumSort.companion.fromName(name: s) }
+            if let s = (try? await container.getArtistsSort()) ?? nil { artistSort = ArtistSort.companion.fromName(name: s) }
+            if let s = (try? await container.getFriendsSort()) ?? nil { friendSort = FriendSort.companion.fromName(name: s) }
             loadingSorts = false
         }
     }
@@ -139,61 +90,11 @@ final class CollectionModel {
     /// FriendsViewModel.init), then the reactive flow shows them.
     func syncFriends() { container.syncFriends() }
 
-    // Each `sorted*` view filters by `searchQuery` first, then sorts — same
-    // fields Android filters on (LibraryViewModel.sorted{Tracks,Albums,Artists}
-    // + FriendsTab): track→title/artist/album, album→title/artist, artist→name,
-    // friend→displayName. Case-insensitive `contains`.
-    private func matches(_ haystacks: String?...) -> Bool {
-        let q = searchQuery.trimmingCharacters(in: .whitespaces)
-        if q.isEmpty { return true }
-        return haystacks.contains { $0?.range(of: q, options: .caseInsensitive) != nil }
-    }
-
-    // ── Sorted + filtered views ────────────────────────────────────────
-    var sortedTracks: [Track] {
-        let f = tracks.filter { matches($0.title, $0.artist, $0.album) }
-        switch trackSort {
-        case .titleAsc:  return f.sorted { $0.title.lowercased() < $1.title.lowercased() }
-        case .titleDesc: return f.sorted { $0.title.lowercased() > $1.title.lowercased() }
-        case .artist:    return f.sorted { $0.artist.lowercased() < $1.artist.lowercased() }
-        case .album:     return f.sorted { ($0.album ?? "").lowercased() < ($1.album ?? "").lowercased() }
-        case .duration:  return f.sorted { ($0.duration?.int64Value ?? 0) > ($1.duration?.int64Value ?? 0) }
-        case .recent:    return f.sorted { $0.addedAt > $1.addedAt }
-        }
-    }
-
-    var sortedAlbums: [Album] {
-        let f = albums.filter { matches($0.title, $0.artist) }
-        switch albumSort {
-        case .alphaAsc:  return f.sorted { $0.title.lowercased() < $1.title.lowercased() }
-        case .alphaDesc: return f.sorted { $0.title.lowercased() > $1.title.lowercased() }
-        case .artist:    return f.sorted { $0.artist.lowercased() < $1.artist.lowercased() }
-        case .recent:    return f.sorted { $0.addedAt > $1.addedAt }
-        }
-    }
-
-    var sortedArtists: [Artist] {
-        let f = artists.filter { matches($0.name) }
-        switch artistSort {
-        case .alphaAsc:  return f.sorted { $0.name.lowercased() < $1.name.lowercased() }
-        case .alphaDesc: return f.sorted { $0.name.lowercased() > $1.name.lowercased() }
-        case .recent:    return f.sorted { $0.addedAt > $1.addedAt }
-        }
-    }
-
-    var sortedFriends: [Friend] {
-        let f = friends.filter { matches($0.displayName) }
-        switch friendSort {
-        case .alphaAsc:  return f.sorted { $0.displayName.lowercased() < $1.displayName.lowercased() }
-        case .alphaDesc: return f.sorted { $0.displayName.lowercased() > $1.displayName.lowercased() }
-        case .recent:    return f.sorted { $0.addedAt > $1.addedAt }
-        case .active:    // played within the last 14 days, most-recent first
-            let cutoff = Int64(Date().timeIntervalSince1970) - 14 * 86400
-            return f.filter { $0.cachedTrackTimestamp > cutoff }
-                .sorted { $0.cachedTrackTimestamp > $1.cachedTrackTimestamp }
-        case .onAir:     return f.filter { $0.isOnAir }.sorted { $0.cachedTrackTimestamp > $1.cachedTrackTimestamp }
-        }
-    }
+    // ── Sorted + filtered views: the shared CollectionSort (#593) ──────
+    var sortedTracks: [Track] { CollectionSort.shared.tracks(list: tracks, sort: trackSort, query: searchQuery) }
+    var sortedAlbums: [Album] { CollectionSort.shared.albums(list: albums, sort: albumSort, query: searchQuery) }
+    var sortedArtists: [Artist] { CollectionSort.shared.artists(list: artists, sort: artistSort, query: searchQuery) }
+    var sortedFriends: [Friend] { CollectionSort.shared.friends(list: friends, sort: friendSort, query: searchQuery) }
 
     // ── Mutations — LOCAL only (sync propagation lands with #194). ──────
     func removeTrack(_ t: Track)   { Task { try? await container.removeTrackFromCollection(track: t) } }
@@ -337,19 +238,19 @@ struct CollectionView: View {
     @ViewBuilder private var sortMenuItems: some View {
         switch tab {
         case .songs:
-            ForEach(CollectionTrackSort.allCases, id: \.self) { s in
+            ForEach(TrackSort.entries, id: \.self) { s in
                 Button { model.trackSort = s } label: { sortItemLabel(s.label, s == model.trackSort) }
             }
         case .albums:
-            ForEach(CollectionAlbumSort.allCases, id: \.self) { s in
+            ForEach(AlbumSort.entries, id: \.self) { s in
                 Button { model.albumSort = s } label: { sortItemLabel(s.label, s == model.albumSort) }
             }
         case .artists:
-            ForEach(CollectionArtistSort.allCases, id: \.self) { s in
+            ForEach(ArtistSort.entries, id: \.self) { s in
                 Button { model.artistSort = s } label: { sortItemLabel(s.label, s == model.artistSort) }
             }
         case .friends:
-            ForEach(CollectionFriendSort.allCases, id: \.self) { s in
+            ForEach(FriendSort.entries, id: \.self) { s in
                 Button { model.friendSort = s } label: { sortItemLabel(s.label, s == model.friendSort) }
             }
         }
@@ -510,7 +411,7 @@ struct CollectionView: View {
                     Text("Listening hidden").font(.system(size: 13)).foregroundStyle(PC.fg3)
                 } else if let track = f.cachedTrackName {
                     // Offline: last track + when they were last active (Android parity).
-                    let ago = f.cachedTrackTimestamp > 0 ? " · \(pcTimeAgo(f.cachedTrackTimestamp))" : ""
+                    let ago = f.cachedTrackTimestamp > 0 ? " · \(RelativeTime.shared.agoSeconds(timestampSeconds: f.cachedTrackTimestamp))" : ""
                     Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")\(ago)")
                         .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                 } else {
@@ -524,18 +425,6 @@ struct CollectionView: View {
 
     /// Relative "last active" label — port of Android FriendsScreen.formatTimeAgo.
     /// `timestampSeconds` is seconds-since-epoch (Friend.cachedTrackTimestamp).
-    private func pcTimeAgo(_ timestampSeconds: Int64) -> String {
-        let diff = Int64(Date().timeIntervalSince1970) - timestampSeconds
-        switch diff {
-        case ..<60:     return "Just now"
-        case ..<3600:   return "\(diff / 60)m ago"
-        case ..<86400:  return "\(diff / 3600)h ago"
-        case ..<172800: return "Yesterday"
-        case ..<604800: return "\(diff / 86400)d ago"
-        default:        return "\(diff / 604800)w ago"
-        }
-    }
-
     private func serviceBadge(_ service: String) -> (String, Color) {
         switch service {
         case "lastfm":       return ("Last.fm", Color(uiColor: UIColor(hex: 0xD51007)))

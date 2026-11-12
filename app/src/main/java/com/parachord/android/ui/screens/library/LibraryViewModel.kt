@@ -77,16 +77,16 @@ class LibraryViewModel constructor(
 
     // --- Sort state per tab ---
 
-    private val _artistSort = MutableStateFlow(ArtistSort.ALPHA_ASC)
+    private val _artistSort = MutableStateFlow(ArtistSort.DEFAULT)
     val artistSort: StateFlow<ArtistSort> = _artistSort
 
-    private val _albumSort = MutableStateFlow(AlbumSort.RECENT)
+    private val _albumSort = MutableStateFlow(AlbumSort.DEFAULT)
     val albumSort: StateFlow<AlbumSort> = _albumSort
 
-    private val _trackSort = MutableStateFlow(TrackSort.RECENT)
+    private val _trackSort = MutableStateFlow(TrackSort.DEFAULT)
     val trackSort: StateFlow<TrackSort> = _trackSort
 
-    private val _friendSort = MutableStateFlow(FriendSort.ALPHA_ASC)
+    private val _friendSort = MutableStateFlow(FriendSort.DEFAULT)
     val friendSort: StateFlow<FriendSort> = _friendSort
 
     // --- Search query (shared across tabs) ---
@@ -140,14 +140,7 @@ class LibraryViewModel constructor(
     val sortedArtists: StateFlow<List<ArtistEntity>> = combine(
         artists, _artistSort, _searchQuery,
     ) { list, sort, query ->
-        val filtered = if (query.isBlank()) list else {
-            list.filter { it.name.contains(query, ignoreCase = true) }
-        }
-        when (sort) {
-            ArtistSort.ALPHA_ASC -> filtered.sortedBy { it.name.lowercase() }
-            ArtistSort.ALPHA_DESC -> filtered.sortedByDescending { it.name.lowercase() }
-            ArtistSort.RECENT -> filtered.sortedByDescending { it.addedAt }
-        }
+        com.parachord.shared.library.CollectionSort.artists(list, sort, query)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // --- Sorted + filtered albums ---
@@ -155,18 +148,7 @@ class LibraryViewModel constructor(
     val sortedAlbums: StateFlow<List<AlbumEntity>> = combine(
         albums, _albumSort, _searchQuery,
     ) { list, sort, query ->
-        val filtered = if (query.isBlank()) list else {
-            list.filter {
-                it.title.contains(query, ignoreCase = true) ||
-                    it.artist.contains(query, ignoreCase = true)
-            }
-        }
-        when (sort) {
-            AlbumSort.ALPHA_ASC -> filtered.sortedBy { it.title.lowercase() }
-            AlbumSort.ALPHA_DESC -> filtered.sortedByDescending { it.title.lowercase() }
-            AlbumSort.ARTIST -> filtered.sortedBy { it.artist.lowercase() }
-            AlbumSort.RECENT -> filtered.sortedByDescending { it.addedAt }
-        }
+        com.parachord.shared.library.CollectionSort.albums(list, sort, query)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // --- Sorted + filtered tracks ---
@@ -174,21 +156,7 @@ class LibraryViewModel constructor(
     val sortedTracks: StateFlow<List<TrackEntity>> = combine(
         tracks, _trackSort, _searchQuery,
     ) { list, sort, query ->
-        val filtered = if (query.isBlank()) list else {
-            list.filter {
-                it.title.contains(query, ignoreCase = true) ||
-                    it.artist.contains(query, ignoreCase = true) ||
-                    (it.album?.contains(query, ignoreCase = true) == true)
-            }
-        }
-        when (sort) {
-            TrackSort.TITLE_ASC -> filtered.sortedBy { it.title.lowercase() }
-            TrackSort.TITLE_DESC -> filtered.sortedByDescending { it.title.lowercase() }
-            TrackSort.ARTIST -> filtered.sortedBy { it.artist.lowercase() }
-            TrackSort.ALBUM -> filtered.sortedBy { (it.album ?: "").lowercase() }
-            TrackSort.DURATION -> filtered.sortedByDescending { it.duration ?: 0L }
-            TrackSort.RECENT -> filtered.sortedByDescending { it.addedAt }
-        }
+        com.parachord.shared.library.CollectionSort.tracks(list, sort, query)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Lazily fetch an artist image if not already enriched this session. */

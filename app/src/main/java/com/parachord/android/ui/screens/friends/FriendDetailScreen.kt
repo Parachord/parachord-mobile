@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.shared.format.playCountLabel
+import com.parachord.shared.format.RelativeTime
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.AlbumContextMenu
@@ -338,7 +340,7 @@ private fun RecentTrackRow(
         // Time ago
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-            text = if (track.nowPlaying) "Now" else formatTimeAgo(track.timestamp),
+            text = if (track.nowPlaying) "Now" else RelativeTime.agoSeconds(track.timestamp),
             style = MaterialTheme.typography.labelSmall,
             color = if (track.nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -382,7 +384,7 @@ private fun FriendTopSongsTab(
                             val key = "${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"
                             TrackRow(
                                 title = track.title,
-                                artist = "${track.artist}  •  ${formatPlayCount(track.playCount)}",
+                                artist = "${track.artist}  •  ${playCountLabel(track.playCount)}",
                                 artworkUrl = track.artworkUrl ?: trackArtwork[key],
                                 trackNumber = track.rank,
                                 resolvers = trackResolvers[key],
@@ -512,7 +514,7 @@ private fun AlbumGridItem(album: HistoryAlbum, onClick: () -> Unit = {}, onLongC
                     .align(Alignment.TopEnd),
             ) {
                 Text(
-                    text = formatPlayCount(album.playCount),
+                    text = playCountLabel(album.playCount),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White,
                 )
@@ -630,7 +632,7 @@ private fun ArtistGridItem(
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            text = formatPlayCount(artist.playCount),
+            text = playCountLabel(artist.playCount),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -694,22 +696,3 @@ private fun EmptyState(message: String) {
     }
 }
 
-private fun formatPlayCount(count: Int): String = when {
-    count >= 1_000_000 -> "${"%.1f".format(count / 1_000_000.0)}M plays"
-    count >= 1_000 -> "${"%.1f".format(count / 1_000.0)}K plays"
-    count == 1 -> "1 play"
-    else -> "$count plays"
-}
-
-private fun formatTimeAgo(timestampSeconds: Long): String {
-    val now = System.currentTimeMillis() / 1000
-    val diff = now - timestampSeconds
-    return when {
-        diff < 60 -> "Just now"
-        diff < 3600 -> "${diff / 60}m ago"
-        diff < 86400 -> "${diff / 3600}h ago"
-        diff < 172800 -> "Yesterday"
-        diff < 604800 -> "${diff / 86400}d ago"
-        else -> "${diff / 604800}w ago"
-    }
-}

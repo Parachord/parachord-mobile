@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.shared.format.RelativeTime
 import android.Manifest
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -1364,7 +1365,7 @@ private fun FriendActivityRow(
                         friend.cachedTrackArtist?.let { append("  ·  $it") }
                         if (friend.cachedTrackTimestamp > 0) {
                             append("  ·  ")
-                            append(formatTimeAgo(friend.cachedTrackTimestamp))
+                            append(RelativeTime.agoSeconds(friend.cachedTrackTimestamp))
                         }
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -2228,18 +2229,6 @@ private fun StatCard(
 }
 
 // ── Utility ──────────────────────────────────────────────────────
-
-private fun formatTimeAgo(timestampSeconds: Long): String {
-    val now = System.currentTimeMillis() / 1000
-    val diff = now - timestampSeconds
-    return when {
-        diff < 60 -> "now"
-        diff < 3600 -> "${diff / 60}m"
-        diff < 86400 -> "${diff / 3600}h"
-        diff < 604800 -> "${diff / 86400}d"
-        else -> "${diff / 604800}w"
-    }
-}
 
 // ── Splash Screen ───────────────────────────────────────────────
 
