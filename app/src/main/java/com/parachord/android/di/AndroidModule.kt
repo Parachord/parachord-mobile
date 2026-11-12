@@ -712,7 +712,7 @@ val androidModule = module {
             scoring = sharedScoring,
             getActive = { settingsStore.getActiveResolvers() },
             getDisabled = { settingsStore.getDisabledPlugins() },
-            getPlugins = { pluginManager.plugins.value },
+            getPlugins = { pluginManager.ensureInitialized(); pluginManager.plugins.value },
             resolveSpotify = { query, target ->
                 val token = settingsStore.getSpotifyAccessToken()
                 if (token.isNullOrBlank()) {
