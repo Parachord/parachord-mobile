@@ -138,6 +138,7 @@ fun PopOfTheTopsScreen(
                     onSearchQueryChange = viewModel::setSearchQuery,
                     onAlbumClick = { album -> onNavigateToAlbum(album.title, album.artist) },
                     onNavigateToArtist = onNavigateToArtist,
+                    onPlayAlbum = viewModel::playAlbumByName,
                     onQueueAlbum = viewModel::queueAlbumByName,
                     onAddAlbumToCollection = viewModel::addAlbumToCollection,
                 )
@@ -416,6 +417,7 @@ private fun AlbumsTab(
     onSearchQueryChange: (String) -> Unit,
     onAlbumClick: (ChartAlbum) -> Unit,
     onNavigateToArtist: (String) -> Unit = {},
+    onPlayAlbum: (albumTitle: String, albumArtist: String) -> Unit = { _, _ -> },
     onQueueAlbum: (albumTitle: String, albumArtist: String) -> Unit = { _, _ -> },
     onAddAlbumToCollection: (title: String, artist: String, artworkUrl: String?) -> Unit = { _, _, _ -> },
 ) {
@@ -462,6 +464,10 @@ private fun AlbumsTab(
                             artworkUrl = album.artworkUrl,
                             isInCollection = false,
                             onDismiss = { showMenu = false },
+                            onPlayAlbum = {
+                                showMenu = false
+                                onPlayAlbum(album.title, album.artist)
+                            },
                             onQueueAlbum = { onQueueAlbum(album.title, album.artist) },
                             onGoToAlbum = { onAlbumClick(album) },
                             onGoToArtist = { onNavigateToArtist(album.artist) },

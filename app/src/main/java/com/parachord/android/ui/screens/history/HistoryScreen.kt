@@ -146,6 +146,7 @@ fun HistoryScreen(
                     onPeriodChanged = viewModel::setPeriod,
                     onAlbumClick = onNavigateToAlbum,
                     onNavigateToArtist = onNavigateToArtist,
+                    onPlayAlbum = { title, artist -> viewModel.playAlbumByName(title, artist) },
                     onQueueAlbum = { title, artist -> viewModel.queueAlbumByName(title, artist) },
                     onAddAlbumToCollection = { title, artist, artworkUrl -> viewModel.addAlbumToCollection(title, artist, artworkUrl) },
                 )
@@ -258,6 +259,7 @@ private fun TopAlbumsTab(
     onPeriodChanged: (String) -> Unit,
     onAlbumClick: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onNavigateToArtist: (String) -> Unit = {},
+    onPlayAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
     onQueueAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
     onAddAlbumToCollection: (title: String, artist: String, artworkUrl: String?) -> Unit = { _, _, _ -> },
 ) {
@@ -296,6 +298,10 @@ private fun TopAlbumsTab(
                                     artworkUrl = album.artworkUrl,
                                     isInCollection = false,
                                     onDismiss = { showMenu = false },
+                                    onPlayAlbum = {
+                                        showMenu = false
+                                        onPlayAlbum(album.name, album.artist)
+                                    },
                                     onQueueAlbum = {
                                         showMenu = false
                                         onQueueAlbum(album.name, album.artist)

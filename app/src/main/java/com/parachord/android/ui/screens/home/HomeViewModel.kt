@@ -565,6 +565,19 @@ class HomeViewModel constructor(
     }
 
     /** Fetch an album's tracklist from metadata providers, resolve each track, and queue. */
+    /** Play an album that isn't in the library (#588 follow-up): its tracks from the catalog, as a new queue. */
+    fun playAlbumByName(albumTitle: String, artistName: String) {
+        viewModelScope.launch {
+            try {
+                val queue = catalogQueues.album(albumTitle, artistName) ?: return@launch
+                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e("HomeVM", "Failed to play album '$albumTitle'", e)
+            }
+        }
+    }
+
     fun queueAlbumByName(albumTitle: String, artistName: String) {
         viewModelScope.launch {
             try {

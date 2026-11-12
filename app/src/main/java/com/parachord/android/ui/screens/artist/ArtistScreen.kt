@@ -318,6 +318,7 @@ fun ArtistScreen(
                             onRetry = { viewModel.reloadDiscography() },
                             onNavigateToAlbum = onNavigateToAlbum,
                             onNavigateToArtist = onNavigateToArtist,
+                            onPlayAlbum = { title, artist -> viewModel.playAlbumByName(title, artist) },
                             onQueueAlbum = { title, artist -> viewModel.queueAlbumByName(title, artist) },
                             onAddAlbumToCollection = { title, artist, artworkUrl, year ->
                                 viewModel.addAlbumToCollection(title, artist, artworkUrl, year)
@@ -405,6 +406,7 @@ private fun DiscographyTab(
     onRetry: () -> Unit = {},
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit,
     onNavigateToArtist: (String) -> Unit = {},
+    onPlayAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
     onQueueAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
     onAddAlbumToCollection: (title: String, artist: String, artworkUrl: String?, year: Int?) -> Unit = { _, _, _, _ -> },
     onRemoveAlbumFromCollection: (title: String, artist: String) -> Unit = { _, _ -> },
@@ -562,6 +564,10 @@ private fun DiscographyTab(
                                             artworkUrl = album.artworkUrl,
                                             isInCollection = false,
                                             onDismiss = { showAlbumMenu = false },
+                                            onPlayAlbum = {
+                                                showAlbumMenu = false
+                                                onPlayAlbum(album.title, album.artist)
+                                            },
                                             onQueueAlbum = {
                                                 showAlbumMenu = false
                                                 onQueueAlbum(album.title, album.artist)

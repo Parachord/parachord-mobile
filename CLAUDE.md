@@ -892,8 +892,8 @@ Every album card across the app supports long-press context menus via the shared
 4. Show `AlbumContextMenu` when `showMenu` is true
 
 **AlbumContextMenu callbacks** — all optional except `onToggleCollection`:
-- `onPlayAlbum` — play the album immediately
-- `onQueueAlbum` — add album tracks to the playback queue
+- `onPlayAlbum` — play the album immediately (every album menu offers it, as on iOS; outside Library through the ViewModel's `playAlbumByName`, shared `CatalogQueues.album`)
+- `onQueueAlbum` — add album tracks to the playback queue (`queueAlbumByName`)
 - `onGoToAlbum` — navigate to the album detail screen
 - `onGoToArtist` — navigate to the artist screen
 - `onToggleCollection` — add/remove from collection (required)
