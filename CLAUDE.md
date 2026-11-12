@@ -28,6 +28,10 @@ The desktop uses a cascading provider pattern. Each provider has a specialty:
 
 **MusicBrainz is the primary source for discography and album tracklists.** Last.fm and Spotify supplement with images and additional metadata. Results from all providers are merged — later providers fill in gaps from earlier ones.
 
+**One provider list, built once (#595).** `MetadataProviders` (`shared/.../metadata/MetadataWiring.kt`) builds the cascade's providers for both apps: MusicBrainz, Wikipedia, Last.fm, Discogs, Spotify, then the Apple Music catalog's artist art (25). `withoutSpotify()` is the list for iOS's background enrichment service. The cascade's `enrichAlbumArtwork` step is the shared `upgradeCoverArtArchiveArtwork`, which swaps a Cover Art Archive cover for the iTunes 600x600 art. Which providers the user switched off still comes from two different settings: Android reads `disabled_meta_providers`, iOS reads `disabled_plugins`.
+
+**Top lists are cached a day (#595).** History's and a friend's top tracks, albums and artists go through the shared `TopListsCache`, on both apps. A list fetched less than 24 hours ago shows without a request. A failed or empty refresh shows the last list. Recently Played isn't cached.
+
 **Which edition an album opens (#560, desktop parachord#1290).** A release group holds every edition. The album page (when a discography or search has given the release group) and `parachord://` album links by MBID ask for up to 25 official releases with their track lists in one request (`MusicBrainzClient.albumReleaseOfGroup`) and open the one shared `pickRelease` chooses: digital-only releases first (what streaming services carry), then the most common track count (the standard edition, so not Abbey Road's 40-track deluxe), then the earliest date, undated last. Taking the first release MusicBrainz listed opened George Michael's "The Faith Tour" with 9 of 18 tracks (one CD). A port of desktop's `release-pick.js`; change it there first. The release-search path (no release group known) still takes the first search result, as desktop does.
 
 ### Resolver Scoring — Two-Tier System

@@ -36,6 +36,7 @@ class FriendDetailViewModel constructor(
     private val trackResolverCache: TrackResolverCache,
     private val metadataService: MetadataService,
     private val libraryRepository: LibraryRepository,
+    private val topLists: com.parachord.shared.repository.TopListsCache,
 ) : ViewModel() {
 
     companion object {
@@ -273,18 +274,24 @@ class FriendDetailViewModel constructor(
     private fun loadTopCharts(friend: FriendEntity) {
         val period = selectedPeriod.value
         viewModelScope.launch {
-            friendsRepository.getFriendTopTracks(friend.username, friend.service, period)
+            topLists.tracks(com.parachord.shared.repository.TopListsCache.friendKey(friend.username, friend.service, period)) {
+                friendsRepository.getFriendTopTracks(friend.username, friend.service, period)
+            }
                 .collect {
                     _topTracks.value = it
                     if (it is Resource.Success) resolveTracksInBackground(it.data)
                 }
         }
         viewModelScope.launch {
-            friendsRepository.getFriendTopAlbums(friend.username, friend.service, period)
+            topLists.albums(com.parachord.shared.repository.TopListsCache.friendKey(friend.username, friend.service, period)) {
+                friendsRepository.getFriendTopAlbums(friend.username, friend.service, period)
+            }
                 .collect { _topAlbums.value = it }
         }
         viewModelScope.launch {
-            friendsRepository.getFriendTopArtists(friend.username, friend.service, period)
+            topLists.artists(com.parachord.shared.repository.TopListsCache.friendKey(friend.username, friend.service, period)) {
+                friendsRepository.getFriendTopArtists(friend.username, friend.service, period)
+            }
                 .collect { _topArtists.value = it }
         }
     }
