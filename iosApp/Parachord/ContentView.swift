@@ -1926,6 +1926,8 @@ final class QueuePlaybackCoordinator {
     private let resolverCache: IosTrackResolverCache
     private let container = IosContainer.companion.shared
     private let queueManager = QueueManager()
+    /// Saves and restores the queue (shared `QueuePersistenceStore`, #594).
+    @ObservationIgnored private lazy var queuePersistence = container.makeQueuePersistence(queueManager: queueManager)
 
     private var router: PlaybackRouter {
         PlaybackRouter(avPlayer: player, musicKit: musicKit, spotify: spotify, soundCloud: soundCloud, bandcamp: bandcamp,
@@ -2006,8 +2008,6 @@ final class QueuePlaybackCoordinator {
     }
     /// Position saving (`PlaybackResumePosition`): was the last tick playing,
     /// and when was the position last written.
-    @ObservationIgnored private var positionSaveWasPlaying = false
-    @ObservationIgnored private var positionSavedAtMs: Int64 = 0
 
     /// Resolver ids that open in the browser instead of streaming (stream:false,
     /// e.g. Bandcamp). Seeded with the known default so it holds before the .axe
@@ -2662,9 +2662,9 @@ final class QueuePlaybackCoordinator {
                         positionMs: Int64(self.currentTime * 1000),
                         durationMs: Int64(self.duration * 1000)
                     )
-                    // #322: warm the next track's Apple Music `Song` ~15s before
-                    // the boundary so its play() skips the ~1.6s catalog fetch.
-                    self.prefetchNextIfNeeded(remainingSec: self.duration - self.currentTime)
+                    // #322: warm the next track's Apple Music `Song` in the last
+                    // 30 s so its play() skips the ~1.6s catalog fetch.
+                    self.prefetchNextIfNeeded()
                     // Track changes, artwork that resolved late, and drift.
                     self.nowPlaying?.refresh()
                     // #567: where the track is, for a queue restored after iOS ends the app.
@@ -2676,17 +2676,18 @@ final class QueuePlaybackCoordinator {
     }
 
     /// Pre-fetch the NEXT queued track's Apple Music catalog `Song` when the
-    /// current track is within ~15s of ending, so the boundary `play()` skips
-    /// the ~1.6s `MusicCatalogResourceRequest` (measured in the #322 trace).
-    /// Android parity: `PlaybackController` pre-resolves the next track ~30s
-    /// early. One-shot per current track; fire-and-forget; a plain catalog REST
+    /// current track is in its last 30 s (shared `NextTrackPreparation`, the
+    /// window Android readies the next track in), so the boundary `play()`
+    /// skips the ~1.6s `MusicCatalogResourceRequest` (#322 trace). One-shot per current track; fire-and-forget; a plain catalog REST
     /// lookup that never touches `ApplicationMusicPlayer`, so it can't disrupt
     /// the outgoing Spotify or Apple Music stream. Only fires when the next
     /// track will actually route to Apple Music (has an `appleMusicId`).
     @MainActor
-    private func prefetchNextIfNeeded(remainingSec: Double) {
+    private func prefetchNextIfNeeded() {
+        // The last 30 s, as Android readies the next track (shared, #594).
         guard !prefetchedNextForCurrentTrack, isPlaying,
-              remainingSec > 0, remainingSec <= 15,
+              NextTrackPreparation.shared.shouldPrepareNext(
+                positionMs: Int64(currentTime * 1000), durationMs: Int64(duration * 1000)),
               let next = upNext.first else { return }
         prefetchedNextForCurrentTrack = true
         Task { @MainActor in
@@ -3271,6 +3272,13 @@ final class QueuePlaybackCoordinator {
                 if loadOnPlay?.track.id == track.id { loadOnPlay = nil }
                 unplayableRun.started()
                 playedSinceWrap = true
+                // Resolve the next few queued tracks now, so their badges show
+                // and they start quickly (shared with Android, #594). Behind
+                // the rows on screen in the resolve queue.
+                for (i, next) in NextTrackPreparation.shared.tracksToPreresolve(upNext: upNext).enumerated() {
+                    resolverCache.resolve(ResolveRequest(artist: next.artist, title: next.title, album: next.album,
+                                                         spotifyId: next.spotifyId), order: 10_000 + i)
+                }
                 playingPick = forced.map { (trackId: track.id, resolver: $0) }
                 let previousEngine = activeEngine
                 activeEngine = kind
@@ -3588,56 +3596,22 @@ final class QueuePlaybackCoordinator {
 
     // MARK: - Queue persistence (#220)
 
-    /// Debounced save: coalesce bursts of mutations into one write ~500 ms later
-    /// (mirrors Android's QueuePersistence debounce). Cancels the prior pending
-    /// save so only the latest state is written.
-    @ObservationIgnored private var persistTask: Task<Void, Never>?
+    /// Save the queue: the shared store takes it as it is now and writes the
+    /// latest 500 ms after the last change, when "Remember queue" is on (#594).
     private func persistSoon() {
-        persistTask?.cancel()
-        persistTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if Task.isCancelled { return }
-            await self?.saveQueueNow()
-        }
-    }
-
-    /// A queue was restored, or a non-empty one saved, in this run (shared
-    /// `QueueRestorePolicy.shouldSave`, #604).
-    @ObservationIgnored private var hadQueueThisRun = false
-
-    private func saveQueueNow() async {
-        guard (try? await container.settingsStore.isPersistQueueEnabled()) == true else { return }
-        guard let snap = queueManager.snapshot.value as? QueueSnapshot else { return }
-        // An empty queue isn't written over the last session's until this run
-        // has had one: a run whose restore a play link skipped, and the link
-        // then found nothing, would wipe it for good.
-        let isEmpty = currentTrack == nil && snap.upNext.isEmpty
-        guard QueueRestorePolicy.shared.shouldSave(isEmpty: isEmpty, hadQueueThisRun: hadQueueThisRun) else { return }
-        if !isEmpty { hadQueueThisRun = true }
-        let state = PersistedQueueState(
-            currentTrack: currentTrack,
-            upNext: snap.upNext,
-            playHistory: queueManager.history,
-            playbackContext: snap.playbackContext,
-            shuffleEnabled: snap.shuffleEnabled,
-            originalOrder: queueManager.savedOriginalOrder,
-            playHistoryInQueue: queueManager.historyInQueue,
-            currentIsPoolTrack: queueManager.currentIsPoolTrack,
-            upNextInLap: queueManager.upNextInLap,
-            currentInLap: queueManager.currentInLap)
-        let jsonStr = QueuePersistenceCodec.shared.encode(state: state)
-        try? await container.settingsStore.setPersistedQueueState(json: jsonStr)
+        queuePersistence.saveSoon(currentTrack: currentTrack)
     }
 
     /// Restore the saved queue on launch (paused — never auto-plays, Android
     /// parity). Sets currentTrack + upNext/shuffle/context from the persisted
     /// blob if the "Remember queue" setting is on and a blob exists.
     func restoreQueue() async {
-        guard (try? await container.settingsStore.isPersistQueueEnabled()) == true else { return }
-        guard let jsonStr = try? await container.settingsStore.getPersistedQueueState(),
-              let state = QueuePersistenceCodec.shared.decode(jsonStr: jsonStr) else { return }
-        if state.upNext.isEmpty && state.currentTrack == nil { return }
-        let savedPosition = try? await container.settingsStore.getPersistedPlaybackPosition()
+        guard let state = try? await queuePersistence.load() else { return }
+        var resumeAtMs: Int64 = 0
+        if let id = state.currentTrack?.id,
+           let ms = try? await queuePersistence.resumePositionMs(trackId: id) {
+            resumeAtMs = ms.int64Value
+        }
         await MainActor.run {
             // The reads above wait, and a play can start meanwhile (a deep
             // link, a tap on the phone). Putting the last session's queue back
@@ -3650,28 +3624,13 @@ final class QueuePlaybackCoordinator {
                 NSLog("QUEUE restore skipped: something is already playing")
                 return
             }
-            self.queueManager.restoreState(
-                restoredUpNext: state.upNext,
-                restoredHistory: state.playHistory,
-                restoredOriginalOrder: state.originalOrder,
-                context: state.playbackContext,
-                shuffle: state.shuffleEnabled,
-                restoredHistoryInQueue: state.playHistoryInQueue,
-                restoredCurrentIsPoolTrack: state.currentIsPoolTrack,
-                restoredUpNextInLap: state.upNextInLap,
-                restoredCurrentInLap: state.currentInLap)
+            self.currentTrack = self.queuePersistence.apply(state: state)
             self.playedSinceWrap = false
-            self.hadQueueThisRun = true
-            self.currentTrack = state.currentTrack
             // Shown paused but loaded in no engine: play starts it, at the
             // saved position when it's for this track (#567).
             self.loadOnPlay = state.currentTrack.map { track in
-                LoadOnPlay(
-                    track: track,
-                    positionMs: PlaybackResumePosition.shared.resumeAtMs(
-                        saved: PlaybackResumePosition.shared.decode(jsonStr: savedPosition),
-                        trackId: track.id),
-                    skipReselect: false, why: .restored, pickedResolver: nil)
+                LoadOnPlay(track: track, positionMs: resumeAtMs,
+                           skipReselect: false, why: .restored, pickedResolver: nil)
             }
             self.syncSnapshot()
         }
@@ -3682,15 +3641,10 @@ final class QueuePlaybackCoordinator {
     /// Called from the 1 s tick.
     @MainActor
     private func savePositionIfDue() {
-        let playing = isPlaying
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let due = PlaybackResumePosition.shared.shouldSave(
-            wasPlaying: positionSaveWasPlaying, isPlaying: playing,
-            msSinceLastSave: nowMs - positionSavedAtMs)
-        positionSaveWasPlaying = playing
+        let due = queuePersistence.positionSaveDue(isPlaying: isPlaying, nowMs: nowMs)
         // A track no engine holds keeps the position its slot saved.
         guard due, let track = currentTrack, loadOnPlayTarget == nil else { return }
-        positionSavedAtMs = nowMs
         savePosition(trackId: track.id, positionMs: Int64(currentTime * 1000),
                      durationMs: Int64(max(duration, 0) * 1000))
     }
@@ -3698,13 +3652,7 @@ final class QueuePlaybackCoordinator {
     /// Writes the saved resume position (`persisted_queue_position`), when
     /// "Remember queue" is on.
     private func savePosition(trackId: String, positionMs: Int64, durationMs: Int64) {
-        let json = PlaybackResumePosition.shared.encode(position: SavedPlaybackPosition(
-            trackId: trackId, positionMs: positionMs, durationMs: durationMs))
-        let settings = container.settingsStore
-        Task {
-            guard (try? await settings.isPersistQueueEnabled()) == true else { return }
-            try? await settings.setPersistedPlaybackPosition(json: json)
-        }
+        queuePersistence.savePosition(trackId: trackId, positionMs: positionMs, durationMs: durationMs)
     }
 
     /// Moves where Play starts the track no engine holds (Previous restarting

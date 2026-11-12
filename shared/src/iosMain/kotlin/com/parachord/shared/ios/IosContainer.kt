@@ -1641,6 +1641,12 @@ class IosContainer private constructor() {
     private fun makeSpinoffTrack(title: String, artist: String): Track =
         com.parachord.shared.playback.spinoffTrack(title, artist)
 
+    /** The queue persistence for [queueManager] (shared `QueuePersistenceStore`, #594). Swift can't pass the defaulted debounce. */
+    fun makeQueuePersistence(queueManager: com.parachord.shared.playback.QueueManager): com.parachord.shared.playback.QueuePersistenceStore =
+        com.parachord.shared.playback.QueuePersistenceStore(
+            com.parachord.shared.playback.settingsQueueStorage(settingsStore), queueManager, appScope,
+        )
+
     /**
      * A radio station's pool refiller (the shared `PoolRefiller`, Android's), its
      * fetcher reading a hosted tracklist URL. Swift can't call the defaulted

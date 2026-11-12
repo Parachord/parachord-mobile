@@ -1901,7 +1901,7 @@ class PlaybackController constructor(
         // is looking at the current track / their current screen), so
         // they shouldn't compete with foreground track-list resolution
         // for the priority lane.
-        val upcoming = snapshot.upNext.take(3)
+        val upcoming = com.parachord.shared.playback.NextTrackPreparation.tracksToPreresolve(snapshot.upNext)
         if (upcoming.isNotEmpty()) {
             trackResolverCache.resolveInBackground(upcoming, priority = false)
         }
@@ -2016,7 +2016,7 @@ class PlaybackController constructor(
                     val position = ctrl.currentPosition.coerceAtLeast(0L)
                     val duration = ctrl.duration.coerceAtLeast(0L)
                     stateHolder.update { copy(position = position, duration = duration) }
-                    if (duration > 0 && duration - position in 1..30_000) {
+                    if (com.parachord.shared.playback.NextTrackPreparation.shouldPrepareNext(position, duration)) {
                         prewarmSpotifyFor(queueManager.snapshot.value.upNext.firstOrNull())
                     }
                 }
@@ -2292,10 +2292,10 @@ class PlaybackController constructor(
                     // state flipping to "unknown"/isPlaying:false mid-song).
                     // The resolver pre-resolution is enough: setQueue() in play()
                     // is fast when the WebView is already warm.
-                    if (duration > 0 && duration - position in 1..30_000) {
+                    if (com.parachord.shared.playback.NextTrackPreparation.shouldPrepareNext(position, duration)) {
                         prewarmSpotifyFor(queueManager.snapshot.value.upNext.firstOrNull())
                     }
-                    if (!nextTrackPreloaded && duration > 0 && duration - position in 1..30_000) {
+                    if (!nextTrackPreloaded && com.parachord.shared.playback.NextTrackPreparation.shouldPrepareNext(position, duration)) {
                         val nextTrack = queueManager.snapshot.value.upNext.firstOrNull()
                         if (nextTrack != null) {
                             nextTrackPreloaded = true
@@ -2391,7 +2391,7 @@ class PlaybackController constructor(
                         duration = if (duration > 0) duration else this.duration,
                     )
                 }
-                if (duration > 0 && duration - position in 1..30_000) {
+                if (com.parachord.shared.playback.NextTrackPreparation.shouldPrepareNext(position, duration)) {
                     prewarmSpotifyFor(queueManager.snapshot.value.upNext.firstOrNull())
                 }
                 stoppedAtEnd = if (!playing && duration > 0 && duration - position < 1500) stoppedAtEnd + 1 else 0

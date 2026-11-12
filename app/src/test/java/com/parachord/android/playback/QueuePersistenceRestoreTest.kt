@@ -5,7 +5,6 @@ import com.parachord.android.data.store.SettingsStore
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
-import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -24,14 +23,11 @@ class QueuePersistenceRestoreTest {
     private fun persistence(queueManager: QueueManager): QueuePersistence {
         val settingsStore = mockk<SettingsStore>(relaxed = true)
         coEvery { settingsStore.isPersistQueueEnabled() } returns true
-        coEvery { settingsStore.getPersistedQueueState() } returns Json.encodeToString(
-            PersistedQueueState.serializer(),
-            PersistedQueueState(
-                currentTrack = saved.toSerializable(),
-                upNext = listOf(savedNext.toSerializable()),
-            ),
-        )
-        return QueuePersistence(settingsStore, queueManager, PlaybackStateHolder(), Json)
+        coEvery { settingsStore.getPersistedQueueState() } returns
+            com.parachord.shared.playback.QueuePersistenceCodec.encode(
+                com.parachord.shared.playback.PersistedQueueState(currentTrack = saved, upNext = listOf(savedNext)),
+            )
+        return QueuePersistence(settingsStore, queueManager, PlaybackStateHolder())
     }
 
     @Test fun `a fresh start restores the saved queue`() = runBlocking {
