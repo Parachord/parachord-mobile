@@ -256,11 +256,6 @@ data class IosShareResult(
     val isSmartLink: Boolean,
 )
 
-// Concert artist seed: top artists across EVERY time window, both services.
-private val CONCERT_LASTFM_PERIODS = listOf("7day", "1month", "3month", "6month", "12month", "overall")
-private val CONCERT_LB_RANGES = listOf("week", "month", "quarter", "half_yearly", "year", "all_time")
-private const val CONCERT_SEED_MAX = 40 // matches Android ConcertsViewModel.MAX_ARTISTS
-
 @kotlinx.serialization.Serializable
 private data class TimedTracks(val fetchedAt: Long, val data: List<HistoryTrack>)
 
@@ -2305,7 +2300,7 @@ class IosContainer private constructor() {
         if (paintedCache) emit(cached!!)
         if (fresh) return@flow
 
-        val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
+        val artists = try { concertArtistSeed.gather() } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() }
         // Nothing to search with: end the load (an empty answer) unless the cache
         // already painted something.
         if (artists.isEmpty()) { if (!paintedCache) emit(emptyList<ConcertEvent>()); return@flow }
@@ -2334,7 +2329,7 @@ class IosContainer private constructor() {
      *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is
      *  safe. */
     suspend fun loadConcerts(): List<ConcertEvent> {
-        val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
+        val artists = try { concertArtistSeed.gather() } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() }
         if (artists.isEmpty()) return emptyList()
         val loc = settingsStore.getConcertLocation()
         var out = emptyList<ConcertEvent>()
@@ -2346,63 +2341,17 @@ class IosContainer private constructor() {
         return out
     }
 
-    /**
-     * The concert artist SEED: the user's TOP ARTISTS across EVERY time window
-     * — Last.fm periods (7day…overall, reusing the per-period disk cache via
-     * [loadTopArtists]) AND ListenBrainz ranges (week…all_time). Deduped by name
-     * and round-robin interleaved across the two services for fair
-     * representation, capped at [CONCERT_SEED_MAX]. Mirrors Android
-     * `ConcertsViewModel.gatherArtists`'s history source (Android additionally
-     * folds in collection/library artists from the DB — not available on iOS
-     * until the DB lands). This deliberately replaces the old
-     * recommended-artists stand-in, which seeded concerts off AI suggestions
-     * rather than what the user actually listens to.
-     */
-    suspend fun topArtistsAllWindows(): List<ConcertArtist> {
-        val lastfm = mutableListOf<ConcertArtist>()
-        val lb = mutableListOf<ConcertArtist>()
-
-        // Last.fm: every period (cached per-period on disk → warm builds are cheap).
-        if (settingsStore.getLastFmUsername() != null) {
-            val seen = mutableSetOf<String>()
-            for (p in CONCERT_LASTFM_PERIODS) {
-                val list = try { loadTopArtists(p) } catch (e: Exception) { emptyList() }
-                for (a in list) {
-                    val k = a.name.lowercase()
-                    if (a.name.isNotBlank() && seen.add(k)) lastfm.add(ConcertArtist(a.name, "history", a.imageUrl))
-                }
-            }
-        }
-
-        // ListenBrainz: every range.
-        val lbUser = settingsStore.getListenBrainzUsername()
-        if (lbUser != null) {
-            val seen = mutableSetOf<String>()
-            for (r in CONCERT_LB_RANGES) {
-                val list = try { listenBrainzClient.getUserTopArtists(lbUser, r, 50) } catch (e: Exception) { emptyList() }
-                for (a in list) {
-                    val k = a.name.lowercase()
-                    if (a.name.isNotBlank() && seen.add(k)) lb.add(ConcertArtist(a.name, "history"))
-                }
-            }
-        }
-
-        // Round-robin interleave the two services, dedupe across them, cap at
-        // CONCERT_SEED_MAX (mirrors Android interleaveAndDedupe).
-        val out = mutableListOf<ConcertArtist>()
-        val seen = mutableSetOf<String>()
-        val itA = lastfm.iterator()
-        val itB = lb.iterator()
-        while (out.size < CONCERT_SEED_MAX && (itA.hasNext() || itB.hasNext())) {
-            for (it in listOf(itA, itB)) {
-                if (out.size >= CONCERT_SEED_MAX) break
-                while (it.hasNext()) {
-                    val a = it.next()
-                    if (seen.add(a.name.lowercase())) { out.add(a); break }
-                }
-            }
-        }
-        return out
+    /** The concert artist seed (#589): collection, library and 6-month history, shared with Android. */
+    private val concertArtistSeed by lazy {
+        com.parachord.shared.repository.ConcertArtistSeedSource(
+            artistDao = artistDao,
+            trackDao = trackDao,
+            albumDao = albumDao,
+            settingsStore = settingsStore,
+            lastFmClient = lastFmClient,
+            listenBrainzClient = listenBrainzClient,
+            lastFmApiKey = appConfig.lastFmApiKey,
+        )
     }
 
     // ── Geo location (geoIP detect + Nominatim typeahead/reverse) ───────
