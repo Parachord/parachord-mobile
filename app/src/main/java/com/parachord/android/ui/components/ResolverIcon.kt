@@ -455,7 +455,7 @@ fun ResolverIconSquare(
     modifier: Modifier = Modifier,
 ) {
     val bgColor = ResolverIconColors.forResolver(resolver)
-    val iconAlpha = if (confidence > 0.8f) 1f else 0.6f
+    val iconAlpha = if (com.parachord.shared.resolver.ResolverBadges.isDimmed(confidence.toDouble())) 0.6f else 1f
 
     // SoundCloud uses a PNG drawable instead of an SVG path
     if (resolver.lowercase() == "soundcloud") {
