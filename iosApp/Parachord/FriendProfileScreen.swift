@@ -149,7 +149,7 @@ private let friendPeriods: [(key: String, label: String)] = [
 struct FriendProfileScreen: View {
     @State private var model: FriendProfileModel
     @State private var tabIndex = 0
-    @State private var period = "7day"
+    @State private var period = FormattersKt.DEFAULT_HISTORY_PERIOD
     @State private var navArtist: String?
     @State private var navAlbum: PCAlbumRef?
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
@@ -282,7 +282,7 @@ struct FriendProfileScreen: View {
                             Text(t.title).font(.system(size: 15, weight: .medium))
                                 .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
                                     : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1)).lineLimit(1)
-                            Text("\(t.artist) · \(plays(t.playCount))").font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+                            Text("\(t.artist) · \(FormattersKt.playCountLabel(count: t.playCount))").font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                         }
                         Spacer(minLength: 8)
                         if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
@@ -316,7 +316,7 @@ struct FriendProfileScreen: View {
                                 .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4)).padding(6)
                         }
                         Text(a.name).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).padding(.horizontal, 2)
-                        Text("\(a.artist) · \(plays(a.playCount))").font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1).padding(.horizontal, 2)
+                        Text("\(a.artist) · \(FormattersKt.playCountLabel(count: a.playCount))").font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1).padding(.horizontal, 2)
                     }
                 }
                 .buttonStyle(.plain)
@@ -338,7 +338,7 @@ struct FriendProfileScreen: View {
                     VStack(spacing: 6) {
                         artistCircle(a.imageUrl, seed: a.name)
                         Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).multilineTextAlignment(.center)
-                        Text(plays(a.playCount)).font(.system(size: 10)).foregroundStyle(PC.fg3)
+                        Text(FormattersKt.playCountLabel(count: a.playCount)).font(.system(size: 10)).foregroundStyle(PC.fg3)
                     }
                 }
                 .buttonStyle(.plain)
@@ -373,7 +373,7 @@ struct FriendProfileScreen: View {
                             }
                         }
                         Spacer(minLength: 8)
-                        Text(t.nowPlaying ? "Now" : timeAgo(t.timestamp)).font(.system(size: 11)).foregroundStyle(PC.fg3)
+                        Text(t.nowPlaying ? "Now" : RelativeTime.shared.agoSeconds(timestampSeconds: t.timestamp)).font(.system(size: 11)).foregroundStyle(PC.fg3)
                         if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
                             ResolverBadgeRow(sources: s)
                         }
@@ -431,17 +431,5 @@ struct FriendProfileScreen: View {
             Text(message)
                 .font(.system(size: 14)).foregroundStyle(PC.fg2).multilineTextAlignment(.center).padding(.horizontal, 40)
         }
-    }
-
-    private func plays(_ n: Int32) -> String { n == 1 ? "1 play" : "\(n) plays" }
-
-    private func timeAgo(_ ts: Int64) -> String {
-        guard ts > 0 else { return "" }
-        let secs = Int64(Date().timeIntervalSince1970) - ts
-        if secs < 60 { return "just now" }
-        if secs < 3600 { return "\(secs / 60)m ago" }
-        if secs < 86400 { return "\(secs / 3600)h ago" }
-        if secs < 172800 { return "Yesterday" }
-        return "\(secs / 86400)d ago"
     }
 }

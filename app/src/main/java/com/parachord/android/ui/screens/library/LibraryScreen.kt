@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.library
 
+import com.parachord.shared.format.RelativeTime
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
@@ -542,21 +543,7 @@ private fun FriendsTab(
     onListenAlong: (FriendEntity) -> Unit,
 ) {
     val sortedFriends = remember(friends, friendSort, searchQuery) {
-        val filtered = if (searchQuery.isBlank()) friends else {
-            friends.filter { it.displayName.contains(searchQuery, ignoreCase = true) }
-        }
-        when (friendSort) {
-            FriendSort.ALPHA_ASC -> filtered.sortedBy { it.displayName.lowercase() }
-            FriendSort.ALPHA_DESC -> filtered.sortedByDescending { it.displayName.lowercase() }
-            FriendSort.RECENT -> filtered.sortedByDescending { it.addedAt }
-            FriendSort.ACTIVE -> {
-                val fourteenDaysAgo = System.currentTimeMillis() / 1000 - 14 * 86400
-                filtered.filter { it.cachedTrackTimestamp > fourteenDaysAgo }
-                    .sortedByDescending { it.cachedTrackTimestamp }
-            }
-            FriendSort.ON_AIR -> filtered.filter { it.isOnAir }
-                .sortedByDescending { it.cachedTrackTimestamp }
-        }
+        com.parachord.shared.library.CollectionSort.friends(friends, friendSort, searchQuery)
     }
 
     val friendListState = rememberLazyListState()
@@ -718,7 +705,7 @@ private fun FriendsTab(
                                             friend.cachedTrackArtist?.let { append("  ·  $it") }
                                             if (friend.cachedTrackTimestamp > 0) {
                                                 append("  ·  ")
-                                                append(formatFriendTimeAgo(friend.cachedTrackTimestamp))
+                                                append(RelativeTime.agoSeconds(friend.cachedTrackTimestamp))
                                             }
                                         },
                                         style = MaterialTheme.typography.bodySmall,
@@ -913,19 +900,6 @@ private fun FriendHexFallback(name: String) {
             fontWeight = FontWeight.SemiBold,
             color = Color.White,
         )
-    }
-}
-
-private fun formatFriendTimeAgo(timestampSeconds: Long): String {
-    val now = System.currentTimeMillis() / 1000
-    val diff = now - timestampSeconds
-    return when {
-        diff < 60 -> "Just now"
-        diff < 3600 -> "${diff / 60}m ago"
-        diff < 86400 -> "${diff / 3600}h ago"
-        diff < 172800 -> "Yesterday"
-        diff < 604800 -> "${diff / 86400}d ago"
-        else -> "${diff / 604800}w ago"
     }
 }
 

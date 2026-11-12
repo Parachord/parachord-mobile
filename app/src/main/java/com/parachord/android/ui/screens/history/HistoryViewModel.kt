@@ -62,7 +62,7 @@ class HistoryViewModel constructor(
     }
 
     // Period filter for top charts
-    val selectedPeriod = MutableStateFlow(link.period ?: "1month")
+    val selectedPeriod = MutableStateFlow(link.period ?: com.parachord.shared.format.DEFAULT_HISTORY_PERIOD)
 
     // Top charts data
     private val _topTracks = MutableStateFlow<Resource<List<HistoryTrack>>>(Resource.Loading)

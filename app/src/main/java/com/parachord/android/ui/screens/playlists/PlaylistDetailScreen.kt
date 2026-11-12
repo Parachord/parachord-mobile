@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.shared.format.RelativeTime
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
@@ -330,7 +331,7 @@ fun PlaylistDetailScreen(
                     playlist?.lastModified?.takeIf { it > 0 }?.let { ts ->
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "Last updated ${formatPlaylistRelativeTime(ts)}",
+                            text = "Last updated: ${RelativeTime.ago(ts)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -674,29 +675,6 @@ private fun String.titlecase(): String =
  * Mirrors the settings screen's sync-status formatter but kept local
  * to avoid dragging the helper across modules.
  */
-private fun formatPlaylistRelativeTime(timestamp: Long): String {
-    val diff = System.currentTimeMillis() - timestamp
-    return when {
-        diff < 60_000 -> "just now"
-        diff < 3_600_000 -> {
-            val m = diff / 60_000
-            if (m == 1L) "1 minute ago" else "$m minutes ago"
-        }
-        diff < 86_400_000 -> {
-            val h = diff / 3_600_000
-            if (h == 1L) "1 hour ago" else "$h hours ago"
-        }
-        diff < 7 * 86_400_000L -> {
-            val d = diff / 86_400_000
-            if (d == 1L) "yesterday" else "$d days ago"
-        }
-        else -> {
-            val fmt = java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault())
-            "on ${fmt.format(java.util.Date(timestamp))}"
-        }
-    }
-}
-
 /** Web URL for a playlist on a given service, or null if not linkable. */
 private fun playlistMirrorUrl(providerId: String, externalId: String): String? = when (providerId) {
     "spotify" -> "https://open.spotify.com/playlist/$externalId"

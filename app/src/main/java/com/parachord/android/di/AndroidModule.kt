@@ -981,6 +981,19 @@ val androidModule = module {
         )
     }
 
+    // The concert artist seed (#589), shared with iOS.
+    single {
+        com.parachord.shared.repository.ConcertArtistSeedSource(
+            artistDao = get(),
+            trackDao = get(),
+            albumDao = get(),
+            settingsStore = get(),
+            lastFmClient = get(),
+            listenBrainzClient = get(),
+            lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
+        )
+    }
+
     // ── AI ────────────────────────────────────────────────────────────
 
     // AiChatService — shared. DjToolExecutor is now a shared interface;

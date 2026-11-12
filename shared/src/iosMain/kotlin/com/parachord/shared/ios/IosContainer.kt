@@ -254,11 +254,6 @@ data class IosShareResult(
     val isSmartLink: Boolean,
 )
 
-// Concert artist seed: top artists across EVERY time window, both services.
-private val CONCERT_LASTFM_PERIODS = listOf("7day", "1month", "3month", "6month", "12month", "overall")
-private val CONCERT_LB_RANGES = listOf("week", "month", "quarter", "half_yearly", "year", "all_time")
-private const val CONCERT_SEED_MAX = 40 // matches Android ConcertsViewModel.MAX_ARTISTS
-
 class IosContainer private constructor() {
 
     companion object {
@@ -516,42 +511,28 @@ class IosContainer private constructor() {
      * mirrors) PLUS — for pull providers (Spotify / Apple Music) — live-fetched
      * not-yet-imported native playlists, deduped against native rows + linked
      * mirror copies + same-name local rows so a playlist never appears twice.
-     * Mirrors Android's SyncViewModel.openConfig merge; call from a `Task`.
+     * The shared [com.parachord.shared.sync.SyncPickerRows], Android's too:
+     * the provider's list is fetched at most once a minute, and a row the user
+     * already checked stays checked. Call from a `Task`.
      */
-    suspend fun getProviderPickerRows(providerId: String): List<ProviderChannelPlaylist> {
-        val local = playlistSyncChannelManager.getProviderChannelPlaylists(providerId)
-        val provider = when (providerId) {
-            "spotify" -> spotifySyncProvider
-            "applemusic" -> appleMusicSyncProvider
-            else -> return local // ListenBrainz: no live catalog to merge
-        }
-        val nativeLocalIds = local.filter { !it.isMirror }.map { it.localId }.toSet()
-        val linkedExternalIds = syncEngine.linkedExternalIdsForProvider(providerId)
-        val localNames = playlistDao.getAllSync()
-            .mapNotNull { it.name.trim().lowercase().ifBlank { null } }.toSet()
-        val fetched = runCatching { provider.fetchPlaylists() }.getOrElse { emptyList() }
-        val notImported = fetched
-            .filter {
-                "$providerId-${it.spotifyId}" !in nativeLocalIds &&
-                    it.spotifyId !in linkedExternalIds &&
-                    it.entity.name.trim().lowercase() !in localNames
-            }
-            .map { sp ->
-                ProviderChannelPlaylist(
-                    localId = "$providerId-${sp.spotifyId}",
-                    name = sp.entity.name,
-                    trackCount = sp.trackCount,
-                    ownerName = sp.entity.ownerName,
-                    createdAt = sp.entity.createdAt,
-                    updatedAt = sp.entity.updatedAt,
-                    lastModified = sp.entity.lastModified,
-                    isMirror = false,
-                    originLabel = null,
-                    enabled = false,
-                    notImported = true,
-                )
-            }
-        return local + notImported
+    suspend fun getProviderPickerRows(providerId: String): List<ProviderChannelPlaylist> =
+        syncPickerRows.rows(providerId)
+
+    /** The picker's row rules, shared with Android (#591). */
+    private val syncPickerRows by lazy {
+        com.parachord.shared.sync.SyncPickerRows(
+            channelManager = playlistSyncChannelManager,
+            syncEngine = syncEngine,
+            playlistDao = playlistDao,
+            settings = settingsStore,
+            provider = { id ->
+                when (id) {
+                    "spotify" -> spotifySyncProvider
+                    "applemusic" -> appleMusicSyncProvider
+                    else -> null
+                }
+            },
+        )
     }
 
     // ── Legacy → N-way migration preview (#289 brick #5) ──────────────
@@ -2254,7 +2235,7 @@ class IosContainer private constructor() {
         if (paintedCache) emit(cached!!)
         if (fresh) return@flow
 
-        val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
+        val artists = try { concertArtistSeed.gather() } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() }
         // Nothing to search with: end the load (an empty answer) unless the cache
         // already painted something.
         if (artists.isEmpty()) { if (!paintedCache) emit(emptyList<ConcertEvent>()); return@flow }
@@ -2283,7 +2264,7 @@ class IosContainer private constructor() {
      *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is
      *  safe. */
     suspend fun loadConcerts(): List<ConcertEvent> {
-        val artists = try { topArtistsAllWindows() } catch (e: Exception) { emptyList() }
+        val artists = try { concertArtistSeed.gather() } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() }
         if (artists.isEmpty()) return emptyList()
         val loc = settingsStore.getConcertLocation()
         var out = emptyList<ConcertEvent>()
@@ -2295,63 +2276,17 @@ class IosContainer private constructor() {
         return out
     }
 
-    /**
-     * The concert artist SEED: the user's TOP ARTISTS across EVERY time window
-     * — Last.fm periods (7day…overall, reusing the per-period disk cache via
-     * [loadTopArtists]) AND ListenBrainz ranges (week…all_time). Deduped by name
-     * and round-robin interleaved across the two services for fair
-     * representation, capped at [CONCERT_SEED_MAX]. Mirrors Android
-     * `ConcertsViewModel.gatherArtists`'s history source (Android additionally
-     * folds in collection/library artists from the DB — not available on iOS
-     * until the DB lands). This deliberately replaces the old
-     * recommended-artists stand-in, which seeded concerts off AI suggestions
-     * rather than what the user actually listens to.
-     */
-    suspend fun topArtistsAllWindows(): List<ConcertArtist> {
-        val lastfm = mutableListOf<ConcertArtist>()
-        val lb = mutableListOf<ConcertArtist>()
-
-        // Last.fm: every period (cached per-period on disk → warm builds are cheap).
-        if (settingsStore.getLastFmUsername() != null) {
-            val seen = mutableSetOf<String>()
-            for (p in CONCERT_LASTFM_PERIODS) {
-                val list = try { loadTopArtists(p) } catch (e: Exception) { emptyList() }
-                for (a in list) {
-                    val k = a.name.lowercase()
-                    if (a.name.isNotBlank() && seen.add(k)) lastfm.add(ConcertArtist(a.name, "history", a.imageUrl))
-                }
-            }
-        }
-
-        // ListenBrainz: every range.
-        val lbUser = settingsStore.getListenBrainzUsername()
-        if (lbUser != null) {
-            val seen = mutableSetOf<String>()
-            for (r in CONCERT_LB_RANGES) {
-                val list = try { listenBrainzClient.getUserTopArtists(lbUser, r, 50) } catch (e: Exception) { emptyList() }
-                for (a in list) {
-                    val k = a.name.lowercase()
-                    if (a.name.isNotBlank() && seen.add(k)) lb.add(ConcertArtist(a.name, "history"))
-                }
-            }
-        }
-
-        // Round-robin interleave the two services, dedupe across them, cap at
-        // CONCERT_SEED_MAX (mirrors Android interleaveAndDedupe).
-        val out = mutableListOf<ConcertArtist>()
-        val seen = mutableSetOf<String>()
-        val itA = lastfm.iterator()
-        val itB = lb.iterator()
-        while (out.size < CONCERT_SEED_MAX && (itA.hasNext() || itB.hasNext())) {
-            for (it in listOf(itA, itB)) {
-                if (out.size >= CONCERT_SEED_MAX) break
-                while (it.hasNext()) {
-                    val a = it.next()
-                    if (seen.add(a.name.lowercase())) { out.add(a); break }
-                }
-            }
-        }
-        return out
+    /** The concert artist seed (#589): collection, library and 6-month history, shared with Android. */
+    private val concertArtistSeed by lazy {
+        com.parachord.shared.repository.ConcertArtistSeedSource(
+            artistDao = artistDao,
+            trackDao = trackDao,
+            albumDao = albumDao,
+            settingsStore = settingsStore,
+            lastFmClient = lastFmClient,
+            listenBrainzClient = listenBrainzClient,
+            lastFmApiKey = appConfig.lastFmApiKey,
+        )
     }
 
     // ── Geo location (geoIP detect + Nominatim typeahead/reverse) ───────

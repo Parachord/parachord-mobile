@@ -245,23 +245,10 @@ final class SyncViewModel {
     }
 
     // ── Formatting helpers (match Android) ───────────────────────────────
-    static func axesSummary(_ axes: Set<String>) -> String {
-        var parts: [String] = []
-        if axes.contains("tracks") { parts.append("Liked Songs") }
-        if axes.contains("albums") { parts.append("Albums") }
-        if axes.contains("artists") { parts.append("Artists") }
-        if axes.contains("playlists") { parts.append("Playlists") }
-        return parts.joined(separator: " · ")
-    }
+    // The status text is shared with Android (#591).
+    static func axesSummary(_ axes: Set<String>) -> String { SyncStatusText.shared.axesSummary(axes: axes) }
 
-    static func relativeTime(_ ms: Int64) -> String {
-        if ms == 0 { return "Never" }
-        let diff = Int64(Date().timeIntervalSince1970 * 1000) - ms
-        if diff < 60_000 { return "Just now" }
-        if diff < 3_600_000 { return "\(diff / 60_000) minutes ago" }
-        if diff < 86_400_000 { return "\(diff / 3_600_000) hours ago" }
-        return "\(diff / 86_400_000) days ago"
-    }
+    static func relativeTime(_ ms: Int64) -> String { SyncStatusText.shared.lastSynced(timestampMs: ms) }
 }
 
 /// Acquire the Apple Music **Music User Token** (library Web API) via StoreKit —
