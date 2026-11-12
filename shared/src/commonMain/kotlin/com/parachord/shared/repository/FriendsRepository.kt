@@ -120,43 +120,43 @@ class FriendsRepository(
      * tell it from "not listening"; without it the client answers null as before.
      */
     private suspend fun transientNowPlaying(service: String, user: String, strict: Boolean): Friend? {
+        // The same answer a saved friend gets for the same account (#610): a
+        // radio station's playing-now is empty between songs, and reading only
+        // that ended a link-followed session there.
         return when (service) {
             "listenbrainz" -> {
-                val listen = (if (strict) listenBrainzClient.getPlayingNowOrThrow(user)
-                else listenBrainzClient.getPlayingNow(user)) ?: return null
+                val playing = if (strict) listenBrainzClient.getPlayingNowOrThrow(user)
+                else listenBrainzClient.getPlayingNow(user)
+                if (playing != null) {
+                    return buildTransientFriend(
+                        service = service, user = user,
+                        trackName = playing.trackName, trackArtist = playing.artistName,
+                        trackAlbum = playing.releaseName, artworkUrl = null,
+                    )
+                }
+                // Nothing playing right now: the latest listen, timed as a
+                // saved friend's is, so it counts for 10 minutes ([Friend.isOnAir]).
+                val latest = (if (strict) listenBrainzClient.getRecentListensOrThrow(user, count = 1)
+                else listenBrainzClient.getRecentListens(user, count = 1)).firstOrNull() ?: return null
                 buildTransientFriend(
-                    service = service,
-                    user = user,
-                    trackName = listen.trackName,
-                    trackArtist = listen.artistName,
-                    trackAlbum = listen.releaseName,
-                    artworkUrl = null,
+                    service = service, user = user,
+                    trackName = latest.trackName, trackArtist = latest.artistName,
+                    trackAlbum = latest.releaseName, artworkUrl = latest.artworkUrl,
+                    timestamp = latest.listenedAt,
                 )
             }
             "lastfm" -> {
-                val response = lastFmClient.getUserRecentTracks(
-                    user = user,
-                    apiKey = lastFmApiKey,
-                    limit = 1,
-                )
-                val first = response.recenttracks?.track?.firstOrNull() ?: return null
-                // Only treat the row as "now playing" when Last.fm
-                // explicitly flags it. Unlike refreshLastFmActivity()
-                // we don't sanity-check against a recent scrobble
-                // here — the deeplink path is one-shot and the user
-                // is already opting in by sharing the link; even a
-                // slightly stale flag is acceptable, and the polling
-                // loop will recover on the next tick.
-                if (first.attr?.nowplaying != "true") return null
+                val response = lastFmClient.getUserRecentTracks(user = user, apiKey = lastFmApiKey, limit = 2)
+                val tracks = response.recenttracks?.track.orEmpty()
+                val first = tracks.firstOrNull() ?: return null
                 val artist = first.artist?.name?.takeIf { it.isNotBlank() } ?: return null
                 val title = first.name.takeIf { it.isNotBlank() } ?: return null
                 buildTransientFriend(
-                    service = service,
-                    user = user,
-                    trackName = title,
-                    trackArtist = artist,
+                    service = service, user = user,
+                    trackName = title, trackArtist = artist,
                     trackAlbum = first.album?.name?.takeIf { it.isNotBlank() },
                     artworkUrl = first.image.bestImageUrl(),
+                    timestamp = lastFmActivityTimestamp(tracks, currentTimeMillis() / 1000),
                 )
             }
             else -> null
@@ -201,6 +201,7 @@ class FriendsRepository(
         trackArtist: String,
         trackAlbum: String?,
         artworkUrl: String?,
+        timestamp: Long = currentTimeMillis() / 1000,
     ): Friend = Friend(
         id = "transient:$service:$user",
         username = user,
@@ -216,7 +217,7 @@ class FriendsRepository(
         // Seconds since epoch — matches the timestamp scale used by
         // refreshLastFmActivity and refreshListenBrainzActivity, so
         // Friend.isOnAir's 10-min window evaluates correctly.
-        cachedTrackTimestamp = currentTimeMillis() / 1000,
+        cachedTrackTimestamp = timestamp,
         pinnedToSidebar = false,
         autoPinned = false,
         transient = true,
@@ -565,36 +566,7 @@ class FriendsRepository(
         recordHidesListening(friend, false)
         val tracks = response.recenttracks?.track.orEmpty()
         val track = tracks.firstOrNull()
-        // The most recent track with a real scrobble timestamp. When
-        // track[0] is the now-playing entry (no `date`), this is
-        // track[1]. When track[0] is a historical scrobble, it IS
-        // track[0]. Either way, `latestScrobble` represents the most
-        // recent definitive listen.
-        val latestScrobble = tracks.firstNotNullOfOrNull {
-            it.date?.uts?.toLongOrNull()
-        } ?: 0L
-        val now = currentTimeMillis() / 1000
-        // Last.fm's `attr.nowplaying = "true"` flag is set on the most
-        // recent track when the user is currently scrobbling, BUT it's
-        // also left in place after they stop — hours later the same row
-        // can still come back marked nowplaying. Only trust the flag if
-        // it's backed by a recent scrobble (within ~30 min): a truly
-        // active listener will have completed at least one full song in
-        // that window, putting that scrobble's `date.uts` in the second
-        // slot of the response.
-        val nowPlayingFlag = track?.attr?.nowplaying == "true"
-        val recentScrobble = latestScrobble > 0 && (now - latestScrobble) < 1800
-        val trulyOnAir = nowPlayingFlag && recentScrobble
-        val timestamp = when {
-            track == null -> 0L
-            // Currently playing AND backed by a real recent scrobble —
-            // safe to stamp now so isOnAir returns true.
-            trulyOnAir -> now
-            // Use the latest definitive scrobble timestamp. `isOnAir`'s
-            // 10-min window keeps an active listener showing as on-air
-            // for that long after their last full song completes.
-            else -> latestScrobble
-        }
+        val timestamp = lastFmActivityTimestamp(tracks, currentTimeMillis() / 1000)
         friendDao.updateCachedTrack(
             id = friend.id,
             name = track?.name,
@@ -604,6 +576,24 @@ class FriendsRepository(
             artworkUrl = track?.image?.bestImageUrl(),
             fetchedAt = currentTimeMillis(),
         )
+    }
+
+    /**
+     * When a Last.fm user last played, from their two most recent rows, in
+     * seconds (0 when nothing): now while the now-playing flag is backed by a
+     * real scrobble in the last 30 minutes (Last.fm leaves the flag on a row
+     * for hours after someone stops), else the latest real scrobble.
+     * [Friend.isOnAir] then counts it for 10 minutes. Saved and link-followed
+     * friends both use it (#610).
+     */
+    private fun lastFmActivityTimestamp(tracks: List<com.parachord.shared.api.LfmUserRecentTrack>, nowSec: Long): Long {
+        val first = tracks.firstOrNull() ?: return 0L
+        // The most recent row with a real scrobble time: the second row when
+        // the first is the now-playing entry (no `date`), else the first.
+        val latestScrobble = tracks.firstNotNullOfOrNull { it.date?.uts?.toLongOrNull() } ?: 0L
+        val nowPlaying = first.attr?.nowplaying == "true"
+        val recentScrobble = latestScrobble > 0 && (nowSec - latestScrobble) < 1800
+        return if (nowPlaying && recentScrobble) nowSec else latestScrobble
     }
 
     private suspend fun refreshListenBrainzActivity(friend: Friend, strict: Boolean) {
