@@ -71,6 +71,11 @@ data class SavedPlaybackPosition(
     val trackId: String,
     val positionMs: Long,
     val durationMs: Long = 0,
+    /**
+     * This listen was already scrobbled (#657, desktop parachord#1346): a
+     * resume at the position mustn't scrobble it again after a restart.
+     */
+    val scrobbled: Boolean = false,
 )
 
 /**

@@ -76,8 +76,11 @@ struct PlaybackRouter {
     var avLoadTag: Int = 0
 
     /// Walk the ranked sources; start the first engine-available one.
-    func play(ranked: [ResolvedSource], title: String, artist: String, album: String? = nil,
-              artworkUrl: String? = nil) async -> RouteResult {
+    /// [startAtSec]: where a resumed track starts (#657). AVPlayer, Apple Music
+    /// and Spotify start there; the SoundCloud and Bandcamp embeds can't, so the
+    /// caller seeks once they play (`PlaybackEngineKind.startsAtPosition`).
+    func play(ranked: [ResolvedSource], title: String, artist: String, startAtSec: Double = 0,
+              album: String? = nil, artworkUrl: String? = nil) async -> RouteResult {
         for source in ranked {
             // Non-streaming resolver — hand its URL back to open in the browser,
             // before trying any audio engine for this source. Not Bandcamp, which
@@ -130,7 +133,8 @@ struct PlaybackRouter {
 
             case let resolver where Self.avPlayerResolvers.contains(resolver):
                 guard !source.url.isEmpty else { continue }
-                avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver, tag: avLoadTag)
+                avPlayer.load(url: source.url, title: title, artist: artist, resolver: source.resolver, tag: avLoadTag,
+                              startAtSec: startAtSec)
                 return .played(.avPlayer, resolver: source.resolver)
 
             case "applemusic":
@@ -142,9 +146,9 @@ struct PlaybackRouter {
                 var status = MusicAuthorization.currentStatus
                 if status == .notDetermined { status = await MusicAuthorization.request() }
                 guard status == .authorized else { onAppleMusicUnauthorized?(); continue }
-                switch await musicKit.play(appleMusicId: id) {
+                switch await musicKit.play(appleMusicId: id, startAtSec: startAtSec) {
                 case .started:
-                    return .played(.musicKit, resolver: source.resolver)
+                        return .played(.musicKit, resolver: source.resolver)
                 case .unavailable:
                     break   // not in the catalog / no subscription → next source
                 case .failed(let timedOut):
@@ -153,7 +157,9 @@ struct PlaybackRouter {
 
             case "spotify":
                 guard spotify.canPlay, let uri = source.spotifyUri, !uri.isEmpty else { continue }
-                if await spotify.play(uri: uri) { return .played(.spotify, resolver: source.resolver) }
+                if await spotify.play(uri: uri, startAtSec: startAtSec) {
+                        return .played(.spotify, resolver: source.resolver)
+                }
                 onSpotifyFailed?()
 
             default:

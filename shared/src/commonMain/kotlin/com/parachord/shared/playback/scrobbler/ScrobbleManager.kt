@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
@@ -95,14 +96,14 @@ class ScrobbleManager(
     private var observeJob: Job? = null
 
     // Track state for scrobble threshold logic.
-    private var currentTrackId: String? = null
-    private var nowPlayingSent = false
+    @Volatile private var currentTrackId: String? = null
+    @Volatile private var nowPlayingSent = false
     // Whether the now-playing we sent carried a real (engine) duration. If the
     // first now-playing went out before the engine reported a duration, we
     // re-send once when it becomes known so LB gets a correct playing-now TTL (#347).
-    private var nowPlayingDurationSent = false
-    private var scrobbleSubmitted = false
-    private var trackStartTimestamp: Long = 0
+    @Volatile private var nowPlayingDurationSent = false
+    @Volatile private var scrobbleSubmitted = false
+    @Volatile private var trackStartTimestamp: Long = 0
 
     /**
      * Start observing playback state and scrobbling when enabled. Idempotent —
@@ -119,6 +120,23 @@ class ScrobbleManager(
                 processPlaybackState(state)
             }
         }
+    }
+
+    /** Whether [trackId] is the track playing and its scrobble was submitted (#657). */
+    fun hasScrobbled(trackId: String): Boolean = currentTrackId == trackId && scrobbleSubmitted
+
+    /**
+     * [trackId] is about to resume a listen that was already scrobbled (a
+     * restored track, #657, desktop's `continuesScrobbled`): count it as
+     * submitted, so the threshold, passed again at once, doesn't scrobble it a
+     * second time. Now Playing still goes out.
+     */
+    fun continueScrobbledListen(trackId: String) {
+        currentTrackId = trackId
+        nowPlayingSent = false
+        nowPlayingDurationSent = false
+        scrobbleSubmitted = true
+        trackStartTimestamp = currentTimeMillis() / 1000
     }
 
     private suspend fun processPlaybackState(state: ScrobbleState) {

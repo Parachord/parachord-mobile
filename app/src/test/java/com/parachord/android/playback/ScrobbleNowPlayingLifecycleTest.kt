@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
 
@@ -130,5 +131,31 @@ class ScrobbleNowPlayingLifecycleTest {
         awaitNowPlayingCount(1)
         delay(300)
         assertEquals(listOf(325_000L), scrobbler.nowPlaying.toList())
+    }
+
+    /**
+     * #657: a restored track paused after its scrobble resumes at 3:00 of 4:00,
+     * past the threshold at once. It continues an already-scrobbled listen, so it
+     * isn't scrobbled again; Now Playing still goes out.
+     */
+    @Test
+    fun aResumedListenThatAlreadyScrobbledIsNotScrobbledAgain() = runBlocking {
+        manager.startObserving()
+        manager.continueScrobbledListen(song.id)
+        assertTrue(manager.hasScrobbled(song.id))
+        emit(ScrobbleState(song, isPlaying = true, position = 180_000, duration = 240_000))
+        emit(ScrobbleState(song, isPlaying = true, position = 181_000, duration = 240_000))
+        awaitNowPlayingCount(1)
+        delay(300)
+        assertTrue(scrobbler.scrobbles.isEmpty())
+    }
+
+    @Test
+    fun aResumedListenNotScrobbledYetScrobblesAtTheThreshold() = runBlocking {
+        manager.startObserving()
+        emit(ScrobbleState(song, isPlaying = true, position = 180_000, duration = 240_000))
+        emit(ScrobbleState(song, isPlaying = true, position = 181_000, duration = 240_000))
+        withTimeout(3_000) { while (scrobbler.scrobbles.isEmpty()) delay(20) }
+        assertEquals(1, scrobbler.scrobbles.size)
     }
 }

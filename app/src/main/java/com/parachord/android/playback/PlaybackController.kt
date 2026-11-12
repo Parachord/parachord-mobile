@@ -411,6 +411,16 @@ class PlaybackController constructor(
      * phone then restored the last session's queue over it and handed that
      * to Auto.
      */
+    init {
+        // A saved position records whether its listen was scrobbled (#657): the
+        // playing track's scrobble, or, for a restored track not played yet,
+        // the flag it was saved with.
+        queuePersistence.isScrobbled = { trackId ->
+            scrobbleManager.hasScrobbled(trackId) ||
+                loadOnPlay?.let { it.track.id == trackId && it.continuesScrobbled } == true
+        }
+    }
+
     fun connect() {
         if (controllerFuture != null) return
 
@@ -463,7 +473,10 @@ class PlaybackController constructor(
                     // would make the system notification show a "playing"
                     // track when nothing is actually playing. Our own mini
                     // player reads from stateHolder, not ExoPlayer.
-                    loadOnPlay = LoadOnPlay(restoredTrack, resumeAtMs, skipReselect = false, why = LoadOnPlay.Why.RESTORED)
+                    loadOnPlay = LoadOnPlay(
+                        restoredTrack, resumeAtMs, skipReselect = false, why = LoadOnPlay.Why.RESTORED,
+                        continuesScrobbled = resumeAtMs > 0 && queuePersistence.resumeContinuesScrobbled(restoredTrack.id),
+                    )
                     // Play is the likely next tap: have Spotify ready if
                     // that's where this track plays.
                     prewarmSpotifyFor(restoredTrack)
@@ -1141,7 +1154,7 @@ class PlaybackController constructor(
             loadOnPlay = null
             clearUserPauseMark()
             Log.d(TAG, "Play loads '${load.track.title}' (${load.why}) at ${load.positionMs} ms")
-            scope.launch { playThenSeek(load.track, load.positionMs, load.skipReselect) }
+            scope.launch { playThenSeek(load.track, load.positionMs, load.skipReselect, load.continuesScrobbled) }
             return
         }
 
@@ -1377,7 +1390,7 @@ class PlaybackController constructor(
     private fun moveSlot(slot: LoadOnPlay) {
         loadOnPlay = slot
         stateHolder.update { copy(position = slot.positionMs) }
-        queuePersistence.savePositionNow(slot.track.id, slot.positionMs, stateHolder.state.value.duration)
+        queuePersistence.savePositionNow(slot.track.id, slot.positionMs, stateHolder.state.value.duration, slot.continuesScrobbled)
     }
 
     /**
@@ -1521,6 +1534,9 @@ class PlaybackController constructor(
         userRequested: Boolean = !advancing,
     ) {
         playRequestedThisRun = true
+        // A resumed track's start position ([playThenSeek]), for the engine.
+        val startAtMs = pendingStartAt?.takeIf { it.first == track.id }?.second ?: 0L
+        if (startAtMs > 0) pendingStartAt = null
         // Cancel any idle timeout — we're actively playing now
         cancelIdleTimeout()
         // A track waiting for Play to load it (restored, idle-stopped, failed)
@@ -1674,7 +1690,11 @@ class PlaybackController constructor(
                     /* handleAudioFocus= */ true,
                 )
                 ctrl.stop()
-                ctrl.setMediaItems(listOf(action.mediaItem), 0, 0L)
+                ctrl.setMediaItems(listOf(action.mediaItem), 0, startAtMs)
+                if (startAtMs > 0) {
+                    startedAtPositionFor = routedTrack.id
+                    stateHolder.update { copy(position = startAtMs) }
+                }
                 ctrl.prepare()
                 ctrl.play()
 
@@ -1821,6 +1841,10 @@ class PlaybackController constructor(
                     // spinner, and no track, prev or next will start (#449,
                     // MusicKit after the network dropped mid-start). Each
                     // handler bounds its own waits; this is the backstop.
+                    if (startAtMs > 0 && action.handler.startsAt(startAtMs)) {
+                        startedAtPositionFor = routedTrack.id
+                        stateHolder.update { copy(position = startAtMs) }
+                    }
                     kotlinx.coroutines.withTimeoutOrNull(PLAY_START_TIMEOUT_MS) {
                         action.handler.play(routedTrack)
                         true
@@ -2453,9 +2477,23 @@ class PlaybackController constructor(
      * cancels the seek. When this play fails too, the next Play aims for the
      * same position.
      */
-    private suspend fun playThenSeek(track: TrackEntity, positionMs: Long, skipReselect: Boolean) {
+    private suspend fun playThenSeek(
+        track: TrackEntity,
+        positionMs: Long,
+        skipReselect: Boolean,
+        continuesScrobbled: Boolean = false,
+    ) {
+        // A restored listen that was already scrobbled resumes as submitted:
+        // the threshold, passed again at once, mustn't scrobble it twice (#657).
+        if (continuesScrobbled && positionMs > 0) scrobbleManager.continueScrobbledListen(track.id)
+        // The engine starts there itself when it can (ExoPlayer, Spotify),
+        // so the song's opening isn't heard before the seek (#657).
+        pendingStartAt = track.id to positionMs.coerceAtLeast(0)
+        startedAtPositionFor = null
         playTrackInternal(track, skipReselect = skipReselect)
+        pendingStartAt = null
         if (positionMs <= 0) return
+        val startedThere = startedAtPositionFor == track.id
         val deadline = System.currentTimeMillis() + RESUME_SEEK_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
             if (stateHolder.state.value.currentTrack?.id != track.id) return
@@ -2475,13 +2513,23 @@ class PlaybackController constructor(
                 controller?.isPlaying == true
             }
             if (playing) {
-                seekTo(positionMs)
+                if (startedThere) {
+                    Log.d(TAG, "'${track.title}' started at $positionMs ms; no seek needed")
+                } else {
+                    seekTo(positionMs)
+                }
                 return
             }
             delay(250)
         }
         Log.d(TAG, "'${track.title}' didn't start within $RESUME_SEEK_WAIT_MS ms; not seeking to $positionMs ms")
     }
+
+    /** The track [playThenSeek] starts and where it should begin; read once by that track's play. */
+    private var pendingStartAt: Pair<String, Long>? = null
+
+    /** The track whose play started at [pendingStartAtMs] itself, so no seek follows. */
+    @Volatile private var startedAtPositionFor: String? = null
 
     private fun cancelIdleTimeout() {
         idleTimeoutJob?.cancel()

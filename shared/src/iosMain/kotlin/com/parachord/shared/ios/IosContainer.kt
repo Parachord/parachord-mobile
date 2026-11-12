@@ -832,6 +832,10 @@ class IosContainer private constructor() {
     suspend fun spotifyPlayRequest(trackUri: String): com.parachord.shared.api.SpPlaybackRequest =
         spotifyPlayRequests.forTrack(trackUri)
 
+    /** The same, starting [startMs] into the track (`position_ms`, a resumed track, #657). */
+    suspend fun spotifyPlayRequest(trackUri: String, startMs: Long): com.parachord.shared.api.SpPlaybackRequest =
+        spotifyPlayRequests.forTrack(trackUri, startMs)
+
     // ── Sync settings (Phase 1 toggles for the iOS Settings screen) ──────
     suspend fun isSyncEnabled(): Boolean = settingsStore.getSyncSettings().enabled
 

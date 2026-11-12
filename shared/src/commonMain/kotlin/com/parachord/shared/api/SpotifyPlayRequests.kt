@@ -46,13 +46,21 @@ class SpotifyPlayRequests(
     private val contexts = LinkedHashMap<String, Context?>()
 
     /** The play request for [trackUri] (`spotify:track:<id>`). Never throws, except on cancellation. */
-    suspend fun forTrack(trackUri: String): SpPlaybackRequest {
-        val trackId = spotifyTrackId(trackUri) ?: return bare(trackUri)
+    suspend fun forTrack(trackUri: String): SpPlaybackRequest = forTrack(trackUri, startMs = 0)
+
+    /**
+     * The same, starting [startMs] into the track (`position_ms`, on the album
+     * body and the bare one alike), so a resumed track starts where it was
+     * instead of at 0:00 and then seeking (#657, desktop parachord#1346).
+     */
+    suspend fun forTrack(trackUri: String, startMs: Long): SpPlaybackRequest {
+        val position = startMs.takeIf { it > 0 }
+        val trackId = spotifyTrackId(trackUri) ?: return bare(trackUri, position)
         val context = contextFor(trackId)
         return if (context != null) {
-            SpPlaybackRequest(contextUri = context.albumUri, offset = SpPlaybackOffset(uri = context.offsetUri))
+            SpPlaybackRequest(contextUri = context.albumUri, offset = SpPlaybackOffset(uri = context.offsetUri), positionMs = position)
         } else {
-            bare(trackUri)
+            bare(trackUri, position)
         }
     }
 
@@ -82,7 +90,7 @@ class SpotifyPlayRequests(
         return context
     }
 
-    private fun bare(trackUri: String) = SpPlaybackRequest(uris = listOf(trackUri))
+    private fun bare(trackUri: String, positionMs: Long?) = SpPlaybackRequest(uris = listOf(trackUri), positionMs = positionMs)
 
     companion object {
         private const val TAG = "SpotifyPlayRequests"

@@ -1288,8 +1288,13 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   15 s while playing (`savePositionIfDue`, shared `PlaybackResumePosition`, its
   own `persisted_queue_position` key; not while a slot is set, which saves its
   own), `restoreQueue` reads it for the same track id into a `RESTORED` slot,
-  and the first play seeks there once the track plays (`seekOnceStarted`, up
-  to 60 s). Under 5 s in, or within 10 s of the end, it starts from the top.
+  and the first play starts there. AVPlayer seeks before play, Apple Music
+  sets `playbackTime` after `prepareToPlay`, and Spotify sends `position_ms`
+  (#657), so the opening isn't heard first. Only an engine that can't
+  (the SoundCloud and Bandcamp embeds) is sought once it plays
+  (`seekOnceStarted`, up to 60 s; skipped when the engine that played
+  is one of those three). Under 5 s in, or within 10 s of the end, it
+  starts from the top.
 - **Checking it in the simulator.** The lock screen can't be photographed with
   `simctl`, but `mediaremoted` logs what it publishes:
   `xcrun simctl spawn booted log stream --level debug --predicate 'process == "mediaremoted"'`
