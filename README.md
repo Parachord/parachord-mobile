@@ -145,7 +145,7 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 ### .axe plugin system
 Both apps run the same plugins as desktop. They're bundled as `.axe` files and updated at runtime from the [`parachord-plugins`](https://github.com/Parachord/parachord-plugins) marketplace, checked at most once a day. Android hosts them in a headless WebView and iOS in JavaScriptCore, and both run desktop's `resolver-loader.js` unchanged.
 
-Plugin types: content resolvers, AI providers, meta-services (Last.fm, MusicBrainz, Discogs, Wikipedia), scrobblers and concert services. YouTube and Ollama are filtered out on mobile (`capabilities.mobile: false`). Native resolvers (Spotify, Apple Music, plus SoundCloud and local files on Android) take priority over their `.axe` equivalents for speed.
+Plugin types: content resolvers, AI providers, meta-services (Last.fm, MusicBrainz, Discogs, Wikipedia), scrobblers and concert services. YouTube and Ollama are filtered out on mobile (`capabilities.mobile: false`). Native resolvers (Spotify, Apple Music, plus local files on Android) take priority over their `.axe` equivalents for speed. SoundCloud and Bandcamp resolve through their plugins on both apps.
 
 ### Background resilience (Android)
 External playback (Apple Music, Spotify Connect) survives screen-off, Doze mode and Android's foreground-service killer. A silent 1-second WAV loops on ExoPlayer, which keeps `MediaSessionService` happy while the DRM audio flows through MusicKit or Spotify. See [CLAUDE.md](CLAUDE.md), "External Playback Background Survival", for the rationale.

@@ -1,6 +1,7 @@
 package com.parachord.shared.ios
 
 import com.parachord.shared.platform.Log
+import com.parachord.shared.api.auth.retryAfterSoundCloudRejection
 
 import com.parachord.shared.db.dao.TrackDao
 import com.parachord.shared.plugin.IosJsRuntime
@@ -51,6 +52,12 @@ class IosResolverRuntime(
      * `MusicKitCatalogLimiter`, #241) and the best title + artist match.
      */
     private val appleMusicResolver: AppleMusicCatalogResolver,
+    /**
+     * Refreshes the SoundCloud sign-in after SoundCloud refused the token the
+     * plugin sent ([com.parachord.shared.api.auth.SoundCloudAuth.refreshAfterRejection]);
+     * true when a different token is now stored. Null: no retry (#598).
+     */
+    private val refreshSoundCloudAfterRejection: (suspend (String?) -> Boolean)? = null,
 ) : ResolverRuntime {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -128,7 +135,16 @@ class IosResolverRuntime(
         targetTitle: String?,
         targetArtist: String?,
         album: String?,
-    ): ResolvedSource? = resolveOne(resolverId, targetArtist ?: "", targetTitle ?: "", album)
+    ): ResolvedSource? {
+        val refresh = refreshSoundCloudAfterRejection
+            ?: return resolveOne(resolverId, targetArtist ?: "", targetTitle ?: "", album)
+        // A SoundCloud 401 refreshes the sign-in and asks once more (#598).
+        return retryAfterSoundCloudRejection(
+            resolverId,
+            currentToken = { settingsStore.getSoundCloudToken() },
+            refreshAfterRejection = refresh,
+        ) { resolveOne(resolverId, targetArtist ?: "", targetTitle ?: "", album) }
+    }
 
     /**
      * Resolve a single track via one `.axe` resolver, awaiting its Promise.

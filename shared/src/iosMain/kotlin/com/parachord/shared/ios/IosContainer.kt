@@ -2852,6 +2852,7 @@ class IosContainer private constructor() {
             settingsStore = settingsStore,
             trackDao = trackDao,
             appleMusicResolver = com.parachord.shared.resolver.AppleMusicCatalogResolver(appleMusicCatalog, settingsStore),
+            refreshSoundCloudAfterRejection = { soundCloudAuth.refreshAfterRejection(it) },
         )
     }
 
@@ -2905,7 +2906,7 @@ class IosContainer private constructor() {
             scoring = resolverScoring,
             getActive = { settingsStore.getActiveResolvers() },
             getDisabled = { settingsStore.getDisabledPlugins() },
-            getPlugins = { pluginManager.plugins.value },
+            getPlugins = { pluginManager.ensureInitialized(); pluginManager.plugins.value },
             // Single source of truth — same lambda reused by resolveSingle, so the
             // Spotify gate can't drift between the two paths.
             resolveSpotify = resolveSpotify,

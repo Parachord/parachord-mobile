@@ -77,7 +77,12 @@ class ResolverCoordinator(
     private val scoring: ResolverScoring,
     private val getActive: suspend () -> List<String>,
     private val getDisabled: suspend () -> Set<String>,
-    private val getPlugins: () -> List<PluginManager.PluginInfo>,
+    /**
+     * The loaded plugins. Suspends until the plugin system has loaded (the
+     * platform binding awaits `PluginManager.ensureInitialized()`), so a
+     * resolve made at launch still asks the `.axe` resolvers (#598).
+     */
+    private val getPlugins: suspend () -> List<PluginManager.PluginInfo>,
     private val resolveSpotify: suspend (query: String, target: MatchTarget) -> ResolvedSource?,
 ) {
     /**
@@ -149,31 +154,35 @@ class ResolverCoordinator(
         val tasks = buildList {
             if (isActive("spotify")) {
                 add(async {
-                    attempt("spotify") { resolveSpotify(query, MatchTarget(targetTitle, targetArtist, targetIsrc, targetMbid)) }
+                    listOf(attempt("spotify") { resolveSpotify(query, MatchTarget(targetTitle, targetArtist, targetIsrc, targetMbid)) })
                 })
             }
             for (id in runtime.nativeResolverIds) {
                 if (isActive(id)) {
                     add(async {
-                        attempt(id) { runtime.resolveNative(id, query, targetTitle, targetArtist, album, targetIsrc, targetMbid) }
+                        listOf(attempt(id) { runtime.resolveNative(id, query, targetTitle, targetArtist, album, targetIsrc, targetMbid) })
                     })
                 }
             }
-            val axeIds = ResolverGating.axeResolverIds(
-                plugins = getPlugins(),
-                active = active,
-                disabled = disabled,
-                // spotify + natives are owned elsewhere — keep them out of the .axe set.
-                nativeResolverIds = runtime.nativeResolverIds + "spotify",
-            )
-            for (id in axeIds) {
-                if (wanted(id)) {
-                    add(async { attempt(id) { runtime.resolveAxe(id, query, targetTitle, targetArtist, album) } })
-                }
-            }
+            // The `.axe` set waits for the plugins to load (getPlugins), while
+            // spotify and the natives are already asking: on a cold start the
+            // resolve used to read an empty plugin list, so no plugin was asked
+            // and the answer was saved without SoundCloud or Bandcamp (#598).
+            add(async {
+                val axeIds = ResolverGating.axeResolverIds(
+                    plugins = getPlugins(),
+                    active = active,
+                    disabled = disabled,
+                    // spotify + natives are owned elsewhere — keep them out of the .axe set.
+                    nativeResolverIds = runtime.nativeResolverIds + "spotify",
+                )
+                axeIds.filter { wanted(it) }
+                    .map { id -> async { attempt(id) { runtime.resolveAxe(id, query, targetTitle, targetArtist, album) } } }
+                    .map { it.await() }
+            })
         }
 
-        val attempts = tasks.map { it.await() }
+        val attempts = tasks.flatMap { it.await() }
         var results = attempts.mapNotNull { it.source }
 
         // Re-score only when BOTH target fields are present (Android parity):

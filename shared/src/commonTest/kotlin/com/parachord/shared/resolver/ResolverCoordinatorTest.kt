@@ -1,6 +1,7 @@
 package com.parachord.shared.resolver
 
 import com.parachord.shared.plugin.PluginManager
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -469,5 +470,34 @@ class ResolverCoordinatorTest {
             coordinator(runtime).resolveSingle("applemusic", "q", "Clover", "Tundra 212", null)
         }.exceptionOrNull()
         assertNotNull(failure)
+    }
+
+    @Test
+    fun resolveScored_asksThePlugins_onceTheyHaveLoaded_withoutHoldingBackTheNatives() = runTest {
+        // A resolve at launch, before the plugin system has loaded (#598): the
+        // natives answer first, and the `.axe` resolvers are still asked.
+        val pluginsLoaded = kotlinx.coroutines.CompletableDeferred<List<PluginManager.PluginInfo>>()
+        val runtime = FakeRuntime(
+            nativeResolverIds = setOf("applemusic"),
+            natives = mapOf("applemusic" to source("applemusic", matchedTitle = "Judy Is a Punk", matchedArtist = "Ramones")),
+            axes = mapOf("soundcloud" to source("soundcloud", matchedTitle = "Judy Is A Punk", matchedArtist = "The Ramones")),
+        )
+        val coord = ResolverCoordinator(
+            runtime = runtime,
+            scoring = scoring(),
+            getActive = { emptyList() },
+            getDisabled = { emptySet() },
+            getPlugins = { pluginsLoaded.await() },
+            resolveSpotify = { _, _ -> null },
+        )
+        val report = async { coord.resolveScoredReport("Ramones Judy Is a Punk", "Judy Is a Punk", "Ramones") }
+        testScheduler.runCurrent()
+        assertEquals(listOf("applemusic"), runtime.askedNative)
+        assertTrue(runtime.askedAxe.isEmpty())
+        pluginsLoaded.complete(listOf(plugin("soundcloud")))
+        val done = report.await()
+        assertEquals(listOf("soundcloud"), runtime.askedAxe)
+        assertEquals(setOf("applemusic", "soundcloud"), done.sources.map { it.resolver }.toSet())
+        assertTrue("soundcloud" in done.asked)
     }
 }

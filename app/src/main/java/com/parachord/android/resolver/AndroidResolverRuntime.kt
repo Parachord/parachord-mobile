@@ -5,17 +5,14 @@ import com.parachord.android.auth.OAuthManager
 import com.parachord.android.data.db.dao.TrackDao
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.plugin.PluginManager
+import com.parachord.shared.api.auth.retryAfterSoundCloudRejection
 import com.parachord.shared.resolver.AppleMusicCatalogLookup
 import com.parachord.shared.resolver.AppleMusicCatalogResolver
 import com.parachord.shared.resolver.ResolvedSource
 import com.parachord.shared.resolver.ResolverRuntime
-import com.parachord.shared.resolver.isOtherVersion
-import com.parachord.shared.resolver.normalizeStr
-import com.parachord.shared.resolver.scoreConfidence
 import com.parachord.shared.resolver.selectBestMatch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
@@ -24,8 +21,9 @@ import okhttp3.Request
 /**
  * Android [ResolverRuntime] (#210, D2). Owns the platform-specific native
  * non-Spotify resolvers (Apple Music via the shared catalog search, then the
- * plugin / iTunes; SoundCloud via the API; local files via the DAO) and `.axe`
- * execution via [PluginManager.resolve].
+ * plugin / iTunes; local files via the DAO) and `.axe` execution via
+ * [PluginManager.resolve]. SoundCloud is a plugin (`soundcloud.axe`), as on iOS
+ * and desktop (#598).
  *
  * The shared [com.parachord.shared.resolver.ResolverCoordinator] owns the
  * fan-out, the Spotify branch (injected lambda), gating, re-score and ranking.
@@ -47,10 +45,10 @@ class AndroidResolverRuntime constructor(
 
     companion object {
         private const val TAG = "ResolverManager"
-        private const val SC_API_BASE = "https://api.soundcloud.com"
     }
 
-    override val nativeResolverIds = setOf("applemusic", "soundcloud", "localfiles")
+    // SoundCloud resolves through soundcloud.axe, as on iOS and desktop (#598).
+    override val nativeResolverIds = setOf("applemusic", "localfiles")
 
     override suspend fun resolveNative(
         resolverId: String,
@@ -59,10 +57,9 @@ class AndroidResolverRuntime constructor(
         targetArtist: String?,
         album: String?,
     ): ResolvedSource? = when (resolverId) {
-        // Android's native AM, SoundCloud, and local-file resolvers don't take
+        // Android's native AM and local-file resolvers don't take
         // album — parity with the pre-#210 fan-out.
         "applemusic" -> resolveAppleMusic(query, targetTitle, targetArtist)
-        "soundcloud" -> resolveSoundCloud(query, targetTitle, targetArtist)
         "localfiles" -> resolveLocalFile(targetTitle, targetArtist)
         else -> null
     }
@@ -92,7 +89,12 @@ class AndroidResolverRuntime constructor(
         targetArtist: String?,
         album: String?,
     // Android passed null for the .axe album arg pre-#210 (resolveViaPlugin) — keep it.
-    ): ResolvedSource? = resolveViaPlugin(resolverId, query, targetTitle, targetArtist)
+    // A SoundCloud 401 refreshes the sign-in and asks once more (#598).
+    ): ResolvedSource? = retryAfterSoundCloudRejection(
+        resolverId,
+        currentToken = { settingsStore.getSoundCloudToken() },
+        refreshAfterRejection = { oAuthManager.refreshSoundCloudToken(rejectedToken = it) },
+    ) { resolveViaPlugin(resolverId, query, targetTitle, targetArtist) }
 
     // ── Apple Music Resolver ────────────────────────────────────────
 
@@ -215,7 +217,7 @@ class AndroidResolverRuntime constructor(
                 // case-insensitive equality SQL lookup, not a fuzzy search.
                 // Matches desktop's localfiles resolver, which the
                 // eager-enrichment gate at app.js:24143 treats as a 1.0
-                // signal. See SoundCloud branch (~L190) for the contract.
+                // signal.
                 confidence = 1.0,
                 matchedTitle = track.title,
                 matchedArtist = track.artist,
@@ -238,103 +240,6 @@ class AndroidResolverRuntime constructor(
             throw e
         }
     }
-
-    // ── SoundCloud Resolver ─────────────────────────────────────────────
-
-    /**
-     * Search SoundCloud for a matching track.
-     * Mirrors the desktop's soundcloud.axe resolver: searches via the
-     * /tracks endpoint, filters to streamable non-blocked tracks, and
-     * returns the best match with default 0.9 confidence.
-     * Handles 401 by refreshing the OAuth token and retrying.
-     */
-    private suspend fun resolveSoundCloud(query: String, targetTitle: String?, targetArtist: String?): ResolvedSource? {
-        val token = settingsStore.getSoundCloudToken()
-        if (token.isNullOrBlank()) return null
-
-        return try {
-            val result = searchSoundCloudTrack(query, token, targetTitle, targetArtist)
-            // Check for 401 (token expired) — returned as null with a log warning
-            result
-        } catch (e: SoundCloudAuthException) {
-            // Token expired — try to refresh
-            if (oAuthManager.refreshSoundCloudToken(rejectedToken = token)) {
-                val newToken = settingsStore.getSoundCloudToken() ?: return null
-                try {
-                    searchSoundCloudTrack(query, newToken, targetTitle, targetArtist)
-                } catch (e2: Exception) {
-                    Log.w(TAG, "SoundCloud resolve failed after refresh for '$query': ${e2.message}")
-                    throw e2
-                }
-            } else {
-                Log.w(TAG, "SoundCloud token refresh failed for '$query'")
-                throw IllegalStateException("SoundCloud token refresh failed")
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            Log.w(TAG, "SoundCloud resolve failed for '$query': ${e.message}")
-            throw e
-        }
-    }
-
-    /** Thrown when SoundCloud API returns 401 (token expired). */
-    private class SoundCloudAuthException : Exception("SoundCloud token expired")
-
-    private suspend fun searchSoundCloudTrack(
-        query: String,
-        token: String,
-        targetTitle: String?,
-        targetArtist: String?,
-    ): ResolvedSource? =
-        withContext(Dispatchers.IO) {
-            val url = okhttp3.HttpUrl.Builder()
-                .scheme("https")
-                .host("api.soundcloud.com")
-                .addPathSegment("tracks")
-                .addQueryParameter("q", query)
-                .addQueryParameter("limit", "20")
-                .build()
-
-            val request = Request.Builder()
-                .url(url)
-                .header("Authorization", "OAuth $token")
-                .get()
-                .build()
-
-            val response = okHttpClient.newCall(request).execute()
-            if (response.code == 401) {
-                throw SoundCloudAuthException()
-            }
-            if (!response.isSuccessful) {
-                Log.w(TAG, "SoundCloud search returned ${response.code}")
-                throw IllegalStateException("SoundCloud search returned ${response.code}")
-            }
-
-            val body = response.body?.string() ?: throw IllegalStateException("SoundCloud search returned no body")
-            val tracks = try {
-                json.decodeFromString<List<ScTrack>>(body)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse SoundCloud search results: ${e.message}")
-                throw e
-            }
-
-            val pick = pickSoundCloudTrack(tracks, targetTitle, targetArtist) ?: return@withContext null
-            val best = pick.track
-
-            Log.d(TAG, "SoundCloud matched '${best.title}' by ${best.user?.username}")
-
-            ResolvedSource(
-                url = best.permalinkUrl ?: "$SC_API_BASE/tracks/${best.id}",
-                sourceType = "soundcloud",
-                resolver = "soundcloud",
-                soundcloudId = best.id.toString(),
-                soundcloudUrl = best.permalinkUrl,
-                confidence = 0.9, // Default — overridden by scoreConfidence() in resolve()
-                matchedTitle = pick.title,
-                matchedArtist = pick.artist,
-                matchedDurationMs = best.duration,
-            )
-        }
 
     // ── .axe Plugin Resolver ──────────────────────────────────────────
 
@@ -440,76 +345,4 @@ private data class ITunesTrack(
     val artworkUrl100: String? = null,
     val trackTimeMillis: Long? = null,
     val previewUrl: String? = null,
-)
-
-// ── SoundCloud API Response Models ──────────────────────────────────
-
-/** A SoundCloud result to play, with the artist and title it stands for. */
-internal data class SoundCloudPick(val track: ScTrack, val artist: String?, val title: String?)
-
-/**
- * The SoundCloud search result to play (#582). SoundCloud is mostly fan
- * uploads, so a result counts as the requested artist's only when:
- * - its uploader IS the artist (names equal, "The" aside), or
- * - its title is an "Artist - Title" upload naming the artist, and then the
- *   source reports that artist and title, so the confidence check scores it.
- * Containment isn't enough: "Ramones of the Day" contains "Ramones", and its
- * "ROTD-Ep100 Judy Is a Punk" is a 29-minute podcast. Among those, in the
- * shared matcher's order: the exact title, then one that isn't another version
- * ([isOtherVersion]), then another version. With none, no SoundCloud source,
- * rather than the top result for the confidence check, whose artist
- * containment accepts the podcast. The artist's own uploads come before
- * "Artist - Title" ones.
- *
- * Only tracks Parachord can play: streamable, and not `blocked` or `preview`
- * (the widget refuses a preview, #495). The first pick for "Judy Is a Punk"
- * was the artist's preview-only "1975 Demo".
- */
-internal fun pickSoundCloudTrack(tracks: List<ScTrack>, targetTitle: String?, targetArtist: String?): SoundCloudPick? {
-    val playable = tracks.filter { it.streamable == true && it.access != "blocked" && it.access != "preview" }
-    if (targetTitle.isNullOrBlank() || targetArtist.isNullOrBlank()) {
-        return playable.firstOrNull()?.let { SoundCloudPick(it, it.user?.username, it.title) }
-    }
-    val artistKey = withoutLeadingThe(targetArtist)
-    val candidates = playable.mapNotNull { track ->
-        val uploader = track.user?.username
-        val title = track.title ?: return@mapNotNull null
-        val (artist, songTitle) = when {
-            withoutLeadingThe(uploader) == artistKey -> uploader to title
-            else -> {
-                val dash = title.indexOf(" - ")
-                if (dash <= 0 || withoutLeadingThe(title.substring(0, dash)) != artistKey) return@mapNotNull null
-                title.substring(0, dash).trim() to title.substring(dash + 3).trim()
-            }
-        }
-        if (scoreConfidence(targetTitle, targetArtist, songTitle, targetArtist) < 0.95) return@mapNotNull null
-        SoundCloudPick(track, artist, songTitle)
-    }.sortedBy { if (withoutLeadingThe(it.track.user?.username) == artistKey) 0 else 1 }
-    val target = normalizeStr(targetTitle)
-    fun otherVersion(p: SoundCloudPick) = isOtherVersion(p.title, p.track.user?.username, targetTitle, targetArtist)
-    return candidates.firstOrNull { normalizeStr(it.title) == target && !otherVersion(it) }
-        ?: candidates.firstOrNull { !otherVersion(it) }
-        ?: candidates.firstOrNull()
-}
-
-private fun withoutLeadingThe(name: String?): String = normalizeStr(name).removePrefix("the")
-
-@Serializable
-internal data class ScTrack(
-    val id: Long,
-    val title: String? = null,
-    val user: ScUser? = null,
-    val duration: Long? = null,
-    @SerialName("permalink_url") val permalinkUrl: String? = null,
-    @SerialName("artwork_url") val artworkUrl: String? = null,
-    @SerialName("waveform_url") val waveformUrl: String? = null,
-    val streamable: Boolean? = null,
-    val access: String? = null,
-    @SerialName("label_name") val labelName: String? = null,
-)
-
-@Serializable
-internal data class ScUser(
-    val username: String? = null,
-    @SerialName("avatar_url") val avatarUrl: String? = null,
 )
