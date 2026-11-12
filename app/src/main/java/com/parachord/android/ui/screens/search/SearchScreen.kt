@@ -34,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -223,6 +224,7 @@ fun SearchScreen(
                         SectionHeader("Artists")
                     }
                     items(artists, key = { "artist-${it.name}" }) { artist ->
+                        LaunchedEffect(artist.name) { viewModel.artistShown(artist) }
                         val image = artist.imageUrl ?: searchArt[SearchSession.artistArtKey(artist.name)]
                         Row(
                             modifier = Modifier
@@ -290,6 +292,7 @@ fun SearchScreen(
                         SectionHeader("Tracks")
                     }
                     items(remoteTracks, key = { "remote-track-${it.title}-${it.artist}" }) { track ->
+                        LaunchedEffect(track.title, track.artist) { viewModel.trackShown(track) }
                         // Its own cover, the one found for it, or (any row, as History
                         // does) the cover of the source it resolved to.
                         val art = track.artworkUrl
@@ -322,6 +325,7 @@ fun SearchScreen(
                         SectionHeader("Albums")
                     }
                     items(remoteAlbums, key = { "remote-album-${it.title}-${it.artist}" }) { album ->
+                        LaunchedEffect(album.title, album.artist) { viewModel.albumShown(album) }
                         // A checked cover once there is one; until then (and past the
                         // first rows) the row's own, which may not load.
                         val art = searchArt[SearchSession.albumArtKey(album.title, album.artist)] ?: album.artworkUrl

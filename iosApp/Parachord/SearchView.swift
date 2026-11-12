@@ -89,6 +89,12 @@ final class SearchViewModel {
         session.query(text: newValue)
     }
 
+    /// A result row came on screen: the shared session looks up its cover if
+    /// it has none (#590), as for the first rows. Android does the same.
+    func trackShown(_ t: TrackSearchResult) { session.trackShown(track: t) }
+    func albumShown(_ a: AlbumSearchResult) { session.albumShown(album: a) }
+    func artistShown(_ a: IosArtistResult) { session.artistShown(name: a.name, imageUrl: a.imageUrl) }
+
     func trackArt(_ t: TrackSearchResult) -> String? {
         t.artworkUrl ?? art[SearchSession.companion.trackArtKey(title: t.title, artist: t.artist)]
     }
@@ -286,7 +292,7 @@ struct SearchView: View {
                     if !model.artists.isEmpty {
                         sectionHeader("Artists")
                         ForEach(Array(model.artists.enumerated()), id: \.offset) { _, artist in
-                            artistRow(artist)
+                            artistRow(artist).onAppear { model.artistShown(artist) }
                         }
                     }
                     if !model.remoteTracks.isEmpty {
@@ -299,12 +305,13 @@ struct SearchView: View {
                             trackRow(entity, index: i, queue: entities,
                                      resultType: "track", resultName: t.title, resultArtist: t.artist,
                                      artwork: entity.artworkUrl)
+                                .onAppear { model.trackShown(t) }
                         }
                     }
                     if !model.remoteAlbums.isEmpty {
                         sectionHeader("Albums")
                         ForEach(Array(model.remoteAlbums.enumerated()), id: \.offset) { _, album in
-                            albumRow(album)
+                            albumRow(album).onAppear { model.albumShown(album) }
                         }
                     }
                 }

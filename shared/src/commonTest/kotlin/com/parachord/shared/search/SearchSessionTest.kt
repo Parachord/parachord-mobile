@@ -217,6 +217,34 @@ class SearchSessionTest {
     }
 
     @Test
+    fun aRowFurtherDownGetsItsPhotoOnceShown() = runTest {
+        val names = (1..14).map { "Artist $it" }
+        artistsFor = { names.map { ArtistInfo(name = it) } }
+        names.forEach { artistImages[it] = "https://photo/$it" }
+        val s = session()
+        s.query("artist")
+        settle()
+        val twelfth = s.state.value.artists.first { it.name == "Artist 12" }
+        assertNull(s.state.value.art[SearchSession.artistArtKey("Artist 12")], "past the first 10, nothing until shown")
+        s.artistShown(twelfth)
+        settle()
+        assertEquals("https://photo/Artist 12", s.state.value.art[SearchSession.artistArtKey("Artist 12")])
+    }
+
+    @Test
+    fun aRowShownAfterTheQueryChangedIsIgnored() = runTest {
+        artistsFor = { listOf(ArtistInfo(name = it)) }
+        artistImages["old"] = "https://photo/old"
+        val s = session()
+        s.query("old")
+        settle()
+        s.query("new")
+        s.artistShown(ArtistInfo(name = "old"))
+        settle()
+        assertNull(s.state.value.art[SearchSession.artistArtKey("old")])
+    }
+
+    @Test
     fun anOldQuerysCoverLookupsAreDropped() = runTest {
         artistsFor = { listOf(ArtistInfo(name = "Slow $it")) }
         val s = SearchSession(

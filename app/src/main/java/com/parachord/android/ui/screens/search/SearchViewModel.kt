@@ -129,6 +129,11 @@ class SearchViewModel constructor(
         session.query(newQuery)
     }
 
+    /** A result row came on screen: look up its cover if it has none (shared, as iOS). */
+    fun trackShown(track: TrackSearchResult) = session.trackShown(track)
+    fun albumShown(album: AlbumSearchResult) = session.albumShown(album)
+    fun artistShown(artist: ArtistInfo) = session.artistShown(artist)
+
     fun playLocalTrack(track: TrackEntity) {
         val allTracks = localTrackResults.value
         val index = allTracks.indexOf(track).coerceAtLeast(0)

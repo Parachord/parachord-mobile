@@ -9,6 +9,9 @@ import com.parachord.shared.metadata.SearchRanking
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.Album
 import com.parachord.shared.model.Track
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -75,8 +78,9 @@ data class SearchState(
  *   it grows ([SearchRanking]); the Artists list is MusicBrainz's plus the
  *   artists the services' rows name ([SearchArtistList]).
  * - The first [SearchArtwork.LIMIT] rows of each remote category that came
- *   without a usable cover get one looked up ([SearchArtwork]); a row keeps the
- *   first cover found. A new query drops the old query's lookups.
+ *   without a usable cover get one looked up ([SearchArtwork]), and so does any
+ *   other row once it's on screen ([trackShown], [albumShown], [artistShown]);
+ *   a row keeps the first cover found. A new query drops the old query's lookups.
  *
  * Resolving the result rows stays with each app: Android resolves the remote
  * tracks once their search finishes ([onRemoteTracksSettled]); iOS resolves
@@ -113,6 +117,8 @@ class SearchSession(
         searched = q
         val gen = ++generation
         searchJob?.cancel()
+        lookups?.job?.cancel()
+        lookups = null
         if (!isSearchable(q)) {
             searchJob = null
             _state.value = SearchState()
@@ -129,19 +135,37 @@ class SearchSession(
         generation++
         searchJob?.cancel()
         searchJob = null
+        lookups?.job?.cancel()
+        lookups = null
     }
 
-    private inline fun ifCurrent(gen: Int, change: (SearchState) -> SearchState) {
-        if (gen == generation) _state.update { if (gen == generation) change(it) else it }
-    }
+    /**
+     * A result row came on screen: look up its cover if it has none, as for
+     * the first [SearchArtwork.LIMIT] rows. Each row is looked up once per
+     * query. Both apps call these from each row (iOS `.onAppear`, Android a
+     * `LaunchedEffect`), so a row further down still gets its art.
+     */
+    fun trackShown(track: TrackSearchResult) { lookups?.findTrackArt(track) }
 
-    private suspend fun run(q: String, gen: Int) = coroutineScope {
-        ifCurrent(gen) { it.copy(query = q, art = emptyMap(), isSearching = true, hasSearched = false) }
-        val requested = mutableSetOf<String>()
+    fun albumShown(album: AlbumSearchResult) { lookups?.findAlbumArt(album) }
 
-        fun lookUpArt(key: String, find: suspend () -> String?) {
-            if (!requested.add(key)) return
-            launch {
+    fun artistShown(artist: ArtistInfo) { lookups?.findArtistArt(artist) }
+
+    /** [artistShown] for a row that carries only the artist's name and photo (iOS's rows). */
+    fun artistShown(name: String, imageUrl: String?) = artistShown(ArtistInfo(name = name, imageUrl = imageUrl))
+
+    @Volatile
+    private var lookups: Lookups? = null
+
+    /** The current query's cover lookups; a new query cancels them ([job]). */
+    private inner class Lookups(private val gen: Int) {
+        val job = SupervisorJob()
+        private val mutex = Mutex()
+        private val requested = mutableSetOf<String>()
+
+        private fun lookUpArt(key: String, find: suspend () -> String?) {
+            scope.launch(job) {
+                if (!mutex.withLock { requested.add(key) }) return@launch
                 val url = try {
                     find()
                 } catch (e: Exception) {
@@ -172,13 +196,25 @@ class SearchSession(
             }
         }
 
+        fun findArtistArt(artist: ArtistInfo) {
+            if (!artist.imageUrl.isNullOrBlank()) return
+            lookUpArt(artistArtKey(artist.name)) { artwork.lookup { catalog.artistImage(artist.name) } }
+        }
+    }
+
+    private inline fun ifCurrent(gen: Int, change: (SearchState) -> SearchState) {
+        if (gen == generation) _state.update { if (gen == generation) change(it) else it }
+    }
+
+    private suspend fun run(q: String, gen: Int) = coroutineScope {
+        ifCurrent(gen) { it.copy(query = q, art = emptyMap(), isSearching = true, hasSearched = false) }
+        val art = Lookups(gen)
+        lookups?.job?.cancel()
+        lookups = art
+
         fun showArtists(ranked: List<ArtistInfo>) {
             ifCurrent(gen) { it.copy(artists = ranked) }
-            ranked.take(SearchArtwork.LIMIT).forEach { artist ->
-                if (artist.imageUrl.isNullOrBlank()) {
-                    lookUpArt(artistArtKey(artist.name)) { artwork.lookup { catalog.artistImage(artist.name) } }
-                }
-            }
+            ranked.take(SearchArtwork.LIMIT).forEach(art::findArtistArt)
         }
 
         // Library rows follow library changes until the query changes.
@@ -206,7 +242,7 @@ class SearchSession(
                     catalog.tracks(q).collect { rows ->
                         ranked = SearchRanking.rankTracks(q, rows)
                         ifCurrent(gen) { it.copy(remoteTracks = ranked) }
-                        ranked.take(SearchArtwork.LIMIT).forEach(::findTrackArt)
+                        ranked.take(SearchArtwork.LIMIT).forEach(art::findTrackArt)
                         showArtists(artistList.withTracks(ranked))
                     }
                     if (gen == generation) onRemoteTracksSettled(ranked)
@@ -215,7 +251,7 @@ class SearchSession(
                     catalog.albums(q).collect { rows ->
                         val ranked = SearchRanking.rankAlbums(q, rows)
                         ifCurrent(gen) { it.copy(remoteAlbums = ranked) }
-                        ranked.take(SearchArtwork.LIMIT).forEach(::findAlbumArt)
+                        ranked.take(SearchArtwork.LIMIT).forEach(art::findAlbumArt)
                         showArtists(artistList.withAlbums(ranked))
                     }
                 }
