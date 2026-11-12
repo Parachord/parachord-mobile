@@ -64,5 +64,8 @@ class SyncPickerTest {
         assertEquals("5 minutes ago", SyncStatusText.lastSynced(now - 5 * 60_000, now))
         assertEquals("3 hours ago", SyncStatusText.lastSynced(now - 3 * 3_600_000L, now))
         assertEquals("2 days ago", SyncStatusText.lastSynced(now - 2 * 86_400_000L, now))
+        assertEquals("1 minute ago", SyncStatusText.lastSynced(now - 60_000, now))
+        assertEquals("1 hour ago", SyncStatusText.lastSynced(now - 3_600_000L, now))
+        assertEquals("1 day ago", SyncStatusText.lastSynced(now - 86_400_000L, now))
     }
 }
