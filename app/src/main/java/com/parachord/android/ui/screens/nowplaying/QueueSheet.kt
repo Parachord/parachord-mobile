@@ -101,18 +101,10 @@ fun QueueSheet(
                     }
                 }
                 if (playbackContext != null) {
-                    val contextLabel = when (playbackContext.type) {
-                        LISTEN_ALONG_CONTEXT -> "Listening along with ${playbackContext.name}"
-                        // Spinoff covers two flavors: in-app right-click → Spinoff
-                        // (name = "Spinoff from {title}") and Mode B/C protocol radio
-                        // (id = "pool-based", name = station name e.g. "Radio: Slowdive").
-                        // Desktop branches its "Spun off from X by Y" template to
-                        // station-name-only when sourceTrack.artist is blank — Android
-                        // never had that template, so rendering name directly is the
-                        // correct convergence point for both flavors.
-                        "spinoff" -> playbackContext.name
-                        else -> "Playing from: ${playbackContext.name}"
-                    }
+                    // Shared with iOS (#596). A spinoff's name is the whole line:
+                    // "Spinoff from …", or a radio station's name.
+                    val contextLabel = com.parachord.shared.playback.PlaybackMessages
+                        .contextLabel(playbackContext.type, playbackContext.name)
                     val contextColor = when (playbackContext.type) {
                         LISTEN_ALONG_CONTEXT -> Color(0xFF34D399) // Green, matching desktop
                         "spinoff" -> Color(0xFFC084FC) // Purple, matching spinoff button

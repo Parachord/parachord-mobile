@@ -586,16 +586,8 @@ fun ResolverIconRow(
 }
 
 /** Human-readable display names for resolvers. */
-fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) {
-    "spotify" -> "Spotify"
-    "applemusic" -> "Apple Music"
-    "soundcloud" -> "SoundCloud"
-    "localfiles" -> "Local Files"
-    "youtube" -> "YouTube"
-    "bandcamp" -> "Bandcamp"
-    "qobuz" -> "Qobuz"
-    else -> resolver.replaceFirstChar { it.uppercase() }
-}
+fun resolverDisplayName(resolver: String): String =
+    com.parachord.shared.playback.resolverDisplayName(resolver)
 
 /**
  * Resolver source dropdown for the Now Playing screen.

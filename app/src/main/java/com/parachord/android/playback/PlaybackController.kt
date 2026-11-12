@@ -3278,8 +3278,7 @@ class PlaybackController constructor(
         val excluded = track.resolver ?: "soundcloud"
         val fallback = playFromOtherSource(track, excluded, advancing)
         if (fallback != null) {
-            val label = com.parachord.android.ui.components.resolverDisplayName(fallback)
-            Toast.makeText(context, "${e.serviceName} can't play this track here. Playing via $label.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, PlaybackMessages.playingViaInstead(e.serviceName, fallback), Toast.LENGTH_SHORT).show()
             return
         }
         // Nothing else can play it. Skipped when the queue is moving on,
@@ -3308,7 +3307,7 @@ class PlaybackController constructor(
         // Shown by playTrackInternal unless onTrackUnplayable takes the track.
         failureNotice = PlaybackNotice(
             message = message,
-            actionLabel = e.pageUrl?.let { "Open in ${e.serviceName}" },
+            actionLabel = e.pageUrl?.let { PlaybackMessages.openIn(e.serviceName) },
             actionUrl = e.pageUrl,
         )
     }
