@@ -40,6 +40,8 @@ class DeepLinkViewModelControlTest {
         Dispatchers.resetMain()
     }
 
+    private val lockedLinkNotifier = mockk<LockedLinkNotifier>(relaxed = true)
+
     private fun viewModel() = DeepLinkViewModel(
         deepLinkHandler = deepLinkHandler,
         externalLinkResolver = mockk(relaxed = true),
@@ -57,6 +59,7 @@ class DeepLinkViewModelControlTest {
         friendsRepository = mockk(relaxed = true),
         pluginManager = mockk(relaxed = true),
         trackResolverCache = mockk(relaxed = true),
+        lockedLinkNotifier = lockedLinkNotifier,
     )
 
     private fun kotlinx.coroutines.test.TestScope.openControlLink(action: String, isPlaying: Boolean) {
@@ -107,5 +110,25 @@ class DeepLinkViewModelControlTest {
         openControlLink("skip", isPlaying = false)
         verify(exactly = 1) { playbackController.skipNext() }
         verify(exactly = 0) { playbackController.togglePlayPause() }
+    }
+
+    @Test
+    fun `a play link with the phone locked asks to unlock and plays nothing`() = runTest(testDispatcher) {
+        every { lockedLinkNotifier.isLocked() } returns true
+        val action = DeepLinkAction.Play("Ramones", "Judy Is a Punk")
+        every { deepLinkHandler.parse(uri) } returns action
+        viewModel().handleUri(uri)
+        advanceUntilIdle()
+        verify(exactly = 1) { lockedLinkNotifier.notifyUnlockToPlay(uri, action) }
+        verify(exactly = 0) { playbackController.noteLinkPlayRequested() }
+        verify(exactly = 0) { playbackController.playTrack(any(), any()) }
+    }
+
+    @Test
+    fun `a control link with the phone locked still works`() = runTest(testDispatcher) {
+        every { lockedLinkNotifier.isLocked() } returns true
+        openControlLink("skip", isPlaying = true)
+        verify(exactly = 1) { playbackController.skipNext() }
+        verify(exactly = 0) { lockedLinkNotifier.notifyUnlockToPlay(any(), any()) }
     }
 }

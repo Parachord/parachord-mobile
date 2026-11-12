@@ -101,6 +101,7 @@ class DeepLinkViewModel constructor(
     private val friendsRepository: FriendsRepository,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
     private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache,
+    private val lockedLinkNotifier: LockedLinkNotifier,
 ) : ViewModel() {
 
     private val _navEvents = MutableSharedFlow<DeepLinkNavEvent>()
@@ -111,6 +112,13 @@ class DeepLinkViewModel constructor(
 
     fun handleUri(uri: Uri) {
         val action = deepLinkHandler.parse(uri)
+        // With the phone locked, Android won't let a link start playback (no
+        // foreground, no network, no audio focus): ask to unlock instead, and
+        // the notification opens this link again (#619 follow-up).
+        if (action.startsPlayback() && lockedLinkNotifier.isLocked()) {
+            lockedLinkNotifier.notifyUnlockToPlay(uri, action)
+            return
+        }
         // A play link searches before it plays; marked now, so the saved-queue
         // restore on a cold start doesn't land on top of it (#604).
         if (action.startsPlayback()) playbackController.noteLinkPlayRequested()

@@ -1221,5 +1221,6 @@ val androidModule = module {
     viewModelOf(::ConcertsViewModel)
     viewModelOf(::SyncViewModel)
     viewModelOf(::PlaylistSyncChannelsViewModel)
+    single { com.parachord.android.deeplink.LockedLinkNotifier(androidContext()) }
     viewModelOf(::DeepLinkViewModel)
 }
