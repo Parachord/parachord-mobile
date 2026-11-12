@@ -1,5 +1,8 @@
 package com.parachord.shared.model
 
+import kotlinx.serialization.Serializable
+
+@Serializable
 data class ChartAlbum(
     val id: String,
     val title: String,
@@ -10,6 +13,7 @@ data class ChartAlbum(
     val url: String? = null,
 )
 
+@Serializable
 data class ChartSong(
     val id: String,
     val title: String,
