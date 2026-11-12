@@ -8,6 +8,7 @@ import com.parachord.shared.playback.ResolverVolume
 import android.view.KeyEvent
 import com.parachord.android.auth.OAuthManager
 import com.parachord.shared.api.SpPlaybackRequest
+import com.parachord.shared.playback.SpotifyResumeWatch
 import com.parachord.shared.api.SpotifyPlayRequests
 import com.parachord.shared.api.SpPlaybackState
 import com.parachord.shared.api.SpDevice
@@ -225,6 +226,15 @@ class SpotifyPlaybackHandler constructor(
     private var lastPlayedUri: String? = null
     /** True when WE initiated a pause (user tapped pause). False means Spotify stopped on its own. */
     private var pausedByUs = false
+    /** When [pause] last ran, for [SpotifyResumeWatch.GRACE_AFTER_PAUSE_MS]. */
+    private var pausedAt = 0L
+
+    /**
+     * Called (off the main thread) when the track we paused plays again
+     * because someone resumed it outside Parachord: Spotify's app, a headset,
+     * another Connect device (#666). The controller takes it back as playing.
+     */
+    var onResumedElsewhere: (() -> Unit)? = null
     /** True once the polling loop has confirmed playback started for the current track. */
     private var playbackConfirmed = false
 
@@ -601,6 +611,7 @@ class SpotifyPlaybackHandler constructor(
 
     override suspend fun pause() {
         pausedByUs = true
+        pausedAt = System.currentTimeMillis()
         // When the Web API can't be reached (Parachord's network cut in the
         // background, Doze; a cut network hangs the request for its 30 s
         // socket timeout, hence the short wait) or answers 5xx, pause this
@@ -1309,6 +1320,30 @@ class SpotifyPlaybackHandler constructor(
 
                         if (isStale) {
                             Log.d(TAG, "Ignoring stale API state: item=$apiItemId (expected=$expectedTrackId, ${elapsed}ms since play)")
+                        } else if (pausedByUs) {
+                            // We paused it. Only our track playing again counts
+                            // (#666): Spotify playing another song stays "paused"
+                            // here, so Parachord's Play still resumes ours instead
+                            // of taking the tap as a pause.
+                            val now = System.currentTimeMillis()
+                            val ourIds = setOfNotNull(expectedTrackId, lastPlayedUri?.substringAfterLast(":"))
+                            val linkedFromId = state.item?.linkedFrom?.id
+                            if (SpotifyResumeWatch.resumedElsewhere(
+                                    now - pausedAt, state.isPlaying, apiItemId, linkedFromId, ourIds,
+                                )
+                            ) {
+                                Log.d(TAG, "Our track was resumed outside Parachord (item=$apiItemId at ${state.progressMs} ms)")
+                                pausedByUs = false
+                                cachedIsPlaying = true
+                                cachedPosition = state.progressMs ?: cachedPosition
+                                lastPositionChangeTime = now
+                                currentItemId = apiItemId
+                                state.item?.durationMs?.let { cachedDuration = it }
+                                onResumedElsewhere?.invoke()
+                            } else if (apiItemId != null && (apiItemId in ourIds || linkedFromId in ourIds)) {
+                                // Still ours, paused (perhaps seeked elsewhere).
+                                cachedPosition = state.progressMs ?: cachedPosition
+                            }
                         } else if (!playbackConfirmed && !state.isPlaying && elapsed in 3000..10000 && !pausedByUs) {
                             // Spotify accepted our play command but didn't start.
                             // Re-send the play command once as a lightweight retry.
@@ -1376,7 +1411,9 @@ class SpotifyPlaybackHandler constructor(
                     consecutivePollFailures++
                     Log.w(TAG, "State poll failed ($consecutivePollFailures): ${e.message}")
                 }
-                delay(1000)
+                // Paused by us: a check every 5 s is enough to notice a resume
+                // elsewhere (desktop's EXTERNAL_RESUME_POLL_MS).
+                delay(if (pausedByUs) SpotifyResumeWatch.CHECK_INTERVAL_MS else 1000)
             }
         }
     }

@@ -838,6 +838,16 @@ Conformance checklist (audited 2026-06-07):
   API to start the next one or pause. Android then pauses Spotify with a media
   key (root `CLAUDE.md`, "When Parachord can't reach Spotify"); iOS has no way
   to send another app a key.
+- **A paused track resumed outside Parachord** (Spotify's app, another Connect
+  device; #666) is noticed: after a user pause (`spotifyUserPausedAt`, set by
+  `togglePlayPause`), `checkSpotifyResumedElsewhere` asks Spotify every 5 s
+  from the Spotify loop, skipped during a cooldown, and when Spotify plays our
+  track again (`IosSpotifyConnect.playingTrackId` or the id it was relinked
+  from, the shared `SpotifyResumeWatch`) it sets `spotifyPlaying`, so the
+  button shows Pause and `checkSpotifyEnd` moves the queue on. Without it the
+  track stayed "paused" and never advanced. Not checked on a device: with
+  the app suspended in the background while paused, the check waits until
+  it runs again.
 - **Single-pass**, single 502 retry after 1s; **cold-device verification**
   (2 polls × 500ms via `getPlaybackStateOrNull`); persist the **synthetic**
   `localDeviceId`, never the real id.
