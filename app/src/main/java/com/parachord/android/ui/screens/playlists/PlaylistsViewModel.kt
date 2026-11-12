@@ -66,18 +66,7 @@ class PlaylistsViewModel constructor(
     val sortedPlaylists: StateFlow<List<PlaylistEntity>> = combine(
         playlists, _sort, _searchQuery,
     ) { list, sort, query ->
-        val filtered = if (query.isBlank()) list else {
-            list.filter { it.name.contains(query, ignoreCase = true) }
-        }
-        when (sort) {
-            PlaylistSort.RECENT -> filtered.sortedByDescending { it.createdAt }
-            PlaylistSort.CREATED -> filtered.sortedBy { it.createdAt }
-            PlaylistSort.MODIFIED -> filtered.sortedByDescending {
-                if (it.lastModified > 0L) it.lastModified else it.updatedAt
-            }
-            PlaylistSort.ALPHA_ASC -> filtered.sortedBy { it.name.lowercase() }
-            PlaylistSort.ALPHA_DESC -> filtered.sortedByDescending { it.name.lowercase() }
-        }
+        com.parachord.shared.playlist.PlaylistSorting.playlists(list, sort, query)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** Session-scoped set to avoid re-triggering enrichment for the same playlist. */

@@ -3603,16 +3603,8 @@ private fun SyncTab(
     }
 }
 
-private fun formatRelativeTime(timestamp: Long): String {
-    if (timestamp == 0L) return "Never"
-    val diff = System.currentTimeMillis() - timestamp
-    return when {
-        diff < 60_000 -> "Just now"
-        diff < 3_600_000 -> "${diff / 60_000} minutes ago"
-        diff < 86_400_000 -> "${diff / 3_600_000} hours ago"
-        else -> "${diff / 86_400_000} days ago"
-    }
-}
+private fun formatRelativeTime(timestamp: Long): String =
+    com.parachord.shared.sync.SyncStatusText.lastSynced(timestamp)
 
 // ── About Tab ──────────────────────────────────────────────────────
 

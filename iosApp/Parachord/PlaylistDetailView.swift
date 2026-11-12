@@ -423,27 +423,12 @@ func pcTrack(from t: PlaylistTrack) -> Track {
     )
 }
 
-/// Playlist sort options — mirrors Android's `PlaylistSort` (same `name` keys,
-/// so the persisted choice is shared across platforms).
-enum PlaylistSort: String, CaseIterable {
-    case RECENT, CREATED, MODIFIED, ALPHA_ASC, ALPHA_DESC
-    var label: String {
-        switch self {
-        case .RECENT: return "Recently Added"
-        case .CREATED: return "Date Created"
-        case .MODIFIED: return "Recently Modified"
-        case .ALPHA_ASC: return "A-Z"
-        case .ALPHA_DESC: return "Z-A"
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class PlaylistsListModel {
     private let container = IosContainer.companion.shared
     private var raw: [Playlist] = []
-    var sort: PlaylistSort = .RECENT
+    var sort: PlaylistSort = PlaylistSort.companion.DEFAULT
     var mirrors: [String: [String]] = [:]   // localPlaylistId -> push-mirror provider ids
     var playlists: [Playlist] { sorted(raw) }
     private var sub: Cancellable?
@@ -455,8 +440,8 @@ final class PlaylistsListModel {
             Task { await self?.loadMirrors() }   // refresh chips when the list changes (post-sync)
         }
         Task {
-            if let s = try? await container.getPlaylistsSort(), let parsed = PlaylistSort(rawValue: s) {
-                sort = parsed
+            if let s = try? await container.getPlaylistsSort() {
+                sort = PlaylistSort.companion.fromName(name: s)
             }
             await loadMirrors()
         }
@@ -471,17 +456,12 @@ final class PlaylistsListModel {
 
     func setSort(_ s: PlaylistSort) {
         sort = s
-        Task { try? await container.setPlaylistsSort(sort: s.rawValue) }
+        Task { try? await container.setPlaylistsSort(sort: s.name) }
     }
 
+    /// The shared playlists sort (#591), Android's too.
     private func sorted(_ list: [Playlist]) -> [Playlist] {
-        switch sort {
-        case .RECENT: return list.sorted { $0.createdAt > $1.createdAt }
-        case .CREATED: return list.sorted { $0.createdAt < $1.createdAt }
-        case .MODIFIED: return list.sorted { $0.lastModified > $1.lastModified }
-        case .ALPHA_ASC: return list.sorted { $0.name.lowercased() < $1.name.lowercased() }
-        case .ALPHA_DESC: return list.sorted { $0.name.lowercased() > $1.name.lowercased() }
-        }
+        PlaylistSorting.shared.playlists(list: list, sort: sort, query: "")
     }
 }
 
@@ -524,7 +504,7 @@ struct PlaylistsScreen: View {
                 if !model.playlists.isEmpty {
                     HStack {
                         Menu {
-                            ForEach(PlaylistSort.allCases, id: \.self) { s in
+                            ForEach(PlaylistSort.entries, id: \.self) { s in
                                 Button { model.setSort(s) } label: {
                                     if model.sort == s { Label(s.label, systemImage: "checkmark") } else { Text(s.label) }
                                 }

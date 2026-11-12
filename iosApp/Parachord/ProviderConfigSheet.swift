@@ -1,21 +1,6 @@
 import SwiftUI
 import Shared
 
-/// Sort options for the unified channel picker (mirrors Android `PlaylistSort`).
-enum PlaylistSortOption: String, CaseIterable, Identifiable {
-    case recent, created, modified, alphaAsc, alphaDesc
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .recent: return "Recently Added"
-        case .created: return "Date Created"
-        case .modified: return "Recently Modified"
-        case .alphaAsc: return "A-Z"
-        case .alphaDesc: return "Z-A"
-        }
-    }
-}
-
 /// "Configure what syncs" sheet (port of Android `ProviderSyncConfigSheet.kt`):
 /// axis toggles ("What syncs", persisted live) + — when the Playlists axis is on
 /// — the UNIFIED channel picker over `getProviderPickerRows`/`setPlaylistChannel`
@@ -147,7 +132,7 @@ struct ProviderSyncConfigSheet: View {
 
     private var sortMenu: some View {
         Menu {
-            ForEach(PlaylistSortOption.allCases) { opt in
+            ForEach(PlaylistSort.entries, id: \.self) { opt in
                 Button { m.setSort(opt) } label: {
                     HStack { Text(opt.label); if m.sort == opt { Image(systemName: "checkmark") } }
                 }
@@ -212,7 +197,7 @@ private final class ProviderConfigModel {
     // service playlist with no local row yet ("Tap to import"). Toggling
     // detaches/admits via setPlaylistChannel — live, no per-row keep/remove.
     var channelRows: [ProviderChannelPlaylist] = []
-    var sort: PlaylistSortOption = .recent
+    var sort: PlaylistSort = PlaylistSort.companion.DEFAULT
 
     init(providerId: String) { self.providerId = providerId }
 
@@ -234,7 +219,7 @@ private final class ProviderConfigModel {
         channelRows = ProviderConfigModel.sorted(rows, sort)
     }
 
-    func setSort(_ s: PlaylistSortOption) {
+    func setSort(_ s: PlaylistSort) {
         sort = s
         channelRows = ProviderConfigModel.sorted(channelRows, s)
     }
@@ -290,17 +275,8 @@ private final class ProviderConfigModel {
         }
     }
 
-    static func sorted(_ list: [ProviderChannelPlaylist], _ s: PlaylistSortOption) -> [ProviderChannelPlaylist] {
-        switch s {
-        case .recent: return list.sorted { $0.createdAt > $1.createdAt }
-        case .created: return list.sorted { $0.createdAt < $1.createdAt }
-        case .modified: return list.sorted { a, b in
-            let av = a.lastModified > 0 ? a.lastModified : a.updatedAt
-            let bv = b.lastModified > 0 ? b.lastModified : b.updatedAt
-            return av > bv
-        }
-        case .alphaAsc: return list.sorted { $0.name.lowercased() < $1.name.lowercased() }
-        case .alphaDesc: return list.sorted { $0.name.lowercased() > $1.name.lowercased() }
-        }
+    /// The shared picker sort (#591), Android's too.
+    static func sorted(_ list: [ProviderChannelPlaylist], _ s: PlaylistSort) -> [ProviderChannelPlaylist] {
+        PlaylistSorting.shared.channelRows(list: list, sort: s)
     }
 }

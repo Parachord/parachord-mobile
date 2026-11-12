@@ -527,42 +527,28 @@ class IosContainer private constructor() {
      * mirrors) PLUS — for pull providers (Spotify / Apple Music) — live-fetched
      * not-yet-imported native playlists, deduped against native rows + linked
      * mirror copies + same-name local rows so a playlist never appears twice.
-     * Mirrors Android's SyncViewModel.openConfig merge; call from a `Task`.
+     * The shared [com.parachord.shared.sync.SyncPickerRows], Android's too:
+     * the provider's list is fetched at most once a minute, and a row the user
+     * already checked stays checked. Call from a `Task`.
      */
-    suspend fun getProviderPickerRows(providerId: String): List<ProviderChannelPlaylist> {
-        val local = playlistSyncChannelManager.getProviderChannelPlaylists(providerId)
-        val provider = when (providerId) {
-            "spotify" -> spotifySyncProvider
-            "applemusic" -> appleMusicSyncProvider
-            else -> return local // ListenBrainz: no live catalog to merge
-        }
-        val nativeLocalIds = local.filter { !it.isMirror }.map { it.localId }.toSet()
-        val linkedExternalIds = syncEngine.linkedExternalIdsForProvider(providerId)
-        val localNames = playlistDao.getAllSync()
-            .mapNotNull { it.name.trim().lowercase().ifBlank { null } }.toSet()
-        val fetched = runCatching { provider.fetchPlaylists() }.getOrElse { emptyList() }
-        val notImported = fetched
-            .filter {
-                "$providerId-${it.spotifyId}" !in nativeLocalIds &&
-                    it.spotifyId !in linkedExternalIds &&
-                    it.entity.name.trim().lowercase() !in localNames
-            }
-            .map { sp ->
-                ProviderChannelPlaylist(
-                    localId = "$providerId-${sp.spotifyId}",
-                    name = sp.entity.name,
-                    trackCount = sp.trackCount,
-                    ownerName = sp.entity.ownerName,
-                    createdAt = sp.entity.createdAt,
-                    updatedAt = sp.entity.updatedAt,
-                    lastModified = sp.entity.lastModified,
-                    isMirror = false,
-                    originLabel = null,
-                    enabled = false,
-                    notImported = true,
-                )
-            }
-        return local + notImported
+    suspend fun getProviderPickerRows(providerId: String): List<ProviderChannelPlaylist> =
+        syncPickerRows.rows(providerId)
+
+    /** The picker's row rules, shared with Android (#591). */
+    private val syncPickerRows by lazy {
+        com.parachord.shared.sync.SyncPickerRows(
+            channelManager = playlistSyncChannelManager,
+            syncEngine = syncEngine,
+            playlistDao = playlistDao,
+            settings = settingsStore,
+            provider = { id ->
+                when (id) {
+                    "spotify" -> spotifySyncProvider
+                    "applemusic" -> appleMusicSyncProvider
+                    else -> null
+                }
+            },
+        )
     }
 
     // ── Legacy → N-way migration preview (#289 brick #5) ──────────────
