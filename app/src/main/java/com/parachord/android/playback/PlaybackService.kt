@@ -100,6 +100,7 @@ class PlaybackService : MediaLibraryService() {
     private val libraryRepository: com.parachord.shared.repository.LibraryRepository by inject()
     private val metadataService: com.parachord.shared.metadata.MetadataService by inject()
     private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache by inject()
+    private val listenAlongManager: ListenAlongManager by inject()
 
     private var mediaSession: MediaLibrarySession? = null
     private var player: ExoPlayer? = null
@@ -340,6 +341,9 @@ class PlaybackService : MediaLibraryService() {
         // when a phone screen opens: Android Auto can start the app with the
         // phone locked. See PlaybackController.connect.
         playbackController.connect()
+        // Listen Along's hooks go in with the playback session, so a session
+        // runs (and follows) with no phone screen (#611).
+        listenAlongManager
 
         // Feed QueueManager snapshots + current-track changes into the
         // wrapper's synthetic timeline. Combines two flows so a change in

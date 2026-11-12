@@ -15,7 +15,7 @@ package com.parachord.shared.deeplink
  * 1. **Exit spinoff** (`PlaybackController.exitSpinoff()`).
  *    Spinoff queues are derived state; if we leave them attached, the
  *    new context inherits the old spinoff parent and refill behavior.
- * 2. **Exit listen-along** (`MainViewModel.listenAlongTakenOver(silently)`,
+ * 2. **Exit listen-along** (`ListenAlongManager.takeOver(silently)` on Android,
  *    the shared `ListenAlongHost.takeOver`). The listen-along ticker keeps
  *    mirroring the followed user's track changes; if we don't stop it
  *    before queue replacement, the next poll tick reverts our newly-set
