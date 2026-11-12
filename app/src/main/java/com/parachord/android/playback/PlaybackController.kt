@@ -419,6 +419,9 @@ class PlaybackController constructor(
             scrobbleManager.hasScrobbled(trackId) ||
                 loadOnPlay?.let { it.track.id == trackId && it.continuesScrobbled } == true
         }
+        router.getSpotifyHandler().onResumedElsewhere = {
+            scope.launch(Dispatchers.Main) { adoptSpotifyResumedElsewhere() }
+        }
     }
 
     fun connect() {
@@ -1096,6 +1099,33 @@ class PlaybackController constructor(
     }
     private fun clearUserPauseMark() {
         lastUserPauseTimeMs = 0
+    }
+
+    /**
+     * The Spotify track the user paused here was resumed outside Parachord
+     * (Spotify's app or notification, a headset while Spotify holds the media
+     * buttons, another Connect device; #666, shared [SpotifyResumeWatch]).
+     * Show it as playing and watch it again: the end-of-track loop restarts so
+     * the queue moves on, and the idle timeout no longer stops it.
+     */
+    private fun adoptSpotifyResumedElsewhere() {
+        val spotify = router.getSpotifyHandler()
+        val track = stateHolder.state.value.currentTrack ?: return
+        if (!isExternalPlayback || router.activeExternalHandler !== spotify) return
+        if (stateHolder.state.value.isPlaying || heldForListener) return
+        val watched = com.parachord.shared.playback.SpotifyResumeWatch.watches(
+            userPaused = lastUserPauseTimeMs > 0,
+            trackHeldBySlot = loadOnPlayTarget(loadOnPlay, track.id) != null,
+            playStarting = isPlayStarting,
+        )
+        if (!watched) return
+        Log.d(TAG, "'${track.title}' was resumed outside Parachord; showing it as playing")
+        cancelIdleTimeout()
+        clearUserPauseMark()
+        stateHolder.update { copy(isPlaying = true, position = spotify.getPosition()) }
+        sendSilencePlayback(pause = false)
+        sendExternalPlaybackStart(track)
+        startStatePolling(spotify)
     }
 
     fun togglePlayPause() {

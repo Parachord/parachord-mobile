@@ -386,8 +386,13 @@ final class IosSpotifyConnect {
     /// `position_ms`, so Spotify starts there. Used by one play.
     private var startMs: Int64 = 0
 
+    /// The Spotify track id of the last play asked for (`spotify:track:<id>`),
+    /// to recognise our track resumed outside Parachord (#666).
+    @ObservationIgnored private(set) var playingTrackId: String?
+
     func play(uri: String, startAtSec: Double = 0) async -> Bool {
         startMs = startAtSec > 0 ? Int64(startAtSec * 1000) : 0
+        playingTrackId = uri.split(separator: ":").last.map(String.init)
         let client = IosContainer.companion.shared.spotifyClient
         let settings = IosContainer.companion.shared.settingsStore
 
@@ -587,7 +592,9 @@ final class IosSpotifyConnect {
         return SpotifyPlaybackSnapshot(
             positionSec: (s.progressMs?.doubleValue ?? 0) / 1000.0,
             durationSec: (s.item?.durationMs?.doubleValue ?? 0) / 1000.0,
-            isPlaying: s.isPlaying
+            isPlaying: s.isPlaying,
+            itemId: s.item?.id,
+            linkedFromId: s.item?.linkedFrom?.id
         )
     }
 
@@ -804,6 +811,9 @@ struct SpotifyPlaybackSnapshot {
     let positionSec: Double
     let durationSec: Double
     let isPlaying: Bool
+    /// The track Spotify reports, and the one it was relinked from.
+    let itemId: String?
+    let linkedFromId: String?
 }
 
 /// "Choose Spotify Device" sheet — mirrors Android's `SpotifyDevicePickerDialog`
@@ -2344,6 +2354,12 @@ final class QueuePlaybackCoordinator {
     /// Once-per-track guard so auto-advance fires a single `skipNext`.
     private var spotifyEndHandled = false
     @ObservationIgnored private var spotifyPollTask: Task<Void, Never>?
+    /// When the user paused the Spotify track (Play / Pause, remote commands),
+    /// so a resume outside Parachord is noticed (#666, shared
+    /// `SpotifyResumeWatch`). Nil while playing, and for a hold or a stop.
+    @ObservationIgnored private var spotifyUserPausedAt: Date?
+    /// When the paused track was last checked, every `CHECK_INTERVAL_MS`.
+    @ObservationIgnored private var spotifyResumeCheckedAt: Date?
 
     // ── Unified now-playing state (engine-agnostic) ────────────────────
     // AVPlayer and MusicKit both expose real position/duration (MusicKit via
@@ -2796,6 +2812,9 @@ final class QueuePlaybackCoordinator {
             Task { @MainActor in
                 if spotify.isPlaying { await spotify.pause() } else { await spotify.resume() }
                 spotifyPlaying = spotify.isPlaying
+                // Watch a user pause for a resume outside Parachord (#666).
+                spotifyUserPausedAt = spotifyPlaying ? nil : Date()
+                spotifyResumeCheckedAt = nil
             }
         case .soundCloud:
             Task { @MainActor in
@@ -3356,6 +3375,7 @@ final class QueuePlaybackCoordinator {
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
                 if kind == .spotify {
                     spotifyPlaying = spotify.isPlaying
+                    spotifyUserPausedAt = nil
                     spotifyPositionSec = 0
                     spotifyDurationSec = 0
                     spotifyElapsedSec = 0
@@ -3607,9 +3627,44 @@ final class QueuePlaybackCoordinator {
                         self.spotifyPlaying = snap.isPlaying
                     }
                 }
+                if !self.spotifyPlaying, cooldown == 0 {
+                    await self.checkSpotifyResumedElsewhere()
+                }
                 self.checkSpotifyEnd()
             }
         }
+    }
+
+    /// The Spotify track the user paused here may have been resumed outside
+    /// Parachord (Spotify's app, another Connect device; #666). Every 5 s while
+    /// paused, ask Spotify; when it plays our track again (shared
+    /// `SpotifyResumeWatch`), show it as playing, so the poll's end-of-track
+    /// check moves the queue on and Play / Pause stays in step.
+    @MainActor
+    private func checkSpotifyResumedElsewhere() async {
+        guard let pausedAt = spotifyUserPausedAt else { return }
+        let watch = SpotifyResumeWatch.shared
+        guard watch.watches(userPaused: true, trackHeldBySlot: loadOnPlayTarget != nil,
+                            playStarting: isStarting),
+              !heldForListener else { return }
+        let now = Date()
+        if let last = spotifyResumeCheckedAt,
+           now.timeIntervalSince(last) * 1000 < Double(watch.CHECK_INTERVAL_MS) { return }
+        spotifyResumeCheckedAt = now
+        guard let ours = spotify.playingTrackId,
+              let snap = await spotify.fetchPlaybackState() else { return }
+        // A newer play or a Play tap may have run while the request was out.
+        guard spotifyUserPausedAt == pausedAt, activeEngine == .spotify, !spotifyPlaying else { return }
+        let msSincePause = Int64(Date().timeIntervalSince(pausedAt) * 1000)
+        guard watch.resumedElsewhere(msSincePause: msSincePause, isPlaying: snap.isPlaying,
+                                     itemId: snap.itemId, linkedFromId: snap.linkedFromId,
+                                     ourTrackIds: [ours]) else { return }
+        NSLog("QUEUE '%@' was resumed outside Parachord; showing it as playing", currentTrack?.title ?? "")
+        spotifyUserPausedAt = nil
+        spotify.isPlaying = true
+        spotifyPlaying = true
+        spotifyPositionSec = snap.positionSec
+        if snap.durationSec > 0 { spotifyDurationSec = snap.durationSec }
     }
 
     /// Auto-advance detection for Connect, mirroring Android `isOurTrackDone`:
