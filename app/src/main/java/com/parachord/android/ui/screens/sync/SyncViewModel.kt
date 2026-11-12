@@ -172,15 +172,8 @@ class SyncViewModel constructor(
         }
     }
 
-    private fun formatAxesSummary(axes: Set<String>): String {
-        val labels = listOf(
-            "tracks" to "Liked Songs",
-            "albums" to "Albums",
-            "artists" to "Artists",
-            "playlists" to "Playlists",
-        )
-        return labels.filter { it.first in axes }.joinToString(" · ") { it.second }
-    }
+    private fun formatAxesSummary(axes: Set<String>): String =
+        com.parachord.shared.sync.SyncStatusText.axesSummary(axes)
 
     val syncEnabled = settingsStore.syncEnabledFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
@@ -599,26 +592,18 @@ class SyncViewModel constructor(
     private fun sortChannelPlaylists(
         list: List<ProviderChannelPlaylist>,
         sort: PlaylistSort,
-    ): List<ProviderChannelPlaylist> = when (sort) {
-        PlaylistSort.RECENT -> list.sortedByDescending { it.createdAt }
-        PlaylistSort.CREATED -> list.sortedBy { it.createdAt }
-        PlaylistSort.MODIFIED -> list.sortedByDescending { if (it.lastModified > 0L) it.lastModified else it.updatedAt }
-        PlaylistSort.ALPHA_ASC -> list.sortedBy { it.name.lowercase() }
-        PlaylistSort.ALPHA_DESC -> list.sortedByDescending { it.name.lowercase() }
-    }
+    ): List<ProviderChannelPlaylist> = com.parachord.shared.playlist.PlaylistSorting.channelRows(list, sort)
 
-    private val liveFetchCache = mutableMapOf<String, Pair<Long, List<SyncedPlaylist>>>()
-
-    /** Live-fetch a provider's playlists for the picker, cached 60s so repeated
-     *  config-sheet opens don't hammer the shared Spotify client_id / AM catalog. */
-    private suspend fun fetchProviderPlaylistsCached(providerId: String): List<SyncedPlaylist> {
-        val now = com.parachord.shared.platform.currentTimeMillis()
-        liveFetchCache[providerId]?.let { (ts, list) -> if (now - ts < 60_000L) return list }
-        val provider = providers.firstOrNull { it.id == providerId } ?: return emptyList()
-        val list = provider.fetchPlaylists()
-        liveFetchCache[providerId] = now to list
-        return list
-    }
+    /** The picker's rows (shared with iOS, #591): local channel rows plus, for
+     *  Spotify and Apple Music, their playlists not imported yet (fetched at most
+     *  once a minute). */
+    private val pickerRows = com.parachord.shared.sync.SyncPickerRows(
+        channelManager = channelManager,
+        syncEngine = syncEngine,
+        playlistDao = playlistDao,
+        settings = settingsStore,
+        provider = { id -> providers.firstOrNull { it.id == id } },
+    )
 
     // Axis-drop keep/remove prompt (reuses [RemovalConfirmation] + the
     // existing count/remove engine methods).
@@ -631,7 +616,7 @@ class SyncViewModel constructor(
     /** Spotify + Apple Music PULL the catalog (choose which service playlists to
      *  import); ListenBrainz PUSHES local playlists up. */
     fun isPullProvider(providerId: String): Boolean =
-        providerId == SpotifySyncProvider.PROVIDER_ID || providerId == "applemusic"
+        com.parachord.shared.sync.SyncPickerRows.isPullProvider(providerId)
 
     /** ListenBrainz mirrors local playlists OUT (push). */
     fun isPushProvider(providerId: String): Boolean =
@@ -665,48 +650,7 @@ class SyncViewModel constructor(
             // the per-playlist Sync menu. PLUS, for pull providers, the provider's
             // own playlists that aren't imported yet (live-fetched) so the user can
             // check them to start syncing.
-            val localRows = channelManager.getProviderChannelPlaylists(providerId)
-            val combined = if (isPullProvider(providerId)) {
-                val nativeLocalIds = localRows.filter { !it.isMirror }.map { it.localId }.toSet()
-                // Exclude pushed-mirror copies already shown as mirror rows, else
-                // they reappear as fake 0-track "not imported" duplicates.
-                val linkedExternalIds = syncEngine.linkedExternalIdsForProvider(providerId)
-                // A live-fetched remote whose NAME already matches a local playlist
-                // is the same logical playlist (just not linked) — suppress it so it
-                // doesn't show as a chip-less duplicate of the existing row.
-                val localNames = playlistDao.getAllSync()
-                    .mapNotNull { it.name.trim().lowercase().ifBlank { null } }
-                    .toSet()
-                val fetched = runCatching { fetchProviderPlaylistsCached(providerId) }.getOrDefault(emptyList())
-                val notImported = fetched
-                    .filter {
-                        "$providerId-${it.spotifyId}" !in nativeLocalIds &&
-                            it.spotifyId !in linkedExternalIds &&
-                            it.entity.name.trim().lowercase() !in localNames
-                    }
-                    .map { sp ->
-                        val futureId = "$providerId-${sp.spotifyId}"
-                        // A pending check (override set before the import runs)
-                        // keeps the row checked across reopens.
-                        val pending = settingsStore.getPlaylistChannels(futureId)?.contains(providerId) == true
-                        ProviderChannelPlaylist(
-                            localId = futureId,
-                            name = sp.entity.name,
-                            trackCount = sp.trackCount,
-                            ownerName = sp.entity.ownerName,
-                            createdAt = sp.entity.createdAt,
-                            updatedAt = sp.entity.updatedAt,
-                            lastModified = sp.entity.lastModified,
-                            isMirror = false,
-                            originLabel = null,
-                            enabled = pending,
-                            notImported = true,
-                        )
-                    }
-                localRows + notImported
-            } else {
-                localRows
-            }
+            val combined = pickerRows.rows(providerId)
             _configChannelPlaylists.value = sortChannelPlaylists(combined, _configChannelSort.value)
             if (isPushProvider(providerId)) {
                 // Seed "checked" from the ACTUAL live mirrors (links ∩ existing
