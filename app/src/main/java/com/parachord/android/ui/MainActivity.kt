@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
     private val musicKitBridge: MusicKitWebBridge by inject()
     private val settingsStore: SettingsStore by inject()
     private val announcementsRepository: com.parachord.shared.repository.AnnouncementsRepository by inject()
+    private val backgroundSweeper: com.parachord.android.resolver.BackgroundResolveSweeper by inject()
 
     /** Pending deep link URI stored for the composable to process. */
     internal val pendingDeepLink = MutableStateFlow<Uri?>(null)
@@ -155,6 +156,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Desktop's idle background pre-resolution, while Parachord is on screen.
+        backgroundSweeper.setForeground(true)
         musicKitBridge.setActivity(this)
         // Auto-configure MusicKit on launch if the user has previously set up Apple Music.
         // configure() restores the saved Music User Token, so no login popup is needed.
@@ -205,8 +208,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Touches pause the background sweep for a few seconds (desktop's activity gate). */
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+        backgroundSweeper.noteUserActivity()
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onPause() {
         super.onPause()
+        backgroundSweeper.setForeground(false)
         musicKitBridge.setActivity(null)
     }
 

@@ -744,6 +744,19 @@ data class PlaylistTrackInfo(
     val recordingMbid: String? = null,
 )
 
+/** A playlist row as the resolver cache takes it. */
+fun com.parachord.shared.model.PlaylistTrack.toTrackInfo() = PlaylistTrackInfo(
+    title = trackTitle,
+    artist = trackArtist,
+    spotifyId = trackSpotifyId,
+    appleMusicId = trackAppleMusicId,
+    soundcloudId = trackSoundcloudId,
+    isrc = trackIsrc,
+    recordingMbid = trackRecordingMbid,
+    playlistId = playlistId,
+    position = position,
+)
+
 /** Canonical key format for track resolver lookups. */
 fun trackKey(title: String, artist: String): String =
     "${title.lowercase().trim()}|${artist.lowercase().trim()}"

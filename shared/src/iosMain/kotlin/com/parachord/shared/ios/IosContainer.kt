@@ -3718,6 +3718,22 @@ class IosContainer private constructor() {
     }
 
     /**
+     * Desktop's idle background pre-resolution ([com.parachord.shared.resolver.BackgroundResolveSweep]):
+     * the collection's tracks, then the playlists', with no source yet. Swift's
+     * `BackgroundResolveSweeper` drives it while the app is active.
+     */
+    fun makeBackgroundResolveSweep(): com.parachord.shared.resolver.BackgroundResolveSweep =
+        com.parachord.shared.resolver.BackgroundResolveSweep(
+            collection = { com.parachord.shared.resolver.BackgroundResolveSweep.collectionItems(trackDao.getAll().first()) },
+            playlists = {
+                com.parachord.shared.resolver.BackgroundResolveSweep.playlistItems(
+                    playlistDao.getAllSync().flatMap { playlistTrackDao.getByPlaylistIdSync(it.id) },
+                )
+            },
+            startedAtMs = com.parachord.shared.platform.currentTimeMillis(),
+        )
+
+    /**
      * The Search screen's session, with Android's rules (#590): from two
      * characters, 300 ms after the last keystroke, a new keystroke cancelling
      * the running search (so its MusicBrainz requests leave the 1 req/s queue,

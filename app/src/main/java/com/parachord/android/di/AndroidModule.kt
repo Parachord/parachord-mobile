@@ -693,6 +693,7 @@ val androidModule = module {
     // Android ResolverRuntime (#210, D2): owns native non-Spotify resolution
     // (Apple Music, SoundCloud, local files) + .axe execution.
     singleOf(::AndroidResolverRuntime)
+    single { com.parachord.android.resolver.BackgroundResolveSweeper(get(), get(), get(), get(), get()) }
 
     // Shared ResolverCoordinator (#210): fan-out + Spotify branch + gating +
     // re-score. The Spotify lambda below is the EXACT body of the old

@@ -18,6 +18,7 @@ import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.resolver.PlaylistTrackInfo
+import com.parachord.android.resolver.toTrackInfo
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.sync.SpotifySyncProvider
 import kotlinx.coroutines.channels.Channel
@@ -85,18 +86,6 @@ class PlaylistDetailViewModel constructor(
      */
     fun resolveVisible(pt: PlaylistTrackEntity): Job =
         trackResolverCache.resolvePlaylistTracksInBackground(listOf(pt.toTrackInfo()), priority = true)
-
-    private fun PlaylistTrackEntity.toTrackInfo() = PlaylistTrackInfo(
-        title = trackTitle,
-        artist = trackArtist,
-        spotifyId = trackSpotifyId,
-        appleMusicId = trackAppleMusicId,
-        soundcloudId = trackSoundcloudId,
-        isrc = trackIsrc,
-        recordingMbid = trackRecordingMbid,
-        playlistId = playlistId,
-        position = position,
-    )
 
     /** True when the remote playlist (Spotify) has changes not yet pulled locally. */
     private val _hasRemoteUpdate = MutableStateFlow(false)
