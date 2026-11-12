@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.search
 
+import kotlinx.coroutines.Job
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.data.db.dao.SearchHistoryDao
@@ -112,16 +113,12 @@ class SearchViewModel constructor(
     val searchHistory: StateFlow<List<SearchHistoryEntity>> = searchHistoryDao.getRecent()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    init {
-        // Pre-resolve local search results so resolver badges appear and playback is instant
-        viewModelScope.launch {
-            localTrackResults.collect { tracks ->
-                if (tracks.isNotEmpty()) {
-                    trackResolverCache.resolveInBackground(tracks)
-                }
-            }
-        }
-    }
+    /**
+     * Resolves one Library-section row while it's on screen (#181), so its badges
+     * appear and playback is instant; see ResolveWhileVisible.
+     */
+    fun resolveVisibleLocalTrack(track: TrackEntity): Job =
+        trackResolverCache.resolveInBackground(listOf(track))
 
     fun onQueryChange(newQuery: String) {
         _query.value = newQuery

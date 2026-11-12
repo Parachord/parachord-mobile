@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.home
 
+import kotlinx.coroutines.Job
 import com.parachord.shared.ui.UiMessages
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -180,13 +181,11 @@ class HomeViewModel constructor(
         loadDiscoverPreviews()
         checkAiPlugins()
         loadWeeklyPlaylists()
-        // Run full resolver pipeline against stored tracks in background (concurrent, deduplicated)
-        viewModelScope.launch {
-            recentTracks.collect { tracks ->
-                if (tracks.isNotEmpty()) trackResolverCache.resolveInBackground(tracks)
-            }
-        }
     }
+
+    /** Resolves one Recent Loves row while it's on screen (#181); see ResolveWhileVisible. */
+    fun resolveVisible(track: TrackEntity): Job =
+        trackResolverCache.resolveInBackground(listOf(track))
 
     private fun checkAiPlugins() {
         viewModelScope.launch {

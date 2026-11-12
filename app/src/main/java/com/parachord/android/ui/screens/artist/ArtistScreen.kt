@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.artist
 
+import com.parachord.android.ui.components.ResolveWhileVisible
+import kotlinx.coroutines.Job
 import com.parachord.android.resolver.trackKey
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
@@ -334,6 +336,7 @@ fun ArtistScreen(
                             trackResolverConfidences = trackResolverConfidences,
                             trackArtwork = trackArtwork,
                             onPlayTopTrack = { index -> viewModel.playTopTrack(index) },
+                            onTrackVisible = viewModel::resolveVisible,
                             onTrackLongClick = { track ->
                                 val entity = viewModel.trackSearchResultToEntity(track)
                                 contextMenuState.show(
@@ -663,6 +666,7 @@ private fun TopTracksTab(
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
     trackArtwork: Map<String, String> = emptyMap(),
     onPlayTopTrack: (Int) -> Unit = {},
+    onTrackVisible: (TrackSearchResult) -> Job? = { null },
     onTrackLongClick: (TrackSearchResult) -> Unit = {},
 ) {
     val showSkeletons = topTracks.isEmpty() && isLoading
@@ -670,6 +674,7 @@ private fun TopTracksTab(
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         if (topTracks.isNotEmpty()) {
             itemsIndexed(topTracks) { index, track ->
+                ResolveWhileVisible(trackKey(track.title, track.artist)) { onTrackVisible(track) }
                 TrackRow(
                     title = track.title,
                     artist = track.album ?: "",

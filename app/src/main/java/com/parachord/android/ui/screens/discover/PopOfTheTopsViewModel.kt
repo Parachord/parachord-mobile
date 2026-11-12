@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import kotlinx.coroutines.CancellationException
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -64,7 +65,6 @@ class PopOfTheTopsViewModel constructor(
     val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
     val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
 
-    private var resolveJob: Job? = null
 
     val countries = CHARTS_COUNTRIES
 
@@ -147,22 +147,20 @@ class PopOfTheTopsViewModel constructor(
         )
     }
 
-    private fun resolveTracksInBackground(songs: List<ChartSong>) {
-        resolveJob?.cancel()
-        resolveJob = viewModelScope.launch {
-            for (song in songs) {
-                val key = trackKey(song.title, song.artist)
-                if (_trackSources.value.containsKey(key)) continue
-                // The shared cache: its sources, a retry of resolvers that
-                // couldn't answer, or a fresh resolve (#566).
-                try {
-                    val sources = trackResolverCache.resolveTrack(song.title, song.artist, spotifyId = song.spotifyId)
-                    if (sources.isNotEmpty()) {
-                        _trackSources.value = _trackSources.value + (key to sources)
-                    }
-                } catch (_: Exception) { /* skip */ }
+    /** Resolves one chart row while it's on screen (#181); see ResolveWhileVisible. */
+    fun resolveVisible(song: ChartSong): Job = viewModelScope.launch {
+        val key = trackKey(song.title, song.artist)
+        if (_trackSources.value.containsKey(key)) return@launch
+        // The shared cache: its sources, a retry of resolvers that
+        // couldn't answer, or a fresh resolve (#566).
+        try {
+            val sources = trackResolverCache.resolveTrackForRow(song.title, song.artist, spotifyId = song.spotifyId)
+            if (sources.isNotEmpty()) {
+                _trackSources.value = _trackSources.value + (key to sources)
             }
-        }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) { /* skip */ }
     }
 
     private fun loadAlbums() {
@@ -182,8 +180,6 @@ class PopOfTheTopsViewModel constructor(
                 else -> chartsRepository.getAppleMusicSongs(_selectedCountry.value)
             }
             _songsLoading.value = false
-            // Pre-resolve all songs in background
-            resolveTracksInBackground(_songs.value)
         }
     }
 

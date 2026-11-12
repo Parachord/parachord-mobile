@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.artist
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -23,8 +25,6 @@ import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -159,7 +159,6 @@ class ArtistViewModel constructor(
                 val tracks = metadataService.getArtistTopTracks(artistName, limit = 10)
                 _topTracks.value = tracks
                 _isLoading.value = false
-                resolveTracksInBackground(tracks)
             } catch (e: Exception) {
                 Log.e("ArtistVM", "Failed loading top tracks for '$artistName'", e)
             }
@@ -517,24 +516,20 @@ class ArtistViewModel constructor(
         }
     }
 
-    private fun resolveTracksInBackground(tracks: List<TrackSearchResult>) {
-        viewModelScope.launch {
-            // Resolve all tracks in parallel instead of sequentially
-            tracks.map { track ->
-                async {
-                    val key = trackKey(track.title, track.artist)
-                    if (_trackSources.value.containsKey(key)) return@async
-                    // The shared cache: its sources, a retry of resolvers that
-                    // couldn't answer, or a fresh resolve (#566).
-                    try {
-                        val sources = trackResolverCache.resolveTrack(track.title, track.artist, spotifyId = track.spotifyId)
-                        if (sources.isNotEmpty()) {
-                            _trackSources.value = _trackSources.value + (key to sources)
-                        }
-                    } catch (_: Exception) { /* skip */ }
-                }
-            }.awaitAll()
-        }
+    /** Resolves one Top Tracks row while it's on screen (#181); see ResolveWhileVisible. */
+    fun resolveVisible(track: TrackSearchResult): Job = viewModelScope.launch {
+        val key = trackKey(track.title, track.artist)
+        if (_trackSources.value.containsKey(key)) return@launch
+        // The shared cache: its sources, a retry of resolvers that
+        // couldn't answer, or a fresh resolve (#566).
+        try {
+            val sources = trackResolverCache.resolveTrackForRow(track.title, track.artist, spotifyId = track.spotifyId)
+            if (sources.isNotEmpty()) {
+                _trackSources.value = _trackSources.value + (key to sources)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) { /* skip */ }
     }
 
 }

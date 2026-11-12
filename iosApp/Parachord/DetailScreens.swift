@@ -718,6 +718,7 @@ struct AlbumScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(t, index: index) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(model.entities[safe: index] ?? pcTrack(from: t), coordinator: coordinator)
             }
         }
@@ -1319,6 +1320,7 @@ struct ArtistScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(t, index: index) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(model.topEntities[safe: index] ?? pcTrack(from: t), coordinator: coordinator)
             }
             if model.topTracks.isEmpty && model.loaded {

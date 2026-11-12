@@ -155,6 +155,7 @@ struct PlaylistDetailView: View {
                             }
                             .buttonStyle(.plain)
                             .onAppear { model.resolveVisible(track, index: index) }
+                            .onDisappear { IosTrackResolverCache.shared.leave(artist: track.artist, title: track.title) }
                             .pcTrackContextMenu(
                                 entity, coordinator: coordinator,
                                 onGoToArtist: { navArtist = entity.artist },
@@ -1090,6 +1091,7 @@ struct SavedPlaylistDetailView: View {
                         }
                         .buttonStyle(.plain)
                         .onAppear { resolverCache.resolve(ResolveRequest(artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum), order: i) }
+                        .onDisappear { IosTrackResolverCache.shared.leave(artist: t.trackArtist, title: t.trackTitle) }
                         .pcTrackContextMenu(
                             entity, coordinator: coordinator,
                             onGoToArtist: { navArtist = t.trackArtist },

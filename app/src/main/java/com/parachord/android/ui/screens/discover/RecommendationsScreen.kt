@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.ResolveWhileVisible
+import kotlinx.coroutines.Job
 import com.parachord.shared.ui.UiMessages
 import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.hapticClickable
@@ -369,7 +371,7 @@ private fun SongsTab(
     trackArtwork: Map<String, String>,
     onRefresh: () -> Unit,
     onPlayTrack: (RecommendedTrack) -> Unit = {},
-    onTrackVisible: (RecommendedTrack) -> Unit = {},
+    onTrackVisible: (RecommendedTrack) -> Job? = { null },
 ) {
     when (tracks) {
         is Resource.Loading -> {
@@ -386,9 +388,10 @@ private fun SongsTab(
                     items(tracks.data, key = { "${it.title}-${it.artist}" }) { track ->
                         val resolverKey = trackKey(track.title, track.artist)
                         // Visibility-scoped resolution (#177): a row resolves once it
-                        // composes (viewport + overscan). The shared cache dedups, so
-                        // scrolling back or reopening the screen fires no new searches.
-                        LaunchedEffect(resolverKey) { onTrackVisible(track) }
+                        // composes (viewport + overscan) and is cancelled when it leaves.
+                        // The shared cache dedups, so scrolling back or reopening the
+                        // screen fires no new searches.
+                        ResolveWhileVisible(resolverKey) { onTrackVisible(track) }
                         TrackRow(
                             title = track.title,
                             artist = track.artist,

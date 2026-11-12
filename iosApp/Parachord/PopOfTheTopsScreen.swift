@@ -282,6 +282,7 @@ struct PopOfTheTopsScreen: View {
                 }
                 .buttonStyle(.plain)
                 .onAppear { model.resolveVisible(song, index: index) }
+                .onDisappear { IosTrackResolverCache.shared.leave(artist: song.artist, title: song.title) }
                 .pcTrackContextMenu(
                     entity, coordinator: coordinator,
                     onGoToArtist: { navArtist = song.artist },

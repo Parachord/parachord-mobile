@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import android.content.Intent
 import android.net.Uri
@@ -379,6 +380,9 @@ fun PlaylistDetailScreen(
 
             // Track list
             itemsIndexed(tracks, key = { index, _ -> index }) { index, track ->
+                ResolveWhileVisible("${track.playlistId}|${track.position}|${track.trackTitle}|${track.trackArtist}") {
+                    viewModel.resolveVisible(track)
+                }
                 TrackRow(
                     title = track.trackTitle,
                     artist = track.trackArtist,

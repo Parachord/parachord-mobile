@@ -183,6 +183,7 @@ fun NowPlayingScreen(
                 onMoveInQueue = { from, to -> viewModel.moveInQueue(from, to) },
                 onRemoveFromQueue = { viewModel.removeFromQueue(it) },
                 onClearQueue = { viewModel.clearQueue() },
+                onTrackVisible = viewModel::resolveVisibleQueueTrack,
                 resolverOrder = resolverOrder,
                 trackResolvers = trackResolvers,
                 trackResolverConfidences = trackResolverConfidences,

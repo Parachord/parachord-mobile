@@ -589,6 +589,7 @@ struct HomeScreen: View {
         }
         .buttonStyle(.plain)
         .onAppear { resolverCache.resolve(ResolveRequest(artist: track.artist, title: track.title, album: track.album), order: index) }
+        .onDisappear { IosTrackResolverCache.shared.leave(artist: track.artist, title: track.title) }
         .pcTrackContextMenu(
             track, coordinator: coordinator,
             onGoToArtist: { path.append(.artist(track.artist)) },

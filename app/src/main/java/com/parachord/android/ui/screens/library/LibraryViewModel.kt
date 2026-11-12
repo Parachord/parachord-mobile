@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.library
 
+import kotlinx.coroutines.Job
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.data.db.entity.AlbumEntity
@@ -109,13 +110,11 @@ class LibraryViewModel constructor(
                 runCatching { FriendSort.valueOf(name) }.getOrNull()?.let { _friendSort.value = it }
             }
         }
-        // Run full resolver pipeline against stored tracks in background (concurrent, deduplicated)
-        viewModelScope.launch {
-            tracks.collect { trackList ->
-                if (trackList.isNotEmpty()) trackResolverCache.resolveInBackground(trackList)
-            }
-        }
     }
+
+    /** Resolves one row while it's on screen (#181); see ResolveWhileVisible. */
+    fun resolveVisible(track: TrackEntity): Job =
+        trackResolverCache.resolveInBackground(listOf(track))
 
     fun setArtistSort(sort: ArtistSort) {
         _artistSort.value = sort

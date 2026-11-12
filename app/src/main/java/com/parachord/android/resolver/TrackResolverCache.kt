@@ -265,6 +265,32 @@ class TrackResolverCache constructor(
     }
 
     /**
+     * [resolveTrack] for a row that just came on screen (#177, #181): it waits
+     * for a priority-lane permit, so a fast scroll queues rows rather than
+     * firing them all at once, at most [MAX_PRIORITY_CONCURRENCY] at a time.
+     * Call it from the row's [com.parachord.android.ui.components.ResolveWhileVisible],
+     * which cancels it when the row leaves the screen, as desktop's
+     * `ResolutionScheduler.updateVisibility` aborts rows that scroll away.
+     */
+    suspend fun resolveTrackForRow(
+        title: String,
+        artist: String,
+        spotifyId: String? = null,
+        appleMusicId: String? = null,
+        soundcloudId: String? = null,
+        isrc: String? = null,
+        recordingMbid: String? = null,
+    ): List<ResolvedSource> {
+        awaitLoaded()
+        _trackSources.value[trackKey(title, artist)]?.let { cached ->
+            if (dueRetry(trackKey(title, artist)) == null) return cached
+        }
+        return prioritySemaphore.withPermit {
+            resolveTrack(title, artist, spotifyId, appleMusicId, soundcloudId, isrc, recordingMbid)
+        }
+    }
+
+    /**
      * One track's sources, for screens that resolve their own rows: the cached
      * ones, with any resolvers that failed asked again once due, or a fresh
      * resolve, stored with what couldn't answer (#566). Use this rather than

@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.search
 
+import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.search.SearchSession
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
@@ -144,6 +145,7 @@ fun SearchScreen(
                 if (localTracks.isNotEmpty()) {
                     item { SectionHeader("Library") }
                     items(localTracks.take(5), key = { "local-track-${it.id}" }) { track ->
+                        ResolveWhileVisible(track.id) { viewModel.resolveVisibleLocalTrack(track) }
                         TrackRow(
                             title = track.title,
                             artist = track.artist,
