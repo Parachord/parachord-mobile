@@ -3296,7 +3296,7 @@ final class QueuePlaybackCoordinator {
                 // (incl. Bandcamp), not just the flat-field trio (#276).
                 container.updateScrobbleSources(trackId: track.id, sources: ranked ?? [])
                 if let service = refusal.service, playedResolver != "soundcloud" {
-                    notice = Notice(message: "\(service) can't play this track here. Playing via \(pcResolverName(playedResolver)).",
+                    notice = Notice(message: PlaybackMessages.shared.playingViaInstead(service: service, playedResolver: playedResolver),
                                     showInCar: false)
                 }
                 if kind == .avPlayer { startAVPlaybackWhenReady() }
@@ -3424,7 +3424,7 @@ final class QueuePlaybackCoordinator {
                     // being offline) rather than "resuming" a stopped page.
                     if failure == .embedRefused, !stop.byCar, let service = refusal.service {
                         notice = Notice(message: stop.message,
-                                        actionLabel: refusal.pageUrl == nil ? nil : "Open in \(service)",
+                                        actionLabel: refusal.pageUrl == nil ? nil : PlaybackMessages.shared.openIn(service: service),
                                         actionUrl: refusal.pageUrl)
                     } else {
                         notice = Notice(message: stop.message)

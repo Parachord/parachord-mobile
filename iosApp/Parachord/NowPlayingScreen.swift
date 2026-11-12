@@ -12,15 +12,8 @@ import AVKit
 private let pcKnownResolvers = ["spotify", "applemusic", "bandcamp", "soundcloud", "youtube", "localfiles"]
 
 func pcResolverName(_ r: String) -> String {
-    switch r.lowercased() {
-    case "spotify": return "Spotify"
-    case "applemusic": return "Apple Music"
-    case "bandcamp": return "Bandcamp"
-    case "soundcloud": return "SoundCloud"
-    case "youtube": return "YouTube"
-    case "localfiles": return "Local Files"
-    default: return "Direct"
-    }
+    // Shared with Android (#596).
+    PlaybackMessagesKt.resolverDisplayName(resolver: r)
 }
 
 private func pcTime(_ s: Double) -> String {
@@ -759,16 +752,13 @@ struct PCQueuePanel: View {
             .contentShape(Rectangle())
             .onTapGesture { if navigable { onNavigateToContext?(ctx) } }
         } else {
-            Text("Playing from your queue").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
+            Text(PlaybackMessages.shared.PLAYING_FROM_QUEUE).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
         }
     }
 
     private func contextLabel(_ ctx: PlaybackContext) -> String {
-        switch ctx.type {
-        case "listen-along": return "Listening along with \(ctx.name)"
-        case "spinoff":      return ctx.name
-        default:             return "Playing from: \(ctx.name)"
-        }
+        // Shared with Android (#596).
+        PlaybackMessages.shared.contextLabel(contextType: ctx.type, contextName: ctx.name)
     }
     private func contextColor(_ ctx: PlaybackContext) -> Color {
         switch ctx.type {
