@@ -2983,7 +2983,19 @@ class PlaybackController constructor(
      * Matches the desktop's exitSpinoff() logic.
      */
     fun exitSpinoff() {
-        if (!stateHolder.state.value.spinoffMode) return
+        val state = stateHolder.state.value
+        when (com.parachord.shared.playback.spinoffExit(state.spinoffMode, fetching = state.spinoffLoading)) {
+            com.parachord.shared.playback.SpinoffExit.NOTHING -> return
+            com.parachord.shared.playback.SpinoffExit.CANCEL_FETCH -> {
+                // Its tracks would start it later and end what was chosen since (#612).
+                spinoffJob?.cancel()
+                spinoffJob = null
+                stateHolder.update { copy(spinoffLoading = false) }
+                Log.d(TAG, "Spinoff: cancelled the fetch still running")
+                return
+            }
+            com.parachord.shared.playback.SpinoffExit.END_SPINOFF -> {}
+        }
 
         spinoffJob?.cancel()
         spinoffPool.clear()

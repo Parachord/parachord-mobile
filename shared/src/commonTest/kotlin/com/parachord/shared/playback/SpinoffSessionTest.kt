@@ -80,4 +80,12 @@ class SpinoffSessionTest {
             PlaybackMessages.noPlayableSimilarTracks("Myth"),
         )
     }
+
+    @Test
+    fun `leaving a spinoff ends it or cancels a fetch still running`() {
+        assertEquals(SpinoffExit.END_SPINOFF, spinoffExit(spinoffMode = true, fetching = false))
+        assertEquals(SpinoffExit.END_SPINOFF, spinoffExit(spinoffMode = true, fetching = true))
+        assertEquals(SpinoffExit.CANCEL_FETCH, spinoffExit(spinoffMode = false, fetching = true))
+        assertEquals(SpinoffExit.NOTHING, spinoffExit(spinoffMode = false, fetching = false))
+    }
 }

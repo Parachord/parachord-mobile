@@ -33,7 +33,20 @@ final class SpinoffController {
     /// so the alert says so instead of "no similar tracks".
     var lastFetchFailed = false
 
-    func bind(_ c: QueuePlaybackCoordinator) { coordinator = c }
+    func bind(_ c: QueuePlaybackCoordinator) {
+        coordinator = c
+        // Leaving a spinoff (Listen Along starting, a link) cancels a fetch
+        // still running (shared `spinoffExit`, #612).
+        c.spinoffFetching = { [weak self] in self?.loading ?? false }
+        c.cancelSpinoffFetch = { [weak self] in self?.cancel() }
+    }
+
+    /// Cancel the pool fetch: its tracks never start a spinoff.
+    func cancel() {
+        task?.cancel()
+        task = nil
+        loading = false
+    }
 
     /// The Spinoff (fork) button: toggle the spinoff station on/off (Android `toggleSpinoff`).
     func toggle() {

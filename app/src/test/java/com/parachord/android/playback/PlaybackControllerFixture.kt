@@ -28,6 +28,7 @@ internal class PlaybackControllerFixture(
     val trackResolverCache: TrackResolverCache = mockk(relaxed = true)
     val networkMonitor: NetworkMonitor = mockk(relaxed = true)
     val resolverScoring: ResolverScoring = mockk(relaxed = true)
+    val lastFmClient: com.parachord.shared.api.LastFmClient = mockk(relaxed = true)
 
     init {
         // Nothing resolved: tracks route by what they carry.
@@ -51,7 +52,7 @@ internal class PlaybackControllerFixture(
         scrobbleManager = mockk(relaxed = true),
         imageEnrichment = mockk(relaxed = true),
         mbidEnrichment = mockk(relaxed = true),
-        lastFmClient = mockk(relaxed = true),
+        lastFmClient = lastFmClient,
         resolverManager = mockk(relaxed = true),
         resolverScoring = resolverScoring,
         trackResolverCache = trackResolverCache,

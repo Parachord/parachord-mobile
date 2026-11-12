@@ -51,3 +51,19 @@ suspend fun <T> firstPlayableIndex(pool: List<T>, isPlayable: suspend (T) -> Boo
     }
     return null
 }
+
+/** What leaving a spinoff does ([spinoffExit]). */
+enum class SpinoffExit { END_SPINOFF, CANCEL_FETCH, NOTHING }
+
+/**
+ * Leaving a spinoff (the Spinoff button, Listen Along starting, a link taking
+ * over): a running spinoff ends; one still fetching its similar tracks is
+ * cancelled, so its tracks can't start it later and end what the user chose
+ * since (#612: a Listen Along session started while the fetch ran was ended
+ * when the tracks arrived). Both apps follow it in `exitSpinoff`.
+ */
+fun spinoffExit(spinoffMode: Boolean, fetching: Boolean): SpinoffExit = when {
+    spinoffMode -> SpinoffExit.END_SPINOFF
+    fetching -> SpinoffExit.CANCEL_FETCH
+    else -> SpinoffExit.NOTHING
+}
