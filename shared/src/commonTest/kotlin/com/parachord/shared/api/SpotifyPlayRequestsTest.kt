@@ -20,6 +20,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * A one-track Spotify play goes out as the track's album with an offset, not a
@@ -142,5 +143,27 @@ class SpotifyPlayRequestsTest {
         assertEquals(setOf("uris"), body.keys)
         assertFalse(body.containsKey("context_uri"))
         assertEquals(trackUri, body["uris"]!!.jsonArray.single().jsonPrimitive.content)
+    }
+
+    @Test
+    fun `a resumed track starts at its position on the album body and the bare one`() = runTest {
+        // #657: position_ms, so Spotify starts there instead of at 0:00 then seeking.
+        val inAlbum = SpotifyPlayRequests(lookupTrack = { track(it, "album1") }).forTrack(trackUri, startMs = 95_000)
+        assertEquals(95_000L, inAlbum.positionMs)
+        assertEquals("spotify:album:album1", inAlbum.contextUri)
+        val bare = SpotifyPlayRequests(lookupTrack = { error("offline") }).forTrack(trackUri, startMs = 95_000)
+        assertEquals(95_000L, bare.positionMs)
+        assertEquals(listOf(trackUri), bare.uris)
+    }
+
+    @Test
+    fun `a play from the top sends no position`() = runTest {
+        val requests = SpotifyPlayRequests(lookupTrack = { track(it, "album1") })
+        assertNull(requests.forTrack(trackUri).positionMs)
+        assertNull(requests.forTrack(trackUri, startMs = 0).positionMs)
+        val body = kotlinx.serialization.json.Json.encodeToString(SpPlaybackRequest.serializer(), requests.forTrack(trackUri))
+        assertFalse("position_ms" in body)
+        val resumed = kotlinx.serialization.json.Json.encodeToString(SpPlaybackRequest.serializer(), requests.forTrack(trackUri, 1_000))
+        assertTrue("\"position_ms\":1000" in resumed)
     }
 }

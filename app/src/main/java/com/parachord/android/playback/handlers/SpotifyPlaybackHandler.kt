@@ -250,7 +250,19 @@ class SpotifyPlaybackHandler constructor(
 
     override suspend fun createMediaItem(track: TrackEntity): Nothing? = null
 
+    /** Where the next play starts ([startsAt]); 0 = the top. Used by one play only. */
+    @Volatile private var nextStartMs = 0L
+
+    /** Spotify starts there itself: `position_ms` on the play request (#657). */
+    override fun startsAt(positionMs: Long): Boolean {
+        nextStartMs = positionMs.coerceAtLeast(0)
+        return true
+    }
+
     override suspend fun play(track: TrackEntity) {
+        val startMs = nextStartMs
+        nextStartMs = 0L
+        playStartMs = startMs
         val uri = track.spotifyUri
         if (uri == null) {
             Log.w(TAG, "No spotifyUri on track '${track.title}'")
@@ -315,8 +327,11 @@ class SpotifyPlaybackHandler constructor(
      * Old flow had 3 layers of retries (playWithRetry × 502 retries × verification)
      * compounding to 27.5s worst case. This flow is single-pass: ~2-5s cold, ~200ms warm.
      */
+    /** The current play's start position, for its request (and its re-sends). */
+    @Volatile private var playStartMs = 0L
+
     private suspend fun attemptPlay(uri: String, flowStart: Long): Boolean {
-        val request = playRequests.forTrack(uri)
+        val request = playRequests.forTrack(uri, playStartMs)
         lastPlayRequest = request
         // The ids Spotify may report for this play: the one asked for, and the
         // album's (relinked) id the offset names.

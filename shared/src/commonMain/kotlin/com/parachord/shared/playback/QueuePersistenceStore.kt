@@ -148,6 +148,20 @@ class QueuePersistenceStore(
     }
 
     /** Where the restored track [trackId] starts, in ms ([PlaybackResumePosition.resumeAtMs]). */
+    /**
+     * Whether resuming [trackId] at its saved position continues a listen that
+     * was already scrobbled (#657). False when it starts from the top.
+     */
+    @Throws(Exception::class)
+    suspend fun resumeContinuesScrobbled(trackId: String): Boolean =
+        try {
+            val saved = PlaybackResumePosition.decode(storage.readPosition())
+            saved != null && saved.scrobbled && PlaybackResumePosition.resumeAtMs(saved, trackId) > 0
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            false
+        }
+
     @Throws(Exception::class)
     suspend fun resumePositionMs(trackId: String): Long =
         try {
@@ -171,9 +185,13 @@ class QueuePersistenceStore(
         return due
     }
 
-    /** Save where [trackId] is, when "Remember queue" is on. */
-    fun savePosition(trackId: String, positionMs: Long, durationMs: Long) {
-        val json = PlaybackResumePosition.encode(SavedPlaybackPosition(trackId, positionMs, durationMs))
+    /**
+     * Save where [trackId] is, when "Remember queue" is on. [scrobbled]: this
+     * listen was already scrobbled, so a resume after a restart doesn't scrobble
+     * it again (#657).
+     */
+    fun savePosition(trackId: String, positionMs: Long, durationMs: Long, scrobbled: Boolean) {
+        val json = PlaybackResumePosition.encode(SavedPlaybackPosition(trackId, positionMs, durationMs, scrobbled))
         scope.launch {
             try {
                 if (storage.enabled()) storage.writePosition(json)

@@ -382,7 +382,12 @@ final class IosSpotifyConnect {
     /// saved device, no wake. Only the phone's own Spotify device, already
     /// listed, is used; otherwise this returns `false` at once.
     @MainActor
-    func play(uri: String) async -> Bool {
+    /// Where the next play starts, in ms (a resumed track, #657): sent as
+    /// `position_ms`, so Spotify starts there. Used by one play.
+    private var startMs: Int64 = 0
+
+    func play(uri: String, startAtSec: Double = 0) async -> Bool {
+        startMs = startAtSec > 0 ? Int64(startAtSec * 1000) : 0
         let client = IosContainer.companion.shared.spotifyClient
         let settings = IosContainer.companion.shared.settingsStore
 
@@ -683,8 +688,8 @@ final class IosSpotifyConnect {
         // The track's album + an offset, not a bare `uris` play: Spotify's
         // Android app plays nothing for the bare form (shared
         // `SpotifyPlayRequests`, the same request Android sends).
-        let body = (try? await IosContainer.companion.shared.spotifyPlayRequest(trackUri: uri))
-            ?? SpPlaybackRequest(uris: [uri], contextUri: nil, offset: nil)
+        let body = (try? await IosContainer.companion.shared.spotifyPlayRequest(trackUri: uri, startMs: startMs))
+            ?? SpPlaybackRequest(uris: [uri], contextUri: nil, offset: nil, positionMs: startMs > 0 ? KotlinLong(value: startMs) : nil)
         func attempt() async -> Int {
             do {
                 let resp = try await client.startPlayback(
@@ -1350,7 +1355,9 @@ final class IosMusicKitPlayer {
     /// track (`.failed`) or let the queue move on (`.unavailable`).
     @MainActor
     @discardableResult
-    func play(appleMusicId: String) async -> PlayOutcome {
+    /// [startAtSec]: where the song starts (a resumed track, #657), set after
+    /// `prepareToPlay` and before `play`, as desktop's native player does.
+    func play(appleMusicId: String, startAtSec: Double = 0) async -> PlayOutcome {
         lastError = nil
         playGeneration += 1
         let generation = playGeneration
@@ -1394,6 +1401,10 @@ final class IosMusicKitPlayer {
             duration = 0
             let player = ApplicationMusicPlayer.shared
             player.queue = [song]
+            if startAtSec > 0 {
+                try? await player.prepareToPlay()
+                player.playbackTime = startAtSec
+            }
             try await MusicKitDeadline.run(seconds: Self.playTimeoutSec, onLate: { [weak self] in
                 // The play started after its limit, when the coordinator had
                 // already stopped on the track: silence it, unless a newer
@@ -1407,7 +1418,7 @@ final class IosMusicKitPlayer {
             nowPlayingTitle = song.title
             isPlaying = true
             duration = song.duration ?? 0
-            currentTime = 0
+            currentTime = startAtSec
             // Re-arm end-detection now that the new track is actually playing.
             trackEndHandled = false
             observedPlaying = false
@@ -1718,7 +1729,10 @@ final class IosAVPlayer {
         resolver: String = "direct",
         /// Which play loaded this item (the coordinator's play request
         /// number), handed back with its failure.
-        tag: Int = 0
+        tag: Int = 0,
+        /// Where the item starts (a resumed track, #657): sought before play,
+        /// so the opening isn't heard first.
+        startAtSec: Double = 0
     ) {
         guard let url = URL(string: Self.resolveLocalImportPath(urlString)) else {
             status = .failed
@@ -1804,6 +1818,10 @@ final class IosAVPlayer {
         loadedURL = url
         status = .loading
         errorMessage = nil
+        if startAtSec > 0 {
+            newPlayer.seek(to: CMTime(seconds: startAtSec, preferredTimescale: 600))
+            currentTime = startAtSec
+        }
     }
 
     /// The item failed: report it once, saying whether it had started playing,
@@ -2375,7 +2393,8 @@ final class QueuePlaybackCoordinator {
             var ms = Int64(max(seconds, 0) * 1000)
             if let length = load.track.duration?.int64Value, length > 0 { ms = min(ms, length) }
             setLoadOnPlayPosition(load.doCopy(track: load.track, positionMs: ms, skipReselect: load.skipReselect,
-                                              why: load.why, pickedResolver: load.pickedResolver))
+                                              why: load.why, pickedResolver: load.pickedResolver,
+                                              continuesScrobbled: load.continuesScrobbled))
             return
         }
         switch activeEngine {
@@ -2750,6 +2769,11 @@ final class QueuePlaybackCoordinator {
                 let resumeAtSec = Double(load.positionMs) / 1000
                 NSLog("QUEUE Play loads '%@' (%@) at %.1f s%@", load.track.title, load.why.name, resumeAtSec,
                       load.pickedResolver.map { " on \($0)" } ?? "")
+                startedAtPositionFor = nil
+                // A restored listen already scrobbled resumes as submitted (#657).
+                if resumeAtSec > 0, load.continuesScrobbled {
+                    IosContainer.companion.shared.scrobbleManager.continueScrobbledListen(trackId: load.track.id)
+                }
                 playTrack(load.track, forcedResolver: load.pickedResolver, aimedAtSec: resumeAtSec, fromLoadOnPlay: true)
                 if resumeAtSec > 0 { seekOnceStarted(trackId: load.track.id, toSec: resumeAtSec) }
                 return
@@ -2895,7 +2919,7 @@ final class QueuePlaybackCoordinator {
         heldForListener = false
         loadOnPlay = currentTrack.map { track in
             let picked = pick(for: track)
-            return LoadOnPlay(track: track, positionMs: 0, skipReselect: picked != nil, why: .failed, pickedResolver: picked)
+            return LoadOnPlay(track: track, positionMs: 0, skipReselect: picked != nil, why: .failed, pickedResolver: picked, continuesScrobbled: false)
         }
     }
 
@@ -3050,7 +3074,7 @@ final class QueuePlaybackCoordinator {
         playedSinceWrap = false
         heldForListener = false
         currentTrack = track
-        loadOnPlay = LoadOnPlay(track: track, positionMs: 0, skipReselect: false, why: .restored, pickedResolver: nil)
+        loadOnPlay = LoadOnPlay(track: track, positionMs: 0, skipReselect: false, why: .restored, pickedResolver: nil, continuesScrobbled: false)
         syncSnapshot()
     }
 
@@ -3178,7 +3202,9 @@ final class QueuePlaybackCoordinator {
                 await applyEngineHandoff(from: previousEngine, to: .avPlayer)
                 if Task.isCancelled { return }
                 activeEngine = .avPlayer
-                player.load(url: url, title: track.title, artist: track.artist, resolver: "direct", tag: request)
+                player.load(url: url, title: track.title, artist: track.artist, resolver: "direct", tag: request,
+                            startAtSec: aimedAtSec)
+                if aimedAtSec > 0 { startedAtPositionFor = track.id }
                 playingPick = nil
                 // The URL couldn't even be loaded: `avPlaybackFailed` stopped
                 // on the track already.
@@ -3273,12 +3299,19 @@ final class QueuePlaybackCoordinator {
             // (the track's own unless it's Last.fm's placeholder, else its
             // resolved sources'), then the playing source's.
             let result = await router.play(ranked: ranked ?? [], title: track.title, artist: track.artist,
+                                           startAtSec: aimedAtSec,
                                            album: track.album,
                                            artworkUrl: pcTrackArt(track.artworkUrl, artist: track.artist,
                                                                   title: track.title, album: track.album))
             // Superseded while the engine was starting — skip the stale UI
             // state updates (the newer start owns activeEngine now).
             if Task.isCancelled { return }
+            // The engine started at the resumed position itself (#657): no seek
+            // follows. AVPlayer, Apple Music and Spotify can; the embeds can't.
+            if aimedAtSec > 0, case .played(let kind, _) = result,
+               kind == .avPlayer || kind == .musicKit || kind == .spotify {
+                startedAtPositionFor = track.id
+            }
             switch result {
             case .played(let kind, let playedResolver):
                 if kind == .avPlayer, avFailedLoad == request {
@@ -3641,9 +3674,14 @@ final class QueuePlaybackCoordinator {
     func restoreQueue() async {
         guard let state = try? await queuePersistence.load() else { return }
         var resumeAtMs: Int64 = 0
+        var continuesScrobbled = false
         if let id = state.currentTrack?.id,
            let ms = try? await queuePersistence.resumePositionMs(trackId: id) {
             resumeAtMs = ms.int64Value
+            // Its listen was already scrobbled: resuming it mustn't scrobble it again (#657).
+            if resumeAtMs > 0 {
+                continuesScrobbled = (try? await queuePersistence.resumeContinuesScrobbled(trackId: id))?.boolValue ?? false
+            }
         }
         await MainActor.run {
             // The reads above wait, and a play can start meanwhile (a deep
@@ -3663,7 +3701,8 @@ final class QueuePlaybackCoordinator {
             // saved position when it's for this track (#567).
             self.loadOnPlay = state.currentTrack.map { track in
                 LoadOnPlay(track: track, positionMs: resumeAtMs,
-                           skipReselect: false, why: .restored, pickedResolver: nil)
+                           skipReselect: false, why: .restored, pickedResolver: nil,
+                           continuesScrobbled: continuesScrobbled)
             }
             self.syncSnapshot()
         }
@@ -3679,13 +3718,15 @@ final class QueuePlaybackCoordinator {
         // A track no engine holds keeps the position its slot saved.
         guard due, let track = currentTrack, loadOnPlayTarget == nil else { return }
         savePosition(trackId: track.id, positionMs: Int64(currentTime * 1000),
-                     durationMs: Int64(max(duration, 0) * 1000))
+                     durationMs: Int64(max(duration, 0) * 1000),
+                     scrobbled: IosContainer.companion.shared.scrobbleManager.hasScrobbled(trackId: track.id))
     }
 
     /// Writes the saved resume position (`persisted_queue_position`), when
     /// "Remember queue" is on.
-    private func savePosition(trackId: String, positionMs: Int64, durationMs: Int64) {
-        queuePersistence.savePosition(trackId: trackId, positionMs: positionMs, durationMs: durationMs)
+    private func savePosition(trackId: String, positionMs: Int64, durationMs: Int64, scrobbled: Bool) {
+        queuePersistence.savePosition(trackId: trackId, positionMs: positionMs, durationMs: durationMs,
+                                      scrobbled: scrobbled)
     }
 
     /// Moves where Play starts the track no engine holds (Previous restarting
@@ -3695,8 +3736,11 @@ final class QueuePlaybackCoordinator {
         loadOnPlay = load
         NSLog("QUEUE '%@' will start at %.1f s", load.track.title, Double(load.positionMs) / 1000)
         savePosition(trackId: load.track.id, positionMs: load.positionMs,
-                     durationMs: load.track.duration?.int64Value ?? 0)
+                     durationMs: load.track.duration?.int64Value ?? 0, scrobbled: load.continuesScrobbled)
     }
+
+    /// The track whose play started at its resume position itself (#657).
+    @ObservationIgnored private var startedAtPositionFor: String?
 
     /// Seeks [trackId] to [toSec] once it's playing: the first play of a
     /// restored queue (#567). Waits up to 60 s, since a slow network can hold
@@ -3707,7 +3751,11 @@ final class QueuePlaybackCoordinator {
             while Date() < deadline {
                 guard let self, self.currentTrack?.id == trackId else { return }
                 if self.isPlaying && !self.isStarting {
-                    self.seek(to: toSec)
+                    if self.startedAtPositionFor == trackId {
+                        NSLog("QUEUE restored track started at %.1f s; no seek needed", toSec)
+                    } else {
+                        self.seek(to: toSec)
+                    }
                     return
                 }
                 try? await Task.sleep(nanoseconds: 250_000_000)

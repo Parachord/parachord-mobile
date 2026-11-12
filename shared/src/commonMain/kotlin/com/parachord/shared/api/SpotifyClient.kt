@@ -644,6 +644,8 @@ fun List<SpImage>?.bestImageUrl(): String? =
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) val uris: List<String>? = null,
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) @SerialName("context_uri") val contextUri: String? = null,
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) val offset: SpPlaybackOffset? = null,
+    /** Where in the track to start, in ms (a resumed track, #657); left out to start from the top. */
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER) @SerialName("position_ms") val positionMs: Long? = null,
 )
 /** Where in [SpPlaybackRequest.contextUri] to start: a track URI in that context. */
 @Serializable data class SpPlaybackOffset(val uri: String)

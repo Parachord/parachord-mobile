@@ -74,7 +74,7 @@ class QueuePersistenceStoreTest {
         assertFalse(s.write(PersistedQueueState(currentTrack = t("a"))))
         storage.queue = QueuePersistenceCodec.encode(PersistedQueueState(currentTrack = t("a")))
         assertNull(s.load())
-        s.savePosition("a", 60_000, 200_000)
+        s.savePosition("a", 60_000, 200_000, scrobbled = false)
         runCurrent()
         assertNull(storage.position)
     }
@@ -138,10 +138,29 @@ class QueuePersistenceStoreTest {
     fun aRestoredTrackResumesWhereItWas() = runTest {
         val storage = FakeStorage()
         val s = store(storage)
-        s.savePosition("a", 60_000, 200_000)
+        s.savePosition("a", 60_000, 200_000, scrobbled = false)
         runCurrent()
         assertEquals(60_000L, s.resumePositionMs("a"))
         assertEquals(0L, s.resumePositionMs("b"))
+    }
+
+    @Test
+    fun aScrobbledListenIsRecordedAndResumesAsScrobbledOnlyAtItsPosition() = runTest {
+        // #657: paused at 3:00 of 4:00 after it scrobbled; resuming there mustn't scrobble again.
+        val storage = FakeStorage()
+        val s = store(storage)
+        s.savePosition("a", 180_000, 240_000, scrobbled = true)
+        runCurrent()
+        assertTrue(s.resumeContinuesScrobbled("a"))
+        assertFalse(s.resumeContinuesScrobbled("b"))
+        // Within 10 s of the end it starts over: a new listen.
+        s.savePosition("a", 235_000, 240_000, scrobbled = true)
+        runCurrent()
+        assertFalse(s.resumeContinuesScrobbled("a"))
+        // Not scrobbled yet: resumes as a listen still to scrobble.
+        s.savePosition("a", 60_000, 240_000, scrobbled = false)
+        runCurrent()
+        assertFalse(s.resumeContinuesScrobbled("a"))
     }
 
     @Test

@@ -69,6 +69,33 @@ class PlaybackControllerStoppedTrackTest {
     private fun routed(id: String) = coVerify { f.router.route(match { it.id == id }) }
     private fun routedTimes(id: String, times: Int) = coVerify(exactly = times) { f.router.route(match { it.id == id }) }
 
+    // ── Resume where it was (#657) ─────────────────────────────────────
+
+    private fun resumeRestoredAt(positionMs: Long, engineStartsThere: Boolean) {
+        every { handler.startsAt(any()) } returns engineStartsThere
+        every { handler.isPlaying() } returns true
+        every { f.router.activeExternalHandler } returns handler
+        controller.restoreQueuePaused(listOf(b, c), null)
+        controller.seekTo(positionMs)
+        controller.togglePlayPause()
+        run()
+        dispatcher.scheduler.advanceTimeBy(1_000)
+        run()
+    }
+
+    @Test
+    fun `a resumed track starts at its position when the engine can and isn't seeked`() {
+        resumeRestoredAt(120_000, engineStartsThere = true)
+        verify { handler.startsAt(120_000) }
+        coVerify(exactly = 0) { handler.seekTo(any()) }
+    }
+
+    @Test
+    fun `an engine that can't start there plays then seeks as before`() {
+        resumeRestoredAt(120_000, engineStartsThere = false)
+        coVerify { handler.seekTo(120_000) }
+    }
+
     // ── A. Previous on a stopped track ─────────────────────────────────
 
     @Test
@@ -90,7 +117,7 @@ class PlaybackControllerStoppedTrackTest {
         // Nothing holds it, so nothing is sought.
         coVerify(exactly = 0) { handler.seekTo(any()) }
         // The next launch doesn't bring 2:00 back.
-        verify { f.queuePersistence.savePositionNow("b", 0L, any()) }
+        verify { f.queuePersistence.savePositionNow("b", 0L, any(), false) }
     }
 
     @Test

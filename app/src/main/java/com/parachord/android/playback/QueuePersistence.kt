@@ -59,7 +59,7 @@ class QueuePersistence constructor(
             stateHolder.state.collect { state ->
                 val due = store.positionSaveDue(state.isPlaying, currentTimeMillis())
                 val track = state.currentTrack ?: return@collect
-                if (due) store.savePosition(track.id, state.position, state.duration)
+                if (due) store.savePosition(track.id, state.position, state.duration, isScrobbled(track.id))
             }
         }
     }
@@ -70,12 +70,23 @@ class QueuePersistence constructor(
      * changed (Previous restarting it, a seek), which the observer above never
      * saves (it saves on a pause and while playing).
      */
-    fun savePositionNow(trackId: String, positionMs: Long, durationMs: Long) {
-        store.savePosition(trackId, positionMs, durationMs)
+    fun savePositionNow(trackId: String, positionMs: Long, durationMs: Long, scrobbled: Boolean) {
+        store.savePosition(trackId, positionMs, durationMs, scrobbled)
     }
+
+    /**
+     * Whether [trackId]'s listen was already scrobbled, saved with its position
+     * so a resume after a restart doesn't scrobble it again (#657). Set by
+     * [PlaybackController] (a property, not a constructor parameter: this is
+     * bound with `singleOf`).
+     */
+    var isScrobbled: (trackId: String) -> Boolean = { false }
 
     /** Where the restored track [trackId] should start, in ms; 0 starts it from the top. */
     suspend fun savedResumePositionMs(trackId: String): Long = store.resumePositionMs(trackId)
+
+    /** Whether resuming [trackId] at its saved position continues an already-scrobbled listen (#657). */
+    suspend fun resumeContinuesScrobbled(trackId: String): Boolean = store.resumeContinuesScrobbled(trackId)
 
     /**
      * Restore the saved queue if the setting is on.

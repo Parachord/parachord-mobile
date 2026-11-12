@@ -19,6 +19,13 @@ data class LoadOnPlay(
     val why: Why,
     /** The resolver the person picked by hand, kept for the retry; null when none was. */
     val pickedResolver: String? = null,
+    /**
+     * Played from [positionMs], it continues a listen that was already
+     * scrobbled (a restored track paused after its scrobble, #657): Play tells
+     * the scrobbler so, and it isn't scrobbled twice. From the top it's a new
+     * listen ([restartedFromTop] drops it).
+     */
+    val continuesScrobbled: Boolean = false,
 ) {
     enum class Why {
         /** The queue restored at launch (#567): starts where the app last was. */
@@ -92,7 +99,7 @@ fun positionForPrevious(playerPositionMs: Long, pending: LoadOnPlay?, currentTra
     loadOnPlayTarget(pending, currentTrackId)?.positionMs ?: playerPositionMs
 
 /** The same slot at position 0: what Previous leaves when it restarts the track. */
-fun LoadOnPlay.restartedFromTop(): LoadOnPlay = copy(positionMs = 0)
+fun LoadOnPlay.restartedFromTop(): LoadOnPlay = copy(positionMs = 0, continuesScrobbled = false)
 
 /**
  * Whether Play has nothing to start (#617): no track on screen (the queue

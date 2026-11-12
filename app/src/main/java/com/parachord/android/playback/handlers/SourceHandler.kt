@@ -38,6 +38,13 @@ sealed class PlaybackAction {
  */
 interface ExternalPlaybackHandler {
     suspend fun play(track: TrackEntity)
+
+    /**
+     * Start the next [play] [positionMs] into the track, if this engine can
+     * (a resumed track, #657). True means it will, so no seek is needed after
+     * it starts; false (the default) means play from the top, then seek.
+     */
+    fun startsAt(positionMs: Long): Boolean = false
     suspend fun pause()
     suspend fun resume()
     suspend fun seekTo(positionMs: Long)
