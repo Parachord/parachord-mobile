@@ -103,7 +103,7 @@ The Parachord team has no Unlimited account; theli-ua does, and runs the account
    - Until then, Amazon is never a playback source on iOS: hidden from badges and picking, as for a Prime plan.
 6. **Plugin gate and docs.**
    - Today `capabilities.mobile: false` hides the plugin everywhere. We need a per-platform switch so Android loads it and iOS loads it for discovery only.
-   - Proposal for desktop (agreed; filed as a desktop issue): the plugin declares the host bridge it needs (`requires: { hostBridges: ["amazonMusic"], playback: "widevine" }`), and each host reports what it supplies. A host missing the bridge hides the plugin. A host that has the bridge but can't play (iOS) keeps discovery and leaves Amazon out of playback.
+   - Proposal for desktop (agreed; Parachord/parachord#1355): the plugin declares the host bridge it needs (`requires: { hostBridges: ["amazonMusic"], playback: "widevine" }`), and each host reports what it supplies. A host missing the bridge hides the plugin. A host that has the bridge but can't play (iOS) keeps discovery and leaves Amazon out of playback.
    - Then add `minAppVersion.android` / `.ios` and drop `mobile: false`.
    - A plugin that's visible without its bridge would throw `not-ready` on every resolve, which #566 would retry indefinitely.
    - Update CLAUDE.md (a new "Amazon Music" section; resolver order; volume table), `iosApp/AGENTS.md` and the README.
