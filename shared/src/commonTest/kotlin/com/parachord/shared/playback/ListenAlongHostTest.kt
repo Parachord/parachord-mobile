@@ -180,6 +180,24 @@ class ListenAlongHostTest {
     }
 
     @Test
+    fun `our track failing partway through waits quietly for the friend's next track`() {
+        // #618: a local stream that played a while then failed is handed over
+        // like a track that couldn't start: no message, held, and the next
+        // poll with a new song plays it.
+        startWithA()
+        host.onPoll(ListenAlongPoll.Listening(a))
+        playing = false
+        assertTrue(host.onTrackUnplayable(currentId!!))
+        assertTrue(messages.isEmpty())
+        assertTrue(host.isHolding)
+        assertTrue(host.onUserAction(UserPlaybackAction.RESUME))
+        assertTrue(calls.isEmpty())
+        host.onPoll(ListenAlongPoll.Listening(b))
+        assertEquals(listOf("play Song B for Pat"), calls)
+        assertFalse(host.isHolding)
+    }
+
+    @Test
     fun `an unplayable track of ours is handled and plays a held track`() {
         startWithA()
         host.onPoll(ListenAlongPoll.Listening(b))

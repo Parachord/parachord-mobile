@@ -2062,7 +2062,8 @@ final class QueuePlaybackCoordinator {
     @ObservationIgnored var onTrackFinished: (() -> Bool)?
 
     /// Called when `track` couldn't play (no source, a start that failed or
-    /// timed out, an embed refused with no fallback). True means the listener
+    /// timed out, an embed refused with no fallback, an AVPlayer item that
+    /// failed before or after it started, #618). True means the listener
     /// handled it: no notice and no skip. Play still loads the track unless the
     /// listener plays another.
     @ObservationIgnored var onTrackUnplayable: ((Track) -> Bool)?
@@ -3501,6 +3502,18 @@ final class QueuePlaybackCoordinator {
                 aimedAtMs: start.aimedAtMs, pickedResolver: start.pickedResolver)
             NSLog("QUEUE '%@' failed to start on AVPlayer; Play will load it at %.1f s", track.title,
                   Double(start.aimedAtMs) / 1000)
+        }
+        // A listener's own track (Listen Along's), whether it failed to start
+        // or partway through (#618, as Android): the session decides what
+        // comes next, with no notice. Unless it started another play, Play
+        // does nothing until the friend's next track plays or the session ends.
+        if let hook = onTrackUnplayable {
+            let requestsBefore = playRequestCount
+            if hook(track) {
+                NSLog("QUEUE '%@' failed on AVPlayer: the listener handles it", track.title)
+                if playRequestCount == requestsBefore { heldForListener = true }
+                return
+            }
         }
         notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
     }

@@ -111,6 +111,29 @@ class PlaybackControllerListenerHooksTest {
     }
 
     @Test
+    fun `the session's own track failing mid-song goes to the session and Play waits`() {
+        val handed = mutableListOf<String>()
+        controller.drivesTrack = { it.id == "a" }
+        controller.onTrackUnplayable = { handed += it.id; true }
+        controller.onUserAction = { false }
+        controller.onLocalPlayerFailed(positionMs = 60_000, durationMs = 200_000)
+        assertEquals(listOf("a"), handed)
+        assertFalse(stateHolder.state.value.isPlaying)
+        // Play doesn't restart it while the session waits for the friend's next track.
+        assertTrue(controller.onSessionPlayPause(play = true))
+    }
+
+    @Test
+    fun `any other track failing mid-song stops for Play as before`() {
+        val handed = mutableListOf<String>()
+        controller.drivesTrack = { false }
+        controller.onTrackUnplayable = { handed += it.id; true }
+        controller.onLocalPlayerFailed(positionMs = 60_000, durationMs = 200_000)
+        assertTrue(handed.isEmpty())
+        assertTrue(controller.needsLoadOnPlay)
+    }
+
+    @Test
     fun `a queue given back paused shows its first track paused and Play loads it`() {
         controller.restoreQueuePaused(listOf(b, c), null)
         val state = stateHolder.state.value
