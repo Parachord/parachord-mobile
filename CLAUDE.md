@@ -1007,7 +1007,7 @@ The Concerts page looks up the concerts of up to 40 artists, picked by the share
 - **Library:** the artists of the collection's tracks, then of its albums.
 - **History:** the top 40 artists over the last 6 months, from Last.fm (`6month`) then ListenBrainz (`half_yearly`), for whichever has a username.
 
-Each artist counts once, in the first group that has it (names compared trimmed and lowercase). The groups are then dealt round-robin. A source that fails counts as empty. iOS used to search only history, across every period, because it predates the collection database there. With no artists, iOS and desktop show no concerts, while Android falls back to local events near the saved location.
+Each artist counts once, in the first group that has it (names compared trimmed and lowercase). The groups are then dealt round-robin. A source that fails counts as empty. iOS used to search only history, across every period, because it predates the collection database there. With no artists, the page shows no concerts on every platform (Android used to fall back to events near the saved location).
 
 ### On Tour Indicator — Location-Filtered
 

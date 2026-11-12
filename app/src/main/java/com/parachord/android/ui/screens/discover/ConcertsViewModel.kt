@@ -225,17 +225,8 @@ class ConcertsViewModel constructor(
                 Log.d(TAG, "Gathered ${artists.size} artists for concert search")
 
                 if (artists.isEmpty()) {
-                    // Fall back to local events by location if no library artists
-                    val loc = settingsStore.getConcertLocation()
-                    val lat = loc.latitude
-                    val lon = loc.longitude
-                    if (lat != null && lon != null) {
-                        concertsRepository.getLocalEvents(
-                            lat, lon, loc.radiusMiles, forceRefresh,
-                        ).collect { _events.value = it }
-                    } else {
-                        _events.value = Resource.Success(emptyList())
-                    }
+                    // No artists to search with: no concerts, as on iOS and desktop.
+                    _events.value = Resource.Success(emptyList())
                 } else {
                     // Personalized: search for user's artists' concerts
                     val loc = settingsStore.getConcertLocation()
