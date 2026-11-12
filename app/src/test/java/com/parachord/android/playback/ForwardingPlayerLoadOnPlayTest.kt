@@ -6,7 +6,6 @@ import androidx.media3.common.util.Util
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -110,24 +109,23 @@ class ForwardingPlayerLoadOnPlayTest {
         verify(exactly = 0) { delegate.seekToPreviousMediaItem() }
     }
 
-    @Test fun `next on a playing local track still goes to ExoPlayer`() {
+    /** #608: a local track ExoPlayer plays holds no next item; the queue is the controller's. */
+    @Test fun `next and previous on a playing local track go to the controller`() {
         val (wrapper, delegate, controller) = wrapper(needsLoad = false)
         every { delegate.isCommandAvailable(any()) } returns false
 
-        assertFalse(wrapper.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
+        assertTrue(wrapper.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
+        assertTrue(wrapper.availableCommands.contains(Player.COMMAND_SEEK_TO_PREVIOUS))
         wrapper.seekToNext()
+        wrapper.seekToNextMediaItem()
+        wrapper.seekToPrevious()
+        wrapper.seekToPreviousMediaItem()
 
-        verify(exactly = 0) { controller.skipNext() }
-        verify(exactly = 1) { delegate.seekToNext() }
-    }
-
-    @Test fun `the session hears when Next and Previous become available`() {
-        val (wrapper, _, _) = wrapper(needsLoad = true)
-        val listener = mockk<Player.Listener>(relaxed = true)
-        wrapper.addListener(listener)
-
-        wrapper.publishAvailableCommands()
-
-        verify { listener.onAvailableCommandsChanged(match { it.contains(Player.COMMAND_SEEK_TO_NEXT) && it.contains(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM) }) }
+        verify(exactly = 2) { controller.skipNext() }
+        verify(exactly = 2) { controller.skipPrevious() }
+        verify(exactly = 0) { delegate.seekToNext() }
+        verify(exactly = 0) { delegate.seekToPrevious() }
+        verify(exactly = 0) { delegate.seekToNextMediaItem() }
+        verify(exactly = 0) { delegate.seekToPreviousMediaItem() }
     }
 }
