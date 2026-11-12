@@ -204,6 +204,7 @@ fun FriendDetailScreen(
                     onPeriodChanged = viewModel::setPeriod,
                     onAlbumClick = onNavigateToAlbum,
                     onNavigateToArtist = onNavigateToArtist,
+                    onPlayAlbum = viewModel::playAlbumByName,
                     onQueueAlbum = viewModel::queueAlbumByName,
                     onAddAlbumToCollection = viewModel::addAlbumToCollection,
                 )
@@ -405,6 +406,7 @@ private fun FriendTopAlbumsTab(
     onPeriodChanged: (String) -> Unit,
     onAlbumClick: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onNavigateToArtist: (String) -> Unit = {},
+    onPlayAlbum: (albumTitle: String, albumArtist: String) -> Unit = { _, _ -> },
     onQueueAlbum: (albumTitle: String, albumArtist: String) -> Unit = { _, _ -> },
     onAddAlbumToCollection: (title: String, artist: String, artworkUrl: String?) -> Unit = { _, _, _ -> },
 ) {
@@ -443,6 +445,10 @@ private fun FriendTopAlbumsTab(
                                     artworkUrl = album.artworkUrl,
                                     isInCollection = false,
                                     onDismiss = { showMenu = false },
+                                    onPlayAlbum = {
+                                        showMenu = false
+                                        onPlayAlbum(album.name, album.artist)
+                                    },
                                     onQueueAlbum = { onQueueAlbum(album.name, album.artist) },
                                     onGoToAlbum = { onAlbumClick(album.name, album.artist) },
                                     onGoToArtist = { onNavigateToArtist(album.artist) },

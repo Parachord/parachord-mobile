@@ -504,6 +504,10 @@ fun HomeScreen(
                                         artworkUrl = album.artworkUrl,
                                         isInCollection = true,
                                         onDismiss = { showAlbumMenu = false },
+                                        onPlayAlbum = {
+                                            showAlbumMenu = false
+                                            viewModel.playAlbumByName(album.title, album.artist)
+                                        },
                                         onQueueAlbum = {
                                             showAlbumMenu = false
                                             viewModel.queueAlbumByName(album.title, album.artist)
@@ -624,6 +628,9 @@ fun HomeScreen(
                                 onArtistClick = onNavigateToArtist,
                                 onAddAlbumToCollection = { title, artist, artworkUrl ->
                                     viewModel.addAlbumToCollection(title, artist, artworkUrl)
+                                },
+                                onPlayAlbum = { title, artist ->
+                                    viewModel.playAlbumByName(title, artist)
                                 },
                                 onQueueAlbum = { title, artist ->
                                     viewModel.queueAlbumByName(title, artist)
@@ -1738,6 +1745,7 @@ private fun AiSuggestionsSection(
     onAlbumClick: (albumTitle: String, artistName: String) -> Unit,
     onArtistClick: (String) -> Unit,
     onAddAlbumToCollection: (title: String, artist: String, artworkUrl: String?) -> Unit = { _, _, _ -> },
+    onPlayAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
     onQueueAlbum: (title: String, artist: String) -> Unit = { _, _ -> },
     onGoToArtist: (String) -> Unit = {},
     onPlayArtistTopSongs: (String) -> Unit = {},
@@ -1821,6 +1829,10 @@ private fun AiSuggestionsSection(
                                 artworkUrl = album.artworkUrl,
                                 isInCollection = false,
                                 onDismiss = { showAlbumMenu = false },
+                                onPlayAlbum = {
+                                    showAlbumMenu = false
+                                    onPlayAlbum(album.title, album.artist)
+                                },
                                 onQueueAlbum = {
                                     showAlbumMenu = false
                                     onQueueAlbum(album.title, album.artist)
