@@ -200,31 +200,17 @@ class PopOfTheTopsViewModel constructor(
         }
     }
 
+    /** Album and top-songs queues, shared with iOS (#588). */
+    private val catalogQueues = com.parachord.shared.playback.CatalogQueues(metadataService)
+
     fun queueAlbumByName(albumTitle: String, albumArtist: String) {
         viewModelScope.launch {
             try {
-                val detail = metadataService.loadAlbumTrackList(albumTitle, albumArtist)
-                if (detail == null || detail.tracks.isEmpty()) return@launch
-                val entities = detail.tracks.mapNotNull { track ->
-                    val sources = resolverManager.resolveWithHints(
-                        query = "${track.artist} - ${track.title}",
-                        spotifyId = track.spotifyId,
-                        targetTitle = track.title,
-                        targetArtist = track.artist,
-                    )
-                    val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-                    TrackEntity(
-                        id = "resolved-${track.title.hashCode()}-${track.artist.hashCode()}-${albumTitle.hashCode()}",
-                        title = track.title, artist = track.artist, album = albumTitle,
-                        duration = track.duration,
-                        artworkUrl = track.artworkUrl ?: detail.artworkUrl,
-                        sourceType = best.sourceType, sourceUrl = best.url, resolver = best.resolver,
-                        spotifyUri = best.spotifyUri, soundcloudId = best.soundcloudId, appleMusicId = best.appleMusicId,
-                    )
-                }
-                if (entities.isNotEmpty()) playbackController.addToQueue(entities)
+                val queue = catalogQueues.album(albumTitle, albumArtist) ?: return@launch
+                playbackController.addToQueue(queue.tracks)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to queue album '$albumTitle'", e)
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e("PopOfTheTopsVM", "Failed to queue album '$albumTitle'", e)
             }
         }
     }

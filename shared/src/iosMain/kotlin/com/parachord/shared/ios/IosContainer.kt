@@ -1984,6 +1984,18 @@ class IosContainer private constructor() {
     suspend fun albumTrackList(albumTitle: String, artistName: String): AlbumDetail? =
         metadataService.loadAlbumTrackList(albumTitle, artistName)
 
+    private val catalogQueues by lazy { com.parachord.shared.playback.CatalogQueues(metadataService) }
+
+    /** "Play / Queue album" from a menu (shared `CatalogQueues`, #588); null when there's no track list. */
+    @Throws(Throwable::class)
+    suspend fun albumQueue(title: String, artist: String): com.parachord.shared.playback.CatalogQueue? =
+        catalogQueues.album(title, artist)
+
+    /** "Play / Queue top songs" from a menu (shared `CatalogQueues`, #588); null when there are none. */
+    @Throws(Throwable::class)
+    suspend fun artistTopSongsQueue(name: String): com.parachord.shared.playback.CatalogQueue? =
+        catalogQueues.artistTopSongs(name)
+
     /** The album page's track list as it loads: each provider's answer, and a
      *  plugin catalog's list when the providers can't supply one (#424). */
     fun albumDetailFlow(albumTitle: String, artistName: String): Flow<AlbumDetail> =
@@ -3845,16 +3857,13 @@ class IosContainer private constructor() {
         chatPlaybackBridge.onPlayTrack(chatTrack(title, artist, album))
     }
     suspend fun chatPlayAlbum(title: String, artist: String) {
-        val tracks = (metadataService.loadAlbumTrackList(title, artist)?.tracks ?: emptyList())
-            .map { chatTrack(it.title, it.artist, it.album) }
-        if (tracks.isEmpty()) return
+        val tracks = catalogQueues.album(title, artist)?.tracks ?: return
         chatPlaybackBridge.onClearQueue()
         chatPlaybackBridge.onPlayTrack(tracks.first())
         tracks.drop(1).forEach { chatPlaybackBridge.onAddToQueue(it) }
     }
     suspend fun chatPlayArtist(name: String) {
-        val tops = metadataService.getArtistTopTracks(name, 20).map { chatTrack(it.title, it.artist, it.album) }
-        if (tops.isEmpty()) return
+        val tops = catalogQueues.artistTopSongs(name)?.tracks ?: return
         chatPlaybackBridge.onClearQueue()
         chatPlaybackBridge.onPlayTrack(tops.first())
         tops.drop(1).forEach { chatPlaybackBridge.onAddToQueue(it) }

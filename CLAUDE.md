@@ -913,7 +913,7 @@ Every artist card grid across the app supports long-press context menus via the 
 4. Show `ArtistContextMenu` when `showMenu` is true
 
 **ArtistContextMenu callbacks** — all optional except `onToggleCollection`:
-- `onPlayTopSongs` — fetch and play the artist's top tracks via `metadataService.getArtistTopTracks()`
+- `onPlayTopSongs` — fetch and play the artist's top tracks (shared `CatalogQueues.artistTopSongs`)
 - `onQueueTopSongs` — fetch and queue the artist's top tracks
 - `onGoToArtist` — navigate to the artist screen
 - `onToggleCollection` — add/remove artist from collection (required)
@@ -922,28 +922,24 @@ Pass `null` for any action that isn't applicable in a given context (the menu it
 
 **Screens with artist context menus:** LibraryScreen (artist grid), ArtistScreen (related artists), HistoryScreen (top artists), FriendDetailScreen (top artists), RecommendationsScreen (recommended artists), HomeScreen (AI artist suggestions).
 
-**ViewModel requirements:** Each ViewModel that supports artist context menus needs `playArtistTopSongs(artistName)`, `queueArtistTopSongs(artistName)`, and `toggleArtistCollection(artistName, imageUrl, isInCollection)` methods. These require `MetadataService`, `ResolverManager`, `ResolverScoring`, and `PlaybackController` as dependencies. Currently implemented in: LibraryViewModel, ArtistViewModel, HistoryViewModel, FriendDetailViewModel, RecommendationsViewModel, HomeViewModel.
+**ViewModel requirements:** Each ViewModel that supports artist context menus needs `playArtistTopSongs(artistName)`, `queueArtistTopSongs(artistName)`, and `toggleArtistCollection(artistName, imageUrl, isInCollection)` methods. The first two go through the shared `CatalogQueues` (see "Queue Album by Name / Artist Top Songs"), which needs `MetadataService` and `PlaybackController`. Currently implemented in: LibraryViewModel, ArtistViewModel, HistoryViewModel, FriendDetailViewModel, RecommendationsViewModel, HomeViewModel.
 
-### Queue Album by Name Pattern
+### Queue Album by Name / Artist Top Songs — shared `CatalogQueues` (#588)
 
-To queue an album that isn't in the local library (e.g., from charts, friend history, discography), use the `queueAlbumByName` pattern present in most ViewModels:
+To play or queue an album that isn't in the library (charts, friend history, discography) or an artist's top songs, use the shared `CatalogQueues` (`shared/.../playback/CatalogQueues.kt`), which both apps call:
 
 ```kotlin
+private val catalogQueues = CatalogQueues(metadataService)
+
 fun queueAlbumByName(albumTitle: String, albumArtist: String) {
     viewModelScope.launch {
-        val detail = metadataService.getAlbumTracks(albumTitle, albumArtist)
-        if (detail == null || detail.tracks.isEmpty()) return@launch
-        val entities = detail.tracks.mapNotNull { track ->
-            val sources = resolverManager.resolveWithHints(...)
-            val best = resolverScoring.selectBest(sources) ?: return@mapNotNull null
-            TrackEntity(...)
-        }
-        if (entities.isNotEmpty()) playbackController.addToQueue(entities)
+        val queue = catalogQueues.album(albumTitle, albumArtist) ?: return@launch
+        playbackController.addToQueue(queue.tracks)   // or playQueue(queue.tracks, 0, queue.context)
     }
 }
 ```
 
-This requires `MetadataService`, `ResolverManager`, `ResolverScoring`, and `PlaybackController` as ViewModel dependencies.
+The tracks are metadata-only (title, artist, album, length, cover, the provider's Spotify id and recording MBID) and resolve when they play, like every other metadata-only track; nothing is resolved up front and nothing is dropped. The context links back to the page: an album's name is its title and its id the artist (the album page's form), an artist's name and id are the artist. Top songs are `CatalogQueues.TOP_SONGS` (10). iOS's album and artist menus (`Interactions.swift`) and the DJ chat's album and artist cards (`IosContainer.chatPlayAlbum` / `chatPlayArtist`) use the same class through `IosContainer.albumQueue` / `artistTopSongsQueue`.
 
 ### Album Collection Reactive Checks
 
