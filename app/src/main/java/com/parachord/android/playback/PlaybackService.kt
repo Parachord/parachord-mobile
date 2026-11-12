@@ -361,15 +361,6 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
-        // A track waiting for Play to load it: Next and Previous are offered
-        // and go to the controller (ExoPlayer is empty then), so the car can
-        // get past it.
-        serviceScope.launch {
-            playbackController.needsLoadOnPlayFlow.collect {
-                wrapper.publishAvailableCommands()
-            }
-        }
-
         // Parachord's shuffle → the session's, the same way.
         serviceScope.launch {
             stateHolder.state.map { it.shuffleEnabled }.distinctUntilChanged().collect {
@@ -1670,7 +1661,7 @@ class PlaybackService : MediaLibraryService() {
                 command == COMMAND_SET_SHUFFLE_MODE
             ) return true
             if (externalMode && command in EXTERNAL_COMMANDS) return true
-            if (skipsGoToController && command in SKIP_COMMANDS) return true
+            if (command in SKIP_COMMANDS) return true
             return super.isCommandAvailable(command)
         }
 
@@ -1686,26 +1677,12 @@ class PlaybackService : MediaLibraryService() {
                     // the wrapped ExoPlayer reports.
                     COMMAND_SET_SHUFFLE_MODE,
                 )
-            if (skipsGoToController) {
-                builder.addAll(
-                    COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_PREVIOUS,
-                    COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
-                )
-            }
+            // Next and Previous are the controller's, for every source (#608).
+            builder.addAll(
+                COMMAND_SEEK_TO_NEXT, COMMAND_SEEK_TO_PREVIOUS,
+                COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+            )
             return builder.build()
-        }
-
-        /**
-         * Tell the session the commands changed: [needsLoadOnPlayFlow] adds or
-         * drops Next and Previous ([skipsGoToController]) with no ExoPlayer
-         * event to carry it. Main thread.
-         */
-        fun publishAvailableCommands() {
-            if (dispatching) return
-            val commands = availableCommands
-            for (listener in externalListeners) {
-                listener.onAvailableCommandsChanged(commands)
-            }
         }
 
         /**
@@ -1860,33 +1837,20 @@ class PlaybackService : MediaLibraryService() {
             super.pause()
         }
 
-        // Next and Previous go to the controller's queue in external mode, and
-        // while a track waits for Play to load it (needsLoadOnPlay: restored,
-        // stopped after failing, the car's unplayable-run stop): ExoPlayer is
-        // empty then, so its own Next did nothing and the car couldn't get
-        // past the track. A local track that plays still goes to ExoPlayer (#608).
-        private val skipsGoToController: Boolean
-            get() = externalMode || playbackController.needsLoadOnPlay
+        // Next and Previous always go to the controller's queue, whatever plays
+        // (#608): the queue lives in QueueManager, and ExoPlayer holds at most
+        // the one track it plays (or the silent loop, or nothing for a track
+        // waiting for Play). A local track's Next went to ExoPlayer, which had
+        // no next item, so the lock screen, a headset and the car did nothing;
+        // its Previous restarted the track by ExoPlayer's rule, not the shared
+        // one, and Listen Along never heard about either.
+        override fun seekToNext() = playbackController.skipNext()
 
-        override fun seekToNext() {
-            if (skipsGoToController) { playbackController.skipNext(); return }
-            super.seekToNext()
-        }
+        override fun seekToPrevious() = playbackController.skipPrevious()
 
-        override fun seekToPrevious() {
-            if (skipsGoToController) { playbackController.skipPrevious(); return }
-            super.seekToPrevious()
-        }
+        override fun seekToNextMediaItem() = playbackController.skipNext()
 
-        override fun seekToNextMediaItem() {
-            if (skipsGoToController) { playbackController.skipNext(); return }
-            super.seekToNextMediaItem()
-        }
-
-        override fun seekToPreviousMediaItem() {
-            if (skipsGoToController) { playbackController.skipPrevious(); return }
-            super.seekToPreviousMediaItem()
-        }
+        override fun seekToPreviousMediaItem() = playbackController.skipPrevious()
 
         // ── Repeat ──────────────────────────────────────────────────────
         // Parachord's repeat (PlaybackState.repeatMode), applied by the

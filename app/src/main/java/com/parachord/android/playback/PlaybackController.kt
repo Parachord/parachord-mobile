@@ -154,13 +154,6 @@ class PlaybackController constructor(
      * play ([playTrackInternalUnsafe]).
      */
     @Volatile private var loadOnPlay: LoadOnPlay? = null
-        set(value) {
-            field = value
-            loadOnPlaySlot.value = value
-        }
-
-    /** [loadOnPlay], observable, for [needsLoadOnPlayFlow]. */
-    private val loadOnPlaySlot = kotlinx.coroutines.flow.MutableStateFlow<LoadOnPlay?>(null)
 
     /**
      * Play has to load the current track ([loadOnPlay]). The media session's
@@ -169,16 +162,6 @@ class PlaybackController constructor(
      */
     val needsLoadOnPlay: Boolean
         get() = loadOnPlayTarget(loadOnPlay, stateHolder.state.value.currentTrack?.id) != null
-
-    /**
-     * [needsLoadOnPlay] as it changes, for the media session: Next and
-     * Previous are offered (and reach the controller) while it's true, even
-     * with ExoPlayer empty and out of external mode.
-     */
-    val needsLoadOnPlayFlow: kotlinx.coroutines.flow.Flow<Boolean>
-        get() = kotlinx.coroutines.flow.combine(loadOnPlaySlot, stateHolder.state) { slot, state ->
-            loadOnPlayTarget(slot, state.currentTrack?.id) != null
-        }.distinctUntilChanged()
 
     /**
      * How the play in progress ended with nothing playing, or null. Set by
