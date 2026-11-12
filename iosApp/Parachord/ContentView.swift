@@ -2919,7 +2919,7 @@ final class QueuePlaybackCoordinator {
         heldForListener = false
         loadOnPlay = currentTrack.map { track in
             let picked = pick(for: track)
-            return LoadOnPlay(track: track, positionMs: 0, skipReselect: picked != nil, why: .failed, pickedResolver: picked)
+            return LoadOnPlay(track: track, positionMs: 0, skipReselect: picked != nil, why: .failed, pickedResolver: picked, continuesScrobbled: false)
         }
     }
 
@@ -3074,7 +3074,7 @@ final class QueuePlaybackCoordinator {
         playedSinceWrap = false
         heldForListener = false
         currentTrack = track
-        loadOnPlay = LoadOnPlay(track: track, positionMs: 0, skipReselect: false, why: .restored, pickedResolver: nil)
+        loadOnPlay = LoadOnPlay(track: track, positionMs: 0, skipReselect: false, why: .restored, pickedResolver: nil, continuesScrobbled: false)
         syncSnapshot()
     }
 
@@ -3679,8 +3679,9 @@ final class QueuePlaybackCoordinator {
            let ms = try? await queuePersistence.resumePositionMs(trackId: id) {
             resumeAtMs = ms.int64Value
             // Its listen was already scrobbled: resuming it mustn't scrobble it again (#657).
-            continuesScrobbled = resumeAtMs > 0
-                && ((try? await queuePersistence.resumeContinuesScrobbled(trackId: id))?.boolValue ?? false)
+            if resumeAtMs > 0 {
+                continuesScrobbled = (try? await queuePersistence.resumeContinuesScrobbled(trackId: id))?.boolValue ?? false
+            }
         }
         await MainActor.run {
             // The reads above wait, and a play can start meanwhile (a deep
