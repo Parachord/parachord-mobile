@@ -11,6 +11,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -224,6 +229,8 @@ fun NowPlayingScreen(
                     )
                 },
         ) {
+            val isLandscape =
+                LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
             Column(
                 modifier = Modifier.fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -302,21 +309,21 @@ fun NowPlayingScreen(
                     modifier = Modifier.hapticClickable { onBack() },
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
-
                 // Streaming source artwork first (higher quality, confirms actual
                 // track), then the track's own, then its resolved sources' art.
                 val streamingMeta = playbackState.streamingMetadata
                 val displayArtworkUrl = playbackState.effectiveArtwork(trackArtwork)
 
                 // Large album artwork — tap to open album page.
-                // Dynamically sized: takes remaining height after fixed elements
-                // (metadata, seek bar, controls, bottom row) are accounted for.
-                // This prevents the play/pause button from being pushed off screen
-                // when the title wraps to 2 lines.
+                // Portrait: dynamically sized, it takes the height left after the
+                // fixed elements (metadata, seek bar, controls, bottom row), so the
+                // play/pause button isn't pushed off screen when the title wraps.
+                // Landscape: those elements alone are taller than the screen, so the
+                // artwork goes beside them, sized to the height, and they scroll.
                 val currentTrackIsLoved by viewModel.currentTrackIsLoved.collectAsStateWithLifecycle()
                 val singleTapHaptic = LocalHapticFeedback.current
 
+                val artwork: @Composable (Modifier) -> Unit = { artModifier ->
                 AlbumArtWithGestures(
                     artworkUrl = displayArtworkUrl,
                     artist = track?.artist,
@@ -337,15 +344,103 @@ fun NowPlayingScreen(
                     },
                     onSwipePrevious = { viewModel.skipPrevious() },
                     placeholderName = track?.artist ?: track?.title,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 8.dp),
+                    modifier = artModifier,
                     cornerRadius = 12.dp,
                     elevation = 8.dp,
                 )
+                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                // Queue (with its badge) and Spinoff: a row of their own below the
+                // controls in portrait, beside them in landscape.
+                val queueButton: @Composable () -> Unit = {
+                    // Queue button with badge
+                    Box(
+                        modifier = Modifier.size(48.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        IconButton(
+                            onClick = {
+                                haptic()
+                                scope.launch {
+                                    if (sheetState.currentValue == SheetValue.Expanded) {
+                                        sheetState.partialExpand()
+                                    } else {
+                                        sheetState.expand()
+                                    }
+                                }
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = if (upNext.isNotEmpty()) ActiveControlColor else PlayerTextSecondary,
+                            ),
+                        ) {
+                            Icon(
+                                imageVector = ParachordIcons.Queue,
+                                contentDescription = "Queue",
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
+                        if (upNext.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = (-2).dp, y = 4.dp)
+                                    .size(16.dp)
+                                    // Desktop parity (app.js:55180): gray while spun
+                                    // off / listening along, purple otherwise.
+                                    .background(
+                                        if (playbackState.spinoffMode || inListenAlong) Color(0xFF6B7280) else PurpleDark,
+                                        CircleShape,
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = if (upNext.size > 99) "99+" else "${upNext.size}",
+                                    color = Color.White,
+                                    fontSize = if (upNext.size > 99) 7.sp else 9.sp,
+                                    lineHeight = if (upNext.size > 99) 7.sp else 9.sp,
+                                )
+                            }
+                        }
+                    }
+                }
+                val spinoffButton: @Composable () -> Unit = {
+                    // Spinoff button — states: loading (spinner), active (purple), available (gray), unavailable (dim)
+                    IconButton(
+                        onClick = { haptic(); viewModel.toggleSpinoff() },
+                        enabled = !playbackState.spinoffLoading && playbackState.spinoffAvailable != false,
+                        colors = IconButtonDefaults.iconButtonColors(
+                            contentColor = when {
+                                playbackState.spinoffMode -> ActiveControlColor
+                                playbackState.spinoffAvailable == false -> PlayerTextSecondary.copy(alpha = 0.3f)
+                                else -> PlayerTextSecondary
+                            },
+                            disabledContentColor = PlayerTextSecondary.copy(alpha = 0.3f),
+                        ),
+                    ) {
+                        if (playbackState.spinoffLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = ActiveControlColor,
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(
+                                imageVector = ParachordIcons.Spinoff,
+                                contentDescription = if (playbackState.spinoffMode) "Exit Spinoff" else "Spinoff",
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .offset(y = (-1).dp),
+                            )
+                        }
+                    }
+                }
 
+                // Title, artist, seek bar, controls and the bottom row.
+                val details: @Composable () -> Unit = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                 // Display actual streaming metadata when available, fall back to queued track
                 val displayTitle = streamingMeta?.title ?: track?.title ?: "No track playing"
                 val displayArtist = streamingMeta?.artist ?: track?.artist ?: ""
@@ -416,7 +511,7 @@ fun NowPlayingScreen(
 
                     // Resolver source dropdown — shows current source with option to switch
                     if (track?.resolver != null) {
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 16.dp))
                         val key = trackKey(track.title, track.artist)
                         val sources = trackSources[key] ?: emptyList()
                         ResolverSourceDropdown(
@@ -427,7 +522,7 @@ fun NowPlayingScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 24.dp))
 
                 // Seek bar with custom colors
                 val duration = playbackState.duration.coerceAtLeast(1L)
@@ -462,7 +557,7 @@ fun NowPlayingScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(if (isLandscape) 8.dp else 24.dp))
 
                 // Playback controls with shuffle and repeat. The two sides
                 // take equal widths so play stays centered with two buttons on
@@ -482,6 +577,7 @@ fun NowPlayingScreen(
                         horizontalArrangement = Arrangement.Start,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (isLandscape) queueButton()
                         // Shuffle (disabled during a spinoff or Listen Along: shared shuffleAllowed)
                         IconButton(
                             onClick = { haptic(); viewModel.toggleShuffle() },
@@ -539,7 +635,7 @@ fun NowPlayingScreen(
                     IconButton(
                         onClick = { haptic(); viewModel.togglePlayPause() },
                         modifier = Modifier
-                            .size(72.dp)
+                            .size(if (isLandscape) 60.dp else 72.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primary),
                         colors = IconButtonDefaults.iconButtonColors(
@@ -582,6 +678,7 @@ fun NowPlayingScreen(
                         horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        if (isLandscape) spinoffButton()
                         // Context menu (•••) button — opens track actions
                         // Uses effectiveTrack so actions (add to playlist, collection, etc.)
                         // reflect the actual streaming track metadata
@@ -615,6 +712,7 @@ fun NowPlayingScreen(
                     }
                 }
 
+                if (!isLandscape) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Bottom row: Queue (left) and Spinoff (right)
@@ -626,85 +724,42 @@ fun NowPlayingScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    // Queue button with badge
-                    Box(
-                        modifier = Modifier.size(48.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        IconButton(
-                            onClick = {
-                                haptic()
-                                scope.launch {
-                                    if (sheetState.currentValue == SheetValue.Expanded) {
-                                        sheetState.partialExpand()
-                                    } else {
-                                        sheetState.expand()
-                                    }
-                                }
-                            },
-                            colors = IconButtonDefaults.iconButtonColors(
-                                contentColor = if (upNext.isNotEmpty()) ActiveControlColor else PlayerTextSecondary,
-                            ),
-                        ) {
-                            Icon(
-                                imageVector = ParachordIcons.Queue,
-                                contentDescription = "Queue",
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                        if (upNext.isNotEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .offset(x = (-2).dp, y = 4.dp)
-                                    .size(16.dp)
-                                    // Desktop parity (app.js:55180): gray while spun
-                                    // off / listening along, purple otherwise.
-                                    .background(
-                                        if (playbackState.spinoffMode || inListenAlong) Color(0xFF6B7280) else PurpleDark,
-                                        CircleShape,
-                                    ),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    text = if (upNext.size > 99) "99+" else "${upNext.size}",
-                                    color = Color.White,
-                                    fontSize = if (upNext.size > 99) 7.sp else 9.sp,
-                                    lineHeight = if (upNext.size > 99) 7.sp else 9.sp,
-                                )
-                            }
-                        }
-                    }
+                    queueButton()
+                    spinoffButton()
+                }
+                }
+                }
+                }
 
-                    // Spinoff button — states: loading (spinner), active (purple), available (gray), unavailable (dim)
-                    IconButton(
-                        onClick = { haptic(); viewModel.toggleSpinoff() },
-                        enabled = !playbackState.spinoffLoading && playbackState.spinoffAvailable != false,
-                        colors = IconButtonDefaults.iconButtonColors(
-                            contentColor = when {
-                                playbackState.spinoffMode -> ActiveControlColor
-                                playbackState.spinoffAvailable == false -> PlayerTextSecondary.copy(alpha = 0.3f)
-                                else -> PlayerTextSecondary
-                            },
-                            disabledContentColor = PlayerTextSecondary.copy(alpha = 0.3f),
-                        ),
+                if (isLandscape) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .padding(start = 24.dp, end = 8.dp, bottom = 36.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (playbackState.spinoffLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = ActiveControlColor,
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Icon(
-                                imageVector = ParachordIcons.Spinoff,
-                                contentDescription = if (playbackState.spinoffMode) "Exit Spinoff" else "Spinoff",
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .offset(y = (-1).dp),
-                            )
+                        artwork(Modifier.fillMaxHeight())
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            details()
                         }
                     }
+                } else {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    artwork(
+                        Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp),
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    details()
                 }
             }
         }

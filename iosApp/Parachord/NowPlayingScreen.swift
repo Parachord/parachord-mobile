@@ -54,6 +54,8 @@ struct PCNowPlaying: View {
     /// lost in the wide column; compact (phone) stays capped so the controls
     /// clear the Up-Next peek.
     @Environment(\.horizontalSizeClass) private var hSize
+    /// Compact on a phone in landscape: lay the art beside the controls.
+    @Environment(\.verticalSizeClass) private var vSize
 
     private var npBg: Color { Color(uiColor: UIColor(hex: 0x1e1e20)) }
 
@@ -63,32 +65,33 @@ struct PCNowPlaying: View {
             npBg.ignoresSafeArea()
             VStack(spacing: 0) {
                 grabberBar
+                if vSize == .compact {
+                    // Landscape phone: the portrait column is taller than the
+                    // screen, so the art goes beside the controls, sized to the
+                    // height, and the controls scroll if they still don't fit.
+                    HStack(alignment: .center, spacing: 20) {
+                        npArt(track)
+                            .aspectRatio(1, contentMode: .fit)
+                            .frame(maxHeight: .infinity)
+                            .matchedGeometryEffect(id: "npArt", in: artNamespace)
+                            .shadow(color: .black.opacity(0.6), radius: 16, y: 10)
+                        ScrollView {
+                            VStack(spacing: 10) {
+                                npDetails(track)
+                            }
+                            .padding(.vertical, 8)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+                } else {
                 ScrollView {
                     VStack(spacing: 16) {
                         // iPad: center the column in the tall viewport instead of
                         // leaving a big gap below the controls (phone stays
                         // top-anchored — these spacers collapse there).
                         if hSize == .regular { Spacer(minLength: 0) }
-                        PCNowPlayingArtGestures(
-                            track: track,
-                            // Android: a single tap opens the track's album.
-                            onSingleTap: track.flatMap { t in
-                                t.album.flatMap { album in
-                                    album.isEmpty || t.artist.isEmpty ? nil : { onAlbum(album, t.artist) }
-                                }
-                            },
-                            onNext: {
-                                if coordinator.playbackContext?.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT {
-                                    if listenAlong.friendIsAhead { listenAlong.advanceToFriend() }
-                                }
-                                else { coordinator.skipNext() }
-                            },
-                            onPrevious: { coordinator.skipPrevious() }
-                        ) {
-                            pcCover(track.flatMap { pcTrackArt($0.artworkUrl, artist: $0.artist, title: $0.title, album: $0.album) },
-                                    seed: track?.title ?? "P", size: nil, radius: 14,
-                                    resolving: track.map { pcTrackResolving(artist: $0.artist, title: $0.title, album: $0.album) } ?? false)
-                        }
+                        npArt(track)
                             // Cap the art so the transport, resolver deck and
                             // bottom actions stay on-screen above the Up-Next
                             // peek; larger cap on iPad so it isn't tiny in the
@@ -99,27 +102,13 @@ struct PCNowPlaying: View {
                             .shadow(color: .black.opacity(0.6), radius: 24, y: 20)
                             .padding(.top, 4)
 
-                        titleRow(track)
-                        scrubber
-                        transport
-                        // Android parity: the "Playing From" deck only shows once a
-                        // resolver is actually playing (NowPlayingScreen gates on
-                        // `track.resolver != null`). Hiding it until then avoids the
-                        // old hardcoded "Local Files" default appearing on launch /
-                        // mid-resolve.
-                        if coordinator.currentTrack?.resolver != nil {
-                            PCResolverDeck(
-                                active: coordinator.activeResolverName,
-                                available: coordinator.availableResolvers(),
-                                onPick: { coordinator.switchResolver($0) }
-                            )
-                        }
-                        bottomActions
+                        npDetails(track)
                         if hSize == .regular { Spacer(minLength: 0) }
                     }
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
                     .modifier(NPVCenterOnRegular(active: hSize == .regular))
+                }
                 }
                 upNextPeek
             }
@@ -178,6 +167,50 @@ struct PCNowPlaying: View {
             }
             .zIndex(20)
         }
+    }
+
+    /// The hero artwork with its gestures (tap: album, swipe: skip).
+    @ViewBuilder private func npArt(_ track: Track?) -> some View {
+        PCNowPlayingArtGestures(
+                            track: track,
+                            // Android: a single tap opens the track's album.
+                            onSingleTap: track.flatMap { t in
+                                t.album.flatMap { album in
+                                    album.isEmpty || t.artist.isEmpty ? nil : { onAlbum(album, t.artist) }
+                                }
+                            },
+                            onNext: {
+                                if coordinator.playbackContext?.type == SpinoffSessionKt.LISTEN_ALONG_CONTEXT {
+                                    if listenAlong.friendIsAhead { listenAlong.advanceToFriend() }
+                                }
+                                else { coordinator.skipNext() }
+                            },
+                            onPrevious: { coordinator.skipPrevious() }
+                        ) {
+                            pcCover(track.flatMap { pcTrackArt($0.artworkUrl, artist: $0.artist, title: $0.title, album: $0.album) },
+                                    seed: track?.title ?? "P", size: nil, radius: 14,
+                                    resolving: track.map { pcTrackResolving(artist: $0.artist, title: $0.title, album: $0.album) } ?? false)
+                        }
+    }
+
+    /// Title, scrubber, transport, the "Playing From" deck and the bottom actions.
+    @ViewBuilder private func npDetails(_ track: Track?) -> some View {
+                        titleRow(track)
+                        scrubber
+                        transport
+                        // Android parity: the "Playing From" deck only shows once a
+                        // resolver is actually playing (NowPlayingScreen gates on
+                        // `track.resolver != null`). Hiding it until then avoids the
+                        // old hardcoded "Local Files" default appearing on launch /
+                        // mid-resolve.
+                        if coordinator.currentTrack?.resolver != nil {
+                            PCResolverDeck(
+                                active: coordinator.activeResolverName,
+                                available: coordinator.availableResolvers(),
+                                onPick: { coordinator.switchResolver($0) }
+                            )
+                        }
+                        bottomActions
     }
 
     private var grabberBar: some View {
