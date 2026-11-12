@@ -845,10 +845,13 @@ val androidModule = module {
     // feeds + Last.fm chart endpoints all flow through shared Ktor clients
     // — no more raw OkHttp/JSONObject in the chart pipeline.
     single {
+        val chartsFile = java.io.File(androidContext().filesDir, "charts_cache.json")
         com.parachord.shared.repository.ChartsRepository(
             appleMusicClient = get(),
             lastFmClient = get(),
             lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
+            cacheRead = { com.parachord.android.data.cache.CacheFiles.read(chartsFile) },
+            cacheWrite = { com.parachord.android.data.cache.CacheFiles.write(chartsFile, it) },
         )
     }
     // History + Friends repositories take `lastFmApiKey` as a constructor

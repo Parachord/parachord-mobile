@@ -1819,7 +1819,11 @@ class IosContainer private constructor() {
     }
     val lastFmClient: LastFmClient by lazy { LastFmClient(httpClient) }
     val chartsRepository: ChartsRepository by lazy {
-        ChartsRepository(appleMusicClient, lastFmClient, lastFmApiKey = appConfig.lastFmApiKey)
+        ChartsRepository(
+            appleMusicClient, lastFmClient, lastFmApiKey = appConfig.lastFmApiKey,
+            cacheRead = { IosFileCache.read("charts_cache.json") },
+            cacheWrite = { IosFileCache.write("charts_cache.json", it) },
+        )
     }
 
     /** Pop of the Tops — Apple Music (iTunes RSS) top albums (default tab) +
