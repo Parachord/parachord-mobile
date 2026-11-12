@@ -73,7 +73,7 @@ No spike needs a paid account: Navidrome runs locally in Docker with a few audio
 - **Volume offset** 0 dB.
 
 ### 4. Plugin changes (desktop, then marketplace)
-- **Failed searches throw.** `search` and `searchAlbums` throw on an HTTP error, a Subsonic API error, or a failed request, with the status in the message. Unconfigured stays `[]`. Same change as `soundcloud.axe` 1.3.4. Every desktop caller already catches per resolver.
+- **Failed searches throw** (Parachord/parachord#1358). `search` and `searchAlbums` throw on an HTTP error, a Subsonic API error, or a failed request, with the status in the message. Unconfigured stays `[]`. Same change as `soundcloud.axe` 1.3.4. Every desktop caller already catches per resolver.
 - Once both apps ship the engine and settings: drop `capabilities.mobile: false` and add `minAppVersion.android` / `.ios` at the versions that have them, so older apps keep hiding it. With per-platform loading (Parachord/parachord#1355) the plugin would declare `requires: { capabilities: ["html5Stream", "pluginSettings"] }` instead.
 
 ### 5. Network
@@ -117,9 +117,6 @@ See the decisions below. Whichever is chosen:
 - Testing on devices: 1 day.
 - About a week in all.
 
-## Decisions for you
-1. **Plain `http://` servers.** Most home setups are `http://<LAN IP>:4533`.
-   - **(a) Allow cleartext app-wide, and restore the guard in code (recommended).** The shared HTTP clients and NativeBridge's fetch refuse `http://` except to the host in a plugin's saved `serverUrl`. On iOS, `NSAllowsLocalNetworking` allows `.local` names and IP literals without opening arbitrary loads.
-   - **(b) Require HTTPS.** No security change, but most LAN setups won't work.
-   - **(c) Allow cleartext for local addresses only.** Android's network security config can't express IP ranges, so this means (a) with the code guard narrowed to private IPs and `.local`.
-2. **Self-signed certificates** (common on home HTTPS). Trusting user-installed CAs (Android `src="user"` trust anchors) weakens every connection the app makes. Recommendation: don't. Point people at a real certificate (Let's Encrypt, Tailscale HTTPS) or plain HTTP on the LAN.
+## Decisions (2026-11-12)
+1. **Plain `http://` servers: allowed, with the guard in code.** Android's network security config permits cleartext. The shared HTTP clients, NativeBridge's fetch and the `html5Stream` engine then refuse `http://` to every host except the host in a plugin's saved `serverUrl`, so the app's own services stay HTTPS-only as H9 intended. On iOS, `NSAllowsLocalNetworking` covers `.local` names and IP literals; a public `http://` server isn't supported there. A test pins the guard: an `http://` request to any other host fails.
+2. **Self-signed certificates: not supported.** No user-CA trust anchors. The settings screen's connection error points to a real certificate (Let's Encrypt, Tailscale HTTPS) or plain HTTP on the home network.
