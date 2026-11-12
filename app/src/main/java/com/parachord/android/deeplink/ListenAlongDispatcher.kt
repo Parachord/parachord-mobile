@@ -60,8 +60,9 @@ sealed class ListenAlongResult {
  * `MainViewModel.startListenAlong` (which itself replaces any active
  * session, keeping the suspended queue) — a stop+start race where the
  * dying loop's last poll tick can clobber the new friend's track.
- * [ProtocolPlayTeardown.prepareForListenAlongHandover] runs only steps
- * 1 and 3, leaving the listen-along stop to `startListenAlong`.
+ * [ProtocolPlayTeardown.prepareForListenAlongHandover] runs only step 1
+ * (exit spinoff), leaving the listen-along swap to `startListenAlong` and the
+ * user's queue to the session, which gives all of it back at the end (#613).
  */
 class ListenAlongDispatcher(
     private val friendsRepository: FriendsRepository,

@@ -44,11 +44,13 @@ interface ProtocolPlayTeardown {
     suspend fun prepareForNewPlayback(endListenAlongSilently: Boolean)
 
     /**
-     * Half-teardown for `parachord://listen-along` friend-A → friend-B
-     * handover. Runs steps **(1) exit spinoff** and **(3) clear queue**,
-     * but DELIBERATELY SKIPS step (2) "stop listen-along".
+     * Half-teardown for a `parachord://listen-along` link. Runs only step
+     * **(1) exit spinoff**. It DELIBERATELY SKIPS step (2) "stop
+     * listen-along", and step (3) "clear queue": the session sets the user's
+     * whole queue aside and gives it back when it ends, as an in-app start
+     * does (#613).
      *
-     * The reason: `MainViewModel.startListenAlong(friend)` already replaces
+     * Why no stop: `ListenAlongManager.start(friend)` already replaces
      * any active session (keeping the suspended queue), so the swap is atomic.
      * Calling [prepareForNewPlayback] here would tear down the very
      * listen-along loop we're about to replace — a stop+start race that
@@ -56,7 +58,7 @@ interface ProtocolPlayTeardown {
      * friend's track right after `startListenAlong` set it.
      *
      * Use this method, NOT [prepareForNewPlayback], from any code path
-     * that's about to call `MainViewModel.startListenAlong`.
+     * that's about to start Listen Along.
      */
     suspend fun prepareForListenAlongHandover()
 }
