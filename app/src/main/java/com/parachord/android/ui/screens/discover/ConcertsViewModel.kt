@@ -239,6 +239,8 @@ class ConcertsViewModel constructor(
                     ).collect { _events.value = it }
                 }
             } catch (e: Exception) {
+                // A newer load cancelled this one (refresh, a location change): not a failure.
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Failed to load events", e)
             } finally {
                 _isRefreshing.value = false

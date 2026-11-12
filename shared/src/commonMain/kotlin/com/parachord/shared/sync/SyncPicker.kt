@@ -118,7 +118,7 @@ object SyncStatusText {
             .filter { it.first in axes }
             .joinToString(" · ") { it.second }
 
-    /** When the last sync ran: "Never", "Just now", "5 minutes ago", "3 hours ago", "2 days ago". */
+    /** When the last sync ran: "Never", "Just now", "1 minute ago", "3 hours ago", "2 days ago". */
     fun lastSynced(timestampMs: Long): String = lastSynced(timestampMs, currentTimeMillis())
 
     fun lastSynced(timestampMs: Long, nowMs: Long): String {
@@ -126,9 +126,11 @@ object SyncStatusText {
         val diff = nowMs - timestampMs
         return when {
             diff < 60_000 -> "Just now"
-            diff < 3_600_000 -> "${diff / 60_000} minutes ago"
-            diff < 86_400_000 -> "${diff / 3_600_000} hours ago"
-            else -> "${diff / 86_400_000} days ago"
+            diff < 3_600_000 -> ago(diff / 60_000, "minute")
+            diff < 86_400_000 -> ago(diff / 3_600_000, "hour")
+            else -> ago(diff / 86_400_000, "day")
         }
     }
+
+    private fun ago(n: Long, unit: String): String = if (n == 1L) "1 $unit ago" else "$n ${unit}s ago"
 }
