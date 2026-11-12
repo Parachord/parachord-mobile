@@ -81,7 +81,7 @@ class TrackResolverCacheFailedResolveTest {
             resolverManager.resolveReport(any(), any(), any(), any(), setOf("spotify", "soundcloud"), any(), any())
         }
         assertEquals(listOf("applemusic", "spotify"), cache.getSources("I Know!", "Swapmeet")?.map { it.resolver })
-        repeat(50) { if (disk == null) delay(20) }
+        repeat(250) { if (disk == null) delay(20) }
         assertEquals("saved once every resolver answered", true, disk?.contains("spotify:track:abc"))
     }
 
@@ -91,7 +91,7 @@ class TrackResolverCacheFailedResolveTest {
         val cache = cache()
         cache.awaitLoaded()
         settle(cache)
-        repeat(50) { if (disk == null) delay(20) }
+        repeat(250) { if (disk == null) delay(20) }
         assertEquals(true, disk?.contains("spotify:track:abc"))
     }
 
@@ -101,7 +101,8 @@ class TrackResolverCacheFailedResolveTest {
         first.awaitLoaded()
         first.putSources("I Know!", "Swapmeet", listOf(amHint))
         first.putSources("Poor Advice", "Basht.", listOf(spotify.copy(artworkUrl = "s.jpg")))
-        repeat(50) { if (disk?.contains("s.jpg") != true) delay(20) }
+        // Up to 5 s for the debounced save: a slow CI runner took over 1 s.
+        repeat(250) { if (disk?.contains("s.jpg") != true) delay(20) }
 
         val second = cache()
         second.awaitLoaded()

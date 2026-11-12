@@ -2721,6 +2721,13 @@ final class QueuePlaybackCoordinator {
             NSLog("QUEUE play ignored: '%@' is held for Listen Along", currentTrack?.title ?? "")
             return
         }
+        // No track on screen (the queue ended and the track was cleared):
+        // nothing to start, so don't resume the last engine (shared, #617).
+        if LoadOnPlayKt.playStartsNothing(hasCurrentTrack: currentTrack != nil, isPlaying: wasPlaying,
+                                          isStarting: isStarting) {
+            NSLog("QUEUE play ignored: no track")
+            return
+        }
         // Nothing loaded for the track on screen (the shared `LoadOnPlay`: a
         // restored queue, or stopped because nothing could play it): start it
         // at the slot's position (#567), on the source picked by hand if one was.
