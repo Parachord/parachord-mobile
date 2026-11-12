@@ -2248,8 +2248,21 @@ final class QueuePlaybackCoordinator {
 
     /// Exit spinoff: drop the pool, restore the saved context. The queue was never
     /// modified, so the next skipNext resumes it. Also the Spinoff button's toggle-off.
+    /// The Spinoff button's pending fetch, if any (`SpinoffController`): whether
+    /// one is running, and how to cancel it. Set when the controller binds.
+    @ObservationIgnored var spinoffFetching: () -> Bool = { false }
+    @ObservationIgnored var cancelSpinoffFetch: () -> Void = {}
+
     func exitSpinoff() {
-        guard spinoffMode else { return }
+        let exit = SpinoffSessionKt.spinoffExit(spinoffMode: spinoffMode, fetching: spinoffFetching())
+        if exit == SpinoffExit.nothing { return }
+        if exit == SpinoffExit.cancelFetch {
+            // Its tracks would start it later and end what was chosen since
+            // (#612: a Listen Along session started while it fetched).
+            cancelSpinoffFetch()
+            NSLog("SPINOFF cancelled the fetch still running")
+            return
+        }
         spinoffPool.removeAll()
         spinoffGeneration += 1
         spinoffRefiller.refillUrl = nil

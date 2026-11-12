@@ -155,4 +155,24 @@ class PlaybackControllerListenerHooksTest {
         assertEquals(idle, idleTimeoutLoad(null, a, positionMs = 42_000))
         assertNull(idleTimeoutLoad(failed, null, positionMs = 0))
     }
+
+    @Test
+    fun `leaving while the spinoff is still fetching cancels it so it never starts`() {
+        // #612: Listen Along starting calls exitSpinoff while the similar
+        // tracks are still on their way; they must not start the spinoff later.
+        val f = PlaybackControllerFixture(stateHolder, queueManager)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        io.mockk.coEvery { f.lastFmClient.getSimilarTracks(any(), any(), any(), any()) } coAnswers {
+            gate.await()
+            error("cancelled fetch reached Last.fm's answer")
+        }
+        f.controller.startSpinoffWithSeed("X", "A")
+        assertTrue(stateHolder.state.value.spinoffLoading)
+        f.controller.exitSpinoff()
+        assertFalse(stateHolder.state.value.spinoffLoading)
+        gate.complete(Unit)
+        Thread.sleep(300)
+        assertFalse(stateHolder.state.value.spinoffMode)
+        assertFalse(stateHolder.state.value.spinoffLoading)
+    }
 }
