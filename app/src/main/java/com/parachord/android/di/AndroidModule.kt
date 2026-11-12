@@ -89,56 +89,6 @@ import java.util.concurrent.TimeUnit
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 /**
- * iTunes Search API enrichment for album artwork. Used by the shared
- * [com.parachord.shared.metadata.MetadataService] when an album's
- * `artworkUrl` points at Cover Art Archive (which 404s frequently).
- *
- * Looks up the album by `"<artist> <title>"` against the iTunes Search
- * `/search?media=music&entity=album` endpoint and substitutes the 600x600
- * artwork URL on a successful match. Failures fall through to the
- * original album record — never propagates exceptions back to the
- * caller.
- *
- * Lives in `AndroidModule.kt` next to its only dependency
- * (`AppleMusicClient`) so the shared metadata module stays free of
- * iTunes-specific logic. The previous Android `MetadataService`
- * wrapper class hosted this function as a private method; eliminating
- * the wrapper relocated the helper here.
- */
-private suspend fun enrichAlbumArtworkViaItunes(
-    appleMusicClient: com.parachord.shared.api.AppleMusicClient,
-    artistName: String,
-    albums: List<com.parachord.shared.metadata.AlbumSearchResult>,
-): List<com.parachord.shared.metadata.AlbumSearchResult> = coroutineScope {
-    albums.map { album ->
-        async {
-            val url = album.artworkUrl
-            if (url != null && url.contains("coverartarchive.org")) {
-                try {
-                    val term = "$artistName ${album.title}"
-                    val response = appleMusicClient.search(
-                        term = term,
-                        entity = "album",
-                        limit = 3,
-                    )
-                    val match = response.results.firstOrNull { item ->
-                        item.collectionName != null &&
-                            item.artistName?.lowercase()
-                                ?.contains(artistName.lowercase()) == true
-                    }
-                    val itunesArt = match?.artworkUrl100?.replace("100x100", "600x600")
-                    if (itunesArt != null) album.copy(artworkUrl = itunesArt) else album
-                } catch (_: Exception) {
-                    album
-                }
-            } else {
-                album
-            }
-        }
-    }.awaitAll()
-}
-
-/**
  * Android Koin module — provides all Android-specific dependencies.
  * Replaces the 4 Hilt modules: ApiModule, AppModule, DatabaseModule, ScrobblerModule.
  */
@@ -567,21 +517,10 @@ val androidModule = module {
     // enrichment lambda that fixes Cover Art Archive 404s, which now
     // lives next to its only dependency (AppleMusicClient).
     single {
-        val musicBrainz: MusicBrainzProvider = get()
-        val wikipedia: WikipediaProvider = get()
-        val lastFm: LastFmProvider = get()
-        val discogs: DiscogsProvider = get()
-        val spotify: SpotifyProvider = get()
         val settingsStore: com.parachord.shared.settings.SettingsStore = get()
         val appleMusicClient: com.parachord.shared.api.AppleMusicClient = get()
-
-        // Gap-filler (priority 25, last): Apple Music catalog artist art when no
-        // higher provider had an image. Uses the built-in dev token (Bearer).
-        val appleMusicArtist = com.parachord.shared.metadata.AppleMusicArtistProvider(
-            get(), get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
-        )
-        val providers = listOf(musicBrainz, wikipedia, lastFm, discogs, spotify, appleMusicArtist)
-            .sortedBy { it.priority }
+        // The cascade's providers, shared with iOS (#595).
+        val providers = get<com.parachord.shared.metadata.MetadataProviders>().all()
 
         val filesDir = androidContext().filesDir
         val artistImagesFile = java.io.File(filesDir, "artist_images_cache.json")
@@ -592,7 +531,7 @@ val androidModule = module {
             providers = providers,
             getDisabledProviders = { settingsStore.getDisabledMetaProviders() },
             enrichAlbumArtwork = { artistName, albums ->
-                enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
+                com.parachord.shared.metadata.upgradeCoverArtArchiveArtwork(appleMusicClient, artistName, albums)
             },
             // Persisted like iOS already does: artist images (History/Friends ask
             // for up to 50 per load), album tracklists and discographies (desktop
@@ -643,25 +582,17 @@ val androidModule = module {
             ),
         )
     }
-    singleOf(::MusicBrainzProvider)
-    // LastFmProvider takes the api key as a constructor parameter so the
-    // shared class doesn't depend on Android BuildConfig. Sourced here from
-    // the same BuildConfig field that previously lived inside the provider.
-    single {
-        com.parachord.shared.metadata.LastFmProvider(
-            api = get(),
-            apiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
-        )
-    }
-    singleOf(::SpotifyProvider)
-    // Explicit binding: singleOf would try to inject the defaulted
-    // knownArtistMbid lambda and fail the whole DI graph at launch.
+    // The metadata providers, built once by shared code (#595, as iOS).
     single {
         val tracks: com.parachord.shared.db.dao.TrackDao = get()
-        WikipediaProvider(
+        com.parachord.shared.metadata.MetadataProviders(
             musicBrainzClient = get(),
-            musicBrainzProvider = get(),
             httpClient = get(),
+            lastFmClient = get(),
+            lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
+            spotifyClient = get(),
+            settingsStore = get(),
+            appleMusicDeveloperToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
             // The artist's MBID without asking MusicBrainz (#429): the mapper
             // cache, then the library.
             knownArtistMbid = { name ->
@@ -670,7 +601,19 @@ val androidModule = module {
             },
         )
     }
-    singleOf(::DiscogsProvider)
+    single { get<com.parachord.shared.metadata.MetadataProviders>().musicBrainz }
+    single { get<com.parachord.shared.metadata.MetadataProviders>().lastFm }
+    single { get<com.parachord.shared.metadata.MetadataProviders>().spotify }
+    single { get<com.parachord.shared.metadata.MetadataProviders>().wikipedia }
+    single { get<com.parachord.shared.metadata.MetadataProviders>().discogs }
+    // History's and friends' top lists, cached a day on disk (#595, as iOS).
+    single {
+        val dir = androidContext().filesDir
+        com.parachord.shared.repository.TopListsCache(
+            read = { name -> com.parachord.android.data.cache.CacheFiles.read(java.io.File(dir, name)) },
+            write = { name, json -> com.parachord.android.data.cache.CacheFiles.write(java.io.File(dir, name), json) },
+        )
+    }
     // ImageEnrichmentService — shared. The 2x2 mosaic composite step is
     // platform-specific (Coil + Bitmap), forwarded via a suspend lambda.
     // The Ktor HttpClient is also injected so the service can HEAD-check

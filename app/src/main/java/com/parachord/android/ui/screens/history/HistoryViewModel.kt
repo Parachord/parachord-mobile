@@ -43,6 +43,7 @@ class HistoryViewModel constructor(
     private val trackResolverCache: TrackResolverCache,
     private val metadataService: MetadataService,
     private val libraryRepository: LibraryRepository,
+    private val topLists: com.parachord.shared.repository.TopListsCache,
 ) : ViewModel() {
 
     companion object {
@@ -288,16 +289,16 @@ class HistoryViewModel constructor(
         val period = selectedPeriod.value
 
         viewModelScope.launch {
-            historyRepository.getTopTracks(period).collect {
+            topLists.tracks(com.parachord.shared.repository.TopListsCache.ownKey(period)) { historyRepository.getTopTracks(period) }.collect {
                 _topTracks.value = it
                 if (it is Resource.Success) resolveTracksInBackground(it.data)
             }
         }
         viewModelScope.launch {
-            historyRepository.getTopAlbums(period).collect { _topAlbums.value = it }
+            topLists.albums(com.parachord.shared.repository.TopListsCache.ownKey(period)) { historyRepository.getTopAlbums(period) }.collect { _topAlbums.value = it }
         }
         viewModelScope.launch {
-            historyRepository.getTopArtists(period).collect { _topArtists.value = it }
+            topLists.artists(com.parachord.shared.repository.TopListsCache.ownKey(period)) { historyRepository.getTopArtists(period) }.collect { _topArtists.value = it }
         }
     }
 

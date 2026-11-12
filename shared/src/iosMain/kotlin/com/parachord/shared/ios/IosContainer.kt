@@ -92,6 +92,7 @@ import com.parachord.shared.api.TicketmasterClient
 import com.parachord.shared.api.SeatGeekClient
 import com.parachord.shared.repository.ChartsRepository
 import com.parachord.shared.repository.ConcertsRepository
+import com.parachord.shared.repository.TopListsCache
 import com.parachord.shared.repository.ConcertArtist
 import com.parachord.shared.repository.ConcertEvent
 import com.parachord.shared.repository.CriticalDarlingsRepository
@@ -178,9 +179,6 @@ import platform.Foundation.NSBundle
 // ── Top-data disk-cache shapes (own history + friend profiles) ──────────
 // One file per type; the map key is the timeframe filter for own history
 // (e.g. "7day") or "friend:<user>:<service>:<period>" for friend profiles.
-private const val TOP_TRACKS_FILE = "history_top_tracks.json"
-private const val TOP_ALBUMS_FILE = "history_top_albums.json"
-private const val TOP_ARTISTS_FILE = "history_top_artists.json"
 
 /**
  * Flat, Swift-friendly deep-link command (#228). [kind] selects the dispatch
@@ -255,15 +253,6 @@ data class IosShareResult(
     val subject: String,
     val isSmartLink: Boolean,
 )
-
-@kotlinx.serialization.Serializable
-private data class TimedTracks(val fetchedAt: Long, val data: List<HistoryTrack>)
-
-@kotlinx.serialization.Serializable
-private data class TimedAlbums(val fetchedAt: Long, val data: List<HistoryAlbum>)
-
-@kotlinx.serialization.Serializable
-private data class TimedArtists(val fetchedAt: Long, val data: List<HistoryArtist>)
 
 class IosContainer private constructor() {
 
@@ -1696,19 +1685,19 @@ class IosContainer private constructor() {
     // stays live (getFriendRecentTracks below — not cached).
     @Throws(Throwable::class)
     suspend fun getFriendTopTracks(username: String, service: String, period: String): List<HistoryTrack> =
-        cachedTopTracks(TOP_TRACKS_FILE, "friend:$username:$service:$period") {
-            friendsRepository.getFriendTopTracks(username, service, period).shownOrThrow(emptyList())
-        }
+        topLists.tracks(TopListsCache.friendKey(username, service, period)) {
+            friendsRepository.getFriendTopTracks(username, service, period)
+        }.shownOrThrow(emptyList())
     @Throws(Throwable::class)
     suspend fun getFriendTopAlbums(username: String, service: String, period: String): List<HistoryAlbum> =
-        cachedTopAlbums(TOP_ALBUMS_FILE, "friend:$username:$service:$period") {
-            friendsRepository.getFriendTopAlbums(username, service, period).shownOrThrow(emptyList())
-        }
+        topLists.albums(TopListsCache.friendKey(username, service, period)) {
+            friendsRepository.getFriendTopAlbums(username, service, period)
+        }.shownOrThrow(emptyList())
     @Throws(Throwable::class)
     suspend fun getFriendTopArtists(username: String, service: String, period: String): List<HistoryArtist> =
-        cachedTopArtists(TOP_ARTISTS_FILE, "friend:$username:$service:$period") {
-            friendsRepository.getFriendTopArtists(username, service, period).shownOrThrow(emptyList())
-        }
+        topLists.artists(TopListsCache.friendKey(username, service, period)) {
+            friendsRepository.getFriendTopArtists(username, service, period)
+        }.shownOrThrow(emptyList())
     @Throws(Throwable::class)
     suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> =
         friendsRepository.getFriendRecentTracks(username, service).shownOrThrow(emptyList())
@@ -1879,28 +1868,28 @@ class IosContainer private constructor() {
         )
     }
 
+    /** The metadata providers, built by shared code with Android (#595). */
+    private val metadataProviders by lazy {
+        com.parachord.shared.metadata.MetadataProviders(
+            musicBrainzClient = musicBrainzClient,
+            httpClient = httpClient,
+            lastFmClient = lastFmClient,
+            lastFmApiKey = appConfig.lastFmApiKey,
+            spotifyClient = spotifyClient,
+            settingsStore = settingsStore,
+            appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
+            knownArtistMbid = ::knownArtistMbid,
+        )
+    }
+
     val metadataService: MetadataService by lazy {
-        val mbProvider = MusicBrainzProvider(musicBrainzClient)
         MetadataService(
-            // Priority order (cascade fills gaps): MB 0, Wikipedia 5, Last.fm 10,
-            // Discogs 15, Spotify 20 — matches AndroidModule's provider set so
-            // artist images/bios fall back to Wikipedia/Discogs (no auth) when
-            // Spotify isn't connected.
-            providers = listOf(
-                mbProvider,
-                WikipediaProvider(musicBrainzClient, mbProvider, httpClient, knownArtistMbid = ::knownArtistMbid),
-                LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
-                DiscogsProvider(httpClient, settingsStore),
-                SpotifyProvider(spotifyClient, settingsStore),
-                // Gap-filler (priority 25, last): Apple Music catalog artist art
-                // when nothing above had an image. Inert without a dev token.
-                AppleMusicArtistProvider(httpClient, appConfig.appleMusicDeveloperToken),
-            ),
+            // The cascade's providers, shared with Android (#595).
+            providers = metadataProviders.all(),
             getDisabledProviders = { settingsStore.getDisabledPlugins() },
-            // Mirrors AndroidModule.enrichAlbumArtworkViaItunes: upgrade Cover
-            // Art Archive URLs to iTunes art via the shared AppleMusicClient.
+            // Cover Art Archive covers become iTunes art (shared, #595).
             enrichAlbumArtwork = { artistName, albums ->
-                enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
+                com.parachord.shared.metadata.upgradeCoverArtArchiveArtwork(appleMusicClient, artistName, albums)
             },
             // Persistent artist-image URL cache lives in the shared service now
             // (was the iOS-only artist-images.json); reuse it across sessions.
@@ -1922,39 +1911,6 @@ class IosContainer private constructor() {
             // #488: ListenBrainz listen counts rank originals above covers in Search.
             searchPopularity = SearchPopularity(fetchListens = { kind, mbids -> listenBrainzClient.getPopularity(kind, mbids) }),
         )
-    }
-
-    /** Verbatim port of AndroidModule.enrichAlbumArtworkViaItunes — a DI
-     *  closure over the shared AppleMusicClient, not enrichment logic. */
-    private suspend fun enrichAlbumArtworkViaItunes(
-        appleMusicClient: AppleMusicClient,
-        artistName: String,
-        albums: List<AlbumSearchResult>,
-    ): List<AlbumSearchResult> = coroutineScope {
-        albums.map { album ->
-            async {
-                val url = album.artworkUrl
-                if (url != null && url.contains("coverartarchive.org")) {
-                    try {
-                        val response = appleMusicClient.search(
-                            term = "$artistName ${album.title}",
-                            entity = "album",
-                            limit = 3,
-                        )
-                        val match = response.results.firstOrNull { item ->
-                            item.collectionName != null &&
-                                item.artistName?.lowercase()?.contains(artistName.lowercase()) == true
-                        }
-                        val itunesArt = match?.artworkUrl100?.replace("100x100", "600x600")
-                        if (itunesArt != null) album.copy(artworkUrl = itunesArt) else album
-                    } catch (_: Exception) {
-                        album
-                    }
-                } else {
-                    album
-                }
-            }
-        }.awaitAll()
     }
 
     suspend fun getAlbumDetail(albumTitle: String, artistName: String): AlbumDetail? =
@@ -2086,22 +2042,15 @@ class IosContainer private constructor() {
     // that re-trips the shared key's 3600s window on every cold Discover load.
     // User-initiated Album/Artist screens keep the full Spotify cascade.
     private val enrichMetadataService: MetadataService by lazy {
-        val mbProvider = MusicBrainzProvider(musicBrainzClient)
         MetadataService(
             // Spotify-free (avoids the shared-key burst on cold Discover loads),
             // but DOES include Wikipedia + Discogs so background artist-image
             // enrichment (ImageEnrichmentService) and recommendations get real
             // artist images without a connected Spotify. No auth on either.
-            providers = listOf(
-                mbProvider,
-                WikipediaProvider(musicBrainzClient, mbProvider, httpClient, knownArtistMbid = ::knownArtistMbid),
-                LastFmProvider(lastFmClient, appConfig.lastFmApiKey),
-                DiscogsProvider(httpClient, settingsStore),
-                AppleMusicArtistProvider(httpClient, appConfig.appleMusicDeveloperToken),
-            ),
+            providers = metadataProviders.withoutSpotify(),
             getDisabledProviders = { settingsStore.getDisabledPlugins() },
             enrichAlbumArtwork = { artistName, albums ->
-                enrichAlbumArtworkViaItunes(appleMusicClient, artistName, albums)
+                com.parachord.shared.metadata.upgradeCoverArtArchiveArtwork(appleMusicClient, artistName, albums)
             },
             // Same tracklist cache: the Spotify-free enrichment pass (mosaics,
             // curated-list art) is the heaviest caller of getAlbumTracks.
@@ -2364,32 +2313,24 @@ class IosContainer private constructor() {
     val historyRepository: HistoryRepository by lazy {
         HistoryRepository(lastFmClient, listenBrainzClient, settingsStore, metadataService, appConfig.lastFmApiKey)
     }
-    // ── Top-data disk cache (own history + friend profiles) ─────────────
-    // Top tracks/albums/artists change slowly, so a 24h disk cache makes cold
-    // launches instant instead of re-hitting Last.fm/ListenBrainz + artwork
-    // enrichment every time. Keyed per timeframe filter (and per friend), so
-    // every period (7day…overall) is cached independently. Recently Played is
-    // deliberately NOT cached — it updates constantly (see loadRecentTracks /
-    // getFriendRecentTracks, which stay on the live repo flow).
-    private val topCacheTtlMs = 24L * 60 * 60 * 1000
-    private val topCacheMutex = Mutex()
-    private val topCacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    // Top lists (own history + friend profiles): the shared 24 h disk cache
+    // (#595, Android uses it too). Recently Played isn't cached.
+    private val topLists by lazy {
+        TopListsCache(read = { IosFileCache.read(it) }, write = { file, json -> IosFileCache.write(file, json) })
+    }
 
     @Throws(Throwable::class)
     suspend fun loadTopTracks(period: String): List<HistoryTrack> =
-        cachedTopTracks(TOP_TRACKS_FILE, period) {
-            historyRepository.getTopTracks(period, 50).shownOrThrow(emptyList())
-        }
+        topLists.tracks(TopListsCache.ownKey(period)) { historyRepository.getTopTracks(period, 50) }
+            .shownOrThrow(emptyList())
     @Throws(Throwable::class)
     suspend fun loadTopAlbums(period: String): List<HistoryAlbum> =
-        cachedTopAlbums(TOP_ALBUMS_FILE, period) {
-            historyRepository.getTopAlbums(period, 50).shownOrThrow(emptyList())
-        }
+        topLists.albums(TopListsCache.ownKey(period)) { historyRepository.getTopAlbums(period, 50) }
+            .shownOrThrow(emptyList())
     @Throws(Throwable::class)
     suspend fun loadTopArtists(period: String): List<HistoryArtist> =
-        cachedTopArtists(TOP_ARTISTS_FILE, period) {
-            historyRepository.getTopArtists(period, 50).shownOrThrow(emptyList())
-        }
+        topLists.artists(TopListsCache.ownKey(period)) { historyRepository.getTopArtists(period, 50) }
+            .shownOrThrow(emptyList())
     @Throws(Throwable::class)
     suspend fun loadRecentTracks(): List<RecentTrack> =
         historyRepository.getRecentTracks().shownOrThrow(emptyList())
@@ -2404,84 +2345,6 @@ class IosContainer private constructor() {
         is Resource.Error -> throw IosLoadException(r.message)
         Resource.Loading -> empty
     }
-
-    // Three concrete helpers (kotlinx-serialization generics are fragile on
-    // Kotlin/Native, so we avoid a generic helper). Each does: fresh-enough
-    // disk hit → return it (no network); else fetch, then merge-write under the
-    // mutex (re-read so a concurrent writer for a different key isn't clobbered);
-    // a fetch that comes back empty falls back to any stale cache rather than
-    // wiping the row.
-    private suspend fun cachedTopTracks(
-        file: String,
-        key: String,
-        fetch: suspend () -> List<HistoryTrack>,
-    ): List<HistoryTrack> {
-        val now = com.parachord.shared.platform.currentTimeMillis()
-        readTopTracksCache(file)[key]?.let {
-            if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
-        }
-        // A failed fetch shows the stale list when there is one, else its error.
-        val fresh = try { fetch() } catch (e: IosLoadException) {
-            readTopTracksCache(file)[key]?.data?.takeIf { it.isNotEmpty() } ?: throw e
-        }
-        if (fresh.isEmpty()) return readTopTracksCache(file)[key]?.data ?: emptyList()
-        topCacheMutex.withLock {
-            val map = readTopTracksCache(file)
-            map[key] = TimedTracks(now, fresh)
-            try { IosFileCache.write(file, topCacheJson.encodeToString(map.toMap())) } catch (_: Exception) {}
-        }
-        return fresh
-    }
-    private fun readTopTracksCache(file: String): MutableMap<String, TimedTracks> =
-        try { IosFileCache.read(file)?.let { topCacheJson.decodeFromString<Map<String, TimedTracks>>(it).toMutableMap() } } catch (_: Exception) { null } ?: mutableMapOf()
-
-    private suspend fun cachedTopAlbums(
-        file: String,
-        key: String,
-        fetch: suspend () -> List<HistoryAlbum>,
-    ): List<HistoryAlbum> {
-        val now = com.parachord.shared.platform.currentTimeMillis()
-        readTopAlbumsCache(file)[key]?.let {
-            if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
-        }
-        // A failed fetch shows the stale list when there is one, else its error.
-        val fresh = try { fetch() } catch (e: IosLoadException) {
-            readTopAlbumsCache(file)[key]?.data?.takeIf { it.isNotEmpty() } ?: throw e
-        }
-        if (fresh.isEmpty()) return readTopAlbumsCache(file)[key]?.data ?: emptyList()
-        topCacheMutex.withLock {
-            val map = readTopAlbumsCache(file)
-            map[key] = TimedAlbums(now, fresh)
-            try { IosFileCache.write(file, topCacheJson.encodeToString(map.toMap())) } catch (_: Exception) {}
-        }
-        return fresh
-    }
-    private fun readTopAlbumsCache(file: String): MutableMap<String, TimedAlbums> =
-        try { IosFileCache.read(file)?.let { topCacheJson.decodeFromString<Map<String, TimedAlbums>>(it).toMutableMap() } } catch (_: Exception) { null } ?: mutableMapOf()
-
-    private suspend fun cachedTopArtists(
-        file: String,
-        key: String,
-        fetch: suspend () -> List<HistoryArtist>,
-    ): List<HistoryArtist> {
-        val now = com.parachord.shared.platform.currentTimeMillis()
-        readTopArtistsCache(file)[key]?.let {
-            if (it.data.isNotEmpty() && now - it.fetchedAt < topCacheTtlMs) return it.data
-        }
-        // A failed fetch shows the stale list when there is one, else its error.
-        val fresh = try { fetch() } catch (e: IosLoadException) {
-            readTopArtistsCache(file)[key]?.data?.takeIf { it.isNotEmpty() } ?: throw e
-        }
-        if (fresh.isEmpty()) return readTopArtistsCache(file)[key]?.data ?: emptyList()
-        topCacheMutex.withLock {
-            val map = readTopArtistsCache(file)
-            map[key] = TimedArtists(now, fresh)
-            try { IosFileCache.write(file, topCacheJson.encodeToString(map.toMap())) } catch (_: Exception) {}
-        }
-        return fresh
-    }
-    private fun readTopArtistsCache(file: String): MutableMap<String, TimedArtists> =
-        try { IosFileCache.read(file)?.let { topCacheJson.decodeFromString<Map<String, TimedArtists>>(it).toMutableMap() } } catch (_: Exception) { null } ?: mutableMapOf()
 
     val freshDropsRepository: FreshDropsRepository by lazy {
         FreshDropsRepository(
