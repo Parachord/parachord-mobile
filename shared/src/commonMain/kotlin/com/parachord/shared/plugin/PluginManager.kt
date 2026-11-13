@@ -645,6 +645,11 @@ class PluginManager constructor(
             "(function() { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
                 "if (!r || !r.isConfigured) return true; return !!r.isConfigured(r.config || {}); })()",
         )?.unquote()
+        // No answer (the runtime isn't ready yet — a cold start can run before
+        // the WebView finishes loading — or the evaluate failed): not a
+        // "not configured" verdict. Assume configured and cache nothing, so
+        // the next ask answers when the runtime can.
+        if (raw != "true" && raw != "false") return true
         val configured = raw == "true"
         configuredMutex.withLock { configuredCache[resolverId] = configured }
         return configured

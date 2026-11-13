@@ -31,6 +31,7 @@ class PluginStreamManagerTest {
         override suspend fun initialize() {}
         override fun teardown() {}
         override suspend fun evaluate(script: String): String? = when {
+            script.contains("r.isConfigured") && configured == "<null>" -> null
             script.contains("r.isConfigured") -> "\"$configured\""
             script.trim() == "window.__lastPluginResult" -> "\"ok\""
             script.startsWith("window.__resolveResults['") -> "\"$answer\""
@@ -107,5 +108,18 @@ class PluginStreamManagerTest {
         )
         // A plugin without the isConfigured function (bandcamp) counts as configured.
         assertTrue(pm.isPluginConfigured("bandcamp"))
+    }
+
+    @Test
+    fun `an isConfigured check with no answer is not cached as not-configured`() = runBlocking {
+        val runtime = FakeRuntime("[]", configured = "<null>")
+        val pm = manager(runtime)
+        pm.ensureInitialized()
+        // The runtime not being ready (cold start) or a failed evaluate is not a
+        // "not configured" verdict: assume configured, cache nothing.
+        assertTrue(pm.isPluginConfigured("subsonic"))
+        // The next ask hits the runtime again — a real answer lands once it can.
+        runtime.configured = "false"
+        assertTrue(!pm.isPluginConfigured("subsonic"))
     }
 }

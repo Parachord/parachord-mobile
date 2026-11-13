@@ -2,6 +2,8 @@ package com.parachord.shared.plugin
 
 import com.parachord.shared.store.KvStore
 import com.parachord.shared.store.SecureTokenStore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -73,6 +75,7 @@ class PluginUserConfig(
             }
         }
         kv.setString(TEXT_KEY_PREFIX + pluginId, buildJsonObject { texts.forEach { (k, v) -> put(k, v) } }.toString())
+        configCacheMutex.withLock { configCache = null }
         onConfigSaved(pluginId)
     }
 
@@ -90,12 +93,24 @@ class PluginUserConfig(
     /**
      * Configs for every loaded plugin with configurable fields, for the
      * resolver config provider (merged after the per-service configs so a
-     * plugin's own fields win).
+     * plugin's own fields win). Cached — the provider runs before every plugin
+     * call, and building this decrypts the secure store once per password
+     * field — and the cache drops on [save] or a plugin-set change.
      */
-    suspend fun pluginConfigs(): Map<String, String> =
-        plugins()
-            .filter { it.configFields.isNotEmpty() }
-            .associate { it.id to configJson(it.id) }
+    suspend fun pluginConfigs(): Map<String, String> {
+        val plugins = plugins().filter { it.configFields.isNotEmpty() }
+        val fingerprint = plugins.joinToString(";") { p -> p.id + ":" + p.configFields.joinToString(",") { it.key } }
+        configCacheMutex.withLock {
+            val cached = configCache
+            if (cached?.first == fingerprint) return cached.second
+        }
+        val configs = plugins.associate { it.id to configJson(it.id) }
+        configCacheMutex.withLock { configCache = fingerprint to configs }
+        return configs
+    }
+
+    private val configCacheMutex = Mutex()
+    private var configCache: Pair<String, Map<String, String>>? = null
 
     private suspend fun textValues(pluginId: String): Map<String, String> = try {
         val raw = kv.getStringOrNull(TEXT_KEY_PREFIX + pluginId) ?: return emptyMap()

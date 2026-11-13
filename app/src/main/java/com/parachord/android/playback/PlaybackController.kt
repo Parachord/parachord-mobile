@@ -1424,18 +1424,6 @@ class PlaybackController constructor(
     }
 
     /**
-     * ExoPlayer's item for the current track failed at [positionMs]: Play
-     * loads the track again, where it stopped, keeping a source the user
-     * picked ([manualPickTrackId]), as iOS does.
-     *
-     * A track the listener drives (Listen Along's own) goes to the listener
-     * instead, as a track that couldn't start does (#618): no message, and
-     * Play does nothing while it waits for the friend's next track
-     * ([heldForListener]). A failure while a play is still starting is left to
-     * that play, which reports it the same way.
-     */
-    @androidx.annotation.VisibleForTesting
-    /**
      * The HTTP status an [androidx.media3.common.PlaybackException] carries when
      * the stream's server refused the request's credentials (401/403 — a wrong
      * password on an html5Stream plugin's server), else null.
@@ -1447,6 +1435,18 @@ class PlaybackController constructor(
             ?.takeIf { it.responseCode == 401 || it.responseCode == 403 }
             ?.responseCode
 
+    /**
+     * ExoPlayer's item for the current track failed at [positionMs]: Play
+     * loads the track again, where it stopped, keeping a source the user
+     * picked ([manualPickTrackId]), as iOS does.
+     *
+     * A track the listener drives (Listen Along's own) goes to the listener
+     * instead, as a track that couldn't start does (#618): no message, and
+     * Play does nothing while it waits for the friend's next track
+     * ([heldForListener]). A failure while a play is still starting is left to
+     * that play, which reports it the same way.
+     */
+    @androidx.annotation.VisibleForTesting
     internal fun onLocalPlayerFailed(positionMs: Long, durationMs: Long) {
         val track = stateHolder.state.value.currentTrack ?: return
         loadOnPlay = failedLoad(
