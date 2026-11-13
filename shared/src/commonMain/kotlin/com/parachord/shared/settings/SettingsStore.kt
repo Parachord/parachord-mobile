@@ -196,7 +196,7 @@ class SettingsStore(
 
         /** Default canonical resolver order matching the desktop app. */
         private const val DEFAULT_RESOLVER_ORDER =
-            "spotify,applemusic,bandcamp,soundcloud,localfiles,youtube"
+            "spotify,applemusic,bandcamp,soundcloud,localfiles,subsonic,youtube"
     }
 
     @Volatile private var migrated = false
@@ -1164,6 +1164,7 @@ class SettingsStore(
         "applemusic" to 0,
         "localfiles" to 0,
         "soundcloud" to 0,
+        "subsonic" to 0,
         "bandcamp" to -3,
         "youtube" to -6,
     )

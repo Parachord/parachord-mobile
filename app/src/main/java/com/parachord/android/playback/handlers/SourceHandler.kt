@@ -115,6 +115,20 @@ class PlaybackStartTimeoutException(message: String) : Exception(message)
 class PlaybackStartFailedException(message: String, val alreadyReported: Boolean = false) : Exception(message)
 
 /**
+ * An `html5Stream` plugin's stream couldn't be built or played for a settings
+ * reason: not configured, a wrong password, or a plain-`http://` server the
+ * host won't play (plan parachord-mobile#664). Like
+ * [PlaybackStartFailedException] the track stays on screen and Play loads it
+ * again, but [userMessage] ("Check Subsonic's settings…") replaces the generic
+ * connection message.
+ */
+class PluginStreamStartException(
+    /** What the person is told (the shared `checkPluginSettingsMessage`). */
+    val userMessage: String,
+    cause: Throwable? = null,
+) : Exception(userMessage, cause)
+
+/**
  * A service's embedded player won't play this track here (SoundCloud's widget
  * loads a track SoundCloud won't let it embed and never starts it, desktop
  * parachord#1209; Bandcamp's embed doesn't start, #513). [com.parachord.android.playback.PlaybackController] treats

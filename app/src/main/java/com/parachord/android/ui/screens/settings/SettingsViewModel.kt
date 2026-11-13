@@ -43,6 +43,7 @@ class SettingsViewModel constructor(
     private val lovesPushService: LovesPushService,
     private val libraryRepository: LibraryRepository,
     private val syncEngine: com.parachord.android.sync.SyncEngine,
+    private val pluginUserConfig: com.parachord.shared.plugin.PluginUserConfig,
 ) : ViewModel() {
 
     // ── N-way multimaster (dev) ──────────────────────────────────────
@@ -187,6 +188,92 @@ class SettingsViewModel constructor(
     /** Loaded .axe plugins — drives the dynamic plugin list in Settings. */
     val loadedPlugins: StateFlow<List<com.parachord.shared.plugin.PluginManager.PluginInfo>> =
         pluginManager.plugins
+
+    // ── Plugin configurable fields (Subsonic; plan parachord-mobile#664) ──
+
+    /** One plugin's Test connection result. */
+    sealed interface PluginConnectionTest {
+        data object Running : PluginConnectionTest
+        data class Ok(val resultCount: Int) : PluginConnectionTest
+        data class Failed(val message: String) : PluginConnectionTest
+    }
+
+    /** Field values being edited, per plugin id (field key → value). */
+    private val _pluginConfigValues = MutableStateFlow<Map<String, Map<String, String>>>(emptyMap())
+    val pluginConfigValues: StateFlow<Map<String, Map<String, String>>> = _pluginConfigValues.asStateFlow()
+
+    /** Test connection results, per plugin id. */
+    private val _pluginConnectionTests = MutableStateFlow<Map<String, PluginConnectionTest>>(emptyMap())
+    val pluginConnectionTests: StateFlow<Map<String, PluginConnectionTest>> = _pluginConnectionTests.asStateFlow()
+
+    /** The plugins' own `isConfigured` answers, per plugin id. */
+    private val _pluginConfigured = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val pluginConfigured: StateFlow<Map<String, Boolean>> = _pluginConfigured.asStateFlow()
+
+    /** Refresh the configured state of every plugin with configurable fields (Settings opens, plugins load). */
+    fun refreshPluginConfiguredStates() {
+        viewModelScope.launch {
+            for (plugin in pluginManager.plugins.value.filter { it.configFields.isNotEmpty() }) {
+                refreshPluginConfigured(plugin.id)
+            }
+        }
+    }
+
+    /** A plugin's configurable fields, in manifest order. */
+    fun pluginConfigFields(pluginId: String): List<com.parachord.shared.plugin.PluginManager.PluginConfigField> =
+        pluginUserConfig.fields(pluginId)
+
+    /** Load a plugin's saved config into [pluginConfigValues] for editing. */
+    fun loadPluginConfig(pluginId: String) {
+        viewModelScope.launch {
+            val values = mutableMapOf<String, String>()
+            for (field in pluginUserConfig.fields(pluginId)) {
+                values[field.key] = pluginUserConfig.value(pluginId, field)
+            }
+            _pluginConfigValues.value = _pluginConfigValues.value + (pluginId to values)
+            refreshPluginConfigured(pluginId)
+        }
+    }
+
+    /** Save the plugin's fields (passwords to the secure store) and re-test its readiness. */
+    fun savePluginConfig(pluginId: String, values: Map<String, String>) {
+        viewModelScope.launch {
+            pluginUserConfig.save(pluginId, values)
+            loadPluginConfig(pluginId)
+        }
+    }
+
+    /** Run the plugin's own search as a connection test: it throws with the server's status in the message when the credentials are wrong. */
+    fun testPluginConnection(pluginId: String) {
+        viewModelScope.launch {
+            _pluginConnectionTests.value = _pluginConnectionTests.value + (pluginId to PluginConnectionTest.Running)
+            val result = try {
+                val raw = pluginManager.searchForConnectionTest(pluginId)
+                val count = raw?.let {
+                    runCatching {
+                        (kotlinx.serialization.json.Json.parseToJsonElement(it) as? kotlinx.serialization.json.JsonArray)?.size
+                    }.getOrNull()
+                } ?: 0
+                PluginConnectionTest.Ok(count)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PluginConnectionTest.Failed(e.message ?: "Connection failed")
+            }
+            _pluginConnectionTests.value = _pluginConnectionTests.value + (pluginId to result)
+        }
+    }
+
+    private suspend fun refreshPluginConfigured(pluginId: String) {
+        val configured = try {
+            pluginManager.isPluginConfigured(pluginId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            true
+        }
+        _pluginConfigured.value = _pluginConfigured.value + (pluginId to configured)
+    }
 
     // ── Dynamic AI Model Lists ───────────────────────────────────────
 

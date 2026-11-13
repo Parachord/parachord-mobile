@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.io.encoding.Base64
@@ -52,6 +53,21 @@ class PluginManager constructor(
         val icon: String = "",
         val color: String = "",
         val capabilities: Map<String, Boolean> = emptyMap(),
+        /** The plugin's `settings.configurable` fields, in manifest order (plan parachord-mobile#664). */
+        val configFields: List<PluginConfigField> = emptyList(),
+        /** `settings.requiresAuth`: the plugin needs its config set before it can answer. */
+        val requiresAuth: Boolean = false,
+    )
+
+    /** One `settings.configurable` field of a plugin manifest, rendered by the settings screen. */
+    @Serializable
+    data class PluginConfigField(
+        val key: String,
+        /** `text` or `password`. Passwords go to the secure store, never prefs. */
+        val type: String,
+        val label: String,
+        val description: String? = null,
+        val placeholder: String? = null,
     )
 
     private val _plugins = MutableStateFlow<List<PluginInfo>>(emptyList())
@@ -127,6 +143,7 @@ class PluginManager constructor(
             // Unload all existing plugins
             jsRuntime.evaluate("(async () => { const ids = window.__resolverLoader.getAllResolvers().map(r => r.id); for (const id of ids) await window.__resolverLoader.unloadResolver(id); })()")
             loadPlugins()
+            configuredMutex.withLock { configuredCache.clear() }
             Log.d(TAG, "Plugins reloaded: ${_plugins.value.size} plugins")
         }
         applyResolverConfigs()
@@ -346,6 +363,13 @@ class PluginManager constructor(
      */
     suspend fun resolve(resolverId: String, artist: String, title: String, album: String?): String? {
         ensureInitialized()
+        // A plugin whose config isn't complete stays out of resolution (plan
+        // parachord-mobile#664): it would only answer empty, recording a miss
+        // for every track while the user hasn't set it up.
+        if (!isPluginConfigured(resolverId)) {
+            Log.d(TAG, "Plugin '$resolverId' isn't configured; skipping resolve")
+            return null
+        }
         val idEsc = escapeForJs(resolverId)
         val artistEsc = escapeForJs(artist)
         val titleEsc = escapeForJs(title)
@@ -564,6 +588,99 @@ class PluginManager constructor(
         return null
     }
 
+    /** Loaded plugins that declare `capabilities.html5Stream`, as (id, name) — the resolvers whose playback the host owns (plan parachord-mobile#664). */
+    fun html5StreamPlugins(): List<PluginInfo> = plugins.value.filter { it.capabilities["html5Stream"] == true }
+
+    /** The loaded plugin behind [resolverId] when it declares `capabilities.html5Stream`, else null. */
+    fun html5StreamPlugin(resolverId: String?): PluginInfo? =
+        resolverId?.let { id -> plugins.value.find { it.id == id && it.capabilities["html5Stream"] == true } }
+
+    /**
+     * An `html5Stream` plugin's `getStreamUrl(track, config)` (plan
+     * parachord-mobile#664): the plain stream URL the host plays for [trackJson]
+     * — a JSON object shaped like the plugin's own results (`{ "subsonicId": … }`) —
+     * or null when the plugin can't build one (not configured).
+     *
+     * The returned URL carries the plugin's credentials in its query (a
+     * Subsonic token+salt pair replays until the password changes), so it
+     * lives for THIS play only: never persist it on the track, in the resolver
+     * cache, the saved queue, sync, or a log line.
+     *
+     * Throws when the plugin threw or didn't answer in time (#566): that's a
+     * resolver that couldn't answer, not one with no URL.
+     */
+    @OptIn(ExperimentalEncodingApi::class)
+    suspend fun getStreamUrl(resolverId: String, trackJson: String): String? {
+        ensureInitialized()
+        val b64 = Base64.encode(trackJson.encodeToByteArray())
+        val raw = pollAsync(
+            "gsu",
+            // One expression — pollAsync splices this into `var result = <expression>`, so a
+            // statement list here is a syntax error and the call never answers.
+            "await (async () => { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                "if (!r || !r.getStreamUrl) return null; " +
+                "return await r.getStreamUrl(JSON.parse(atob('$b64')), r.config || {}); })()",
+            attempts = LOOKUP_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        ) ?: return null
+        return runCatching {
+            (Json.parseToJsonElement(raw) as? JsonPrimitive)?.contentOrNull
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * One plugin's `isConfigured(config)`: whether its saved config is complete
+     * (desktop's rule — an enabled resolver that isn't configured shows as
+     * needing setup and stays out of resolution). A plugin without the function
+     * counts as configured. Sync, one evaluate, no request. Answer cached until
+     * the config changes ([refreshConfiguredCache]).
+     */
+    suspend fun isPluginConfigured(resolverId: String): Boolean {
+        if (plugins.value.find { it.id == resolverId }?.requiresAuth != true) return true
+        configuredMutex.withLock {
+            if (configuredCache.containsKey(resolverId)) return configuredCache[resolverId]!!
+        }
+        ensureInitialized()
+        val raw = jsRuntime.evaluate(
+            "(function() { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                "if (!r || !r.isConfigured) return true; return !!r.isConfigured(r.config || {}); })()",
+        )?.unquote()
+        val configured = raw == "true"
+        configuredMutex.withLock { configuredCache[resolverId] = configured }
+        return configured
+    }
+
+    /** Forget the cached `isConfigured` answers (a settings save changed the config). */
+    suspend fun refreshConfiguredCache(pluginId: String? = null) {
+        configuredMutex.withLock {
+            if (pluginId == null) configuredCache.clear() else configuredCache.remove(pluginId)
+        }
+    }
+
+    private val configuredMutex = kotlinx.coroutines.sync.Mutex()
+    private val configuredCache = mutableMapOf<String, Boolean>()
+
+    /**
+     * One plugin's `search(query, config)` via the unique-key poll, for the
+     * settings screen's Test connection: a plugin whose credentials are broken
+     * THROWS with the server's status in the message (Subsonic's "40 Wrong
+     * username or password"), a working one answers its results. The raw JSON
+     * array, or null when the plugin answered nothing.
+     */
+    suspend fun searchForConnectionTest(resolverId: String): String? {
+        ensureInitialized()
+        return pollAsync(
+            "tst",
+            // One expression (see [getStreamUrl]): a statement list here is a
+            // syntax error inside pollAsync's `var result = …` wrapper.
+            "await (async () => { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                "if (!r || !r.search) return null; " +
+                "return await r.search('test', r.config || {}); })()",
+            attempts = LOOKUP_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        )
+    }
+
     // ── AI Provider Calls ────────────────────────────────────────────
 
     suspend fun aiGenerate(pluginId: String, prompt: String, configJson: String, contextJson: String?): String? {
@@ -638,6 +755,16 @@ class PluginManager constructor(
                 icon = m.icon ?: "",
                 color = m.color ?: "",
                 capabilities = axe.capabilities ?: emptyMap(),
+                configFields = axe.settings?.configurable?.map { (key, field) ->
+                    PluginConfigField(
+                        key = key,
+                        type = field.type,
+                        label = field.label ?: key,
+                        description = field.description,
+                        placeholder = field.placeholder,
+                    )
+                } ?: emptyList(),
+                requiresAuth = axe.settings?.requiresAuth ?: false,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse .axe manifest: ${e.message}", e)
@@ -693,6 +820,7 @@ class PluginManager constructor(
     private data class AxeFile(
         val manifest: AxeManifest,
         val capabilities: Map<String, Boolean>? = null,
+        val settings: AxeSettings? = null,
     )
 
     @Serializable
@@ -704,5 +832,20 @@ class PluginManager constructor(
         val icon: String? = null,
         val color: String? = null,
         val minAppVersion: JsonElement? = null,
+    )
+
+    @Serializable
+    private data class AxeSettings(
+        val requiresAuth: Boolean = false,
+        val authType: String? = null,
+        val configurable: Map<String, AxeConfigField> = emptyMap(),
+    )
+
+    @Serializable
+    private data class AxeConfigField(
+        val type: String = "text",
+        val label: String? = null,
+        val description: String? = null,
+        val placeholder: String? = null,
     )
 }

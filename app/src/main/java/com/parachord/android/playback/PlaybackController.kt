@@ -1435,6 +1435,18 @@ class PlaybackController constructor(
      * that play, which reports it the same way.
      */
     @androidx.annotation.VisibleForTesting
+    /**
+     * The HTTP status an [androidx.media3.common.PlaybackException] carries when
+     * the stream's server refused the request's credentials (401/403 — a wrong
+     * password on an html5Stream plugin's server), else null.
+     */
+    private fun authRejectionCode(error: androidx.media3.common.PlaybackException): Int? =
+        generateSequence<Throwable>(error) { it.cause }
+            .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+            .firstOrNull()
+            ?.takeIf { it.responseCode == 401 || it.responseCode == 403 }
+            ?.responseCode
+
     internal fun onLocalPlayerFailed(positionMs: Long, durationMs: Long) {
         val track = stateHolder.state.value.currentTrack ?: return
         loadOnPlay = failedLoad(
@@ -1633,7 +1645,25 @@ class PlaybackController constructor(
             }
         }
 
-        val action = router.route(routedTrack)
+        val action = try {
+            router.route(routedTrack)
+        } catch (e: com.parachord.android.playback.handlers.PluginStreamStartException) {
+            // An html5Stream plugin's stream couldn't be built for a settings
+            // reason (not configured, a wrong password, or an http server on
+            // an https-only build; plan parachord-mobile#664). Play loads the
+            // track again once the settings are fixed.
+            Log.w(TAG, "'${routedTrack.title}': ${e.userMessage}")
+            playFailure = PlayFailure.START_FAILED
+            stateHolder.update {
+                copy(
+                    currentTrack = routedTrack,
+                    isPlaying = false,
+                    isBuffering = false,
+                    playbackError = e.userMessage,
+                )
+            }
+            return
+        }
         val snapshot = queueManager.snapshot.value
 
         if (action == null) {
@@ -2034,6 +2064,18 @@ class PlaybackController constructor(
                 // message (a refused track) for the car, not ExoPlayer's.
                 if (isExternalPlayback) return
                 if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_REMOTE_ERROR) return
+                // An html5Stream plugin's stream the server refused (a wrong
+                // password: Subsonic answers 401/403) is a settings problem,
+                // not a dropped stream.
+                val failedResolver = stateHolder.state.value.currentTrack?.resolver
+                if (failedResolver != null && router.isHtml5StreamResolver(failedResolver)) {
+                    authRejectionCode(error)?.let { code ->
+                        Log.w(TAG, "ExoPlayer: $failedResolver refused the stream (HTTP $code); Play will load the track")
+                        stateHolder.update {
+                            copy(playbackError = com.parachord.shared.playback.checkPluginSettingsMessage(failedResolver))
+                        }
+                    }
+                }
                 Log.w(TAG, "ExoPlayer failed (${error.errorCodeName}); Play will load the track")
                 onLocalPlayerFailed(ctrl.currentPosition.coerceAtLeast(0L), ctrl.duration.coerceAtLeast(0L))
             }

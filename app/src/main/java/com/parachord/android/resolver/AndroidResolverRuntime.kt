@@ -265,6 +265,7 @@ class AndroidResolverRuntime constructor(
             null
         } else {
             val result = json.decodeFromString<AxeResolveResult>(resultJson)
+            val pluginTrackId = com.parachord.shared.resolver.pluginTrackId(resultJson, resolverId)
             // Plugins don't all return a top-level `url`: ID-based resolvers
             // (Apple Music, Spotify) carry a catalog id they route by, and
             // Bandcamp carries only `bandcampUrl` (its `<resolverId>Url`).
@@ -276,6 +277,11 @@ class AndroidResolverRuntime constructor(
                 ?: result.spotifyUrl
                 ?: result.appleMusicId?.let { "applemusic:song:$it" }
                 ?: result.spotifyUri
+                // An html5Stream plugin's result carries no URL at all — the
+                // credentialed stream URL is built at play time (plan
+                // parachord-mobile#664). Keep the result under a non-secret
+                // placeholder so it survives this drop check.
+                ?: pluginTrackId?.let { com.parachord.shared.resolver.pluginTrackUrl(resolverId, it) }
                 ?: return@resolveViaPlugin null
             ResolvedSource(
                 resolver = resolverId,
@@ -286,6 +292,7 @@ class AndroidResolverRuntime constructor(
                 soundcloudId = result.soundcloudId,
                 appleMusicId = result.appleMusicId,
                 bandcampTrackId = com.parachord.shared.resolver.pluginBandcampTrackId(resultJson),
+                pluginTrackId = pluginTrackId,
                 // Optional `.axe` result field — a plugin that resolves a
                 // streaming source MAY return its ISRC for the MBID fallback,
                 // validated/normalized so a malformed value never stores (#217).

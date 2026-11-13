@@ -46,6 +46,7 @@ fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) 
     "localfiles" -> "Local Files"
     "youtube" -> "YouTube"
     "bandcamp" -> "Bandcamp"
+    "subsonic" -> "Subsonic"
     "qobuz" -> "Qobuz"
     "direct" -> "Direct"
     else -> resolver.replaceFirstChar { it.uppercase() }
