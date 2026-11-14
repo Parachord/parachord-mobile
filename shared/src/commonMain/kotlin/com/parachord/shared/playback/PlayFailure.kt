@@ -70,6 +70,14 @@ const val APPLE_MUSIC_SIGN_IN_MESSAGE = "Sign in to Apple Music to play this tra
 /** What the person is told when no resolver found a playable source ([PlayFailure.NO_SOURCE]). */
 const val PLAY_NO_SOURCE_MESSAGE = "Couldn't find a playable source for this track."
 
+/**
+ * What the person is told when an `html5Stream` plugin's play failed for a
+ * settings reason (not configured, a wrong password): fix the plugin's settings.
+ * [resolver] is the resolver id ("subsonic").
+ */
+fun checkPluginSettingsMessage(resolver: String): String =
+    "Check ${resolverDisplayName(resolver)}'s settings to play this."
+
 /** What a play that ended with nothing playing does: [unplayableTrackOutcome]. */
 sealed class UnplayableTrackOutcome {
     /** The queue moves on to the next track. */

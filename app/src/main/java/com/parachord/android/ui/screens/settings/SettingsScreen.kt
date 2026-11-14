@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -144,6 +145,10 @@ private data class PluginInfo(
     val category: PluginCategory,
     val capabilities: List<String>,
     val description: String,
+    /** The plugin's `settings.configurable` fields, in manifest order (Subsonic; plan parachord-mobile#664). */
+    val configFields: List<com.parachord.shared.plugin.PluginManager.PluginConfigField> = emptyList(),
+    /** The plugin needs its config set before it can answer. */
+    val requiresAuth: Boolean = false,
 )
 
 private enum class PluginCategory(val label: String) {
@@ -178,6 +183,8 @@ private fun buildPluginList(
             category = category,
             capabilities = caps,
             description = "v${axe.version}",
+            configFields = axe.configFields,
+            requiresAuth = axe.requiresAuth,
         )
     }
 }
@@ -432,6 +439,18 @@ private fun PlugInsTab(
     val disabledPlugins by settingsViewModel.disabledPlugins.collectAsStateWithLifecycle()
     // #213: per-resolver enable/disable (independent of connection). Empty = all on.
     val activeResolvers by settingsViewModel.activeResolvers.collectAsStateWithLifecycle()
+    // Plugin configurable fields (Subsonic; plan parachord-mobile#664): values
+    // for the open sheet, its configured state, and Test connection results.
+    val pluginConfigValues by settingsViewModel.pluginConfigValues.collectAsStateWithLifecycle()
+    val pluginConfigured by settingsViewModel.pluginConfigured.collectAsStateWithLifecycle()
+    val pluginConnectionTests by settingsViewModel.pluginConnectionTests.collectAsStateWithLifecycle()
+    LaunchedEffect(selectedPlugin?.id) {
+        selectedPlugin?.id?.takeIf { it.isNotEmpty() }?.let { settingsViewModel.loadPluginConfig(it) }
+    }
+    // The "Set up" tile state needs the configured answers before any sheet opens.
+    LaunchedEffect(axePlugins) {
+        settingsViewModel.refreshPluginConfiguredStates()
+    }
     // BYO Spotify Client ID + its Connect error, sourced from the local VM
     // reference (like lovePushEnabled below) — no prop threading needed.
     val spotifyClientId by settingsViewModel.spotifyClientId.collectAsStateWithLifecycle()
@@ -492,8 +511,14 @@ private fun PlugInsTab(
     //  • enabled     — connected AND user-enabled → draggable priority list
     //  • off         — connected but user-DISABLED → "Disabled" section (toggle back on)
     //  • unconnected — no credentials yet → "Not connected" section
-    // resolverOrder uses resolverId values (e.g. "localfiles", "spotify")
-    val enabledResolverIds = resolverOrder.filter { id ->
+    // resolverOrder uses resolverId values (e.g. "localfiles", "spotify").
+    // A connected resolver the saved order doesn't know (a plugin added after
+    // the order was last written — subsonic) must not fall through both the
+    // enabled list and the not-connected one: append it (plan #664).
+    val savedOrderMissing = resolverPlugins
+        .filter { it.resolverId !in resolverOrder && isConnected(it.resolverId) && isResolverEnabled(it.resolverId) }
+        .map { it.resolverId }
+    val enabledResolverIds = (resolverOrder + savedOrderMissing).filter { id ->
         val plugin = findPlugin(id)
         plugin != null && plugin.category == PluginCategory.RESOLVER &&
             isConnected(id) && isResolverEnabled(id)
@@ -755,6 +780,10 @@ private fun PlugInsTab(
                 ) {
                     rowPlugins.forEach { plugin ->
                         val connected = isConnected(plugin.id)
+                        // A plugin whose own config isn't complete (Subsonic without
+                        // its server URL) shows "Set up" (plan parachord-mobile#664).
+                        val needsSetup = plugin.requiresAuth && plugin.configFields.isNotEmpty() &&
+                            pluginConfigured[plugin.id] == false
                         PluginTile(
                             plugin = plugin,
                             isConnected = connected,
@@ -762,6 +791,7 @@ private fun PlugInsTab(
                             onClick = { selectedPlugin = plugin },
                             modifier = Modifier.weight(1f),
                             grayed = !connected,
+                            statusLabel = if (needsSetup) "Set up" else null,
                         )
                     }
                     repeat(3 - rowPlugins.size) {
@@ -904,6 +934,11 @@ private fun PlugInsTab(
             onLovePushToggle = { service, enabled -> settingsViewModel.setLovePushEnabled(service, enabled) },
             onLoveBackfillClick = { service -> settingsViewModel.runLoveBackfill(service) },
             onLoveBackfillDismiss = { settingsViewModel.dismissLoveBackfillState() },
+            pluginConfigValues = pluginConfigValues,
+            pluginConfigured = pluginConfigured,
+            pluginConnectionTests = pluginConnectionTests,
+            onSavePluginConfig = { pluginId, values -> settingsViewModel.savePluginConfig(pluginId, values) },
+            onTestPluginConnection = { pluginId -> settingsViewModel.testPluginConnection(pluginId) },
         )
     }
 }
@@ -1195,6 +1230,12 @@ private fun PluginConfigSheet(
     onLovePushToggle: (service: String, enabled: Boolean) -> Unit = { _, _ -> },
     onLoveBackfillClick: (service: String) -> Unit = {},
     onLoveBackfillDismiss: () -> Unit = {},
+    // Plugin configurable fields (Subsonic; plan parachord-mobile#664)
+    pluginConfigValues: Map<String, Map<String, String>> = emptyMap(),
+    pluginConfigured: Map<String, Boolean> = emptyMap(),
+    pluginConnectionTests: Map<String, SettingsViewModel.PluginConnectionTest> = emptyMap(),
+    onSavePluginConfig: (pluginId: String, values: Map<String, String>) -> Unit = { _, _ -> },
+    onTestPluginConnection: (pluginId: String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -1206,6 +1247,7 @@ private fun PluginConfigSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
         ) {
@@ -1329,8 +1371,19 @@ private fun PluginConfigSheet(
                 }
             }
 
-            // Plugin-specific config
-            when (plugin.id) {
+            // Plugin-specific config. A plugin with `settings.configurable`
+            // fields (Subsonic's server URL / username / password) gets the
+            // generic field editor; everything else keeps its per-plugin UI.
+            if (plugin.configFields.isNotEmpty()) {
+                PluginFieldsConfig(
+                    plugin = plugin,
+                    savedValues = pluginConfigValues[plugin.id] ?: emptyMap(),
+                    configured = pluginConfigured[plugin.id] ?: !plugin.requiresAuth,
+                    connectionTest = pluginConnectionTests[plugin.id],
+                    onSave = { values -> onSavePluginConfig(plugin.id, values) },
+                    onTestConnection = { onTestPluginConnection(plugin.id) },
+                )
+            } else when (plugin.id) {
                 "spotify" -> SpotifyConfig(
                     isConnected = isConnected,
                     onToggle = onToggleConnection,
@@ -2222,6 +2275,136 @@ private fun ConcertProviderConfig(
         }
     }
 
+}
+
+// ── Plugin configurable fields (Subsonic; plan parachord-mobile#664) ──
+
+/**
+ * The generic editor for a plugin's `settings.configurable` fields — text and
+ * password fields straight from the manifest, a Save button, and the plugin's
+ * own search as a Test connection. Passwords go to the secure store via the
+ * ViewModel; nothing here names a service.
+ */
+@Composable
+private fun PluginFieldsConfig(
+    plugin: PluginInfo,
+    savedValues: Map<String, String>,
+    configured: Boolean,
+    connectionTest: SettingsViewModel.PluginConnectionTest?,
+    onSave: (Map<String, String>) -> Unit,
+    onTestConnection: () -> Unit,
+) {
+    Spacer(modifier = Modifier.height(16.dp))
+    HorizontalDivider()
+    Spacer(modifier = Modifier.height(16.dp))
+
+    if (plugin.requiresAuth && !configured) {
+        Text(
+            text = "Set up ${plugin.name} to use it: every field below is needed before it can resolve or play.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+    }
+
+    val fields = plugin.configFields
+    // Local edit state seeded from the saved values; the field key maps to
+    // its manifest entry, so an unknown field can't reach the store.
+    var editValues by remember(plugin.id) {
+        mutableStateOf(fields.associate { it.key to (savedValues[it.key] ?: "") })
+    }
+    // Re-seed when the saved values change under us (a save, a reload).
+    val savedFingerprint = savedValues.entries.joinToString("|") { "${it.key}=${it.value}" }
+    LaunchedEffect(plugin.id, savedFingerprint) {
+        editValues = fields.associate { it.key to (savedValues[it.key] ?: "") }
+    }
+
+    for (field in fields) {
+        var showPassword by remember(field.key) { mutableStateOf(false) }
+        OutlinedTextField(
+            value = editValues[field.key] ?: "",
+            onValueChange = { editValues = editValues + (field.key to it) },
+            label = { Text(field.label) },
+            placeholder = field.placeholder?.let { { Text(it) } },
+            supportingText = field.description?.let { { Text(it, style = MaterialTheme.typography.bodySmall) } },
+            singleLine = true,
+            visualTransformation = if (field.type == "password" && !showPassword) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
+            trailingIcon = if (field.type == "password") {
+                {
+                    IconButton(onClick = { showPassword = !showPassword }) {
+                        Icon(
+                            if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = if (showPassword) "Hide password" else "Show password",
+                        )
+                    }
+                }
+            } else {
+                null
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+    }
+
+    Button(
+        onClick = { onSave(editValues) },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text("Save")
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    OutlinedButton(
+        onClick = onTestConnection,
+        modifier = Modifier.fillMaxWidth(),
+        enabled = configured,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text("Test connection")
+    }
+
+    when (connectionTest) {
+        is SettingsViewModel.PluginConnectionTest.Running -> {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Testing…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        is SettingsViewModel.PluginConnectionTest.Ok -> {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = Color(0xFF10B981),
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Connected — ${connectionTest.resultCount} result${if (connectionTest.resultCount == 1) "" else "s"} for \"test\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF10B981),
+                )
+            }
+        }
+        is SettingsViewModel.PluginConnectionTest.Failed -> {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = connectionTest.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+        null -> {}
+    }
 }
 
 // ── Last.fm Config ─────────────────────────────────────────────────

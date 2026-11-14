@@ -30,6 +30,18 @@ data class ResolvedSource(
      */
     val bandcampTrackId: String? = null,
     /**
+     * A plugin resolver's own track id, by the `<resolverId>Id` convention of
+     * the plugin track shape (`subsonicId`; plan PR parachord-mobile#664), the
+     * way [pluginServiceUrl] reads `<resolverId>Url`. An `html5Stream` plugin's
+     * result carries no URL at all — the stream URL is built at play time with
+     * the saved config, because it bakes the server's auth token into the query —
+     * so [com.parachord.android.resolver.AndroidResolverRuntime] keeps the result
+     * by giving it the non-secret placeholder [pluginTrackUrl] and this id, and
+     * the `html5Stream` engine hands both back to the plugin's `getStreamUrl`.
+     * Never persisted anywhere with a credentialed URL attached.
+     */
+    val pluginTrackId: String? = null,
+    /**
      * ISRC of the matched recording, when the resolver's response carries one
      * (Spotify `external_ids.isrc`, Apple Music catalog `attributes.isrc`, or an
      * `.axe` result's `isrc`). The service-agnostic supply side of the ISRC →
@@ -469,4 +481,48 @@ fun pluginServiceUrl(resultJson: String, resolverId: String): String? = try {
         ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
 } catch (_: Exception) {
     null
+}
+
+/**
+ * A plugin resolver's own track id, by the `<resolverId>Id` convention
+ * (`subsonicId`), the way [pluginServiceUrl] reads `<resolverId>Url`. A number
+ * or a string in the JSON, like `bandcampTrackId`. Null when absent or
+ * unreadable.
+ */
+fun pluginTrackId(resultJson: String, resolverId: String): String? = try {
+    val obj = kotlinx.serialization.json.Json.parseToJsonElement(resultJson) as? kotlinx.serialization.json.JsonObject
+    val primitive = (obj?.get(pluginTrackIdKey(resolverId)) as? kotlinx.serialization.json.JsonPrimitive)
+    // A number or a string — a boolean or a null is not an id.
+    if (primitive != null && (primitive.isString || primitive.content.toLongOrNull() != null)) {
+        primitive.content.takeIf { it.isNotBlank() }
+    } else {
+        null
+    }
+} catch (_: Exception) {
+    null
+}
+
+/** The JSON key a plugin's own track id rides on: `<resolverId>Id` (`subsonicId`). */
+fun pluginTrackIdKey(resolverId: String): String =
+    resolverId.replace(Regex("[^A-Za-z0-9]"), "") + "Id"
+
+/**
+ * The non-secret placeholder URL an `html5Stream` plugin's result carries in
+ * [com.parachord.shared.resolver.ResolvedSource.url] (`subsonic:track:mf3…`):
+ * the plugin's results carry NO URL, because the real stream URL bakes the
+ * server's auth token into its query and a token+salt pair replays until the
+ * password changes. The placeholder only names the track for the engine; it
+ * is never playable on its own, so it's safe in the resolver cache, the saved
+ * queue and sync.
+ */
+fun pluginTrackUrl(resolverId: String, trackId: String): String = "$resolverId:track:$trackId"
+
+/** The resolver id and track id a [pluginTrackUrl] placeholder names, or null. */
+fun parsePluginTrackUrl(url: String): Pair<String, String>? {
+    val idx = url.indexOf(":track:")
+    if (idx <= 0) return null
+    val resolver = url.substring(0, idx)
+    val trackId = url.substring(idx + ":track:".length)
+    if (resolver.isBlank() || trackId.isBlank()) return null
+    return resolver to trackId
 }

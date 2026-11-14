@@ -8,6 +8,7 @@ import com.parachord.android.playback.handlers.LocalFileHandler
 import com.parachord.android.playback.handlers.PlaybackAction
 import com.parachord.android.playback.handlers.AppleMusicPlaybackHandler
 import com.parachord.android.playback.handlers.BandcampPlaybackHandler
+import com.parachord.android.playback.handlers.PluginStreamHandler
 import com.parachord.android.playback.handlers.SoundCloudPlaybackHandler
 import com.parachord.android.playback.handlers.SourceHandler
 import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
@@ -28,6 +29,7 @@ class PlaybackRouter constructor(
     private val appleMusicHandler: AppleMusicPlaybackHandler,
     private val soundCloudHandler: SoundCloudPlaybackHandler,
     private val bandcampHandler: BandcampPlaybackHandler,
+    private val pluginStreamHandler: PluginStreamHandler,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
 ) {
     companion object {
@@ -43,13 +45,18 @@ class PlaybackRouter constructor(
 
     /** All handlers in priority order. */
     private val handlers: List<SourceHandler>
-        get() = listOf(spotifyHandler, appleMusicHandler, soundCloudHandler, localFileHandler, directStreamHandler)
+        get() = listOf(spotifyHandler, appleMusicHandler, soundCloudHandler, localFileHandler, pluginStreamHandler, directStreamHandler)
 
     /**
      * Determine how to play a track and return the appropriate action.
      * Returns null if no handler can play this track.
      */
     suspend fun route(track: TrackEntity): PlaybackAction? {
+        // Capability lookups below (the html5Stream handler's, the
+        // stream:false browser check) read the loaded plugin list; a cold start
+        // with no screen yet (Android Auto) must not route on an empty list.
+        pluginManager.ensureInitialized()
+
         // Bandcamp plays in its embed (#513). Ahead of the check below, because
         // bandcamp.axe keeps `stream: false` so older app versions still open the
         // browser, and ahead of the handler walk, because a track re-routed here
@@ -102,6 +109,9 @@ class PlaybackRouter constructor(
         activeExternalHandler?.stop()
         activeExternalHandler = null
     }
+
+    /** Whether [resolverId]'s plugin declares `capabilities.html5Stream` (the [PluginStreamHandler]'s resolvers). */
+    fun isHtml5StreamResolver(resolverId: String?): Boolean = pluginManager.html5StreamPlugin(resolverId) != null
 
     /** Get the Spotify handler for state observation. */
     fun getSpotifyHandler(): SpotifyPlaybackHandler = spotifyHandler

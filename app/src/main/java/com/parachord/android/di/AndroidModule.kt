@@ -473,6 +473,13 @@ val androidModule = module {
     singleOf(::AppleMusicPlaybackHandler)
     singleOf(::SoundCloudPlaybackHandler)
     singleOf(::SoundCloudWidgetBridge)
+    single { com.parachord.shared.plugin.PluginUserConfig(
+        plugins = { get<com.parachord.shared.plugin.PluginManager>().plugins.value },
+        kv = get(),
+        secureStore = get<com.parachord.shared.store.SecureTokenStore>(),
+        onConfigSaved = { pluginId -> get<com.parachord.shared.plugin.PluginManager>().refreshConfiguredCache(pluginId) },
+    ) }
+    singleOf(::PluginStreamHandler)
     singleOf(::BandcampEmbedBridge)
     single { com.parachord.shared.playback.BandcampEmbedResolver(get()) }
     singleOf(::BandcampPlaybackHandler)
@@ -1087,9 +1094,14 @@ val androidModule = module {
             // getRecommendations (#606).
             val soundCloudAuth = get<com.parachord.shared.api.auth.SoundCloudAuth>()
             val settingsStore = get<com.parachord.shared.settings.SettingsStore>()
+            val pluginUserConfig = get<com.parachord.shared.plugin.PluginUserConfig>()
             resolverConfigProvider = {
                 mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
-                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore)
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore) +
+                    // A plugin's own configurable fields (Subsonic's server URL /
+                    // username / password; plan parachord-mobile#664) — last, so
+                    // they win over the per-service configs in code.
+                    pluginUserConfig.pluginConfigs()
             }
         }
     }

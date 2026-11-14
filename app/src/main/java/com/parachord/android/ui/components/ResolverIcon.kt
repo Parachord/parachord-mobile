@@ -50,6 +50,7 @@ import com.parachord.android.ui.theme.LocalResolverOrder
 object ResolverIconColors {
     val spotify = Color(0xFF1DB954)
     val bandcamp = Color(0xFF629AA9)
+    val subsonic = Color(0xFF14B8A6)
     val qobuz = Color(0xFF4285F4)
     val youtube = Color(0xFFFF0000)
     val localfiles = Color(0xFFA855F7)
@@ -72,6 +73,7 @@ object ResolverIconColors {
     fun forResolver(resolver: String?): Color? = when (resolver?.lowercase()) {
         "spotify" -> spotify
         "bandcamp" -> bandcamp
+        "subsonic" -> subsonic
         "qobuz" -> qobuz
         "youtube" -> youtube
         "localfiles" -> localfiles
@@ -188,6 +190,7 @@ object ResolverIconPaths {
         "youtube" -> youtube
         "bandcamp" -> bandcamp
         // SoundCloud uses PNG drawable, handled separately in ResolverIconSquare
+        // Subsonic uses the manifest's 📡 emoji, handled separately in ResolverIconSquare
         "localfiles" -> localfiles
         "applemusic" -> applemusic
         "qobuz" -> qobuz
@@ -455,6 +458,36 @@ fun ResolverIconSquare(
 ) {
     val bgColor = ResolverIconColors.forResolver(resolver)
     val iconAlpha = if (com.parachord.shared.resolver.ResolverBadges.isDimmed(confidence.toDouble())) 0.6f else 1f
+
+    // Subsonic's logo is a bitmap, like SoundCloud's: the yellow submarine
+    // from subsonic.org, full colour on the resolver-coloured (teal) badge —
+    // a port of desktop's SERVICE_LOGO_IMAGES entry (ui-atoms.js), which has
+    // no monochrome vector of it either.
+    if (resolver.lowercase() == "subsonic") {
+        if (showBackground && bgColor != null) {
+            Box(
+                modifier = modifier
+                    .size(size)
+                    .clip(RoundedCornerShape(4.dp))
+                    .alpha(iconAlpha)
+                    .background(bgColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.subsonic_icon),
+                    contentDescription = "Subsonic",
+                    modifier = Modifier.size(size * 0.65f),
+                )
+            }
+        } else {
+            Image(
+                painter = painterResource(R.drawable.subsonic_logo),
+                contentDescription = "Subsonic",
+                modifier = modifier.size(size).alpha(iconAlpha),
+            )
+        }
+        return
+    }
 
     // SoundCloud uses a PNG drawable instead of an SVG path
     if (resolver.lowercase() == "soundcloud") {

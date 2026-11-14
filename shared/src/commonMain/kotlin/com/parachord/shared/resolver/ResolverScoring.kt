@@ -25,7 +25,7 @@ class ResolverScoring constructor(
          * and as the basis for insertInCanonicalOrder().
          */
         val CANONICAL_RESOLVER_ORDER = listOf(
-            "spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"
+            "spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "subsonic", "youtube"
         )
 
         /**

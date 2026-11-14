@@ -54,7 +54,7 @@ A Spotify result at 70% confidence beats a SoundCloud result at 95% when Spotify
 
 **Canonical resolver order (default):**
 ```
-spotify > applemusic > bandcamp > soundcloud > localfiles > youtube
+spotify > applemusic > bandcamp > soundcloud > localfiles > subsonic > youtube
 ```
 
 ### Resolver Coordinator — Shared Orchestration (#210)
@@ -78,7 +78,7 @@ Android's `ResolverManager` keeps its richer `resolveWithHints` wrapper (Spotify
 ### Per-Resolver Volume Offsets (dB)
 
 ```
-spotify:     0    applemusic:  0    localfiles:  0
+spotify:     0    applemusic:  0    localfiles:  0    subsonic: 0
 soundcloud:  0    bandcamp:   -3    youtube:    -6
 ```
 
@@ -249,7 +249,7 @@ An `AtomicBoolean(trackEndHandled)` prevents both paths from double-firing.
 
 ### .axe Plugin System — Full Integration
 
-The Android app runs the **same .axe plugin system as desktop**. 19 plugins loaded via `JsBridge` (headless WebView) executing `resolver-loader.js` unchanged from the Electron app. The `PluginManager` handles loading, semver deduplication, hot-reload, and marketplace sync from the `parachord-plugins` GitHub repo.
+The Android app runs the **same .axe plugin system as desktop**. 20 plugins loaded via `JsBridge` (headless WebView) executing `resolver-loader.js` unchanged from the Electron app. The `PluginManager` handles loading, semver deduplication, hot-reload, and marketplace sync from the `parachord-plugins` GitHub repo.
 
 **Architecture:**
 - `JsRuntime` interface (`plugin/JsRuntime.kt`) — platform-agnostic JS execution abstraction. Android: `JsBridge` (WebView). iOS future: JavaScriptCore. KMP-ready.
@@ -259,6 +259,7 @@ The Android app runs the **same .axe plugin system as desktop**. 19 plugins load
 
 **Plugin types loaded:**
 - **Content resolvers** (stream: true): spotify, applemusic, localfiles — native Kotlin takes priority (faster), .axe as fallback; soundcloud — the .axe only (#598)
+- **html5Stream resolvers**: subsonic — the host plays a URL the plugin's `getStreamUrl` builds at play time (see "Plugin settings + the html5Stream engine")
 - **Content resolvers** (stream: false): bandcamp — plays in its embed through an explicit engine ahead of the `stream: false` check (see "Bandcamp — the Embed"), so older app versions still open the browser
 - **AI providers**: chatgpt, gemini, claude — native Kotlin handles these, `AxeAiProvider` wrapper available for .axe-only providers (ollama)
 - **Meta-services**: discogs, wikipedia, lastfm, listenbrainz, librefm — native Kotlin implementations (except Recommendations, below), `AxeScrobbler` wrapper ready for migration
@@ -272,6 +273,20 @@ The Android app runs the **same .axe plugin system as desktop**. 19 plugins load
 **Native-first resolver strategy:** For spotify/applemusic/localfiles, the native Kotlin resolver always runs first (faster, no JS bridge overhead). .axe resolvers (soundcloud, bandcamp, future resolvers) fill gaps for sources with no native implementation. Both run in parallel via `ResolverManager.resolve()`.
 
 **Key files:** `plugin/JsRuntime.kt`, `plugin/PluginManager.kt`, `plugin/PluginSyncService.kt`, `bridge/JsBridge.kt`, `bridge/NativeBridge.kt`, `ai/providers/AxeAiProvider.kt`, `playback/scrobbler/AxeScrobbler.kt`
+
+### Plugin settings + the html5Stream engine (Subsonic, #401 / plan PR #664)
+
+A plugin that declares `capabilities.html5Stream` streams through **ExoPlayer playing a URL the plugin builds at play time** — desktop's shared HTML5 `<audio>` element contract, with all the Subsonic logic staying in the plugin. The poster child is `subsonic.axe` (a self-hosted Navidrome/Subsonic server); the design is generic (any plugin declaring the capability routes the same way, and a future `widevine` capability slots in beside it).
+
+**Routing is capability-driven, never resolver-id:** `PlaybackRouter` asks `pluginManager.html5StreamPlugin(resolver)`; `PluginStreamHandler : SourceHandler` builds a `MediaItem` from `pluginManager.getStreamUrl(resolver, trackJson)` — the unique-key poll into the resolver-loader (an async **IIFE inside the poll expression**: pollAsync splices it into `var result = <expression>`, so a statement list there is a syntax error and the call never answers — caught only on-device). It's ordinary ExoPlayer playback: seek by Range, `STATE_ENDED` advance, the #614 foreground keep, the car, resume-at-position (#657) — all engine-agnostic machinery. `PlaybackRouter.route` calls `pluginManager.ensureInitialized()` first, so a cold start (Auto, no screen) never routes on an empty plugin list.
+
+**The credentialed URL lives for ONE play.** A Subsonic token+salt pair replays until the password changes, so the URL from `getStreamUrl` reaches ExoPlayer's `MediaItem` and nothing else — never the track, the resolver cache, the saved queue, sync, or an unredacted log line (`PluginStreamUrl.redact` strips `t`/`s`/`token`/`apikey`/`api_key` values; the handler logs redacted only). Because the results can't carry a URL, a plugin result rides on `ResolvedSource.pluginTrackId` (the `<resolverId>Id` convention, `subsonicId`) plus a non-secret placeholder URL (`subsonic:track:<id>`, `pluginTrackUrl`/`parsePluginTrackUrl`) — safe in caches and sync, and what the engine hands back to the plugin. `PluginStreamUrl.isPlayable` is **https-only** for now; the deferred plain-`http://` home-server allowance (plan PR #664 decision 1) grows in that one function plus the network security config.
+
+**Failures:** no URL / not configured / a wrong password → `PlayFailure.START_FAILED` with `checkPluginSettingsMessage` ("Check Subsonic's settings to play this."); a 401/403 from the stream during playback maps the same way (`PlaybackController.authRejectionCode` walks the ExoPlayer cause chain). iOS mirrors the branch later (follow-up ticket; the plugin carries `minAppVersion.android "0.9.11"` / `.ios "0.3.0"` floors so iOS below 0.3.0 stays hidden from it).
+
+**Plugin settings (`PluginUserConfig`, shared):** a plugin's `settings.configurable` fields (Subsonic: serverUrl/username/password) render in a generic field editor in the plugin's Settings sheet — text fields → `plugin_config_<id>` in KvStore, `password` fields → `SecureTokenStore` (one key per secret, never plain prefs). The values feed the plugin through `resolverConfigProvider` (merged after the per-service configs), `PluginManager.isPluginConfigured` (the plugin's own `isConfigured`, cached until a save) gates resolution — an unset-up plugin answers null without a request, so it records no miss — and a **Test connection** button runs the plugin's `search("test")` with the status in any error (the #1358 throw-on-failure change makes wrong credentials say so). A `requiresAuth` plugin that isn't configured shows "Set up" on its tile. A failed search THROWS rather than answering `[]` on desktop's plugin (Parachord/parachord#1358, `subsonic.axe` 0.3.3), so leaving home Wi-Fi is retried ("couldn't answer"), never recorded as misses (#566).
+
+**Key files:** `playback/handlers/PluginStreamHandler.kt`, `shared/.../plugin/PluginUserConfig.kt`, `shared/.../playback/PluginStreamUrl.kt`, `shared/.../plugin/PluginManager.kt` (`getStreamUrl`, `isPluginConfigured`, `searchForConnectionTest`, `html5StreamPlugin`), `shared/.../resolver/ResolverModels.kt` (`pluginTrackId`, `pluginTrackUrl`), `app/.../ui/screens/settings/SettingsScreen.kt` (`PluginFieldsConfig`), `app/.../playback/PlaybackController.kt` (the `PluginStreamStartException` catch + 401/403 mapping), desktop `plugins-src/subsonic/` (the plugin itself — v0.3.3)
 
 ### Extensibility principle — abstract over the plugin registry, don't hardwire services
 
@@ -367,7 +382,7 @@ Results are cached in `TrackResolverCache.putSources()` so subsequent plays of t
 - **Not visibility-scoped on purpose:** `PlaybackController` resolves the current track, the next few queued tracks and the spinoff pool's next tracks (playback lookahead), and links resolve what they play.
 - **The idle background sweep** (desktop's `background` context): the shared `BackgroundResolveSweep` (`shared/.../resolver/BackgroundResolveSweep.kt`) picks the collection's tracks, then every playlist's, that have no source: none cached and no stored Spotify / Apple Music / SoundCloud id or local file on the row (synced tracks count as resolved, as on desktop). Nothing for 30 s after launch or within 3 s of a touch; batches of 5 for the first three, then 25; each track once per run; with nothing to do it looks again after 60 s. The platform asks for the next batch only once its resolver cache is idle and runs it behind every visible row: Android `BackgroundResolveSweeper` (started and stopped with `MainActivity`'s resume and pause, touches from `dispatchTouchEvent`, the cache's background lane), iOS `BackgroundResolveSweeper` (in `IosTrackResolverCache.swift`, while the scene is active, touches from a gesture recognizer on the window that never takes them). Results are saved like any resolve, so the next look reads them from the cache.
 
-**Every implemented resolver must be in the pipeline.** `ResolverManager.resolve()` must include all resolvers that have working implementations. The `_resolvers` list must match — only list resolvers with actual `resolve*()` methods. Currently implemented natively: `spotify`, `applemusic`, `localfiles`; SoundCloud and Bandcamp resolve through their `.axe`. Planned but not yet implemented: `bandcamp`, `youtube` (these exist in `CANONICAL_RESOLVER_ORDER` and `DEFAULT_RESOLVER_ORDER` for when they're added).
+**Every implemented resolver must be in the pipeline.** `ResolverManager.resolve()` must include all resolvers that have working implementations. The `_resolvers` list must match — only list resolvers with actual `resolve*()` methods. Native: `spotify`, `applemusic`, `localfiles`; SoundCloud and Bandcamp resolve through their `.axe`, and `subsonic` through its `html5Stream` capability, gated on its config being complete; the coordinator fans out to every resolve-capable plugin. `youtube` exists in `CANONICAL_RESOLVER_ORDER` and `DEFAULT_RESOLVER_ORDER` but is filtered on mobile (`capabilities.mobile: false`).
 
 **Only call active resolvers.** `ResolverManager.resolve()` checks `settingsStore.getActiveResolvers()` before calling each resolver. If the active list is empty, all implemented resolvers run. If the user has configured a specific set, only those are called. `ResolverScoring.selectBest()` also filters by active resolvers.
 
