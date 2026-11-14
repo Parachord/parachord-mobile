@@ -208,6 +208,25 @@ adb shell am force-stop com.parachord.android.debug
 
 Release builds require a keystore; the CI workflow handles signing and publishing. See [docs/play-store-publishing.md](docs/play-store-publishing.md).
 
+#### Keeping your data between builds
+
+- **The debug build is its own app.** It installs as `com.parachord.android.debug`, next to the release `com.parachord.android`, with its own data. Development never touches a release install.
+- **`installDebug` keeps the app's data** (collection, playlists, settings, sign-ins). You lose it only in two cases:
+  - you uninstall the app;
+  - the signing key changes. Debug builds are signed with your machine's `~/.android/debug.keystore`, and Android refuses an update signed with another key, so you'd have to uninstall. If you build on more than one machine, copy the same `debug.keystore` to each.
+- **There's no backup.** `allowBackup="false"` keeps sign-in tokens out of cloud backup and `adb backup`. Your playlists and collection come back through sync (Spotify, Apple Music, ListenBrainz) after a fresh install. Settings and sign-ins don't.
+- **You can snapshot and restore the debug build's data.** It's debuggable, so `run-as` can read and write its data folder. Force-stop the app first, so the database isn't mid-write:
+
+  ```bash
+  adb shell am force-stop com.parachord.android.debug
+  # Snapshot
+  adb exec-out run-as com.parachord.android.debug tar -cf - . > parachord-debug-data.tar
+  # Restore (onto the same install)
+  adb exec-in run-as com.parachord.android.debug tar -xf - < parachord-debug-data.tar
+  ```
+
+  The snapshot holds the database, preferences and caches. Restored onto the same install, everything comes back, sign-ins included. After an uninstall, sign-ins have to be redone: they're encrypted with an Android Keystore key, which goes away with the app. The file holds your account data, so keep it private.
+
 ### iOS
 
 **Prerequisites:** Xcode 26 with the iOS 26 SDK, JDK 17 (Gradle builds the shared framework).
