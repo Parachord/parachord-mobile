@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 class PluginTrackIdTest {
 
     @Test
-    fun `the id rides on the resolverId-Id key, as number or string`() {
+    fun `the id rides on the resolverId-Id key — number or string`() {
         assertEquals("mf3", pluginTrackId("""{"subsonicId":"mf3","title":"Pyramid Song"}""", "subsonic"))
         assertEquals("42", pluginTrackId("""{"subsonicId":42}""", "subsonic"))
         assertNull(pluginTrackId("""{"subsonicId":""}""", "subsonic"))

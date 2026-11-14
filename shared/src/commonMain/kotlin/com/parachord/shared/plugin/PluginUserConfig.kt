@@ -75,7 +75,10 @@ class PluginUserConfig(
             }
         }
         kv.setString(TEXT_KEY_PREFIX + pluginId, buildJsonObject { texts.forEach { (k, v) -> put(k, v) } }.toString())
-        configCacheMutex.withLock { configCache = null }
+        configCacheMutex.withLock {
+            configCache = null
+            configGeneration++
+        }
         onConfigSaved(pluginId)
     }
 
@@ -100,17 +103,25 @@ class PluginUserConfig(
     suspend fun pluginConfigs(): Map<String, String> {
         val plugins = plugins().filter { it.configFields.isNotEmpty() }
         val fingerprint = plugins.joinToString(";") { p -> p.id + ":" + p.configFields.joinToString(",") { it.key } }
+        val generationAtBuild: Long
         configCacheMutex.withLock {
             val cached = configCache
             if (cached?.first == fingerprint) return cached.second
+            generationAtBuild = configGeneration
         }
         val configs = plugins.associate { it.id to configJson(it.id) }
-        configCacheMutex.withLock { configCache = fingerprint to configs }
+        configCacheMutex.withLock {
+            // A save landed while this built: don't store the pre-save configs
+            // over the save's cache drop — the next call builds them fresh.
+            if (configGeneration == generationAtBuild) configCache = fingerprint to configs
+        }
         return configs
     }
 
     private val configCacheMutex = Mutex()
     private var configCache: Pair<String, Map<String, String>>? = null
+    /** Bumped by [save], so an in-flight [pluginConfigs] build doesn't cache stale configs over it. */
+    private var configGeneration: Long = 0
 
     private suspend fun textValues(pluginId: String): Map<String, String> = try {
         val raw = kv.getStringOrNull(TEXT_KEY_PREFIX + pluginId) ?: return emptyMap()

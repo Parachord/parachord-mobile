@@ -33,7 +33,7 @@ class PluginUserConfigTest {
     private fun config(plugins: () -> List<PluginManager.PluginInfo>): Triple<PluginUserConfig, MapSettings, FakeSecureStore> {
         val backing = MapSettings()
         val secure = FakeSecureStore()
-        return PluginUserConfig(plugins = plugins, kv = KvStore(backing), secureStore = secure) to backing to secure
+        return Triple(PluginUserConfig(plugins = plugins, kv = KvStore(backing), secureStore = secure), backing, secure)
     }
 
     private fun subsonicPlugin() = PluginManager.PluginInfo(
@@ -52,7 +52,7 @@ class PluginUserConfigTest {
         // Text fields land in the plain KvStore as JSON…
         assertEquals(
             """{"serverUrl":"https://nav.example","username":"test"}""",
-            backing.getString("plugin_config_subsonic"),
+            backing.getStringOrNull("plugin_config_subsonic"),
         )
         // …and the password only in the secure store.
         assertEquals("hunter2", secure.m[PluginUserConfig.secretKey("subsonic", "password")])
@@ -60,11 +60,11 @@ class PluginUserConfigTest {
     }
 
     @Test
-    fun `a blank password clears the secret, a blank text field is dropped`() = runTest {
+    fun `a blank password clears the secret — a blank text field is dropped`() = runTest {
         val (userConfig, backing, secure) = config { listOf(subsonicPlugin()) }
         userConfig.save("subsonic", mapOf("serverUrl" to "https://nav.example", "username" to "test", "password" to "hunter2"))
         userConfig.save("subsonic", mapOf("serverUrl" to "", "username" to "test", "password" to ""))
-        assertEquals("""{"username":"test"}""", backing.getString("plugin_config_subsonic"))
+        assertEquals("""{"username":"test"}""", backing.getStringOrNull("plugin_config_subsonic"))
         assertEquals(null, secure.m[PluginUserConfig.secretKey("subsonic", "password")])
     }
 
@@ -90,7 +90,7 @@ class PluginUserConfigTest {
     }
 
     @Test
-    fun `saving fires the refresh hook, unknown fields never reach a store`() = runTest {
+    fun `saving fires the refresh hook — unknown fields never reach a store`() = runTest {
         val saved = mutableListOf<String>()
         val backing = MapSettings()
         val userConfig = PluginUserConfig(
@@ -101,6 +101,6 @@ class PluginUserConfigTest {
         )
         userConfig.save("subsonic", mapOf("serverUrl" to "https://nav.example", "hackerKey" to "nope"))
         assertEquals(listOf("subsonic"), saved)
-        assertEquals("""{"serverUrl":"https://nav.example"}""", backing.getString("plugin_config_subsonic"))
+        assertEquals("""{"serverUrl":"https://nav.example"}""", backing.getStringOrNull("plugin_config_subsonic"))
     }
 }

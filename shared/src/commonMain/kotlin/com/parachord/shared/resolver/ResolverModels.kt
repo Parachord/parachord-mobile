@@ -491,8 +491,13 @@ fun pluginServiceUrl(resultJson: String, resolverId: String): String? = try {
  */
 fun pluginTrackId(resultJson: String, resolverId: String): String? = try {
     val obj = kotlinx.serialization.json.Json.parseToJsonElement(resultJson) as? kotlinx.serialization.json.JsonObject
-    (obj?.get(pluginTrackIdKey(resolverId)) as? kotlinx.serialization.json.JsonPrimitive)
-        ?.content?.takeIf { it.isNotBlank() }
+    val primitive = (obj?.get(pluginTrackIdKey(resolverId)) as? kotlinx.serialization.json.JsonPrimitive)
+    // A number or a string — a boolean or a null is not an id.
+    if (primitive != null && (primitive.isString || primitive.content.toLongOrNull() != null)) {
+        primitive.content.takeIf { it.isNotBlank() }
+    } else {
+        null
+    }
 } catch (_: Exception) {
     null
 }
