@@ -372,6 +372,15 @@ class PlaybackService : MediaLibraryService() {
             }
         }
 
+        // An external engine starting, playing, stalling or pausing → the
+        // session's state, so the car shows its spinner while a play loads
+        // and Pause only once it plays (#677).
+        serviceScope.launch {
+            stateHolder.state.map { it.isPlaying to it.isBuffering }.distinctUntilChanged().collect {
+                wrapper.publishExternalPlaybackState()
+            }
+        }
+
         // Parachord's shuffle → the session's, the same way.
         serviceScope.launch {
             stateHolder.state.map { it.shuffleEnabled }.distinctUntilChanged().collect {
@@ -1785,7 +1794,13 @@ class PlaybackService : MediaLibraryService() {
         // MusicKitWebBridge polling).
 
         override fun isPlaying(): Boolean {
-            if (externalMode) return stateHolder.state.value.isPlaying
+            if (externalMode) {
+                // Player.isPlaying is "playing now": not while the engine is
+                // still starting (or stalled), which getPlaybackState reports
+                // as buffering.
+                val state = stateHolder.state.value
+                return state.isPlaying && !state.isBuffering
+            }
             return super.isPlaying()
         }
 
@@ -1796,15 +1811,20 @@ class PlaybackService : MediaLibraryService() {
 
         override fun getPlaybackState(): Int {
             if (externalMode) {
-                // Map external state → Player state. We only ever report
-                // READY (whether playing or paused) or IDLE (no track, or the
-                // track failed to start). External handlers don't expose
-                // buffering/ended states distinctly enough to map here.
+                // Map external state → Player state: IDLE with no track or a
+                // track that failed to start; BUFFERING while a play is still
+                // starting (the controller marks a track playing as its load
+                // begins, and Spotify waking or MusicKit loading can take
+                // seconds) or the engine has stalled; READY otherwise. As
+                // READY, a play still loading showed Android Auto a Pause
+                // button over silence, and a tap on it did nothing (#677);
+                // as BUFFERING it shows the car's loading spinner.
                 if (playerErrorOverride != null) return Player.STATE_IDLE
-                return if (stateHolder.state.value.currentTrack != null) {
-                    Player.STATE_READY
-                } else {
-                    Player.STATE_IDLE
+                val state = stateHolder.state.value
+                return when {
+                    state.currentTrack == null -> Player.STATE_IDLE
+                    state.isPlaying && state.isBuffering -> Player.STATE_BUFFERING
+                    else -> Player.STATE_READY
                 }
             }
             return super.getPlaybackState()
@@ -2244,6 +2264,21 @@ class PlaybackService : MediaLibraryService() {
             val enabled = shuffleModeEnabled
             for (listener in externalListeners) {
                 listener.onShuffleModeEnabledChanged(enabled)
+            }
+        }
+
+        /**
+         * Tell the session the external engine's state changed (started,
+         * stalled, paused): [getPlaybackState] and [isPlaying] read
+         * [stateHolder], which no player event follows on its own.
+         */
+        fun publishExternalPlaybackState() {
+            if (!externalMode || dispatching) return
+            val state = playbackState
+            val playing = isPlaying
+            for (listener in externalListeners) {
+                listener.onPlaybackStateChanged(state)
+                listener.onIsPlayingChanged(playing)
             }
         }
 
