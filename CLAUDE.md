@@ -1096,15 +1096,17 @@ The desktop uses **purple as the primary accent color**, not blue.
 
 **Light theme:**
 - Background: `#ffffff` (primary), `#f9fafb` (secondary), `#f3f4f6` (inset)
-- Text: `#111827` (primary), `#6b7280` (secondary), `#9ca3af` (tertiary)
+- Text: `#111827` (primary), `#4b5563` (secondary), `#6b7280` (tertiary)
 - Borders: `#e5e7eb` (default), `#f3f4f6` (light)
 - Accent: `#7c3aed` (purple, primary), with alpha variants
-- Semantic: success `#10b981`, warning `#f59e0b`, error `#ef4444`
+- Status: success `#10b981`, warning `#f59e0b`, error `#ef4444` for dots and icons; status text and fills have their own tokens (`docs/DESIGN_SYSTEM.md`)
 
 **Dark theme:**
 - Background: `#161616` (primary), `#1e1e1e` (secondary), `#252525` (elevated)
-- Text: `#f3f4f6` (primary), `#9ca3af` (secondary), `#6b7280` (tertiary)
+- Text: `#f3f4f6` (primary), `#9ca3af` (secondary), `#8b8f97` (tertiary)
 - Accent: `#a78bfa` (lighter purple for contrast)
+
+These are desktop's design-audit values (parachord#1393), held once in `shared/.../ui/DesignTokens.kt`.
 
 **Brand color (icon background):** `#273441`
 

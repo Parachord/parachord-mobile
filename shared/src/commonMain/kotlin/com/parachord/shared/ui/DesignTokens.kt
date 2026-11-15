@@ -8,8 +8,9 @@ import kotlin.concurrent.Volatile
  * Values are plain `0xRRGGBB` ints, so Compose (`Color(0xFF000000 or v)`) and
  * SwiftUI (`UIColor(hex: UInt32(v))`) read the same numbers. Android's
  * `ui/theme/Color.kt` and iOS's `Theme.swift` only convert them; a value
- * changes here, never in a platform file. Desktop's `index.html` is the source
- * of truth for the values themselves.
+ * changes here, never in a platform file. Desktop's `index.html` and
+ * `lib/page-colors.js` are the source of truth for the values themselves
+ * (desktop's design audit, parachord#1393).
  */
 object DesignTokens {
 
@@ -19,37 +20,61 @@ object DesignTokens {
     // ── Theme colours ────────────────────────────────────────────────
     val bgPrimary = ThemeColor(0xFFFFFF, 0x161616)
     val bgSecondary = ThemeColor(0xF9FAFB, 0x1E1E1E)
+    /** Sheets, dialogs, menus. */
     val bgElevated = ThemeColor(0xFFFFFF, 0x252525)
     val bgInset = ThemeColor(0xF3F4F6, 0x1A1A1A)
-    val cardBg = ThemeColor(0xFFFFFF, 0x1E1E1E)
-    val cardBorder = ThemeColor(0xE5E7EB, 0x2A2A2A)
+    val cardBg = ThemeColor(0xFFFFFF, 0x252525)
+    val cardBorder = ThemeColor(0xE5E7EB, 0x2E2E2E)
+    /** Image placeholders, skeleton bars. */
+    val placeholderBg = ThemeColor(0xE5E7EB, 0x383838)
     val textPrimary = ThemeColor(0x111827, 0xF3F4F6)
-    val textSecondary = ThemeColor(0x6B7280, 0x9CA3AF)
-    /** Placeholders only: fails 4.5:1 as label text in both themes. */
-    val textTertiary = ThemeColor(0x9CA3AF, 0x6B7280)
+    /** Labels, metadata. Passes 4.5:1 on the page and on cards. */
+    val textSecondary = ThemeColor(0x4B5563, 0x9CA3AF)
+    /** Hints, counts, timestamps. Passes 4.5:1 too, distinct from secondary. */
+    val textTertiary = ThemeColor(0x6B7280, 0x8B8F97)
     val borderDefault = ThemeColor(0xE5E7EB, 0x2E2E2E)
     val borderLight = ThemeColor(0xF3F4F6, 0x252525)
+    val borderStrong = ThemeColor(0xD1D5DB, 0x404040)
+    /** A switch track that's off. */
+    val controlOff = ThemeColor(0xD1D5DB, 0x707070)
 
     /** Links, outlines, active icons, selected text. Never under white text. */
     val accent = ThemeColor(0x7C3AED, 0xA78BFA)
     val accentHover = ThemeColor(0x6D28D9, 0x8B5CF6)
+    val accentSecondary = ThemeColor(0x8B5CF6, 0xC4B5FD)
+    val accentSoft = ThemeColor(0xA78BFA, 0xC4B5FD)
     /** Accent-tinted surface: opaque in light, `#8b5cf6` at 15% in dark. */
     val accentSurface = ThemeColor(0xEDE9FE, 0x8B5CF6, darkAlpha = 0.15f)
+    const val ACCENT_TERTIARY = 0xA855F7
 
     /**
      * Anything filled that carries white text (buttons, selected chips, play
-     * buttons, badges), in both themes. White on the dark accent `#a78bfa` is
-     * 2.7:1; on this it's 5.7:1.
+     * buttons, badges, switch tracks), in both themes. White on the dark
+     * accent `#a78bfa` is 2.7:1; on this it's 5.7:1.
      */
     const val FILL_ACCENT = 0x7C3AED
-    const val ACCENT_SECONDARY = 0x8B5CF6
-    const val ACCENT_TERTIARY = 0xA855F7
-    const val ACCENT_SOFT = 0xA78BFA
+    const val FILL_ACCENT_HOVER = 0x6D28D9
+    /** Text on any fill. */
+    const val ON_ACCENT = 0xFFFFFF
 
-    // ── Semantic ─────────────────────────────────────────────────────
-    const val SUCCESS = 0x10B981
-    const val WARNING = 0xF59E0B
-    const val ERROR = 0xEF4444
+    // ── Status ───────────────────────────────────────────────────────
+    /** Dots, icons and indicators. */
+    val success = ThemeColor(0x10B981, 0x34D399)
+    val warning = ThemeColor(0xF59E0B, 0xFBBF24)
+    val error = ThemeColor(0xEF4444, 0xF87171)
+    val info = ThemeColor(0x2563EB, 0x60A5FA)
+    /** Status text on a page or card (≥ 4.5:1 in both themes). */
+    val textSuccess = ThemeColor(0x15803D, 0x4ADE80)
+    val textWarning = ThemeColor(0xB45309, 0xFBBF24)
+    val textDanger = ThemeColor(0xB91C1C, 0xF87171)
+    val textInfo = ThemeColor(0x1D4ED8, 0x93C5FD)
+    /** Status fills with white text (toasts, banners, a confirm button), both themes. */
+    const val FILL_SUCCESS = 0x15803D
+    const val FILL_WARNING = 0xB45309
+    const val FILL_ERROR = 0xB91C1C
+    const val FILL_ERROR_HOVER = 0x991B1B
+    const val FILL_INFO = 0x2563EB
+
     const val ON_TOUR = 0x10C9B4
     const val HOSTED_FG = 0x3B82F6
     const val HOSTED_BG = 0xEFF6FF
@@ -62,19 +87,23 @@ object DesignTokens {
 
     // ── Page colours ─────────────────────────────────────────────────
     /**
-     * Each page's colour (drawer / tab entry, "See all" links) and its hero
-     * gradient, top-left to bottom-right, as desktop's `bg-gradient-to-br`.
+     * Each page's colour (drawer / tab entry, its tint, "See all" links, its
+     * own controls), [fill] (a darker shade for white-text buttons, ≥ 4.5:1)
+     * and hero gradient, top-left to bottom-right (desktop's
+     * `bg-gradient-to-br`). A port of desktop's `lib/page-colors.js`; no two
+     * heroes start in the same colour family. Home's colour is the theme
+     * accent ([accent]); [color] holds its light value.
      */
-    enum class Page(val color: Int, val gradient: List<Int>) {
-        HOME(0x7C3AED, listOf(0x7C3AED, 0x6D28D9)),
-        COLLECTION(0x06B6D4, listOf(0x06B6D4, 0x0891B2)),
-        HISTORY(0x3B82F6, listOf(0x06B6D4, 0x3B82F6, 0x4F46E5)),
-        FRESH_DROPS(0x10B981, listOf(0x10B981, 0x14B8A6, 0x0891B2)),
-        POP_OF_THE_TOPS(0xF97316, listOf(0xF97316, 0xEC4899, 0x9333EA)),
-        CRITICAL_DARLINGS(0xEF4444, listOf(0xF59E0B, 0xF97316, 0xEF4444)),
-        CONCERTS(0x10C9B4, listOf(0x14B8A6, 0x14B8A6, 0x0891B2)),
-        PLAYLISTS(0xEC4899, listOf(0xF43F5E, 0xEC4899, 0xC026D3)),
-        RECOMMENDATIONS(0xF59E0B, listOf(0xFBBF24, 0xF59E0B, 0xF97316)),
+    enum class Page(val color: Int, val fill: Int, val gradient: List<Int>) {
+        HOME(0x7C3AED, FILL_ACCENT, listOf(0xA855F7, 0x7C3AED, 0x4F46E5)),
+        PLAYLISTS(0xEC4899, 0xBE185D, listOf(0xF43F5E, 0xEC4899, 0xC026D3)),
+        COLLECTION(0x06B6D4, 0x0E7490, listOf(0x06B6D4, 0x0891B2, 0x1D4ED8)),
+        HISTORY(0x3B82F6, 0x1D4ED8, listOf(0x0EA5E9, 0x3B82F6, 0x4F46E5)),
+        FRESH_DROPS(0x22C55E, 0x15803D, listOf(0x84CC16, 0x22C55E, 0x059669)),
+        RECOMMENDATIONS(0xF59E0B, 0xB45309, listOf(0xFBBF24, 0xF59E0B, 0xF97316)),
+        POP_OF_THE_TOPS(0xF97316, 0xC2410C, listOf(0xF97316, 0xEC4899, 0x9333EA)),
+        CRITICAL_DARLINGS(0xEF4444, 0xB91C1C, listOf(0xEF4444, 0xDC2626, 0xBE123C)),
+        CONCERTS(0x10C9B4, 0x0F766E, listOf(0x14B8A6, 0x14B8A6, 0x0891B2)),
     }
 
     // ── Release types ────────────────────────────────────────────────
@@ -134,6 +163,7 @@ object ServiceColors {
         "librefm" to 0x4CAF50,
         "discogs" to 0x333333,
         "wikipedia" to 0x000000,
+        "customllm" to 0x8B5CF6,
         "chatgpt" to 0x10A37F,
         "claude" to 0xD97757,
         "gemini" to 0x4285F4,

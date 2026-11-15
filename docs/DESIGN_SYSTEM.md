@@ -16,37 +16,51 @@ Where it lives in code:
 
 ### Theme tokens
 
+Values from desktop's design audit (`design-audit`, [parachord#1393](https://github.com/Parachord/parachord/pull/1393)): `index.html` and `docs/DESIGN_SYSTEM.md` there.
+
 | Token | Light | Dark | Use |
 |---|---|---|---|
 | bg-primary | `#ffffff` | `#161616` | page background |
 | bg-secondary | `#f9fafb` | `#1e1e1e` | secondary surfaces, idle chips |
-| bg-elevated | `#ffffff` | `#252525` | sheets, dialogs |
-| bg-inset | `#f3f4f6` | `#1a1a1a` | recessed areas |
-| card-bg | `#ffffff` | `#1e1e1e` | cards |
-| card-border | `#e5e7eb` | `#2a2a2a` | card edge |
+| bg-elevated | `#ffffff` | `#252525` | sheets, dialogs, menus |
+| bg-inset | `#f3f4f6` | `#1a1a1a` | recessed areas, neutral chips |
+| card-bg | `#ffffff` | `#252525` | cards |
+| card-border | `#e5e7eb` | `#2e2e2e` | card edge |
+| placeholder-bg | `#e5e7eb` | `#383838` | image placeholders, skeleton bars |
 | text-primary | `#111827` | `#f3f4f6` | titles, body |
-| text-secondary | `#6b7280` | `#9ca3af` | artist names, metadata, labels |
-| text-tertiary | `#9ca3af` | `#6b7280` | placeholders only |
+| text-secondary | `#4b5563` | `#9ca3af` | artist names, metadata, labels |
+| text-tertiary | `#6b7280` | `#8b8f97` | hints, counts, timestamps |
 | border-default | `#e5e7eb` | `#2e2e2e` | dividers, outlines |
 | border-light | `#f3f4f6` | `#252525` | faint dividers |
+| border-strong | `#d1d5db` | `#404040` | stronger outlines |
+| control-off | `#d1d5db` | `#707070` | a switch track that's off |
 | accent | `#7c3aed` | `#a78bfa` | links, outlines, active icons, selected text |
-| accent-hover / pressed | `#6d28d9` | `#8b5cf6` | |
+| accent-hover | `#6d28d9` | `#8b5cf6` | |
+| accent-secondary | `#8b5cf6` | `#c4b5fd` | |
+| accent-soft | `#a78bfa` | `#c4b5fd` | |
 | accent-surface | `#ede9fe` | `#8b5cf6` at 15% | accent-tinted surface |
-| **fill-accent** | `#7c3aed` | `#7c3aed` | anything filled that carries white text |
-| success | `#10b981` | `#10b981` | |
-| warning | `#f59e0b` | `#f59e0b` | |
-| error | `#ef4444` | `#ef4444` | |
+| **fill-accent** | `#7c3aed` | `#7c3aed` | anything filled that carries white text (hover `#6d28d9`) |
+| on-accent | `#ffffff` | `#ffffff` | text on any fill |
 | on-tour | `#10c9b4` | `#10c9b4` | On Tour dot |
 | hosted chip | `#3b82f6` on `#eff6ff` | same | the `🌐 Hosted` chip |
+
+Status colours, three kinds:
+
+| Use | Success | Warning | Error / danger | Info |
+|---|---|---|---|---|
+| Dots, icons, indicators (light / dark) | `#10b981` / `#34d399` | `#f59e0b` / `#fbbf24` | `#ef4444` / `#f87171` | `#2563eb` / `#60a5fa` |
+| Status text on a page or card, ≥ 4.5:1 (light / dark) | `#15803d` / `#4ade80` | `#b45309` / `#fbbf24` | `#b91c1c` / `#f87171` | `#1d4ed8` / `#93c5fd` |
+| Fills with white text: toasts, banners, a confirm button (both themes) | `#15803d` | `#b45309` | `#b91c1c` (hover `#991b1b`) | `#2563eb` |
 
 Always-dark player surfaces (mini player, Now Playing, the queue, the car-style surfaces): bg `#161616`, elevated `#1e1e1e`, text `#f3f4f6` / `#9ca3af`, in both themes.
 
 Rules:
-- **White text never sits on the theme accent.** In dark mode the accent is `#a78bfa`, and white on it is 2.7:1. Filled buttons, selected chips, play buttons and badges with white text use **fill-accent** (`#7c3aed`) in both themes. Android's Material `primary` is the theme accent, so a filled Material component (`Button`, `Switch`, `FilterChip`, `FloatingActionButton`) needs fill-accent set explicitly, or `onPrimary` must not be white in dark.
-- **Text-tertiary is for placeholders only.** Labels, hints and metadata use text-secondary: tertiary fails 4.5:1 in both themes.
-- **No colour literals outside the theme files.** Use a token. If none fits, add one to `DesignTokens` (both apps then read it) and to this table. Success, warning and error are always the tokens, never their own hex.
+- **White text never sits on the theme accent.** In dark mode the accent is `#a78bfa`, and white on it is 2.7:1. Filled buttons, selected chips, play buttons, switch tracks and badges with white text use **fill-accent** (`#7c3aed`) in both themes. Android's Material `primary` is the theme accent, so its dark `onPrimary` is `#161616`, not white: a Material component filled with `primary` gets dark content. A fill that carries white uses `FillAccent` explicitly (iOS: `PC.fillAccent`).
+- **Status text uses the status text tokens, status fills the fill tokens.** The plain status colours are for dots and icons; they're too light for text on white and too light under white text.
+- **Secondary and tertiary text both pass 4.5:1** on the page and on cards in both themes. Map Tailwind greys as gray-900/800 → primary, 700/600 → secondary, 500/400 → tertiary.
+- **No colour literals outside the theme files.** Use a token. If none fits, add one to `DesignTokens` (both apps then read it) and to this table. Status colours are always the tokens, never their own hex.
 - **Never Material You dynamic colour, never the iOS system tint.** Every interactive element gets an explicit colour.
-- Dark mode follows the in-app setting: Android `ParachordTheme.isDark` (never `isSystemInDarkTheme()`), iOS `ThemeObserver` → `.preferredColorScheme`.
+- Dark mode follows the in-app setting: Android `ParachordTheme.isDark` (never `isSystemInDarkTheme()`), iOS `ThemeObserver` → `.preferredColorScheme`. Android's status colours (`Success`, `Warning`, `Error`, …) are composable reads that follow it.
 
 ### Service colours
 
@@ -62,6 +76,7 @@ A service's colour is its plugin's manifest `color`, never a hand-copied hex: bo
 | SoundCloud | `#FF5500` |
 | Subsonic | `#14b8a6` |
 | Local Files | `#6366f1` |
+| Custom LLM | `#8b5cf6` |
 | Last.fm | `#D51007` |
 | ListenBrainz | `#353070` |
 
@@ -69,19 +84,19 @@ The source icon is the service's logo on a square of that colour. A filter chip 
 
 ### Page colours
 
-Each page has one colour, used by its drawer or tab entry, its hero and any "See all" link that leads to it.
+Each page has one colour, used by its drawer or tab entry (and its 10% tint), its hero, any "See all" link that leads to it, and the page's own controls; a darker **fill** shade for its buttons with white text (≥ 4.5:1). A port of desktop's `lib/page-colors.js`; no two heroes start in the same colour family. Shared: `DesignTokens.Page` (`color`, `fill`, `gradient`).
 
-| Page | Colour | Hero gradient |
-|---|---|---|
-| Home | `#7c3aed` | violet |
-| Collection | `#06b6d4` | |
-| History | `#3b82f6` | cyan → blue → indigo |
-| Fresh Drops | `#10b981` | emerald → teal → cyan |
-| Pop of the Tops | `#f97316` | orange → pink → purple |
-| Critical Darlings | `#ef4444` | amber → orange → red |
-| Concerts | `#10c9b4` | teal → cyan |
-| Playlists | `#ec4899` | rose → pink → fuchsia |
-| Recommendations | `#f59e0b` | amber → orange |
+| Page | Colour | Fill | Hero gradient |
+|---|---|---|---|
+| Home | the accent | fill-accent | purple → violet → indigo |
+| Playlists | `#ec4899` | `#be185d` | rose → pink → fuchsia |
+| Collection | `#06b6d4` | `#0e7490` | cyan → cyan → blue |
+| History | `#3b82f6` | `#1d4ed8` | sky → blue → indigo |
+| Fresh Drops | `#22c55e` | `#15803d` | lime → green → emerald |
+| Recommendations | `#f59e0b` | `#b45309` | amber → amber → orange |
+| Pop of the Tops | `#f97316` | `#c2410c` | orange → pink → purple |
+| Critical Darlings | `#ef4444` | `#b91c1c` | red → red → rose |
+| Concerts | `#10c9b4` | `#0f766e` | teal → teal → cyan |
 
 Hero titles are uppercase, light weight, wide tracking (the collapsed desktop hero), styled with an uppercase modifier, never typed in caps.
 
@@ -185,7 +200,7 @@ The data rules (`getHistoryMixes`, `tracksChangedAt` / `lastChangeAdded`, setup 
 
 - Every icon-only control has a label (Android `contentDescription`, iOS `accessibilityLabel`). Decorative icons next to text get `null` / `.accessibilityHidden(true)`.
 - Long-press actions are also reachable another way (an overflow button or the item's page).
-- Text contrast at least 4.5:1: the fill-accent and text-tertiary rules above exist for this.
+- Text contrast at least 4.5:1: the fill-accent and status-text rules above exist for this.
 - iOS text scales with Dynamic Type.
 
 ## 7. Checking a UI change

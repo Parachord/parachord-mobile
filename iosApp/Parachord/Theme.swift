@@ -73,9 +73,12 @@ enum PC {
     // FILLED that carries white text uses `fillAccent`, in both themes.
     static let accent        = dyn(tokens.accent)
     static let accentHover   = dyn(tokens.accentHover)
-    static let accentSoft    = pcToken(tokens.ACCENT_SOFT)
+    static let accentSoft    = dyn(tokens.accentSoft)
+    static let accentSecondary = dyn(tokens.accentSecondary)
     static let accentSurface = dyn(tokens.accentSurface)
     static let fillAccent    = pcToken(tokens.FILL_ACCENT)
+    static let fillAccentHover = pcToken(tokens.FILL_ACCENT_HOVER)
+    static let onAccent      = pcToken(tokens.ON_ACCENT)
 
     // Backgrounds
     static let bgPrimary   = dyn(tokens.bgPrimary)
@@ -83,21 +86,36 @@ enum PC {
     static let bgElevated  = dyn(tokens.bgElevated)
     static let bgInset     = dyn(tokens.bgInset)
 
-    // Text (fg3 is for placeholders only)
+    // Text. fg2 = labels and metadata, fg3 = hints, counts, timestamps; both
+    // pass 4.5:1 in both themes.
     static let fg1 = dyn(tokens.textPrimary)
     static let fg2 = dyn(tokens.textSecondary)
     static let fg3 = dyn(tokens.textTertiary)
 
     // Borders / cards
     static let border      = dyn(tokens.borderDefault)
+    static let borderStrong = dyn(tokens.borderStrong)
+    static let controlOff  = dyn(tokens.controlOff)
+    static let placeholder = dyn(tokens.placeholderBg)
     static let borderLight = dyn(tokens.borderLight)
     static let cardBg      = dyn(tokens.cardBg)
     static let cardBorder  = dyn(tokens.cardBorder)
 
-    // Semantic
-    static let success = pcToken(tokens.SUCCESS)
-    static let warning = pcToken(tokens.WARNING)
-    static let error   = pcToken(tokens.ERROR)
+    // Status: dots, icons and indicators (lighter in dark mode)
+    static let success = dyn(tokens.success)
+    static let warning = dyn(tokens.warning)
+    static let error   = dyn(tokens.error)
+    static let info    = dyn(tokens.info)
+    // Status text on a page or card (≥ 4.5:1 in both themes)
+    static let textSuccess = dyn(tokens.textSuccess)
+    static let textWarning = dyn(tokens.textWarning)
+    static let textDanger  = dyn(tokens.textDanger)
+    static let textInfo    = dyn(tokens.textInfo)
+    // Status fills with white text, the same in both themes
+    static let fillSuccess = pcToken(tokens.FILL_SUCCESS)
+    static let fillWarning = pcToken(tokens.FILL_WARNING)
+    static let fillError   = pcToken(tokens.FILL_ERROR)
+    static let fillInfo    = pcToken(tokens.FILL_INFO)
     static let onTour  = pcToken(tokens.ON_TOUR)
 
     // Hosted (XSPF) chip — brand blue, constant
@@ -113,7 +131,9 @@ enum PC {
     }
 
     /// A page's colour (drawer entry, "See all") and hero gradient.
-    static func page(_ p: DesignTokens.Page) -> Color { pcToken(p.color) }
+    static func page(_ p: DesignTokens.Page) -> Color { p == .home ? accent : pcToken(p.color) }
+    /// A page's darker shade, for its buttons with white text (≥ 4.5:1).
+    static func pageFill(_ p: DesignTokens.Page) -> Color { pcToken(p.fill) }
     static func pageGradient(_ p: DesignTokens.Page) -> [UInt32] {
         p.gradient.map { UInt32($0.int32Value) }
     }

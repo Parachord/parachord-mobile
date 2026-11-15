@@ -32,7 +32,7 @@ private val DarkColorScheme = darkColorScheme(
     onSurfaceVariant = TextSecondaryDark,
     outline = TextTertiaryDark,
     outlineVariant = BorderDefaultDark,
-    error = Error,
+    error = ErrorDark,
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -49,7 +49,7 @@ private val LightColorScheme = lightColorScheme(
     onSurfaceVariant = TextSecondaryLight,
     outline = BorderDefaultLight,
     outlineVariant = BorderLightLight,
-    error = Error,
+    error = ErrorLight,
 )
 
 // ── Extended Colors ──────────────────────────────────────────────────

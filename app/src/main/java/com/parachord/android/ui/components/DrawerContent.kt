@@ -107,7 +107,7 @@ private val discoverItems = listOf(
 )
 
 private val FriendPurple = FillAccent
-private val OnAirGreen = com.parachord.android.ui.theme.Success
+private val OnAirGreen: Color @androidx.compose.runtime.Composable get() = com.parachord.android.ui.theme.Success
 
 // Desktop --surface-dark: dark pill bg for friend mini playbar
 private val MiniPlaybarBgLight = Color(0xF21F2937) // rgba(31,41,55,0.95)

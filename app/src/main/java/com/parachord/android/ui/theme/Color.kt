@@ -1,5 +1,7 @@
 package com.parachord.android.ui.theme
 
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.ServiceColors
@@ -22,9 +24,9 @@ val PurpleLight = DesignTokens.accent.lightColor()          // --accent-primary 
 val PurpleDark = DesignTokens.accent.darkColor()            // --accent-primary (dark)
 val PurpleHoverLight = DesignTokens.accentHover.lightColor()
 val PurpleHoverDark = DesignTokens.accentHover.darkColor()
-val PurpleSecondary = tokenColor(DesignTokens.ACCENT_SECONDARY)
+val PurpleSecondary = DesignTokens.accentSecondary.lightColor()
 val PurpleTertiary = tokenColor(DesignTokens.ACCENT_TERTIARY)
-val PurpleSoft = tokenColor(DesignTokens.ACCENT_SOFT)
+val PurpleSoft = DesignTokens.accentSoft.lightColor()
 val PurpleSurface = DesignTokens.accentSurface.lightColor() // --accent-surface (light)
 val PurpleSurfaceDark = DesignTokens.accentSurface.darkColor() // #8b5cf6 at 15%
 
@@ -33,6 +35,7 @@ val PurpleSurfaceDark = DesignTokens.accentSurface.darkColor() // #8b5cf6 at 15%
  * White on the dark accent [PurpleDark] fails contrast.
  */
 val FillAccent = tokenColor(DesignTokens.FILL_ACCENT)
+val FillAccentHover = tokenColor(DesignTokens.FILL_ACCENT_HOVER)
 
 // Alpha variants (matching desktop rgba(124,58,237,x))
 val PurpleAlpha06 = PurpleLight.copy(alpha = 0.06f)
@@ -45,10 +48,33 @@ val PurpleAlpha60 = PurpleLight.copy(alpha = 0.60f)
 val PurpleDarkAlpha10 = PurpleDark.copy(alpha = 0.10f)
 val PurpleDarkAlpha20 = PurpleDark.copy(alpha = 0.20f)
 
-// ── Semantic Colors ──────────────────────────────────────────────────
-val Success = tokenColor(DesignTokens.SUCCESS)
-val Warning = tokenColor(DesignTokens.WARNING)
-val Error = tokenColor(DesignTokens.ERROR)
+// ── Status Colors ────────────────────────────────────────────────────
+/** A themed token in the current theme ([ParachordTheme.isDark]). */
+@Composable
+@ReadOnlyComposable
+fun DesignTokens.ThemeColor.current(): Color =
+    if (LocalIsDarkTheme.current) darkColor() else lightColor()
+
+/** Status dots, icons and indicators; lighter in dark mode. */
+val Success: Color @Composable @ReadOnlyComposable get() = DesignTokens.success.current()
+val Warning: Color @Composable @ReadOnlyComposable get() = DesignTokens.warning.current()
+val Error: Color @Composable @ReadOnlyComposable get() = DesignTokens.error.current()
+val Info: Color @Composable @ReadOnlyComposable get() = DesignTokens.info.current()
+
+/** Status text on a page or card (≥ 4.5:1 in both themes). */
+val TextSuccess: Color @Composable @ReadOnlyComposable get() = DesignTokens.textSuccess.current()
+val TextWarning: Color @Composable @ReadOnlyComposable get() = DesignTokens.textWarning.current()
+val TextDanger: Color @Composable @ReadOnlyComposable get() = DesignTokens.textDanger.current()
+val TextInfo: Color @Composable @ReadOnlyComposable get() = DesignTokens.textInfo.current()
+
+/** Status fills with white text, the same in both themes. */
+val FillSuccess = tokenColor(DesignTokens.FILL_SUCCESS)
+val FillWarning = tokenColor(DesignTokens.FILL_WARNING)
+val FillError = tokenColor(DesignTokens.FILL_ERROR)
+val FillInfo = tokenColor(DesignTokens.FILL_INFO)
+
+val ErrorLight = DesignTokens.error.lightColor()
+val ErrorDark = DesignTokens.error.darkColor()
 val OnTour = tokenColor(DesignTokens.ON_TOUR)
 
 // ── Background Colors ────────────────────────────────────────────────
@@ -91,6 +117,7 @@ val PlayerTextSecondary = tokenColor(DesignTokens.PLAYER_TEXT_SECONDARY)
 
 // ── Page and release-type colours ────────────────────────────────────
 val DesignTokens.Page.composeColor: Color get() = tokenColor(color)
+val DesignTokens.Page.composeFill: Color get() = tokenColor(fill)
 val DesignTokens.Page.composeGradient: List<Color> get() = gradient.map { tokenColor(it) }
 
 fun releaseTypeColor(type: String?): Color = tokenColor(DesignTokens.releaseTypeColor(type))

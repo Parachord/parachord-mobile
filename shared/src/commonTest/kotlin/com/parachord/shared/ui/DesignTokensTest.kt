@@ -43,6 +43,8 @@ class DesignTokensTest {
         assertEquals(DesignTokens.accent.light, DesignTokens.FILL_ACCENT)
         assertEquals(0x8B5CF6, DesignTokens.accentSurface.dark)
         assertEquals(0.15f, DesignTokens.accentSurface.darkAlpha)
+        DesignTokens.Page.entries.forEach { assertEquals(it.fill, it.fill and 0xFFFFFF) }
+        assertEquals(DesignTokens.FILL_ACCENT, DesignTokens.Page.HOME.fill)
     }
 
     @Test
@@ -50,9 +52,18 @@ class DesignTokensTest {
         assertEquals(0x3B82F6, DesignTokens.Page.HISTORY.color)
         assertEquals(0x10C9B4, DesignTokens.Page.CONCERTS.color)
         assertEquals(0xF97316, DesignTokens.Page.POP_OF_THE_TOPS.color)
-        // amber → orange → red, not the reverse
-        assertEquals(listOf(0xF59E0B, 0xF97316, 0xEF4444), DesignTokens.Page.CRITICAL_DARLINGS.gradient)
-        assertEquals(listOf(0x06B6D4, 0x3B82F6, 0x4F46E5), DesignTokens.Page.HISTORY.gradient)
+        assertEquals(0x22C55E, DesignTokens.Page.FRESH_DROPS.color)
+        // red → rose: desktop stopped it starting in Recommendations' amber
+        assertEquals(listOf(0xEF4444, 0xDC2626, 0xBE123C), DesignTokens.Page.CRITICAL_DARLINGS.gradient)
+        assertEquals(listOf(0x0EA5E9, 0x3B82F6, 0x4F46E5), DesignTokens.Page.HISTORY.gradient)
+    }
+
+    @Test
+    fun noTwoHeroesStartTheSame() {
+        // desktop's tests/renderer/page-colors.test.js checks colour families;
+        // the first stops being distinct is the part we can check exactly.
+        val starts = DesignTokens.Page.entries.map { it.gradient.first() }
+        assertEquals(starts.size, starts.toSet().size)
     }
 
     @Test

@@ -1245,7 +1245,7 @@ private fun rememberShimmerAlpha(): Float {
 
 // ── Friend Activity Row ──────────────────────────────────────────
 
-private val OnAirGreen = com.parachord.android.ui.theme.Success
+private val OnAirGreen: Color @androidx.compose.runtime.Composable get() = com.parachord.android.ui.theme.Success
 private val LastFmRed = Color(0xFFD51007)
 private val ListenBrainzOrange = Color(0xFFE8702A)
 private val HomeMiniPlaybarBg = Color(0xF2262626)

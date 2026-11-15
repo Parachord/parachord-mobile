@@ -305,9 +305,9 @@ struct HomeScreen: View {
     // Subtitles match Android's fallbackSubtitle (HomeScreen.kt).
     private let tiles: [Tile] = [
         .init(title: "For You", icon: "star.fill", c1: 0x7c3aed, c2: 0x6d28d9, subtitle: "Personalized picks", preset: "foryou"),
-        .init(title: "Critical Darlings", icon: "heart.fill", c1: 0xf59e0b, c2: 0xef4444, subtitle: "Staff picks", preset: "critical"),
-        .init(title: "Pop of the Tops", icon: "chart.line.uptrend.xyaxis", c1: 0xec4899, c2: 0xf59e0b, subtitle: "Top charts", preset: "pop"),
-        .init(title: "Fresh Drops", icon: "drop.fill", c1: 0x10b981, c2: 0x0d9488, subtitle: "New releases", preset: "fresh"),
+        .init(title: "Critical Darlings", icon: "heart.fill", c1: PC.pageGradient(.criticalDarlings).first!, c2: PC.pageGradient(.criticalDarlings).last!, subtitle: "Staff picks", preset: "critical"),
+        .init(title: "Pop of the Tops", icon: "chart.line.uptrend.xyaxis", c1: PC.pageGradient(.popOfTheTops).first!, c2: PC.pageGradient(.popOfTheTops).last!, subtitle: "Top charts", preset: "pop"),
+        .init(title: "Fresh Drops", icon: "drop.fill", c1: PC.pageGradient(.freshDrops).first!, c2: PC.pageGradient(.freshDrops).last!, subtitle: "New releases", preset: "fresh"),
     ]
 
     private var discoverGrid: some View {
