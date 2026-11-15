@@ -159,8 +159,6 @@ fun PlaylistsScreen(
             )
 
             var pendingDeletePlaylist by remember { mutableStateOf<PlaylistEntity?>(null) }
-            var deleteMirrors by remember { mutableStateOf<List<String>>(emptyList()) }
-            var deleteSelected by remember { mutableStateOf<Set<String>>(emptySet()) }
             var syncTarget by remember { mutableStateOf<PlaylistEntity?>(null) }
 
             syncTarget?.let { pl ->
@@ -171,71 +169,16 @@ fun PlaylistsScreen(
                 )
             }
 
-            LaunchedEffect(pendingDeletePlaylist) {
-                val pl = pendingDeletePlaylist
-                if (pl != null) {
-                    val m = viewModel.getDeletableMirrors(pl.id)
-                    deleteMirrors = m
-                    deleteSelected = m.toSet()   // default: also delete from every mirror
-                }
-            }
-
             pendingDeletePlaylist?.let { playlist ->
-                AlertDialog(
-                    onDismissRequest = { pendingDeletePlaylist = null },
-                    containerColor = ModalBg,
-                    titleContentColor = ModalTextActive,
-                    textContentColor = ModalTextPrimary,
-                    title = { Text("Delete Playlist") },
-                    text = {
-                        Column {
-                            Text("Remove \"${playlist.name}\" from Parachord.")
-                            if (deleteMirrors.isNotEmpty()) {
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    "Also delete from:",
-                                    color = ModalTextSecondary,
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                                deleteMirrors.forEach { pid ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth().clickable {
-                                            deleteSelected = if (pid in deleteSelected) deleteSelected - pid else deleteSelected + pid
-                                        },
-                                    ) {
-                                        Checkbox(
-                                            checked = pid in deleteSelected,
-                                            onCheckedChange = { on ->
-                                                deleteSelected = if (on) deleteSelected + pid else deleteSelected - pid
-                                            },
-                                        )
-                                        Text(playlistProviderLabel(pid), color = ModalTextPrimary)
-                                    }
-                                }
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    "Unchecked services keep their copy (may re-import on next sync). " +
-                                        "Apple Music can't be deleted via its API.",
-                                    color = ModalTextSecondary,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        }
+                com.parachord.android.ui.components.DeletePlaylistDialog(
+                    playlistId = playlist.id,
+                    playlistName = playlist.name,
+                    loadMirrors = viewModel::getDeletableMirrors,
+                    onConfirm = { fromProviders ->
+                        viewModel.deletePlaylist(playlist, fromProviders)
+                        pendingDeletePlaylist = null
                     },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            viewModel.deletePlaylist(playlist, deleteSelected)
-                            pendingDeletePlaylist = null
-                        }) {
-                            Text("Delete", color = Color(0xFFEF4444))
-                        }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { pendingDeletePlaylist = null }) {
-                            Text("Cancel", color = ModalTextPrimary)
-                        }
-                    },
+                    onDismiss = { pendingDeletePlaylist = null },
                 )
             }
 
@@ -416,9 +359,3 @@ private fun PlaylistSourceChip(text: String, color: Color) {
     )
 }
 
-private fun playlistProviderLabel(providerId: String): String = when (providerId) {
-    "spotify" -> "Spotify"
-    "applemusic" -> "Apple Music"
-    "listenbrainz" -> "ListenBrainz"
-    else -> providerId.replaceFirstChar { it.uppercase() }
-}

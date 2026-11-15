@@ -229,10 +229,13 @@ class LibraryRepository(
      * rows are consulted before the local row's foreign-key cascade
      * blows them away. The local delete is still last so a partial
      * failure doesn't leave the local row referencing dead remotes.
+     *
+     * [deleteFromProviders] is the set of services the user ticked in the
+     * delete dialog; an empty set deletes only the local copy (#684).
      */
     suspend fun deletePlaylistWithSync(
         playlist: Playlist,
-        deleteFromProviders: Set<String>? = null,
+        deleteFromProviders: Set<String>,
     ): List<SyncEngine.PlaylistDeletionAttempt> {
         val attempts = syncEngine.onPlaylistRemoved(playlist, deleteFromProviders)
         playlistDao.delete(playlist)

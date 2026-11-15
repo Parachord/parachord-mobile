@@ -194,6 +194,22 @@ fun HomeScreen(
         )
     }
 
+    // Deleting from the Home long-press menu asks first and names the
+    // services, like every other delete (#684).
+    var deleteTarget by remember { mutableStateOf<PlaylistEntity?>(null) }
+    deleteTarget?.let { pl ->
+        com.parachord.android.ui.components.DeletePlaylistDialog(
+            playlistId = pl.id,
+            playlistName = pl.name,
+            loadMirrors = viewModel::getDeletableMirrors,
+            onConfirm = { fromProviders ->
+                viewModel.deletePlaylist(pl, fromProviders)
+                deleteTarget = null
+            },
+            onDismiss = { deleteTarget = null },
+        )
+    }
+
     // Surface playlist-action toasts (e.g. "Apple Music doesn't allow
     // deletion via the API…" from `deletePlaylistWithSync` returning
     // `DeleteResult.Unsupported`). Same pattern as PlaylistsScreen.
@@ -552,7 +568,7 @@ fun HomeScreen(
                                     },
                                     onSharePlaylist = { sharePlaylistById(playlist.id) },
                                     onOpenSync = { syncTarget = playlist },
-                                    onDeletePlaylist = { viewModel.deletePlaylist(playlist) },
+                                    onDeletePlaylist = { deleteTarget = playlist },
                                 )
                             }
                         }

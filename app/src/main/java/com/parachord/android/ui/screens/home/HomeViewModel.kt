@@ -424,6 +424,10 @@ class HomeViewModel constructor(
         }
     }
 
+    /** The services this playlist is on, for the delete dialog (#684). */
+    suspend fun getDeletableMirrors(playlistId: String): List<String> =
+        repository.getPlaylistMirrors(playlistId).keys.toList()
+
     /**
      * Sync-aware delete from the Home → Your Playlists long-press menu.
      * Routes through `deletePlaylistWithSync` so any linked Spotify /
@@ -432,9 +436,9 @@ class HomeViewModel constructor(
      * user via the toast channel rather than swallowing it (Decision
      * D8 — same pattern as PlaylistsViewModel/PlaylistDetailViewModel).
      */
-    fun deletePlaylist(playlist: PlaylistEntity) {
+    fun deletePlaylist(playlist: PlaylistEntity, deleteFromProviders: Set<String>) {
         viewModelScope.launch {
-            val attempts = repository.deletePlaylistWithSync(playlist)
+            val attempts = repository.deletePlaylistWithSync(playlist, deleteFromProviders)
             val unsupported = attempts.filter {
                 it.result is com.parachord.shared.sync.DeleteResult.Unsupported
             }

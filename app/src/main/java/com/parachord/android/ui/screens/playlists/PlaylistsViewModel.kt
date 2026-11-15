@@ -94,7 +94,7 @@ class PlaylistsViewModel constructor(
     )
     val toastEvents: kotlinx.coroutines.flow.Flow<String> = _toastEvents.receiveAsFlow()
 
-    fun deletePlaylist(playlist: PlaylistEntity, deleteFromProviders: Set<String>? = null) {
+    fun deletePlaylist(playlist: PlaylistEntity, deleteFromProviders: Set<String>) {
         viewModelScope.launch {
             val attempts = libraryRepository.deletePlaylistWithSync(playlist, deleteFromProviders)
             val unsupported = attempts.filter {
