@@ -40,9 +40,9 @@ data class XspfImportResult(
  *
  * Errors are logged and swallowed — the next tick retries (desktop parity).
  *
- * NOTE: Android still uses its own `PlaylistImportManager`/`HostedPlaylistPoller`
- * (XmlPullParser + WorkManager). Converging Android onto this shared service is
- * a tracked follow-up — out of scope for the iOS port.
+ * Both apps import hosted XSPF links through [importHostedXspf] (via
+ * [PlaylistUrlImporter]). Android still polls with its own `HostedPlaylistPoller`
+ * (XmlPullParser + WorkManager); moving its polling here is a follow-up.
  */
 class HostedXspfService(
     private val httpClient: HttpClient,

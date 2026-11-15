@@ -533,8 +533,8 @@ struct ContentView: View {
         case "navChat":
             pendingChatPrompt = cmd.prompt   // #256 prompt injection
             withAnimation(.easeInOut(duration: 0.3)) { showChat = true }
-        // parachord://import?url= — dispatch to the shared importer (#256, reuses
-        // the #18/#254 import: Spotify / Apple Music / hosted XSPF URLs).
+        // parachord://import?url= — the shared importer (#256): service playlists
+        // through the resolvers, anything else as a hosted XSPF.
         case "import":
             if let u = cmd.url, !u.isEmpty {
                 PlaylistImporter.shared.url = u

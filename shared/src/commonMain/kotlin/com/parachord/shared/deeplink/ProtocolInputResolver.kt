@@ -16,6 +16,12 @@ data class ResolvedProtocolPlay(
     val displayName: String,
     val tracks: List<ProtocolTrack>,
     val albumArt: String? = null,
+    /**
+     * Which service the tracklist came from (`spotify`, `applemusic`, or the
+     * id of the plugin that claimed the URL), or null for a tracklist document
+     * (XSPF / JSPF / Achordion). A playlist import names its source after it.
+     */
+    val providerId: String? = null,
 )
 
 /**

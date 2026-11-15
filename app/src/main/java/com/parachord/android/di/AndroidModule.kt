@@ -1140,6 +1140,38 @@ val androidModule = module {
             pluginLookupPlaylistJson = { url -> pluginManager.lookupPlaylist(url) },
         )
     }
+    // Playlist import from a link (#689's groundwork): the shared importer, on the
+    // same resolver a play/playlist link uses, with the hosted-XSPF fallback.
+    single {
+        val pluginManager = get<com.parachord.shared.plugin.PluginManager>()
+        com.parachord.shared.deeplink.ProviderPlaylistResolver(
+            spotifyClient = get(),
+            appleMusicClient = get(),
+            httpClient = get(),
+            appleMusicDeveloperToken = get<com.parachord.shared.config.AppConfig>().appleMusicDeveloperToken,
+            spotifyAccessToken = { get<com.parachord.shared.settings.SettingsStore>().getSpotifyAccessToken() },
+            pluginLookupPlaylistJson = { url -> pluginManager.lookupPlaylist(url) },
+        )
+    }
+    single {
+        com.parachord.shared.playlist.HostedXspfService(
+            httpClient = get(),
+            libraryRepository = get(),
+            playlistDao = get(),
+            playlistTrackDao = get(),
+            imageEnrichmentService = get(),
+        )
+    }
+    single {
+        val hosted = get<com.parachord.shared.playlist.HostedXspfService>()
+        com.parachord.shared.playlist.PlaylistUrlImporter(
+            providerPlaylists = get(),
+            importHostedXspf = { url -> hosted.importHostedXspf(url) },
+            createPlaylist = { playlist, tracks ->
+                get<com.parachord.shared.repository.LibraryRepository>().createPlaylistWithTracks(playlist, tracks)
+            },
+        )
+    }
     single { com.parachord.android.deeplink.AndroidProtocolPlayTeardown(playbackController = get()) }
     single<com.parachord.shared.deeplink.ProtocolPlayTeardown> { get<com.parachord.android.deeplink.AndroidProtocolPlayTeardown>() }
     // Listen Along lives as long as the process, not a screen (#611).
