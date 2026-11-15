@@ -38,7 +38,7 @@ class DefaultProtocolInputResolver(
     pluginLookupPlaylistJson: (suspend (String) -> String?)? = null,
 ) : ProtocolInputResolver {
 
-    private val maxTracklistBytes: Int = 100 * 1024  // 100KB body cap
+    private val maxTracklistBytes: Int = com.parachord.shared.deeplink.PROTOCOL_TRACKLIST_MAX_BYTES
 
     // play/playlist provider-page resolution (parachord#930 + #281 registry fallback).
     private val providerPlaylistResolver = ProviderPlaylistResolver(
@@ -121,18 +121,13 @@ class DefaultProtocolInputResolver(
     }
 
     override suspend fun resolveByUrl(url: String): ResolvedProtocolPlay? {
-        validatePublicHttpsUrl(url)  // SSRF guard
+        // The first URL is refused here (a toast); every redirect hop is checked
+        // and the body capped while it's read (GHSA-gfvj-rh43-vmp9).
+        validatePublicHttpsUrl(url)
         val body = try {
-            val response = httpClient.get(url)
-            if (!response.status.isSuccess()) {
-                Log.w(TAG, "URL fetch returned ${response.status} for $url")
-                return null
-            }
-            val text = response.bodyAsText()
-            if (text.length > maxTracklistBytes) {
-                throw IllegalArgumentException("Tracklist body exceeds ${maxTracklistBytes / 1024} KB cap")
-            }
-            text
+            com.parachord.shared.deeplink.fetchPublicPlaylistText(httpClient, url, maxTracklistBytes)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "URL fetch failed for $url: ${e.message}")
             return null

@@ -54,7 +54,7 @@ class AndroidProtocolInputResolver constructor(
 
     /** Body cap on URL-fetched tracklists — guards against very large
      *  publisher errors. 100KB matches desktop's per-payload limit. */
-    private val maxTracklistBytes: Int = 100 * 1024
+    private val maxTracklistBytes: Int = com.parachord.shared.deeplink.PROTOCOL_TRACKLIST_MAX_BYTES
 
     // play/playlist provider-page resolution (parachord#930 + #281 registry fallback) — shared with iOS.
     private val providerPlaylistResolver = com.parachord.shared.deeplink.ProviderPlaylistResolver(
@@ -163,22 +163,13 @@ class AndroidProtocolInputResolver constructor(
     }
 
     override suspend fun resolveByUrl(url: String): ResolvedProtocolPlay? {
-        // SSRF guard runs at the entry point — and again on every subsequent
-        // fetch if we ever follow redirects. Currently we use the shared Ktor
-        // client which respects its `followRedirects` setting; the Location
-        // header is not re-validated here. Document that as a known gap.
+        // The first URL is refused here (a toast); every redirect hop is checked
+        // and the body capped while it's read (GHSA-gfvj-rh43-vmp9).
         validatePublicHttpsUrl(url)
         val body = try {
-            val response = httpClient.get(url)
-            if (!response.status.isSuccess()) {
-                Log.w(TAG, "URL fetch returned ${response.status} for $url")
-                return null
-            }
-            val text = response.bodyAsText()
-            if (text.length > maxTracklistBytes) {
-                throw IllegalArgumentException("Tracklist body exceeds ${maxTracklistBytes / 1024} KB cap")
-            }
-            text
+            com.parachord.shared.deeplink.fetchPublicPlaylistText(httpClient, url, maxTracklistBytes)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "URL fetch failed for $url: ${e.message}")
             return null

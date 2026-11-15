@@ -31,9 +31,10 @@ package com.parachord.shared.deeplink
  *   slips through. The defense is socket-level post-resolution checking,
  *   which neither Ktor nor OkHttp expose portably across KMP. Document
  *   this; revisit if/when the threat becomes relevant.
- * - **3xx redirects to private addresses.** Callers must use
- *   `redirect: manual` (or `followRedirects(false)` on OkHttp) and
- *   re-validate the `Location` header through this function.
+ * - **3xx redirects to private addresses** on their own: a caller that
+ *   follows redirects must re-check each `Location` here first. Fetch
+ *   playlist URLs with [fetchPublicPlaylistText], which does that and caps
+ *   the body (GHSA-gfvj-rh43-vmp9).
  *
  * @throws IllegalArgumentException with a user-readable message on
  *   any rejection. Caller is expected to convert this to a toast or

@@ -2,6 +2,8 @@ package com.parachord.shared.playlist
 
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
+import com.parachord.shared.deeplink.HOSTED_PLAYLIST_MAX_BYTES
+import com.parachord.shared.deeplink.fetchPublicPlaylistText
 import com.parachord.shared.deeplink.validatePublicHttpsUrl
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.model.Playlist
@@ -12,9 +14,6 @@ import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.platform.randomUUID
 import com.parachord.shared.repository.LibraryRepository
 import io.ktor.client.HttpClient
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.isSuccess
 
 /** Outcome of an XSPF import — playlist id, name, and how many tracks landed. */
 data class XspfImportResult(
@@ -64,7 +63,9 @@ class HostedXspfService(
     /** Import an XSPF playlist from an HTTPS URL → a hosted playlist (polled). */
     suspend fun importHostedXspf(url: String): XspfImportResult {
         validatePublicHttpsUrl(url)  // H10: https-only + private/loopback host block
-        val content = fetch(url) ?: throw IllegalStateException("Failed to fetch playlist from $url")
+        // An import says why it failed (refused redirect, too large, HTTP status).
+        val content = fetchPublicPlaylistText(httpClient, url, HOSTED_PLAYLIST_MAX_BYTES)
+            .ifBlank { throw IllegalStateException("Failed to fetch playlist from $url") }
         require(looksLikeXspf(content)) { "URL does not contain a valid XSPF playlist" }
         val parsed = XspfParser.parse(content)
         return save(parsed.title, "hosted-xspf", parsed.tracks, sourceUrl = url, contentHash = sha256Hex(content))
@@ -141,14 +142,12 @@ class HostedXspfService(
         return true
     }
 
+    /** The hosted XSPF's text, every redirect hop checked and the body capped
+     *  ([fetchPublicPlaylistText], GHSA-gfvj-rh43-vmp9); null when it failed. */
     private suspend fun fetch(url: String): String? = try {
-        val resp = httpClient.get(url)
-        if (!resp.status.isSuccess()) {
-            Log.w(TAG, "Fetch $url failed: HTTP ${resp.status.value}")
-            null
-        } else {
-            resp.bodyAsText().ifBlank { null }
-        }
+        fetchPublicPlaylistText(httpClient, url, HOSTED_PLAYLIST_MAX_BYTES).ifBlank { null }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
     } catch (e: Exception) {
         Log.w(TAG, "Fetch $url error: ${e.message}")
         null

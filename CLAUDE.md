@@ -703,6 +703,8 @@ Importing a playlist from an XSPF URL (as opposed to an uploaded `.xspf` file or
 
 **SSRF re-validation on every poll.** `validateXspfUrl` runs at import time AND on every poll tick — a DNS record can change between import and the next fetch, so a previously-safe URL can later resolve to an internal address. Literal-host check only (we don't resolve DNS, which would introduce a TOCTOU race).
 
+**Every playlist URL fetch goes through `fetchPublicPlaylistText` (GHSA-gfvj-rh43-vmp9).** The shared helper (`shared/.../deeplink/PublicPlaylistFetch.kt`) is the one way both apps fetch a user-supplied playlist URL: the hosted XSPF import and poll (`HostedXspfService`, Android's `HostedPlaylistPoller`), `parachord://play/playlist?url=` (`DefaultProtocolInputResolver`, `AndroidProtocolInputResolver`), and the Achordion and Spotify-embed fetches in `ProviderPlaylistResolver`. It never lets the client follow a redirect: each 3xx `Location` is resolved and run through `validatePublicHttpsUrl` before any request goes to it, at most 5 hops (the engines never follow redirects themselves: Ktor's OkHttp engine turns OkHttp's off, and the Darwin delegate declines them). The body is capped while it's read (`HOSTED_PLAYLIST_MAX_BYTES` 5 MB, desktop's; `PROTOCOL_TRACKLIST_MAX_BYTES` 100 KB), and a larger `Content-Length` is refused before reading. Following redirects automatically let a public https URL send the app to a device on the user's network, loopback, or plain http, and an endless body was read whole. Don't fetch a playlist URL with a bare `httpClient.get`.
+
 **Content hash comparison, not conditional GET.** `sha256Hex(body)` is the change token. HTTP `ETag`/`If-Modified-Since` would be a nice efficiency win but aren't universally honored; hash works regardless. Schema stores the hash in `playlists.sourceContentHash`.
 
 **SyncEngine hooks for hosted playlists (`sourceUrl != null`):**
@@ -1382,7 +1384,7 @@ A full security review was completed April 2026. The review plan is at `.claude/
 - H5: OAuth state parameter + CSRF protection + per-flow verifier isolation
 - H8: Release build fails if `CI_KEYSTORE_PATH` unset (no debug-keystore fallback)
 - H9: `network_security_config.xml` denying cleartext traffic
-- H10: XSPF SSRF block (HTTPS-only, private-IP rejection) + XXE prevention
+- H10: XSPF SSRF block (HTTPS-only, private-IP rejection, every redirect hop re-checked, bodies capped while read: `fetchPublicPlaylistText`, GHSA-gfvj-rh43-vmp9) + XXE prevention
 - M8: Keystore password from env var (not hardcoded)
 - M12: Explicit `usesCleartextTraffic="false"`
 

@@ -61,7 +61,7 @@ See issue [#107](https://github.com/Parachord/parachord-mobile/issues/107) for t
 - **iOS:** App Transport Security is left at its HTTPS-only default, with no exceptions.
 - All API endpoints use HTTPS.
 - Every request carries a `Parachord/<version>` User-Agent with a reachable contact URL, as MusicBrainz and ListenBrainz require.
-- Hosted XSPF imports are HTTPS-only and reject private and loopback hosts, re-checked on every poll (SSRF). XML parsing disables external entities (XXE).
+- Playlist URLs (hosted XSPF imports and polls, `parachord://play/playlist?url=`) are HTTPS-only and reject private and loopback hosts, re-checked on every poll and on every redirect hop before it's requested, and their bodies are capped while being read (SSRF, GHSA-gfvj-rh43-vmp9). XML parsing disables external entities (XXE).
 
 ### OAuth
 
