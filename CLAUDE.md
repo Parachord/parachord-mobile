@@ -1068,6 +1068,14 @@ The "On Tour" teal dot (`#10C9B4`) appears next to the artist name in the mini p
 
 ## Design System & Theming
 
+**The full design system is [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md)**: tokens, page and service colours, scales, the shared components (section titles, filter chips, source icons, cards, states), Home, copy and accessibility. It translates desktop's rules (desktop `CLAUDE.md` "Design system: don't let it drift", #1380) to Compose and SwiftUI; when desktop changes a rule, change it there in the same piece of work. Where the apps stand against it: [docs/plans/2026-11-15-mobile-design-audit.md](docs/plans/2026-11-15-mobile-design-audit.md). The rules most often broken:
+- **White text never sits on the theme accent** (`#a78bfa` in dark). Filled buttons, selected chips and play buttons use the fixed fill accent `#7c3aed` in both themes.
+- **No colour literals outside the theme files**, and success / warning / error are always the tokens.
+- **A service's colour is its plugin's manifest `color`** (`PluginManager` carries it), never a hand-copied hex.
+- **Section titles and filter chips are one shared component per platform**, styled as desktop's `SectionHeader` (20 / 700, text-primary, "See all" in the destination page's colour) and `FilterChips`. Never rebuild them on a screen.
+- **Stay on the scales**: type 11 · 12 · 13 · 14 · 16 · 20 · 24 · 28 · 48, 4-point spacing, radius 4 · 6 · 8 · 10 · 12 · 16 · full.
+- **Copy**: plugin / service / source (never "resolver" in UI), track not song, "…" not "...", one plural helper, "Try again", no raw error messages.
+
 ### Brand Colors
 
 The desktop uses **purple as the primary accent color**, not blue.
@@ -1086,12 +1094,9 @@ The desktop uses **purple as the primary accent color**, not blue.
 
 **Brand color (icon background):** `#273441`
 
-### Resolver-Specific Colors
+### Service Colors
 
-Used for badges and source indicators:
-- Spotify: green (`bg-green-600/20`, `text-green-400`)
-- YouTube: red (`bg-red-600/20`, `text-red-400`)
-- Bandcamp: cyan (`bg-cyan-600/20`, `text-cyan-400`)
+A service's colour is its plugin's manifest `color` (Spotify `#1DB954`, Apple Music `#FA243C`, Bandcamp `#629AA9`, SoundCloud `#FF5500`, Subsonic `#14b8a6`, Local Files `#6366f1`, …; the full table is in `docs/DESIGN_SYSTEM.md`). Source icons are the service's logo on a square of that colour.
 
 ### Typography
 
@@ -1101,14 +1106,14 @@ On Android, use the system default (Roboto) — this naturally matches.
 
 ### Component Styling Conventions
 
-- **Cards/containers:** `rounded-lg` equivalent (8dp), subtle hover/press states
-- **Buttons:** Primary = purple fill + white text. Secondary = gray fill. Icon buttons = rounded-full
+- **Cards/containers:** 10dp cards with 6dp art inside, 8dp buttons, rows and menus, subtle press states
+- **Buttons:** Primary = fill accent `#7c3aed` + white text (both themes). Secondary = outline. Icon buttons = rounded-full
 - **Inputs:** Border with purple focus ring
 - **Spacing:** 4dp increment system (8, 12, 16dp common)
 - **Shadows:** Subtle — small, medium, large levels. Don't over-shadow
 - **Transitions:** Smooth color/opacity transitions on interactive elements
 - **Text colors:** Primary for titles, secondary (gray) for artist names/metadata, purple for interactive/active states
-- **Play button:** Rounded-full, purple background, white icon
+- **Play button:** Rounded-full, fill accent `#7c3aed` background, white icon
 
 ### Dark Mode
 
