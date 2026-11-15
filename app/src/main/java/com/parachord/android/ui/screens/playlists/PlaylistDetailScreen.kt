@@ -460,28 +460,19 @@ fun PlaylistDetailScreen(
         }
 
         if (showDeleteConfirm) {
-            AlertDialog(
-                onDismissRequest = { showDeleteConfirm = false },
-                containerColor = ModalBg,
-                titleContentColor = ModalTextActive,
-                textContentColor = ModalTextPrimary,
-                title = { Text("Delete Playlist") },
-                text = { Text("Are you sure you want to delete \"${playlist?.name}\"?") },
-                confirmButton = {
-                    TextButton(onClick = {
+            playlist?.let { pl ->
+                com.parachord.android.ui.components.DeletePlaylistDialog(
+                    playlistId = pl.id,
+                    playlistName = pl.name,
+                    loadMirrors = viewModel::getDeletableMirrors,
+                    onConfirm = { fromProviders ->
                         showDeleteConfirm = false
-                        viewModel.deletePlaylist()
+                        viewModel.deletePlaylist(fromProviders)
                         onBack()
-                    }) {
-                        Text("Delete", color = Color(0xFFEF4444))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text("Cancel", color = ModalTextPrimary)
-                    }
-                },
-            )
+                    },
+                    onDismiss = { showDeleteConfirm = false },
+                )
+            }
         }
     }
 }

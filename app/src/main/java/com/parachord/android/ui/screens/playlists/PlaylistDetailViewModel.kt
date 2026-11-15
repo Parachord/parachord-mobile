@@ -258,6 +258,10 @@ class PlaylistDetailViewModel constructor(
     private val _toastEvents = Channel<String>(Channel.BUFFERED)
     val toastEvents: Flow<String> = _toastEvents.receiveAsFlow()
 
+    /** The services this playlist is on, for the delete dialog (#684). */
+    suspend fun getDeletableMirrors(playlistId: String): List<String> =
+        libraryRepository.getPlaylistMirrors(playlistId).keys.toList()
+
     /**
      * Delete this playlist locally AND attempt to delete each remote
      * mirror. Per Decision D8, when Apple Music returns
@@ -266,10 +270,10 @@ class PlaylistDetailViewModel constructor(
      * remove the playlist manually in the Music app — the local row
      * is gone but the AM mirror is not.
      */
-    fun deletePlaylist() {
+    fun deletePlaylist(deleteFromProviders: Set<String>) {
         viewModelScope.launch {
             val pl = playlist.value ?: return@launch
-            val attempts = libraryRepository.deletePlaylistWithSync(pl)
+            val attempts = libraryRepository.deletePlaylistWithSync(pl, deleteFromProviders)
             val unsupported = attempts.filter {
                 it.result is com.parachord.shared.sync.DeleteResult.Unsupported
             }

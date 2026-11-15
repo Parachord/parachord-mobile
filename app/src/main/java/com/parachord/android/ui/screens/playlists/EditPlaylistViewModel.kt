@@ -128,15 +128,19 @@ class EditPlaylistViewModel constructor(
     )
     val toastEvents: kotlinx.coroutines.flow.Flow<String> = _toastEvents.receiveAsFlow()
 
+    /** The services this playlist is on, for the delete dialog (#684). */
+    suspend fun getDeletableMirrors(playlistId: String): List<String> =
+        libraryRepository.getPlaylistMirrors(playlistId).keys.toList()
+
     /**
      * Delete this playlist entirely. Phase 6.5 sync-aware: also
      * attempts remote deletion and surfaces a toast if any provider
      * returned Unsupported (per Decision D8).
      */
-    fun deletePlaylist(onDone: () -> Unit) {
+    fun deletePlaylist(deleteFromProviders: Set<String>, onDone: () -> Unit) {
         viewModelScope.launch {
             val pl = playlist.value ?: run { onDone(); return@launch }
-            val attempts = libraryRepository.deletePlaylistWithSync(pl)
+            val attempts = libraryRepository.deletePlaylistWithSync(pl, deleteFromProviders)
             val unsupported = attempts.filter {
                 it.result is com.parachord.shared.sync.DeleteResult.Unsupported
             }

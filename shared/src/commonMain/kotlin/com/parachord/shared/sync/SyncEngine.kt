@@ -110,13 +110,6 @@ class SyncEngine constructor(
          */
         var SYNC_WATCHDOG_TIMEOUT_MS = 10 * 60 * 1000L
 
-        /**
-         * Bump this to force a full re-fetch on next sync (bypasses quick-check).
-         * The current version is stored in DataStore; when it's less than this,
-         * localCount is passed as 0 to force a full diff.
-         */
-        private const val SYNC_DATA_VERSION = 4
-
         /** Dead-mirror reconcile (workstream B): if more than this many mirrors
          *  look absent from one provider fetch, treat it as a partial/failed
          *  fetch and skip the reconcile rather than probe-storm / mass-act. */
@@ -141,10 +134,14 @@ class SyncEngine constructor(
         private const val NWAY_HELD_TOKEN = "nway-held"
 
         /** Sentinel for the cross-provider local-row dedup migration
-         *  ([migrateMergeCrossProviderDuplicates]). Lives above
-         *  [SYNC_DATA_VERSION] so it doesn't piggyback on the v3→v4
-         *  Spotify dedup migration's gating. Idempotent: runs once
-         *  per install. */
+         *  ([migrateMergeCrossProviderDuplicates]), stored in the sync data
+         *  version (3 = the v2→v3 track re-fetch). Idempotent: runs once per
+         *  install. Version 4 was a one-time Spotify duplicate cleanup that
+         *  unfollowed same-named remote playlists by name alone; it was removed
+         *  (#684) because it unfollowed originals that desktop still linked to.
+         *  Nothing reads 4 any more. Mobile never deletes or unfollows a remote
+         *  playlist on its own judgment, only when the user picks the services
+         *  ([onPlaylistRemoved], [deletePlaylistOnProvider]). */
         private const val MIGRATION_DEDUP_LOCAL_V1 = 5
 
         /**
@@ -552,7 +549,7 @@ class SyncEngine constructor(
      * agnostic — collected from `sync_sources`, since `deleteSyncedTracks` only
      * catches `spotify-%`) and let the normal re-fetch re-create them with
      * canonical ISRC-keyed ids that merge across providers. Gated on a dedicated
-     * flag (not the shared SYNC_DATA_VERSION counter).
+     * flag (not the shared sync data version).
      */
     private suspend fun migrateCrossProviderTrackDedup() {
         if (settingsStore.getTrackDedupV1Done()) return
@@ -680,7 +677,7 @@ class SyncEngine constructor(
             syncSourceDao.deleteByProviderAndType(providerId, "track")
             trackDao.deleteSyncedTracks()
             val result = syncTracksClean(onProgress)
-            // Set to 3, not SYNC_DATA_VERSION — playlist dedup (v4) runs separately
+            // Set to 3: later versions belong to the playlist migrations.
             settingsStore.setSyncDataVersion(3)
             return result
         }
@@ -2423,11 +2420,11 @@ class SyncEngine constructor(
             return TypeSyncResult(added, removed, updated, unchanged)
         }
 
-        // ── Spotify pull (existing block; preserves dedup-cleanup migration) ──
-        // The dedup-cleanup migration block below is Spotify-only by design
-        // (one-time fix for playlists created by old Spotify sync bugs); it
-        // can't be generalized so we keep the Spotify pull inline rather
-        // than duplicating the whole helper. When Spotify has opted out
+        // ── Spotify pull (inline; predates the per-provider helper) ──
+        // Spotify's pull still runs inline rather than through
+        // `pullPlaylistsForProvider`; it no longer deletes anything remote
+        // (the old by-name duplicate cleanup that lived after it was removed,
+        // #684). When Spotify has opted out
         // of the playlists axis (per-provider opt-in via the wizard),
         // skip the fetch entirely — the push and non-Spotify-pull loops
         // below have their own per-axis gates.
@@ -2675,60 +2672,6 @@ class SyncEngine constructor(
             }
         }
 
-        // One-time cleanup of duplicate playlists on Spotify created by earlier
-        // sync bugs. Only runs during the v3→v4 migration, not on every sync.
-        val deletedSpotifyIds = mutableSetOf<String>()
-        if (settingsStore.getSyncDataVersion() < SYNC_DATA_VERSION) {
-            val currentLocalSources = syncSourceDao.getByProvider(providerId, "playlist")
-            val ownedByName = remotePlaylists.filter { it.isOwned }
-                .groupBy { it.entity.name.lowercase() }
-            val dupeGroups = ownedByName.values.filter { it.size > 1 }
-            if (dupeGroups.isNotEmpty()) {
-                val totalDupes = dupeGroups.sumOf { it.size - 1 }
-                var dedupProgress = 0
-                onProgress(SyncProgress(SyncPhase.PLAYLISTS, 0, totalDupes, "Cleaning up duplicate playlists..."))
-
-                for (dupes in dupeGroups) {
-                    val trackedIds = currentLocalSources.mapNotNull { it.externalId }.toSet()
-                    val tracked = dupes.filter { it.spotifyId in trackedIds }
-                    val keep = tracked.firstOrNull() ?: dupes.first()
-                    for (dupe in dupes) {
-                        if (dupe.spotifyId == keep.spotifyId) continue
-                        try {
-                            Log.d(TAG, "Removing duplicate Spotify playlist: ${dupe.entity.name} (${dupe.spotifyId})")
-                            val result = spotifyProvider.deletePlaylist(dupe.spotifyId)
-                            when (result) {
-                                is com.parachord.shared.sync.DeleteResult.Success ->
-                                    deletedSpotifyIds.add(dupe.spotifyId)
-                                is com.parachord.shared.sync.DeleteResult.Unsupported -> {
-                                    Log.w(TAG, "Spotify deletePlaylist returned Unsupported(${result.status}); skipping")
-                                    continue
-                                }
-                                is com.parachord.shared.sync.DeleteResult.Failed -> {
-                                    Log.w(TAG, "Spotify deletePlaylist failed for ${dupe.spotifyId}", result.error)
-                                    continue
-                                }
-                            }
-                            val orphanSource = currentLocalSources.find { it.externalId == dupe.spotifyId }
-                            if (orphanSource != null) {
-                                syncSourceDao.deleteByKey(orphanSource.itemId, "playlist", providerId)
-                            }
-                            // Prune the durable link map too so the next sync
-                            // doesn't burn a validation round-trip on a
-                            // known-dead externalId.
-                            syncPlaylistLinkDao.deleteByExternalId(providerId, dupe.spotifyId)
-                            removed++
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to remove duplicate playlist ${dupe.spotifyId}", e)
-                        }
-                        dedupProgress++
-                        onProgress(SyncProgress(SyncPhase.PLAYLISTS, dedupProgress, totalDupes, "Cleaning up duplicate playlists..."))
-                    }
-                }
-            }
-            settingsStore.setSyncDataVersion(SYNC_DATA_VERSION)
-        }
-
         // ── Phase 4.5: per-provider push loop ────────────────────────
         // Iterate every enabled SyncProvider; for each, push the
         // playlists eligible for that provider (see `isPushCandidate`)
@@ -2753,9 +2696,8 @@ class SyncEngine constructor(
                 // Per-provider axis opt-in — skip push for providers that
                 // didn't enable the playlists axis in their wizard.
                 if (!providerHasAxis(provider.id, "playlists")) continue
-                // Spotify already loaded `remotePlaylists` + `deletedSpotifyIds`
-                // above for the dedup-cleanup phase; reuse those for Spotify
-                // and fetch fresh for any other provider.
+                // Spotify already loaded `remotePlaylists` above; reuse it for
+                // Spotify and fetch fresh for any other provider.
                 val providerRemote = if (provider.id == SpotifySyncProvider.PROVIDER_ID) {
                     remotePlaylists
                 } else {
@@ -2767,13 +2709,9 @@ class SyncEngine constructor(
                         continue
                     }
                 }
-                val deletedExternalIds = if (provider.id == SpotifySyncProvider.PROVIDER_ID) {
-                    deletedSpotifyIds
-                } else emptySet()
                 val pushed = pushPlaylistsForProvider(
                     provider = provider,
                     remotePlaylists = providerRemote,
-                    deletedExternalIds = deletedExternalIds,
                 )
                 added += pushed
             }
@@ -3275,7 +3213,6 @@ class SyncEngine constructor(
     private suspend fun pushPlaylistsForProvider(
         provider: com.parachord.shared.sync.SyncProvider,
         remotePlaylists: List<SyncedPlaylist>,
-        deletedExternalIds: Set<String>,
     ): Int {
         val providerId = provider.id
         var added = 0
@@ -3301,9 +3238,8 @@ class SyncEngine constructor(
             it.name.isNotBlank() && shouldPushToProvider(it, providerId)
         }
 
-        val liveRemote = remotePlaylists.filter { it.spotifyId !in deletedExternalIds }
-        val remoteById = liveRemote.associateBy { it.spotifyId }
-        val ownedRemoteByName = liveRemote.filter { it.isOwned }
+        val remoteById = remotePlaylists.associateBy { it.spotifyId }
+        val ownedRemoteByName = remotePlaylists.filter { it.isOwned }
             .groupBy { it.entity.name.trim().lowercase() }
 
         // Pre-fetch each candidate's link once: reused by the mass-floor pre-pass
@@ -4117,18 +4053,24 @@ class SyncEngine constructor(
      * (`playlistDao.delete`) — this method only handles the remote
      * cleanup so it composes with `LibraryRepository.deletePlaylist`
      * without ordering surprises.
+     *
+     * [deleteFromProviders] is required and is the user's own choice: the
+     * delete dialog names each service and the user picks which ones lose
+     * their copy (#684). There is no "every mirror" default, so no caller can
+     * delete or unfollow a remote playlist the user didn't pick. On Spotify a
+     * delete is an unfollow, which the owner can't undo in Spotify's app, and
+     * another client (desktop) may still link to that copy.
      */
     suspend fun onPlaylistRemoved(
         playlist: Playlist,
-        deleteFromProviders: Set<String>? = null,
+        deleteFromProviders: Set<String>,
     ): List<PlaylistDeletionAttempt> {
         val attempts = mutableListOf<PlaylistDeletionAttempt>()
         val mirrors = getPlaylistMirrors(playlist.id)
         for ((providerId, externalId) in mirrors) {
-            // null = delete from EVERY mirror (legacy behavior). Otherwise only
-            // the user-selected providers get a remote delete; the rest keep
-            // their remote playlist. Local cleanup below runs regardless.
-            if (deleteFromProviders != null && providerId !in deleteFromProviders) continue
+            // Only the user-selected providers get a remote delete; the rest
+            // keep their remote playlist. Local cleanup below runs regardless.
+            if (providerId !in deleteFromProviders) continue
             val provider = providers.firstOrNull { it.id == providerId } ?: continue
             val result = try {
                 provider.deletePlaylist(externalId)
