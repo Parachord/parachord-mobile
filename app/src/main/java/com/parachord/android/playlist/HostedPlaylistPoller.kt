@@ -8,8 +8,9 @@ import com.parachord.android.data.db.entity.PlaylistTrackEntity
 import com.parachord.android.data.metadata.ImageEnrichmentService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import com.parachord.shared.deeplink.HOSTED_PLAYLIST_MAX_BYTES
+import com.parachord.shared.deeplink.fetchPublicPlaylistText
+import io.ktor.client.HttpClient
 
 /**
  * Re-fetches a hosted XSPF playlist and reimports its tracks when the source
@@ -24,7 +25,7 @@ import okhttp3.Request
  * non-fatal.
  */
 class HostedPlaylistPoller constructor(
-    private val httpClient: OkHttpClient,
+    private val httpClient: HttpClient,
     private val playlistDao: PlaylistDao,
     private val playlistTrackDao: PlaylistTrackDao,
     private val imageEnrichmentService: ImageEnrichmentService,
@@ -91,19 +92,15 @@ class HostedPlaylistPoller constructor(
             return@withContext false
         }
 
+        // Every redirect hop is checked and the body is capped while it's read
+        // (GHSA-gfvj-rh43-vmp9); the shared helper iOS uses too.
         val content = try {
-            val request = Request.Builder().url(url).build()
-            val response = httpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.w(TAG, "Hosted playlist '${playlist.name}' fetch failed: HTTP ${response.code}")
-                response.close()
+            fetchPublicPlaylistText(httpClient, url, HOSTED_PLAYLIST_MAX_BYTES).ifBlank {
+                Log.w(TAG, "Hosted playlist '${playlist.name}' returned empty body")
                 return@withContext false
             }
-            response.body?.string().also { response.close() }
-                ?: run {
-                    Log.w(TAG, "Hosted playlist '${playlist.name}' returned empty body")
-                    return@withContext false
-                }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Hosted playlist '${playlist.name}' fetch error: ${e.message}")
             return@withContext false

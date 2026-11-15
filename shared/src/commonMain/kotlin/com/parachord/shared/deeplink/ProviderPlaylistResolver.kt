@@ -109,10 +109,14 @@ class ProviderPlaylistResolver(
 
     // ── Achordion → public XSPF endpoint, then the standard tracklist parser ──
     private suspend fun fetchAchordionXspf(xspfUrl: String): ResolvedProtocolPlay {
-        val resp = httpClient.get(xspfUrl)
-        if (!resp.status.isSuccess()) throw IllegalStateException("Achordion playlist fetch failed: ${resp.status.value}")
-        val body = resp.bodyAsText()
-        if (body.length > MAX_BODY) throw IllegalArgumentException("Playlist response too large (max 100KB)")
+        // Redirect hops checked and the body capped while read (GHSA-gfvj-rh43-vmp9).
+        val body = try {
+            fetchPublicPlaylistText(httpClient, xspfUrl, MAX_BODY)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException("Achordion playlist fetch failed: ${e.message}")
+        }
         val parsed = parseProtocolTracklist(body, ::parseXspf)
         if (parsed.tracks.isEmpty()) throw IllegalStateException("Achordion playlist had no playable tracks.")
         return ResolvedProtocolPlay(displayName = parsed.title ?: parsed.creator ?: "Playlist", tracks = parsed.tracks)
@@ -183,14 +187,9 @@ class ProviderPlaylistResolver(
      */
     private suspend fun fetchSpotifyEmbedPlaylist(playlistId: String): ResolvedProtocolPlay? {
         return try {
-            val resp = httpClient.get("https://open.spotify.com/embed/playlist/$playlistId")
-            if (!resp.status.isSuccess()) {
-                Log.w(TAG, "Spotify embed HTTP ${resp.status.value} for $playlistId"); return null
-            }
-            val html = resp.bodyAsText()
-            if (html.length > SPOTIFY_EMBED_MAX_BODY) {
-                Log.w(TAG, "Spotify embed page too large for $playlistId"); return null
-            }
+            val html = fetchPublicPlaylistText(
+                httpClient, "https://open.spotify.com/embed/playlist/$playlistId", SPOTIFY_EMBED_MAX_BODY,
+            )
             parseSpotifyEmbed(html)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
