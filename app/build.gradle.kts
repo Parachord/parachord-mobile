@@ -244,6 +244,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.kotlinx.datetime)
     testImplementation(libs.turbine)
     testImplementation(libs.sqldelight.sqlite.driver)
     testImplementation(libs.sqlite.jdbc)

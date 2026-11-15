@@ -20,10 +20,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.datetime.Clock
-import kotlinx.datetime.DateTimeUnit
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
-import kotlinx.datetime.minus
 import kotlinx.datetime.todayIn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -35,7 +33,8 @@ import kotlinx.serialization.json.Json
  * Mirrors the desktop app's `loadNewReleases()` approach:
  * 1. Gather artists from library + Last.fm/ListenBrainz top artists
  * 2. For each artist, resolve MBID (mapper first, then MusicBrainz search fallback)
- * 3. Browse their release-groups and filter to recent releases (last 6 months)
+ * 3. Browse their release-groups and keep the ones in [freshDropsWindow]
+ *    (three months back to 14 days ahead; the cache is held to it too)
  * 4. Assign Cover Art Archive URLs
  * 5. Cache with 6-hour TTL
  *
@@ -96,6 +95,8 @@ class FreshDropsRepository(
      * for 30 days (parachord#1127). Null = session-only, as before.
      */
     private val artistIdCache: com.parachord.shared.cache.PersistentJsonCache<String>? = null,
+    /** Today's date, which sets the window ([freshDropsWindow]); a test can fix it. */
+    private val today: () -> LocalDate = { Clock.System.todayIn(TimeZone.currentSystemDefault()) },
 ) {
     companion object {
         private const val TAG = "FreshDropsRepo"
@@ -142,7 +143,9 @@ class FreshDropsRepository(
         try {
             val body = cacheRead() ?: return
             val wrapper = diskJson.decodeFromString<FreshDropsDiskCache>(body)
-            cachedReleases = wrapper.releases
+            // Releases that aged out of the window since the last save go now,
+            // so the list never grows past it (#687, desktop parachord#1421).
+            cachedReleases = withinFreshDropsWindow(wrapper.releases, today())
             lastFetchedAt = wrapper.fetchedAt
             Log.d(TAG, "Loaded ${wrapper.releases.size} cached fresh drops from disk (age: ${(currentTimeMillis() - wrapper.fetchedAt) / 1000}s)")
         } catch (e: Exception) {
@@ -314,16 +317,17 @@ class FreshDropsRepository(
             // Snapshot prior cached releases before fetch starts (desktop pattern:
             // merge new + prior so we don't lose results from artists not in this
             // run's selection — the artist cap means each fetch only covers a subset)
-            val priorCachedReleases = cachedReleases?.toList() ?: emptyList()
+            // Held to the window, so a release found by an earlier scan ages out
+            // even when this scan doesn't reach its artist (#687).
+            val window = freshDropsWindow(today())
+            val priorCachedReleases = cachedReleases?.filter { window.contains(it.date) } ?: emptyList()
 
             // 2. Fetch releases for each artist from MusicBrainz
-            val sixMonthsAgo = Clock.System.todayIn(TimeZone.currentSystemDefault())
-                .minus(6, DateTimeUnit.MONTH)
             val allReleases = mutableListOf<FreshDrop>()
 
             for ((index, artist) in artists.withIndex()) {
                 try {
-                    val releases = fetchReleasesForArtist(artist.name, sixMonthsAgo, libraryTracks)
+                    val releases = fetchReleasesForArtist(artist.name, window, libraryTracks)
                     val withSource = releases.map { it.copy(artistSource = artist.source) }
                     allReleases.addAll(withSource)
 
@@ -553,7 +557,7 @@ class FreshDropsRepository(
      */
     private suspend fun fetchReleasesForArtist(
         artistName: String,
-        cutoffDate: LocalDate,
+        window: FreshDropsWindow,
         libraryTracks: List<com.parachord.shared.model.Track>,
     ): List<FreshDrop> {
         // Resolve MBID: mapper first (~4ms), MB search fallback (rate-limited)
@@ -582,26 +586,13 @@ class FreshDropsRepository(
             }
         } while (offset < totalCount && offset < 500 && lastPageSize == pageSize)
 
-        // `kotlinx.datetime.LocalDate.toString()` produces ISO-8601 (`yyyy-MM-dd`),
-        // matching the previous `DateTimeFormatter.ISO_LOCAL_DATE` output.
-        val cutoffStr = cutoffDate.toString()
-
         return allReleaseGroups
             .filter { rg ->
-                // Must have a release date
-                val date = rg.firstReleaseDate ?: return@filter false
-                // MusicBrainz returns dates as "YYYY-MM-DD", "YYYY-MM", or "YYYY".
-                // Pad partial dates to full precision for comparison — use the
-                // earliest possible day so we INCLUDE releases whose partial date
-                // *could* be after the cutoff (e.g. "2025" → "2025-01-01" keeps
-                // any 2025 release if the cutoff year is 2025).
-                val comparable = when (date.length) {
-                    4 -> "$date-01-01"     // "2025" → "2025-01-01"
-                    7 -> "$date-01"        // "2025-09" → "2025-09-01"
-                    else -> date           // "2025-09-22" already full
-                }
-                // Must be after cutoff (last 6 months)
-                comparable >= cutoffStr
+                // Inside the window: three months back to 14 days ahead, so
+                // months-out pre-announcements don't show. MusicBrainz dates
+                // can be "YYYY", "YYYY-MM" or "YYYY-MM-DD"; they're compared as
+                // strings, as desktop does (FreshDropsWindow.contains).
+                window.contains(rg.firstReleaseDate)
                     // Exclude broadcast as primary type
                     && rg.primaryType?.lowercase() != "broadcast"
                     // Exclude compilations, broadcasts, live, DJ-mix, remix, etc.
