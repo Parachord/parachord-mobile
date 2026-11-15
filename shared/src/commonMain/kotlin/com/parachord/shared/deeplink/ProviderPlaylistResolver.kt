@@ -2,6 +2,7 @@ package com.parachord.shared.deeplink
 
 import com.parachord.shared.api.AppleMusicClient
 import com.parachord.shared.api.SpotifyClient
+import com.parachord.shared.api.bestImageUrl
 import com.parachord.shared.platform.Log
 import com.parachord.shared.playlist.XspfParser
 import io.ktor.client.HttpClient
@@ -97,7 +98,10 @@ class ProviderPlaylistResolver(
                 ProtocolTrack(artist = artist, title = title, album = o["album"]?.jsonPrimitive?.contentOrNull)
             }
             if (tracks.isEmpty()) null
-            else ResolvedProtocolPlay(displayName = name, tracks = tracks, albumArt = pl["albumArt"]?.jsonPrimitive?.contentOrNull)
+            else ResolvedProtocolPlay(
+                displayName = name, tracks = tracks, albumArt = pl["albumArt"]?.jsonPrimitive?.contentOrNull,
+                providerId = embedJson.parseToJsonElement(raw).jsonObject["resolverId"]?.jsonPrimitive?.contentOrNull,
+            )
         } catch (e: Exception) {
             Log.w(TAG, "registry playlist parse failed for $url: ${e.message}"); null
         }
@@ -140,12 +144,21 @@ class ProviderPlaylistResolver(
                 page.items.forEach { item ->
                     val t = item.track ?: return@forEach
                     if (t.name.isNullOrBlank()) return@forEach
-                    tracks.add(ProtocolTrack(artist = t.artistName, title = t.name.orEmpty(), album = t.album?.name))
+                    tracks.add(
+                        ProtocolTrack(
+                            artist = t.artistName, title = t.name.orEmpty(), album = t.album?.name,
+                            spotifyId = t.id, albumId = t.album?.id, durationMs = t.durationMs,
+                            artworkUrl = t.album?.images.bestImageUrl(),
+                        ),
+                    )
                 }
                 offset += page.items.size
                 if (page.next == null) break
             }
-            if (tracks.isNotEmpty()) ResolvedProtocolPlay(displayName = full.name ?: "Spotify Playlist", tracks = tracks)
+            if (tracks.isNotEmpty()) ResolvedProtocolPlay(
+                displayName = full.name ?: "Spotify Playlist", tracks = tracks,
+                albumArt = full.images.bestImageUrl(), providerId = "spotify",
+            )
             else null
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -194,10 +207,15 @@ class ProviderPlaylistResolver(
         val result = appleMusicClient.getCatalogPlaylist(storefront, plId, appleMusicDeveloperToken)
             ?: throw IllegalStateException("Couldn't load that Apple Music playlist — it may be private or unavailable in your region.")
         val tracks = result.tracks.map { s ->
-            ProtocolTrack(artist = s.artist, title = s.title, album = s.album)
+            ProtocolTrack(
+                artist = s.artist, title = s.title, album = s.album,
+                appleMusicId = s.id, durationMs = s.durationMs, artworkUrl = s.artworkUrl,
+            )
         }
         if (tracks.isEmpty()) throw IllegalStateException("That Apple Music playlist had no playable tracks.")
-        return ResolvedProtocolPlay(displayName = result.name, tracks = tracks, albumArt = result.artworkUrl)
+        return ResolvedProtocolPlay(
+            displayName = result.name, tracks = tracks, albumArt = result.artworkUrl, providerId = "applemusic",
+        )
     }
 
     private fun extractSpotifyPlaylistId(url: String): String? =
@@ -240,5 +258,5 @@ internal fun parseSpotifyEmbed(html: String): ResolvedProtocolPlay? {
             ?.takeIf { it.startsWith("spotify:track:") }?.removePrefix("spotify:track:")?.takeIf { it.isNotBlank() }
         ProtocolTrack(artist = artist, title = title, spotifyId = spotifyId)
     }
-    return if (tracks.isEmpty()) null else ResolvedProtocolPlay(displayName = name, tracks = tracks)
+    return if (tracks.isEmpty()) null else ResolvedProtocolPlay(displayName = name, tracks = tracks, providerId = "spotify")
 }

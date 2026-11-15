@@ -57,6 +57,14 @@ data class ProtocolTrack(
      *  for editorial playlists, #286) — threaded onto the built track as a resolver
      *  hint so a Spotify source is available without a title/artist search. */
     val spotifyId: String? = null,
+    /** Apple Music catalog id, when the source is Apple's catalog. */
+    val appleMusicId: String? = null,
+    /** The service's album id (Spotify), when known. */
+    val albumId: String? = null,
+    /** Length in milliseconds, when the source reports one. */
+    val durationMs: Long? = null,
+    /** The track's cover, when the source carries one. */
+    val artworkUrl: String? = null,
 )
 
 /**

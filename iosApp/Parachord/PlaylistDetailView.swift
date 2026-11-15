@@ -335,8 +335,9 @@ final class PlaylistImporter {
         }
     }
 
-    /// Import a playlist from the pasted URL (#18): Spotify / Apple Music catalog
-    /// / hosted XSPF — the container dispatches by URL shape.
+    /// Import a playlist from the pasted URL (#18) through the shared importer:
+    /// service playlists via the resolvers (Spotify, Apple Music, any plugin that
+    /// claims the link), anything else as a hosted XSPF.
     func importFromUrl() {
         let u = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !u.isEmpty else { return }

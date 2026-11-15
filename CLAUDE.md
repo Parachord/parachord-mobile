@@ -309,6 +309,18 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   providers still work. Example: `ProviderPlaylistResolver` (playlist URL → tracks) does
   native Spotify/Apple first, then `lookupPlaylist` via the registry — so SoundCloud
   (#281) and any future resolver work with no per-service branch.
+- **Importing a playlist from a link goes through the same resolver.** The shared
+  `PlaylistUrlImporter` (`shared/.../playlist/PlaylistUrlImporter.kt`) is what both apps'
+  import field and `parachord://import?url=` call (Android `PlaylistImportManager.importFromUrl`,
+  iOS `IosContainer.importPlaylistFromUrl`). An Achordion playlist imports as its XSPF
+  endpoint (hosted, polled); a link `ProviderPlaylistResolver` resolves is saved as a
+  snapshot with `source = "<providerId>-import"` (`spotify-import`, `applemusic-import`,
+  `soundcloud-import`: the provider comes from `ResolvedProtocolPlay.providerId`) and the
+  native ids the tracklist carries (`ProtocolTrack.spotifyId` / `appleMusicId`, plus album
+  id, length and cover); anything else is a hosted XSPF (`HostedXspfService.importHostedXspf`).
+  Both apps used to choose by URL shape (`open.spotify.com` / `music.apple.com`, else XSPF),
+  so a SoundCloud set was fetched as XSPF and failed. A Spotify link imports without a
+  Spotify connection too, from the public embed page (tracks keep their Spotify ids).
 - **Reaching the `.axe` from an arbitrary URL needs the unique-key POLL on BOTH runtimes.**
   A bare `(async () => …)()` does NOT return the resolved value once it awaits a real
   `fetch` — iOS JSC yields `[object Promise]`, and Android WebView yields the unresolved
@@ -682,7 +694,7 @@ SINGLE-AUTHORITY (hosted-XSPF, FOLLOWED `writable=false` source, or user-flagged
 
 ### Hosted XSPF Playlists
 
-Importing a playlist from an XSPF URL (as opposed to an uploaded `.xspf` file or a Spotify/Apple Music URL) sets `sourceUrl` on the row and records a SHA-256 of the body in `sourceContentHash`. A background poller re-fetches that URL, diffs the hash, and when the content has changed replaces the playlist's tracks and flips `locallyModified = true`. The XSPF is canonical; the next Spotify sync pushes the new state up, overwriting any Spotify-side edits (mirrors desktop's `pollHostedPlaylists`, app.js L32167+).
+Importing a playlist from an XSPF URL (as opposed to an uploaded `.xspf` file or a service playlist link, see "Importing a playlist from a link" below) sets `sourceUrl` on the row and records a SHA-256 of the body in `sourceContentHash`. A background poller re-fetches that URL, diffs the hash, and when the content has changed replaces the playlist's tracks and flips `locallyModified = true`. The XSPF is canonical; the next Spotify sync pushes the new state up, overwriting any Spotify-side edits (mirrors desktop's `pollHostedPlaylists`, app.js L32167+).
 
 **Dual-track polling (mirrors [SyncScheduler](app/src/main/java/com/parachord/android/sync/SyncScheduler.kt)):**
 - Foreground coroutine timer every 5 min while the app is running — matches desktop cadence.
@@ -707,7 +719,7 @@ Importing a playlist from an XSPF URL (as opposed to an uploaded `.xspf` file or
 
 **Recommendation: import each URL on exactly one device, and prefer the phone.** Two reasons: (1) WorkManager runs the poller every 15 min in the background even when the app isn't open — a laptop that sleeps overnight gets zero polls, a phone in your pocket gets dozens; (2) Android-as-polling-agent works regardless of desktop uptime, while desktop-as-polling-agent freezes the playlist whenever the laptop's offline. **Don't import the same URL on both devices** — local IDs are random UUIDs (`hosted-xspf-<uuid>`), so two imports produce two distinct local rows. Three-layer dedup catches the name match on push, but you still end up with a duplicate local row on whichever device imported second.
 
-**Key files:** `playlist/HostedPlaylistPoller.kt`, `playlist/HostedPlaylistScheduler.kt`, `playlist/HostedPlaylistWorker.kt`, `playlist/XspfHashing.kt` (shared SSRF + SHA-256 helpers), `playlist/PlaylistImportManager.kt` (persists `sourceUrl` + hash), `sync/SyncEngine.kt` (hosted skip-pull + include-in-push), `ui/components/HostedBadge.kt`
+**Key files:** `playlist/HostedPlaylistPoller.kt`, `playlist/HostedPlaylistScheduler.kt`, `playlist/HostedPlaylistWorker.kt`, `playlist/XspfHashing.kt` (shared SSRF + SHA-256 helpers), `shared/.../playlist/HostedXspfService.kt` (`importHostedXspf` persists `sourceUrl` + hash, both apps), `sync/SyncEngine.kt` (hosted skip-pull + include-in-push), `ui/components/HostedBadge.kt`
 
 ### Outbound Sharing (Achordion + Smart Links)
 
