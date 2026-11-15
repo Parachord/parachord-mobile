@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.artist
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.ResolveWhileVisible
 import kotlinx.coroutines.Job
 import com.parachord.android.resolver.trackKey
@@ -392,14 +393,8 @@ private val RELEASE_FILTERS = listOf(
 
 /** Per-release-type color — desktop `badgeStyles` map (app.js), the source of
  *  truth (#247). Shared by the artist discography filters/badges AND Fresh Drops. */
-fun releaseTypeBadgeColor(type: String?): Color = when (type?.lowercase()) {
-    "album" -> Color(0xFF6366F1)        // indigo
-    "ep" -> Color(0xFFA855F7)           // purple
-    "single" -> Color(0xFFDB2777)       // rose
-    "live" -> Color(0xFFD97706)         // amber
-    "compilation" -> Color(0xFF0EB3A0)  // teal
-    else -> Color(0xFF9CA3AF)           // gray
-}
+fun releaseTypeBadgeColor(type: String?): Color =
+    com.parachord.android.ui.theme.releaseTypeColor(type) // one map, shared (DesignTokens)
 
 @Composable
 private fun DiscographyTab(
@@ -923,7 +918,7 @@ private fun OnTourTab(
                 contentAlignment = Alignment.Center,
             ) {
                 androidx.compose.material3.CircularProgressIndicator(
-                    color = Color(0xFF7C3AED),
+                    color = FillAccent,
                 )
             }
         }

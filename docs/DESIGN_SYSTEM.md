@@ -5,9 +5,10 @@ The design rules both mobile apps follow. Desktop is the source of truth: its to
 Where the apps stand against these rules today: [the 2026-11-15 design audit](plans/2026-11-15-mobile-design-audit.md).
 
 Where it lives in code:
-- Android: `app/.../ui/theme/` (`Color.kt`, `Theme.kt`, `Type.kt`, `Shape.kt`) and `app/.../ui/components/`.
-- iOS: `iosApp/Parachord/Theme.swift` (`PC`, `PCSpace`, `PCRadius`, `ResolverColor`).
-- Shared: rules that both apps apply (which source icons show and dim, copy strings) live in `shared/commonMain` (`ResolverBadges`, `UiMessages`, `PlaybackMessages`). Token values are still kept twice, once per platform; keep the two copies identical to the tables below.
+- **Shared (the values):** `shared/commonMain/.../ui/DesignTokens.kt`. One table, plain `0xRRGGBB` ints, that both apps read: the theme colours (light and dark), the fill accent, semantic colours, the always-dark player surfaces, page colours and hero gradients (`DesignTokens.Page`), release-type colours (`releaseTypeColor`), and the type, spacing and radius scales. Service colours are `ServiceColors` in the same file: each plugin's manifest `color`, reported by the shared `PluginManager` as it loads plugins, with a fallback for before they load that a test keeps equal to the bundled manifests (`ServiceColorsManifestTest`). Change a value here, never in a platform file.
+- Android: `app/.../ui/theme/` only converts them (`Color.kt`: `tokenColor`, `FillAccent`, `serviceColor`, `releaseTypeColor`, `Page.composeColor` / `composeGradient`), plus `Theme.kt`, `Type.kt`, `Shape.kt` and `app/.../ui/components/`.
+- iOS: `iosApp/Parachord/Theme.swift` only converts them (`PC`, including `PC.fillAccent`, `PC.page(_:)`, `PC.pageGradient(_:)`, `PC.releaseType(_:)`; `ResolverColor.solid(_:)` for services). `PCSpace` / `PCRadius` are there too.
+- Shared rules both apps apply (which source icons show and dim, copy strings) live in `shared/commonMain` too (`ResolverBadges`, `UiMessages`, `PlaybackMessages`).
 
 ---
 
@@ -43,13 +44,13 @@ Always-dark player surfaces (mini player, Now Playing, the queue, the car-style 
 Rules:
 - **White text never sits on the theme accent.** In dark mode the accent is `#a78bfa`, and white on it is 2.7:1. Filled buttons, selected chips, play buttons and badges with white text use **fill-accent** (`#7c3aed`) in both themes. Android's Material `primary` is the theme accent, so a filled Material component (`Button`, `Switch`, `FilterChip`, `FloatingActionButton`) needs fill-accent set explicitly, or `onPrimary` must not be white in dark.
 - **Text-tertiary is for placeholders only.** Labels, hints and metadata use text-secondary: tertiary fails 4.5:1 in both themes.
-- **No colour literals outside the theme files.** Use a token. If none fits, add one to both platforms' theme files and to this table. Success, warning and error are always the tokens, never their own hex.
+- **No colour literals outside the theme files.** Use a token. If none fits, add one to `DesignTokens` (both apps then read it) and to this table. Success, warning and error are always the tokens, never their own hex.
 - **Never Material You dynamic colour, never the iOS system tint.** Every interactive element gets an explicit colour.
 - Dark mode follows the in-app setting: Android `ParachordTheme.isDark` (never `isSystemInDarkTheme()`), iOS `ThemeObserver` → `.preferredColorScheme`.
 
 ### Service colours
 
-A service's colour is its plugin's manifest `color` (`PluginManager`'s plugin info carries it), never a hand-copied hex. Current manifest values, for reference:
+A service's colour is its plugin's manifest `color`, never a hand-copied hex: both apps ask the shared `ServiceColors` (Android `serviceColor(id)`, iOS `ResolverColor.solid(id)`). Current manifest values, for reference:
 
 | Service | Colour |
 |---|---|
@@ -86,7 +87,7 @@ Hero titles are uppercase, light weight, wide tracking (the collapsed desktop he
 
 ### Release types
 
-One map for every screen (Fresh Drops, an artist's discography, Home): Album, EP, Single, Compilation, Live each have one colour. Desktop's Fresh Drops page is the reference; a second map on a platform is a bug.
+One map for every screen (Fresh Drops, an artist's discography, an album page, Home): `DesignTokens.releaseTypeColor`. Album `#6366f1`, EP `#a855f7`, Single `#db2777` (desktop's Fresh Drops chips), Live `#d97706`, Compilation `#0eb3a0`, anything else `#9ca3af`. A second map on a platform is a bug.
 
 ---
 

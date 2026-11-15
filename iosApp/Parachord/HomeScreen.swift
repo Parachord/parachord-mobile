@@ -237,7 +237,7 @@ struct HomeScreen: View {
                     .overlay { PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: f.displayName, size: nil, radius: 0) } }
                     .clipShape(PCHexagon())   // friends = hexagons
                 if f.isOnAir {
-                    Circle().fill(Color(uiColor: UIColor(hex: 0x10B981)))
+                    Circle().fill(PC.success)
                         .frame(width: 12, height: 12)
                         .overlay(Circle().strokeBorder(PC.bgPrimary, lineWidth: 2))
                 }
@@ -246,7 +246,7 @@ struct HomeScreen: View {
                 Text(f.displayName).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 if f.isOnAir, let track = f.cachedTrackName {
                     Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
-                        .font(.system(size: 13)).foregroundStyle(Color(uiColor: UIColor(hex: 0x10B981))).lineLimit(1)
+                        .font(.system(size: 13)).foregroundStyle(PC.success).lineLimit(1)
                 } else if let track = f.cachedTrackName {
                     Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
                         .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -305,7 +305,7 @@ struct HomeScreen: View {
     // Subtitles match Android's fallbackSubtitle (HomeScreen.kt).
     private let tiles: [Tile] = [
         .init(title: "For You", icon: "star.fill", c1: 0x7c3aed, c2: 0x6d28d9, subtitle: "Personalized picks", preset: "foryou"),
-        .init(title: "Critical Darlings", icon: "heart.fill", c1: 0xea580c, c2: 0xf59e0b, subtitle: "Staff picks", preset: "critical"),
+        .init(title: "Critical Darlings", icon: "heart.fill", c1: 0xf59e0b, c2: 0xef4444, subtitle: "Staff picks", preset: "critical"),
         .init(title: "Pop of the Tops", icon: "chart.line.uptrend.xyaxis", c1: 0xec4899, c2: 0xf59e0b, subtitle: "Top charts", preset: "pop"),
         .init(title: "Fresh Drops", icon: "drop.fill", c1: 0x10b981, c2: 0x0d9488, subtitle: "New releases", preset: "fresh"),
     ]
@@ -368,7 +368,7 @@ struct HomeScreen: View {
             Text("ListenBrainz").font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color(uiColor: UIColor(hex: 0xb45309)))
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Color(uiColor: UIColor(hex: 0xf59e0b)).opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
+                .background(PC.warning.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
             Spacer()
         }
         .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
@@ -617,7 +617,7 @@ struct HomeScreen: View {
                 Button { scanner.scan() } label: {
                     Text("Scan Local Music").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                         .frame(maxWidth: .infinity).padding(.vertical, 11)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(PC.accent))
+                        .background(RoundedRectangle(cornerRadius: 8).fill(PC.fillAccent))
                 }
                 .buttonStyle(.plain)
             }
@@ -756,7 +756,7 @@ struct HomeScreen: View {
 
     private func announcementColor(_ severity: String?) -> Color {
         switch severity {
-        case "error":            return Color(uiColor: UIColor(hex: 0xef4444))
+        case "error":            return PC.error
         case "warn", "warning":  return PC.warning
         case "success":          return PC.success
         default:                 return PC.accent

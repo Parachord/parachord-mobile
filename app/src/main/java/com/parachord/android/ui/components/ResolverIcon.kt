@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import com.parachord.android.ui.theme.serviceColorOrNull
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.res.painterResource
@@ -42,59 +43,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.parachord.android.R
 import com.parachord.android.ui.theme.LocalResolverOrder
-
-/**
- * Resolver icon colors matching the desktop's resolverIconColors.
- * These are the solid brand colors used as icon background squares.
- */
-object ResolverIconColors {
-    val spotify = Color(0xFF1DB954)
-    val bandcamp = Color(0xFF629AA9)
-    val subsonic = Color(0xFF14B8A6)
-    val qobuz = Color(0xFF4285F4)
-    val youtube = Color(0xFFFF0000)
-    val localfiles = Color(0xFFA855F7)
-    val soundcloud = Color(0xFFFF5500)
-    val applemusic = Color(0xFFFA243C)
-    val lastfm = Color(0xFFD51007)
-    val listenbrainz = Color(0xFF353070)
-    val librefm = Color(0xFF4CAF50)
-    val discogs = Color(0xFF333333)
-    val wikipedia = Color(0xFF000000)
-    val chatgpt = Color(0xFF10A37F)
-    val claude = Color(0xFFD97757)
-    val gemini = Color(0xFF4285F4)
-    val ticketmaster = Color(0xFF026CDF)
-    val seatgeek = Color(0xFFFC4C02)
-    val bandsintown = Color(0xFF00B4B3)
-    val songkick = Color(0xFFF80046)
-    val achordion = Color(0xFF7C3AED)
-
-    fun forResolver(resolver: String?): Color? = when (resolver?.lowercase()) {
-        "spotify" -> spotify
-        "bandcamp" -> bandcamp
-        "subsonic" -> subsonic
-        "qobuz" -> qobuz
-        "youtube" -> youtube
-        "localfiles" -> localfiles
-        "soundcloud" -> soundcloud
-        "applemusic" -> applemusic
-        "lastfm" -> lastfm
-        "listenbrainz" -> listenbrainz
-        "librefm" -> librefm
-        "discogs" -> discogs
-        "wikipedia" -> wikipedia
-        "chatgpt" -> chatgpt
-        "claude" -> claude
-        "gemini" -> gemini
-        "ticketmaster" -> ticketmaster
-        "seatgeek" -> seatgeek
-        "bandsintown" -> bandsintown
-        "songkick" -> songkick
-        "achordion" -> achordion
-        else -> null
-    }
-}
 
 /**
  * Icon spec with SVG path data and optional custom viewport.
@@ -456,7 +404,7 @@ fun ResolverIconSquare(
     confidence: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
-    val bgColor = ResolverIconColors.forResolver(resolver)
+    val bgColor = serviceColorOrNull(resolver)
     val iconAlpha = if (com.parachord.shared.resolver.ResolverBadges.isDimmed(confidence.toDouble())) 0.6f else 1f
 
     // Subsonic's logo is a bitmap, like SoundCloud's: the yellow submarine
@@ -706,7 +654,7 @@ fun ResolverSourceDropdown(
 
             offered.forEach { source ->
                 val isActive = source.resolver == currentResolver
-                val iconColor = ResolverIconColors.forResolver(source.resolver)
+                val iconColor = serviceColorOrNull(source.resolver)
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

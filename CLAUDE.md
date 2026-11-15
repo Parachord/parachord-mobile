@@ -1083,9 +1083,9 @@ The "On Tour" teal dot (`#10C9B4`) appears next to the artist name in the mini p
 ## Design System & Theming
 
 **The full design system is [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md)**: tokens, page and service colours, scales, the shared components (section titles, filter chips, source icons, cards, states), Home, copy and accessibility. It translates desktop's rules (desktop `CLAUDE.md` "Design system: don't let it drift", #1380) to Compose and SwiftUI; when desktop changes a rule, change it there in the same piece of work. Where the apps stand against it: [docs/plans/2026-11-15-mobile-design-audit.md](docs/plans/2026-11-15-mobile-design-audit.md). The rules most often broken:
-- **White text never sits on the theme accent** (`#a78bfa` in dark). Filled buttons, selected chips and play buttons use the fixed fill accent `#7c3aed` in both themes.
-- **No colour literals outside the theme files**, and success / warning / error are always the tokens.
-- **A service's colour is its plugin's manifest `color`** (`PluginManager` carries it), never a hand-copied hex.
+- **White text never sits on the theme accent** (`#a78bfa` in dark). Filled buttons, selected chips and play buttons use the fixed fill accent `#7c3aed` in both themes (Android `FillAccent`, iOS `PC.fillAccent`; Android's dark `onPrimary` is dark for the same reason).
+- **Token values live once, in `shared/.../ui/DesignTokens.kt`**; `Color.kt` and `Theme.swift` only convert them. No colour literals outside the theme files, and success / warning / error are always the tokens.
+- **A service's colour is its plugin's manifest `color`**, through the shared `ServiceColors` (Android `serviceColor(id)`, iOS `ResolverColor.solid(id)`), never a hand-copied hex.
 - **Section titles and filter chips are one shared component per platform**, styled as desktop's `SectionHeader` (20 / 700, text-primary, "See all" in the destination page's colour) and `FilterChips`. Never rebuild them on a screen.
 - **Stay on the scales**: type 11 · 12 · 13 · 14 · 16 · 20 · 24 · 28 · 48, 4-point spacing, radius 4 · 6 · 8 · 10 · 12 · 16 · full.
 - **Copy**: plugin / service / source (never "resolver" in UI), track not song, "…" not "...", one plural helper, "Try again", no raw error messages.

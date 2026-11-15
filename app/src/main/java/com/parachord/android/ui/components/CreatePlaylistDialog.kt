@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -63,8 +64,8 @@ fun CreatePlaylistDialog(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = ModalTextActive,
                         unfocusedTextColor = ModalTextPrimary,
-                        cursorColor = Color(0xFF7C3AED),
-                        focusedBorderColor = Color(0xFF7C3AED),
+                        cursorColor = FillAccent,
+                        focusedBorderColor = FillAccent,
                         unfocusedBorderColor = ModalDivider,
                     ),
                 )
@@ -79,7 +80,7 @@ fun CreatePlaylistDialog(
                 },
                 enabled = playlistName.isNotBlank(),
             ) {
-                Text("Create", color = Color(0xFF7C3AED))
+                Text("Create", color = FillAccent)
             }
         },
         dismissButton = {

@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,7 +22,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.parachord.android.deeplink.DeepLinkConfirmation
 
-private val Purple = Color(0xFF7C3AED)
+private val Purple = FillAccent
 
 /**
  * Confirmation dialog for deep link actions that need user approval.

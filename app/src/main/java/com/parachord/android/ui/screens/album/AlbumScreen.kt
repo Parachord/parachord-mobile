@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.album
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
@@ -296,7 +297,7 @@ fun AlbumScreen(
                                     Button(
                                         onClick = { viewModel.playAll() },
                                         colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            containerColor = FillAccent,
                                             contentColor = Color.White,
                                         ),
                                     ) {
@@ -511,14 +512,8 @@ private fun AlbumOptionsSheet(
     }
 }
 
-private fun releaseTypeBadgeColor(type: String): Color = when (type.lowercase()) {
-    "album" -> Color(0xFF6366F1)        // indigo
-    "ep" -> Color(0xFFA855F7)           // purple
-    "single" -> Color(0xFFEC4899)       // pink
-    "live" -> Color(0xFFF59E0B)         // amber
-    "compilation" -> Color(0xFF14B8A6)  // teal
-    else -> Color(0xFF9CA3AF)           // gray
-}
+private fun releaseTypeBadgeColor(type: String): Color =
+    com.parachord.android.ui.theme.releaseTypeColor(type) // one map, shared (DesignTokens)
 
 private fun formatDuration(ms: Long): String {
     val totalSeconds = ms / 1000

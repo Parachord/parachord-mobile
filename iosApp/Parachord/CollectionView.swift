@@ -390,7 +390,7 @@ struct CollectionView: View {
                     .overlay { PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: f.displayName, size: nil, radius: 0) } }
                     .clipShape(PCHexagon())   // friends = hexagons
                 if f.isOnAir {
-                    Circle().fill(Color(uiColor: UIColor(hex: 0x10B981)))
+                    Circle().fill(PC.success)
                         .frame(width: 12, height: 12)
                         .overlay(Circle().strokeBorder(PC.bgPrimary, lineWidth: 2))
                 }
@@ -405,7 +405,7 @@ struct CollectionView: View {
                 }
                 if f.isOnAir, let track = f.cachedTrackName {
                     Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
-                        .font(.system(size: 13)).foregroundStyle(Color(uiColor: UIColor(hex: 0x10B981))).lineLimit(1)
+                        .font(.system(size: 13)).foregroundStyle(PC.success).lineLimit(1)
                 } else if f.hidesListening {
                     // A Last.fm profile that hides its recent listening is never
                     // on-air; say why instead of a stale track (desktop parachord#1140).

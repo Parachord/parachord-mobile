@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.android.ui.theme.composeGradient
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import android.Manifest
@@ -316,7 +318,7 @@ fun HomeScreen(
                         Button(
                             onClick = { permissionLauncher.launch(audioPermission) },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary,
+                                containerColor = FillAccent,
                                 contentColor = Color.White,
                             ),
                         ) {
@@ -859,11 +861,7 @@ private fun DiscoverGrid(
             DiscoverCard(
                 title = "Critical Darlings",
                 icon = Icons.Filled.Favorite,
-                gradient = listOf(
-                    Color(0xFFF59E0B), // amber
-                    Color(0xFFF97316), // orange
-                    Color(0xFFEF4444), // red
-                ),
+                gradient = com.parachord.shared.ui.DesignTokens.Page.CRITICAL_DARLINGS.composeGradient,
                 preview = criticalDarlingsPreview,
                 fallbackSubtitle = "Staff picks",
                 onClick = onNavigateToCriticalDarlings,
@@ -877,11 +875,7 @@ private fun DiscoverGrid(
             DiscoverCard(
                 title = "Pop of the Tops",
                 icon = Icons.AutoMirrored.Filled.TrendingUp,
-                gradient = listOf(
-                    Color(0xFFF97316), // orange
-                    Color(0xFFEC4899), // pink
-                    Color(0xFF8B5CF6), // purple
-                ),
+                gradient = com.parachord.shared.ui.DesignTokens.Page.POP_OF_THE_TOPS.composeGradient,
                 preview = popOfTheTopsPreview,
                 fallbackSubtitle = "Top charts",
                 onClick = onNavigateToPopOfTheTops,
@@ -890,11 +884,7 @@ private fun DiscoverGrid(
             DiscoverCard(
                 title = "Fresh Drops",
                 icon = Icons.Filled.Explore,
-                gradient = listOf(
-                    Color(0xFF10B981), // emerald
-                    Color(0xFF14B8A6), // teal
-                    Color(0xFF06B6D4), // cyan
-                ),
+                gradient = com.parachord.shared.ui.DesignTokens.Page.FRESH_DROPS.composeGradient,
                 preview = freshDropsPreview,
                 fallbackSubtitle = "New releases",
                 onClick = onNavigateToFreshDrops,
@@ -1255,7 +1245,7 @@ private fun rememberShimmerAlpha(): Float {
 
 // ── Friend Activity Row ──────────────────────────────────────────
 
-private val OnAirGreen = Color(0xFF22C55E)
+private val OnAirGreen = com.parachord.android.ui.theme.Success
 private val LastFmRed = Color(0xFFD51007)
 private val ListenBrainzOrange = Color(0xFFE8702A)
 private val HomeMiniPlaybarBg = Color(0xF2262626)

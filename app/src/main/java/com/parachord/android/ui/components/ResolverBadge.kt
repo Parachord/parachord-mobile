@@ -10,29 +10,29 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.parachord.android.ui.theme.ResolverColors
+import com.parachord.android.ui.theme.serviceColorOrNull
 
 /**
  * Small colored pill showing the resolver source (Spotify, YouTube, etc.).
- * Matches the desktop's resolver badge pattern with alpha-20 background
- * and bright text color.
+ * The service's manifest colour (shared `ServiceColors`) as text on a
+ * 20% tint of itself, the desktop's resolver badge pattern.
  */
 @Composable
 fun ResolverBadge(
     resolver: String,
     modifier: Modifier = Modifier,
 ) {
-    val colors = ResolverColors.forResolver(resolver) ?: return
+    val color = serviceColorOrNull(resolver) ?: return
     val shape = RoundedCornerShape(4.dp)
 
     Text(
         text = resolver.uppercase(),
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.SemiBold,
-        color = colors.text,
+        color = color,
         modifier = modifier
             .clip(shape)
-            .background(colors.background)
+            .background(color.copy(alpha = 0.2f))
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }

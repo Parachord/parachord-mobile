@@ -199,7 +199,7 @@ struct ChatScreen: View {
             Spacer(minLength: 40)
             Text(text).font(.system(size: 14)).foregroundStyle(.white)
                 .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(PC.accent, in: .rect(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16))
+                .background(PC.fillAccent, in: .rect(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16))
         }
     }
 
@@ -252,7 +252,7 @@ struct ChatScreen: View {
             Button { doSend() } label: {
                 Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
                     .frame(width: 40, height: 40)
-                    .background(model.input.trimmingCharacters(in: .whitespaces).isEmpty || model.isLoading ? PC.accent.opacity(0.3) : PC.accent, in: Circle())
+                    .background(model.input.trimmingCharacters(in: .whitespaces).isEmpty || model.isLoading ? PC.fillAccent.opacity(0.3) : PC.fillAccent, in: Circle())
             }
             .disabled(model.input.trimmingCharacters(in: .whitespaces).isEmpty || model.isLoading || model.selectedProviderId == nil)
         }

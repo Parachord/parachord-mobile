@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import com.parachord.shared.ui.ServiceColors
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -232,6 +233,8 @@ class PluginManager constructor(
 
         // Publish the full unfiltered set for version-comparison purposes.
         _allLoadedPlugins.value = pluginInfos.sortedBy { it.name }
+        // Service colours come from the manifests, as on desktop.
+        ServiceColors.update(pluginInfos.associate { it.id to it.color })
 
         // Filter out plugins that declare mobile: false in capabilities for the
         // active runtime set that drives UI and routing.

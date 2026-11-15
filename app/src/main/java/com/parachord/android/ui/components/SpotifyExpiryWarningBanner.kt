@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -43,7 +44,7 @@ fun SpotifyExpiryWarningBanner(
     val isDark = ParachordTheme.isDark
     val bg = if (isDark) Color(0xFF2A1D4A) else Color(0xFFEFE8FD)
     val fg = if (isDark) Color(0xFFF3F4F6) else Color(0xFF111827)
-    val accent = if (isDark) Color(0xFFA78BFA) else Color(0xFF7C3AED)
+    val accent = if (isDark) Color(0xFFA78BFA) else FillAccent
 
     Surface(
         color = bg,

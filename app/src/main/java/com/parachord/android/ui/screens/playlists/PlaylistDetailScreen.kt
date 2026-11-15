@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import android.content.Intent
@@ -176,7 +177,7 @@ fun PlaylistDetailScreen(
                     .fillMaxWidth()
                     .background(
                         Brush.horizontalGradient(
-                            listOf(Color(0xFF7C3AED).copy(alpha = 0.15f), Color(0xFF7C3AED).copy(alpha = 0.08f))
+                            listOf(FillAccent.copy(alpha = 0.15f), FillAccent.copy(alpha = 0.08f))
                         )
                     )
                     .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -191,13 +192,13 @@ fun PlaylistDetailScreen(
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
-                            color = Color(0xFF7C3AED),
+                            color = FillAccent,
                         )
                     } else {
                         Icon(
                             Icons.Filled.Refresh,
                             contentDescription = null,
-                            tint = Color(0xFF7C3AED),
+                            tint = FillAccent,
                             modifier = Modifier.size(16.dp),
                         )
                     }
@@ -213,7 +214,7 @@ fun PlaylistDetailScreen(
                     Row {
                         Text(
                             text = "Pull",
-                            color = Color(0xFF7C3AED),
+                            color = FillAccent,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             modifier = Modifier
@@ -349,7 +350,8 @@ fun PlaylistDetailScreen(
                                 onClick = { viewModel.playAll() },
                                 shape = RoundedCornerShape(24.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    containerColor = FillAccent,
+                                    contentColor = Color.White,
                                 ),
                                 modifier = Modifier.align(Alignment.Center),
                             ) {

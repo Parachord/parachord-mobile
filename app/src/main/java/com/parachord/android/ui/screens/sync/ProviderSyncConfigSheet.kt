@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.sync
 
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -134,7 +135,7 @@ fun ProviderSyncConfigSheet(
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = accent),
+                    colors = ButtonDefaults.buttonColors(containerColor = FillAccent, contentColor = Color.White),
                 ) { Text("Done") }
                 Spacer(Modifier.height(16.dp))
             }

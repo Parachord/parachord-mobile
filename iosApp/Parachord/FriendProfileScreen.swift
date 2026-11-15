@@ -202,7 +202,7 @@ struct FriendProfileScreen: View {
     }
 
     // ── Header — centered, matches Android FriendDetailScreen ──────────
-    private static let onAirGreen = Color(uiColor: UIColor(hex: 0x22C55E))
+    private static let onAirGreen = PC.success
 
     private var header: some View {
         VStack(spacing: 6) {
@@ -259,7 +259,7 @@ struct FriendProfileScreen: View {
                         Text(p.label).font(.system(size: 13, weight: .medium))
                             .foregroundStyle(on ? .white : PC.fg1)
                             .padding(.horizontal, 14).padding(.vertical, 6)
-                            .background(on ? PC.accent : PC.bgInset, in: Capsule())
+                            .background(on ? PC.fillAccent : PC.bgInset, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

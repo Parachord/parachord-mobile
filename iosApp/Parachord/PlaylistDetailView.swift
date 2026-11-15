@@ -194,7 +194,7 @@ struct PlaylistDetailView: View {
                 Button { coordinator.setQueue(model.trackEntities, startIndex: 0, context: playlistContext) } label: {
                     Label("Play All", systemImage: "play.fill").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white).padding(.horizontal, 22).frame(height: 40)
-                        .background(PC.accent, in: Capsule())
+                        .background(PC.fillAccent, in: Capsule())
                 }.buttonStyle(.plain)
                 // Save the ephemeral weekly playlist to the library (#236). Flips
                 // to "Saved" reactively once written (or if already saved).
@@ -1027,7 +1027,7 @@ struct SavedPlaylistDetailView: View {
                 Button { coordinator.setQueue(model.entities, startIndex: 0, context: ctx) } label: {
                     Label("Play All", systemImage: "play.fill").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.white).padding(.horizontal, 22).frame(height: 40)
-                        .background(PC.accent, in: Capsule())
+                        .background(PC.fillAccent, in: Capsule())
                 }.buttonStyle(.plain).disabled(model.entities.isEmpty)
                 if editing {
                     Button { renameText = model.name; showRename = true } label: {

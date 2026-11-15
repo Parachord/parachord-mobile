@@ -573,7 +573,7 @@ struct PCResolverDeck: View {
 
     private func square(_ r: String, size: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(ResolverColor.of(r).solid)
+            .fill(ResolverColor.solid(r))
             .frame(width: size, height: size)
             .overlay(Text(String(pcResolverName(r).prefix(1)))
                 .font(.system(size: size * 0.5, weight: .bold)).foregroundStyle(.white))

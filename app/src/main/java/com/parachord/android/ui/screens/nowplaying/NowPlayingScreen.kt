@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import com.parachord.shared.playback.shuffleAllowed
 import androidx.compose.foundation.background
@@ -389,7 +390,7 @@ fun NowPlayingScreen(
                                     // Desktop parity (app.js:55180): gray while spun
                                     // off / listening along, purple otherwise.
                                     .background(
-                                        if (playbackState.spinoffMode || inListenAlong) Color(0xFF6B7280) else PurpleDark,
+                                        if (playbackState.spinoffMode || inListenAlong) Color(0xFF6B7280) else FillAccent,
                                         CircleShape,
                                     ),
                                 contentAlignment = Alignment.Center,
@@ -638,7 +639,7 @@ fun NowPlayingScreen(
                         modifier = Modifier
                             .size(if (isLandscape) 60.dp else 72.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary),
+                            .background(FillAccent),
                         colors = IconButtonDefaults.iconButtonColors(
                             contentColor = Color.White,
                         ),

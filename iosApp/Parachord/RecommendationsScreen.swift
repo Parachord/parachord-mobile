@@ -133,7 +133,7 @@ struct RecommendationsScreen: View {
                 icon: "star.fill",
                 subtitle: "A daily mix tuned to your listening",
                 count: bannerCount,
-                gradient: [0x7C3AED, 0xA855F7, 0xEC4899])
+                gradient: PC.pageGradient(.recommendations))
             PCTabs(tabs: ["Artists", "Songs"], selection: $tabIndex)
 
             sourceChips
@@ -178,7 +178,7 @@ struct RecommendationsScreen: View {
                         Text(label).font(.system(size: 13, weight: .medium))
                             .foregroundStyle(on ? .white : PC.fg1)
                             .padding(.horizontal, 14).padding(.vertical, 6)
-                            .background(on ? PC.accent : PC.bgInset, in: Capsule())
+                            .background(on ? PC.fillAccent : PC.bgInset, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

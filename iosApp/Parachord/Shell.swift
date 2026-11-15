@@ -319,14 +319,14 @@ struct PCSidebar: View {
     // Playlists + Collection live in the bottom glass nav bar (like Android),
     // so the sidebar only carries Your Music = History.
     private let yourMusic: [Row] = [
-        .init(id: "history", label: "History", icon: "clock.arrow.circlepath", color: Color(uiColor: UIColor(hex: 0x3b82f6))),
+        .init(id: "history", label: "History", icon: "clock.arrow.circlepath", color: PC.page(.history)),
     ]
     private let discover: [Row] = [
-        .init(id: "fresh", label: "Fresh Drops", icon: "drop.fill", color: Color(uiColor: UIColor(hex: 0x10b981))),
-        .init(id: "recommendations", label: "Recommendations", icon: "star.fill", color: Color(uiColor: UIColor(hex: 0xf59e0b))),
-        .init(id: "pop", label: "Pop of the Tops", icon: "chart.line.uptrend.xyaxis", color: Color(uiColor: UIColor(hex: 0xea580c))),
-        .init(id: "critical", label: "Critical Darlings", icon: "trophy.fill", color: Color(uiColor: UIColor(hex: 0xef4444))),
-        .init(id: "concerts", label: "Concerts", icon: "ticket.fill", color: PC.onTour),
+        .init(id: "fresh", label: "Fresh Drops", icon: "drop.fill", color: PC.page(.freshDrops)),
+        .init(id: "recommendations", label: "Recommendations", icon: "star.fill", color: PC.page(.recommendations)),
+        .init(id: "pop", label: "Pop of the Tops", icon: "chart.line.uptrend.xyaxis", color: PC.page(.popOfTheTops)),
+        .init(id: "critical", label: "Critical Darlings", icon: "trophy.fill", color: PC.page(.criticalDarlings)),
+        .init(id: "concerts", label: "Concerts", icon: "ticket.fill", color: PC.page(.concerts)),
     ]
 
     var body: some View {
