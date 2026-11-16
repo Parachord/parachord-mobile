@@ -11,25 +11,15 @@ import Shared
 //
 // Display-only, like Android (the track ROW handles playback). iOS has no
 // brand-logo assets, so each square shows the resolver initial in white; the
-// brand COLOR is the primary identifier, matching ResolverIconColors.
+// brand COLOR (the plugin manifest's, shared `ServiceColors`) identifies it.
 
 struct ResolverIconSquare: View {
     let resolver: String
     var size: CGFloat = 18
     var confidence: Double = 1
 
-    // ResolverIconColors.forResolver (Android), verbatim.
-    private var color: Color {
-        switch resolver.lowercased() {
-        case "spotify":    return Color(uiColor: UIColor(hex: 0x1DB954))
-        case "applemusic": return Color(uiColor: UIColor(hex: 0xFA243C))
-        case "soundcloud": return Color(uiColor: UIColor(hex: 0xFF5500))
-        case "bandcamp":   return Color(uiColor: UIColor(hex: 0x629AA9))
-        case "youtube":    return Color(uiColor: UIColor(hex: 0xFF0000))
-        case "localfiles": return Color(uiColor: UIColor(hex: 0xA855F7))
-        default:           return Color(uiColor: UIColor(hex: 0x7c3aed))
-        }
-    }
+    // The plugin manifest colour (shared ServiceColors), as Android.
+    private var color: Color { ResolverColor.solid(resolver) }
     private var glyph: String {
         switch resolver.lowercased() {
         case "applemusic": return "A"

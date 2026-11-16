@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.settings
 
+import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.theme.serviceColor
 import com.parachord.shared.api.auth.SoundCloudLoopback
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.material3.CircularProgressIndicator
@@ -140,7 +142,7 @@ import kotlinx.coroutines.flow.StateFlow
 private data class PluginInfo(
     val id: String,
     val name: String,
-    val resolverId: String, // maps to ResolverIconPaths/ResolverIconColors
+    val resolverId: String, // maps to ResolverIconPaths; its colour is serviceColor(resolverId)
     val bgColor: Color,
     val category: PluginCategory,
     val capabilities: List<String>,
@@ -190,31 +192,27 @@ private fun buildPluginList(
 }
 
 /** Parse a hex color string from the .axe manifest (e.g., "#1DB954"). */
-private fun parseColor(hex: String): Color {
-    if (hex.isBlank()) return Color(0xFF7C3AED) // default purple
-    return try {
-        Color(android.graphics.Color.parseColor(hex))
-    } catch (_: Exception) {
-        Color(0xFF7C3AED)
-    }
-}
+private fun parseColor(hex: String): Color =
+    com.parachord.android.ui.theme.tokenColor(
+        com.parachord.shared.ui.ServiceColors.parseHex(hex) ?: com.parachord.shared.ui.ServiceColors.DEFAULT,
+    )
 
 /** Hardcoded fallback used before the .axe plugin system initializes. */
 private val builtInPluginsFallback = listOf(
-    PluginInfo("spotify", "Spotify", "spotify", Color(0xFF1DB954), PluginCategory.RESOLVER, listOf("Resolve", "Search", "Stream"), "Stream music from Spotify via Connect"),
-    PluginInfo("soundcloud", "SoundCloud", "soundcloud", Color(0xFFFF5500), PluginCategory.RESOLVER, listOf("Resolve", "Search", "Stream"), "Search and stream tracks from SoundCloud"),
-    PluginInfo("applemusic", "Apple Music", "applemusic", Color(0xFFFA243C), PluginCategory.RESOLVER, listOf("Resolve", "Search", "Stream"), "Search and stream from Apple Music via MusicKit"),
-    PluginInfo("localfiles", "Local Files", "localfiles", Color(0xFFA855F7), PluginCategory.RESOLVER, listOf("Resolve", "Browse", "Stream"), "Play music stored on your device"),
-    PluginInfo("lastfm", "Last.fm", "lastfm", Color(0xFFD51007), PluginCategory.META_SERVICE, listOf("Metadata", "Scrobble"), "Scrobbling, artist info, and recommendations"),
-    PluginInfo("listenbrainz", "ListenBrainz", "listenbrainz", Color(0xFF353070), PluginCategory.META_SERVICE, listOf("Scrobble", "Stats"), "Open-source listening history and statistics"),
-    PluginInfo("librefm", "Libre.fm", "librefm", Color(0xFF4CAF50), PluginCategory.META_SERVICE, listOf("Scrobble"), "Free and open music scrobbling service"),
-    PluginInfo("discogs", "Discogs", "discogs", Color(0xFF333333), PluginCategory.META_SERVICE, listOf("Metadata", "Bios"), "Artist bios and images from Discogs"),
-    PluginInfo("wikipedia", "Wikipedia", "wikipedia", Color(0xFF000000), PluginCategory.META_SERVICE, listOf("Metadata", "Bios"), "Encyclopedia-style artist bios via Wikidata"),
-    PluginInfo("chatgpt", "ChatGPT", "chatgpt", Color(0xFF10A37F), PluginCategory.META_SERVICE, listOf("AI DJ", "Chat"), "Generate playlists and chat with AI DJ using ChatGPT"),
-    PluginInfo("claude", "Claude", "claude", Color(0xFFD97757), PluginCategory.META_SERVICE, listOf("AI DJ", "Chat"), "Anthropic's Claude AI assistant"),
-    PluginInfo("gemini", "Google Gemini", "gemini", Color(0xFF4285F4), PluginCategory.META_SERVICE, listOf("AI DJ", "Chat"), "Generate playlists and chat with Google Gemini"),
-    PluginInfo("ticketmaster", "Ticketmaster", "ticketmaster", Color(0xFF026CDF), PluginCategory.CONCERT_SERVICE, listOf("Concerts", "Events"), "Discover concerts and buy tickets"),
-    PluginInfo("seatgeek", "SeatGeek", "seatgeek", Color(0xFFFC4C02), PluginCategory.CONCERT_SERVICE, listOf("Concerts", "Events"), "Find live events and tickets"),
+    PluginInfo("spotify", "Spotify", "spotify", serviceColor("spotify"), PluginCategory.RESOLVER, listOf("Resolve", "Search", "Stream"), "Stream music from Spotify via Connect"),
+    PluginInfo("soundcloud", "SoundCloud", "soundcloud", serviceColor("soundcloud"), PluginCategory.RESOLVER, listOf("Resolve", "Search", "Stream"), "Search and stream tracks from SoundCloud"),
+    PluginInfo("applemusic", "Apple Music", "applemusic", serviceColor("applemusic"), PluginCategory.RESOLVER, listOf("Resolve", "Search", "Stream"), "Search and stream from Apple Music via MusicKit"),
+    PluginInfo("localfiles", "Local Files", "localfiles", serviceColor("localfiles"), PluginCategory.RESOLVER, listOf("Resolve", "Browse", "Stream"), "Play music stored on your device"),
+    PluginInfo("lastfm", "Last.fm", "lastfm", serviceColor("lastfm"), PluginCategory.META_SERVICE, listOf("Metadata", "Scrobble"), "Scrobbling, artist info, and recommendations"),
+    PluginInfo("listenbrainz", "ListenBrainz", "listenbrainz", serviceColor("listenbrainz"), PluginCategory.META_SERVICE, listOf("Scrobble", "Stats"), "Open-source listening history and statistics"),
+    PluginInfo("librefm", "Libre.fm", "librefm", serviceColor("librefm"), PluginCategory.META_SERVICE, listOf("Scrobble"), "Free and open music scrobbling service"),
+    PluginInfo("discogs", "Discogs", "discogs", serviceColor("discogs"), PluginCategory.META_SERVICE, listOf("Metadata", "Bios"), "Artist bios and images from Discogs"),
+    PluginInfo("wikipedia", "Wikipedia", "wikipedia", serviceColor("wikipedia"), PluginCategory.META_SERVICE, listOf("Metadata", "Bios"), "Encyclopedia-style artist bios via Wikidata"),
+    PluginInfo("chatgpt", "ChatGPT", "chatgpt", serviceColor("chatgpt"), PluginCategory.META_SERVICE, listOf("AI DJ", "Chat"), "Generate playlists and chat with AI DJ using ChatGPT"),
+    PluginInfo("claude", "Claude", "claude", serviceColor("claude"), PluginCategory.META_SERVICE, listOf("AI DJ", "Chat"), "Anthropic's Claude AI assistant"),
+    PluginInfo("gemini", "Google Gemini", "gemini", serviceColor("gemini"), PluginCategory.META_SERVICE, listOf("AI DJ", "Chat"), "Generate playlists and chat with Google Gemini"),
+    PluginInfo("ticketmaster", "Ticketmaster", "ticketmaster", serviceColor("ticketmaster"), PluginCategory.CONCERT_SERVICE, listOf("Concerts", "Events"), "Discover concerts and buy tickets"),
+    PluginInfo("seatgeek", "SeatGeek", "seatgeek", serviceColor("seatgeek"), PluginCategory.CONCERT_SERVICE, listOf("Concerts", "Events"), "Find live events and tickets"),
 )
 
 // ── Settings Screen ────────────────────────────────────────────────
@@ -1006,7 +1004,7 @@ private fun DraggableResolverRow(
                         } else if (isDropTarget) {
                             Modifier.border(
                                 width = 2.dp,
-                                color = Color(0xFF7C3AED),
+                                color = FillAccent,
                                 shape = RoundedCornerShape(16.dp),
                             )
                         } else {

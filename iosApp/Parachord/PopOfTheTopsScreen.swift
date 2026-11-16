@@ -114,7 +114,7 @@ struct PopOfTheTopsScreen: View {
                 icon: "chart.bar.fill",
                 subtitle: "What's trending around the world",
                 count: bannerCount,
-                gradient: [0xF97316, 0xEC4899, 0x8B5CF6])
+                gradient: PC.pageGradient(.popOfTheTops))
             PCTabs(tabs: ["Albums", "Songs"], selection: $tabIndex)
             filterBar
 

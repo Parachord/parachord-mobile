@@ -15,8 +15,12 @@ import androidx.compose.ui.graphics.Color
  * into Material 3 color slots. Dynamic color is intentionally disabled.
  */
 private val DarkColorScheme = darkColorScheme(
+    // primary is the theme accent (text, icons, outlines). White on it fails
+    // contrast in dark (2.7:1), so anything Material fills with it gets dark
+    // content; a fill that carries white uses FillAccent instead
+    // (docs/DESIGN_SYSTEM.md, "White text never sits on the theme accent").
     primary = PurpleDark,
-    onPrimary = Color.White,
+    onPrimary = BgPrimaryDark,
     primaryContainer = PurpleHoverDark,
     secondary = TextSecondaryDark,
     tertiary = TextTertiaryDark,
@@ -28,7 +32,7 @@ private val DarkColorScheme = darkColorScheme(
     onSurfaceVariant = TextSecondaryDark,
     outline = TextTertiaryDark,
     outlineVariant = BorderDefaultDark,
-    error = Error,
+    error = ErrorDark,
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -45,7 +49,7 @@ private val LightColorScheme = lightColorScheme(
     onSurfaceVariant = TextSecondaryLight,
     outline = BorderDefaultLight,
     outlineVariant = BorderLightLight,
-    error = Error,
+    error = ErrorLight,
 )
 
 // ── Extended Colors ──────────────────────────────────────────────────
@@ -90,7 +94,7 @@ private val DarkExtendedColors = ParachordExtendedColors(
     accentAlpha20 = PurpleDarkAlpha20,
     accentAlpha40 = PurpleAlpha40,
     accentAlpha60 = PurpleAlpha60,
-    accentSurface = Color(0xFF1E1E2E),
+    accentSurface = PurpleSurfaceDark,
     cardBackground = CardBgDark,
     cardBorder = CardBorderDark,
 )

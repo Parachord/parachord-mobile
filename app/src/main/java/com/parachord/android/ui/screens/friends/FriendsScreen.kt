@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.shared.format.RelativeTime
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -488,7 +489,7 @@ private fun AddFriendDialog(
                 onClick = onAdd,
                 enabled = input.isNotBlank() && state !is Resource.Loading,
             ) {
-                Text("Add Friend", color = Color(0xFF7C3AED))
+                Text("Add Friend", color = FillAccent)
             }
         },
         dismissButton = {

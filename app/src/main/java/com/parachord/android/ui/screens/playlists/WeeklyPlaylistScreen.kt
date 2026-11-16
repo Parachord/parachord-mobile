@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.ResolveWhileVisible
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -160,7 +161,8 @@ fun WeeklyPlaylistScreen(
                                     onClick = { viewModel.playAll() },
                                     shape = RoundedCornerShape(24.dp),
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        containerColor = FillAccent,
+                                        contentColor = Color.White,
                                     ),
                                 ) {
                                     Icon(

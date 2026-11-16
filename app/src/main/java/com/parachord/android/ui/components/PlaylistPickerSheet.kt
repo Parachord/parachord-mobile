@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -147,7 +148,7 @@ fun PlaylistPickerSheet(
                         Text(
                             text = option.label,
                             color = if (sort == option) {
-                                Color(0xFF7C3AED)
+                                FillAccent
                             } else {
                                 ModalTextSecondary
                             },
@@ -174,13 +175,13 @@ fun PlaylistPickerSheet(
                 Icon(
                     imageVector = Icons.Filled.Add,
                     contentDescription = "Create new playlist",
-                    tint = Color(0xFF7C3AED),
+                    tint = FillAccent,
                 )
                 Spacer(modifier = Modifier.width(16.dp))
                 Text(
                     text = "New Playlist\u2026",
                     style = MaterialTheme.typography.bodyLarge,
-                    color = Color(0xFF7C3AED),
+                    color = FillAccent,
                 )
             }
 

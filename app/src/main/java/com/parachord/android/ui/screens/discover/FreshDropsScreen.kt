@@ -70,11 +70,7 @@ import com.parachord.android.ui.components.shimmerBrush
 
 // Desktop gradient: emerald → teal → cyan
 private val HeaderGradient = Brush.horizontalGradient(
-    colors = listOf(
-        Color(0xFF10B981), // emerald-500
-        Color(0xFF14B8A6), // teal-500
-        Color(0xFF06B6D4), // cyan-500
-    ),
+    colors = com.parachord.shared.ui.DesignTokens.Page.FRESH_DROPS.gradient.map { com.parachord.android.ui.theme.tokenColor(it) },
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

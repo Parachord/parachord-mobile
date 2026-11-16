@@ -1,5 +1,8 @@
 package com.parachord.android.ui.components
 
+import com.parachord.android.ui.theme.composeColor
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -92,19 +95,19 @@ data class DrawerMenuItem(
 // ── Drawer Item Definitions ─────────────────────────────────────────
 
 private val yourMusicItems = listOf(
-    DrawerMenuItem(Routes.HISTORY, "History", Icons.Outlined.History, Color(0xFF06B6D4)),
+    DrawerMenuItem(Routes.HISTORY, "History", Icons.Outlined.History, DesignTokens.Page.HISTORY.composeColor),
 )
 
 private val discoverItems = listOf(
-    DrawerMenuItem(Routes.FRESH_DROPS, "Fresh Drops", Icons.Outlined.WaterDrop, Color(0xFF10B981)),
-    DrawerMenuItem(Routes.RECOMMENDATIONS, "Recommendations", Icons.Outlined.Star, Color(0xFFF59E0B)),
-    DrawerMenuItem(Routes.POP_OF_THE_TOPS, "Pop of the Tops", Icons.Outlined.BarChart, Color(0xFFF97316)),
-    DrawerMenuItem(Routes.CRITICAL_DARLINGS, "Critical Darlings", Icons.Outlined.EmojiEvents, Color(0xFFEF4444)),
-    DrawerMenuItem(Routes.CONCERTS, "Concerts", Icons.Outlined.ConfirmationNumber, Color(0xFF14B8A6)),
+    DrawerMenuItem(Routes.FRESH_DROPS, "Fresh Drops", Icons.Outlined.WaterDrop, DesignTokens.Page.FRESH_DROPS.composeColor),
+    DrawerMenuItem(Routes.RECOMMENDATIONS, "Recommendations", Icons.Outlined.Star, DesignTokens.Page.RECOMMENDATIONS.composeColor),
+    DrawerMenuItem(Routes.POP_OF_THE_TOPS, "Pop of the Tops", Icons.Outlined.BarChart, DesignTokens.Page.POP_OF_THE_TOPS.composeColor),
+    DrawerMenuItem(Routes.CRITICAL_DARLINGS, "Critical Darlings", Icons.Outlined.EmojiEvents, DesignTokens.Page.CRITICAL_DARLINGS.composeColor),
+    DrawerMenuItem(Routes.CONCERTS, "Concerts", Icons.Outlined.ConfirmationNumber, DesignTokens.Page.CONCERTS.composeColor),
 )
 
-private val FriendPurple = Color(0xFF7C3AED)
-private val OnAirGreen = Color(0xFF22C55E)
+private val FriendPurple = FillAccent
+private val OnAirGreen: Color @androidx.compose.runtime.Composable get() = com.parachord.android.ui.theme.Success
 
 // Desktop --surface-dark: dark pill bg for friend mini playbar
 private val MiniPlaybarBgLight = Color(0xF21F2937) // rgba(31,41,55,0.95)

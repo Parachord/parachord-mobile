@@ -147,7 +147,7 @@ struct HistoryScreen: View {
             PCCuratedBanner(
                 icon: "clock.arrow.circlepath",
                 subtitle: "Your top songs, albums, artists & recent plays",
-                count: nil, gradient: [0x06B6D4, 0x0891B2])
+                count: nil, gradient: PC.pageGradient(.history))
             PCTabs(tabs: ["Top Songs", "Top Albums", "Top Artists", "Recent"], selection: $tabIndex)
             if tabIndex != 3 { periodChips }
 
@@ -182,7 +182,7 @@ struct HistoryScreen: View {
                         Text(p.label).font(.system(size: 13, weight: .medium))
                             .foregroundStyle(on ? .white : PC.fg1)
                             .padding(.horizontal, 14).padding(.vertical, 6)
-                            .background(on ? PC.accent : PC.bgInset, in: Capsule())
+                            .background(on ? PC.fillAccent : PC.bgInset, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }

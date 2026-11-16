@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.chat
 
+import com.parachord.android.ui.theme.FillAccent
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -511,13 +512,13 @@ private fun UserMessageBubble(text: String, maxWidth: Dp) {
                         bottomEnd = 4.dp,
                     ),
                 )
-                .background(MaterialTheme.colorScheme.primary)
+                .background(FillAccent)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onPrimary,
+                color = Color.White,
             )
         }
     }
@@ -720,7 +721,7 @@ private fun ChatCardRow(
                 modifier = Modifier
                     .size(28.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
+                    .background(FillAccent),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -860,7 +861,7 @@ private fun ChatInput(
                 .clip(CircleShape)
                 .background(
                     if (text.isNotBlank() && !isLoading) {
-                        MaterialTheme.colorScheme.primary
+                        FillAccent
                     } else {
                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
                     },
@@ -870,7 +871,7 @@ private fun ChatInput(
                 imageVector = Icons.AutoMirrored.Filled.Send,
                 contentDescription = "Send",
                 tint = if (text.isNotBlank() && !isLoading) {
-                    MaterialTheme.colorScheme.onPrimary
+                    Color.White
                 } else {
                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 },

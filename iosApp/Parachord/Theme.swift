@@ -32,19 +32,27 @@ final class ThemeObserver {
     }
 }
 
-// MARK: - Parachord design system (ported from docs/design/parachord-ios)
+// MARK: - Parachord design system
 //
-// Tokens mirror `assets/colors_and_type.css` from the Claude Design handoff,
-// which itself mirrors the Android Compose theme + desktop CSS. Purple-accented,
-// with ALWAYS-DARK player surfaces and a resolver-color system (each music
-// source has paired bg / fg / solid colors). Light + dark variants adapt
-// automatically via dynamic UIColors.
+// The token VALUES live once, in the shared `DesignTokens`
+// (shared/commonMain/.../ui/DesignTokens.kt), which Android's Color.kt reads
+// too; docs/DESIGN_SYSTEM.md lists them. This file only turns them into
+// SwiftUI colours: change a value there, not here. Light + dark variants adapt
+// automatically via dynamic UIColors; player surfaces are always dark.
 
-private func dyn(_ light: UInt32, _ dark: UInt32) -> Color {
+private let tokens = DesignTokens.shared
+
+/// A themed token: light/dark resolved from the trait collection.
+private func dyn(_ c: DesignTokens.ThemeColor) -> Color {
     Color(uiColor: UIColor { tc in
-        UIColor(hex: tc.userInterfaceStyle == .dark ? dark : light)
+        tc.userInterfaceStyle == .dark
+            ? UIColor(hex: UInt32(c.dark)).withAlphaComponent(CGFloat(c.darkAlpha))
+            : UIColor(hex: UInt32(c.light))
     })
 }
+
+/// A constant `0xRRGGBB` token (Kotlin `Int`).
+func pcToken(_ rgb: Int32) -> Color { Color(uiColor: UIColor(hex: UInt32(rgb))) }
 
 extension UIColor {
     convenience init(hex: UInt32) {
@@ -60,74 +68,89 @@ extension UIColor {
 /// Color tokens. Use `PC.accent`, `PC.fg1`, etc. Player-surface tokens are
 /// constant (never adapt) — the mini-player + Now Playing are always dark.
 enum PC {
-    // Accent (purple)
-    static let accent        = dyn(0x7c3aed, 0xa78bfa)
-    static let accentHover   = dyn(0x6d28d9, 0x8b5cf6)
-    static let accentSoft     = Color(uiColor: UIColor(hex: 0xa78bfa))
-    static let accentSurface = dyn(0xede9fe, 0x1e1e2e)
+    // Accent (purple). `accent` is for text, icons, outlines and selected
+    // text; it's #a78bfa in dark, where white on it fails contrast. Anything
+    // FILLED that carries white text uses `fillAccent`, in both themes.
+    static let accent        = dyn(tokens.accent)
+    static let accentHover   = dyn(tokens.accentHover)
+    static let accentSoft    = dyn(tokens.accentSoft)
+    static let accentSecondary = dyn(tokens.accentSecondary)
+    static let accentSurface = dyn(tokens.accentSurface)
+    static let fillAccent    = pcToken(tokens.FILL_ACCENT)
+    static let fillAccentHover = pcToken(tokens.FILL_ACCENT_HOVER)
+    static let onAccent      = pcToken(tokens.ON_ACCENT)
 
     // Backgrounds
-    static let bgPrimary   = dyn(0xffffff, 0x161616)
-    static let bgSecondary = dyn(0xf9fafb, 0x1e1e1e)
-    static let bgElevated  = dyn(0xffffff, 0x252525)
-    static let bgInset     = dyn(0xf3f4f6, 0x1a1a1a)
+    static let bgPrimary   = dyn(tokens.bgPrimary)
+    static let bgSecondary = dyn(tokens.bgSecondary)
+    static let bgElevated  = dyn(tokens.bgElevated)
+    static let bgInset     = dyn(tokens.bgInset)
 
-    // Text
-    static let fg1 = dyn(0x111827, 0xf3f4f6)
-    static let fg2 = dyn(0x6b7280, 0x9ca3af)
-    static let fg3 = dyn(0x9ca3af, 0x6b7280)
+    // Text. fg2 = labels and metadata, fg3 = hints, counts, timestamps; both
+    // pass 4.5:1 in both themes.
+    static let fg1 = dyn(tokens.textPrimary)
+    static let fg2 = dyn(tokens.textSecondary)
+    static let fg3 = dyn(tokens.textTertiary)
 
     // Borders / cards
-    static let border     = dyn(0xe5e7eb, 0x2e2e2e)
-    static let borderLight = dyn(0xf3f4f6, 0x252525)
-    static let cardBg     = dyn(0xffffff, 0x1e1e1e)
-    static let cardBorder = dyn(0xe5e7eb, 0x2a2a2a)
+    static let border      = dyn(tokens.borderDefault)
+    static let borderStrong = dyn(tokens.borderStrong)
+    static let controlOff  = dyn(tokens.controlOff)
+    static let placeholder = dyn(tokens.placeholderBg)
+    static let borderLight = dyn(tokens.borderLight)
+    static let cardBg      = dyn(tokens.cardBg)
+    static let cardBorder  = dyn(tokens.cardBorder)
 
-    // Semantic
-    static let success = Color(uiColor: UIColor(hex: 0x10b981))
-    static let warning = Color(uiColor: UIColor(hex: 0xf59e0b))
-    static let error   = Color(uiColor: UIColor(hex: 0xef4444))
-    static let onTour  = Color(uiColor: UIColor(hex: 0x10c9b4))
+    // Status: dots, icons and indicators (lighter in dark mode)
+    static let success = dyn(tokens.success)
+    static let warning = dyn(tokens.warning)
+    static let error   = dyn(tokens.error)
+    static let info    = dyn(tokens.info)
+    // Status text on a page or card (≥ 4.5:1 in both themes)
+    static let textSuccess = dyn(tokens.textSuccess)
+    static let textWarning = dyn(tokens.textWarning)
+    static let textDanger  = dyn(tokens.textDanger)
+    static let textInfo    = dyn(tokens.textInfo)
+    // Status fills with white text, the same in both themes
+    static let fillSuccess = pcToken(tokens.FILL_SUCCESS)
+    static let fillWarning = pcToken(tokens.FILL_WARNING)
+    static let fillError   = pcToken(tokens.FILL_ERROR)
+    static let fillInfo    = pcToken(tokens.FILL_INFO)
+    static let onTour  = pcToken(tokens.ON_TOUR)
 
     // Hosted (XSPF) chip — brand blue, constant
-    static let hostedBg = Color(uiColor: UIColor(hex: 0xeff6ff))
-    static let hostedFg = Color(uiColor: UIColor(hex: 0x3b82f6))
+    static let hostedBg = pcToken(tokens.HOSTED_BG)
+    static let hostedFg = pcToken(tokens.HOSTED_FG)
 
     // Always-dark player surfaces (mini-player + Now Playing, regardless of theme)
     enum Player {
-        static let bg     = Color(uiColor: UIColor(hex: 0x161616))
-        static let bgElev = Color(uiColor: UIColor(hex: 0x1e1e1e))
-        static let fg1    = Color(uiColor: UIColor(hex: 0xf3f4f6))
-        static let fg2    = Color(uiColor: UIColor(hex: 0x9ca3af))
+        static let bg     = pcToken(tokens.PLAYER_BG)
+        static let bgElev = pcToken(tokens.PLAYER_BG_ELEVATED)
+        static let fg1    = pcToken(tokens.PLAYER_TEXT_PRIMARY)
+        static let fg2    = pcToken(tokens.PLAYER_TEXT_SECONDARY)
+    }
+
+    /// A page's colour (drawer entry, "See all") and hero gradient.
+    static func page(_ p: DesignTokens.Page) -> Color { p == .home ? accent : pcToken(p.color) }
+    /// A page's darker shade, for its buttons with white text (≥ 4.5:1).
+    static func pageFill(_ p: DesignTokens.Page) -> Color { pcToken(p.fill) }
+    static func pageGradient(_ p: DesignTokens.Page) -> [UInt32] {
+        p.gradient.map { UInt32($0.int32Value) }
+    }
+
+    /// One colour per release type (Album, EP, Single, Live, Compilation).
+    static func releaseType(_ type: String?) -> Color {
+        pcToken(tokens.releaseTypeColor(type: type))
     }
 }
 
-/// Resolver source colors — small colored squares with white glyph + pill badges.
+/// A service's colour: its plugin manifest's `color` (shared `ServiceColors`,
+/// the same answer Android gets), never a hand-copied hex.
 enum ResolverColor {
-    case spotify, appleMusic, youtube, bandcamp, soundcloud, localfiles
-
-    static func of(_ resolver: String) -> ResolverColor {
-        switch resolver.lowercased() {
-        case "spotify": return .spotify
-        case "applemusic", "apple music": return .appleMusic
-        case "youtube": return .youtube
-        case "bandcamp": return .bandcamp
-        case "soundcloud": return .soundcloud
-        default: return .localfiles
-        }
+    static func hex(_ serviceId: String) -> UInt32 {
+        UInt32(ServiceColors.shared.color(serviceId: serviceId))
     }
-
-    /// Solid brand color (the colored square fill / pill).
-    var solid: Color {
-        switch self {
-        case .spotify:    return Color(uiColor: UIColor(hex: 0x1db954))
-        case .appleMusic: return Color(uiColor: UIColor(hex: 0xfa233b))
-        case .youtube:    return Color(uiColor: UIColor(hex: 0xff0033))
-        case .bandcamp:   return Color(uiColor: UIColor(hex: 0x1da0c3))
-        case .soundcloud: return Color(uiColor: UIColor(hex: 0xff5500))
-        case .localfiles: return Color(uiColor: UIColor(hex: 0x4b5563))
-        }
-    }
+    static func solid(_ serviceId: String) -> Color { pcToken(ServiceColors.shared.color(serviceId: serviceId)) }
 }
 
 /// Spacing scale (4px base).

@@ -64,11 +64,7 @@ import com.parachord.android.ui.components.SpinningRefreshIcon
 
 // Desktop gradient: amber → orange → red
 private val HeaderGradient = Brush.horizontalGradient(
-    colors = listOf(
-        Color(0xFFF59E0B), // amber-500
-        Color(0xFFF97316), // orange-500
-        Color(0xFFEF4444), // red-500
-    ),
+    colors = com.parachord.shared.ui.DesignTokens.Page.CRITICAL_DARLINGS.gradient.map { com.parachord.android.ui.theme.tokenColor(it) },
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

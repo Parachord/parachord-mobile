@@ -610,7 +610,7 @@ struct AlbumScreen: View {
                         Label("Play All", systemImage: "play.fill")
                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 28).frame(height: 48)
-                            .background(PC.accent, in: Capsule())
+                            .background(PC.fillAccent, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, 20).padding(.vertical, 12)
@@ -1083,7 +1083,7 @@ struct ArtistScreen: View {
             Label("Play Top Tracks", systemImage: "play.fill")
                 .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                 .padding(.horizontal, 22).frame(height: 44)
-                .background(PC.accent, in: Capsule())
+                .background(PC.fillAccent, in: Capsule())
                 .shadow(color: PC.accent.opacity(0.4), radius: 12, y: 8)
         }
         .buttonStyle(.plain)
@@ -1148,17 +1148,8 @@ struct ArtistScreen: View {
         DiscoFilter(label: "Compilations", key: "compilation"),
     ]
 
-    /// Per-type chip/badge colour — verbatim from Android's releaseTypeBadgeColor.
-    private func releaseTypeColor(_ key: String?) -> Color {
-        switch key?.lowercased() {
-        case "album":       return Color(uiColor: UIColor(hex: 0x6366F1)) // indigo
-        case "ep":          return Color(uiColor: UIColor(hex: 0xA855F7)) // purple
-        case "single":      return Color(uiColor: UIColor(hex: 0xEC4899)) // pink
-        case "live":        return Color(uiColor: UIColor(hex: 0xF59E0B)) // amber
-        case "compilation": return Color(uiColor: UIColor(hex: 0x14B8A6)) // teal
-        default:            return Color(uiColor: UIColor(hex: 0x9CA3AF)) // gray
-        }
-    }
+    /// Per-type chip/badge colour: the one shared map, as Fresh Drops.
+    private func releaseTypeColor(_ key: String?) -> Color { PC.releaseType(key) }
 
     /// Collapse duplicate titles to ONE entry, keeping the most meaningful release
     /// type. Two distinct cases:
@@ -1201,7 +1192,7 @@ struct ArtistScreen: View {
                 .multilineTextAlignment(.center).padding(.horizontal, 40)
             Button { Task { await model.retryDiscography() } } label: {
                 Text("Try Again").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 22).frame(height: 42).background(PC.accent, in: Capsule())
+                    .padding(.horizontal, 22).frame(height: 42).background(PC.fillAccent, in: Capsule())
             }
             .buttonStyle(.plain).padding(.top, 4)
         }

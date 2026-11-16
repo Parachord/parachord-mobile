@@ -72,11 +72,7 @@ import com.parachord.android.ui.components.TrackRow
 private val OrangeAccent = Color(0xFFF97316)
 
 private val HeaderGradient = Brush.horizontalGradient(
-    colors = listOf(
-        Color(0xFFF97316), // orange
-        Color(0xFFEC4899), // pink
-        Color(0xFF8B5CF6), // purple
-    ),
+    colors = com.parachord.shared.ui.DesignTokens.Page.POP_OF_THE_TOPS.gradient.map { com.parachord.android.ui.theme.tokenColor(it) },
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

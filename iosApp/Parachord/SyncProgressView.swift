@@ -29,7 +29,7 @@ struct SyncProgressView: View {
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(syncEnabled ? PC.accent : PC.fg3))
+                    .background(RoundedRectangle(cornerRadius: 8).fill(syncEnabled ? PC.fillAccent : PC.fg3))
             }
             .buttonStyle(.plain)
             .disabled(!syncEnabled)

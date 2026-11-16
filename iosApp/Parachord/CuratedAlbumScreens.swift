@@ -307,7 +307,7 @@ struct CriticalDarlingsScreen: View {
                         icon: "trophy.fill",
                         subtitle: "Top-rated albums from leading music publications",
                         count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
-                        gradient: [0xF59E0B, 0xF97316, 0xEF4444])
+                        gradient: PC.pageGradient(.criticalDarlings))
                     filterBar
                     if model.isLoading && !model.loaded {
                         PCSkeletonList(count: 6, art: 80)
@@ -452,20 +452,9 @@ final class FreshDropsModel {
 private let freshFilters: [(key: String, label: String)] =
     [("all", "All"), ("album", "Albums"), ("ep", "EPs"), ("single", "Singles")]
 
-/// Per-release-type pill/badge color (shared by the Fresh Drops chips/filters AND
-/// the artist discography filters). Colors are the DESKTOP `badgeStyles` map
-/// (app.js) — the source of truth (#247). Note Android's Fresh Drops uses a
-/// different purple/cyan/amber set; desktop is canonical, so iOS follows it.
-func pcReleaseTypeColor(_ key: String?) -> Color {
-    switch key?.lowercased() {
-    case "album":       return Color(uiColor: UIColor(hex: 0x6366F1)) // indigo
-    case "ep":          return Color(uiColor: UIColor(hex: 0xA855F7)) // purple
-    case "single":      return Color(uiColor: UIColor(hex: 0xDB2777)) // rose
-    case "live":        return Color(uiColor: UIColor(hex: 0xD97706)) // amber
-    case "compilation": return Color(uiColor: UIColor(hex: 0x0EB3A0)) // teal
-    default:            return Color(uiColor: UIColor(hex: 0x9CA3AF)) // gray
-    }
-}
+/// Per-release-type pill/badge color (Fresh Drops, a discography, an album):
+/// the one shared map (`DesignTokens.releaseTypeColor`, Android's too).
+func pcReleaseTypeColor(_ key: String?) -> Color { PC.releaseType(key) }
 
 struct FreshDropsScreen: View {
     @State private var model = FreshDropsModel.shared
@@ -491,7 +480,7 @@ struct FreshDropsScreen: View {
                         icon: "drop.fill",
                         subtitle: "New releases from artists you listen to",
                         count: model.drops.isEmpty ? nil : "\(model.drops.count) releases",
-                        gradient: [0x10B981, 0x14B8A6, 0x06B6D4])
+                        gradient: PC.pageGradient(.freshDrops))
 
                     Section {
                         if model.isLoading && !model.loaded {
@@ -589,7 +578,7 @@ struct FreshDropsScreen: View {
                         .background(typeColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 3))
                     if let d = freshDate(drop.date) {
                         Text(d.text).font(.system(size: 12))
-                            .foregroundStyle(d.upcoming ? Color(uiColor: UIColor(hex: 0x10B981)) : PC.fg3)
+                            .foregroundStyle(d.upcoming ? PC.success : PC.fg3)
                     }
                 }
                 .padding(.top, 1)
@@ -860,7 +849,7 @@ struct ConcertsScreen: View {
                     icon: "ticket.fill",
                     subtitle: "Upcoming shows from artists you listen to",
                     count: model.events.isEmpty ? nil : "\(model.events.count) events",
-                    gradient: [0x14B8A6, 0x0891B2])
+                    gradient: PC.pageGradient(.concerts))
                 if model.isLoading && !model.loaded {
                     PCSkeletonList(count: 6, art: 56)
                 } else if model.events.isEmpty, let error = model.error {

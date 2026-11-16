@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
@@ -245,7 +246,7 @@ fun EditPlaylistScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(2.dp)
-                            .background(Color(0xFF7C3AED)),
+                            .background(FillAccent),
                     )
                 }
 

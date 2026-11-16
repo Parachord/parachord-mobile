@@ -39,34 +39,35 @@ struct PCLoadedPlugin: Identifiable {
 }
 
 /// Parse a `.axe` hex color ("#1DB954") into the UInt32 PCService uses; falls
-/// back to brand purple.
+/// back to brand purple. The parsing is the shared `ServiceColors.parseHex`.
 func pcParseHex(_ hex: String) -> UInt32 {
-    let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-    return UInt32(s, radix: 16) ?? 0x7C3AED
+    UInt32(truncating: ServiceColors.shared.parseHex(hex: hex) ?? KotlinInt(int: ServiceColors.shared.DEFAULT))
 }
 
+/// Presentation for the known services. Colours are the plugin manifests'
+/// (shared `ServiceColors`), never copied here.
 enum PCServices {
     static let resolvers: [PCService] = [
-        .init(id: "spotify", name: "Spotify", color: 0x1DB954, icon: "music.note", kind: .resolver),
-        .init(id: "applemusic", name: "Apple Music", color: 0xFA243C, icon: "music.note", kind: .resolver),
-        .init(id: "bandcamp", name: "Bandcamp", color: 0x629AA9, icon: "music.note", kind: .resolver),
-        .init(id: "soundcloud", name: "SoundCloud", color: 0xFF5500, icon: "cloud", kind: .resolver),
-        .init(id: "localfiles", name: "Local Files", color: 0xA855F7, icon: "internaldrive", kind: .resolver),
+        .init(id: "spotify", name: "Spotify", color: ResolverColor.hex("spotify"), icon: "music.note", kind: .resolver),
+        .init(id: "applemusic", name: "Apple Music", color: ResolverColor.hex("applemusic"), icon: "music.note", kind: .resolver),
+        .init(id: "bandcamp", name: "Bandcamp", color: ResolverColor.hex("bandcamp"), icon: "music.note", kind: .resolver),
+        .init(id: "soundcloud", name: "SoundCloud", color: ResolverColor.hex("soundcloud"), icon: "cloud", kind: .resolver),
+        .init(id: "localfiles", name: "Local Files", color: ResolverColor.hex("localfiles"), icon: "internaldrive", kind: .resolver),
     ]
     static let meta: [PCService] = [
-        .init(id: "lastfm", name: "Last.fm", color: 0xD51007, icon: "waveform", kind: .meta),
-        .init(id: "listenbrainz", name: "ListenBrainz", color: 0xEB743B, icon: "waveform", kind: .meta),
-        .init(id: "librefm", name: "Libre.fm", color: 0x4CAF50, icon: "waveform", kind: .meta),
-        .init(id: "discogs", name: "Discogs", color: 0x333333, icon: "opticaldisc", kind: .meta),
-        .init(id: "chatgpt", name: "ChatGPT", color: 0x10A37F, icon: "sparkles", kind: .meta),
-        .init(id: "claude", name: "Claude", color: 0xD97757, icon: "sparkles", kind: .meta),
-        .init(id: "gemini", name: "Gemini", color: 0x4285F4, icon: "sparkles", kind: .meta),
+        .init(id: "lastfm", name: "Last.fm", color: ResolverColor.hex("lastfm"), icon: "waveform", kind: .meta),
+        .init(id: "listenbrainz", name: "ListenBrainz", color: ResolverColor.hex("listenbrainz"), icon: "waveform", kind: .meta),
+        .init(id: "librefm", name: "Libre.fm", color: ResolverColor.hex("librefm"), icon: "waveform", kind: .meta),
+        .init(id: "discogs", name: "Discogs", color: ResolverColor.hex("discogs"), icon: "opticaldisc", kind: .meta),
+        .init(id: "chatgpt", name: "ChatGPT", color: ResolverColor.hex("chatgpt"), icon: "sparkles", kind: .meta),
+        .init(id: "claude", name: "Claude", color: ResolverColor.hex("claude"), icon: "sparkles", kind: .meta),
+        .init(id: "gemini", name: "Gemini", color: ResolverColor.hex("gemini"), icon: "sparkles", kind: .meta),
     ]
     static let concerts: [PCService] = [
-        .init(id: "ticketmaster", name: "Ticketmaster", color: 0x026CDF, icon: "ticket", kind: .concert),
-        .init(id: "seatgeek", name: "SeatGeek", color: 0xFF5B49, icon: "ticket", kind: .concert),
-        .init(id: "bandsintown", name: "Bandsintown", color: 0x00B4B3, icon: "ticket", kind: .concert),
-        .init(id: "songkick", name: "Songkick", color: 0xF80046, icon: "ticket", kind: .concert),
+        .init(id: "ticketmaster", name: "Ticketmaster", color: ResolverColor.hex("ticketmaster"), icon: "ticket", kind: .concert),
+        .init(id: "seatgeek", name: "SeatGeek", color: ResolverColor.hex("seatgeek"), icon: "ticket", kind: .concert),
+        .init(id: "bandsintown", name: "Bandsintown", color: ResolverColor.hex("bandsintown"), icon: "ticket", kind: .concert),
+        .init(id: "songkick", name: "Songkick", color: ResolverColor.hex("songkick"), icon: "ticket", kind: .concert),
     ]
     static let all = resolvers + meta + concerts
     static func find(_ id: String) -> PCService? { all.first { $0.id == id } }

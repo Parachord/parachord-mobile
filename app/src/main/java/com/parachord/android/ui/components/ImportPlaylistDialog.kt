@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.android.ui.theme.FillAccent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -46,7 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
-private val Purple = Color(0xFF7C3AED)
+private val Purple = FillAccent
 
 @Composable
 fun ImportPlaylistDialog(
