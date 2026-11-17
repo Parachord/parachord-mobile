@@ -119,7 +119,7 @@ One map for every screen (Fresh Drops, an artist's discography, an album page, H
 
 ## 3. Icons
 
-Mobile draws desktop's icons, not Material icons or SF Symbols. Desktop's set is `src/renderer/components/icons.js` (Lucide paths, ISC licence, plus Spinner, Spinoff and Playlist), and its logos are `brand-logos.js`. Both are copied into shared code by `scripts/sync-desktop-icons.js`, which writes `shared/.../ui/icons/DesktopIcons.kt`:
+Mobile draws desktop's icons for everything that's Parachord's own, and the platform's icon for a short list of system actions (below). Desktop's set is `src/renderer/components/icons.js` (Lucide paths, ISC licence, plus Spinner, Spinoff and Playlist), and its logos are `brand-logos.js`. Both are copied into shared code by `scripts/sync-desktop-icons.js`, which writes `shared/.../ui/icons/DesktopIcons.kt`:
 - `AppIcon`: every icon, named as on desktop (`AppIcon.Play`, `.Heart`, `.Spinoff` …).
 - `ServiceLogos.spec(id)`: the source badge logo (`SERVICE_LOGO_PATHS`).
 - `ServiceLogos.large(id)`: the large logo, used for Settings tiles and the meta services (`SERVICE_LOGOS`).
@@ -133,12 +133,26 @@ The shared `SvgPath` turns each path into move / line / cubic / close commands, 
 
 Two logos are bitmaps (`ServiceLogos.BITMAPS`: SoundCloud, Subsonic). Each app bundles desktop's image for them: Android `drawable-nodpi`, iOS `ServiceLogoSoundcloud` / `ServiceLogoSubsonic` in the asset catalog.
 
-Rules, as desktop:
+**System actions keep the platform's icon.** A few icons carry the platform's own meaning, and people find them by habit. These use SF Symbols on iOS and Material icons on Android, never desktop's version:
+
+| Action | iOS (SF Symbol) | Android (Material) |
+|---|---|---|
+| Back (navigation bar) | `chevron.left` | `Icons.AutoMirrored.Filled.ArrowBack` |
+| Share | `square.and.arrow.up` | `Icons.Filled.Share` |
+| More / overflow menu | `ellipsis` (`ellipsis.circle` in a navigation bar) | `Icons.Filled.MoreVert` |
+| Close a sheet or dialog | `xmark` | `Icons.Filled.Close` |
+| Search (tab bar, navigation bar) | `magnifyingglass` | `Icons.Filled.Search` |
+
+Surfaces the system draws (lock screen and notification media controls, CarPlay, Android Auto, the share sheet, widgets' system chrome) show the system's glyphs anyway. Everything else (transport controls inside the app, love, queue, Spinoff, Shuffleupagus, sources, playlists, page icons, settings rows, empty states) is desktop's.
+
+Rules for desktop's icons:
 - **Stroke and fill:** stroke 2, round caps and joins. The transport icons (Play, Pause, SkipBack, SkipForward) are solid; the rest are outlines.
 - **Sizes:** 16 in rows, chips, small buttons and inline with text. 20 in buttons and dialog titles. 12 only inside a badge. 32–48 only for an empty state's illustration.
+- **Text size:** an icon beside text scales with that text (Dynamic Type on iOS, font scale on Android), as a system icon would. Today's `PCIcon` and `ParachordIcon` are fixed sizes; #709 adds the scaling.
+- **Right-to-left:** directional icons (chevrons, arrows, back, list-with-arrow icons such as `QueueAdd` and `ListPlus`) flip in a right-to-left language, as SF Symbols and Android's AutoMirrored icons do. Which icons flip is a shared decision (one list in `shared/.../ui/icons/`), added in #709.
 - **Colour:** an icon takes its context's colour. A logo is white on its service's colour square, except where it has its own colours (Achordion).
 - **Labels:** an icon is decorative (no label) unless it's the only thing in a control. Then the control carries the label.
-- **No other icons:** never a text glyph (✕ ✓ ▶) as an icon, never a pasted SVG path, never a hand-copied logo. An icon desktop doesn't have is added on desktop first (`SHAPES` in `icons.js`), then synced.
+- **No other icons:** apart from the system actions above, never a Material icon or SF Symbol, never a text glyph (✕ ✓ ▶) as an icon, never a pasted SVG path, never a hand-copied logo. An icon desktop doesn't have is added on desktop first (`SHAPES` in `icons.js`), then synced.
 
 ## 4. Components
 

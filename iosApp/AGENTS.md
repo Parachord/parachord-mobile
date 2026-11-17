@@ -24,7 +24,8 @@ For every UI/UX or behavior task, in this order:
    apps follow (tokens, the fill accent, service and page colours, scales,
    desktop's icons and logos, section titles, filter chips, cards, copy),
    translated from desktop's. Icons are desktop's (`PCIcon`, `PCServiceLogo`,
-   from the shared `AppIcon` / `ServiceLogos`), not SF Symbols.
+   from the shared `AppIcon` / `ServiceLogos`), not SF Symbols,
+   except the system actions the design system lists (back, share, more, close, search).
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at
