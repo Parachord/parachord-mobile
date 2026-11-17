@@ -1490,6 +1490,17 @@ only draws it.
     Bandcamp covers don't show in CarPlay Now Playing there (see the known gap
     under Bandcamp).
 
+## Local files are the library, not loves (#705)
+
+The Music-library scan (`MediaLibraryScanner.swift` → `IosContainer.addLocalTracks`)
+and imported files (`addImportedFiles`) save through the shared
+`LibraryRepository.addScannedLocalTracks`, so a file is listed in the
+Collection's songs but isn't a love until the user hearts it (`tracks.inCollection`;
+the column and a one-time cleanup run in `DriverFactory`'s `addColumnIfMissing`).
+Home's Recent Loves use the shared `recentLoves`; the love-push Backfill and
+CarPlay's Loved Songs leave unloved files out. Removing a heart from a file keeps
+its row. Root `CLAUDE.md` → "Local files are the library, not loves".
+
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
 Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`

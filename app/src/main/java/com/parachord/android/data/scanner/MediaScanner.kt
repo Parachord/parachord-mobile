@@ -160,7 +160,8 @@ class MediaScanner constructor(
 
         // Batch insert into Room
         if (tracksToInsert.isNotEmpty()) {
-            repository.addTracks(tracksToInsert)
+            // Local library, not the collection (#705): a scanned file isn't a love.
+            repository.addScannedLocalTracks(tracksToInsert)
         }
         if (albumMap.isNotEmpty()) {
             repository.addAlbums(albumMap.values.toList())

@@ -184,6 +184,7 @@ fun CollectionScreen(
         onNavigateToAlbum = onNavigateToAlbum,
         onToggleCollection = { track, isInCollection ->
             if (isInCollection) viewModel.removeTrackFromCollection(track)
+            else viewModel.addTrackToCollection(track)
         },
     )
 
@@ -474,7 +475,8 @@ fun CollectionScreen(
                                                     album = track.album,
                                                     artworkUrl = track.artworkUrl,
                                                     duration = track.duration,
-                                                    isInCollection = true,
+                                                    // A scanned local file is listed but not loved (#705).
+                                                    isInCollection = track.inCollection,
                                                 ),
                                                 track,
                                             )

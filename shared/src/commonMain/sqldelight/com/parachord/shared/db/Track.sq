@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS tracks (
     recordingMbid TEXT,
     artistMbid TEXT,
     releaseMbid TEXT,
-    crossResolverEnrichedAt INTEGER
+    crossResolverEnrichedAt INTEGER,
+    -- 1 = in the collection (a love: the heart is on), 0 = a local file that is
+    -- only in the library (#705). Local file scans write 0; the heart sets 1.
+    inCollection INTEGER NOT NULL DEFAULT 1
 );
 
 getAll:
@@ -34,7 +37,16 @@ getByAlbumId:
 SELECT * FROM tracks WHERE albumId = ? ORDER BY title;
 
 existsByTitleAndArtist:
-SELECT COUNT(*) > 0 FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?);
+SELECT COUNT(*) > 0 FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) AND inCollection = 1;
+
+getCollectionByTitleAndArtist:
+SELECT * FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) AND inCollection = 1 LIMIT 1;
+
+setInCollection:
+UPDATE tracks SET inCollection = ? WHERE id = ?;
+
+markScannedLocalFilesLibraryOnly:
+UPDATE tracks SET inCollection = 0 WHERE resolver = 'localfiles' AND (id LIKE 'local-%' OR id LIKE 'fileimport-%');
 
 getByTitleAndArtist:
 SELECT * FROM tracks WHERE LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) ORDER BY addedAt ASC LIMIT 1;
@@ -56,8 +68,8 @@ findLocalFile:
 SELECT * FROM tracks WHERE resolver = 'localfiles' AND LOWER(title) = LOWER(?) AND LOWER(artist) = LOWER(?) LIMIT 1;
 
 insert:
-INSERT OR REPLACE INTO tracks (id, title, artist, album, albumId, duration, artworkUrl, sourceType, sourceUrl, addedAt, resolver, spotifyUri, soundcloudId, spotifyId, appleMusicId, isrc, recordingMbid, artistMbid, releaseMbid)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO tracks (id, title, artist, album, albumId, duration, artworkUrl, sourceType, sourceUrl, addedAt, resolver, spotifyUri, soundcloudId, spotifyId, appleMusicId, isrc, recordingMbid, artistMbid, releaseMbid, inCollection)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateArtworkById:
 UPDATE tracks SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artworkUrl = '');

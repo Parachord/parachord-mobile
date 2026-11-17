@@ -245,6 +245,15 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // Local files are library-only, not loves (#705). The ALTER succeeds only
+        // on the launch that adds the column, so the scanned rows are marked
+        // library-only exactly once; a heart added later is never undone.
+        try {
+            driver.execute(null, com.parachord.shared.db.LocalLibraryMigration.ADD_COLUMN, 0)
+            driver.execute(null, com.parachord.shared.db.LocalLibraryMigration.MARK_SCANNED_LOCAL_FILES_LIBRARY_ONLY, 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // ListenBrainz playlist sync (#156): trackRecordingMbid carries the
         // recording MBID per-row so LB push/pull can identify tracks by MBID
         // (LB's only stable ID). New installs get the column from

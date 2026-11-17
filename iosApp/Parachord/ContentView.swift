@@ -4743,7 +4743,7 @@ struct DevSmokeTestView: View {
             recordingMbid: nil,
             artistMbid: nil,
             releaseMbid: nil,
-            crossResolverEnrichedAt: nil
+            crossResolverEnrichedAt: nil, inCollection: true
         )
     }
 

@@ -137,7 +137,7 @@ final class FriendProfileModel {
         Track(id: "\(title)|\(artist)", title: title, artist: artist, album: album, albumId: nil,
               duration: nil, artworkUrl: art, sourceType: nil, sourceUrl: nil, addedAt: 0,
               resolver: nil, spotifyUri: nil, soundcloudId: nil, spotifyId: nil, appleMusicId: nil,
-              isrc: nil, recordingMbid: nil, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil)
+              isrc: nil, recordingMbid: nil, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true)
     }
 }
 

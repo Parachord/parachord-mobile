@@ -106,6 +106,15 @@ class CarBrowseTest {
     }
 
     @Test
+    fun `loved songs leave out local files nobody hearted`() = runTest {
+        val file = tr("f").copy(inCollection = false)
+        val src = FakeSource(collection = listOf(tr("a"), file, tr("b")))
+        assertEquals(listOf("loved-track:a", "loved-track:b"), CarBrowse(src).children(CarIds.LOVED).map { it.id })
+        // Collection Radio still plays the whole library, files included.
+        assertEquals(3, CarBrowse(src).playRequest(CarIds.COLLECTION_RADIO)!!.tracks.size)
+    }
+
+    @Test
     fun `playlist track ids round-trip when the playlist id contains a colon`() {
         assertEquals("hosted:xspf:abc" to 3, CarIds.parsePlaylistTrack(CarIds.playlistTrack("hosted:xspf:abc", 3)))
         assertNull(CarIds.parsePlaylistTrack("playlist:local-1"))

@@ -199,9 +199,16 @@ class LibraryViewModel constructor(
         }
     }
 
+    /** Heart a track the list shows unloved: a scanned local file (#705). */
+    fun addTrackToCollection(track: TrackEntity) {
+        viewModelScope.launch {
+            repository.addToCollection(track)
+        }
+    }
+
     fun removeTrackFromCollection(track: TrackEntity) {
         viewModelScope.launch {
-            repository.deleteTrackWithSync(track)
+            repository.removeFromCollection(track)
         }
     }
 

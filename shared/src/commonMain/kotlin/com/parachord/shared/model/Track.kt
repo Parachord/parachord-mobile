@@ -59,6 +59,13 @@ data class Track(
      * regardless of outcome so un-findable tracks aren't thrashed every run.
      */
     val crossResolverEnrichedAt: Long? = null,
+    /**
+     * False for a local file that is only in the library, not the collection
+     * (#705): it lists and plays like any library track but isn't a love, so its
+     * heart is off and love push never sends it. True for every other row, and
+     * for a local file the user hearted.
+     */
+    val inCollection: Boolean = true,
 ) {
     /**
      * Derive all available resolvers from stored IDs.
