@@ -48,7 +48,7 @@ func pcTrack(from t: TrackSearchResult) -> Track {
         sourceType: nil, sourceUrl: nil, addedAt: 0,
         resolver: nil, spotifyUri: nil, soundcloudId: nil,
         spotifyId: t.spotifyId, appleMusicId: nil, isrc: nil, recordingMbid: t.mbid,
-        artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+        artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
     )
 }
 

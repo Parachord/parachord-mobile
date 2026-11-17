@@ -131,11 +131,32 @@ class LibraryRepository(
      * loves on tracks the user never touched.
      */
     suspend fun addToCollection(track: Track) {
-        val existing = trackDao.getById(track.id)
-            ?: trackDao.getByTitleAndArtist(track.title, track.artist)
-        addTrack(collectionTrack(track, existing, currentTimeMillis()))
+        val existing = trackDao.getById(track.id)?.takeIf { it.inCollection }
+            ?: trackDao.getCollectionByTitleAndArtist(track.title, track.artist)
+        val row = collectionTrack(track, existing, currentTimeMillis())
+        // Written directly, not through addTrack: addTrack keeps an existing
+        // row's addedAt, which for a scanned local file is its scan date (#705).
+        trackDao.insert(row)
+        tombstones.clearAll(TrackTombstoneService.deriveTombstoneEntries(row))
+        mbidEnrichTrack(row.id, row.artist, row.title)
         // Fire-and-forget; LovesPushService handles its own coroutine + idempotency.
         pushLovedTrack(track)
+    }
+
+    /**
+     * Save scanned or imported local files (#705). They join the local
+     * library, not the collection: a new file is saved with
+     * `inCollection = false`, and a file the user already hearted stays in the
+     * collection when it's scanned again. Desktop keeps local files in their
+     * own library for the same reason: a file on the device isn't a love.
+     */
+    suspend fun addScannedLocalTracks(tracks: List<Track>) {
+        val rows = tracks.map { track ->
+            val existing = trackDao.getById(track.id)
+            track.copy(inCollection = existing?.inCollection == true)
+        }
+        trackDao.insertAll(rows)
+        mbidEnrichBatch(rows)
     }
 
     suspend fun addTracks(tracks: List<Track>) {
@@ -273,10 +294,16 @@ class LibraryRepository(
      * Returns false when no library row matched.
      */
     suspend fun removeFromCollection(track: Track): Boolean {
-        val existing = trackDao.getById(track.id)
-            ?: trackDao.getByTitleAndArtist(track.title, track.artist)
+        val existing = trackDao.getById(track.id)?.takeIf { it.inCollection }
+            ?: trackDao.getCollectionByTitleAndArtist(track.title, track.artist)
             ?: return false
-        deleteTrackWithSync(existing)
+        if (isScannedLocalFile(existing)) {
+            // The file stays in the local library; only the love goes (#705).
+            syncEngine.onTrackRemoved(existing)
+            trackDao.setInCollection(existing.id, false)
+        } else {
+            deleteTrackWithSync(existing)
+        }
         return true
     }
 
@@ -463,4 +490,20 @@ class LibraryRepository(
  * the collection and Recent Loves, which sort newest first.
  */
 internal fun collectionTrack(track: Track, existing: Track?, nowMs: Long): Track =
-    track.copy(addedAt = existing?.addedAt ?: nowMs)
+    track.copy(addedAt = existing?.addedAt ?: nowMs, inCollection = true)
+
+/** The collection's loves (#705): every track row but local files the user never hearted. */
+fun lovedTracks(tracks: List<Track>): List<Track> = tracks.filter { it.inCollection }
+
+/** Home's Recent Loves: the [limit] most recently loved tracks, newest first. */
+fun recentLoves(tracks: List<Track>, limit: Int): List<Track> =
+    lovedTracks(tracks).sortedByDescending { it.addedAt }.take(limit)
+
+/**
+ * A row a local-file scan or file import made (#705): Android's `local-<mediaId>`,
+ * iOS's `local-<persistentID>` and `fileimport-<uuid>`. Removing its love keeps
+ * the row, since the file is still on the device.
+ */
+fun isScannedLocalFile(track: Track): Boolean =
+    track.resolver == "localfiles" &&
+        (track.id.startsWith("local-") || track.id.startsWith("fileimport-"))

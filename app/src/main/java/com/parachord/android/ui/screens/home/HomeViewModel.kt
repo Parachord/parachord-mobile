@@ -88,7 +88,7 @@ class HomeViewModel constructor(
     val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
 
     val recentTracks: StateFlow<List<TrackEntity>> = repository.getAllTracks()
-        .map { tracks -> tracks.sortedByDescending { it.addedAt }.take(20) }
+        .map { tracks -> com.parachord.shared.repository.recentLoves(tracks, 20) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** null = still loading, true/false = resolved. */
@@ -391,7 +391,7 @@ class HomeViewModel constructor(
      */
     fun removeTrackFromCollection(track: TrackEntity) {
         viewModelScope.launch {
-            repository.deleteTrackWithSync(track)
+            repository.removeFromCollection(track)
         }
     }
 

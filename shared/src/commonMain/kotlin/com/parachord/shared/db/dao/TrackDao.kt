@@ -32,6 +32,7 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         spotifyId = spotifyId, appleMusicId = appleMusicId, isrc = isrc,
         recordingMbid = recordingMbid, artistMbid = artistMbid, releaseMbid = releaseMbid,
         crossResolverEnrichedAt = crossResolverEnrichedAt,
+        inCollection = inCollection != 0L,
     )
 
     /* ---- Queries returning Flow ---- */
@@ -79,6 +80,17 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.getByTitleAndArtist(title, artist).executeAsOneOrNull()?.toTrack()
     }
 
+    /** The collection row (not a library-only local file) for this title and
+     *  artist: the one whose heart [existsByTitleAndArtist] lights (#705). */
+    suspend fun getCollectionByTitleAndArtist(title: String, artist: String): Track? = withContext(Dispatchers.Default) {
+        queries.getCollectionByTitleAndArtist(title, artist).executeAsOneOrNull()?.toTrack()
+    }
+
+    /** Puts a row in the collection (a love) or takes a local file back to library-only (#705). */
+    suspend fun setInCollection(id: String, inCollection: Boolean): Unit = withContext(Dispatchers.Default) {
+        queries.setInCollection(if (inCollection) 1L else 0L, id)
+    }
+
     /** The artist's MusicBrainz id from any enriched library track by them, or null. */
     suspend fun artistMbidForArtist(artist: String): String? = withContext(Dispatchers.Default) {
         queries.artistMbidForArtist(artist).executeAsList().firstOrNull { !it.isNullOrBlank() }
@@ -122,6 +134,7 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
             recordingMbid = track.recordingMbid,
             artistMbid = track.artistMbid,
             releaseMbid = track.releaseMbid,
+            inCollection = if (track.inCollection) 1L else 0L,
         )
     }
 
@@ -148,6 +161,7 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
                     recordingMbid = track.recordingMbid,
                     artistMbid = track.artistMbid,
                     releaseMbid = track.releaseMbid,
+                    inCollection = if (track.inCollection) 1L else 0L,
                 )
             }
         }

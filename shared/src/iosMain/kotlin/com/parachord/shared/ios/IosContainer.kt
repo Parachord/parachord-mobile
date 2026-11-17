@@ -1673,8 +1673,8 @@ class IosContainer private constructor() {
         val stale = trackDao.getAll().first()
             .filter { it.resolver == "localfiles" && it.id.startsWith("local-") && it.id !in keepIds }
         for (t in stale) trackDao.delete(t)
-        if (tracks.isNotEmpty()) trackDao.insertAll(tracks)
-        for (t in tracks) mbidEnrichmentService.enrichInBackground(t.id, t.artist, t.title)
+        // Local library, not the collection (#705): a scanned file isn't a love.
+        if (tracks.isNotEmpty()) libraryRepository.addScannedLocalTracks(tracks)
     }
 
     /**
@@ -1688,8 +1688,7 @@ class IosContainer private constructor() {
      */
     suspend fun addImportedFiles(tracks: List<Track>) {
         if (tracks.isEmpty()) return
-        trackDao.insertAll(tracks)
-        for (t in tracks) mbidEnrichmentService.enrichInBackground(t.id, t.artist, t.title)
+        libraryRepository.addScannedLocalTracks(tracks)
     }
 
     /**

@@ -153,6 +153,8 @@ class LovesPushService(
         service: String,
         collectionTracks: List<Track>,
     ): BackfillState.Done {
+        // Loves only: a local file the user never hearted isn't a love (#705).
+        val loved = com.parachord.shared.repository.lovedTracks(collectionTracks)
         val scrobbler = scrobblers.firstOrNull { it.id == service }
             ?: throw IllegalArgumentException("No scrobbler registered for service '$service'")
         if (!scrobbler.isEnabled()) {
@@ -162,7 +164,7 @@ class LovesPushService(
         var pushed = 0
         var skipped = 0
         var failed = 0
-        val total = collectionTracks.size
+        val total = loved.size
         _backfillState.value = BackfillState.Running(service, 0, 0, 0, total)
 
         // Snapshot the cache once at start; we'll consult it in-memory and
@@ -170,7 +172,7 @@ class LovesPushService(
         // through the mutex + reads-modifies-writes the persistent map).
         val initialCache = settingsStore.getLovePushedKeys()
 
-        for ((index, track) in collectionTracks.withIndex()) {
+        for ((index, track) in loved.withIndex()) {
             if (initialCache[track.id]?.containsKey(service) == true) {
                 skipped++
                 _backfillState.value = BackfillState.Running(service, pushed, skipped, failed, total)
@@ -187,7 +189,7 @@ class LovesPushService(
             }
             _backfillState.value = BackfillState.Running(service, pushed, skipped, failed, total)
             // Pace 1 req/sec except after the last item.
-            if (index < collectionTracks.lastIndex) {
+            if (index < loved.lastIndex) {
                 if (backfillDelayMs > 0) delay(backfillDelayMs)
             }
         }

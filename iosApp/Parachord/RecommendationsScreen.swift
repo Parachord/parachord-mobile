@@ -82,7 +82,7 @@ final class RecommendationsModel {
             // The ids the service sent (ListenBrainz's recording MBID): the
             // exact-id match tier and scrobbles use them with no lookup (#606).
             spotifyId: nil, appleMusicId: nil, isrc: t.isrc, recordingMbid: t.recordingMbid,
-            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
         )
     }
 }

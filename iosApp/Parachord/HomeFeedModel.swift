@@ -45,7 +45,7 @@ final class HomeFeedModel {
         })
         subs.append(container.watchCollectionTracks { [weak self] tracks in
             let count = tracks.count
-            let recent = Array(tracks.sorted { $0.addedAt > $1.addedAt }.prefix(10))
+            let recent = LibraryRepositoryKt.recentLoves(tracks: tracks, limit: 10)
             Task { @MainActor in self?.songCount = count; self?.recentLoves = recent; self?.recomputeEmpty() }
         })
         subs.append(container.watchCollectionArtists { [weak self] artists in

@@ -174,7 +174,9 @@ class CarBrowse(private val source: CarLibrarySource) {
         return CarPlayRequest(rows.map { source.toTrack(it) }, startIndex, shuffle)
     }
 
-    private fun lovedSongs(tracks: List<Track>): List<Track> = tracks.take(CAR_LOVED_CAP)
+    // Loves only: local files the user never hearted aren't loved songs (#705).
+    private fun lovedSongs(tracks: List<Track>): List<Track> =
+        com.parachord.shared.repository.lovedTracks(tracks).take(CAR_LOVED_CAP)
 
     private fun playlistsFolder() =
         CarItem(CarIds.PLAYLISTS, "Playlists", null, null, null, true, false, CarItemKind.FOLDER)

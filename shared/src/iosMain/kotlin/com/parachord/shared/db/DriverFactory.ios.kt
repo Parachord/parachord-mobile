@@ -44,12 +44,18 @@ actual class DriverFactory {
         addColumnIfMissing(driver, table = "track_provider_id_cache", column = "missingStreak", type = "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing(driver, table = "track_provider_id_cache", column = "lastSeenAt", type = "INTEGER")
         addColumnIfMissing(driver, table = "friends", column = "hidesListening", type = "INTEGER NOT NULL DEFAULT 0")
+        // Local files are library-only, not loves (#705): marked once, on the
+        // launch that adds the column, so a later heart is never undone.
+        if (addColumnIfMissing(driver, table = "tracks", column = "inCollection", type = "INTEGER NOT NULL DEFAULT 1")) {
+            driver.execute(null, com.parachord.shared.db.LocalLibraryMigration.MARK_SCANNED_LOCAL_FILES_LIBRARY_ONLY, 0)
+        }
         return driver
     }
 
     /** Add [column] to [table] only when it isn't already present — no exception,
-     *  so nothing is logged on the (normal) already-migrated path. */
-    private fun addColumnIfMissing(driver: SqlDriver, table: String, column: String, type: String) {
+     *  so nothing is logged on the (normal) already-migrated path. True when it
+     *  added the column (this launch is the one that migrates). */
+    private fun addColumnIfMissing(driver: SqlDriver, table: String, column: String, type: String): Boolean {
         val exists = driver.executeQuery(
             identifier = null,
             sql = "PRAGMA table_info($table)",
@@ -66,5 +72,6 @@ actual class DriverFactory {
         if (!exists) {
             driver.execute(null, "ALTER TABLE $table ADD COLUMN $column $type", 0)
         }
+        return !exists
     }
 }

@@ -155,7 +155,7 @@ Bandcamp plays through its own embedded player (`bandcamp.com/EmbeddedPlayer`), 
 
 The car UIs show one tree and follow one set of rules, all in `shared/.../car/` (`com.parachord.shared.car`):
 
-- **`CarBrowse`** (over a `CarLibrarySource`; `daoCarLibrarySource` is the DAO-backed one): `children(parentId)`, `item(id)`, `playRequest(id)`, `isBrowseTreeId(id)`. The root lists Playlists, Loved Songs and Collection Radio. Caps: `CAR_LOVED_CAP` 100 loved songs, `CAR_PLAYLIST_CAP` 500 tracks in one opened playlist (the playlists list is uncapped).
+- **`CarBrowse`** (over a `CarLibrarySource`; `daoCarLibrarySource` is the DAO-backed one): `children(parentId)`, `item(id)`, `playRequest(id)`, `isBrowseTreeId(id)`. The root lists Playlists, Loved Songs and Collection Radio. Loved Songs are the loves only (`lovedTracks`: no local file the user never hearted); Collection Radio plays every track row, local files included. Caps: `CAR_LOVED_CAP` 100 loved songs, `CAR_PLAYLIST_CAP` 500 tracks in one opened playlist (the playlists list is uncapped).
 - **`CarIds`**, the exact media ids: `parachord_root`, `browse:playlists`, `browse:loved`, `action:collection-radio`, `playlist:<id>`, `playlist-shuffle:<id>`, `playlist-track:<position>:<playlistId>` (position first so an id containing `:` parses), `loved-track:<id>`.
 - **`CarItem`** (`id`, `title`, `subtitle`, `artworkUrl`, `album`, `isBrowsable`, `isPlayable`, `kind` = `FOLDER | PLAYLIST | TRACK | ACTION`) is the tile; **`CarPlayRequest`** (`tracks`, `startIndex`, `shuffle`; null shuffle keeps the current setting) is what a tap plays. Collection Radio plays the whole collection shuffled.
 - **`carNowPlayingButtons(loved, spinoffMode, spinoffAvailable, spinoffLoading)`** gives the Now Playing buttons: heart (`LOVE` / `UNLOVE`), then Spinoff (`SPINOFF` / `END_SPINOFF`). None while nothing plays; Spinoff is hidden, not dimmed, when nothing similar exists. While the pool is being built (15 s or more) Spinoff already shows as `END_SPINOFF`, and a tap is ignored: the car shows no other sign that the tap took, and an unchanged button read as a tap that did nothing (#551).
@@ -428,7 +428,7 @@ The **ListenBrainz MBID Mapper** (`mapper.listenbrainz.org/mapping/lookup`) reso
 
 **MBID enrichment is wired into every track entry point:**
 1. **Library import** — `LibraryRepository.addTrack()`/`addTracks()` calls `enrichBatchInBackground()`
-2. **Local file scan** — `MediaScanner.scan()` → `repository.addTracks()` → same as above
+2. **Local file scan** — `MediaScanner.scan()` → `repository.addScannedLocalTracks()` (MBID enrichment as above; see "Local files are the library, not loves")
 3. **Background resolution** — `TrackResolverCache.resolveInBackground()` fires MBID enrichment in parallel with resolver resolution
 4. **Queue addition** — `PlaybackController.addToQueue()`/`insertNext()` enriches queued tracks
 5. **Playback start** — `PlaybackController.playTrackInternal()` enriches the current track
@@ -795,13 +795,23 @@ When the user adds a track to their collection (a "love"), Parachord can mirror 
 
 **Push paths:**
 - **Real-time** — `LibraryRepository.addToCollection(track)` calls `LovesPushService.pushLoved(track)` (through its `pushLovedTrack` lambda, wired in `AndroidModule` and `IosContainer`) after the local upsert. Fire-and-forget; failures log + skip without rolling back the local love. Every heart, double-tap and "Add to Collection" on both platforms goes through `addToCollection`.
-- **Backfill** — each service's settings show a Backfill button. It enumerates the existing collection, skips entries already in the idempotency cache for that service, pushes the rest at 1 per second, and shows the progress from `LovesPushService.backfillState` (Android `SettingsViewModel.runLoveBackfill`, iOS `IosContainer.runLoveBackfill` / `watchLoveBackfill`). One backfill runs at a time.
+- **Backfill** — each service's settings show a Backfill button. It enumerates the collection's loves (`lovedTracks`: a scanned local file the user never hearted isn't one, #705), skips entries already in the idempotency cache for that service, pushes the rest at 1 per second, and shows the progress from `LovesPushService.backfillState` (Android `SettingsViewModel.runLoveBackfill`, iOS `IosContainer.runLoveBackfill` / `watchLoveBackfill`). One backfill runs at a time.
 
 **Per-service gating:**
 - **ListenBrainz**: needs `recording_mbid` (validates against the 36-char canonical regex). Tracks without one are silently skipped — the next mapper backfill via `MbidEnrichmentService` will eventually populate the MBID, and the next love (or backfill run) catches them.
 - **Last.fm**: needs (artist, title) + a valid Last.fm session token. No MBID dependency.
 
 **Key files:** `shared/.../playback/LovesPushService.kt` (app-side `playback/LovesPushService.kt` is a typealias), `shared/.../playback/scrobbler/{Scrobbler,ListenBrainzScrobbler,LastFmScrobbler}.kt#loveTrack` (KMP-shared, #193), `ui/screens/settings/SettingsViewModel.kt#runLoveBackfill`, iOS `SettingsView.swift` (`lovePushSection`); test `LovesPushServiceTest`.
+
+### Local files are the library, not loves (#705)
+
+A scanned or imported local file joins the local library, not the collection, as on desktop (its local files live in their own library; the Collection's songs list shows them beside the loves, unhearted). Every `tracks` row carries `inCollection`: a love or a synced saved track is 1, a local file the user never hearted is 0. Before this, Android saved every scanned file straight into the collection, so each one showed a filled heart, counted as a love and went out with the love-push Backfill.
+
+- **Saving:** both scanners go through `LibraryRepository.addScannedLocalTracks` (Android `MediaScanner`, iOS `IosContainer.addLocalTracks` / `addImportedFiles`). A new file is saved unloved; a file the user hearted stays loved when it's scanned again.
+- **The heart:** `addToCollection` sets `inCollection` and dates the love now (a scanned file's row keeps its scan date otherwise). `removeFromCollection` on a scanned file (`isScannedLocalFile`: `localfiles` with a `local-` or `fileimport-` id) only clears the flag and keeps the row, since the file is still there; any other track's row is deleted with sync, as before. `existsByTitleAndArtist` (every heart on both apps) and `getCollectionByTitleAndArtist` only see loves.
+- **Who sees only loves:** the love-push Backfill, Home's Recent Loves (`recentLoves`, both apps), the car's Loved Songs. The Collection's songs list, its counts, Collection Radio, Search's Library rows and the resolver sweep still see every row.
+- **Existing installs:** the column is added at database bind time (Android `AndroidModule`, iOS `DriverFactory`'s `addColumnIfMissing`), and in that same step every scanned or imported file is marked unloved once (`LocalLibraryMigration`), including a file the user had hearted before this change, since the old rows can't tell the two apart. Loves already sent to ListenBrainz or Last.fm stay there.
+- **Not changed:** Android still saves each scanned file's album as an album row, so local albums show in the Collection's albums and with a filled album heart (desktop's albums tab lists only saved albums). Love push is still one-way: removing a heart doesn't un-love on the service.
 
 ### Friend Follow / Unfollow
 

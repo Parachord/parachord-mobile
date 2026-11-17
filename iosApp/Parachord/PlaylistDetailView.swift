@@ -96,7 +96,7 @@ final class PlaylistDetailViewModel {
             sourceType: nil, sourceUrl: nil, addedAt: 0,
             resolver: nil, spotifyUri: nil, soundcloudId: nil,
             spotifyId: nil, appleMusicId: nil, isrc: nil, recordingMbid: nil,
-            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
         )
     }
 }
@@ -421,7 +421,7 @@ func pcTrack(from t: PlaylistTrack) -> Track {
         sourceType: nil, sourceUrl: t.trackSourceUrl, addedAt: 0,
         resolver: t.trackResolver, spotifyUri: t.trackSpotifyUri, soundcloudId: t.trackSoundcloudId,
         spotifyId: t.trackSpotifyId, appleMusicId: t.trackAppleMusicId, isrc: nil,
-        recordingMbid: t.trackRecordingMbid, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil
+        recordingMbid: t.trackRecordingMbid, artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
     )
 }
 

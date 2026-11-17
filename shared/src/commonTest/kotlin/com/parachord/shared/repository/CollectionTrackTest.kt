@@ -3,6 +3,8 @@ package com.parachord.shared.repository
 import com.parachord.shared.model.Track
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class CollectionTrackTest {
 
@@ -25,5 +27,30 @@ class CollectionTrackTest {
     fun aTrackAlreadyInTheCollectionKeepsItsDate() {
         val saved = playing.copy(id = "lib-1", addedAt = 1_700_000_000_000L)
         assertEquals(1_700_000_000_000L, collectionTrack(playing, existing = saved, nowMs = now).addedAt)
+    }
+
+    // #705: a scanned local file is in the library, not the collection.
+    private val scanned = Track(id = "local-7", title = "Clover", artist = "Tundra 212", resolver = "localfiles", inCollection = false, addedAt = 9L)
+
+    @Test
+    fun aLoveIsInTheCollection() {
+        assertTrue(collectionTrack(scanned, existing = null, nowMs = now).inCollection)
+    }
+
+    @Test
+    fun scannedAndImportedFilesAreRecognised() {
+        assertTrue(isScannedLocalFile(scanned))
+        assertTrue(isScannedLocalFile(scanned.copy(id = "fileimport-1")))
+        assertFalse(isScannedLocalFile(scanned.copy(resolver = "spotify")))
+        assertFalse(isScannedLocalFile(scanned.copy(id = "spotify-1")))
+    }
+
+    @Test
+    fun recentLovesLeaveOutUnlovedFiles() {
+        val loved = playing.copy(id = "a", addedAt = 1L)
+        val newer = playing.copy(id = "b", addedAt = 3L)
+        assertEquals(listOf("b", "a"), recentLoves(listOf(loved, scanned, newer), 10).map { it.id })
+        assertEquals(listOf("b"), recentLoves(listOf(loved, scanned, newer), 1).map { it.id })
+        assertEquals(listOf("a"), lovedTracks(listOf(loved, scanned)).map { it.id })
     }
 }
