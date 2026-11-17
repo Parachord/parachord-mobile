@@ -22,7 +22,9 @@ For every UI/UX or behavior task, in this order:
 
 0. **Read the design system.** `docs/DESIGN_SYSTEM.md` holds the rules both
    apps follow (tokens, the fill accent, service and page colours, scales,
-   section titles, filter chips, cards, copy), translated from desktop's.
+   desktop's icons and logos, section titles, filter chips, cards, copy),
+   translated from desktop's. Icons are desktop's (`PCIcon`, `PCServiceLogo`,
+   from the shared `AppIcon` / `ServiceLogos`), not SF Symbols.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at

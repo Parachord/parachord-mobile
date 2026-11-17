@@ -8,7 +8,7 @@ Where it lives in code:
 - **Shared (the values):** `shared/commonMain/.../ui/DesignTokens.kt`. One table, plain `0xRRGGBB` ints, that both apps read: the theme colours (light and dark), the fill accent, semantic colours, the always-dark player surfaces, page colours and hero gradients (`DesignTokens.Page`), release-type colours (`releaseTypeColor`), and the type, spacing and radius scales. Service colours are `ServiceColors` in the same file: each plugin's manifest `color`, reported by the shared `PluginManager` as it loads plugins, with a fallback for before they load that a test keeps equal to the bundled manifests (`ServiceColorsManifestTest`). Change a value here, never in a platform file.
 - Android: `app/.../ui/theme/` only converts them (`Color.kt`: `tokenColor`, `FillAccent`, `serviceColor`, `releaseTypeColor`, `Page.composeColor` / `composeGradient`), plus `Theme.kt`, `Type.kt`, `Shape.kt` and `app/.../ui/components/`.
 - iOS: `iosApp/Parachord/Theme.swift` only converts them (`PC`, including `PC.fillAccent`, `PC.page(_:)`, `PC.pageGradient(_:)`, `PC.releaseType(_:)`; `ResolverColor.solid(_:)` for services). `PCSpace` / `PCRadius` are there too.
-- Shared rules both apps apply (which source icons show and dim, copy strings) live in `shared/commonMain` too (`ResolverBadges`, `UiMessages`, `PlaybackMessages`).
+- Shared rules both apps apply (which source icons show and dim, copy strings) live in `shared/commonMain` too (`ResolverBadges`, `UiMessages`, `PlaybackMessages`), and so do desktop's icons and logos (`shared/.../ui/icons/`, see Icons).
 
 ---
 
@@ -16,7 +16,7 @@ Where it lives in code:
 
 ### Theme tokens
 
-Values from desktop's design audit (`design-audit`, [parachord#1393](https://github.com/Parachord/parachord/pull/1393)): `index.html` and `docs/DESIGN_SYSTEM.md` there.
+Values from desktop's design audit ([parachord#1393](https://github.com/Parachord/parachord/pull/1393), merged into desktop `main`): `index.html` and `docs/DESIGN_SYSTEM.md` there.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
@@ -80,7 +80,7 @@ A service's colour is its plugin's manifest `color`, never a hand-copied hex: bo
 | Last.fm | `#D51007` |
 | ListenBrainz | `#353070` |
 
-The source icon is the service's logo on a square of that colour. A filter chip for a service uses the same colour (see FilterChips).
+The source icon is the service's logo (shared `ServiceLogos`, see Icons) on a square of that colour. A filter chip for a service uses the same colour (see FilterChips).
 
 ### Page colours
 
@@ -117,7 +117,30 @@ One map for every screen (Fresh Drops, an artist's discography, an album page, H
 
 ---
 
-## 3. Components
+## 3. Icons
+
+Mobile draws desktop's icons, not Material icons or SF Symbols. Desktop's set is `src/renderer/components/icons.js` (Lucide paths, ISC licence, plus Spinner, Spinoff and Playlist), and its logos are `brand-logos.js`. Both are copied into shared code by `scripts/sync-desktop-icons.js`, which writes `shared/.../ui/icons/DesktopIcons.kt`:
+- `AppIcon`: every icon, named as on desktop (`AppIcon.Play`, `.Heart`, `.Spinoff` …).
+- `ServiceLogos.spec(id)`: the source badge logo (`SERVICE_LOGO_PATHS`).
+- `ServiceLogos.large(id)`: the large logo, used for Settings tiles and the meta services (`SERVICE_LOGOS`).
+- `ServiceLogos.badgeOrLarge(id)`: the badge logo, else the large one.
+
+Never edit the generated file. Change the icon on desktop, then run `node scripts/sync-desktop-icons.js <desktop checkout> origin/main`. With a ref it reads that ref through `git show`, whatever the checkout has checked out.
+
+The shared `SvgPath` turns each path into move / line / cubic / close commands, so the platforms only draw:
+- **Android:** `ParachordIcon(AppIcon.X, contentDescription)`, and `serviceLogoVector(id)` for a logo.
+- **iOS:** `PCIcon(icon: .x)`, and `PCServiceLogo(serviceId:)` for a logo.
+
+Two logos are bitmaps (`ServiceLogos.BITMAPS`: SoundCloud, Subsonic). Each app bundles desktop's image for them: Android `drawable-nodpi`, iOS `ServiceLogoSoundcloud` / `ServiceLogoSubsonic` in the asset catalog.
+
+Rules, as desktop:
+- **Stroke and fill:** stroke 2, round caps and joins. The transport icons (Play, Pause, SkipBack, SkipForward) are solid; the rest are outlines.
+- **Sizes:** 16 in rows, chips, small buttons and inline with text. 20 in buttons and dialog titles. 12 only inside a badge. 32–48 only for an empty state's illustration.
+- **Colour:** an icon takes its context's colour. A logo is white on its service's colour square, except where it has its own colours (Achordion).
+- **Labels:** an icon is decorative (no label) unless it's the only thing in a control. Then the control carries the label.
+- **No other icons:** never a text glyph (✕ ✓ ▶) as an icon, never a pasted SVG path, never a hand-copied logo. An icon desktop doesn't have is added on desktop first (`SHAPES` in `icons.js`), then synced.
+
+## 4. Components
 
 Each of these is one shared component per platform. A screen uses it; it never rebuilds or restyles it. Before writing a UI element, look for the shared one; if you'd write a second copy of something, extract it first.
 
@@ -165,7 +188,7 @@ Announcement severities: error red, warn amber, success green, info purple; succ
 
 ---
 
-## 4. Home
+## 5. Home
 
 Desktop redesigned Home in November 2026 (desktop `docs/superpowers/specs/2026-11-12-home-redesign-design.md`, #1354, #1361, #1362, #1366). Mobile Home should follow it, top to bottom:
 
@@ -185,7 +208,7 @@ The data rules (`getHistoryMixes`, `tracksChangedAt` / `lastChangeAdded`, setup 
 
 ---
 
-## 5. Copy
+## 6. Copy
 
 - **Terms:** *plugin* (what you install), *service* (Spotify, Apple Music…), *source* (where a track plays from). Never "resolver" in UI text. Also *Collection*, *Loves*, *Shuffleupagus*, *track* (not song), *album* / *edition*, *sync* (two-way) / *import* (one-time).
 - Sentence case everywhere except screen titles, tabs and Settings section headings. Never type caps; use the uppercase modifier.
@@ -196,13 +219,13 @@ The data rules (`getHistoryMixes`, `tracksChangedAt` / `lastChangeAdded`, setup 
 - Success is a snackbar or toast, not a dialog.
 - Strings both apps show come from shared code (`UiMessages`, `PlaybackMessages`, `CarMessages`).
 
-## 6. Accessibility
+## 7. Accessibility
 
 - Every icon-only control has a label (Android `contentDescription`, iOS `accessibilityLabel`). Decorative icons next to text get `null` / `.accessibilityHidden(true)`.
 - Long-press actions are also reachable another way (an overflow button or the item's page).
 - Text contrast at least 4.5:1: the fill-accent and status-text rules above exist for this.
 - iOS text scales with Dynamic Type.
 
-## 7. Checking a UI change
+## 8. Checking a UI change
 
 Look at it in light mode, dark mode and the smallest phone width before calling it done, and update its skeleton in the same change. When the change is visible on desktop too, check desktop's look first.

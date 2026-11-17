@@ -142,7 +142,7 @@ import kotlinx.coroutines.flow.StateFlow
 private data class PluginInfo(
     val id: String,
     val name: String,
-    val resolverId: String, // maps to ResolverIconPaths; its colour is serviceColor(resolverId)
+    val resolverId: String, // its logo and colour come from the shared ServiceLogos / ServiceColors
     val bgColor: Color,
     val category: PluginCategory,
     val capabilities: List<String>,

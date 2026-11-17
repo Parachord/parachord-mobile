@@ -176,6 +176,93 @@ enum PCRadius {
     static let pill: CGFloat = 999
 }
 
+// MARK: - Icons (desktop's icon set and service logos, shared)
+
+/// Draws a shared `IconSpec`: an icon from `AppIcon` (generated from desktop's
+/// `icons.js`) or a service logo from `ServiceLogos` (desktop's
+/// `brand-logos.js`). Parts without their own colour take `tint`; strokes are
+/// round-capped and scale with the icon, as on desktop. Android draws the same
+/// specs (`ParachordIcon`, `serviceLogoVector`).
+struct PCIconCanvas: View {
+    let spec: IconSpec
+    var tint: Color
+
+    var body: some View {
+        Canvas { ctx, size in
+            let w = CGFloat(spec.width), h = CGFloat(spec.height)
+            let scale = min(size.width / w, size.height / h)
+            let dx = (size.width - w * scale) / 2 - CGFloat(spec.minX) * scale
+            let dy = (size.height - h * scale) / 2 - CGFloat(spec.minY) * scale
+            func pt(_ x: Float, _ y: Float) -> CGPoint {
+                CGPoint(x: CGFloat(x) * scale + dx, y: CGFloat(y) * scale + dy)
+            }
+            for part in spec.parts {
+                var path = Path()
+                for c in part.commands {
+                    if let m = c as? PathCommand.MoveTo { path.move(to: pt(m.x, m.y)) }
+                    else if let l = c as? PathCommand.LineTo { path.addLine(to: pt(l.x, l.y)) }
+                    else if let q = c as? PathCommand.CubicTo {
+                        path.addCurve(to: pt(q.x, q.y), control1: pt(q.x1, q.y1), control2: pt(q.x2, q.y2))
+                    } else { path.closeSubpath() }
+                }
+                let alpha = Double(part.alpha)
+                if part.fill {
+                    let color = part.fillColor.map { pcToken($0.int32Value) } ?? tint
+                    ctx.fill(path, with: .color(color.opacity(alpha)), style: FillStyle(eoFill: part.evenOdd))
+                }
+                if part.stroke {
+                    let color = part.strokeColor.map { pcToken($0.int32Value) } ?? tint
+                    ctx.stroke(path, with: .color(color.opacity(alpha)),
+                               style: StrokeStyle(lineWidth: CGFloat(part.strokeWidth) * scale,
+                                                  lineCap: .round, lineJoin: .round))
+                }
+            }
+        }
+    }
+}
+
+/// An icon from desktop's set. Sizes, as desktop: 16 in rows, chips and small
+/// buttons; 20 in buttons and dialog titles; 24 by default. Decorative unless
+/// it has a `label`; an icon-only button carries the label instead.
+struct PCIcon: View {
+    let icon: AppIcon
+    var size: CGFloat = 24
+    var tint: Color = PC.fg1
+    var label: String? = nil
+
+    var body: some View {
+        PCIconCanvas(spec: icon.spec, tint: tint)
+            .frame(width: size, height: size)
+            .accessibilityHidden(label == nil)
+            .accessibilityLabel(label ?? "")
+    }
+}
+
+/// A service's logo: desktop's image for a bitmap one (SoundCloud,
+/// Subsonic), else its vector logo from the shared `ServiceLogos`. Nil-safe:
+/// draws nothing for a service with no logo.
+struct PCServiceLogo: View {
+    let serviceId: String
+    var tint: Color = .white
+
+    var body: some View {
+        let id = serviceId.lowercased()
+        if id == "soundcloud" {
+            Image("ServiceLogoSoundcloud").resizable().scaledToFit()
+        } else if id == "subsonic" {
+            Image("ServiceLogoSubsonic").resizable().scaledToFit()
+        } else if let spec = ServiceLogos.shared.badgeOrLarge(serviceId: id) {
+            PCIconCanvas(spec: spec, tint: tint)
+        }
+    }
+
+    /// Whether a logo exists for the service (else callers show its initial).
+    static func has(_ serviceId: String) -> Bool {
+        let id = serviceId.lowercased()
+        return id == "soundcloud" || id == "subsonic" || ServiceLogos.shared.badgeOrLarge(serviceId: id) != nil
+    }
+}
+
 // MARK: - Typography helpers
 
 extension View {
