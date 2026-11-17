@@ -6,11 +6,13 @@ This repo holds both mobile companions to the [Parachord desktop app](https://gi
 
 ## Install
 
-### Android
-- **Beta testers**: join the [internal testing track](https://groups.google.com/g/parachord-testers) to get automatic updates through the Play Store.
-- **Sideload**: grab the signed APK from the [latest release](https://github.com/Parachord/parachord-mobile/releases/latest) and install it directly. You need to give your browser or Files app the "Install unknown apps" permission.
+Both apps are public betas that anyone can join. The same links are on [parachord.com](https://parachord.com/#mobile).
 
-### iOS
+### Android (Android 8.0+)
+- **Google Play**: join the [Parachord-Testers group](https://groups.google.com/g/parachord-testers) and opt in to testing, then install from the [Play listing](https://play.google.com/store/apps/details?id=com.parachord.android). Updates arrive through the Play Store.
+- **Sideload**: get the signed APK from the [latest release](https://github.com/Parachord/parachord-mobile/releases/latest) and install it directly. You need to give your browser or Files app the "Install unknown apps" permission. Every build is on the [releases page](https://github.com/Parachord/parachord-mobile/releases).
+
+### iOS (iOS 17+)
 - **TestFlight**: join the [public beta](https://testflight.apple.com/join/zXvg5zxK).
 
 ## Screenshots
