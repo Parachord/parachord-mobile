@@ -108,6 +108,9 @@ class AppleMusicSyncProvider(
 
     override val id: String = PROVIDER_ID
     override val displayName: String = "Apple Music"
+
+    override fun nativeTrackId(track: Track): String? =
+        track.appleMusicId?.takeIf { com.parachord.shared.resolver.isAppleMusicCatalogId(it) }
     override val features = ProviderFeatures(
         snapshots = SnapshotKind.DateString,
         // Apple has no follow/unfollow API for artists.

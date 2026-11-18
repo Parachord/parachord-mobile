@@ -37,6 +37,11 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
 
     /* ---- Queries returning Flow ---- */
 
+    /** Every track row, once (library sync's row matching, #682). */
+    suspend fun getAllOnce(): List<Track> = withContext(Dispatchers.Default) {
+        queries.getAll().executeAsList().map { it.toTrack() }
+    }
+
     fun getAll(): Flow<List<Track>> =
         queries.getAll().asFlow().mapToList(Dispatchers.Default).map { rows -> rows.map { it.toTrack() } }
 
