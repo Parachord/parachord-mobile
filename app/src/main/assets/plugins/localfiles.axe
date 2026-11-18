@@ -2,9 +2,9 @@
   "manifest": {
     "id": "localfiles",
     "name": "Local Files",
-    "version": "1.1.1",
+    "version": "1.2.0",
     "author": "Parachord Team",
-    "description": "Play music from your local library. Configure watch folders in settings.",
+    "description": "Play the music files on your computer.",
     "requirement": "Choose the folders your music is in.",
     "icon": "📁",
     "color": "#6366f1",
@@ -17,12 +17,15 @@
     "stream": true,
     "browse": false,
     "urlLookup": false,
-    "albumSearch": true
+    "albumSearch": true,
+    "local": true
   },
   "urlPatterns": [],
   "settings": {
     "requiresAuth": false,
-    "configurable": {}
+    "configurable": {},
+    "removable": false,
+    "watchFolders": true
   },
   "implementation": {
     "search": "async function (query, config) {\n    if (!window.electron?.localFiles) {\n      console.error('Local Files API not available');\n      return [];\n    }\n    try {\n      const results = await window.electron.localFiles.search(query);\n      return results || [];\n    } catch (error) {\n      console.error('Local Files search error:', error);\n      return [];\n    }\n  }",

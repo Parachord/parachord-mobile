@@ -3,11 +3,11 @@
     "id": "ollama",
     "name": "Ollama (Local)",
     "type": "meta-service",
-    "version": "1.1.2",
+    "version": "1.1.5",
     "icon": "🦙",
     "color": "#000000",
     "author": "Parachord Team",
-    "description": "Run AI locally with Ollama. Free, private, works offline.",
+    "description": "Talk music with Shuffleupagus using AI that runs on your own computer: free, private and offline.",
     "requirement": "Needs Ollama running on this computer.",
     "homepage": "https://ollama.ai"
   },
@@ -46,10 +46,17 @@
         "default": "http://localhost:11434",
         "placeholder": "http://localhost:11434"
       }
+    },
+    "installCallout": {
+      "title": "Ollama must be installed separately",
+      "text": "Download and install Ollama, then pull a model (for example, ollama pull llama3.1) before you turn it on.",
+      "url": "https://ollama.ai",
+      "linkLabel": "Download Ollama"
     }
   },
   "implementation": {
     "chat": "async function (messages, tools, config) {\n    const endpoint = config.endpoint || 'http://localhost:11434';\n    const model = config.model || 'llama3.1';\n\n    // Convert tools to Ollama format (same as OpenAI)\n    const ollamaTools =\n      tools && tools.length > 0\n        ? tools.map((t) => ({\n            type: 'function',\n            function: {\n              name: t.name,\n              description: t.description,\n              parameters: t.parameters,\n            },\n          }))\n        : undefined;\n\n    // Build request body\n    const body = {\n      model: model,\n      messages: messages,\n      stream: false,\n    };\n\n    // Only include tools if we have them\n    if (ollamaTools && ollamaTools.length > 0) {\n      body.tools = ollamaTools;\n    }\n\n    const response = await fetch(`${endpoint}/api/chat`, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify(body),\n    });\n\n    if (!response.ok) {\n      const text = await response.text();\n      throw new Error(`Ollama error (${response.status}): ${text}`);\n    }\n\n    const data = await response.json();\n\n    // Parse tool calls if present\n    let toolCalls = null;\n    if (data.message && data.message.tool_calls && data.message.tool_calls.length > 0) {\n      toolCalls = data.message.tool_calls.map((tc) => {\n        // Ollama returns tool calls with function.name and function.arguments\n        const args =\n          typeof tc.function.arguments === 'string'\n            ? JSON.parse(tc.function.arguments)\n            : tc.function.arguments;\n        return {\n          id: tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,\n          name: tc.function.name,\n          arguments: args,\n        };\n      });\n    }\n\n    return {\n      content: data.message?.content || '',\n      toolCalls: toolCalls,\n    };\n  }",
+    "describeError": "function (error, config) {\n    const message = (error && error.message) || '';\n    const lower = message.toLowerCase();\n    if (lower.includes('failed to fetch') || lower.includes('econnrefused') || lower.includes('network')) {\n      return { message: 'Can’t connect to Ollama. Attempting to start it…', serverUnavailable: true };\n    }\n    // Quota, rate-limit and key errors read the same for every AI plug-in.\n    if (lower.includes('quota') || lower.includes('exceeded') || message.includes('429') || lower.includes('rate limit')\n      || message.includes('401') || lower.includes('unauthorized') || lower.includes('invalid api key')) {\n      return null;\n    }\n    if (message.includes('404') || lower.includes('not found') || lower.includes('does not exist')) {\n      const model = (config && config.model) || 'llama3.1';\n      return { message: 'Model \"' + model + '\" not installed. Run: ollama pull ' + model };\n    }\n    return null;\n  }",
     "listModels": "async function (config) {\n    const endpoint = config.endpoint || 'http://localhost:11434';\n    const response = await fetch(`${endpoint}/api/tags`);\n    if (!response.ok) throw new Error(`HTTP ${response.status}`);\n    const data = await response.json();\n    const models = data.models || [];\n    return models.map((m) => ({\n      value: m.name,\n      label: `${m.name} (${Math.round((m.size || 0) / 1e9)}B)`,\n    }));\n  }",
     "testConnection": "async function (config) {\n    const endpoint = config.endpoint || 'http://localhost:11434';\n    try {\n      const response = await fetch(`${endpoint}/api/tags`);\n      if (!response.ok) {\n        return { success: false, error: `HTTP ${response.status}` };\n      }\n      const data = await response.json();\n      const models = data.models || [];\n      return {\n        success: true,\n        models: models.map((m) => m.name),\n        message: `Connected. ${models.length} model(s) available.`,\n      };\n    } catch (error) {\n      return {\n        success: false,\n        error: error.message || 'Connection failed',\n      };\n    }\n  }"
   }

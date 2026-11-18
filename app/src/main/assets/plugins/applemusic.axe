@@ -2,9 +2,9 @@
   "manifest": {
     "id": "applemusic",
     "name": "Apple Music",
-    "version": "1.5.1",
+    "version": "1.5.4",
     "author": "Parachord Team",
-    "description": "Search and identify tracks via iTunes/Apple Music catalog. URL lookup for music.apple.com links. MusicKit integration available with Apple Developer account.",
+    "description": "Search and play Apple Music, and open music.apple.com links.",
     "requirement": "Needs an Apple Music subscription. Sign in with your Apple Account.",
     "icon": "🍎",
     "color": "#FA243C",
@@ -19,7 +19,8 @@
     "urlLookup": true,
     "albumSearch": true,
     "recommendations": true,
-    "historyMixes": true
+    "historyMixes": true,
+    "librarySync": true
   },
   "urlPatterns": [
     "music.apple.com/*/album/*/*",
@@ -27,15 +28,33 @@
     "music.apple.com/*/playlist/*/*",
     "itunes.apple.com/*"
   ],
+  "urlTypes": {
+    "track": [
+      "music.apple.com/*/album/*/*?i=*",
+      "itunes.apple.com/*/album/*/*?i=*",
+      "music.apple.com/*/song/*/*",
+      "itunes.apple.com/*/song/*/*"
+    ],
+    "album": [
+      "music.apple.com/*/album/*/*",
+      "itunes.apple.com/*/album/*/*"
+    ],
+    "playlist": [
+      "music.apple.com/*/playlist/*/*",
+      "itunes.apple.com/*/playlist/*/*"
+    ]
+  },
   "settings": {
     "requiresAuth": true,
     "authType": "musickit",
     "configurable": {
       "developerToken": {
         "type": "text",
-        "label": "MusicKit Developer Token",
+        "label": "MusicKit developer token",
         "default": "",
-        "description": "Optional: JWT from Apple Developer account for enhanced features"
+        "description": "Get a token from the Apple Developer Portal (needs an Apple Developer account). It lets Parachord search the Apple Music catalog directly.",
+        "advanced": true,
+        "placeholder": "eyJ…"
       },
       "storefront": {
         "type": "text",
@@ -43,6 +62,12 @@
         "default": "us",
         "description": "Apple Music storefront code (e.g., us, gb, jp)"
       }
+    },
+    "account": {
+      "type": "sign-in",
+      "signInHint": "Sign in with your Apple Account to play from Apple Music",
+      "advancedHint": "Add a developer token for faster, more reliable search.",
+      "advancedSavedHint": "Using your developer token for faster search."
     }
   },
   "implementation": {
