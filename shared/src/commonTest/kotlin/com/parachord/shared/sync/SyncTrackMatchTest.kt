@@ -110,7 +110,7 @@ class SyncTrackMatchTest {
         assertTrue(r.duplicates.isEmpty())
     }
 
-    @Test fun `another edition under the same playable id is added when its row is gone`() {
+    @Test fun `another edition under the same playable id is a repeat when it has no row`() {
         val remaster = row("isrc-B", "Your Misfortune", "Mike Doughty", "Haughty Melodic (Deluxe Remaster)", spotifyId = "S", sources = mapOf(sp to "S"))
         val r = SyncTrackMatch.match(
             listOf(
@@ -119,8 +119,8 @@ class SyncTrackMatchTest {
             ),
             listOf(remaster), sp, nativeOf,
         )
-        assertEquals(listOf("isrc-A"), r.unmatched.map { it.entity.id })
-        assertTrue(r.duplicates.isEmpty())
+        assertTrue(r.unmatched.isEmpty(), "the collection keeps one edition, as on desktop")
+        assertEquals(listOf("isrc-A"), r.duplicates.map { it.entity.id })
     }
 
     @Test fun `a row carrying another song's id never takes it`() {

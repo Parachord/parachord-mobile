@@ -20,11 +20,10 @@ import com.parachord.shared.resolver.normalizeStr
  *  3. the same artist and title, when the albums are compatible.
  * Every exact match is made first, so a fallback never takes a row another
  * remote track carries the exact link to. A row is matched at most once, and a
- * remote track that repeats one already placed (the same id, or the same native
- * id for the same recording) is a duplicate: neither matched nor added. A
- * provider can list two saved entries under one playable id (an original and a
- * remaster, or two songs under a stale id), so a shared native id alone isn't
- * a repeat.
+ * remote track that repeats an id or native id already placed is a duplicate:
+ * neither matched nor added. A provider can list two saved entries under one
+ * playable id (a single and the album track); the collection keeps one. Rows
+ * that already exist for both are each matched by their own id and kept.
  *
  * Albums are compatible when they're the same release or either is a
  * placeholder. Two real, different albums are two editions the user may have
@@ -132,22 +131,17 @@ object SyncTrackMatch {
         val pending = mutableListOf<SyncedTrack>()
         val duplicates = mutableListOf<SyncedTrack>()
         val seenIds = HashSet<String>()
-        val placedByNative = HashMap<String, MutableList<Track>>()
+        val seenNatives = HashSet<String>()
 
         fun place(r: SyncedTrack) {
             seenIds += r.entity.id
-            nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() }?.let { placedByNative.getOrPut(it) { mutableListOf() }.add(r.entity) }
+            nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() }?.let { seenNatives += it }
         }
-        // A repeat of a track already placed: the same id, or the same native
-        // id for the same recording (same artist and title, compatible albums).
-        // A shared native id alone isn't enough: a provider can relink two
-        // editions, or two songs, to one playable id.
-        fun isDuplicate(r: SyncedTrack): Boolean {
-            if (r.entity.id in seenIds) return true
-            val nid = nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() } ?: return false
-            val key = nameKey(r.entity) ?: return false
-            return placedByNative[nid].orEmpty().any { nameKey(it) == key && albumsCompatible(it, r.entity) }
-        }
+        // A repeat of a track already placed: the same id or the same native
+        // id, as on desktop. A provider can list two saved entries under one
+        // playable id (a single and the album track); the collection keeps one.
+        fun isDuplicate(r: SyncedTrack): Boolean =
+            r.entity.id in seenIds || nativeIdOf(r.entity)?.let { it.isNotEmpty() && it in seenNatives } == true
 
         // Pass 1: the exact link: the row with the remote's id, then the rows
         // whose sync source names its external id. Several rows can share one
