@@ -1,6 +1,6 @@
 # Parachord v0.9.11
 
-**Release date:** Unreleased
+**Release date:** 2026-11-18
 
 > Bandcamp now plays inside the app, CarPlay arrives on iOS, and Recommendations come from your Last.fm and ListenBrainz plug-ins, as on desktop. Spotify starts reliably on Android again, playback keeps going with the phone locked, and library sync no longer duplicates songs or empties playlists. Android and iOS now share one set of playback rules (repeat, Spinoff, Listen Along, and what happens when a track can't play), so a fix reaches both phones at once.
 
