@@ -71,7 +71,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Headphones
 import com.parachord.android.data.db.entity.FriendEntity
 import com.parachord.android.playback.effectiveArtwork
-import com.parachord.android.playback.effectiveTrack
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.rememberHapticClick
 import com.parachord.android.resolver.trackKey
@@ -682,12 +681,14 @@ fun NowPlayingScreen(
                     ) {
                         if (isLandscape) spinoffButton()
                         // Context menu (•••) button — opens track actions
-                        // Uses effectiveTrack so actions (add to playlist, collection, etc.)
-                        // reflect the actual streaming track metadata
+                        // Acts on the queued track as it is (add to playlist,
+                        // collection, …), never the service's reported metadata
+                        // over its ids: saving that mix stored one song's ids
+                        // under another's names (#721).
                         IconButton(
                             onClick = {
                                 haptic()
-                                val effective = playbackState.effectiveTrack
+                                val effective = playbackState.currentTrack
                                 if (effective != null) {
                                     contextMenuState.show(
                                         TrackContextInfo(

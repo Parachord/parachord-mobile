@@ -70,11 +70,11 @@ class MainViewModel constructor(
     /** Whether the device has an active internet connection. */
     val isOnline: StateFlow<Boolean> = networkMonitor.isOnline
 
-    /** Whether the currently playing track is in the user's collection.
-     *  Uses [effectiveTrack] so it reflects the actual streaming metadata. */
+    /** Whether the queued track is in the user's collection: the track the
+     *  heart saves (see [toggleCurrentTrackFavorite]). */
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val isCurrentTrackFavorited: StateFlow<Boolean> = playbackStateHolder.state
-        .map { it.effectiveTrack }
+        .map { it.currentTrack }
         .flatMapLatest { track ->
             if (track != null) {
                 libraryRepository.isTrackInCollection(track.title, track.artist)
@@ -173,13 +173,17 @@ class MainViewModel constructor(
     }
 
     /** Toggle the current track's collection status (heart/favorite).
-     *  Uses [effectiveTrack] so it saves/removes the actual streaming track. */
+     *  Saves the queued track as it is, as desktop's `addTrackToCollection`
+     *  does, never [effectiveTrack]: that overlays the service's reported
+     *  title and artist onto the queued track's ids, and when the two disagree
+     *  (a stale report from the previous song) it saved one song's ids under
+     *  another's names (#721). */
     fun toggleCurrentTrackFavorite() {
-        val track = playbackState.value.effectiveTrack ?: return
+        val track = playbackState.value.currentTrack ?: return
         viewModelScope.launch {
             if (isCurrentTrackFavorited.value) {
                 // The heart lights up on a title+artist match (isTrackInCollection),
-                // but `effectiveTrack` may be an ephemeral row (weekly playlist,
+                // but the playing track may be an ephemeral row (weekly playlist,
                 // recommendation, DJ chat) whose id isn't the library row's. Deleting
                 // it by id matched nothing; removeFromCollection resolves the library
                 // row the same way the heart does, then removes it sync-aware (#414).
