@@ -55,9 +55,16 @@ data class StreamingMetadata(
 )
 
 /**
- * The "effective" track that represents what's actually playing.
- * Overlays streaming metadata (from Spotify/Apple Music) onto the queued [TrackEntity],
- * so actions like favorite, add-to-playlist, and scrobble reflect the real track.
+ * The "effective" track that represents what's actually playing, for DISPLAY
+ * only: the mini player, Now Playing, Home's Continue Listening, the widget,
+ * the notification and Android Auto's Now Playing card.
+ * Overlays streaming metadata (from Spotify/Apple Music) onto the queued [TrackEntity].
+ *
+ * Never save it. It keeps the queued track's ids (Apple Music id, link, length)
+ * under the service's reported title and artist, and when the two disagree (a
+ * report left over from the previous song) a heart stored one song's ids under
+ * another's names (#721). Hearts and track menus act on [PlaybackState.currentTrack],
+ * as desktop's do.
  *
  * Returns null if no track is playing. If no streaming metadata is available
  * (ExoPlayer playback), returns [currentTrack] unchanged.

@@ -277,11 +277,11 @@ class PlaybackService : MediaLibraryService() {
     /**
      * Add the playing track to the collection, or remove it, as the mini
      * player's heart does ([com.parachord.android.ui.MainViewModel.toggleCurrentTrackFavorite]):
-     * the effective track, so a Spotify/Apple Music play saves what's actually
-     * playing, and a sync-aware removal of the library row.
+     * the queued track as it is (never the service's reported metadata over its
+     * ids, #721), and a sync-aware removal of the library row.
      */
     private fun toggleCurrentTrackLove() {
-        val track = stateHolder.state.value.effectiveTrack ?: return
+        val track = stateHolder.state.value.currentTrack ?: return
         serviceScope.launch {
             try {
                 val loved = libraryRepository.isTrackInCollection(track.title, track.artist).first()
@@ -393,7 +393,7 @@ class PlaybackService : MediaLibraryService() {
         // Spinoff tapped in the app updates the car too).
         serviceScope.launch {
             val lovedFlow = stateHolder.state
-                .map { it.effectiveTrack?.let { t -> t.title to t.artist } }
+                .map { it.currentTrack?.let { t -> t.title to t.artist } }
                 .distinctUntilChanged()
                 .flatMapLatest { key ->
                     if (key == null) flowOf(null)
@@ -424,7 +424,10 @@ class PlaybackService : MediaLibraryService() {
                 stateHolder.state,
                 trackResolverCache.trackArtwork,
             ) { qs, state, trackArtwork ->
-                val current = state.currentTrack?.let { it.copy(artworkUrl = state.effectiveArtwork(trackArtwork)) }
+                // The phone's Now Playing: the service's reported title, artist
+                // and cover over the queued track (#721), so the car never shows
+                // one song's names with another's cover.
+                val current = state.effectiveTrack?.let { it.copy(artworkUrl = state.effectiveArtwork(trackArtwork)) }
                 current to qs.upNext.map { it.copy(artworkUrl = carArtworkFor(it, trackArtwork)) }
             }
                 .distinctUntilChanged()
