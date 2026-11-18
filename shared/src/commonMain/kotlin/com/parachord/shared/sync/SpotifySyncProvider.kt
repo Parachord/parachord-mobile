@@ -46,6 +46,8 @@ class SpotifySyncProvider(
 
     override val id: String = PROVIDER_ID
     override val displayName: String = "Spotify"
+
+    override fun nativeTrackId(track: Track): String? = track.spotifyId
     override val features = ProviderFeatures(
         snapshots = SnapshotKind.Opaque,
         supportsFollow = true,

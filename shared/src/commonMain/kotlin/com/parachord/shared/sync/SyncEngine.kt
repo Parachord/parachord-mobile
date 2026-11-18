@@ -759,15 +759,29 @@ class SyncEngine constructor(
         if (tombResult.dropped > 0) {
             Log.d(TAG, "applyTrackDiff: tombstones dropped ${tombResult.dropped} remote tracks for $providerId")
         }
-        val remoteByExternalId = remote.associateBy { it.spotifyId }
-        val localByExternalId = localSources.associateBy { it.externalId }
-
-        val toAdd = remote.filter { it.spotifyId !in localByExternalId }
-        var toRemove = localSources.filter { it.externalId !in remoteByExternalId }
-        val toUpdate = remote.filter { synced ->
-            synced.spotifyId in localByExternalId
+        // Match each remote track to the row that already holds it (#682,
+        // desktop parachord#1404 / #1419): the exact link, then the provider's
+        // native id, then artist + title with compatible albums. Only loved
+        // rows take part; a local file the user never hearted stays out.
+        val sourcesByItem = syncSourceDao.getByType("track").groupBy { it.itemId }
+        val rows = trackDao.getAllOnce().filter { it.inCollection }.map { t ->
+            SyncTrackMatch.LocalRow(t, sourcesByItem[t.id].orEmpty().associateBy { it.providerId })
         }
-        Log.i(TAG, "applyTrackDiff[$providerId]: remote=${remote.size}, localSources=${localSources.size}, toAdd=${toAdd.size}, toRemove=${toRemove.size}, toUpdate=${toUpdate.size}")
+        val provider = providers.firstOrNull { it.id == providerId }
+        val match = SyncTrackMatch.match(remote, rows, providerId) { provider?.nativeTrackId(it) }
+
+        // Removals work from the rows matched, not from remote ids: a row
+        // matched by native id or name keeps its own id. A link whose external
+        // id the remote still lists is never removed, whatever the matching
+        // decided: the provider still has the track.
+        val remoteExternalIds = remote.mapTo(HashSet()) { it.spotifyId }
+        var toRemove = localSources.filter { it.itemId !in match.claimed && it.externalId !in remoteExternalIds }
+        Log.i(
+            TAG,
+            "applyTrackDiff[$providerId]: remote=${remote.size}, localSources=${localSources.size}, " +
+                "toAdd=${match.unmatched.size}, toRemove=${toRemove.size}, matched=${match.pairs.size}, " +
+                "merged=${match.merged.size}, duplicates=${match.duplicates.size}",
+        )
 
         if (toRemove.size > localSources.size * MASS_REMOVAL_THRESHOLD_PERCENT
             && toRemove.size > MASS_REMOVAL_THRESHOLD_COUNT
@@ -784,27 +798,79 @@ class SyncEngine constructor(
         // crawl for minutes (thousands of sequential DB round-trips), which read
         // as a stuck "Syncing…".
         run {
-            // ADD: the canonical (ISRC-keyed) row may already exist from ANOTHER
-            // provider — merge service IDs onto it (null-only) instead of
-            // clobbering. `seen` collapses an intra-batch duplicate canonical id
-            // (same recording twice in the library) to one row.
+            // MERGE: rows already in the collection for one recording fold into
+            // the keeper: its fields win, ids it lacks and sync sources from
+            // providers it lacks come from the others. A merge, not a removal:
+            // no tombstone, no remote unsave, not counted as removed.
+            val keepers = HashMap<String, Track>()
+            val keeperSources = HashMap<String, MutableMap<String, SyncSource>>()
+            for (pair in match.pairs) {
+                keepers[pair.local.track.id] = pair.local.track
+                keeperSources[pair.local.track.id] = pair.local.syncSources.toMutableMap()
+            }
+            for (m in match.merged) {
+                val keeper = keepers[m.keeperId] ?: continue
+                keepers[m.keeperId] = mergeSyncedTrack(keeper, m.row.track).copy(inCollection = true)
+                val sources = keeperSources.getOrPut(m.keeperId) { mutableMapOf() }
+                for ((pid, src) in m.row.syncSources) {
+                    if (pid !in sources) sources[pid] = src.copy(itemId = m.keeperId)
+                }
+                syncSourceDao.deleteAllForItem(m.row.track.id, "track")
+                trackDao.delete(m.row.track)
+            }
+
+            // MATCHED: the row keeps its id and its own album; it gains this
+            // provider's ids and sync source, pointing at the row matched.
+            if (match.pairs.isNotEmpty()) {
+                val updatedRows = ArrayList<Track>(match.pairs.size)
+                val sources = ArrayList<SyncSource>()
+                for (pair in match.pairs) {
+                    val id = pair.local.track.id
+                    val base = keepers[id] ?: pair.local.track
+                    val mergedRow = mergeSyncedTrack(base, pair.remote.entity)
+                    // A row matched by native id or name keeps its own album (desktop
+                    // parachord#1404): a no-album love stays one.
+                    updatedRows.add(if (pair.viaExactLink) mergedRow else mergedRow.copy(album = base.album, albumId = base.albumId))
+                    val own = keeperSources[id].orEmpty()
+                    for ((pid, src) in own) if (pid != providerId && src.itemId == id && pair.local.syncSources[pid] == null) sources.add(src)
+                    val existing = own[providerId]
+                    sources.add(
+                        SyncSource(
+                            itemId = id, itemType = "track", providerId = providerId,
+                            externalId = pair.remote.spotifyId,
+                            addedAt = existing?.addedAt ?: pair.remote.addedAt,
+                            syncedAt = now,
+                        ),
+                    )
+                }
+                trackDao.insertAll(updatedRows)
+                syncSourceDao.insertAll(sources)
+            }
+
+            // ADD: no row holds the track. The canonical (ISRC-keyed) row may
+            // already exist outside the collection, so merge onto it.
+            // `seen` collapses an intra-batch duplicate canonical id to one row.
+            val toAdd = match.unmatched
             if (toAdd.isNotEmpty()) {
                 val existingById = trackDao.getByIds(toAdd.map { it.entity.id }).associateBy { it.id }
                 val seen = HashSet<String>()
-                val rows = ArrayList<Track>(toAdd.size)
+                val newRows = ArrayList<Track>(toAdd.size)
                 val sources = ArrayList<SyncSource>(toAdd.size)
                 for (synced in toAdd) {
+                    if (!seen.add(synced.entity.id)) continue
                     sources.add(
                         SyncSource(
                             itemId = synced.entity.id, itemType = "track", providerId = providerId,
                             externalId = synced.spotifyId, addedAt = synced.addedAt, syncedAt = now,
                         ),
                     )
-                    if (!seen.add(synced.entity.id)) continue
                     val existing = existingById[synced.entity.id]
-                    rows.add(if (existing != null) mergeSyncedTrack(existing, synced.entity) else synced.entity)
+                    newRows.add(
+                        if (existing != null) mergeSyncedTrack(existing, synced.entity).copy(inCollection = true)
+                        else synced.entity,
+                    )
                 }
-                trackDao.insertAll(rows)
+                trackDao.insertAll(newRows)
                 syncSourceDao.insertAll(sources)
             }
 
@@ -815,28 +881,13 @@ class SyncEngine constructor(
                     trackDao.getById(source.itemId)?.let { trackDao.delete(it) }
                 }
             }
-
-            // UPDATE: membership unchanged — bump syncedAt and merge (additive, so a
-            // re-pull from THIS provider never wipes another provider's IDs off a
-            // shared canonical row).
-            if (toUpdate.isNotEmpty()) {
-                val existingById = trackDao.getByIds(toUpdate.map { it.entity.id }).associateBy { it.id }
-                val seen = HashSet<String>()
-                val rows = ArrayList<Track>(toUpdate.size)
-                for (synced in toUpdate) {
-                    if (!seen.add(synced.entity.id)) continue
-                    existingById[synced.entity.id]?.let { rows.add(mergeSyncedTrack(it, synced.entity)) }
-                }
-                if (rows.isNotEmpty()) trackDao.insertAll(rows)
-                syncSourceDao.insertAll(toUpdate.map { localByExternalId[it.spotifyId]!!.copy(syncedAt = now) })
-            }
         }
 
         return TypeSyncResult(
-            added = toAdd.size,
+            added = match.unmatched.size,
             removed = toRemove.size,
-            updated = toUpdate.size,
-            unchanged = toUpdate.size,
+            updated = match.pairs.size,
+            unchanged = match.pairs.size,
         )
     }
 

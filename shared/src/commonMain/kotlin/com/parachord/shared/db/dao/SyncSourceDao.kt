@@ -36,6 +36,11 @@ class SyncSourceDao(private val db: ParachordDb) {
             queries.getByProvider(providerId, itemType).executeAsList().map { it.toSyncSource() }
         }
 
+    /** Every provider's sync sources of one type (library sync's row matching, #682). */
+    suspend fun getByType(itemType: String): List<SyncSource> = withContext(Dispatchers.Default) {
+        queries.getByType(itemType).executeAsList().map { it.toSyncSource() }
+    }
+
     suspend fun getAllByProvider(providerId: String): List<SyncSource> = withContext(Dispatchers.Default) {
         queries.getAllByProvider(providerId).executeAsList().map { it.toSyncSource() }
     }

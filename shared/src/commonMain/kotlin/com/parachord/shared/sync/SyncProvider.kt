@@ -20,6 +20,13 @@ interface SyncProvider {
     /** Capability flags. SyncEngine routes on these, never on `id`. */
     val features: ProviderFeatures
 
+    /**
+     * This provider's own id for a track (Spotify's track id, Apple Music's
+     * catalog id), or null. Library sync matches an incoming track to the row
+     * that already holds it by this id ([SyncTrackMatch], #682).
+     */
+    fun nativeTrackId(track: com.parachord.shared.model.Track): String? = null
+
     // ── Playlist surface (Phase 4) ──────────────────────────────────
     // Library-sync members (fetchTracks/Albums/Artists, save/follow)
     // are deferred — Phase 4 ships playlists-only (Decision D1).
