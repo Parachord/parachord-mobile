@@ -95,6 +95,21 @@ class SyncTrackMatchTest {
         assertEquals("S1", r.pairs.single().remote.spotifyId)
     }
 
+    @Test fun `two saved entries under one playable id keep their own rows`() {
+        // Spotify lists an original and a remaster (two ISRCs) under one track id.
+        val original = row("isrc-A", "Your Misfortune", "Mike Doughty", "Haughty Melodic", spotifyId = "S", sources = mapOf(sp to "S"))
+        val remaster = row("isrc-B", "Your Misfortune", "Mike Doughty", "Haughty Melodic (Deluxe Remaster)", spotifyId = "S", sources = mapOf(sp to "S"))
+        val r = SyncTrackMatch.match(
+            listOf(
+                remote("S", "Your Misfortune", "Mike Doughty", "Haughty Melodic (Deluxe Remaster)", id = "isrc-B"),
+                remote("S", "Your Misfortune", "Mike Doughty", "Haughty Melodic", id = "isrc-A"),
+            ),
+            listOf(remaster, original), sp, nativeOf,
+        )
+        assertEquals(setOf("isrc-A", "isrc-B"), r.claimed)
+        assertTrue(r.duplicates.isEmpty())
+    }
+
     @Test fun `placeholder albums`() {
         fun t(album: String?, resolver: String? = null) = Track(id = "x", title = "t", artist = "a", album = album, resolver = resolver)
         assertTrue(SyncTrackMatch.isPlaceholderAlbum(t(null)))

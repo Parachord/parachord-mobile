@@ -177,4 +177,22 @@ class SyncTrackIdentityIntegrationTest {
         assertEquals(1, h.rows().size)
         assertEquals(1, h.sources().size)
     }
+
+    @Test
+    fun `two saved entries under one playable id survive repeated syncs`() = runBlocking {
+        val h = Harness(pid)
+        h.trackDao.insert(Track(id = "isrc-A", title = "Your Misfortune", artist = "Mike Doughty", album = "Haughty Melodic", appleMusicId = "5"))
+        h.trackDao.insert(Track(id = "isrc-B", title = "Your Misfortune", artist = "Mike Doughty", album = "Haughty Melodic (Deluxe Remaster)", appleMusicId = "5"))
+        fun entry(id: String, album: String) = SyncedTrack(
+            Track(id = id, title = "Your Misfortune", artist = "Mike Doughty", album = album, appleMusicId = "5"),
+            spotifyId = "i.5", addedAt = 1_000,
+        )
+        h.provider.library = listOf(entry("isrc-A", "Haughty Melodic"), entry("isrc-B", "Haughty Melodic (Deluxe Remaster)"))
+        h.engine.syncAll()
+        h.provider.library = h.provider.library.reversed()
+        h.engine.syncAll()
+        h.engine.syncAll()
+        assertEquals(setOf("isrc-A", "isrc-B"), h.rows().map { it.id }.toSet())
+        assertEquals(2, h.sources().size)
+    }
 }

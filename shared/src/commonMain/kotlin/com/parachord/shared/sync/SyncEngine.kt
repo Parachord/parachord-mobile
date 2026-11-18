@@ -771,8 +771,11 @@ class SyncEngine constructor(
         val match = SyncTrackMatch.match(remote, rows, providerId) { provider?.nativeTrackId(it) }
 
         // Removals work from the rows matched, not from remote ids: a row
-        // matched by native id or name keeps its own id.
-        var toRemove = localSources.filter { it.itemId !in match.claimed }
+        // matched by native id or name keeps its own id. A link whose external
+        // id the remote still lists is never removed, whatever the matching
+        // decided: the provider still has the track.
+        val remoteExternalIds = remote.mapTo(HashSet()) { it.spotifyId }
+        var toRemove = localSources.filter { it.itemId !in match.claimed && it.externalId !in remoteExternalIds }
         Log.i(
             TAG,
             "applyTrackDiff[$providerId]: remote=${remote.size}, localSources=${localSources.size}, " +

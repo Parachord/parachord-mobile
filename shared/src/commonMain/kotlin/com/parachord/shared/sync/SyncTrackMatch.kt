@@ -109,12 +109,12 @@ object SyncTrackMatch {
         nativeIdOf: (Track) -> String?,
     ): Result {
         val byId = HashMap<String, LocalRow>()
-        val byExternal = HashMap<String, LocalRow>()
+        val byExternal = HashMap<String, MutableList<LocalRow>>()
         val byNative = HashMap<String, MutableList<LocalRow>>()
         val byName = HashMap<String, MutableList<LocalRow>>()
         for (row in local) {
             byId.getOrPut(row.track.id) { row }
-            row.syncSources[providerId]?.externalId?.takeIf { it.isNotEmpty() }?.let { byExternal.getOrPut(it) { row } }
+            row.syncSources[providerId]?.externalId?.takeIf { it.isNotEmpty() }?.let { byExternal.getOrPut(it) { mutableListOf() }.add(row) }
             nativeIdOf(row.track)?.takeIf { it.isNotEmpty() }?.let { byNative.getOrPut(it) { mutableListOf() }.add(row) }
             nameKey(row.track)?.let { byName.getOrPut(it) { mutableListOf() }.add(row) }
         }
@@ -136,16 +136,23 @@ object SyncTrackMatch {
             r.spotifyId in seenExternal || r.entity.id in seenIds ||
                 (nativeIdOf(r.entity)?.let { it.isNotEmpty() && it in seenNatives } == true)
 
-        // Pass 1: the exact link. A second remote for a claimed row is a duplicate.
+        // Pass 1: the exact link: the row with the remote's id, then the rows
+        // whose sync source names its external id. Several rows can share one
+        // external id: Spotify can list two saved entries (an original and a
+        // remaster, each with its own ISRC) under one playable track id, and
+        // each was matched to its own row by id. So the row with the remote's
+        // own id comes first, and a row already claimed is skipped. A remote
+        // whose every candidate is claimed is a duplicate.
         for (r in remote) {
-            val row = byExternal[r.spotifyId] ?: byId[r.entity.id]
+            val candidates = (listOfNotNull(byId[r.entity.id]) + byExternal[r.spotifyId].orEmpty()).distinct()
+            val row = candidates.firstOrNull { it.track.id !in claimed }
             when {
-                row == null -> pending += r
-                row.track.id in claimed -> duplicates += r
-                else -> {
+                row != null -> {
                     claimed += row.track.id
                     pairs += Pair(r, row, viaExactLink = true)
                 }
+                candidates.isEmpty() -> pending += r
+                else -> duplicates += r
             }
         }
         pairs.forEach { place(it.remote) }
