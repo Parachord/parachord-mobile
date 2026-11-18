@@ -1826,7 +1826,14 @@ class IosContainer private constructor() {
         MetadataService(
             // The cascade's providers, shared with Android (#595).
             providers = metadataProviders.all(),
-            getDisabledProviders = { settingsStore.getDisabledPlugins() },
+            // Spotify and Apple Music only while their plug-ins are on (#701).
+            getDisabledProviders = {
+                com.parachord.shared.metadata.metadataProvidersOff(
+                    disabledProviders = settingsStore.getDisabledPlugins(),
+                    activeResolvers = settingsStore.getActiveResolvers(),
+                    disabledPlugins = settingsStore.getDisabledPlugins(),
+                )
+            },
             // Cover Art Archive covers become iTunes art (shared, #595).
             enrichAlbumArtwork = { artistName, albums ->
                 com.parachord.shared.metadata.upgradeCoverArtArchiveArtwork(appleMusicClient, artistName, albums)
@@ -1988,7 +1995,14 @@ class IosContainer private constructor() {
             // enrichment (ImageEnrichmentService) and recommendations get real
             // artist images without a connected Spotify. No auth on either.
             providers = metadataProviders.withoutSpotify(),
-            getDisabledProviders = { settingsStore.getDisabledPlugins() },
+            // Spotify and Apple Music only while their plug-ins are on (#701).
+            getDisabledProviders = {
+                com.parachord.shared.metadata.metadataProvidersOff(
+                    disabledProviders = settingsStore.getDisabledPlugins(),
+                    activeResolvers = settingsStore.getActiveResolvers(),
+                    disabledPlugins = settingsStore.getDisabledPlugins(),
+                )
+            },
             enrichAlbumArtwork = { artistName, albums ->
                 com.parachord.shared.metadata.upgradeCoverArtArchiveArtwork(appleMusicClient, artistName, albums)
             },
