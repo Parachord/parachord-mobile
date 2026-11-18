@@ -2611,6 +2611,29 @@ class SyncEngine constructor(
                     continue
                 }
 
+                // Cross-provider push-mirror guard, as in
+                // pullPlaylistsForProvider's UPDATE branch. A Spotify playlist
+                // linked to a local row whose pull source is another provider
+                // (a ListenBrainz or Apple Music playlist matched by name on
+                // the first sync) is a mirror: never pullPlaylist over it. The
+                // CREATE branch already kept such a row, but the playlist's
+                // legacy snapshotId is never Spotify's, so the next sync took
+                // the snapshot branch below and replaced the playlist's tracks
+                // with the Spotify copy's: a new mirror holding only the
+                // tracks found on Spotify, or none (seen on a Pixel, Nov 2026).
+                val pullSource = syncPlaylistSourceDao.selectForLocal(localPlaylist.id)
+                if (pullSource != null && pullSource.providerId != providerId) {
+                    syncPlaylistLinkDao.upsertWithSnapshot(
+                        localPlaylistId = localPlaylist.id,
+                        providerId = providerId,
+                        externalId = remote.spotifyId,
+                        snapshotId = remote.snapshotId,
+                    )
+                    syncSourceDao.insert(existingSource.copy(syncedAt = currentTimeMillis()))
+                    unchanged++
+                    continue
+                }
+
                 val remoteSnapshotId = remote.snapshotId
                 val localSnapshotId = localPlaylist.snapshotId
                 val localModified = localPlaylist.locallyModified
@@ -2622,9 +2645,9 @@ class SyncEngine constructor(
                 // Force a refetch from Spotify even if snapshot matches
                 // — Spotify is the canonical source, and we trust it to
                 // give us non-empty tracks.
-                val pullSource = syncPlaylistSourceDao.selectForLocal(localPlaylist.id)
-                val ownPullSource = pullSource == null
-                    || pullSource.providerId == providerId
+                // A cross-provider pull source returned above, so the pull
+                // source here is Spotify or none.
+                val ownPullSource = true
                 val localTrackCount = playlistTrackDao.getByPlaylistIdSync(localPlaylist.id).size
                 val needsTrackRecovery = ownPullSource && localTrackCount == 0
                     && remote.trackCount > 0
