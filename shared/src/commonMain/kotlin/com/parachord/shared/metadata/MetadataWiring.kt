@@ -51,6 +51,27 @@ class MetadataProviders(
     fun withoutSpotify(): List<MetadataProvider> = all().filter { it !== spotify }
 }
 
+/** Metadata providers that belong to a streaming service's plug-in. */
+val SERVICE_METADATA_PROVIDERS: Set<String> = setOf("spotify", "applemusic")
+
+/**
+ * The providers [MetadataService] must skip: the ones the user switched off
+ * as metadata sources ([disabledProviders]), plus Spotify and Apple Music
+ * while their plug-ins are off (#701, desktop parachord#1466). A saved
+ * Spotify sign-in outlives turning Spotify off, so a token check alone kept
+ * sending artist photos and searches to Spotify and extended its rate-limit
+ * pause. A service is off when its plug-in is disabled, or when the active
+ * list is set and doesn't name it. An empty active list means every
+ * resolver is on (Android's default).
+ */
+fun metadataProvidersOff(
+    disabledProviders: Set<String>,
+    activeResolvers: Collection<String>,
+    disabledPlugins: Set<String>,
+): Set<String> = disabledProviders + SERVICE_METADATA_PROVIDERS.filter { id ->
+    id in disabledPlugins || (activeResolvers.isNotEmpty() && id !in activeResolvers)
+}
+
 /**
  * Swaps a Cover Art Archive cover (which often 404s) for the iTunes album
  * art (600x600) when the iTunes Search finds the album by an artist whose

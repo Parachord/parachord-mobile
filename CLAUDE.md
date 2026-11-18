@@ -34,7 +34,7 @@ The desktop uses a cascading provider pattern. Each provider has a specialty:
 
 **MusicBrainz is the primary source for discography and album tracklists.** Last.fm and Spotify supplement with images and additional metadata. Results from all providers are merged — later providers fill in gaps from earlier ones.
 
-**One provider list, built once (#595).** `MetadataProviders` (`shared/.../metadata/MetadataWiring.kt`) builds the cascade's providers for both apps: MusicBrainz, Wikipedia, Last.fm, Discogs, Spotify, then the Apple Music catalog's artist art (25). `withoutSpotify()` is the list for iOS's background enrichment service. The cascade's `enrichAlbumArtwork` step is the shared `upgradeCoverArtArchiveArtwork`, which swaps a Cover Art Archive cover for the iTunes 600x600 art. Which providers the user switched off still comes from two different settings: Android reads `disabled_meta_providers`, iOS reads `disabled_plugins`.
+**One provider list, built once (#595).** `MetadataProviders` (`shared/.../metadata/MetadataWiring.kt`) builds the cascade's providers for both apps: MusicBrainz, Wikipedia, Last.fm, Discogs, Spotify, then the Apple Music catalog's artist art (25). `withoutSpotify()` is the list for iOS's background enrichment service. The cascade's `enrichAlbumArtwork` step is the shared `upgradeCoverArtArchiveArtwork`, which swaps a Cover Art Archive cover for the iTunes 600x600 art. Which providers the user switched off still comes from two different settings: Android reads `disabled_meta_providers`, iOS reads `disabled_plugins`. On both, Spotify and Apple Music are asked only while their plug-ins are on (shared `metadataProvidersOff`, #701, desktop parachord#1466): off when the plug-in is disabled, or when the active-resolver list is set and doesn't name it. A saved Spotify sign-in outlives turning Spotify off, so a token check alone kept sending searches and artist photos to Spotify and extended its rate-limit pause.
 
 **Top lists are cached a day (#595).** History's and a friend's top tracks, albums and artists go through the shared `TopListsCache`, on both apps. A list fetched less than 24 hours ago shows without a request. A failed or empty refresh shows the last list. Recently Played isn't cached.
 
@@ -359,7 +359,7 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `url`, then the plugin's own `<resolverId>Url` (`pluginServiceUrl`), then the
   service URL/id fields — never require `url`.
 - **Artist photos are a chain with a plugin step** (desktop parachord#1141).
-  `MetadataService.getArtistImage` asks Apple Music, Spotify, then the active resolvers
+  `MetadataService.getArtistImage` asks Apple Music, Spotify (each only while its plug-in is on, #701), then the active resolvers
   declaring `capabilities.artistImage` (resolver-loader `getArtistImageResolvers` /
   `searchArtistImage`, via `PluginManager`), then Deezer's public search, Wikipedia,
   Discogs, Last.fm and MusicBrainz. First usable photo wins (`ArtistImageChain.isUsableUrl`

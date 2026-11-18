@@ -791,7 +791,10 @@ token (`ApplicationMusicPlayer`) is minted on-device from the MusicKit App
 Service. The token here is a hand-generated **ES256 JWT** (`exp` ≤ 6 months)
 that populates `AppConfig.appleMusicDeveloperToken`, used by the shared
 `AppleMusicArtistProvider` (a catalog gap-filler for **artist images** in the
-metadata cascade — NOT playback).
+metadata cascade — NOT playback). Like Spotify's metadata, it's asked only
+while the Apple Music plug-in is on, i.e. in `active_resolvers` (shared
+`metadataProvidersOff`, #701, desktop parachord#1466), so on iOS its artist
+images need Apple Music connected.
 
 - **iOS source:** `iosApp/Parachord/Secrets.xcconfig`
   (`APPLE_MUSIC_DEVELOPER_TOKEN`, gitignored) → `Info.plist`

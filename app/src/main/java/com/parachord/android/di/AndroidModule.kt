@@ -545,7 +545,14 @@ val androidModule = module {
         val day = 24L * 60 * 60 * 1000
         com.parachord.shared.metadata.MetadataService(
             providers = providers,
-            getDisabledProviders = { settingsStore.getDisabledMetaProviders() },
+            // Spotify and Apple Music only while their plug-ins are on (#701).
+            getDisabledProviders = {
+                com.parachord.shared.metadata.metadataProvidersOff(
+                    disabledProviders = settingsStore.getDisabledMetaProviders(),
+                    activeResolvers = settingsStore.getActiveResolvers(),
+                    disabledPlugins = settingsStore.getDisabledPlugins(),
+                )
+            },
             enrichAlbumArtwork = { artistName, albums ->
                 com.parachord.shared.metadata.upgradeCoverArtArchiveArtwork(appleMusicClient, artistName, albums)
             },

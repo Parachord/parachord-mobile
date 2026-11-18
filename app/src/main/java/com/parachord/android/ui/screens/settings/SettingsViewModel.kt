@@ -473,7 +473,8 @@ class SettingsViewModel constructor(
     /**
      * Toggle a resolver on/off WITHOUT disconnecting (#213). Writes only
      * `active_resolvers` (the coordinator + scoring gate) — NOT `disabled_plugins`,
-     * so the connection state and metadata provider are left intact (a resolver
+     * so the connection state is left intact; turning Spotify or Apple Music off
+     * here also stops their metadata calls (`metadataProvidersOff`, #701) (a resolver
      * toggle ≠ a service kill). On a fresh `active_resolvers` (all-on default) the
      * set is first seeded with the full catalog so only [id] is affected.
      */

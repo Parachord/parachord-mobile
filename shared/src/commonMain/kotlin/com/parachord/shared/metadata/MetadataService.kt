@@ -24,7 +24,7 @@ import kotlinx.serialization.json.Json
  * Mirrors the desktop app's cascading provider pattern:
  * 1. MusicBrainz (free, always available, MBIDs)
  * 2. Last.fm (images, bios, similar artists)
- * 3. Spotify (album art, preview URLs — only when authenticated)
+ * 3. Spotify (album art, preview URLs — only when signed in and its plug-in is on, #701)
  *
  * For search: results from all available providers are merged, deduplicated,
  * and sorted by provider priority.
