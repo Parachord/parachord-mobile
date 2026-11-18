@@ -23,6 +23,7 @@
 - **CarPlay (iOS).** The same Playlists, Loved Songs and Collection Radio as Android Auto, with a heart and Spinoff on Now Playing and an Up Next list.
 - **Spinoff on Android Auto,** next to the heart.
 - **The car stays in charge.** A song started in the car isn't replaced when you unlock the phone, and a song still loading shows as loading, not Pause.
+- **The car shows the right song.** Android Auto now shows the same title and artist as the phone, and the heart in the car or on Now Playing saves the song that's playing, not a different one.
 - **No silent run to the end of the queue.** After three tracks in a row that can't play, the car stops and asks you to open Parachord on your phone.
 
 ## Listen Along and Spinoff
