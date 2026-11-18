@@ -16,12 +16,15 @@ import com.parachord.shared.resolver.normalizeStr
  *  1. the exact link: this provider's sync source already names the remote
  *     track's external id, or the row has the remote track's id;
  *  2. the provider's native id (Spotify track id, Apple Music catalog id),
- *     when the albums are compatible;
+ *     when the titles agree and the albums are compatible;
  *  3. the same artist and title, when the albums are compatible.
  * Every exact match is made first, so a fallback never takes a row another
  * remote track carries the exact link to. A row is matched at most once, and a
- * remote track that repeats an external id, id or native id already placed is
- * a duplicate: neither matched nor added.
+ * remote track that repeats one already placed (the same id, or the same native
+ * id for the same recording) is a duplicate: neither matched nor added. A
+ * provider can list two saved entries under one playable id (an original and a
+ * remaster, or two songs under a stale id), so a shared native id alone isn't
+ * a repeat.
  *
  * Albums are compatible when they're the same release or either is a
  * placeholder. Two real, different albums are two editions the user may have
@@ -80,6 +83,11 @@ object SyncTrackMatch {
         return ka.isNotEmpty() && ka == albumKey(b.album)
     }
 
+    private fun sameTitle(a: Track, b: Track): Boolean {
+        val ta = normalizeStr(a.title)
+        return ta.isNotEmpty() && ta == normalizeStr(b.title)
+    }
+
     private fun nameKey(t: Track): String? {
         val artist = normalizeStr(t.artist)
         val title = normalizeStr(t.title)
@@ -123,18 +131,23 @@ object SyncTrackMatch {
         val pairs = mutableListOf<Pair>()
         val pending = mutableListOf<SyncedTrack>()
         val duplicates = mutableListOf<SyncedTrack>()
-        val seenExternal = HashSet<String>()
         val seenIds = HashSet<String>()
-        val seenNatives = HashSet<String>()
+        val placedByNative = HashMap<String, MutableList<Track>>()
 
         fun place(r: SyncedTrack) {
-            seenExternal += r.spotifyId
             seenIds += r.entity.id
-            nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() }?.let { seenNatives += it }
+            nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() }?.let { placedByNative.getOrPut(it) { mutableListOf() }.add(r.entity) }
         }
-        fun isDuplicate(r: SyncedTrack): Boolean =
-            r.spotifyId in seenExternal || r.entity.id in seenIds ||
-                (nativeIdOf(r.entity)?.let { it.isNotEmpty() && it in seenNatives } == true)
+        // A repeat of a track already placed: the same id, or the same native
+        // id for the same recording (same artist and title, compatible albums).
+        // A shared native id alone isn't enough: a provider can relink two
+        // editions, or two songs, to one playable id.
+        fun isDuplicate(r: SyncedTrack): Boolean {
+            if (r.entity.id in seenIds) return true
+            val nid = nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() } ?: return false
+            val key = nameKey(r.entity) ?: return false
+            return placedByNative[nid].orEmpty().any { nameKey(it) == key && albumsCompatible(it, r.entity) }
+        }
 
         // Pass 1: the exact link: the row with the remote's id, then the rows
         // whose sync source names its external id. Several rows can share one
@@ -142,17 +155,20 @@ object SyncTrackMatch {
         // remaster, each with its own ISRC) under one playable track id, and
         // each was matched to its own row by id. So the row with the remote's
         // own id comes first, and a row already claimed is skipped. A remote
-        // whose every candidate is claimed is a duplicate.
+        // whose own-id row is claimed is a duplicate; one whose only
+        // candidates are other rows linked to the same external id goes on to
+        // pass 2, which decides whether it's the same recording.
         for (r in remote) {
-            val candidates = (listOfNotNull(byId[r.entity.id]) + byExternal[r.spotifyId].orEmpty()).distinct()
+            val own = byId[r.entity.id]
+            val candidates = (listOfNotNull(own) + byExternal[r.spotifyId].orEmpty()).distinct()
             val row = candidates.firstOrNull { it.track.id !in claimed }
             when {
                 row != null -> {
                     claimed += row.track.id
                     pairs += Pair(r, row, viaExactLink = true)
                 }
-                candidates.isEmpty() -> pending += r
-                else -> duplicates += r
+                own != null -> duplicates += r
+                else -> pending += r
             }
         }
         pairs.forEach { place(it.remote) }
@@ -161,8 +177,13 @@ object SyncTrackMatch {
         val unmatched = mutableListOf<SyncedTrack>()
         for (r in pending) {
             val nid = nativeIdOf(r.entity)?.takeIf { it.isNotEmpty() }
+            // The native id needs the same title too (the artist credit may
+            // differ: "Mondo Cozmo, Jim James" against "Mondo Cozmo"), so a row
+            // carrying a wrong id from older data never takes another song.
             var row = nid?.let { id ->
-                byNative[id]?.firstOrNull { it.track.id !in claimed && albumsCompatible(it.track, r.entity) }
+                byNative[id]?.firstOrNull {
+                    it.track.id !in claimed && sameTitle(it.track, r.entity) && albumsCompatible(it.track, r.entity)
+                }
             }
             if (row == null) {
                 row = nameKey(r.entity)?.let { key ->

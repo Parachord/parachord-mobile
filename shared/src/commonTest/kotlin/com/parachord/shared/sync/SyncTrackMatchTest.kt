@@ -110,6 +110,30 @@ class SyncTrackMatchTest {
         assertTrue(r.duplicates.isEmpty())
     }
 
+    @Test fun `another edition under the same playable id is added when its row is gone`() {
+        val remaster = row("isrc-B", "Your Misfortune", "Mike Doughty", "Haughty Melodic (Deluxe Remaster)", spotifyId = "S", sources = mapOf(sp to "S"))
+        val r = SyncTrackMatch.match(
+            listOf(
+                remote("S", "Your Misfortune", "Mike Doughty", "Haughty Melodic (Deluxe Remaster)", id = "isrc-B"),
+                remote("S", "Your Misfortune", "Mike Doughty", "Haughty Melodic", id = "isrc-A"),
+            ),
+            listOf(remaster), sp, nativeOf,
+        )
+        assertEquals(listOf("isrc-A"), r.unmatched.map { it.entity.id })
+        assertTrue(r.duplicates.isEmpty())
+    }
+
+    @Test fun `a row carrying another song's id never takes it`() {
+        // Older data left a wrong Spotify id on a different song's row.
+        val wrong = row("isrc-C", "Dream About Changing", "Sally Seltmann", "Heart That's Pounding", spotifyId = "S3")
+        val r = SyncTrackMatch.match(
+            listOf(remote("S3", "Heart That's Pounding", "Sally Seltmann", "Heart That's Pounding", id = "isrc-D")),
+            listOf(wrong), sp, nativeOf,
+        )
+        assertTrue(r.pairs.isEmpty())
+        assertEquals(listOf("isrc-D"), r.unmatched.map { it.entity.id })
+    }
+
     @Test fun `placeholder albums`() {
         fun t(album: String?, resolver: String? = null) = Track(id = "x", title = "t", artist = "a", album = album, resolver = resolver)
         assertTrue(SyncTrackMatch.isPlaceholderAlbum(t(null)))
