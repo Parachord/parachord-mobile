@@ -63,28 +63,15 @@ xcodebuild clean archive \
   -archivePath "$ARCHIVE" \
   -allowProvisioningUpdates
 
-# --- export ------------------------------------------------------------------
-echo "▶︎ Exporting signed .ipa…"
-xcodebuild -exportArchive \
-  -archivePath "$ARCHIVE" \
-  -exportPath "$EXPORT_DIR" \
-  -exportOptionsPlist "$EXPORT_OPTIONS" \
-  -allowProvisioningUpdates
-
-IPA="$(/usr/bin/find "$EXPORT_DIR" -maxdepth 1 -name '*.ipa' | head -1)"
-if [[ -z "$IPA" ]]; then
-  echo "✗ No .ipa produced in $EXPORT_DIR" >&2
-  exit 1
-fi
-echo "✅ Exported: $IPA"
-
 # --- publish the archive to Xcode's Organizer --------------------------------
 # Xcode's Organizer ONLY lists ~/Library/Developer/Xcode/Archives/<date>/. This
 # script archives into the repo's build dir, so without this copy the build is
 # invisible there and "select the latest archive → Distribute App" silently
 # ships whatever older build IS listed. That is not hypothetical: build 0.1 (4)
 # was uploaded as August's 0.1 (2) exactly this way (Sept 2026). Every build
-# goes where the tools expect to find it.
+# goes where the tools expect to find it. It runs before the export, so a
+# failed command-line export (no Xcode account here, a stale profile) still
+# leaves the archive in Organizer to distribute from there.
 ORGANIZER_DIR="$HOME/Library/Developer/Xcode/Archives/$(date +%Y-%m-%d)"
 ARCHIVE_PLIST="$ARCHIVE/Info.plist"
 AV_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:CFBundleShortVersionString' "$ARCHIVE_PLIST" 2>/dev/null || echo '')"
@@ -100,8 +87,23 @@ if mkdir -p "$ORGANIZER_DIR" && rm -rf "$ORGANIZER_ARCHIVE" && cp -R "$ARCHIVE" 
   echo "✅ Archive published to Organizer: $(basename "$ORGANIZER_ARCHIVE")"
 else
   echo "⚠️  Could not copy the archive into $ORGANIZER_DIR — it will NOT appear in Organizer."
-  echo "    Upload the .ipa with Transporter instead; do not pick 'the latest archive' in Organizer."
+  echo "    Do not pick 'the latest archive' in Organizer; upload the exported .ipa with Transporter."
 fi
+
+# --- export ------------------------------------------------------------------
+echo "▶︎ Exporting signed .ipa…"
+xcodebuild -exportArchive \
+  -archivePath "$ARCHIVE" \
+  -exportPath "$EXPORT_DIR" \
+  -exportOptionsPlist "$EXPORT_OPTIONS" \
+  -allowProvisioningUpdates
+
+IPA="$(/usr/bin/find "$EXPORT_DIR" -maxdepth 1 -name '*.ipa' | head -1)"
+if [[ -z "$IPA" ]]; then
+  echo "✗ No .ipa produced in $EXPORT_DIR" >&2
+  exit 1
+fi
+echo "✅ Exported: $IPA"
 
 # --- upload (optional) -------------------------------------------------------
 if [[ "$UPLOAD" == "1" ]]; then

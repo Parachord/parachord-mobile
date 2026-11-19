@@ -553,7 +553,11 @@ and died with exit 127.
 > load-bearing.** The script archives into `iosApp/build/testflight/`, which is
 > OUTSIDE `~/Library/Developer/Xcode/Archives`, the only directory Organizer
 > reads. It therefore copies each finished archive there as
-> `Parachord <version> (<build>).xcarchive`. **Do not remove that copy step:**
+> `Parachord <version> (<build>).xcarchive`, before the export, so a failed
+> command-line export still leaves the build in Organizer (0.2 (9), Nov 2026:
+> the CLI export failed with "No Accounts" and a cached App Store profile
+> without CarPlay Audio; Organizer's Distribute App signs it with Xcode's
+> account and a fresh profile). **Do not remove that copy step:**
 > without it a build is invisible in Organizer, and "select the latest archive
 > → Distribute App" silently ships whatever older build IS listed. That is
 > what happened to build 0.1 (4) in Sept 2026 — the fix was verifiably in the
