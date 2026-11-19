@@ -38,8 +38,6 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -73,6 +71,9 @@ import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.components.ResolverIconRow
 import com.parachord.android.ui.components.TrackRow
 import com.parachord.android.ui.screens.library.CollectionFilterBar
+import com.parachord.android.ui.components.FilterChips
+import com.parachord.android.ui.components.FilterChipItem
+import com.parachord.shared.ui.DesignTokens
 
 private val historyTabs = listOf("Top Songs", "Top Albums", "Top Artists", "Recently Played")
 
@@ -192,23 +193,13 @@ private fun PeriodFilter(
     onPeriodChanged: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    LazyRow(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(periodOptions, key = { it.key }) { option ->
-            FilterChip(
-                selected = selectedPeriod == option.key,
-                onClick = { onPeriodChanged(option.key) },
-                label = { Text(option.label) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary,
-                ),
-            )
-        }
-    }
+    FilterChips(
+        chips = periodOptions.map { FilterChipItem(it.key, it.label) },
+        selectedId = selectedPeriod,
+        onSelect = onPeriodChanged,
+        modifier = modifier.fillMaxWidth().padding(vertical = 8.dp),
+        pageFill = DesignTokens.Page.HISTORY.fill,
+    )
 }
 
 // ---------- Top Songs Tab ----------

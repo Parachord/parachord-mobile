@@ -3,9 +3,12 @@ package com.parachord.shared.ui
 import kotlin.math.pow
 
 /**
- * The text colour that reads best on a coloured fill: white or near-black,
- * whichever has the higher WCAG contrast. A port of desktop's
- * `lib/readable-text.js` (its vectors are in ReadableTextTest).
+ * The text colour for a coloured fill: white whenever it reads (3:1 contrast,
+ * WCAG's floor for bold text and controls), else whichever of white or
+ * near-black contrasts more. So Apple Music's red and SoundCloud's orange get
+ * white, as on their own buttons, and only fills too light for white
+ * (Spotify's green, Amazon's cyan) get near-black. A port of desktop's
+ * `lib/readable-text.js`; its vectors are in SectionAndChipsTest.
  */
 object ReadableText {
     const val LIGHT = 0xFFFFFF
@@ -15,7 +18,9 @@ object ReadableText {
     fun on(rgb: Int?): Int {
         if (rgb == null) return LIGHT
         val l = luminance(rgb)
-        return if (contrast(1.0, l) >= contrast(l, luminance(DARK))) LIGHT else DARK
+        val onWhite = contrast(1.0, l)
+        if (onWhite >= 3.0) return LIGHT
+        return if (onWhite >= contrast(l, luminance(DARK))) LIGHT else DARK
     }
 
     private fun luminance(rgb: Int): Double {
@@ -37,12 +42,12 @@ object ReadableText {
  * 20 / 700 text-primary in sentence case, an optional 12 text-secondary
  * subtitle 2 below, and on the right an optional link, 13 / 600, in the
  * destination page's colour (the accent when it acts in place). A
- * subsection title is 15 / 600. 16 below it before the content.
+ * subsection title is 16 / 600. 16 below it before the content.
  */
 object SectionHeaderSpec {
     const val TITLE_SIZE = 20
     const val TITLE_WEIGHT = 700
-    const val SUB_TITLE_SIZE = 15
+    const val SUB_TITLE_SIZE = 16
     const val SUB_TITLE_WEIGHT = 600
     const val SUBTITLE_SIZE = 12
     const val SUBTITLE_GAP = 2

@@ -30,8 +30,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,14 +61,15 @@ import com.parachord.android.ui.components.ShimmerTrackRow
 import com.parachord.android.ui.components.shimmerBrush
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.components.TrackRow
+import com.parachord.android.ui.components.FilterChips
+import com.parachord.android.ui.components.FilterChipItem
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.shared.ui.ServiceColors
 
 private val recommendationsTabs = listOf("Artists", "Songs")
 
 // Source filter colors matching desktop:
 // ListenBrainz = orange, Last.fm = red, All = amber
-private val FilterColorAll = Color(0xFFF59E0B)         // amber-500
-private val FilterColorListenBrainz = Color(0xFFF97316) // orange-500
-private val FilterColorLastFm = Color(0xFFDC2626)       // red-600
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -154,62 +153,24 @@ private fun SourceFilterBar(
     counts: SourceCounts,
     onFilterChange: (String) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        SourceFilterChip(
-            label = "All",
-            count = counts.total,
-            selected = currentFilter == "all",
-            activeColor = FilterColorAll,
-            onClick = { onFilterChange("all") },
-        )
+    // Each service in its plug-in's colour; All in the page's colour when
+    // picked (desktop's FilterChips).
+    fun label(name: String, count: Int) = if (count > 0) "$name ($count)" else name
+    val chips = buildList {
+        add(FilterChipItem("all", label("All", counts.total)))
         if (counts.listenbrainz > 0) {
-            SourceFilterChip(
-                label = "ListenBrainz",
-                count = counts.listenbrainz,
-                selected = currentFilter == "listenbrainz",
-                activeColor = FilterColorListenBrainz,
-                onClick = { onFilterChange("listenbrainz") },
-            )
+            add(FilterChipItem("listenbrainz", label("ListenBrainz", counts.listenbrainz), ServiceColors.color("listenbrainz")))
         }
         if (counts.lastfm > 0) {
-            SourceFilterChip(
-                label = "Last.fm",
-                count = counts.lastfm,
-                selected = currentFilter == "lastfm",
-                activeColor = FilterColorLastFm,
-                onClick = { onFilterChange("lastfm") },
-            )
+            add(FilterChipItem("lastfm", label("Last.fm", counts.lastfm), ServiceColors.color("lastfm")))
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SourceFilterChip(
-    label: String,
-    count: Int,
-    selected: Boolean,
-    activeColor: Color,
-    onClick: () -> Unit,
-) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = {
-            Text(
-                text = if (count > 0) "$label ($count)" else label,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        },
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = activeColor,
-            selectedLabelColor = Color.White,
-        ),
+    FilterChips(
+        chips = chips,
+        selectedId = currentFilter,
+        onSelect = onFilterChange,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        pageFill = DesignTokens.Page.RECOMMENDATIONS.fill,
     )
 }
 

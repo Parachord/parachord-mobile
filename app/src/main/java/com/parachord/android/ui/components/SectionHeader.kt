@@ -30,7 +30,7 @@ data class SectionAction(val label: String, val onClick: () -> Unit)
  * 20 / 700 text-primary in sentence case, an optional grey subtitle, and on
  * the right an optional link. With [page] the link is "See all in <page>" in
  * that page's colour and [onSeeAll] opens it; with [action] it acts in place,
- * in the accent. [sub] makes it a subsection title (15 / 600).
+ * in the accent. [sub] makes it a subsection title (16 / 600).
  *
  * Page heroes, dialog titles, Settings' group labels ([SettingsGroupLabel])
  * and drawer labels are other elements.

@@ -7,10 +7,15 @@ class SectionAndChipsTest {
 
     // Desktop's tests/renderer/readable-text.test.js vectors.
     @Test
-    fun lightAndMidBrandColoursGetDarkText() {
-        assertEquals(ReadableText.DARK, ReadableText.on(0xFA243C)) // Apple Music
+    fun lightBrandColoursWhereWhiteFailsGetDarkText() {
         assertEquals(ReadableText.DARK, ReadableText.on(0x25D1DA)) // Amazon Music
-        assertEquals(ReadableText.DARK, ReadableText.on(0x1DB954)) // Spotify
+        assertEquals(ReadableText.DARK, ReadableText.on(0x1DB954)) // Spotify, 2.6:1 on white
+    }
+
+    @Test
+    fun midColoursWhereWhiteReadsGetWhite() {
+        assertEquals(ReadableText.LIGHT, ReadableText.on(0xFA243C)) // Apple Music, 3.9:1
+        assertEquals(ReadableText.LIGHT, ReadableText.on(0xFF5500)) // SoundCloud, 3.2:1
     }
 
     @Test

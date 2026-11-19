@@ -32,8 +32,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -67,6 +65,9 @@ import com.parachord.shared.model.Resource
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.SpinningRefreshIcon
 import com.parachord.android.ui.components.shimmerBrush
+import com.parachord.android.ui.components.FilterChips
+import com.parachord.android.ui.components.FilterChipItem
+import com.parachord.shared.ui.DesignTokens
 
 // Desktop gradient: emerald → teal → cyan
 private val HeaderGradient = Brush.horizontalGradient(
@@ -306,27 +307,18 @@ private fun FreshDropsFilterBar(
                 .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                filters.forEach { (key, label) ->
-                    // Per-type color so the selected filter chip matches the row
-                    // badge (#247); "all" falls through to gray.
-                    val chipColor = releaseTypeBadgeColor(key)
-                    FilterChip(
-                        selected = filterType == key,
-                        onClick = { onFilterTypeChange(key) },
-                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = chipColor.copy(alpha = 0.20f),
-                            selectedLabelColor = chipColor,
-                        ),
-                    )
-                }
-            }
+            // The release types in their colours; All takes the page's colour
+            // when picked (desktop's FilterChips).
+            FilterChips(
+                chips = filters.map { (key, label) ->
+                    FilterChipItem(key, label, if (key == "all") null else DesignTokens.releaseTypeColor(key))
+                },
+                selectedId = filterType,
+                onSelect = onFilterTypeChange,
+                modifier = Modifier.weight(1f),
+                pageFill = DesignTokens.Page.FRESH_DROPS.fill,
+                contentPadding = PaddingValues(0.dp),
+            )
             IconButton(onClick = onToggleSearch) {
                 Icon(
                     if (searchOpen) Icons.Filled.Close else Icons.Filled.Search,

@@ -504,7 +504,7 @@ fun HomeScreen(
 
                 // ── Recently Added Albums ────────────────────────────────
                 if (recentAlbums.isNotEmpty()) {
-                    item { SectionHeader("Recently Added") }
+                    item { SectionHeader("Recently added") }
                     item {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -555,7 +555,7 @@ fun HomeScreen(
 
                 // ── Your Playlists ───────────────────────────────────────
                 if (recentPlaylists.isNotEmpty()) {
-                    item { SectionHeader("Your Playlists") }
+                    item { SectionHeader("Your playlists") }
                     item {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -618,7 +618,7 @@ fun HomeScreen(
 
                 // ── Friend Activity ──────────────────────────────────────
                 if (friendActivity.isNotEmpty()) {
-                    item { SectionHeader("Friend Activity") }
+                    item { SectionHeader("Friend activity") }
                     item {
                         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                             friendActivity.forEach { friend ->
@@ -677,7 +677,7 @@ fun HomeScreen(
                 }
 
                 // ── Collection Stats ─────────────────────────────────────
-                item { SectionHeader("Your Collection") }
+                item { SectionHeader("Your collection") }
                 item {
                     StatsRow(
                         stats = stats,
@@ -691,7 +691,7 @@ fun HomeScreen(
 
                 // ── Recent Loves ─────────────────────────────────────────
                 if (recentTracks.isNotEmpty()) {
-                    item { SectionHeader("Recent Loves") }
+                    item { SectionHeader("Recent loves") }
                     items(recentTracks.take(10), key = { it.id }) { track ->
                         ResolveWhileVisible(track.id) { viewModel.resolveVisible(track) }
                         TrackRow(
@@ -1558,7 +1558,7 @@ private fun ContinueListeningCard(
     val isDark = ParachordTheme.isDark
 
     Column {
-        SectionHeader("Continue Listening")
+        SectionHeader("Continue listening")
 
         Row(
             modifier = Modifier
