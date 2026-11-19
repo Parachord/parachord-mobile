@@ -101,6 +101,8 @@ class RecommendationsRepository(
     private val similarUsers: suspend (force: Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
     /** Who Listeners leaves out, read at every merge. */
     private val friendExclusions: suspend () -> FriendExclusions = { FriendExclusions() },
+    /** Some similar-users provider is on and ready, so [similarUsers] will really ask (the Listeners skeleton shows only then). */
+    private val canAskSimilarUsers: suspend () -> Boolean = { false },
     /** The saved similar users, shown at once while [similarUsers] asks again (an older shape among them). */
     private val cachedSimilarUsers: suspend () -> Map<String, List<SimilarUser>> = { emptyMap() },
     private val nowMs: () -> Long = { currentTimeMillis() },
@@ -400,12 +402,13 @@ class RecommendationsRepository(
         if (savedUsers.isNotEmpty()) mutex.withLock { if (generation == run.generation) similar = savedUsers }
         applyFresh(run)
         val pending = mutex.withLock { toFetch.filter { it.id !in run.stale && it.id !in quiet }.map { it.id }.toSet() }
+        val asking = safely(false) { canAskSimilarUsers() }
         _page.update {
             it.copy(
                 loading = it.sections.isEmpty() && toFetch.isNotEmpty(),
                 pendingProviders = pending,
                 // The similar-users lookup is out and no Listeners row is on screen yet.
-                listenersPending = it.sections.none { section -> section.type == null },
+                listenersPending = asking && it.sections.none { section -> section.type == null },
                 error = null,
                 hero = hero,
             )

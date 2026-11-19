@@ -1971,6 +1971,7 @@ class IosContainer private constructor() {
             similarUsers = { force -> similarUsersStore.usersFor(force) },
             friendExclusions = { similarUsersStore.exclusions() },
             cachedSimilarUsers = { similarUsersStore.cached() },
+            canAskSimilarUsers = { similarUsersStore.canAsk() },
         )
     }
 

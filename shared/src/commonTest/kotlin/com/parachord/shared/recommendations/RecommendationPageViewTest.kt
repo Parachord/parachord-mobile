@@ -182,6 +182,10 @@ class RecommendationPageViewTest {
         assertEquals(PageStatus.Empty(false), pageStatus(RecommendationPageState(), null))
         assertEquals(PageStatus.Empty(true), pageStatus(RecommendationPageState(), "lastfm"))
         assertEquals(PageStatus.Content, pageStatus(RecommendationPageState(listenersPending = true), null))
+        // With a source picked the Listeners skeleton doesn't show.
+        assertEquals(PageStatus.Empty(true), pageStatus(RecommendationPageState(listenersPending = true), "lastfm"))
+        // Shuffleupagus thinking: the Albums skeleton stands in.
+        assertEquals(PageStatus.Content, pageStatus(RecommendationPageState(aiLoading = true), null))
         assertEquals(PageStatus.Content, pageStatus(RecommendationPageState(pendingProviders = setOf("lastfm")), null))
         assertEquals(PageStatus.Content, pageStatus(RecommendationPageState(sections = content), null))
         assertEquals(PageStatus.Content, pageStatus(RecommendationPageState(loading = true, sections = content), null))

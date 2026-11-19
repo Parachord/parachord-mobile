@@ -935,6 +935,7 @@ val androidModule = module {
             similarUsers = { force -> similarUsersStore.usersFor(force) },
             friendExclusions = { similarUsersStore.exclusions() },
             cachedSimilarUsers = { similarUsersStore.cached() },
+            canAskSimilarUsers = { similarUsersStore.canAsk() },
         )
     }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`

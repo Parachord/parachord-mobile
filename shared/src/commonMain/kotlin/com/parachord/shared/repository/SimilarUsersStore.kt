@@ -126,6 +126,15 @@ class SimilarUsersStore(
     /** The on providers' ids: the services the Listeners row may offer people from. */
     suspend fun friendServices(): Set<String> = onProviders().map { it.id }.toSet()
 
+    /**
+     * Whether [usersFor] would ask anyone: an on provider whose config names an
+     * account and isn't waiting on credentials. Cached answers don't count.
+     */
+    suspend fun canAsk(): Boolean = onProviders().any { provider ->
+        val config = safeConfig(provider.id)
+        config != null && accountOf(config) != null && !isPending(config)
+    }
+
     /** What Listeners leaves out, with [FriendExclusions.friendServices] from the on providers. */
     suspend fun exclusions(): FriendExclusions = friends().copy(friendServices = friendServices())
 

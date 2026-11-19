@@ -110,6 +110,7 @@ class RecommendationsRepositoryTest {
         isOn: (RecommendationProvider) -> Boolean = { true },
         clock: Clock = Clock(),
         similarUsers: suspend (Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
+        canAskSimilarUsers: Boolean = true,
     ): Rig {
         val prefs = listOfNotNull(
             lastFm?.let { SettingsStore.LASTFM_USERNAME to it },
@@ -126,6 +127,7 @@ class RecommendationsRepositoryTest {
             cacheRead = { disk.saved },
             cacheWrite = { disk.saved = it; disk.writes += it },
             similarUsers = similarUsers,
+            canAskSimilarUsers = { canAskSimilarUsers },
             nowMs = { clock.now },
             scope = backgroundScope,
         )
@@ -415,6 +417,18 @@ class RecommendationsRepositoryTest {
         val job = launch { r.repo.load() }
         runCurrent()
         assertTrue(r.repo.page.value.listenersPending)
+        gate.complete(emptyMap())
+        job.join()
+        assertFalse(r.repo.page.value.listenersPending)
+    }
+
+    @Test
+    fun `listenersPending stays false when no similar-users provider can be asked`() = runTest {
+        val gate = CompletableDeferred<Map<String, List<SimilarUser>>>()
+        val r = rig(similarUsers = { gate.await() }, canAskSimilarUsers = false)
+        val job = launch { r.repo.load() }
+        runCurrent()
+        assertFalse(r.repo.page.value.listenersPending)
         gate.complete(emptyMap())
         job.join()
         assertFalse(r.repo.page.value.listenersPending)

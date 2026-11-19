@@ -121,7 +121,10 @@ fun pageStatus(state: RecommendationPageState, filter: String?): PageStatus = wh
     state.loading && state.sections.isEmpty() -> PageStatus.Loading
     state.error is RecommendationsError.NotConfigured -> PageStatus.NotConfigured
     state.error is RecommendationsError.Message -> PageStatus.Failed(state.error.text)
-    state.sections.isEmpty() && state.pendingProviders.isEmpty() && !state.listenersPending -> PageStatus.Empty(filter != null)
+    // Desktop's contentBlocks also hold the Albums skeleton, and its Listeners
+    // placeholder shows only with no source picked (`friendsPending`).
+    state.sections.isEmpty() && state.pendingProviders.isEmpty() &&
+        !(state.listenersPending && filter == null) && !albumsSkeletonSlot(state, filter) -> PageStatus.Empty(filter != null)
     else -> PageStatus.Content
 }
 
