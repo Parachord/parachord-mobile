@@ -14,7 +14,7 @@ import kotlinx.serialization.json.doubleOrNull
 /*
  * The items behind Recommendations: a port of desktop's
  * `src/renderer/lib/recommendation-model.js` (items, keys and the merge; the
- * page builder sits on top of these).
+ * page builder on top of these is in `RecommendationPage.kt`).
  *
  * Plugins that declare `capabilities.recommendations` answer
  * `getRecommendations(config)` with `{ sections: [{ id?, title?, description?,
@@ -81,6 +81,8 @@ data class RecommendationItem(
     /** The seed artist of an `artist`-category row the item came from. */
     val seedArtist: String? = null,
     val resolverId: String? = null,
+    /** The source's display name, set by [homeRecommendationAlbums] (desktop's `sourceLabel`). */
+    val resolverName: String? = null,
     /** Every provider that sent this item, first one first (set by [mergeOwned]). */
     val sourceIds: List<String> = emptyList(),
     /** True for an artist taken from a recommended song, not sent by a provider. */
