@@ -38,7 +38,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
+import com.parachord.android.ui.theme.FillAccent
+import com.parachord.shared.recommendations.RecommendationCopy
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -105,6 +109,11 @@ fun FriendDetailScreen(
     val trackArtwork by viewModel.trackArtwork.collectAsState()
 
     val currentFriend = friend
+    val isFollowed by viewModel.isFollowed.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(viewModel) {
+        viewModel.messages.collect { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show() }
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         TopAppBar(
@@ -123,7 +132,7 @@ fun FriendDetailScreen(
                 }
             },
             actions = {
-                if (currentFriend != null) {
+                if (currentFriend != null && isFollowed) {
                     IconButton(onClick = { viewModel.togglePin() }) {
                         Icon(
                             imageVector = if (currentFriend.pinnedToSidebar) Icons.Filled.PushPin else Icons.Outlined.PushPin,
@@ -166,16 +175,20 @@ fun FriendDetailScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val serviceLabel = when (currentFriend.service) {
-                    "lastfm" -> "Last.fm"
-                    "listenbrainz" -> "ListenBrainz"
-                    else -> currentFriend.service
-                }
                 Text(
-                    text = "Listening activity from $serviceLabel",
+                    text = "Listening activity from ${friendServiceLabel(currentFriend.service)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
+                if (!isFollowed) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { viewModel.follow() },
+                        colors = ButtonDefaults.buttonColors(containerColor = FillAccent, contentColor = Color.White),
+                    ) {
+                        Text(RecommendationCopy.FOLLOW)
+                    }
+                }
             }
         }
 
@@ -189,13 +202,16 @@ fun FriendDetailScreen(
                     },
                     onPlayTrack = viewModel::playRecentTrack,
                     onTrackVisible = viewModel::resolveVisible,
-                    onRetry = viewModel::refresh,
+                    onRetry = { viewModel.retryTab(0) },
+                    service = currentFriend?.service,
                     trackResolvers = trackResolvers,
                     trackResolverConfidences = trackResolverConfidences,
                     trackArtwork = trackArtwork,
                 )
                 1 -> FriendTopSongsTab(
                     tracks = topTracks,
+                    service = currentFriend?.service,
+                    onRetry = { viewModel.retryTab(1) },
                     selectedPeriod = selectedPeriod,
                     onPeriodChanged = viewModel::setPeriod,
                     onPlayTrack = viewModel::playTopTrack,
@@ -206,6 +222,8 @@ fun FriendDetailScreen(
                 )
                 2 -> FriendTopAlbumsTab(
                     albums = topAlbums,
+                    service = currentFriend?.service,
+                    onRetry = { viewModel.retryTab(2) },
                     selectedPeriod = selectedPeriod,
                     onPeriodChanged = viewModel::setPeriod,
                     onAlbumClick = onNavigateToAlbum,
@@ -216,6 +234,8 @@ fun FriendDetailScreen(
                 )
                 3 -> FriendTopArtistsTab(
                     artists = topArtists,
+                    service = currentFriend?.service,
+                    onRetry = { viewModel.retryTab(3) },
                     selectedPeriod = selectedPeriod,
                     onPeriodChanged = viewModel::setPeriod,
                     onArtistClick = onNavigateToArtist,
@@ -255,6 +275,7 @@ private fun FriendRecentTab(
     onPlayTrack: (Int) -> Unit,
     onTrackVisible: (title: String, artist: String) -> Job? = { _, _ -> null },
     onRetry: () -> Unit = {},
+    service: String? = null,
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
     trackArtwork: Map<String, String> = emptyMap(),
@@ -265,7 +286,7 @@ private fun FriendRecentTab(
                 items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
             }
         }
-        is Resource.Error -> ErrorState(recentTracks.message, onRetry)
+        is Resource.Error -> ErrorState(service, onRetry)
         is Resource.Success -> {
             if (recentTracks.data.isEmpty()) {
                 EmptyState(hiddenMessage ?: UiMessages.FRIEND_RECENT_EMPTY)
@@ -357,6 +378,8 @@ private fun FriendTopSongsTab(
     onPeriodChanged: (String) -> Unit,
     onPlayTrack: (Int) -> Unit,
     onTrackVisible: (title: String, artist: String) -> Job? = { _, _ -> null },
+    service: String? = null,
+    onRetry: () -> Unit = {},
     trackResolvers: Map<String, List<String>> = emptyMap(),
     trackResolverConfidences: Map<String, Map<String, Float>> = emptyMap(),
     trackArtwork: Map<String, String> = emptyMap(),
@@ -369,7 +392,7 @@ private fun FriendTopSongsTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(tracks.message)
+            is Resource.Error -> ErrorState(service, onRetry)
             is Resource.Success -> {
                 if (tracks.data.isEmpty()) {
                     EmptyState(UiMessages.FRIEND_TRACKS_EMPTY)
@@ -408,6 +431,8 @@ private fun FriendTopAlbumsTab(
     onPlayAlbum: (albumTitle: String, albumArtist: String) -> Unit = { _, _ -> },
     onQueueAlbum: (albumTitle: String, albumArtist: String) -> Unit = { _, _ -> },
     onAddAlbumToCollection: (title: String, artist: String, artworkUrl: String?) -> Unit = { _, _, _ -> },
+    service: String? = null,
+    onRetry: () -> Unit = {},
 ) {
     val shareAlbumLite = com.parachord.android.share.rememberShareAlbumLite()
     Column(modifier = Modifier.fillMaxSize()) {
@@ -418,7 +443,7 @@ private fun FriendTopAlbumsTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(albums.message)
+            is Resource.Error -> ErrorState(service, onRetry)
             is Resource.Success -> {
                 if (albums.data.isEmpty()) {
                     EmptyState(UiMessages.FRIEND_ALBUMS_EMPTY)
@@ -547,6 +572,8 @@ private fun FriendTopArtistsTab(
     onPlayTopSongs: (String) -> Unit = {},
     onQueueTopSongs: (String) -> Unit = {},
     onToggleArtistCollection: (name: String, imageUrl: String?, isInCollection: Boolean) -> Unit = { _, _, _ -> },
+    service: String? = null,
+    onRetry: () -> Unit = {},
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         PeriodFilter(selectedPeriod = selectedPeriod, onPeriodChanged = onPeriodChanged)
@@ -563,7 +590,7 @@ private fun FriendTopArtistsTab(
                     )
                 }
             }
-            is Resource.Error -> ErrorState(artists.message)
+            is Resource.Error -> ErrorState(service, onRetry)
             is Resource.Success -> {
                 if (artists.data.isEmpty()) {
                     EmptyState(UiMessages.FRIEND_ARTISTS_EMPTY)
@@ -654,7 +681,8 @@ private fun ArtistGridItem(
 // ---------- Shared ----------
 
 @Composable
-private fun ErrorState(message: String, onRetry: (() -> Unit)? = null) {
+private fun ErrorState(service: String?, onRetry: (() -> Unit)? = null) {
+    val message = RecommendationCopy.couldntReach(service?.let { friendServiceLabel(it) } ?: "the service")
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
@@ -670,11 +698,17 @@ private fun ErrorState(message: String, onRetry: (() -> Unit)? = null) {
             if (onRetry != null) {
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(onClick = onRetry) {
-                    Text(UiMessages.RETRY)
+                    Text(RecommendationCopy.TRY_AGAIN)
                 }
             }
         }
     }
+}
+
+private fun friendServiceLabel(service: String): String = when (service) {
+    "lastfm" -> "Last.fm"
+    "listenbrainz" -> "ListenBrainz"
+    else -> service
 }
 
 @Composable

@@ -64,6 +64,20 @@ class FriendsRepository(
     suspend fun getFriendById(id: String): Friend? = friendDao.getFriendById(id)
 
     /**
+     * The friend a profile page shows for [id]: the saved friend, or for an unsaved id
+     * (`transient:service:user`, see [unsavedFriendId]) the saved friend with that service and
+     * username when there is one, else an unsaved friend with no cached track. A failed read of
+     * the saved list falls back to the unsaved friend; null for an id that isn't either.
+     */
+    suspend fun profileFriend(id: String): Friend? {
+        val byId = try { friendDao.getFriendById(id) } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+        if (byId != null) return byId
+        if (parseUnsavedFriendId(id) == null) return null
+        val all = try { friendDao.getAllFriendsSync() } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
+        return chooseProfileFriend(id, savedById = null, allSaved = all)
+    }
+
+    /**
      * The friend a `parachord://friend/{id}` link names. Desktop writes the
      * username there (else the id, else the name) and its handler accepts any
      * of the three, the names case-insensitively (#470).
@@ -206,7 +220,7 @@ class FriendsRepository(
         artworkUrl: String?,
         timestamp: Long = currentTimeMillis() / 1000,
     ): Friend = Friend(
-        id = "transient:$service:$user",
+        id = unsavedFriendId(service, user),
         username = user,
         service = service,
         displayName = user,
@@ -908,4 +922,34 @@ class FriendsRepository(
             if (enrichedUrl != null) artist.copy(imageUrl = enrichedUrl) else artist
         }
     }
+}
+
+
+private const val UNSAVED_PREFIX = "transient:"
+
+/** The id of a friend who isn't followed: `transient:<service>:<username>`. */
+fun unsavedFriendId(service: String, username: String): String = "$UNSAVED_PREFIX$service:$username"
+
+/** Splits an [unsavedFriendId] into (service, username); the username may hold `:`. Null if not one. */
+fun parseUnsavedFriendId(id: String): Pair<String, String>? {
+    if (!id.startsWith(UNSAVED_PREFIX)) return null
+    val rest = id.removePrefix(UNSAVED_PREFIX)
+    val cut = rest.indexOf(':')
+    if (cut <= 0 || cut == rest.length - 1) return null
+    return rest.substring(0, cut) to rest.substring(cut + 1)
+}
+
+/** The rule behind [FriendsRepository.profileFriend], over what was read. */
+fun chooseProfileFriend(id: String, savedById: Friend?, allSaved: List<Friend>): Friend? {
+    if (savedById != null) return savedById
+    val (service, username) = parseUnsavedFriendId(id) ?: return null
+    allSaved.firstOrNull { it.service == service && it.username.equals(username, ignoreCase = true) }?.let { return it }
+    return Friend(
+        id = unsavedFriendId(service, username),
+        username = username,
+        service = service,
+        displayName = username,
+        addedAt = currentTimeMillis(),
+        transient = true,
+    )
 }
