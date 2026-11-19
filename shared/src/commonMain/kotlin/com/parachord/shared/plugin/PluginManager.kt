@@ -640,6 +640,9 @@ class PluginManager constructor(
      */
     suspend fun isPluginConfigured(resolverId: String): Boolean {
         if (plugins.value.find { it.id == resolverId }?.requiresAuth != true) return true
+        // The app gates the plugins it sets up itself on its own sign-in state,
+        // and nothing refreshes this cache when that changes.
+        if (!PluginUserConfig.usesGenericSettings(resolverId)) return true
         configuredMutex.withLock {
             if (configuredCache.containsKey(resolverId)) return configuredCache[resolverId]!!
         }

@@ -103,4 +103,28 @@ class PluginUserConfigTest {
         assertEquals(listOf("subsonic"), saved)
         assertEquals("""{"serverUrl":"https://nav.example"}""", backing.getStringOrNull("plugin_config_subsonic"))
     }
+
+    private fun hostPlugin(id: String) = PluginManager.PluginInfo(
+        id = id, name = id, version = "1.0",
+        configFields = listOf(usernameField, PluginManager.PluginConfigField("apiKey", "text", "API key")),
+        requiresAuth = true,
+    )
+
+    @Test
+    fun `plugins the app sets up itself get no generic config — their own config isn't overwritten`() = runTest {
+        val ids = listOf("lastfm", "listenbrainz", "soundcloud", "spotify", "applemusic", "chatgpt", "ticketmaster")
+        val (userConfig, _, _) = config { ids.map { hostPlugin(it) } + subsonicPlugin() }
+        // Only Subsonic, which has no settings screen of its own.
+        assertEquals(setOf("subsonic"), userConfig.pluginConfigs().keys)
+    }
+
+    @Test
+    fun `the generic editor is only for plugins without their own settings`() {
+        assertTrue(PluginUserConfig.usesGenericSettings("subsonic"))
+        for (id in listOf("lastfm", "listenbrainz", "librefm", "soundcloud", "spotify", "applemusic",
+            "localfiles", "discogs", "wikipedia", "chatgpt", "claude", "gemini",
+            "ticketmaster", "seatgeek", "bandsintown", "songkick")) {
+            assertTrue(!PluginUserConfig.usesGenericSettings(id), id)
+        }
+    }
 }

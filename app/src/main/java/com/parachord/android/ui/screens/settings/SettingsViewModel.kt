@@ -213,7 +213,9 @@ class SettingsViewModel constructor(
     /** Refresh the configured state of every plugin with configurable fields (Settings opens, plugins load). */
     fun refreshPluginConfiguredStates() {
         viewModelScope.launch {
-            for (plugin in pluginManager.plugins.value.filter { it.configFields.isNotEmpty() }) {
+            for (plugin in pluginManager.plugins.value.filter {
+                it.configFields.isNotEmpty() && com.parachord.shared.plugin.PluginUserConfig.usesGenericSettings(it.id)
+            }) {
                 refreshPluginConfigured(plugin.id)
             }
         }
