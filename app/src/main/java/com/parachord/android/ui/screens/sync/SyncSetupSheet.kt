@@ -29,6 +29,9 @@ import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.sync.SyncEngine
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.FilterChips
+import com.parachord.android.ui.components.FilterChipItem
+import androidx.compose.foundation.layout.PaddingValues
 
 private val SpotifyGreen = Color(0xFF1DB954)
 private val AppleMusicRed = Color(0xFFFA243C)
@@ -382,14 +385,16 @@ private fun PlaylistSelectionStep(viewModel: SyncViewModel, accent: Color = Spot
         )
         Spacer(Modifier.height(16.dp))
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            FilterChip(selected = filter == "all", onClick = { viewModel.setPlaylistFilter("all") },
-                label = { Text("All") }, modifier = Modifier.padding(end = 8.dp))
-            FilterChip(selected = filter == "owned", onClick = { viewModel.setPlaylistFilter("owned") },
-                label = { Text("Created by Me") }, modifier = Modifier.padding(end = 8.dp))
-            FilterChip(selected = filter == "following", onClick = { viewModel.setPlaylistFilter("following") },
-                label = { Text("Following") })
-        }
+        FilterChips(
+            chips = listOf(
+                FilterChipItem("all", "All"),
+                FilterChipItem("owned", "Created by me"),
+                FilterChipItem("following", "Following"),
+            ),
+            selectedId = filter,
+            onSelect = { viewModel.setPlaylistFilter(it) },
+            contentPadding = PaddingValues(0.dp),
+        )
 
         if (!isLoading && error == null) {
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {

@@ -514,25 +514,18 @@ struct FreshDropsScreen: View {
     private var filterBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(freshFilters, id: \.key) { f in
-                            let on = filter == f.key
-                            let color = f.key == "all" ? pcReleaseTypeColor(nil) : pcReleaseTypeColor(f.key)
-                            let count = f.key == "all" ? nil : model.drops.filter { $0.releaseType.lowercased() == f.key }.count
-                            let label = count != nil ? "\(f.label) (\(count!))" : f.label
-                            Button { filter = f.key } label: {
-                                Text(label).font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(on ? color : PC.fg2)
-                                    .padding(.horizontal, 14).padding(.vertical, 6)
-                                    .background(on ? color.opacity(0.20) : PC.bgInset, in: Capsule())
-                                    .overlay(Capsule().strokeBorder(on ? Color.clear : PC.border))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.leading, 20)
-                }
+                // The release types in their colours; All takes the page's fill
+                // when picked (desktop's FilterChips, Android's FreshDropsFilterBar).
+                PCFilterChips(
+                    chips: freshFilters.map { f in
+                        PCChip(id: f.key, label: f.label,
+                               color: f.key == "all" ? nil : UInt32(DesignTokens.shared.releaseTypeColor(type: f.key)))
+                    },
+                    selection: filter,
+                    onSelect: { filter = $0 },
+                    pageFill: UInt32(DesignTokens.Page.freshDrops.fill),
+                    horizontalPadding: 0)
+                .padding(.leading, CGFloat(DesignTokens.shared.SCREEN_GUTTER))
                 Button {
                     withAnimation(.easeOut(duration: 0.2)) { searchOpen.toggle() }
                     if !searchOpen { search = "" }
@@ -914,25 +907,12 @@ struct ConcertsScreen: View {
     }
 
     private var radiusChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(ConcertsModel.radiusOptions, id: \.self) { r in
-                    let selected = model.concertRadius == r
-                    Text("\(r)mi")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(selected ? PC.onTour : PC.fg2)
-                        .padding(.horizontal, 14).padding(.vertical, 7)
-                        .background(
-                            Capsule().fill(selected ? PC.onTour.opacity(0.15) : PC.bgInset)
-                        )
-                        .overlay(
-                            Capsule().stroke(selected ? PC.onTour.opacity(0.4) : PC.border, lineWidth: 1)
-                        )
-                        .onTapGesture { model.setConcertRadius(r) }
-                }
-            }
-            .padding(.horizontal, 20).padding(.bottom, 8)
-        }
+        PCFilterChips(
+            chips: ConcertsModel.radiusOptions.map { PCChip(id: String($0), label: "\($0)mi") },
+            selection: String(model.concertRadius),
+            onSelect: { if let r = Int($0) { model.setConcertRadius(r) } },
+            pageFill: UInt32(DesignTokens.Page.concerts.fill))
+        .padding(.bottom, 8)
     }
 
     private func eventRow(_ e: ConcertEvent) -> some View {

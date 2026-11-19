@@ -124,7 +124,7 @@ import com.parachord.android.ui.components.ModalTextActive
 import com.parachord.android.ui.components.ModalTextPrimary
 import com.parachord.android.ui.components.ModalScrim
 import androidx.compose.material3.Slider
-import com.parachord.android.ui.components.SectionHeader
+import com.parachord.android.ui.components.SettingsGroupLabel
 import androidx.compose.ui.draw.alpha
 import com.parachord.shared.playback.ResolverVolume
 import com.parachord.android.ui.components.SwipeableTabLayout
@@ -541,7 +541,7 @@ private fun PlugInsTab(
         verticalArrangement = Arrangement.spacedBy(0.dp),
     ) {
         // Content Resolvers section — enabled (draggable)
-        item { SectionHeader("Content Resolvers") }
+        item { SettingsGroupLabel("Content Resolvers") }
         if (orderedEnabled.isNotEmpty()) {
             item {
                 Text(
@@ -670,7 +670,7 @@ private fun PlugInsTab(
         // Meta Services section
         // Volume Balance — per-resolver loudness trim (desktop parity).
         if (orderedEnabled.isNotEmpty()) {
-            item { SectionHeader("Volume Balance") }
+            item { SettingsGroupLabel("Volume Balance") }
             item {
                 Text(
                     text = "Trim louder sources so switching between them doesn't jump. " +
@@ -722,7 +722,7 @@ private fun PlugInsTab(
             }
         }
 
-        item { SectionHeader("Meta Services") }
+        item { SettingsGroupLabel("Meta Services") }
         item {
             Text(
                 text = "Services for recommendations, metadata, and AI features",
@@ -756,7 +756,7 @@ private fun PlugInsTab(
         }
 
         // Concerts & Events section
-        item { SectionHeader("Concerts & Events") }
+        item { SettingsGroupLabel("Concerts & Events") }
         item {
             Text(
                 text = "Concert discovery and ticket providers",
@@ -3138,7 +3138,7 @@ private fun GeneralTab(
     onPersistQueueChanged: (Boolean) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
-        item { SectionHeader("Appearance") }
+        item { SettingsGroupLabel("Appearance") }
         item {
             ListItem(
                 headlineContent = { Text("Dark Mode") },
@@ -3159,7 +3159,7 @@ private fun GeneralTab(
                 },
             )
         }
-        item { SectionHeader("Playback") }
+        item { SettingsGroupLabel("Playback") }
         item {
             ListItem(
                 headlineContent = { Text("Remember queue") },
@@ -3290,7 +3290,7 @@ private fun SyncTab(
         // Spotify Sync section — only shown when Spotify is connected
         if (spotifyConnected) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
-            item { SectionHeader("Spotify Sync") }
+            item { SettingsGroupLabel("Spotify Sync") }
             item {
                 Card(
                     modifier = Modifier
@@ -3381,7 +3381,7 @@ private fun SyncTab(
         // track IDs to AM."
         if (appleMusicAuthorized) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
-            item { SectionHeader("Apple Music Sync") }
+            item { SettingsGroupLabel("Apple Music Sync") }
             item {
                 Card(
                     modifier = Modifier
@@ -3463,7 +3463,7 @@ private fun SyncTab(
         // up to the user's LB profile).
         if (listenBrainzConnected) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
-            item { SectionHeader("ListenBrainz Sync") }
+            item { SettingsGroupLabel("ListenBrainz Sync") }
             item {
                 Card(
                     modifier = Modifier
@@ -3536,7 +3536,7 @@ private fun SyncTab(
         // UI. The shadow-mode + propagation toggles further down stay DEV-only —
         // validation tooling users never need.
         item { Spacer(modifier = Modifier.height(8.dp)) }
-        item { SectionHeader("New sync engine") }
+        item { SettingsGroupLabel("New sync engine") }
         item {
             ListItem(
                 headlineContent = { Text("Use new sync (preview)") },
@@ -3559,7 +3559,7 @@ private fun SyncTab(
         // testing. The preview → accept entry above is the real user path.
         if (BuildConfig.DEBUG) {
             item { Spacer(modifier = Modifier.height(8.dp)) }
-            item { SectionHeader("Developer · sync engine") }
+            item { SettingsGroupLabel("Developer · sync engine") }
             item {
                 ListItem(
                     headlineContent = { Text("N-way shadow mode") },
@@ -3619,7 +3619,7 @@ private fun SyncTab(
 
                 // ── Propagation (REAL writes, stricter opt-in) ──────────
                 item { Spacer(modifier = Modifier.height(8.dp)) }
-                item { SectionHeader("Developer · N-way propagation (writes)") }
+                item { SettingsGroupLabel("Developer · N-way propagation (writes)") }
                 item {
                     ListItem(
                         headlineContent = { Text("Enable real writes") },

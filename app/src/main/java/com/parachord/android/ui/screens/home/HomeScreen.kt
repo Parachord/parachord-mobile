@@ -504,7 +504,7 @@ fun HomeScreen(
 
                 // ── Recently Added Albums ────────────────────────────────
                 if (recentAlbums.isNotEmpty()) {
-                    item { SectionHeader("Recently Added") }
+                    item { SectionHeader("Recently added") }
                     item {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -555,7 +555,7 @@ fun HomeScreen(
 
                 // ── Your Playlists ───────────────────────────────────────
                 if (recentPlaylists.isNotEmpty()) {
-                    item { SectionHeader("Your Playlists") }
+                    item { SectionHeader("Your playlists") }
                     item {
                         LazyRow(
                             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -618,7 +618,7 @@ fun HomeScreen(
 
                 // ── Friend Activity ──────────────────────────────────────
                 if (friendActivity.isNotEmpty()) {
-                    item { SectionHeader("Friend Activity") }
+                    item { SectionHeader("Friend activity") }
                     item {
                         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                             friendActivity.forEach { friend ->
@@ -677,7 +677,7 @@ fun HomeScreen(
                 }
 
                 // ── Collection Stats ─────────────────────────────────────
-                item { SectionHeader("Your Collection") }
+                item { SectionHeader("Your collection") }
                 item {
                     StatsRow(
                         stats = stats,
@@ -691,7 +691,7 @@ fun HomeScreen(
 
                 // ── Recent Loves ─────────────────────────────────────────
                 if (recentTracks.isNotEmpty()) {
-                    item { SectionHeader("Recent Loves") }
+                    item { SectionHeader("Recent loves") }
                     items(recentTracks.take(10), key = { it.id }) { track ->
                         ResolveWhileVisible(track.id) { viewModel.resolveVisible(track) }
                         TrackRow(
@@ -1034,30 +1034,18 @@ private fun WeeklyCarouselRow(
     val badgeText = if (isDark) Color(0xFFFB923C) else Color(0xFFE65100)
 
     Column {
-        // Header with title + ListenBrainz badge
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 8.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(modifier = Modifier.width(8.dp))
+        SectionHeader(title, trailing = {
             Text(
                 text = "ListenBrainz",
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = badgeText,
                 maxLines = 1,
                 modifier = Modifier
-                    .background(badgeBg, RoundedCornerShape(4.dp))
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                    .background(badgeBg, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
             )
-        }
+        })
 
         // Horizontal carousel of cards
         LazyRow(
@@ -1558,7 +1546,7 @@ private fun ContinueListeningCard(
     val isDark = ParachordTheme.isDark
 
     Column {
-        SectionHeader("Continue Listening")
+        SectionHeader("Continue listening")
 
         Row(
             modifier = Modifier
@@ -1769,27 +1757,14 @@ private fun AiSuggestionsSection(
             AiSuggestionsShimmer(isLoading = true, onRefresh = onRefresh)
         } else if (error != null && (recommendations == null || (recommendations.albums.isEmpty() && recommendations.artists.isEmpty()))) {
             // Error state — show what went wrong with retry
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "AI SUGGESTIONS",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(modifier = Modifier.width(6.dp))
+            SectionHeader("AI suggestions", horizontalPadding = 0.dp, trailing = {
                 ShuffleupagusBadge()
-                Spacer(modifier = Modifier.weight(1f))
                 SpinningRefreshIcon(
                     isLoading = false,
                     onClick = onRefresh,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
+            })
             Text(
                 text = error,
                 style = MaterialTheme.typography.bodySmall,
@@ -1798,27 +1773,14 @@ private fun AiSuggestionsSection(
         } else if (recommendations != null && (recommendations.albums.isNotEmpty() || recommendations.artists.isNotEmpty())) {
             // Album Suggestions
             if (recommendations.albums.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "ALBUM SUGGESTIONS",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                SectionHeader("Album suggestions", horizontalPadding = 0.dp, trailing = {
                     ShuffleupagusBadge()
-                    Spacer(modifier = Modifier.weight(1f))
                     SpinningRefreshIcon(
                         isLoading = isLoading,
                         onClick = onRefresh,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
+                })
 
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1869,22 +1831,8 @@ private fun AiSuggestionsSection(
 
             // Artist Suggestions
             if (recommendations.artists.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = "ARTIST SUGGESTIONS",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                SectionHeader("Artist suggestions", horizontalPadding = 0.dp, trailing = {
                     ShuffleupagusBadge()
-                    Spacer(modifier = Modifier.weight(1f))
-                    // Only show refresh on album row to avoid duplicate
                     if (recommendations.albums.isEmpty()) {
                         SpinningRefreshIcon(
                             isLoading = isLoading,
@@ -1892,7 +1840,7 @@ private fun AiSuggestionsSection(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                }
+                })
 
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -2041,25 +1989,14 @@ private fun AiSuggestionsShimmer(
 ) {
     Column {
         // Album shimmer row
-        Row(
-            modifier = Modifier.padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "ALBUM SUGGESTIONS",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+        SectionHeader("Album suggestions", horizontalPadding = 0.dp, trailing = {
             ShuffleupagusBadge()
-            Spacer(modifier = Modifier.weight(1f))
             SpinningRefreshIcon(
                 isLoading = isLoading,
                 onClick = onRefresh,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
+        })
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(5) {
                 Column(modifier = Modifier.width(120.dp)) {
@@ -2093,20 +2030,9 @@ private fun AiSuggestionsShimmer(
         Spacer(modifier = Modifier.height(16.dp))
 
         // Artist shimmer row
-        Row(
-            modifier = Modifier.padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "ARTIST SUGGESTIONS",
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(6.dp))
+        SectionHeader("Artist suggestions", horizontalPadding = 0.dp, trailing = {
             ShuffleupagusBadge()
-            Spacer(modifier = Modifier.weight(1f))
-        }
+        })
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(5) {
                 Column(

@@ -49,8 +49,6 @@ import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -86,6 +84,9 @@ import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.AlbumArtCardFill
 import com.parachord.android.ui.components.AlbumContextMenu
 import com.parachord.android.ui.components.ArtistContextMenu
+import com.parachord.android.ui.components.FilterChipItem
+import com.parachord.android.ui.components.FilterChips
+import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.FaceAwareImage
 import com.parachord.android.ui.components.hapticCombinedClickable
 import com.parachord.android.ui.components.SectionHeader
@@ -438,28 +439,21 @@ private fun DiscographyTab(
         // Filter chips row (only show if we have more than one filter available)
         if (availableFilters.size > 1) {
             item {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    lazyItems(availableFilters, key = { it.key }) { filter ->
-                        val chipColor = releaseTypeBadgeColor(
-                            if (filter.key == "all") null else filter.key,
-                        )
+                // The release types: All neutral, each type in its colour (desktop's
+                // artist page, FilterChips).
+                FilterChips(
+                    chips = availableFilters.map { filter ->
                         val count = if (filter.key == "all") null else typeCounts[filter.key]
-                        val chipLabel = if (count != null) "${filter.label} ($count)" else filter.label
-                        FilterChip(
-                            selected = selectedFilter == filter.key,
-                            onClick = { selectedFilter = filter.key },
-                            label = { Text(chipLabel) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = chipColor.copy(alpha = 0.20f),
-                                selectedLabelColor = chipColor,
-                            ),
+                        FilterChipItem(
+                            id = filter.key,
+                            label = if (count != null) "${filter.label} ($count)" else filter.label,
+                            color = if (filter.key == "all") null else DesignTokens.releaseTypeColor(filter.key),
                         )
-                    }
-                }
+                    },
+                    selectedId = selectedFilter,
+                    onSelect = { selectedFilter = it },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                )
             }
         }
 
@@ -762,7 +756,7 @@ private fun BiographyTab(
         if (tags.isNotEmpty()) {
             item {
                 if (!bio.isNullOrBlank()) HorizontalDivider()
-                SectionHeader("TAGS")
+                SectionHeader("Tags")
                 FlowRow(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),

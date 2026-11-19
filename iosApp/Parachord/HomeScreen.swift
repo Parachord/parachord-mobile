@@ -141,17 +141,17 @@ struct HomeScreen: View {
                         }
 
                         if let t = coordinator.currentTrack {
-                            sectionHeader("Continue Listening")
+                            sectionHeader("Continue listening")
                             continueCard(t)
                         }
 
                         if !feed.recentAlbums.isEmpty {
-                            sectionHeader("Recently Added")
+                            sectionHeader("Recently added")
                             recentAlbumsRow
                         }
 
                         if !feed.recentPlaylists.isEmpty {
-                            sectionHeader("Your Playlists")
+                            sectionHeader("Your playlists")
                             recentPlaylistsRow
                         }
 
@@ -167,19 +167,19 @@ struct HomeScreen: View {
                         }
 
                         if !model.friendActivity.isEmpty {
-                            sectionHeader("Friend Activity")
+                            sectionHeader("Friend activity")
                             friendActivitySection
                         }
 
                         aiSuggestionsSection
 
                         if !feed.libraryEmpty {
-                            sectionHeader("Your Collection")
+                            sectionHeader("Your collection")
                             collectionStatsRow
                         }
 
                         if !feed.recentLoves.isEmpty {
-                            sectionHeader("Recent Loves")
+                            sectionHeader("Recent loves")
                             recentLovesList
                         }
                     }
@@ -261,8 +261,7 @@ struct HomeScreen: View {
     }
 
     private func sectionHeader(_ text: String) -> some View {
-        Text(text).pcSectionHeader()
-            .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
+        PCSectionHeader(title: text, gutter: 20)   // Home's rows use a 20 pt gutter
     }
 
     private func continueCard(_ t: Track) -> some View {
@@ -363,15 +362,12 @@ struct HomeScreen: View {
     /// the title + "ListenBrainz" badge are byte-identical and the header doesn't
     /// jump (badge pop-in) when content arrives (#249).
     private func weeklyHeader(_ title: String) -> some View {
-        HStack(spacing: 10) {
-            Text(title).pcSectionHeader()
+        PCSectionHeader(title: title, gutter: 20) {
             Text("ListenBrainz").font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color(uiColor: UIColor(hex: 0xb45309)))
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(PC.warning.opacity(0.16), in: RoundedRectangle(cornerRadius: 6))
-            Spacer()
         }
-        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
     }
 
     /// Placeholder carousel shown while the first Weekly load is in flight —
@@ -631,7 +627,7 @@ struct HomeScreen: View {
     @ViewBuilder private var aiSuggestionsSection: some View {
         if feed.hasAiPlugins == true {
             if !feed.aiAlbums.isEmpty {
-                aiHeader("Album Suggestions")
+                aiHeader("Album suggestions")
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         ForEach(Array(feed.aiAlbums.enumerated()), id: \.offset) { _, al in
@@ -656,7 +652,7 @@ struct HomeScreen: View {
                 .padding(.bottom, 8)
             }
             if !feed.aiArtists.isEmpty {
-                aiHeader("Artist Suggestions")
+                aiHeader("Artist suggestions")
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 14) {
                         ForEach(Array(feed.aiArtists.enumerated()), id: \.offset) { _, ar in
@@ -683,7 +679,7 @@ struct HomeScreen: View {
             } else if let error = feed.aiError, feed.aiAlbums.isEmpty && feed.aiArtists.isEmpty {
                 // Android's AiSuggestionsSection error: what went wrong, with
                 // the header's refresh to try again.
-                aiHeader("AI Suggestions")
+                aiHeader("AI suggestions")
                 Text(error).font(.system(size: 13)).foregroundStyle(PC.error)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -709,17 +705,14 @@ struct HomeScreen: View {
     }
 
     private func aiHeader(_ title: String) -> some View {
-        HStack(spacing: 10) {
-            Text(title).pcSectionHeader()
+        PCSectionHeader(title: title, gutter: 20) {
             Text("Shuffleupagus").font(.system(size: 11, weight: .semibold)).foregroundStyle(PC.accent)
                 .padding(.horizontal, 8).padding(.vertical, 3)
                 .background(PC.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-            Spacer()
             Button { Task { await feed.loadAi() } } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 13)).foregroundStyle(PC.accent)
             }
         }
-        .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 8)
     }
 
     // ── Announcement banner ───────────────────────────────────────────────

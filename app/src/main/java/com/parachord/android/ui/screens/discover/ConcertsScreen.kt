@@ -47,8 +47,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -90,6 +88,9 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle as JavaTextStyle
 import java.util.Locale
+import com.parachord.android.ui.components.FilterChips
+import com.parachord.android.ui.components.FilterChipItem
+import com.parachord.shared.ui.DesignTokens
 
 /** Concert accent color — teal, matching the desktop's concert feature. */
 private val ConcertTeal = Color(0xFF10C9B4)
@@ -225,22 +226,12 @@ fun ConcertsScreen(
 
         // Radius filter chips
         if (hasLocation) {
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(RADIUS_OPTIONS, key = { it }) { radius ->
-                    FilterChip(
-                        selected = radiusMiles == radius,
-                        onClick = { viewModel.setRadius(radius) },
-                        label = { Text("${radius}mi") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = ConcertTeal.copy(alpha = 0.15f),
-                            selectedLabelColor = ConcertTeal,
-                        ),
-                    )
-                }
-            }
+            FilterChips(
+                chips = RADIUS_OPTIONS.map { FilterChipItem(it.toString(), "${it}mi") },
+                selectedId = radiusMiles.toString(),
+                onSelect = { viewModel.setRadius(it.toInt()) },
+                pageFill = DesignTokens.Page.CONCERTS.fill,
+            )
             Spacer(modifier = Modifier.height(8.dp))
         }
 

@@ -172,7 +172,7 @@ fun SearchScreen(
                 if (localAlbums.isNotEmpty()) {
                     item {
                         if (localTracks.isNotEmpty()) HorizontalDivider()
-                        SectionHeader("Library Albums")
+                        SectionHeader("Library albums")
                     }
                     items(localAlbums.take(5), key = { "local-album-${it.id}" }) { album ->
                         Row(

@@ -284,7 +284,7 @@ struct SearchView: View {
                         }
                     }
                     if !model.localAlbums.isEmpty {
-                        sectionHeader("Library Albums")
+                        sectionHeader("Library albums")
                         ForEach(Array(model.localAlbums.prefix(5)), id: \.id) { album in
                             localAlbumRow(album)
                         }
@@ -321,8 +321,7 @@ struct SearchView: View {
     }
 
     private func sectionHeader(_ title: String) -> some View {
-        Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(PC.fg2)
-            .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 6)
+        PCSectionHeader(title: title)
     }
 
     private func trackRow(_ track: Track, index: Int, queue: [Track],

@@ -94,16 +94,16 @@ object DesignTokens {
      * heroes start in the same colour family. Home's colour is the theme
      * accent ([accent]); [color] holds its light value.
      */
-    enum class Page(val color: Int, val fill: Int, val gradient: List<Int>) {
-        HOME(0x7C3AED, FILL_ACCENT, listOf(0xA855F7, 0x7C3AED, 0x4F46E5)),
-        PLAYLISTS(0xEC4899, 0xBE185D, listOf(0xF43F5E, 0xEC4899, 0xC026D3)),
-        COLLECTION(0x06B6D4, 0x0E7490, listOf(0x06B6D4, 0x0891B2, 0x1D4ED8)),
-        HISTORY(0x3B82F6, 0x1D4ED8, listOf(0x0EA5E9, 0x3B82F6, 0x4F46E5)),
-        FRESH_DROPS(0x22C55E, 0x15803D, listOf(0x84CC16, 0x22C55E, 0x059669)),
-        RECOMMENDATIONS(0xF59E0B, 0xB45309, listOf(0xFBBF24, 0xF59E0B, 0xF97316)),
-        POP_OF_THE_TOPS(0xF97316, 0xC2410C, listOf(0xF97316, 0xEC4899, 0x9333EA)),
-        CRITICAL_DARLINGS(0xEF4444, 0xB91C1C, listOf(0xEF4444, 0xDC2626, 0xBE123C)),
-        CONCERTS(0x10C9B4, 0x0F766E, listOf(0x14B8A6, 0x14B8A6, 0x0891B2)),
+    enum class Page(val title: String, val color: Int, val fill: Int, val gradient: List<Int>) {
+        HOME("Home", 0x7C3AED, FILL_ACCENT, listOf(0xA855F7, 0x7C3AED, 0x4F46E5)),
+        PLAYLISTS("Playlists", 0xEC4899, 0xBE185D, listOf(0xF43F5E, 0xEC4899, 0xC026D3)),
+        COLLECTION("Collection", 0x06B6D4, 0x0E7490, listOf(0x06B6D4, 0x0891B2, 0x1D4ED8)),
+        HISTORY("History", 0x3B82F6, 0x1D4ED8, listOf(0x0EA5E9, 0x3B82F6, 0x4F46E5)),
+        FRESH_DROPS("Fresh Drops", 0x22C55E, 0x15803D, listOf(0x84CC16, 0x22C55E, 0x059669)),
+        RECOMMENDATIONS("Recommendations", 0xF59E0B, 0xB45309, listOf(0xFBBF24, 0xF59E0B, 0xF97316)),
+        POP_OF_THE_TOPS("Pop of the Tops", 0xF97316, 0xC2410C, listOf(0xF97316, 0xEC4899, 0x9333EA)),
+        CRITICAL_DARLINGS("Critical Darlings", 0xEF4444, 0xB91C1C, listOf(0xEF4444, 0xDC2626, 0xBE123C)),
+        CONCERTS("Concerts", 0x10C9B4, 0x0F766E, listOf(0x14B8A6, 0x14B8A6, 0x0891B2)),
     }
 
     // ── Release types ────────────────────────────────────────────────

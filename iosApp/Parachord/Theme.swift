@@ -263,17 +263,134 @@ struct PCServiceLogo: View {
     }
 }
 
+// MARK: - Section header and filter chips (desktop section-header.js / filter-chips.js)
+
+/// The section title over a row or grid, as desktop's `SectionHeader` (#1370;
+/// sizes in the shared `SectionHeaderSpec`, Android's `SectionHeader` reads
+/// them too): 20 / 700 text-primary in sentence case, an optional grey
+/// subtitle, and on the right an optional link. With `page` the link is
+/// "See all in <page>" in that page's colour; with `action` it acts in place,
+/// in the accent. `sub` makes it a subsection title (16 / 600). Page heroes,
+/// dialog titles and Settings' group labels are other elements.
+struct PCSectionHeader<Trailing: View>: View {
+    let title: String
+    var subtitle: String? = nil
+    var page: DesignTokens.Page? = nil
+    var onSeeAll: (() -> Void)? = nil
+    var action: (label: String, run: () -> Void)? = nil
+    var sub: Bool = false
+    /// Side padding (the screen gutter); a screen with a wider gutter (Home's 20) passes its own.
+    var gutter: CGFloat = CGFloat(DesignTokens.shared.SCREEN_GUTTER)
+    @ViewBuilder var trailing: () -> Trailing
+
+    private var spec: SectionHeaderSpec { SectionHeaderSpec.shared }
+
+    var body: some View {
+        HStack(alignment: .lastTextBaseline, spacing: CGFloat(spec.ROW_GAP)) {
+            VStack(alignment: .leading, spacing: CGFloat(spec.SUBTITLE_GAP)) {
+                Text(title)
+                    .font(.system(size: CGFloat(sub ? spec.SUB_TITLE_SIZE : spec.TITLE_SIZE),
+                                  weight: sub ? .semibold : .bold))
+                    .foregroundStyle(PC.fg1).lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                if let subtitle {
+                    Text(subtitle).font(.system(size: CGFloat(spec.SUBTITLE_SIZE))).foregroundStyle(PC.fg2)
+                }
+            }
+            Spacer(minLength: 0)
+            trailing()
+            if let page, let onSeeAll {
+                link(spec.seeAllLabel(page: page), color: PC.page(page), run: onSeeAll)
+            } else if let action {
+                link(action.label, color: PC.accent, run: action.run)
+            }
+        }
+        .padding(.horizontal, gutter)
+        .padding(.top, 16)
+        .padding(.bottom, CGFloat(spec.GAP_BELOW))
+    }
+
+    private func link(_ label: String, color: Color, run: @escaping () -> Void) -> some View {
+        Button(label, action: run)
+            .font(.system(size: CGFloat(spec.LINK_SIZE), weight: .semibold))
+            .foregroundStyle(color).lineLimit(1).buttonStyle(.plain)
+    }
+}
+
+extension PCSectionHeader where Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil, page: DesignTokens.Page? = nil,
+         onSeeAll: (() -> Void)? = nil, action: (label: String, run: () -> Void)? = nil, sub: Bool = false,
+         gutter: CGFloat = CGFloat(DesignTokens.shared.SCREEN_GUTTER)) {
+        self.init(title: title, subtitle: subtitle, page: page, onSeeAll: onSeeAll,
+                  action: action, sub: sub, gutter: gutter, trailing: { EmptyView() })
+    }
+}
+
+/// One pick-one chip. `color` is its own `0xRRGGBB` colour (a service's
+/// `ResolverColor.hex(id)`, a release type's), or nil for a neutral chip.
+struct PCChip: Identifiable, Hashable {
+    let id: String
+    let label: String
+    var color: UInt32? = nil
+}
+
+/// The app's pick-one filter row, as desktop's `FilterChips` (#1371; look and
+/// sizes from the shared `FilterChipSpec`, which Android's `FilterChips` reads
+/// too). Idle chips are bg-secondary, a coloured one with its dot; the picked
+/// chip fills with its colour (white or near-black text, whichever reads), or
+/// a neutral chip with fill-accent / `pageFill` (the page's
+/// `DesignTokens.Page.fill`). Scrolls sideways when it doesn't fit.
+struct PCFilterChips: View {
+    let chips: [PCChip]
+    let selection: String?
+    let onSelect: (String) -> Void
+    var pageFill: UInt32? = nil
+    /// Side padding of the row (the screen gutter); 0 where the row sits
+    /// inside a bar that already has its own, as Android's `contentPadding`.
+    var horizontalPadding: CGFloat = CGFloat(DesignTokens.shared.SCREEN_GUTTER)
+
+    private var spec: FilterChipSpec { FilterChipSpec.shared }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: CGFloat(spec.GAP)) {
+                ForEach(chips) { chip in chipView(chip) }
+            }
+            .padding(.horizontal, horizontalPadding)
+        }
+    }
+
+    private func chipView(_ chip: PCChip) -> some View {
+        let on = chip.id == selection
+        let look = spec.look(selected: on,
+                             color: chip.color.map { KotlinInt(int: Int32($0)) },
+                             pageFill: pageFill.map { KotlinInt(int: Int32($0)) })
+        return Button { onSelect(chip.id) } label: {
+            HStack(spacing: CGFloat(spec.GAP)) {
+                if let dot = look.dot {
+                    Circle().fill(pcToken(dot.int32Value))
+                        .frame(width: CGFloat(spec.DOT), height: CGFloat(spec.DOT))
+                }
+                Text(chip.label)
+                    .font(.system(size: CGFloat(spec.TEXT_SIZE), weight: .semibold))
+                    .foregroundStyle(look.text.map { pcToken($0.int32Value) } ?? PC.fg1)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, CGFloat(spec.PAD_HORIZONTAL))
+            .padding(.vertical, CGFloat(spec.PAD_VERTICAL))
+            .frame(minHeight: CGFloat(spec.MIN_HEIGHT))
+            .background(look.fill.map { pcToken($0.int32Value) } ?? PC.bgSecondary, in: Capsule())
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
 // MARK: - Typography helpers
 
 extension View {
-    /// Purple uppercase wide-tracked section header (Home / Library / Sidebar).
-    func pcSectionHeader() -> some View {
-        self.font(.system(size: 14, weight: .semibold))
-            .tracking(1.7)                    // ~0.12em at 14px
-            .textCase(.uppercase)
-            .foregroundStyle(PC.accent)
-    }
-
     /// "PARACHORD" wide-tracked uppercase brand title.
     func pcAppTitle() -> some View {
         self.font(.system(size: 18, weight: .regular))
