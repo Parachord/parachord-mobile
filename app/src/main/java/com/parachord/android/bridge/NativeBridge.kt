@@ -47,6 +47,7 @@ class NativeBridge(
     private val dataStore: DataStore<Preferences>,
     private val mbidEnrichment: MbidEnrichmentService,
     private val appleMusicCatalog: com.parachord.shared.api.AppleMusicCatalog,
+    private val settingsStore: com.parachord.shared.settings.SettingsStore,
 ) {
     /** WebView reference for async fetch callbacks. Set by JsBridge after creation. */
     var webView: android.webkit.WebView? = null
@@ -258,6 +259,34 @@ class NativeBridge(
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                 webView?.evaluateJavascript(
                     "window.__amCatalogCallbacks && window.__amCatalogCallbacks['$callbackId'] && window.__amCatalogCallbacks['$callbackId']($payload)",
+                    null,
+                )
+            }
+        }
+    }
+
+    /**
+     * The Apple Music plugin's personal recommendations (`GET
+     * /v1/me/recommendations`): the host hook
+     * `window.appleMusicPersonalRecommendations` (bootstrap.html). The Music
+     * User Token is read here and never enters JS. Delivers the shared
+     * `PersonalRecommendationsResult` envelope to
+     * `window.__amRecsCallbacks[callbackId]`.
+     */
+    @JavascriptInterface
+    fun appleMusicPersonalRecommendations(callbackId: String, limit: Int) {
+        scope.launch {
+            val envelope = try {
+                appleMusicCatalog.personalRecommendations(limit, settingsStore.getAppleMusicUserToken()).toJsEnvelope()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "appleMusicPersonalRecommendations($callbackId) failed: ${e.message}")
+                """{"failed":0}"""
+            }
+            // The envelope is JSON, so it goes in as a JS expression.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                webView?.evaluateJavascript(
+                    "window.__amRecsCallbacks && window.__amRecsCallbacks['$callbackId'] && window.__amRecsCallbacks['$callbackId']($envelope)",
                     null,
                 )
             }

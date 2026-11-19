@@ -3899,6 +3899,23 @@ enum JsPolyfills {
             }
         }
 
+        // The Apple Music plugin's personal recommendations (`window.
+        // appleMusicPersonalRecommendations` in IosJsRuntime's bootstrap): the
+        // shared AppleMusicCatalog does the GET with the developer token and
+        // the Music User Token, which stay out of JS. Resumes
+        // `window.__amRecsCallbacks[callbackId]` with the result envelope.
+        // Android parity: NativeBridge.appleMusicPersonalRecommendations.
+        let appleMusicPersonalRecommendations: @convention(block) (String, Double) -> Void = { callbackId, limit in
+            Task {
+                let envelope = (try? await IosContainer.companion.shared.appleMusicPersonalRecommendations(limit: Int32(limit))) ?? "{\"failed\":0}"
+                await MainActor.run {
+                    let callbacks = context.objectForKeyedSubscript("__amRecsCallbacks")
+                    let callback = callbacks?.objectForKeyedSubscript(callbackId)
+                    if let callback, !callback.isUndefined { callback.call(withArguments: [envelope]) }
+                }
+            }
+        }
+
         // Timers (`setTimeout` in IosJsRuntime's bootstrap): JavaScriptCore has
         // none, and listenbrainz.axe waits between retries with one (its
         // getRecommendations, #606). Fires `window.__timerFire(id)` on the
@@ -3912,6 +3929,7 @@ enum JsPolyfills {
 
         bridge.setObject(resolveMbidForLove, forKeyedSubscript: "resolveMbidForLove" as NSString)
         bridge.setObject(appleMusicCatalogGet, forKeyedSubscript: "appleMusicCatalogGet" as NSString)
+        bridge.setObject(appleMusicPersonalRecommendations, forKeyedSubscript: "appleMusicPersonalRecommendations" as NSString)
         bridge.setObject(setTimeout, forKeyedSubscript: "setTimeout" as NSString)
         context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
     }

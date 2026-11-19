@@ -3083,6 +3083,24 @@ class IosContainer private constructor() {
         null
     }
 
+    /**
+     * The Apple Music plugin's personal recommendations, for the host hook
+     * `appleMusicPersonalRecommendations` (`IosJsRuntime`'s bootstrap). The Swift
+     * `NativeBridge.appleMusicPersonalRecommendations` forwards the limit here and
+     * resumes the JS promise with the returned envelope (`{"ok":…}`,
+     * `{"notReady":"<code>"}` or `{"failed":<status>}`). The Music User Token is
+     * read here and never reaches JavaScript. Android parity:
+     * `NativeBridge.appleMusicPersonalRecommendations`.
+     */
+    suspend fun appleMusicPersonalRecommendations(limit: Int): String = try {
+        appleMusicCatalog.personalRecommendations(limit, settingsStore.getAppleMusicUserToken()).toJsEnvelope()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "appleMusicPersonalRecommendations failed: ${e.message}")
+        """{"failed":0}"""
+    }
+
     private val MBID_REGEX =
         Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 

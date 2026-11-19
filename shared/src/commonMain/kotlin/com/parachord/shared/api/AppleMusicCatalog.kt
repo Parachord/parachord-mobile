@@ -69,6 +69,52 @@ class AppleMusicCatalog(
         return null
     }
 
+    /**
+     * The signed-in user's personal recommendations: `GET /v1/me/recommendations`
+     * with the developer token and the Music User Token ([userToken], read by
+     * the platform; it never reaches JS). For `applemusic.axe`'s
+     * `getRecommendations` through the host hook
+     * `appleMusicPersonalRecommendations`, a port of desktop's. Narrow on
+     * purpose: this one account call, never a general proxy. [limit] is
+     * clamped to 1-30.
+     *
+     * Not signed in, no developer token or a 401 / 403 is [PersonalRecommendationsResult.NotReady],
+     * so the Recommendations page doesn't cache a refusal as "nothing for you";
+     * any other failure (a rate limit included) is [PersonalRecommendationsResult.Failed].
+     */
+    suspend fun personalRecommendations(limit: Int, userToken: String?): PersonalRecommendationsResult {
+        val token = developerToken()?.takeIf { it.isNotBlank() }
+            ?: return PersonalRecommendationsResult.NotReady("no-developer-token")
+        val mut = userToken?.takeIf { it.isNotBlank() }
+            ?: return PersonalRecommendationsResult.NotReady("not-signed-in")
+        val url = "https://api.music.apple.com/v1/me/recommendations?limit=${limit.coerceIn(1, 30)}"
+        val outcome = limiter.runThrottled {
+            try {
+                val resp = httpClient.get(url) {
+                    header("Authorization", "Bearer $token")
+                    header("Music-User-Token", mut)
+                }
+                val status = resp.status.value
+                val text = resp.bodyAsText()
+                when {
+                    status in 200..299 && text.isNotBlank() -> PersonalRecommendationsResult.Ok(text)
+                    status == 401 || status == 403 -> PersonalRecommendationsResult.NotReady("token-refused")
+                    else -> PersonalRecommendationsResult.Failed(status)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PersonalRecommendationsResult.Failed(0)
+            }
+        } ?: return PersonalRecommendationsResult.Failed(429) // cooling down
+        when {
+            outcome is PersonalRecommendationsResult.Ok -> limiter.reportSuccess()
+            outcome is PersonalRecommendationsResult.Failed && outcome.status == 429 -> limiter.reportRateLimit()
+        }
+        if (outcome is PersonalRecommendationsResult.Failed) Log.w(TAG, "Personal recommendations failed: ${outcome.status}")
+        return outcome
+    }
+
     private suspend fun fetchOnce(url: String, token: String): Attempt = try {
         val resp = httpClient.get(url) { header("Authorization", "Bearer $token") }
         val status = resp.status.value
@@ -98,5 +144,27 @@ class AppleMusicCatalog(
         /** Catalog reads only: `/v1/catalog/…`, no `..`, no scheme or host. */
         fun isCatalogPath(path: String): Boolean =
             path.startsWith("/v1/catalog/") && ".." !in path && "://" !in path && '\\' !in path
+    }
+}
+
+/** The answer to [AppleMusicCatalog.personalRecommendations]. */
+sealed interface PersonalRecommendationsResult {
+    /** Apple's JSON response body. */
+    data class Ok(val body: String) : PersonalRecommendationsResult
+
+    /** Not ready, not empty: [code] is `no-developer-token`, `not-signed-in` or `token-refused`. */
+    data class NotReady(val code: String) : PersonalRecommendationsResult
+
+    /** Any other failure ([status] 0 when the request itself failed). */
+    data class Failed(val status: Int) : PersonalRecommendationsResult
+
+    /**
+     * What both hosts hand the JS hook: `{"ok":<body>}`, `{"notReady":"<code>"}`
+     * or `{"failed":<status>}`. The hook turns the last two into rejections.
+     */
+    fun toJsEnvelope(): String = when (this) {
+        is Ok -> """{"ok":$body}"""
+        is NotReady -> """{"notReady":"$code"}"""
+        is Failed -> """{"failed":$status}"""
     }
 }
