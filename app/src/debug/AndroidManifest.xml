@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only spike for #443 (S2). Not merged. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="com.parachord.android.spike.AmazonS2SpikeActivity"
+            android:exported="true"
+            android:launchMode="singleTask" />
+    </application>
+</manifest>
