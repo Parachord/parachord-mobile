@@ -505,6 +505,29 @@ class RecommendationsRepositoryTest {
     }
 
     @Test
+    fun `the old lists say not configured for an AI-only user`() = runTest {
+        val r = rig(FakeSource(), listenBrainz = null, picks = FakePicks(hasProvider = true, shares = true))
+        assertEquals(Resource.Error(RecommendationsRepository.NOT_CONFIGURED_MESSAGE), r.repo.getRecommendedTracks().toList().last())
+        assertEquals(Resource.Error(RecommendationsRepository.NOT_CONFIGURED_MESSAGE), r.repo.getRecommendedArtists().toList().last())
+        // The page itself counts the AI as a source.
+        r.repo.load()
+        assertFalse(r.repo.page.value.error == RecommendationsError.NotConfigured)
+    }
+
+    @Test
+    fun `the old artists list leaves out Shuffleupagus's picks`() = runTest {
+        val picks = FakePicks(picks = AiRecommendations(emptyList(), listOf(AiArtistSuggestion("AI Only", "x"), AiArtistSuggestion("Anathema", "y"))))
+        val source = FakeSource().apply { answer("listenbrainz", { songs(song("One", "Anathema"), song("Two", "Deafheaven")) }) }
+        val r = rig(source, picks = picks)
+        val artists = r.repo.getRecommendedArtists().toList()
+            .filterIsInstance<Resource.Success<List<RecommendedArtist>>>().last().data
+        assertEquals(listOf("Anathema", "Deafheaven"), artists.map { it.name })
+        assertEquals(listOf("listenbrainz", "listenbrainz"), artists.map { it.source })
+        // The page shows them all.
+        assertTrue("AI Only" in r.names(RecommendationType.ARTIST))
+    }
+
+    @Test
     fun `a connected service whose plugin isn't loaded is a failure — not a miss`() = runTest {
         val r = rig(FakeSource(providerList = emptyList()))
         assertEquals(Resource.Error(RecommendationsRepository.FAILED_MESSAGE), r.repo.getRecommendedTracks().toList().last())

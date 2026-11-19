@@ -17,6 +17,7 @@ import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
+import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.SimilarUser
 import com.parachord.shared.recommendations.buildRecommendationPage
 import com.parachord.shared.recommendations.normalizeRecommendationItem
@@ -204,7 +205,7 @@ class RecommendationsRepository(
         emit(cachedTracksList?.let { Resource.Success(it) } ?: Resource.Loading)
         try {
             val outcome = loadProviders(false)
-            if (!outcome.configured) {
+            if (!outcome.legacyConfigured) {
                 emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
                 return@flow
             }
@@ -228,7 +229,7 @@ class RecommendationsRepository(
         emit(cachedArtistsList?.let { Resource.Success(it) } ?: Resource.Loading)
         try {
             val outcome = loadProviders(false)
-            if (!outcome.configured) {
+            if (!outcome.legacyConfigured) {
                 emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
                 return@flow
             }
@@ -271,11 +272,15 @@ class RecommendationsRepository(
     private fun rowItems(key: String): List<RecommendationItem> =
         _page.value.sections.flatMap { it.rows }.firstOrNull { it.key == key }?.items.orEmpty()
 
-    private fun currentTracks(): List<RecommendedTrack> = rowItems("type:song").mapNotNull { it.toRecommendedTrack() }
+    /** The old lists show the providers' picks only, never Shuffleupagus's. */
+    private fun legacyRowItems(key: String): List<RecommendationItem> =
+        rowItems(key).filter { item -> (item.sourceIds.ifEmpty { listOfNotNull(item.resolverId) }).any { it != SHUFFLEUPAGUS_ID } }
+
+    private fun currentTracks(): List<RecommendedTrack> = legacyRowItems("type:song").mapNotNull { it.toRecommendedTrack() }
 
     private fun currentArtists(): List<RecommendedArtist> {
         val images = artistImages
-        return rowItems("type:artist").map { item ->
+        return legacyRowItems("type:artist").map { item ->
             RecommendedArtist(
                 name = item.name,
                 imageUrl = item.imageUrl ?: images[item.name.lowercase().trim()],
@@ -290,6 +295,13 @@ class RecommendationsRepository(
     /** What one load found, for the old flows' messages. */
     private class LoadOutcome(
         val configured: Boolean,
+        /**
+         * The old screens' rule: a Last.fm or ListenBrainz username, or a
+         * content provider on. Shuffleupagus doesn't count there: they don't
+         * show its picks, and its "nothing yet" would name a service the user
+         * never connected.
+         */
+        val legacyConfigured: Boolean = configured,
         val anyFailed: Boolean = false,
         val hasListenBrainz: Boolean = false,
         val hasLastFm: Boolean = false,
@@ -349,6 +361,7 @@ class RecommendationsRepository(
             rebuild()
             return LoadOutcome(configured = false)
         }
+        val legacyConfigured = lastFm != null || listenBrainz != null || providers.any { !it.isMetaService }
 
         // A connected service whose plugin isn't loaded (the plugin runtime
         // didn't start) couldn't answer either.
@@ -400,7 +413,7 @@ class RecommendationsRepository(
 
         save()
         val failed = mutex.withLock { run.failed } + missing
-        val outcome = LoadOutcome(configured = true, anyFailed = failed > 0, hasListenBrainz = listenBrainz != null, hasLastFm = lastFm != null)
+        val outcome = LoadOutcome(configured = true, legacyConfigured = legacyConfigured, anyFailed = failed > 0, hasListenBrainz = listenBrainz != null, hasLastFm = lastFm != null)
         if (!isLatest(run)) return outcome
 
         val anySections = mutex.withLock { shown.any { it.sections.isNotEmpty() } }
