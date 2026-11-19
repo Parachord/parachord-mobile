@@ -164,6 +164,7 @@
   - `normalizeRecommendationItem(raw: JsonElement?, resolverId: String?): RecommendationItem?`
   - `normalizeRecommendationSections(raw: JsonElement?, resolverId: String, resolverName: String): List<RecommendationSection>`
   - `object RecommendationCategories { PLAYLIST, ALBUM tables (id → title); fun validFor(type, id): Boolean; fun categoryFor(type, item, sectionCategory): String?; fun artistRowTitle(seeds: List<String>): String; CATEGORY_RANK }`
+  - `blockedItemPick(item, blocked): Boolean`, over the entries `SettingsStore.getBlockedRecommendations()` returns
   - `recommendationItemKey(item): String`, `providerIdKey(item): String?`, `mergeOwned(into: MutableList<RecommendationItem>, incoming: List<RecommendationItem>)`, `interleave(lists: List<List<T>>): List<T>`, `deriveArtistsFromSongs(items)`
 
 - [ ] **Step 1: Write the failing tests.** Port desktop's `tests/renderer/recommendation-model.test.js` describe blocks, one Kotlin test per desktop `test(...)`, with the same inputs and expectations:
@@ -174,7 +175,9 @@
   - `playlist categories: contract and helpers`, `album categories: tables and helpers`;
   - `one item per provider id`.
 
-  Names use ` — ` instead of `,`. Skip `blockedItemPick`: mobile has no blocklist; note that in the file header.
+  Also port `blockedItemPick`. Mobile keeps the same blocklist: the DJ's `block_recommendation` tool writes it through `SettingsStore.addBlockedRecommendation`, and `getBlockedRecommendations` reads it.
+
+  Names use ` — ` instead of `,`.
 - [ ] **Step 2: Run them; expect them to fail to compile.** Run: `./gradlew :shared:testDebugUnitTest --tests '*RecommendationModelTest*'`.
 - [ ] **Step 3: Implement.** Port the matching functions from desktop's `src/renderer/lib/recommendation-model.js` (L39–332). Copy strings and category titles are desktop's exact text.
 - [ ] **Step 4: Run the tests; expect PASS.** Then run `./gradlew :shared:iosSimulatorArm64Test --tests '*RecommendationModelTest*'`.
@@ -303,6 +306,7 @@
   - Per provider: 20 s; fresh 1 h; stale 7 d; account key; empty never served from cache but replaces the entry; failure keeps; not-ready drops; load generation; force clears expansions; `not_configured`.
   - Paging: one per key, cap 10, no-advance, `lastPageTypes`.
   - Shuffleupagus pending flags.
+  - The blocklist applied at every merge: providers' sections, paged items and Shuffleupagus items.
   - Disk cache.
 
 - [ ] **Step 1: Write the failing tests,** with a fake `RecommendationSource`, a fake clock and an in-memory cache:
@@ -317,7 +321,8 @@
   - `a cursor that doesn't move ends paging`;
   - `not configured with no usernames and no providers on`;
   - `the old tracks and artists flows still come from the page`;
-  - `Shuffleupagus picks land under Based on your listening`.
+  - `Shuffleupagus picks land under Based on your listening`;
+  - `a blocked artist — album or track is left out everywhere`.
 - [ ] **Step 2: Run them; expect them to fail.**
 - [ ] **Step 3: Implement.** Port desktop's `refreshMergedRecommendations` / `loadRecommendations` / `loadMoreRecommendationSection` (`app.js` L27622–28440) behaviour, without UI.
 - [ ] **Step 4: Run the shared tests; expect PASS.**
