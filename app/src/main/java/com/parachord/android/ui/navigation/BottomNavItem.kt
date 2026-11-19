@@ -1,22 +1,26 @@
 package com.parachord.android.ui.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.outlined.AddCircleOutline
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.parachord.shared.ui.icons.AppIcon
+import com.parachord.shared.ui.icons.PageIcon
 
+/**
+ * The bottom tab bar. Each tab draws its page's icon (shared [PageIcon],
+ * desktop's), except Search, which keeps the platform's magnifier
+ * ([systemIcon]; docs/DESIGN_SYSTEM.md → "System actions keep the platform's icon").
+ */
 enum class BottomNavItem(
     val route: String?,
     val label: String,
-    val icon: ImageVector,
+    val icon: AppIcon,
     val isAction: Boolean = false,
+    val systemIcon: ImageVector? = null,
 ) {
-    HOME(Routes.HOME, "Home", Icons.Default.Home),
-    SEARCH(Routes.SEARCH, "Search", Icons.Default.Search),
-    COLLECTION(Routes.COLLECTION_BASE, "Collection", Icons.Default.Inventory2),
-    PLAYLISTS(Routes.PLAYLISTS, "Playlists", Icons.AutoMirrored.Filled.ViewList),
-    ADD(null, "+", Icons.Outlined.AddCircleOutline, isAction = true),
+    HOME(Routes.HOME, "Home", PageIcon.HOME.icon),
+    SEARCH(Routes.SEARCH, "Search", PageIcon.SEARCH.icon, systemIcon = Icons.Filled.Search),
+    COLLECTION(Routes.COLLECTION_BASE, "Collection", PageIcon.COLLECTION.icon),
+    PLAYLISTS(Routes.PLAYLISTS, "Playlists", PageIcon.PLAYLISTS.icon),
+    ADD(null, "Add", AppIcon.Plus, isAction = true),
 }

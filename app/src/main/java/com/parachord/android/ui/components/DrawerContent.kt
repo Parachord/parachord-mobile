@@ -37,13 +37,6 @@ import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.ConfirmationNumber
-import androidx.compose.material.icons.outlined.EmojiEvents
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material.icons.outlined.WaterDrop
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -78,6 +71,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import com.parachord.android.data.db.entity.FriendEntity
 import com.parachord.android.ui.icons.parachordWordmark
+import com.parachord.shared.ui.icons.AppIcon
+import com.parachord.shared.ui.icons.PageIcon
 import com.parachord.android.ui.navigation.Routes
 import kotlin.math.cos
 import kotlin.math.sin
@@ -88,22 +83,22 @@ import kotlin.math.sin
 data class DrawerMenuItem(
     val route: String,
     val label: String,
-    val icon: ImageVector,
+    val icon: AppIcon,
     val activeColor: Color,
 )
 
 // ── Drawer Item Definitions ─────────────────────────────────────────
 
 private val yourMusicItems = listOf(
-    DrawerMenuItem(Routes.HISTORY, "History", Icons.Outlined.History, DesignTokens.Page.HISTORY.composeColor),
+    DrawerMenuItem(Routes.HISTORY, "History", PageIcon.HISTORY.icon, DesignTokens.Page.HISTORY.composeColor),
 )
 
 private val discoverItems = listOf(
-    DrawerMenuItem(Routes.FRESH_DROPS, "Fresh Drops", Icons.Outlined.WaterDrop, DesignTokens.Page.FRESH_DROPS.composeColor),
-    DrawerMenuItem(Routes.RECOMMENDATIONS, "Recommendations", Icons.Outlined.Star, DesignTokens.Page.RECOMMENDATIONS.composeColor),
-    DrawerMenuItem(Routes.POP_OF_THE_TOPS, "Pop of the Tops", Icons.Outlined.BarChart, DesignTokens.Page.POP_OF_THE_TOPS.composeColor),
-    DrawerMenuItem(Routes.CRITICAL_DARLINGS, "Critical Darlings", Icons.Outlined.EmojiEvents, DesignTokens.Page.CRITICAL_DARLINGS.composeColor),
-    DrawerMenuItem(Routes.CONCERTS, "Concerts", Icons.Outlined.ConfirmationNumber, DesignTokens.Page.CONCERTS.composeColor),
+    DrawerMenuItem(Routes.FRESH_DROPS, "Fresh Drops", PageIcon.FRESH_DROPS.icon, DesignTokens.Page.FRESH_DROPS.composeColor),
+    DrawerMenuItem(Routes.RECOMMENDATIONS, "Recommendations", PageIcon.RECOMMENDATIONS.icon, DesignTokens.Page.RECOMMENDATIONS.composeColor),
+    DrawerMenuItem(Routes.POP_OF_THE_TOPS, "Pop of the Tops", PageIcon.POP_OF_THE_TOPS.icon, DesignTokens.Page.POP_OF_THE_TOPS.composeColor),
+    DrawerMenuItem(Routes.CRITICAL_DARLINGS, "Critical Darlings", PageIcon.CRITICAL_DARLINGS.icon, DesignTokens.Page.CRITICAL_DARLINGS.composeColor),
+    DrawerMenuItem(Routes.CONCERTS, "Concerts", PageIcon.CONCERTS.icon, DesignTokens.Page.CONCERTS.composeColor),
 )
 
 private val FriendPurple = FillAccent
@@ -132,7 +127,7 @@ private val HexagonShape = object : Shape {
 }
 
 private val settingsItem = DrawerMenuItem(
-    Routes.SETTINGS, "Settings", Icons.Outlined.Settings, Color(0xFF9CA3AF),
+    Routes.SETTINGS, "Settings", PageIcon.SETTINGS.icon, Color(0xFF9CA3AF),
 )
 
 @Composable
@@ -272,11 +267,11 @@ private fun DrawerNavItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start,
     ) {
-        Icon(
-            imageVector = item.icon,
-            contentDescription = item.label,
+        ParachordIcon(
+            item.icon,
+            contentDescription = null,
             tint = item.activeColor,
-            modifier = Modifier.size(20.dp),
+            size = 20.dp,
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
