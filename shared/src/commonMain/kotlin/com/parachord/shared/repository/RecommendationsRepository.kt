@@ -8,10 +8,11 @@ import com.parachord.shared.model.Resource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.plugin.PluginManager
-import com.parachord.shared.recommendations.ProviderRecommendations
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationType
-import com.parachord.shared.recommendations.buildRecommendationSections
+import com.parachord.shared.recommendations.RecommendationSection
+import com.parachord.shared.recommendations.dedupeItems
+import com.parachord.shared.recommendations.deriveArtistsFromSongs
 import com.parachord.shared.recommendations.normalizeRecommendationSections
 import com.parachord.shared.resolver.validateIsrc
 import com.parachord.shared.settings.SettingsStore
@@ -106,7 +107,7 @@ class RecommendationsRepository(
     private var cachedTracks: List<RecommendedTrack>? = null
     private var cachedArtists: List<RecommendedArtist>? = null
     /** Each provider's last answer, by id. Kept when that provider fails. */
-    private var providerResults: Map<String, ProviderRecommendations> = emptyMap()
+    private var providerResults: Map<String, CachedProviderAnswer> = emptyMap()
     private var diskCacheLoaded = false
 
     private val loadMutex = Mutex()
@@ -312,7 +313,12 @@ class RecommendationsRepository(
                 async {
                     try {
                         val raw = diskJson.parseToJsonElement(source.fetch(provider.id))
-                        normalizeRecommendationSections(raw, provider.id, provider.name).copy(fetchedAt = nowMs())
+                        CachedProviderAnswer(
+                            resolverId = provider.id,
+                            resolverName = provider.name,
+                            sections = normalizeRecommendationSections(raw, provider.id, provider.name),
+                            fetchedAt = nowMs(),
+                        )
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -325,7 +331,7 @@ class RecommendationsRepository(
         // A connected service whose plugin isn't loaded (the plugin runtime
         // didn't start) couldn't answer either.
         var anyFailed = connected.any { id -> providers.none { it.id == id } }
-        val results = LinkedHashMap<String, ProviderRecommendations>()
+        val results = LinkedHashMap<String, CachedProviderAnswer>()
         toAsk.forEachIndexed { index, provider ->
             val answer = answers[index]
             if (answer != null) {
@@ -338,9 +344,7 @@ class RecommendationsRepository(
         }
         providerResults = results
 
-        val sections = buildRecommendationSections(results.values.toList())
-        val songs = sections.firstOrNull { it.bucketType == RecommendationType.SONG }?.items.orEmpty()
-        val artists = sections.firstOrNull { it.bucketType == RecommendationType.ARTIST }?.items.orEmpty()
+        val (songs, artists) = genericSongsAndArtists(results.values.toList())
         return Loaded(
             tracks = songs.mapNotNull { it.toRecommendedTrack() },
             artists = artists,
@@ -364,7 +368,7 @@ internal fun RecommendationItem.toRecommendedTrack(): RecommendedTrack? {
     return RecommendedTrack(
         title = name,
         artist = artistName,
-        duration = durationSeconds?.let { (it * 1000).toLong() }?.takeIf { it > 0 },
+        duration = duration?.let { (it * 1000).toLong() }?.takeIf { it > 0 },
         source = resolverId.orEmpty(),
         recordingMbid = mbid?.lowercase()?.takeIf { isValidMbid(it) },
         isrc = validateIsrc(isrc),
@@ -396,5 +400,28 @@ fun emptyRecommendationsMessage(hasListenBrainz: Boolean, hasLastFm: Boolean): S
 private data class RecommendationsDiskCache(
     val tracks: List<RecommendedTrack> = emptyList(),
     val artists: List<RecommendedArtist> = emptyList(),
-    val providers: List<ProviderRecommendations> = emptyList(),
+    val providers: List<CachedProviderAnswer> = emptyList(),
 )
+
+// Removed in Task 8: the page builder replaces these.
+
+/** One provider's answer as the disk cache keeps it. */
+@Serializable
+internal data class CachedProviderAnswer(
+    val resolverId: String? = null,
+    val resolverName: String? = null,
+    val sections: List<RecommendationSection> = emptyList(),
+    /** When the provider answered (epoch ms); 0 when unknown. */
+    val fetchedAt: Long = 0,
+)
+
+/**
+ * The generic Songs and Artists buckets: every provider's untitled sections,
+ * deduped per type, Artists also from the songs' artists.
+ */
+internal fun genericSongsAndArtists(providers: List<CachedProviderAnswer>): Pair<List<RecommendationItem>, List<RecommendationItem>> {
+    val untitled = providers.flatMap { p -> p.sections.filter { it.title == null }.flatMap { it.items } }
+    val songs = dedupeItems(untitled.filter { it.type == RecommendationType.SONG })
+    val artists = dedupeItems(untitled.filter { it.type == RecommendationType.ARTIST } + deriveArtistsFromSongs(songs))
+    return songs to artists
+}
