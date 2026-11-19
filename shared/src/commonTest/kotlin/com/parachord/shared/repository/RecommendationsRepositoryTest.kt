@@ -11,6 +11,7 @@ import com.parachord.shared.plugin.PluginNotReadyException
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
+import com.parachord.shared.recommendations.SimilarUser
 import com.parachord.shared.recommendations.flattenRecommendationItems
 import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.store.KvStore
@@ -108,6 +109,7 @@ class RecommendationsRepositoryTest {
         picks: FakePicks = FakePicks(),
         isOn: (RecommendationProvider) -> Boolean = { true },
         clock: Clock = Clock(),
+        similarUsers: suspend (Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
     ): Rig {
         val prefs = listOfNotNull(
             lastFm?.let { SettingsStore.LASTFM_USERNAME to it },
@@ -123,6 +125,7 @@ class RecommendationsRepositoryTest {
             providerIsOn = { isOn(it) },
             cacheRead = { disk.saved },
             cacheWrite = { disk.saved = it; disk.writes += it },
+            similarUsers = similarUsers,
             nowMs = { clock.now },
             scope = backgroundScope,
         )
@@ -404,6 +407,30 @@ class RecommendationsRepositoryTest {
     }
 
     // ── Shuffleupagus, the blocklist, the old flows ──────────────────
+
+    @Test
+    fun `listenersPending is true while similar users are fetched — false after`() = runTest {
+        val gate = CompletableDeferred<Map<String, List<SimilarUser>>>()
+        val r = rig(similarUsers = { gate.await() })
+        val job = launch { r.repo.load() }
+        runCurrent()
+        assertTrue(r.repo.page.value.listenersPending)
+        gate.complete(emptyMap())
+        job.join()
+        assertFalse(r.repo.page.value.listenersPending)
+    }
+
+    @Test
+    fun `listenersPending ends false when the lookup throws`() = runTest {
+        val gate = CompletableDeferred<Map<String, List<SimilarUser>>>()
+        val r = rig(similarUsers = { gate.await() })
+        val job = launch { r.repo.load() }
+        runCurrent()
+        assertTrue(r.repo.page.value.listenersPending)
+        gate.completeExceptionally(IllegalStateException("down"))
+        job.join()
+        assertFalse(r.repo.page.value.listenersPending)
+    }
 
     @Test
     fun `Shuffleupagus picks land under Based on your listening`() = runTest {

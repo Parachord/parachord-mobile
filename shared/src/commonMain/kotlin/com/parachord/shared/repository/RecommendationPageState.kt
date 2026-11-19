@@ -29,6 +29,8 @@ data class RecommendationPageState(
     val loading: Boolean = false,
     /** Providers still answering that have nothing on screen (each one's skeleton). */
     val pendingProviders: Set<String> = emptySet(),
+    /** The similar-users lookup is out and no Listeners row is on screen yet: the Listeners skeleton. */
+    val listenersPending: Boolean = false,
     /** Shuffleupagus is picking: the album and artist rows show trailing skeleton cards. */
     val aiLoading: Boolean = false,
     val error: RecommendationsError? = null,

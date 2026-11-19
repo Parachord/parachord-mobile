@@ -173,7 +173,7 @@ class RecommendationsRepository(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Recommendations load failed", e)
-            _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.Message(PAGE_FAILED_MESSAGE)) }
+            _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.Message(PAGE_FAILED_MESSAGE), listenersPending = false) }
         }
     }
 
@@ -365,7 +365,7 @@ class RecommendationsRepository(
                 providerNames = names
             }
             _page.update {
-                it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.NotConfigured, hero = hero)
+                it.copy(loading = false, pendingProviders = emptySet(), listenersPending = false, error = RecommendationsError.NotConfigured, hero = hero)
             }
             rebuild()
             return LoadOutcome(configured = false)
@@ -401,7 +401,14 @@ class RecommendationsRepository(
         applyFresh(run)
         val pending = mutex.withLock { toFetch.filter { it.id !in run.stale && it.id !in quiet }.map { it.id }.toSet() }
         _page.update {
-            it.copy(loading = it.sections.isEmpty() && toFetch.isNotEmpty(), pendingProviders = pending, error = null, hero = hero)
+            it.copy(
+                loading = it.sections.isEmpty() && toFetch.isNotEmpty(),
+                pendingProviders = pending,
+                // The similar-users lookup is out and no Listeners row is on screen yet.
+                listenersPending = it.sections.none { section -> section.type == null },
+                error = null,
+                hero = hero,
+            )
         }
 
         coroutineScope {
@@ -414,10 +421,9 @@ class RecommendationsRepository(
                     Log.w(TAG, "Similar users failed: ${e.message}")
                     null
                 }
-                if (users != null) {
-                    val latest = mutex.withLock { (generation == run.generation).also { if (it) similar = users } }
-                    if (latest) rebuild()
-                }
+                val latest = mutex.withLock { (generation == run.generation).also { if (it && users != null) similar = users } }
+                if (latest && users != null) rebuild()
+                if (latest) _page.update { it.copy(listenersPending = false) }
             }
             for (provider in toFetch) launch { fetchOne(run, provider, accountFor(provider.id, lastFm, listenBrainz)) }
         }
@@ -434,7 +440,7 @@ class RecommendationsRepository(
             if (failed > 0 && failed == toFetch.size + missing) RecommendationsError.Message(PAGE_FAILED_MESSAGE)
             else RecommendationsError.Message(emptyRecommendationsMessage(listenBrainz != null, lastFm != null))
         } else null
-        _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = error) }
+        _page.update { it.copy(loading = false, pendingProviders = emptySet(), listenersPending = false, error = error) }
         return outcome
     }
 
