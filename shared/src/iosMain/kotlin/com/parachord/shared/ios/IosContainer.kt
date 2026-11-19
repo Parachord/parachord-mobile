@@ -2664,7 +2664,7 @@ class IosContainer private constructor() {
             // getRecommendations (#606).
             resolverConfigProvider = {
                 mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
-                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore)
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, appConfig.lastFmApiKey)
             }
         }
     }

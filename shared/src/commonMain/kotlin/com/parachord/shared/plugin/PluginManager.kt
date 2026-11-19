@@ -58,6 +58,8 @@ class PluginManager constructor(
         val configFields: List<PluginConfigField> = emptyList(),
         /** `settings.requiresAuth`: the plugin needs its config set before it can answer. */
         val requiresAuth: Boolean = false,
+        /** `settings.authType` (e.g. `oauth`), informational: [needsAccount] follows [requiresAuth]. */
+        val authType: String? = null,
     )
 
     /** One `settings.configurable` field of a plugin manifest, rendered by the settings screen. */
@@ -843,6 +845,7 @@ class PluginManager constructor(
                     )
                 } ?: emptyList(),
                 requiresAuth = axe.settings?.requiresAuth ?: false,
+                authType = axe.settings?.authType,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse .axe manifest: ${e.message}", e)

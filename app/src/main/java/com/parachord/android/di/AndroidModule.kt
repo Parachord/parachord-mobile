@@ -1113,7 +1113,7 @@ val androidModule = module {
             val pluginUserConfig = get<com.parachord.shared.plugin.PluginUserConfig>()
             resolverConfigProvider = {
                 mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
-                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore) +
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, get<com.parachord.shared.config.AppConfig>().lastFmApiKey) +
                     // A plugin's own configurable fields (Subsonic's server URL /
                     // username / password; plan parachord-mobile#664) — last, so
                     // they win over the per-service configs in code.

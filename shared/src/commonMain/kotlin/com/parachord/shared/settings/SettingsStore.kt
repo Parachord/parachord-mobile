@@ -104,6 +104,8 @@ class SettingsStore(
         const val SORT_FRIENDS = "sort_friends"
         const val SORT_PLAYLISTS = "sort_playlists"
         const val DELETED_FRIEND_KEYS = "deleted_friend_keys"
+        /** Resolver ids the user switched off for Recommendations (CSV). */
+        const val RECOMMENDATIONS_OFF_RESOLVERS = "recommendations_off_resolvers"
         const val CONCERT_LATITUDE = "concert_latitude"
         const val CONCERT_LONGITUDE = "concert_longitude"
         const val CONCERT_CITY = "concert_city"
@@ -1078,6 +1080,16 @@ class SettingsStore(
         kv.remove(SYNC_SELECTED_PLAYLIST_IDS)
         kv.remove(SYNC_LAST_COMPLETED_AT)
         kv.remove(SYNC_PUSH_LOCAL_PLAYLISTS)
+    }
+
+    // ── Recommendations off-list ─────────────────────────────────────
+
+    suspend fun getRecommendationsOffResolvers(): Set<String> {
+        ensureMigrated(); return kv.getStringSetCsv(RECOMMENDATIONS_OFF_RESOLVERS)
+    }
+
+    suspend fun setRecommendationsOffResolvers(ids: Set<String>) {
+        ensureMigrated(); kv.setStringSetCsv(RECOMMENDATIONS_OFF_RESOLVERS, ids)
     }
 
     // ── Deleted Friends (prevent re-sync) ────────────────────────────

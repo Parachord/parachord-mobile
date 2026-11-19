@@ -9,15 +9,20 @@ import kotlinx.serialization.json.put
  * [PluginManager.resolverConfigProvider]: `{ "username": … }`, or `{}` when
  * the service isn't connected, so a disconnect reaches the plugin too.
  *
- * Only the username: `getRecommendations` reads public pages, and a plugin
- * has no use for the session key or token.
+ * The username, plus Last.fm's API key ([lastFmApiKey], when non-blank): the
+ * plugin's `getRecommendations` reads public pages with it. A plugin has no use
+ * for the session key or token.
  */
-suspend fun metaServicePluginConfigs(settingsStore: SettingsStore): Map<String, String> {
-    fun config(username: String?) = buildJsonObject {
+suspend fun metaServicePluginConfigs(
+    settingsStore: SettingsStore,
+    lastFmApiKey: String = "",
+): Map<String, String> {
+    fun config(username: String?, apiKey: String = "") = buildJsonObject {
         username?.takeIf { it.isNotBlank() }?.let { put("username", it) }
+        apiKey.takeIf { it.isNotBlank() }?.let { put("apiKey", it) }
     }.toString()
     return mapOf(
-        "lastfm" to config(settingsStore.getLastFmUsername()),
+        "lastfm" to config(settingsStore.getLastFmUsername(), lastFmApiKey),
         "listenbrainz" to config(settingsStore.getListenBrainzUsername()),
     )
 }
