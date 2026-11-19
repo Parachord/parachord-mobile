@@ -1,150 +1,112 @@
 # Amazon Music on mobile: plan
 
-Ticket: #443 (research). Desktop reference: Parachord/parachord `docs/architecture/amazon-music.md`, `plugins-src/amazonmusic/` (resolver 1.10.0), `amazon-web-player.js`, `amazon-music-logic.js`, `amazon-dmls.js`, `main-process/amazon-telemetry.js`, `src/renderer/lib/widevine-player.js`, `widevine-quality.js`. Read 2026-11-12.
+Ticket: #443 (research). Desktop reference: Parachord/parachord `plugins-src/amazonmusic/` (resolver 1.21.3), `docs/architecture/web-session.md`, `docs/architecture/amazon-music.md`, `docs/architecture/plugins.md` ("The plugin-supplied Widevine path", "Required host bridges"), `main-process/web-session.js`, `main-process/ipc/web-session-bridge.js`, `src/renderer/lib/widevine-player.js`, `widevine-quality.js`. First written 2026-11-12; updated 2026-11-19 for what desktop shipped and for spike S2's result.
+
+## Status (2026-11-19)
+
+- **Step 0 is done on desktop.** Amazon's logic moved into `amazonmusic.axe` (Parachord/parachord#1356, M1–M11, closed): search, albums, artist photos, playlist import, recommendations, the sign-in rules, the plan check, the DRM pair and Amazon's telemetry. The host modules (`amazon-web-player.js`, `amazon-music-logic.js`, `amazon-dmls.js`, `amazon-telemetry.js`) are deleted. A host supplies only the generic `webSession` bridge and a Widevine player.
+- **The plugin gate is done on desktop.** Plugins declare `requires.hostBridges` (Parachord/parachord#1355, closed); `amazonmusic.axe` declares `["webSession"]`. It still carries `capabilities.mobile: false` and no `minAppVersion.android` / `.ios`.
+- **Spike S2 passed on a Pixel 9a** (2026-11-19, a signed-in Amazon account without Music Unlimited). Details under "Spikes". The spike screen is on branch `spike/amazon-s2` (debug-only, not for merge).
+- **Next:** S3 (does Amazon license a Pixel's Widevine through ExoPlayer?), which needs Music Unlimited.
 
 ## Summary
 
 - **Android can do all of it**: sign-in, search and resolve, albums, playlist import, artist photos, recommendations and playback. Playback goes through **ExoPlayer** (DASH + Widevine), not a hidden Amazon web player.
-- **iOS: discovery for sure; playback depends on FairPlay.** Desktop plays through Widevine, and iOS has no Widevine: AVPlayer and WKWebView only do FairPlay, so FairPlay is **required** for any iOS playback. Whether it's **possible** is spike S6: if music.amazon.com plays in Safari, Amazon's web backend already serves FairPlay to some client, and S6 finds out what that client asks for.
-- **One spike decides whether this is feasible**: S2, capturing Amazon's own GraphQL request from inside a mobile web view. Desktop does this at the network layer (Electron `webRequest`), which mobile web views don't have.
-- **Amazon's logic moves into the plugin; the hosts become thin.** Today desktop keeps almost all of it in host code (`amazon-music-logic.js`), and `amazonmusic.axe` is a shell over `window.electron.amazonMusic`. Step 0 is a desktop refactor (Parachord/parachord#1356): the plugin takes over every Amazon-specific step, and each host supplies a few generic primitives: a web session it can load, capture and fetch in; sign-in; and a DRM playback engine. Then a fix to Amazon's parsing reaches all three apps through the marketplace, and mobile ports none of it to Kotlin (CLAUDE.md, Common Mistakes #6 and the extensibility principle).
+- **iOS: discovery for sure; playback depends on FairPlay.** Desktop plays through Widevine, and iOS has no Widevine: AVPlayer and WKWebView only do FairPlay, so FairPlay is **required** for any iOS playback. The plugin's DRM pair asks Amazon for Widevine only (`DrmType: 'WIDEVINE'`), so iOS playback would also need a plugin change. Whether it's **possible** at all is spike S6.
+- **The deciding spike for discovery, S2, passed**: a WebView can capture Amazon's own GraphQL request and replay it.
+- **Amazon's logic lives in the plugin; the hosts are thin.** Mobile ports none of it to Kotlin (CLAUDE.md, Common Mistakes #6 and the extensibility principle). A fix to Amazon's parsing reaches all three apps through the marketplace.
 
-## How desktop does it today
+## How desktop does it now (plugin 1.21.x)
 
-The ticket describes an older design. Desktop deleted it at resolver 1.7.0: there's no `/tracks/{asin}?do=play`, no hidden player page and no injected control scripts. What desktop runs now:
+The plugin drives one host web session (`amazon-music`) through `window.electron.webSession` and owns every Amazon-specific step:
 
-1. **A hidden "search view"**: a web page on `music.amazon.com` in a persistent cookie partition, with a Chrome user agent, parked off screen at 1100x800. It loads Amazon pages such as `/search/<q>/songs`, `/albums/<ASIN>` and `/playlists/<id>`. It also captures the persisted-query GraphQL request each page fires to `gql.music.amazon.com`: the URL, the body (`operationName`, `variables`, `extensions.persistedQuery.sha256Hash`) and the headers (`x-api-key`, `csrf-token`, `csrf-rnd`, `csrf-ts`, `x-amzn-*`).
-   - It replays that request with `fetch` from inside the page, with patched variables.
-   - A captured search becomes a **template**, fresh for 24 h, so later searches don't load a page.
-   - A circuit breaker opens for 10 min after 3 structural failures.
-   - Playlists paginate by passing `pageInfo.token` as `afterCursor`.
-2. **A visible sign-in window** in the same partition. Sign-in only counts once the URL sits on `music.amazon.com` past every wall: `/ap/*` and the profile picker at `/identity/who-is-listening`. "Signed in" is read from cookie names (`at-main`, `sess-at-main`, `at-acb`).
-3. **Playback** has no Amazon page at all.
-   - The main process reads `GET https://music.amazon.com/config.json` (customerId, marketplace, territory, siteRegion, deviceId, `tier`).
-   - It asks `POST https://music.amazon.com/<NA|EU|FE>/api/dmls/` for a DASH manifest (`X-Amz-Target: ...DigitalMusicLocatorServiceExternal.getDashManifestsV2`, `Content-Encoding: amz-1.0`, the csrf headers and the cookie).
-   - Shaka plays it on the app's audio element. Widevine licence challenges are relayed through the same endpoint (`getLicenseForPlaybackV2`), after one empty "cert" challenge per session.
-   - Amazon **telemetry** events are required (`/telemetry/v1/events`); desktop notes plays must be reported.
-4. **Plan gate.** Only Music Unlimited plays (`tier` matches `/^UNLIMITED/i`). Prime and unknown plans keep discovery but lose playback: no badge, never picked.
-5. **Quality.** A global Playback Quality setting has four tiers (Max, High ≤500k, Standard ≤200k, Data saver ≤100k), an Adaptive toggle and "Prefer Dolby Atmos". Families are FLAC, Opus, AAC, plus E-AC-3 when opted in and supported. A licence denial or decode failure drops that family and falls back mid-track.
+1. **Discovery by capture and replay.** The plugin loads an Amazon page (`/search/<q>/songs`, `/albums/<ASIN>`, `/playlists/<id>`, the home page) with a capture window on `gql.music.amazon.com`. It finds the persisted-query request the page fired (`SpecSearchSeeMorePage`, `AlbumDetailPage`, the playlist and home queries), keeps it as a template (fresh 24 h), and replays it from inside the page with patched variables (`pageFetch`). Page flows run one at a time in two lanes (foreground first); replays run in parallel; a circuit breaker opens after repeated structural failures; our own replay traffic comes back flagged `echo` and never mints a template.
+2. **Sign-in** in a visible window sharing the session. The plugin's pure `decide({ url, cookieNames, stableTicks })` says when it's finished: on `music.amazon.com`, past every wall (`/ap/*`, the profile picker at `/identity/who-is-listening`), with an auth cookie (`at-main`, `sess-at-main`, `at-acb`). "Signed in" is read from cookie names only. The session's `generation` changes on sign-out, and the plugin drops every cache minted under the old one.
+3. **Playback** has no Amazon page. The plugin reads `config.json` through `webSession.fetch`, refuses any plan but Music Unlimited (`tier` `/^UNLIMITED/i`) before asking for a manifest, asks `POST /<NA|EU|FE>/api/dmls/` for a DASH manifest (`getDashManifestsV2`), and relays licence challenges through the same endpoint (`getLicenseForPlaybackV2`, after a cert pre-charge). The host's Widevine player (Shaka) plays the manifest and calls the plugin's `relayLicense` for each challenge. Player events go to the plugin's `handlePlayerEvent`, which sends Amazon's telemetry.
+4. **Status.** `capabilities.status`: the plugin's `getStatus` gives signed in or not, the plan and why playback is blocked; the host draws a generic sign-in row from it. `signInPromptDecision` is the plugin's rule for when to show the sign-in window.
+5. **Quality** is host policy (`widevine-quality.js`): the global Playback Quality tiers, Adaptive, and "Prefer Dolby Atmos"; a refused codec family falls back mid-track.
 
-Section 9 of the desktop map lists which pieces are pure: almost all of `amazon-music-logic.js` and the policy half of `widevine-quality.js`.
+## What a mobile host supplies
 
-## Architecture: Amazon logic in the plugin, primitives in the host
+### The `webSession` bridge (shipped names)
 
-```
-  amazonmusic.axe  (all Amazon-specific logic: search URLs, which GraphQL request to capture,
-                    template patching, response parsing, pagination, breaker, sign-in walls,
-                    cookie state, plan, dmls/config/telemetry requests, licence-denial reasons)
-        │ window.parachordHost.webSession.*      window.parachordHost.drm (host-owned playback)
-        ▼
-  Desktop:  Electron WebContentsView + webRequest + net     Shaka + castLabs Widevine
-  Android:  WebView + document-start capture + Ktor          ExoPlayer DASH + Widevine
-  iOS:      WKWebView + WKUserScript capture + Ktor           AVPlayer + FairPlay (only if S6)
-        shared/commonMain: the host contracts below, the quality policy (from
-        widevine-quality.js: tiers, family order, spatial opt-in, family-failure table),
-        and the per-session limits; no Amazon parsing.
-```
+The plugin calls `window.electron.webSession.<method>('amazon-music', …)`. The `window.electron` namespace is hard-coded in the plugin, so a mobile host either exposes the same names or desktop renames the bridge to a host-neutral global first (preferred; a small plugin change). Contract: `docs/architecture/web-session.md`.
 
-**Host primitives** (names provisional; desktop's refactor settles them, and they're generic so another web-only service could use them):
-
-| Primitive | Does | Desktop today |
+| Call | Returns | Android |
 |---|---|---|
-| `webSession.load(id, url, { capture: { urlPrefix }, timeoutMs })` → `{ finalUrl, captures: [{ url, method, headers, body }] }` | Loads a page in a persistent, hidden session and returns the requests it fired to the given prefix | `ensureView` + `attachGqlCapture` |
-| `webSession.pageFetch(id, request)` → `{ status, text }` | `fetch` from inside the session's page (its origin, cookies, CORS) | `GQL_FETCH_SCRIPT` replay |
-| `webSession.fetch(id, request)` → `{ status, headers, text }` | A request outside the page carrying the session's cookies | `amazon-dmls.js` `net` calls |
-| `webSession.state(id)` → `{ url, cookieNames }` | What the plugin needs to judge sign-in and walls | `isSignedIn` inputs |
-| `webSession.signIn(id, url, { done })` | Shows the session in a visible window until the plugin's `done({ url, cookieNames, stableTicks })` says so, or the person closes it | `openLogin` |
-| `webSession.clear(id)` | Sign out: drop the session's cookies and storage (only its own cookie domains on Android, whose WebViews share one cookie jar) | `signOut` |
-| `drm.play(track)`: the host calls the plugin's `getPlaybackManifest(track, config)` → `{ manifest, type: "dash", drm: "widevine"\|"fairplay", context }` and `relayLicense(challengeB64, context)` → licence; it reports `onPlaybackEvent(event, track)` back so the plugin sends telemetry | Host-owned playback with plugin-supplied manifest and licence | `widevine-bridge.js` + `amazon-dmls.js` + `amazon-telemetry.js` |
+| `load(id, url, { timeoutMs, capture: { urlPrefixes, quietMs, budgetMs, doneWhen?, returnOnTimeout? } })` | `{ success, finalUrl, captures: [{ url, method, headers, body, echo? }], loadTimedOut? }` | One hidden WebView per session; a document-start script (`WebViewCompat.addDocumentStartJavaScript`) wraps `fetch` and `XMLHttpRequest` and records matching requests; the capture window ends on quiet, budget, or a `doneWhen` match; loads serialize in two lanes |
+| `pageFetch(id, { url, method, headers, body })` | `{ success, status, text }` or `{ success, error }` (`busy`, `no-origin-page`, `page-off-host`) | `fetch` run inside the page via the unique-key poll (an async IIFE returns `{}` from `evaluateJavascript`); never throws; waits on the navigation gate |
+| `fetch(id, request)` | `{ success, status, headers, text }` | Ktor (or OkHttp) with the session's cookies from `CookieManager`, exact-host allowlist re-checked on every redirect, set-cookie names only back |
+| `state(id)` | `{ url, signInUrl, cookieNames, generation }` | The hidden view's URL, the sign-in screen's, cookie names for the session's cookie domains, and a counter bumped by `clear()` |
+| `signIn(id, url, { decide })` | `{ success, signedIn }` | A visible Activity with a WebView sharing the cookies, ticking once a second into the plugin's `decide`; closing it first is not signed in |
+| `clear(id)` | `{ success }` | Delete only the session's cookie domains (`amazon.com`, `music.amazon.com`, `www.amazon.com`), never `removeAllCookies`: Android has one cookie jar, shared with Apple Music's MusicKit page |
 
-The plugin keeps desktop's behaviour: replay-first templates (24 h), one page flow at a time, the breaker, the plan gate and the prompt rules. Each host keeps only what's physically per-platform: the web view, the capture hook, the cookie store, the player and the quality-to-track-selection mapping.
+Host config, not plugin data: the cookie domains, the exact-host allowlist (`music.amazon.com`, `gql.music.amazon.com`), the sign-in title, a desktop Chrome user agent, and the budget caps (load ≤ 60 s, capture budget ≤ 30 s, quiet ≤ 10 s).
 
-**Sign-in: the plugin decides, the host shows and stores.** The plugin never sees a password or a cookie value.
+The host must also advertise the bridge (`window.__parachordHostBridges` includes `webSession`) and honour `requires.hostBridges` when loading plugins: a plugin whose bridge is missing is hidden, never loaded to throw `not-ready` on every resolve (#566 would retry it forever). Mobile reads neither today; the rule is desktop's `plugin-compat.js`, and the port belongs in shared `PluginCompat.kt`.
 
-| The plugin decides | The host does |
-|---|---|
-| The page that starts sign-in (`https://music.amazon.com/`) | Shows it in a visible window (Android Activity, iOS sheet) sharing the hidden session's cookies |
-| When sign-in is finished: on `music.amazon.com`, past every wall (`/ap/*`, 2FA, the profile picker at `/identity/who-is-listening`), steady for 2 ticks, with an auth cookie present (desktop's `signInLanded`) | Each second, reports `{ url, cookieNames, stableTicks }` to the plugin's `done()`; closes the window when it answers yes. Closing it first ends the flow as not signed in |
-| Signed in or not: which cookie names count (`at-main`, `sess-at-main`, `at-acb`) | `webSession.state()`: the current URL and cookie **names** only |
-| A page load that hit a wall mid-session throws `not-signed-in` | Returns each load's final URL |
-| Sign-out: the final telemetry event, then clear the session | `webSession.clear()` |
-| The status text ("Signed in", "Sign in", "Prime: no playback") | A generic Sign in / Sign out row drawn from the plugin's status |
+### The Widevine player
 
-- **The cookies reach Amazon only through the host.** The host attaches them to `webSession.fetch` (`config.json`, the `dmls` manifest and licence, telemetry). The person types the password, does 2FA and picks the profile on Amazon's own pages.
-- **When to show the sign-in window.** Desktop's rules (`src/renderer/lib/amazon-signin-prompt.js`) are: background lookups never prompt; retry quietly before prompting; 10 minutes of quiet after a decline. They move into the plugin as a pure method. The host calls it with what only the app knows: whether the person is looking at the app, whether the action was explicit, and when they last declined. The plugin answers prompt, retry quietly, or skip.
-- **Cookie isolation differs per platform.** Desktop gives Amazon its own partition (`persist:amazon-music`), so sign-out wipes it whole.
-  - **iOS** can match it with a dedicated `WKWebsiteDataStore(forIdentifier:)` (iOS 17+).
-  - **Android** has one cookie jar (`CookieManager`) for every WebView in the app, shared with Apple Music's MusicKit page. So Android's `webSession.clear()` must delete only that session's own domains (`amazon.com`, `music.amazon.com` and their subdomains), never `removeAllCookies`, or signing out of Amazon would also sign you out of Apple Music.
-  - The session therefore declares its cookie domains (`webSession.open(id, { cookieDomains })`). `state()` reports only those domains' cookie names, and `clear()` removes only them.
+A generic `DrmPlaybackHandler` (any plugin with `capabilities.widevine` and the plugin pair), not Amazon-specific:
+- Calls the plugin's `getPlaybackManifest(track, config)` (10 s budget) → `{ manifest, type: 'dash', drm: 'widevine', context, … }`, and plays the MPD text through ExoPlayer's `DashMediaSource`.
+- `DefaultDrmSessionManager` with a `MediaDrmCallback` that hands each challenge (base64) to the plugin's `relayLicense(challengeB64, context)` and returns its licence. The context stays host-side and is passed back as is.
+- Player lifecycle events go to the plugin's `handlePlayerEvent`.
+- The error fields are load-bearing: `.reason` (`plan-ineligible` with `.planKey`, `not-signed-in`, `load-failed`, `playback-failed`), and on licences `.licenseDenied` and `.denialReason` (a per-content refusal drops that codec family and falls back). They map to `PlayFailure`.
+- It's ExoPlayer, so the local-track rules apply (the #614 foreground keep, the car, resume at position); none of the external-engine foreground rules do.
+- The plugin's `cdmAvailable()` asks `navigator.requestMediaKeySystemAccess('com.widevine.alpha')` in the JS runtime. On Android the plugin host is a WebView, which needs `RESOURCE_PROTECTED_MEDIA_ID` granted to answer yes; on iOS (JavaScriptCore, no `navigator`) it answers no, which is right.
+- `appVersion()` reads `window.electron.updater.getVersion` for Amazon's music agent string and falls back to `dev`; a host should supply its version.
 
-**Resolver-loader prerequisite.** `resolver-loader.js` builds each plugin method separately (`new Function('return ' + fnString)()`), so methods share nothing, and today every helper is copied into each method that uses it. Moving about 60 helpers into the plugin needs a plugin-level library evaluated once and handed to every method (for example `implementation._lib`, exposed as `this.lib`). Mobile's two copies of `resolver-loader.js` take the same change; a test already keeps them identical to desktop's.
+## Spikes (a Music Unlimited account needed for S3–S6)
 
-## Spikes first (a Music Unlimited account needed)
+| # | Question | Pass when | Result |
+|---|---|---|---|
+| S1 | In a WebView (desktop Chrome UA, persistent cookies), can a person sign in, pass 2FA and the profile picker, and land on `music.amazon.com`? | `at-main` / `sess-at-main` present and a search page renders results | **Passed (visible WebView), 2026-11-19, Pixel 9a.** Not yet tried from a hidden view's session handed to a visible sign-in screen |
+| S2 | Can we capture the page's own `SpecSearchSeeMorePage` request (body + headers) and replay it with a new `searchText`? | A replay from the page returns `data.specificationSearch` | **Passed, 2026-11-19, Pixel 9a.** See below |
+| S3 | Does `config.json` + a dmls manifest + a licence relayed through a `MediaDrmCallback` play in ExoPlayer on a Pixel (Widevine L1)? Also an L3 emulator. | Audio plays; note any `denialReason` | Not run (needs Unlimited). theli-ua reports music.amazon.com plays in Firefox for Android, which uses the phone's Widevine too: encouraging, not proof |
+| S4 | Does Amazon accept our telemetry events? | 200 for `streamingInitiated` / `trackStreamed` | Not run |
+| S5 | Does playback survive 10 min screen-off and a full album, and Android Auto? | — | Not run |
+| S6 | (iOS) Does music.amazon.com play in Safari, and with which DRM? Record the dmls manifest and licence calls. | A FairPlay manifest and a CKC that AVPlayer plays | Not run. A pass also needs the plugin to ask for FairPlay |
 
-The Parachord team has no Unlimited account; theli-ua does, and runs the account-dependent spikes (all but parts of S1 and S2, which a Prime account can check). Results go on #443.
+**S2 details.** A debug-only Activity (`spike/amazon-s2`) loaded `music.amazon.com/search/<q>/songs` in a visible WebView with a desktop Chrome UA and a document-start script wrapping `fetch` and XHR:
+- **The wrapper sees every GraphQL request** with its body and headers: `x-api-key`, `csrf-token`, `csrf-rnd`, `csrf-ts`, the `x-amzn-*` headers and the persisted-query hash. Desktop's page-level stub lost this race; Android's document-start script runs first. The page also installs its own `window.fetch` wrapper (a performance tracer) on top of ours, and it still calls ours.
+- **The page posts to `https://gql.music.amazon.com` with no trailing slash.** Desktop's capture prefix is `https://gql.music.amazon.com/*`, so a mobile capture must match the host, not that prefix string, or it captures nothing.
+- **Signed out, the page searches through another API** (`na.web.skill.music.a2z.com/api/searchCatalogTracks`), not GraphQL. The plugin requires sign-in anyway.
+- **A cold first load went to Home.** The first `/search/…` load after a fresh start went through `/?searchTerm=…` and ended on Home with no search fired; the same URL on the warm page fired `SpecSearchSeeMorePage` (`specType: "track"`, `firstLimit: 30`). The web session should warm the page (load `music.amazon.com/`) before its first search, or the plugin counts the miss as structural.
+- **The replay worked.** The captured request, with `searchText` changed and the captured headers, sent from the page with `credentials: 'include'`, returned 200 with `data.specificationSearch` and real results (for "khruangbin": "Lady and Man", "August 10", "White Gloves", "Maria También").
+- **Not covered:** the album and artist tabs (`specType` `album` / `artist`), album lookup, playlist import pagination, recommendations, and a hidden (unattached) WebView. They ride the same mechanism.
 
-| # | Question | Pass when |
-|---|---|---|
-| S1 | In a hidden-capable `WebView` (Chrome UA, persistent cookies), can a person sign in, pass 2FA and the profile picker, and land on `music.amazon.com`? (A tester says Firefox for Android works; a WebView is not Firefox.) | Cookies `at-main`/`sess-at-main` present and a `/search/...` page renders results |
-| S2 | **Can we capture the page's own `SpecSearchSeeMorePage` request (body + headers)?** Try in order: (a) `WebViewCompat.addDocumentStartJavaScript` wrapping `fetch` and `XMLHttpRequest` (runs before page scripts, unlike Electron's isolated preload, which lost the race); (b) `shouldInterceptRequest` for headers + a document-start hook for the body; (c) as a last resort, read the APQ hash from Amazon's JS bundle. | A captured template that, replayed from the page with a new `searchText`, returns `data.specificationSearch` |
-| S3 | Does `config.json` + a dmls manifest + a licence relayed through a custom `MediaDrmCallback` play in ExoPlayer on a Pixel (Widevine L1)? Also try an L3 emulator. | Audio plays; note any `denialReason` (`UNTRUSTED_DEVICE_CERTIFICATE` / `DEVELOPMENT_CERTIFICATE_NOT_ALLOWED` would end the playback half) |
-| S4 | Does Amazon accept our telemetry events (200, not 401)? | 200 for `streamingInitiated` / `trackStreamed` |
-| S5 | Does playback keep going with the screen off and in Android Auto? It's ExoPlayer, so the normal foreground service applies; check DRM session renewal and licence relay with the screen off. | 10 min screen-off, and a full album |
-| S6 | (iOS) **Is FairPlay possible?** First, does music.amazon.com play in Safari (macOS, then iOS)? If it does, record its requests with Safari's Web Inspector: the `dmls` manifest call (its `contentProtectionList`, `musicDashVersionList`, `deviceTypeId`) and the licence call (`DrmType`, certificate fetch). Then replay that manifest request from a test harness and play the result in `AVPlayer` with an `AVContentKeySession` relaying SPC/CKC through dmls. | A FairPlay HLS/DASH manifest and a CKC; AVPlayer plays it. If Safari can't play Amazon Music, FairPlay isn't offered to web clients and iOS stays discovery-only |
+**Go / no-go.** S1 + S2 pass, so discovery can ship on Android. S3 + S4 must pass for Android playback. iOS playback needs S6 and a plugin change.
 
-**Go / no-go.**
-- S1 + S2 must pass for anything to ship, since discovery needs them.
-- S3 + S4 must pass for playback.
-- If S2 fails, stop: hard-coding Amazon's GraphQL hashes would break on every Amazon redeploy, and desktop deliberately never does it.
+## Phases
 
-## Phases (after the spikes)
-
-0. **Desktop refactor first** (Parachord/parachord#1356): the resolver-loader's shared plugin library, the generic `webSession` / `drm` primitives, and Amazon's logic moved from `amazon-music-logic.js`, `amazon-web-player.js`, `amazon-dmls.js` and `amazon-telemetry.js` into `amazonmusic.axe`, with desktop's tests moved to test the plugin. Desktop behaviour unchanged. Mobile work starts once it lands; the spikes can run before.
-1. **Shared host contracts.** `shared/commonMain`: the `webSession` / `drm` contracts each platform implements, the per-session limits desktop's bridge enforces (manifests per minute, licence relays per session), and the quality policy ported from `widevine-quality.js` with its test vectors. Run `:shared:iosSimulatorArm64Test`. No Amazon parsing here.
-2. **Android discovery.**
-   - `AmazonWebSession`: one hidden WebView (not attached to a window, `LAYER_TYPE_NONE`, like MusicKit). Page flows run one at a time; replays run in parallel; a template is replayed first, else the page flow; the view parks after 30 s; page loads time out at 30 s; the circuit breaker applies.
-   - Replays use the unique-key poll for `evaluateJavascript` (CLAUDE.md: a bare async IIFE returns `{}`).
-   - A sign-in Activity hosts a visible WebView with the same cookies, closing when the plugin's `done` says so. It's not a Custom Tab, because the app must read cookies and the URL.
-   - The `window.parachordHost.webSession` functions go in `bootstrap.html`, forwarding to `NativeBridge`.
-   - The prompt rules (background searches never prompt; a quiet retry first; 10 minutes of quiet after a decline) come with the plugin.
-3. **Android playback.**
-   - A generic `DrmPlaybackHandler` (not Amazon-specific; a `SourceHandler` producing an ExoPlayer `MediaItem` with DRM) for any plugin with host-owned DRM playback: `DashMediaSource` from the plugin's `getPlaybackManifest`; `DefaultDrmSessionManager` with a `MediaDrmCallback` that hands challenges to the plugin's `relayLicense` (the plugin sends the cert pre-charge and checks the plan before any manifest).
-   - Player events go to the plugin's `onPlaybackEvent`, which sends Amazon's telemetry.
-   - Licence denials and decode failures feed the shared family-failure table and fall back mid-track. Which denial means what (drop FLAC on `CUSTOMER_NOT_ELIGIBLE`, fail on a certificate denial) is the plugin's answer.
-   - Errors map to `PlayFailure` (`START_FAILED`, or a refused source so another plays).
-   - Quality maps to ExoPlayer track selection: max bitrate per tier, preferred families, spatial opt-in, adaptive or locked.
-   - Volume offset 0 dB, like other full-quality streams.
-   - Because it's ExoPlayer, none of the external-engine foreground rules apply. It behaves like a local track (the #614 foreground keep at a track's end covers it).
-4. **Settings and UI (Android).**
-   - An Amazon Music resolver panel: Sign in / Sign out, status, and the plan message when blocked ("Prime: no playback", "Plan not confirmed").
-   - A Playback Quality card using desktop's keys (`playback_quality`, `playback_abr`, `playback_spatial`) and copy.
-   - Resolver order and colour from desktop (`#25D1DA`; `amazonmusic` third in the default order).
-   - A blocked plan removes Amazon from playback and badges but keeps discovery (desktop's `playback-limits`).
-   - Car: same browse tree. An Amazon track in the car plays like any ExoPlayer track.
-5. **iOS** (if S2 also passes in `WKWebView`, using a `WKUserScript` at document start).
-   - Discovery: the same plugin over iOS's `webSession` (WKWebView, `WKHTTPCookieStore`): playlist import from `music.amazon.com` URLs, album lookup, artist photos and recommendations.
-   - Playback only if S6 passes: an `AVPlayer` engine with an `AVContentKeySession` relaying SPC/CKC through the plugin's `relayLicense`, the plugin asking dmls for FairPlay instead of Widevine.
-   - Until then, Amazon is never a playback source on iOS: hidden from badges and picking, as for a Prime plan.
-6. **Plugin gate and docs.**
-   - Today `capabilities.mobile: false` hides the plugin everywhere. We need a per-platform switch so Android loads it and iOS loads it for discovery only.
-   - Proposal for desktop (agreed; Parachord/parachord#1355): the plugin declares the host primitives it needs (`requires: { hostBridges: ["webSession"], playback: ["widevine", "fairplay"] }`), and each host reports what it supplies. A host missing the bridge hides the plugin. A host that has the bridge but can't play (iOS) keeps discovery and leaves Amazon out of playback.
-   - Then add `minAppVersion.android` / `.ios` and drop `mobile: false`.
-   - A plugin that's visible without its bridge would throw `not-ready` on every resolve, which #566 would retry indefinitely.
-   - Update CLAUDE.md (a new "Amazon Music" section; resolver order; volume table), `iosApp/AGENTS.md` and the README.
+0. **Desktop refactor.** Done (Parachord/parachord#1356, #1355).
+1. **Desktop follow-ups for mobile** (small; desktop tickets to file):
+   - A host-neutral name for the bridge instead of `window.electron.webSession` (and a host-neutral version getter), or agree that mobile exposes `window.electron`.
+   - `minAppVersion.android` once the Android host ships, and drop `capabilities.mobile: false` (`requires.hostBridges` does the hiding).
+   - For iOS playback later: let the DRM pair ask for FairPlay.
+2. **Shared host contracts.** `shared/commonMain`: the `requires.hostBridges` rule in `PluginCompat.kt` and `PluginManager` (hide a plugin whose bridge the platform lacks); the `webSession` contract and its limits (caps, exact-host allowlist, cookie domains); the per-session DRM limits (manifests per minute, 30 licence relays per session); the quality policy ported from `widevine-quality.js` with its vectors. Run `:shared:iosSimulatorArm64Test`. No Amazon parsing here.
+3. **Android web session and discovery.** `WebSessionHost` (generic; Amazon registers one instance): the hidden WebView (not attached to a window, `LAYER_TYPE_NONE`, like MusicKit), the document-start capture script, the two-lane load chain, the navigation gate for `pageFetch`, echo flags, the idle park, the warm-up load, the sign-in Activity, scoped `clear()`. Expose it to the plugin runtime in `bootstrap.html` through `NativeBridge`, with the unique-key poll.
+4. **Android playback.** The generic `DrmPlaybackHandler` above; Playback Quality mapped to ExoPlayer track selection; volume offset 0 dB.
+5. **Settings and UI (Android).** A sign-in row and status drawn from the plugin's `getStatus` (generic, any `capabilities.status` plugin); the Playback Quality card with desktop's keys (`playback_quality`, `playback_abr`, `playback_spatial`); resolver colour `#25D1DA` and the order from desktop. A blocked plan keeps discovery and leaves Amazon out of playback and badges.
+6. **iOS** (if S2 also passes in a `WKWebView` with a `WKUserScript` at document start): discovery only, until S6 and the plugin's FairPlay path. Amazon is never a playback source on iOS until then.
+7. **Docs.** CLAUDE.md (an "Amazon Music" section; resolver order; volume table), `iosApp/AGENTS.md`, the README.
 
 ## Risks
 
-- **Capture (S2)** is the biggest unknown. Desktop found that a page-level `fetch` wrapper installs too late. Android's document-start script may win that race, but nobody has checked.
-- **Licence on Android devices (S3).** Amazon rejects development Widevine certificates. Pixels carry production device certificates, but whether Amazon's licence policy accepts a non-Amazon Android client is untested.
-- **Amazon may change anything without notice.** Desktop already treats every hash, header and response shape as captured rather than hard-coded, and keeps a circuit breaker. Mobile must do the same.
+- **Licence on Android devices (S3).** Amazon rejects development Widevine certificates. Pixels carry production certificates, but whether Amazon's licence policy accepts our client is untested.
+- **Amazon may change anything without notice.** The plugin treats every hash, header and response shape as captured, not hard-coded, and keeps a breaker; the mobile host must not hard-code any of it either.
 - **Account standing.** This uses Amazon's private web API, as desktop does. Telemetry must be accurate.
-- **No concurrent-stream handling** exists on desktop to copy ("playing on another device").
-- **Effort.** Desktop refactor: about a week (desktop's side, with its tests). Shared host contracts and quality policy: 1–2 days. Android web session and discovery: 3 days. Android DRM playback: 3–4 days. Settings/UI: 2 days. iOS discovery: 2 days. Spikes, in parallel with the refactor: 2–3 days.
+- **The bridge's `window.electron` name** ties the plugin to desktop's preload; see phase 1.
+- **Effort** (after step 0): shared contracts and plugin gating 2 days; Android web session and discovery 3–4 days; Android DRM playback 3–4 days; settings/UI 2 days; iOS discovery 2 days.
 
-## Decisions (2026-11-12)
+## Decisions
 
+2026-11-12:
 1. **Test account:** theli-ua has Music Unlimited and runs the spikes that need it.
-2. **iOS:** run S6 before deciding; FairPlay is required for iOS playback, and S6 says whether Amazon offers it.
-3. **Plugin gate:** propose `requires.hostBridges` to desktop.
+2. **iOS:** run S6 before deciding; FairPlay is required for iOS playback.
+3. **Plugin gate:** propose `requires.hostBridges` to desktop (shipped as Parachord/parachord#1355).
 4. **Playback Quality:** add desktop's global setting on mobile, even though only Amazon reads it at first.
-5. **Amazon logic lives in the plugin**, not in each host: desktop refactors first (Parachord/parachord#1356).
+5. **Amazon logic lives in the plugin**, not in each host (shipped as Parachord/parachord#1356).
+
+2026-11-19:
+6. **Discovery on Android is feasible** (S1, S2 passed). Playback waits on S3.
