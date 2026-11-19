@@ -80,7 +80,7 @@ A generic `DrmPlaybackHandler` (any plugin with `capabilities.widevine` and the 
 ## Phases
 
 0. **Desktop refactor.** Done (Parachord/parachord#1356, #1355).
-1. **Desktop follow-ups for mobile** (small; desktop tickets to file):
+1. **Desktop follow-ups for mobile** (small; filed as Parachord/parachord#1561 and #1562):
    - A host-neutral name for the bridge instead of `window.electron.webSession` (and a host-neutral version getter), or agree that mobile exposes `window.electron`.
    - `minAppVersion.android` once the Android host ships, and drop `capabilities.mobile: false` (`requires.hostBridges` does the hiding).
    - For iOS playback later: let the DRM pair ask for FairPlay.
