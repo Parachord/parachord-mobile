@@ -291,7 +291,11 @@ struct SearchView: View {
                     }
                     if !model.artists.isEmpty {
                         sectionHeader("Artists")
-                        ForEach(Array(model.artists.enumerated()), id: \.offset) { _, artist in
+                        // Ids are prefixed per section: every section sits in this one
+                        // LazyVStack, and bare offsets (0, 1, 2…) collided across
+                        // sections, so as results arrived SwiftUI reused one section's
+                        // rows in another (albums under Artists, blank rows under Tracks).
+                        ForEach(Array(model.artists.enumerated()), id: \.offset.artistRowId) { _, artist in
                             artistRow(artist).onAppear { model.artistShown(artist) }
                         }
                     }
@@ -300,7 +304,7 @@ struct SearchView: View {
                         let entities = model.remoteTrackEntities
                         // ZIP so a shorter entities array (non-atomic @Observable
                         // update) can't index out of range vs remoteTracks. #322.
-                        ForEach(Array(zip(model.remoteTracks, entities).enumerated()), id: \.offset) { i, pair in
+                        ForEach(Array(zip(model.remoteTracks, entities).enumerated()), id: \.offset.trackRowId) { i, pair in
                             let (t, entity) = pair
                             trackRow(entity, index: i, queue: entities,
                                      resultType: "track", resultName: t.title, resultArtist: t.artist,
@@ -310,7 +314,7 @@ struct SearchView: View {
                     }
                     if !model.remoteAlbums.isEmpty {
                         sectionHeader("Albums")
-                        ForEach(Array(model.remoteAlbums.enumerated()), id: \.offset) { _, album in
+                        ForEach(Array(model.remoteAlbums.enumerated()), id: \.offset.albumRowId) { _, album in
                             albumRow(album).onAppear { model.albumShown(album) }
                         }
                     }
@@ -423,4 +427,11 @@ struct SearchView: View {
         if let y = a.year { return "\(y.intValue) · \(a.artist)" }
         return a.artist
     }
+}
+
+/// Section-unique row ids for Search's one `LazyVStack` (see `resultsList`).
+private extension Int {
+    var artistRowId: String { "remote-artist-\(self)" }
+    var trackRowId: String { "remote-track-\(self)" }
+    var albumRowId: String { "remote-album-\(self)" }
 }
