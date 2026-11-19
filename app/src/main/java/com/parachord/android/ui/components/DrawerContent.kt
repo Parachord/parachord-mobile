@@ -108,24 +108,6 @@ private val OnAirGreen: Color @androidx.compose.runtime.Composable get() = com.p
 private val MiniPlaybarBgLight = Color(0xF21F2937) // rgba(31,41,55,0.95)
 private val MiniPlaybarBgDark = Color(0xF2262626)  // rgba(38,38,38,0.95)
 
-/** Hexagonal clip path matching the desktop's polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%). */
-private val HexagonShape = object : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.5f, 0f)       // top center
-            lineTo(w, h * 0.25f)       // top right
-            lineTo(w, h * 0.75f)       // bottom right
-            lineTo(w * 0.5f, h)        // bottom center
-            lineTo(0f, h * 0.75f)      // bottom left
-            lineTo(0f, h * 0.25f)      // top left
-            close()
-        }
-        return Outline.Generic(path)
-    }
-}
-
 private val settingsItem = DrawerMenuItem(
     Routes.SETTINGS, "Settings", PageIcon.SETTINGS.icon, Color(0xFF9CA3AF),
 )
