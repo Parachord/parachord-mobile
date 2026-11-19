@@ -54,6 +54,31 @@ class PluginRecommendationsTest {
         }
     }
 
+    @Test
+    fun `the bundled Last_fm and ListenBrainz plugins offer Listeners on both apps`() {
+        fun atLeast(v: String, floor: String): Boolean {
+            val a = v.split(".").map { it.toInt() }
+            val b = floor.split(".").map { it.toInt() }
+            for (i in 0 until 3) if (a[i] != b[i]) return a[i] > b[i]
+            return true
+        }
+        val floors = mapOf("lastfm" to "1.2.15", "listenbrainz" to "1.6.12", "applemusic" to "1.5.7")
+        for ((id, floor) in floors) {
+            for (dir in listOf(androidPlugins, iosPlugins)) {
+                val axe = Json.parseToJsonElement(File(dir, "$id.axe").readText()).jsonObject
+                val manifest = axe.getValue("manifest").jsonObject
+                val version = manifest.getValue("version").jsonPrimitive.content
+                assertTrue("$id $version in ${dir.path} is below $floor", atLeast(version, floor))
+                if (id == "applemusic") continue
+                val caps = axe.getValue("capabilities").jsonObject
+                for (cap in listOf("friends", "similarUsers", "recommendations")) {
+                    assertTrue("$id declares $cap in ${dir.path}", caps.getValue(cap).jsonPrimitive.boolean)
+                }
+                if (id == "listenbrainz") assertTrue("listenbrainz declares historyMixes", caps.getValue("historyMixes").jsonPrimitive.boolean)
+            }
+        }
+    }
+
     /**
      * Stands in for the WebView: plugins "load", and an async call's result
      * key answers with [answer], JSON-quoted as `evaluateJavascript` returns
