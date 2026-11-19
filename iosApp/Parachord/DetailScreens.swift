@@ -1175,10 +1175,10 @@ struct ArtistScreen: View {
     // the filters appear (bug 3).
     private var discoFilterSkeleton: some View {
         HStack(spacing: 8) {
-            ForEach(0..<4, id: \.self) { _ in PCSkeletonBox(width: 78, height: 30, radius: 15) }
+            ForEach(0..<4, id: \.self) { _ in PCSkeletonBox(width: 78, height: CGFloat(FilterChipSpec.shared.MIN_HEIGHT), radius: 18) }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20).padding(.vertical, 12)
+        .padding(.horizontal, CGFloat(DesignTokens.shared.SCREEN_GUTTER)).padding(.vertical, 12)
     }
 
     // Friendly error shown when a provider (typically MusicBrainz) failed, rather
@@ -1212,26 +1212,18 @@ struct ArtistScreen: View {
                     .mapValues { $0.count }
                 let available = Self.discoFilters.filter { $0.key == "all" || typeCounts[$0.key] != nil }
                 if available.count > 1 {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(available, id: \.key) { f in
-                                let on = discoFilter == f.key
-                                let color = releaseTypeColor(f.key == "all" ? nil : f.key)
-                                let count = f.key == "all" ? nil : typeCounts[f.key]
-                                let label = count != nil ? "\(f.label) (\(count!))" : f.label
-                                Button { discoFilter = f.key } label: {
-                                    Text(label).font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(on ? color : PC.fg2)
-                                        .padding(.horizontal, 14).padding(.vertical, 6)
-                                        .background(on ? color.opacity(0.20) : PC.bgInset, in: Capsule())
-                                        .overlay(Capsule().strokeBorder(on ? Color.clear : PC.border))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 20)
-                    }
-                    .padding(.vertical, 12)
+                    // The release types: All neutral (fill-accent when picked),
+                    // each type in its colour (desktop's artist page, FilterChips).
+                    PCFilterChips(
+                        chips: available.map { f in
+                            let count = f.key == "all" ? nil : typeCounts[f.key]
+                            return PCChip(id: f.key,
+                                          label: count.map { "\(f.label) (\($0))" } ?? f.label,
+                                          color: f.key == "all" ? nil : UInt32(DesignTokens.shared.releaseTypeColor(type: f.key)))
+                        },
+                        selection: discoFilter,
+                        onSelect: { discoFilter = $0 })
+                    .padding(.vertical, 8)
                 }
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 18) {

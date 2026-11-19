@@ -260,6 +260,8 @@ struct PCServiceLogo: View {
     static func has(_ serviceId: String) -> Bool {
         let id = serviceId.lowercased()
         return id == "soundcloud" || id == "subsonic" || ServiceLogos.shared.badgeOrLarge(serviceId: id) != nil
+    }
+}
 
 // MARK: - Section header and filter chips (desktop section-header.js / filter-chips.js)
 
@@ -268,7 +270,7 @@ struct PCServiceLogo: View {
 /// them too): 20 / 700 text-primary in sentence case, an optional grey
 /// subtitle, and on the right an optional link. With `page` the link is
 /// "See all in <page>" in that page's colour; with `action` it acts in place,
-/// in the accent. `sub` makes it a subsection title (15 / 600). Page heroes,
+/// in the accent. `sub` makes it a subsection title (16 / 600). Page heroes,
 /// dialog titles and Settings' group labels are other elements.
 struct PCSectionHeader<Trailing: View>: View {
     let title: String
@@ -277,6 +279,8 @@ struct PCSectionHeader<Trailing: View>: View {
     var onSeeAll: (() -> Void)? = nil
     var action: (label: String, run: () -> Void)? = nil
     var sub: Bool = false
+    /// Side padding (the screen gutter); a screen with a wider gutter (Home's 20) passes its own.
+    var gutter: CGFloat = CGFloat(DesignTokens.shared.SCREEN_GUTTER)
     @ViewBuilder var trailing: () -> Trailing
 
     private var spec: SectionHeaderSpec { SectionHeaderSpec.shared }
@@ -301,7 +305,7 @@ struct PCSectionHeader<Trailing: View>: View {
                 link(action.label, color: PC.accent, run: action.run)
             }
         }
-        .padding(.horizontal, CGFloat(DesignTokens.shared.SCREEN_GUTTER))
+        .padding(.horizontal, gutter)
         .padding(.top, 16)
         .padding(.bottom, CGFloat(spec.GAP_BELOW))
     }
@@ -315,9 +319,10 @@ struct PCSectionHeader<Trailing: View>: View {
 
 extension PCSectionHeader where Trailing == EmptyView {
     init(title: String, subtitle: String? = nil, page: DesignTokens.Page? = nil,
-         onSeeAll: (() -> Void)? = nil, action: (label: String, run: () -> Void)? = nil, sub: Bool = false) {
+         onSeeAll: (() -> Void)? = nil, action: (label: String, run: () -> Void)? = nil, sub: Bool = false,
+         gutter: CGFloat = CGFloat(DesignTokens.shared.SCREEN_GUTTER)) {
         self.init(title: title, subtitle: subtitle, page: page, onSeeAll: onSeeAll,
-                  action: action, sub: sub, trailing: { EmptyView() })
+                  action: action, sub: sub, gutter: gutter, trailing: { EmptyView() })
     }
 }
 
@@ -340,6 +345,9 @@ struct PCFilterChips: View {
     let selection: String?
     let onSelect: (String) -> Void
     var pageFill: UInt32? = nil
+    /// Side padding of the row (the screen gutter); 0 where the row sits
+    /// inside a bar that already has its own, as Android's `contentPadding`.
+    var horizontalPadding: CGFloat = CGFloat(DesignTokens.shared.SCREEN_GUTTER)
 
     private var spec: FilterChipSpec { FilterChipSpec.shared }
 
@@ -348,7 +356,7 @@ struct PCFilterChips: View {
             HStack(spacing: CGFloat(spec.GAP)) {
                 ForEach(chips) { chip in chipView(chip) }
             }
-            .padding(.horizontal, CGFloat(DesignTokens.shared.SCREEN_GUTTER))
+            .padding(.horizontal, horizontalPadding)
         }
     }
 
@@ -383,14 +391,6 @@ struct PCFilterChips: View {
 // MARK: - Typography helpers
 
 extension View {
-    /// Purple uppercase wide-tracked section header (Home / Library / Sidebar).
-    func pcSectionHeader() -> some View {
-        self.font(.system(size: 14, weight: .semibold))
-            .tracking(1.7)                    // ~0.12em at 14px
-            .textCase(.uppercase)
-            .foregroundStyle(PC.accent)
-    }
-
     /// "PARACHORD" wide-tracked uppercase brand title.
     func pcAppTitle() -> some View {
         self.font(.system(size: 18, weight: .regular))

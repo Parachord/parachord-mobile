@@ -159,18 +159,21 @@ Rules for desktop's icons:
 Each of these is one shared component per platform. A screen uses it; it never rebuilds or restyles it. Before writing a UI element, look for the shared one; if you'd write a second copy of something, extract it first.
 
 ### SectionHeader (desktop `section-header.js`, #1370)
+Android `SectionHeader`, iOS `PCSectionHeader`; sizes in the shared `SectionHeaderSpec`.
 - Title: **20, 700, text-primary**, sentence case. Not uppercase, not accent.
 - Optional subtitle: 12, text-secondary, 2 below.
-- Right side: an optional "See all" link, 13 / 600, in the destination page's colour (accent when it acts in place).
-- Sub-section title: 15, 600.
+- Right side: an optional link, 13 / 600: "See all in <page>" in that page's colour, or an in-place action ("Show less") in the accent.
+- Sub-section title: 16, 600.
 - 16 below it before the content.
-- Page heroes, dialog titles, settings headings and small uppercase group labels are other elements.
+- Page heroes, dialog titles, settings headings and small uppercase group labels are other elements. Settings' group labels are Android `SettingsGroupLabel`; the drawer's and the sync config sheets' small labels keep their own styles too.
 
 ### FilterChips (desktop `filter-chips.js`, #1371)
-Every row of "pick one" buttons (a source, a release type, a period, a category):
+Android `FilterChips` (rows of `FilterChipItem`), iOS `PCFilterChips`; sizes and each chip's look in the shared `FilterChipSpec.look`. Every row of "pick one" buttons (a source, a release type, a period, a category):
 - Pill, 12 / 600, padding 8×12, min height 36 (touch target 48/44), gap 8.
 - Idle: bg-secondary, text-primary; a chip with a colour (a service, a release type) shows an 8-point dot in it.
-- Selected: filled with its colour, text white or near-black, whichever has more contrast (WCAG). A chip with no colour (All, a period, a category) fills with fill-accent and white text.
+- Selected: filled with its colour. Its text is white whenever white reaches 3:1 (Apple Music's red, SoundCloud's orange), else whichever of white or near-black contrasts more (Spotify's green, Amazon's cyan get near-black): the shared `ReadableText`, a port of desktop's `readable-text.js`. A chip with no colour (All, a period, a category) fills with the page's fill on a page with its own colour (Fresh Drops, History, Concerts, Recommendations), else fill-accent, with white text.
+- The row scrolls sideways when it doesn't fit (desktop wraps).
+- Settings' Light / Dark / System switch is a control, not a filter, and isn't a chip row.
 - Only one is selected.
 
 ### Source icons (desktop `visible-sources.js`, #1407; shared `ResolverBadges`)

@@ -167,25 +167,21 @@ struct RecommendationsScreen: View {
     }
 
     private var sourceChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                // Only show a source chip when it has items (All always shown) —
-                // never present a dead filter that empties the page (#207).
-                ForEach(sources.filter { $0.key == "all" || sourceCount($0.key) > 0 }, id: \.key) { s in
-                    let on = effectiveSource == s.key
-                    let label = s.key == "all" ? s.label : "\(s.label) \(sourceCount(s.key))"
-                    Button { source = s.key } label: {
-                        Text(label).font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(on ? .white : PC.fg1)
-                            .padding(.horizontal, 14).padding(.vertical, 6)
-                            .background(on ? PC.fillAccent : PC.bgInset, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
+        // Each service in its plug-in's colour; All in the page's fill when
+        // picked (desktop's FilterChips, Android's RecommendationsScreen).
+        // Only a source with items gets a chip (All always), so the filter
+        // can never strand the page on an empty source (#207).
+        let chips: [PCChip] = sources
+            .filter { $0.key == "all" || sourceCount($0.key) > 0 }
+            .map { s in
+                let n = sourceCount(s.key)
+                return PCChip(id: s.key, label: n > 0 ? "\(s.label) (\(n))" : s.label,
+                              color: s.key == "all" ? nil : ResolverColor.hex(s.key))
             }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-        }
-        .overlay(Rectangle().fill(PC.border).frame(height: 1), alignment: .bottom)
+        return PCFilterChips(chips: chips, selection: effectiveSource, onSelect: { source = $0 },
+                             pageFill: UInt32(DesignTokens.Page.recommendations.fill))
+            .padding(.vertical, 10)
+            .overlay(Rectangle().fill(PC.border).frame(height: 1), alignment: .bottom)
     }
 
     // ── Artists tab: grid of circular artist cards ─────────────────────

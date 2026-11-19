@@ -251,21 +251,11 @@ struct FriendProfileScreen: View {
     }
 
     private var periodChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(friendPeriods, id: \.key) { p in
-                    let on = period == p.key
-                    Button { period = p.key } label: {
-                        Text(p.label).font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(on ? .white : PC.fg1)
-                            .padding(.horizontal, 14).padding(.vertical, 6)
-                            .background(on ? PC.fillAccent : PC.bgInset, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16).padding(.vertical, 10)
-        }
+        PCFilterChips(
+            chips: friendPeriods.map { PCChip(id: $0.key, label: $0.label) },
+            selection: period,
+            onSelect: { period = $0 })
+        .padding(.vertical, 10)
     }
 
     // ── Top Songs ──────────────────────────────────────────────────────

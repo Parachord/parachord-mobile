@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.theme.composeColor
@@ -31,6 +32,7 @@ data class SectionAction(val label: String, val onClick: () -> Unit)
  * the right an optional link. With [page] the link is "See all in <page>" in
  * that page's colour and [onSeeAll] opens it; with [action] it acts in place,
  * in the accent. [sub] makes it a subsection title (16 / 600).
+ * [horizontalPadding] is the screen gutter; 0 inside a container that has its own.
  *
  * Page heroes, dialog titles, Settings' group labels ([SettingsGroupLabel])
  * and drawer labels are other elements.
@@ -45,9 +47,10 @@ fun SectionHeader(
     action: SectionAction? = null,
     sub: Boolean = false,
     trailing: (@Composable () -> Unit)? = null,
+    horizontalPadding: Dp = 16.dp,
 ) {
     Row(
-        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = SectionHeaderSpec.GAP_BELOW.dp),
+        modifier = modifier.padding(start = horizontalPadding, end = horizontalPadding, top = 16.dp, bottom = SectionHeaderSpec.GAP_BELOW.dp),
         horizontalArrangement = Arrangement.spacedBy(SectionHeaderSpec.ROW_GAP.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
