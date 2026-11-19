@@ -9,9 +9,10 @@ import Shared
 // is the shared `ResolverBadges` rule (#592; CLAUDE.md "Resolver Badge
 // Display"); the leftmost square is the source that will actually play.
 //
-// Display-only, like Android (the track ROW handles playback). iOS has no
-// brand-logo assets, so each square shows the resolver initial in white; the
-// brand COLOR (the plugin manifest's, shared `ServiceColors`) identifies it.
+// Display-only, like Android (the track ROW handles playback). Each square is
+// the service's colour (its plugin manifest's, shared `ServiceColors`) with
+// desktop's logo on it in white (shared `ServiceLogos`, `PCServiceLogo`); a
+// service with no logo shows its initial.
 
 struct ResolverIconSquare: View {
     let resolver: String
@@ -33,13 +34,25 @@ struct ResolverIconSquare: View {
     }
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 4, style: .continuous)
-            .fill(color)
-            .frame(width: size, height: size)
-            .overlay(
-                Text(glyph).font(.system(size: size * 0.55, weight: .bold)).foregroundStyle(.white)
-            )
-            .opacity(ResolverBadges.shared.isDimmed(confidence: confidence) ? 0.6 : 1)
+        Group {
+            if resolver.lowercased() == "achordion" {
+                // Its logo carries its own dark circle and colours.
+                PCServiceLogo(serviceId: resolver)
+            } else {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(color)
+                    .overlay {
+                        if PCServiceLogo.has(resolver) {
+                            PCServiceLogo(serviceId: resolver).padding(size * 0.175)
+                        } else {
+                            Text(glyph).font(.system(size: size * 0.55, weight: .bold)).foregroundStyle(.white)
+                        }
+                    }
+            }
+        }
+        .frame(width: size, height: size)
+        .opacity(ResolverBadges.shared.isDimmed(confidence: confidence) ? 0.6 : 1)
+        .accessibilityLabel(PlaybackMessagesKt.resolverDisplayName(resolver: resolver))
     }
 }
 
