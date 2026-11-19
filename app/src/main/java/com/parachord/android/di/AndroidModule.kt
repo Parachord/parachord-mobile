@@ -910,6 +910,7 @@ val androidModule = module {
         val releaseDatesFile = java.io.File(context.filesDir, "release_dates_cache.json")
         val settings: com.parachord.shared.settings.SettingsStore = get()
         val musicBrainz: com.parachord.shared.api.MusicBrainzClient = get()
+        val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore = get()
         com.parachord.shared.repository.RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(get()),
             settingsStore = settings,
@@ -924,29 +925,44 @@ val androidModule = module {
                 nowMs = { System.currentTimeMillis() },
             ),
             // Android gates on connection state, not active_resolvers.
-            providerIsOn = { p ->
-                val connected = when (p.id) {
-                    "spotify" -> settings.getSpotifyAccessToken() != null
-                    "applemusic" -> settings.getAppleMusicUserToken() != null
-                    "soundcloud" -> settings.getSoundCloudToken() != null
-                    else -> true
-                }
-                com.parachord.shared.plugin.pluginIsOn(
-                    id = p.id,
-                    isMetaService = p.isMetaService,
-                    needsAccount = p.needsAccount,
-                    connected = connected,
-                    activeResolvers = settings.getActiveResolvers(),
-                    disabledPlugins = settings.getDisabledPlugins(),
-                    disabledMetaProviders = settings.getDisabledMetaProviders(),
-                )
-            },
+            providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
             cacheRead = {
                 com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
             cacheWrite = { json ->
                 com.parachord.android.data.cache.CacheFiles.write(cacheFile, json)
             },
+            similarUsers = { force -> similarUsersStore.usersFor(force) },
+            friendExclusions = { similarUsersStore.exclusions() },
+            cachedSimilarUsers = { similarUsersStore.cached() },
+        )
+    }
+    // Listeners' people (similar_users_cache.json). Explicit `single {}`
+    // (lambda + defaulted params, CLAUDE.md Common Mistakes #37).
+    single {
+        val context = androidContext()
+        val cacheFile = java.io.File(context.filesDir, "similar_users_cache.json")
+        val settings: com.parachord.shared.settings.SettingsStore = get()
+        val pluginManager: com.parachord.shared.plugin.PluginManager = get()
+        val friendDao: com.parachord.shared.db.dao.FriendDao = get()
+        com.parachord.shared.repository.SimilarUsersStore(
+            source = com.parachord.shared.repository.PluginSimilarUsersSource(pluginManager),
+            friends = {
+                com.parachord.shared.repository.friendExclusionsOf(
+                    friends = friendDao.getAllFriendsSync(),
+                    deletedFriendKeys = settings.getDeletedFriendKeys(),
+                    selfAccounts = mapOf(
+                        "lastfm" to settings.getLastFmUsername(),
+                        "listenbrainz" to settings.getListenBrainzUsername(),
+                    ),
+                )
+            },
+            configFor = { id ->
+                com.parachord.shared.repository.similarUsersConfig(id, pluginManager.resolverConfigProvider?.invoke())
+            },
+            providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
+            load = { com.parachord.android.data.cache.CacheFiles.read(cacheFile) },
+            save = { com.parachord.android.data.cache.CacheFiles.write(cacheFile, it) },
         )
     }
     // FreshDropsRepository takes file I/O + MBID lookups as suspend lambdas
@@ -1319,4 +1335,28 @@ val androidModule = module {
     viewModelOf(::PlaylistSyncChannelsViewModel)
     single { com.parachord.android.deeplink.LockedLinkNotifier(androidContext()) }
     viewModelOf(::DeepLinkViewModel)
+}
+
+/** `pluginIsOn` as Android decides it: by connection state, not `active_resolvers`. */
+private suspend fun androidPluginIsOn(
+    settings: com.parachord.shared.settings.SettingsStore,
+    id: String,
+    isMetaService: Boolean,
+    needsAccount: Boolean,
+): Boolean {
+    val connected = when (id) {
+        "spotify" -> settings.getSpotifyAccessToken() != null
+        "applemusic" -> settings.getAppleMusicUserToken() != null
+        "soundcloud" -> settings.getSoundCloudToken() != null
+        else -> true
+    }
+    return com.parachord.shared.plugin.pluginIsOn(
+        id = id,
+        isMetaService = isMetaService,
+        needsAccount = needsAccount,
+        connected = connected,
+        activeResolvers = settings.getActiveResolvers(),
+        disabledPlugins = settings.getDisabledPlugins(),
+        disabledMetaProviders = settings.getDisabledMetaProviders(),
+    )
 }

@@ -1965,22 +1965,49 @@ class IosContainer private constructor() {
                 lookup = { title, artist -> musicBrainzClient.releaseDateLookup(title, artist) },
                 nowMs = { com.parachord.shared.platform.currentTimeMillis() },
             ),
-            // iOS's active_resolvers already reflects connections.
-            providerIsOn = { p ->
-                com.parachord.shared.plugin.pluginIsOn(
-                    id = p.id,
-                    isMetaService = p.isMetaService,
-                    needsAccount = p.needsAccount,
-                    connected = true,
-                    activeResolvers = settingsStore.getActiveResolvers(),
-                    disabledPlugins = settingsStore.getDisabledPlugins(),
-                    disabledMetaProviders = settingsStore.getDisabledMetaProviders(),
-                )
-            },
+            providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
             cacheRead = { IosFileCache.read("recommendations_cache.json") },
             cacheWrite = { IosFileCache.write("recommendations_cache.json", it) },
+            similarUsers = { force -> similarUsersStore.usersFor(force) },
+            friendExclusions = { similarUsersStore.exclusions() },
+            cachedSimilarUsers = { similarUsersStore.cached() },
         )
     }
+
+    /** Listeners' people, from the plugins with `similarUsers` and `friends` (similar_users_cache.json). */
+    val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore by lazy {
+        com.parachord.shared.repository.SimilarUsersStore(
+            source = com.parachord.shared.repository.PluginSimilarUsersSource(pluginManager),
+            friends = {
+                com.parachord.shared.repository.friendExclusionsOf(
+                    friends = friendDao.getAllFriendsSync(),
+                    deletedFriendKeys = settingsStore.getDeletedFriendKeys(),
+                    selfAccounts = mapOf(
+                        "lastfm" to settingsStore.getLastFmUsername(),
+                        "listenbrainz" to settingsStore.getListenBrainzUsername(),
+                    ),
+                )
+            },
+            configFor = { id ->
+                com.parachord.shared.repository.similarUsersConfig(id, pluginManager.resolverConfigProvider?.invoke())
+            },
+            providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
+            load = { IosFileCache.read("similar_users_cache.json") },
+            save = { IosFileCache.write("similar_users_cache.json", it) },
+        )
+    }
+
+    /** `pluginIsOn` as iOS decides it: its active_resolvers already reflects connections. */
+    private suspend fun iosPluginIsOn(id: String, isMetaService: Boolean, needsAccount: Boolean): Boolean =
+        com.parachord.shared.plugin.pluginIsOn(
+            id = id,
+            isMetaService = isMetaService,
+            needsAccount = needsAccount,
+            connected = true,
+            activeResolvers = settingsStore.getActiveResolvers(),
+            disabledPlugins = settingsStore.getDisabledPlugins(),
+            disabledMetaProviders = settingsStore.getDisabledMetaProviders(),
+        )
 
     suspend fun loadRecommendedTracks(): List<RecommendedTrack> {
         var out = emptyList<RecommendedTrack>()

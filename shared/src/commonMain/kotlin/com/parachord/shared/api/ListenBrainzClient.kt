@@ -924,6 +924,34 @@ class ListenBrainzClient(
         }
     }
 
+    /**
+     * [getUserTopRecordings], but a failed request throws
+     * ([ListenBrainzHttpException] for a non-2xx). 204 (no stats yet) is empty.
+     */
+    suspend fun getUserTopRecordingsOrThrow(
+        username: String,
+        range: String = "month",
+        count: Int = 50,
+    ): List<LbRecordingStat> {
+        val response = httpClient.get("$BASE_URL/1/stats/user/$username/recordings") {
+            parameter("range", range)
+            parameter("count", count)
+        }
+        if (response.status.value == 204) return emptyList()
+        if (!response.status.isSuccess()) {
+            throw ListenBrainzHttpException(response.status.value, "ListenBrainz answered ${response.status.value}")
+        }
+        val parsed = json.decodeFromString<TopRecordingsWire>(response.bodyAsText())
+        return parsed.payload?.recordings.orEmpty().map { rec ->
+            LbRecordingStat(
+                trackName = rec.trackName.orEmpty(),
+                artistName = rec.artistName.orEmpty(),
+                releaseName = rec.releaseName?.ifBlank { null },
+                listenCount = rec.listenCount ?: 0,
+            )
+        }
+    }
+
     /** Fetch user's top recordings (tracks). */
     suspend fun getUserTopRecordings(
         username: String,
@@ -931,20 +959,7 @@ class ListenBrainzClient(
         count: Int = 50,
     ): List<LbRecordingStat> {
         return try {
-            val response = httpClient.get("$BASE_URL/1/stats/user/$username/recordings") {
-                parameter("range", range)
-                parameter("count", count)
-            }
-            if (!response.status.isSuccess()) return emptyList()
-            val parsed = json.decodeFromString<TopRecordingsWire>(response.bodyAsText())
-            parsed.payload?.recordings.orEmpty().map { rec ->
-                LbRecordingStat(
-                    trackName = rec.trackName.orEmpty(),
-                    artistName = rec.artistName.orEmpty(),
-                    releaseName = rec.releaseName?.ifBlank { null },
-                    listenCount = rec.listenCount ?: 0,
-                )
-            }
+            getUserTopRecordingsOrThrow(username, range, count)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {

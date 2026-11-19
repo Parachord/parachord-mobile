@@ -13,6 +13,7 @@ import com.parachord.shared.model.HistoryArtist
 import com.parachord.shared.model.HistoryTrack
 import com.parachord.shared.model.RecentTrack
 import com.parachord.shared.model.Resource
+import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.platform.randomUUID
@@ -49,6 +50,8 @@ class FriendsRepository(
 ) {
     companion object {
         private const val TAG = "FriendsRepository"
+        /** How many top tracks Listeners' Play queues. */
+        const val LISTENER_TOP_TRACKS = 10
     }
 
     /** All friends as a live-updating Flow. */
@@ -294,10 +297,22 @@ class FriendsRepository(
      * Add a friend by raw input (username or URL).
      * Validates the user exists, fetches display info, stores locally.
      */
-    suspend fun addFriend(input: String): Resource<Friend> = withContext(Dispatchers.Default) {
-        val parsed = parseFriendInput(input)
-            ?: return@withContext Resource.Error("Invalid username or URL")
+    suspend fun addFriend(input: String): Resource<Friend> {
+        val parsed = parseFriendInput(input) ?: return Resource.Error("Invalid username or URL")
+        return addParsed(parsed)
+    }
 
+    /**
+     * Follow [username] on [service] (Listeners' Follow): the same path as
+     * [addFriend], with the service given rather than parsed from the input.
+     */
+    suspend fun follow(service: String, username: String): Resource<Friend> {
+        val name = username.trim()
+        if (name.isEmpty()) return Resource.Error("Invalid username or URL")
+        return addParsed(ParsedFriend(service, name))
+    }
+
+    private suspend fun addParsed(parsed: ParsedFriend): Resource<Friend> = withContext(Dispatchers.Default) {
         try {
             val friend = when (parsed.service) {
                 "lastfm" -> addLastFmFriend(parsed.username)
@@ -320,6 +335,8 @@ class FriendsRepository(
             } else {
                 Resource.Error("User not found")
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add friend: ${parsed.username}", e)
             Resource.Error("Failed to add friend: ${e.message}")
@@ -625,6 +642,35 @@ class FriendsRepository(
         "overall" -> "all_time"
         else -> "month"
     }
+
+    /**
+     * What Listeners' Play plays (desktop's `playListenerTopTracks`): the
+     * person's 7-day top 10, else their 1-month top 10, as metadata-only
+     * tracks that resolve when they play. Empty when they have neither;
+     * throws when the service couldn't answer.
+     */
+    suspend fun listenerTopTracks(service: String, username: String): List<Track> = withContext(Dispatchers.Default) {
+        val week = topTracksOrThrow(service, username, "7day", LISTENER_TOP_TRACKS)
+        val tracks = week.ifEmpty { topTracksOrThrow(service, username, "1month", LISTENER_TOP_TRACKS) }
+        tracks.map { (title, artist, album) ->
+            Track(
+                id = "friend-${title.hashCode()}-${artist.hashCode()}",
+                title = title,
+                artist = artist,
+                album = album,
+            )
+        }
+    }
+
+    private suspend fun topTracksOrThrow(service: String, username: String, period: String, limit: Int): List<Triple<String, String, String?>> =
+        when (service) {
+            "lastfm" -> lastFmClient.getUserTopTracks(user = username, apiKey = lastFmApiKey, period = period, limit = limit)
+                .toptracks?.track.orEmpty()
+                .map { Triple(it.name, it.artist?.name.orEmpty(), null) }
+            "listenbrainz" -> listenBrainzClient.getUserTopRecordingsOrThrow(username, periodToLbRange(period), limit)
+                .map { Triple(it.trackName, it.artistName, it.releaseName) }
+            else -> throw IllegalArgumentException("No top tracks for $service")
+        }.filter { it.first.isNotBlank() && it.second.isNotBlank() }.take(limit)
 
     fun getFriendTopTracks(username: String, service: String, period: String): Flow<Resource<List<HistoryTrack>>> = flow {
         emit(Resource.Loading)

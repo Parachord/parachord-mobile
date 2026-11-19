@@ -22,6 +22,18 @@ object UiMessages {
     /** A "load more" page that failed (desktop's toast). */
     fun couldntLoadMoreFrom(provider: String): String = "Couldn't load more from $provider"
 
+    // ── Listeners ──────────────────────────────────────────────────────
+    /** Play on a listener with no 7-day or 1-month top tracks (desktop's toast); `%s` is their name. */
+    const val LISTENER_NO_TOP_TRACKS = "%s has no recent top tracks"
+    /** Play on a listener whose top tracks couldn't be fetched (desktop's, curly apostrophes). */
+    const val LISTENER_TOP_TRACKS_FAILED = "Couldn’t load %s’s top tracks. Try again in a moment."
+    /** A Follow that couldn't reach the service; `%s` is the service's name. */
+    const val COULDNT_REACH_SERVICE = "Couldn't reach %s"
+
+    fun listenerNoTopTracks(name: String): String = LISTENER_NO_TOP_TRACKS.replace("%s", name)
+    fun listenerTopTracksFailed(name: String): String = LISTENER_TOP_TRACKS_FAILED.replace("%s", name)
+    fun couldntReachService(service: String): String = COULDNT_REACH_SERVICE.replace("%s", service)
+
     // ── Fresh Drops / Critical Darlings ────────────────────────────────
     const val FRESH_DROPS_EMPTY =
         "No new releases found.\nAdd artists to your library or connect Last.fm/ListenBrainz."

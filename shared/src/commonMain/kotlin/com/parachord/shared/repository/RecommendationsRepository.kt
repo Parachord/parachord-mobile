@@ -74,6 +74,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * - **Paging:** one request per `pagingKey` at a time, at most
  *   [EXPANSION_PAGE_CAP] pages; an empty page or a cursor that doesn't move
  *   ends it. [openRow] pages every pageable section of a row until done.
+ * - **Listeners:** [cachedSimilarUsers] show at once, then [similarUsers]
+ *   (a [SimilarUsersStore]) replaces them when it answers.
  * - **Merge:** [buildRecommendationPage] with Shuffleupagus's picks, the
  *   similar users and the blocklist, re-run on every change so a block takes
  *   effect at once.
@@ -98,6 +100,8 @@ class RecommendationsRepository(
     private val similarUsers: suspend (force: Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
     /** Who Listeners leaves out, read at every merge. */
     private val friendExclusions: suspend () -> FriendExclusions = { FriendExclusions() },
+    /** The saved similar users, shown at once while [similarUsers] asks again (an older shape among them). */
+    private val cachedSimilarUsers: suspend () -> Map<String, List<SimilarUser>> = { emptyMap() },
     private val nowMs: () -> Long = { currentTimeMillis() },
     /** Runs late answers, Shuffleupagus and release-date lookups past the caller. */
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
@@ -387,6 +391,8 @@ class RecommendationsRepository(
             run
         }
 
+        val savedUsers = safely(emptyMap()) { cachedSimilarUsers() }
+        if (savedUsers.isNotEmpty()) mutex.withLock { if (generation == run.generation) similar = savedUsers }
         applyFresh(run)
         val pending = mutex.withLock { toFetch.filter { it.id !in run.stale && it.id !in quiet }.map { it.id }.toSet() }
         _page.update {
