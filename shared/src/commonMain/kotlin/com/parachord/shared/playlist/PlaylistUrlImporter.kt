@@ -49,7 +49,7 @@ class PlaylistUrlImporter(
     private suspend fun save(play: ResolvedProtocolPlay): XspfImportResult {
         val provider = play.providerId ?: "link"
         val source = "$provider-import"
-        val tracks = play.tracks.mapIndexed { i, t -> importedTrack(t, provider, i) }
+        val tracks = play.tracks.mapIndexed { i, t -> protocolPlayTrack(t, provider, i) }
         val id = "$source-${randomUUID()}"
         createPlaylist(
             Playlist(
@@ -83,7 +83,7 @@ fun normalizePlaylistUrl(rawUrl: String): String {
  * becomes the track's id and resolver, so it plays without a search; a track
  * with neither (a plugin's playlist) is metadata only and resolves when it plays.
  */
-internal fun importedTrack(t: ProtocolTrack, provider: String, index: Int): Track = when {
+fun protocolPlayTrack(t: ProtocolTrack, provider: String, index: Int): Track = when {
     t.spotifyId != null -> Track(
         id = "spotify:${t.spotifyId}", title = t.title, artist = t.artist, album = t.album,
         albumId = t.albumId, duration = t.durationMs, artworkUrl = t.artworkUrl, resolver = "spotify",
