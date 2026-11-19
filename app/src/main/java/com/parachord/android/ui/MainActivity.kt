@@ -81,6 +81,7 @@ import com.parachord.android.ui.components.SpotifyDevicePickerDialog
 import com.parachord.android.ui.components.DrawerContent
 import com.parachord.android.ui.components.MiniPlayer
 import com.parachord.android.ui.components.MiniPlayerLoading
+import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.navigation.BottomNavItem
 import com.parachord.android.ui.navigation.ParachordNavHost
 import com.parachord.android.ui.navigation.Routes
@@ -662,19 +663,20 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         if (item.isAction) {
-                                            Icon(
+                                            ParachordIcon(
                                                 item.icon,
                                                 contentDescription = item.label,
                                                 tint = Color.White.copy(alpha = 0.7f),
-                                                modifier = Modifier.size(28.dp),
+                                                size = 28.dp,
                                             )
                                         } else {
-                                            Icon(
-                                                item.icon,
-                                                contentDescription = item.label,
-                                                tint = if (selected) Color.White else Color.White.copy(alpha = 0.55f),
-                                                modifier = Modifier.size(26.dp),
-                                            )
+                                            val tint = if (selected) Color.White else Color.White.copy(alpha = 0.55f)
+                                            val systemIcon = item.systemIcon
+                                            if (systemIcon != null) {
+                                                Icon(systemIcon, contentDescription = item.label, tint = tint, modifier = Modifier.size(26.dp))
+                                            } else {
+                                                ParachordIcon(item.icon, contentDescription = item.label, tint = tint, size = 24.dp)
+                                            }
                                         }
                                     }
                                 }

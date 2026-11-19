@@ -145,6 +145,8 @@ Two logos are bitmaps (`ServiceLogos.BITMAPS`: SoundCloud, Subsonic). Each app b
 
 Surfaces the system draws (lock screen and notification media controls, CarPlay, Android Auto, the share sheet, widgets' system chrome) show the system's glyphs anyway. Everything else (transport controls inside the app, love, queue, Spinoff, Shuffleupagus, sources, playlists, page icons, settings rows, empty states) is desktop's.
 
+**Page icons** (the tab bar and the side menu) come from the shared `PageIcon` (`shared/.../ui/icons/PageIcons.kt`), a port of desktop's `lib/page-icons.js`: Home, Search, Playlists `ListMusic`, Collection `Library`, History `RotateCcw`, Fresh Drops `Droplet`, Recommendations `Radar`, Pop of the Tops `ListOrdered`, Critical Darlings `Trophy`, Concerts `Ticket`, Settings. Each entry draws in its page colour. The Search tab is the one exception: it keeps the platform's magnifier, as in the table above.
+
 Rules for desktop's icons:
 - **Stroke and fill:** stroke 2, round caps and joins. The transport icons (Play, Pause, SkipBack, SkipForward) are solid; the rest are outlines.
 - **Sizes:** 16 in rows, chips, small buttons and inline with text. 20 in buttons and dialog titles. 12 only inside a badge. 32–48 only for an empty state's illustration.

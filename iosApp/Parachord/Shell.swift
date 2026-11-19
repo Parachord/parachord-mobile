@@ -14,12 +14,13 @@ import Shared
 enum PCTab: String, CaseIterable {
     case home, search, collection, playlists
     var title: String { rawValue.capitalized }
-    var icon: String {
+    /// The page's icon, shared with Android and desktop (`PageIcon`).
+    var icon: AppIcon {
         switch self {
-        case .home: return "house.fill"
-        case .search: return "magnifyingglass"
-        case .collection: return "square.stack.fill"
-        case .playlists: return "music.note.list"
+        case .home: return PageIcon.home.icon
+        case .search: return PageIcon.search.icon   // drawn as the system magnifier
+        case .collection: return PageIcon.collection.icon
+        case .playlists: return PageIcon.playlists.icon
         }
     }
 }
@@ -85,7 +86,13 @@ struct PCTabBar: View {
                         if selected == tab { onReselect(tab) } else { selected = tab }
                     } label: {
                         VStack(spacing: 2) {
-                            Image(systemName: tab.icon).font(.system(size: 21))
+                            if tab == .search {
+                                // System action: keeps the platform's magnifier (DESIGN_SYSTEM.md).
+                                Image(systemName: "magnifyingglass").font(.system(size: 21))
+                                    .frame(width: 22, height: 22)
+                            } else {
+                                PCIcon(icon: tab.icon, size: 22, tint: selected == tab ? PC.accent : PC.fg3)
+                            }
                             Text(tab.title).font(.system(size: 10, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
@@ -104,9 +111,7 @@ struct PCTabBar: View {
             .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
 
             Button(action: onCenter) {
-                Image(systemName: "plus")
-                    .font(.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.white)
+                PCIcon(icon: .plus, size: 26, tint: .white, label: "Add")
                     .frame(width: 56, height: 56)
                     .background(
                         LinearGradient(colors: [Color(uiColor: UIColor(hex: 0xa78bfa)), Color(uiColor: UIColor(hex: 0x7c3aed))],
@@ -314,19 +319,19 @@ struct PCSidebar: View {
 
     @State private var friends = SidebarFriendsModel()
 
-    private struct Row: Identifiable { let id: String; let label: String; let icon: String; let color: Color }
+    private struct Row: Identifiable { let id: String; let label: String; let icon: AppIcon; let color: Color }
 
     // Playlists + Collection live in the bottom glass nav bar (like Android),
     // so the sidebar only carries Your Music = History.
     private let yourMusic: [Row] = [
-        .init(id: "history", label: "History", icon: "clock.arrow.circlepath", color: PC.page(.history)),
+        .init(id: "history", label: "History", icon: PageIcon.history.icon, color: PC.page(.history)),
     ]
     private let discover: [Row] = [
-        .init(id: "fresh", label: "Fresh Drops", icon: "drop.fill", color: PC.page(.freshDrops)),
-        .init(id: "recommendations", label: "Recommendations", icon: "star.fill", color: PC.page(.recommendations)),
-        .init(id: "pop", label: "Pop of the Tops", icon: "chart.line.uptrend.xyaxis", color: PC.page(.popOfTheTops)),
-        .init(id: "critical", label: "Critical Darlings", icon: "trophy.fill", color: PC.page(.criticalDarlings)),
-        .init(id: "concerts", label: "Concerts", icon: "ticket.fill", color: PC.page(.concerts)),
+        .init(id: "fresh", label: "Fresh Drops", icon: PageIcon.freshDrops.icon, color: PC.page(.freshDrops)),
+        .init(id: "recommendations", label: "Recommendations", icon: PageIcon.recommendations.icon, color: PC.page(.recommendations)),
+        .init(id: "pop", label: "Pop of the Tops", icon: PageIcon.popOfTheTops.icon, color: PC.page(.popOfTheTops)),
+        .init(id: "critical", label: "Critical Darlings", icon: PageIcon.criticalDarlings.icon, color: PC.page(.criticalDarlings)),
+        .init(id: "concerts", label: "Concerts", icon: PageIcon.concerts.icon, color: PC.page(.concerts)),
     ]
 
     var body: some View {
@@ -342,7 +347,7 @@ struct PCSidebar: View {
             Divider()
             Button { onNav("settings") } label: {
                 HStack(spacing: 16) {
-                    Image(systemName: "gearshape").font(.system(size: 18)).foregroundStyle(PC.fg2)
+                    PCIcon(icon: PageIcon.settings.icon, size: 20, tint: PC.fg2)
                     Text("SETTINGS").font(.system(size: 13, weight: .medium)).tracking(1.8).foregroundStyle(PC.fg2)
                 }
             }
@@ -431,7 +436,7 @@ struct PCSidebar: View {
         ForEach(rows) { r in
             Button { onNav(r.id) } label: {
                 HStack(spacing: 16) {
-                    Image(systemName: r.icon).font(.system(size: 18)).foregroundStyle(r.color).frame(width: 20)
+                    PCIcon(icon: r.icon, size: 20, tint: r.color)
                     Text(r.label).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
                 }
             }
