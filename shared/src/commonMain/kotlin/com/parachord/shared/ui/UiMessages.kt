@@ -19,6 +19,9 @@ object UiMessages {
     const val RECOMMENDED_TRACKS_EMPTY =
         "No track recommendations yet.\nListen to more music to get personalized suggestions!"
 
+    /** A "load more" page that failed (desktop's toast). */
+    fun couldntLoadMoreFrom(provider: String): String = "Couldn't load more from $provider"
+
     // ── Fresh Drops / Critical Darlings ────────────────────────────────
     const val FRESH_DROPS_EMPTY =
         "No new releases found.\nAdd artists to your library or connect Last.fm/ListenBrainz."

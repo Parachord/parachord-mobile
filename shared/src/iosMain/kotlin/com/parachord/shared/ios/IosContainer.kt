@@ -105,6 +105,7 @@ import com.parachord.shared.repository.FreshDrop
 import com.parachord.shared.repository.FreshDropsRepository
 import com.parachord.shared.repository.FriendsRepository
 import com.parachord.shared.repository.RecommendationsRepository
+import com.parachord.shared.recommendations.releaseDateLookup
 import com.parachord.shared.ai.AiChatProvider
 import com.parachord.shared.ai.AiChatService
 import com.parachord.shared.ai.AiProviderConfig
@@ -1957,6 +1958,25 @@ class IosContainer private constructor() {
             // from ListenBrainz, not metadata, so this costs nothing (artist
             // images already came from Last.fm/MusicBrainz, not Spotify).
             metadataService = enrichMetadataService,
+            aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(aiRecommendationService, settingsStore),
+            releaseDates = com.parachord.shared.recommendations.ReleaseDates(
+                load = { IosFileCache.read("release_dates_cache.json") },
+                save = { IosFileCache.write("release_dates_cache.json", it) },
+                lookup = { title, artist -> musicBrainzClient.releaseDateLookup(title, artist) },
+                nowMs = { com.parachord.shared.platform.currentTimeMillis() },
+            ),
+            // iOS's active_resolvers already reflects connections.
+            providerIsOn = { p ->
+                com.parachord.shared.plugin.pluginIsOn(
+                    id = p.id,
+                    isMetaService = p.isMetaService,
+                    needsAccount = p.needsAccount,
+                    connected = true,
+                    activeResolvers = settingsStore.getActiveResolvers(),
+                    disabledPlugins = settingsStore.getDisabledPlugins(),
+                    disabledMetaProviders = settingsStore.getDisabledMetaProviders(),
+                )
+            },
             cacheRead = { IosFileCache.read("recommendations_cache.json") },
             cacheWrite = { IosFileCache.write("recommendations_cache.json", it) },
         )

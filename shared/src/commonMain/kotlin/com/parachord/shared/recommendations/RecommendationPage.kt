@@ -50,7 +50,16 @@ data class ExpandedSection(
     val items: List<RecommendationItem>,
     val nextCursor: String? = null,
     val exhausted: Boolean = false,
+    /** Pages fetched so far; at `EXPANSION_PAGE_CAP` the section is exhausted. */
+    val pages: Int = 0,
+    /** The item types the last page brought: a row whose type it didn't bring stops its loading tail. */
+    val lastPageTypes: List<RecommendationType> = emptyList(),
+    /** The album / playlist categories the last page brought, typed (`album:new`, `playlist:personal`). */
+    val lastPageCategories: List<String> = emptyList(),
 )
+
+/** Desktop's `EXPANSION_PAGE_CAP`: at most this many "load more" pages per provider section. */
+const val EXPANSION_PAGE_CAP = 10
 
 /** The key of a provider section's pages: `<resolverId>|<section id, else title>`. */
 fun pagingKey(resolverId: String, section: RecommendationSection): String =

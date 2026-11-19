@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import com.parachord.android.ai.AiChatService
 import com.parachord.android.ai.AiRecommendationService
+import com.parachord.shared.recommendations.releaseDateLookup
 import com.parachord.android.ai.ChatCardEnricher
 import com.parachord.android.ai.ChatContextProvider
 import com.parachord.android.ai.providers.ChatGptProvider
@@ -902,13 +903,44 @@ val androidModule = module {
     }
     // RecommendationsRepository — shared. The recommendations come from the
     // plugins that declare the capability (#606); file I/O via lambdas.
+    // Explicit `single {}` (defaulted + lambda params, CLAUDE.md Common Mistakes #37).
     single {
         val context = androidContext()
         val cacheFile = java.io.File(context.filesDir, "recommendations_cache.json")
+        val releaseDatesFile = java.io.File(context.filesDir, "release_dates_cache.json")
+        val settings: com.parachord.shared.settings.SettingsStore = get()
+        val musicBrainz: com.parachord.shared.api.MusicBrainzClient = get()
         com.parachord.shared.repository.RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(get()),
-            settingsStore = get(),
+            settingsStore = settings,
             metadataService = get(),
+            aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(
+                get<com.parachord.shared.ai.AiRecommendationService>(), settings,
+            ),
+            releaseDates = com.parachord.shared.recommendations.ReleaseDates(
+                load = { com.parachord.android.data.cache.CacheFiles.read(releaseDatesFile) },
+                save = { com.parachord.android.data.cache.CacheFiles.write(releaseDatesFile, it) },
+                lookup = { title, artist -> musicBrainz.releaseDateLookup(title, artist) },
+                nowMs = { System.currentTimeMillis() },
+            ),
+            // Android gates on connection state, not active_resolvers.
+            providerIsOn = { p ->
+                val connected = when (p.id) {
+                    "spotify" -> settings.getSpotifyAccessToken() != null
+                    "applemusic" -> settings.getAppleMusicUserToken() != null
+                    "soundcloud" -> settings.getSoundCloudToken() != null
+                    else -> true
+                }
+                com.parachord.shared.plugin.pluginIsOn(
+                    id = p.id,
+                    isMetaService = p.isMetaService,
+                    needsAccount = p.needsAccount,
+                    connected = connected,
+                    activeResolvers = settings.getActiveResolvers(),
+                    disabledPlugins = settings.getDisabledPlugins(),
+                    disabledMetaProviders = settings.getDisabledMetaProviders(),
+                )
+            },
             cacheRead = {
                 com.parachord.android.data.cache.CacheFiles.read(cacheFile)
             },
