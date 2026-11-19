@@ -838,7 +838,12 @@ class FriendsRepository(
         }
     }
 
-    fun getFriendRecentTracks(username: String, service: String): Flow<Resource<List<RecentTrack>>> = flow {
+    fun getFriendRecentTracks(
+        username: String,
+        service: String,
+        /** Told whether the Last.fm profile hides its listening, for a friend with no saved row to record it on. */
+        onHidesListening: ((Boolean) -> Unit)? = null,
+    ): Flow<Resource<List<RecentTrack>>> = flow {
         emit(Resource.Loading)
         try {
             val tracks = when (service) {
@@ -854,10 +859,12 @@ class FriendsRepository(
                         // The Recent tab says the profile hides its listening
                         // (from the friend's flag); the other tabs still load.
                         stored?.let { recordHidesListening(it, true) }
+                        onHidesListening?.invoke(true)
                         emit(Resource.Success(emptyList()))
                         return@flow
                     }
                     stored?.let { recordHidesListening(it, false) }
+                    onHidesListening?.invoke(false)
                     response.recenttracks?.track?.map { track ->
                         RecentTrack(
                             title = track.name,

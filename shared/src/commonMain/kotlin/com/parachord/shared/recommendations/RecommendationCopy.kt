@@ -1,5 +1,6 @@
 package com.parachord.shared.recommendations
 
+import com.parachord.shared.playback.resolverDisplayName
 import kotlin.math.roundToInt
 
 /**
@@ -40,7 +41,9 @@ object RecommendationCopy {
     fun playing(name: String) = "Playing $name"
     fun loading(name: String) = "Loading $name…"
     fun couldntLoad(name: String) = "Couldn’t load $name"
-    fun couldntReach(service: String) = "Couldn’t reach $service"
+    /** [serviceId] is a service id ("lastfm"); a blank one reads "the service". */
+    fun couldntReach(serviceId: String?): String =
+        "Couldn’t reach ${serviceId?.takeIf { it.isNotBlank() }?.let { resolverDisplayName(it) } ?: "the service"}"
 
     /** A listener's similarity as a whole percent ("88%"); null when the service sent none. */
     fun similarityBadge(similarity: Double?): String? =

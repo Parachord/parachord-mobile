@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -284,7 +285,10 @@ class FriendDetailViewModel constructor(
 
     private fun loadRecentTracks(friend: FriendEntity) {
         viewModelScope.launch {
-            friendsRepository.getFriendRecentTracks(friend.username, friend.service)
+            friendsRepository.getFriendRecentTracks(friend.username, friend.service) { hides ->
+                // No saved row to record it on for someone not followed: keep it on the profile.
+                if (friend.transient) _friend.update { f -> f?.takeIf { it.transient }?.copy(hidesListening = hides) ?: f }
+            }
                 .collect {
                     _recentTracks.value = it
                 }
@@ -300,13 +304,13 @@ class FriendDetailViewModel constructor(
         loadTopArtists(friend)
     }
 
-    private fun friendTopKey(friend: FriendEntity) = com.parachord.shared.repository.TopListsCache
-        .friendKey(friend.username, friend.service, selectedPeriod.value)
+    private fun friendTopKey(friend: FriendEntity, period: String) = com.parachord.shared.repository.TopListsCache
+        .friendKey(friend.username, friend.service, period)
 
     private fun loadTopTracks(friend: FriendEntity) {
         val period = selectedPeriod.value
         viewModelScope.launch {
-            topLists.tracks(friendTopKey(friend)) {
+            topLists.tracks(friendTopKey(friend, period)) {
                 friendsRepository.getFriendTopTracks(friend.username, friend.service, period)
             }.collect { _topTracks.value = it }
         }
@@ -315,7 +319,7 @@ class FriendDetailViewModel constructor(
     private fun loadTopAlbums(friend: FriendEntity) {
         val period = selectedPeriod.value
         viewModelScope.launch {
-            topLists.albums(friendTopKey(friend)) {
+            topLists.albums(friendTopKey(friend, period)) {
                 friendsRepository.getFriendTopAlbums(friend.username, friend.service, period)
             }.collect { _topAlbums.value = it }
         }
@@ -324,7 +328,7 @@ class FriendDetailViewModel constructor(
     private fun loadTopArtists(friend: FriendEntity) {
         val period = selectedPeriod.value
         viewModelScope.launch {
-            topLists.artists(friendTopKey(friend)) {
+            topLists.artists(friendTopKey(friend, period)) {
                 friendsRepository.getFriendTopArtists(friend.username, friend.service, period)
             }.collect { _topArtists.value = it }
         }

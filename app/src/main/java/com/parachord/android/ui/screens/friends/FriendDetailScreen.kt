@@ -42,6 +42,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import com.parachord.android.ui.theme.FillAccent
+import com.parachord.shared.playback.resolverDisplayName
 import com.parachord.shared.recommendations.RecommendationCopy
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -176,7 +177,7 @@ fun FriendDetailScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "Listening activity from ${friendServiceLabel(currentFriend.service)}",
+                    text = "Listening activity from ${resolverDisplayName(currentFriend.service)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                 )
@@ -682,7 +683,7 @@ private fun ArtistGridItem(
 
 @Composable
 private fun ErrorState(service: String?, onRetry: (() -> Unit)? = null) {
-    val message = RecommendationCopy.couldntReach(service?.let { friendServiceLabel(it) } ?: "the service")
+    val message = RecommendationCopy.couldntReach(service)
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
@@ -703,12 +704,6 @@ private fun ErrorState(service: String?, onRetry: (() -> Unit)? = null) {
             }
         }
     }
-}
-
-private fun friendServiceLabel(service: String): String = when (service) {
-    "lastfm" -> "Last.fm"
-    "listenbrainz" -> "ListenBrainz"
-    else -> service
 }
 
 @Composable

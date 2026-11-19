@@ -27,6 +27,12 @@ class PlaybackMessagesTest {
         assertEquals("Apple Music", resolverDisplayName("applemusic"))
         assertEquals("Local Files", resolverDisplayName("LocalFiles"))
         assertEquals("Direct", resolverDisplayName("direct"))
+        assertEquals("Last.fm", resolverDisplayName("lastfm"))
+        assertEquals("ListenBrainz", resolverDisplayName("listenbrainz"))
+        assertEquals("Libre.fm", resolverDisplayName("librefm"))
+        assertEquals("Couldn’t reach Last.fm", com.parachord.shared.recommendations.RecommendationCopy.couldntReach("lastfm"))
+        assertEquals("Couldn’t reach the service", com.parachord.shared.recommendations.RecommendationCopy.couldntReach(null))
+        assertEquals("Couldn’t reach the service", com.parachord.shared.recommendations.RecommendationCopy.couldntReach(" "))
         // A plugin resolver the apps don't list: its id, capitalized.
         assertEquals("Tidal", resolverDisplayName("tidal"))
     }
