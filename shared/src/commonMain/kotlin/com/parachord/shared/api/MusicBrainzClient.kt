@@ -357,7 +357,8 @@ data class MbRecording(
 
 @Serializable
 data class MbArtistCredit(
-    val name: String,
+    /** Defaults to "" so one credit without a name doesn't fail decoding a whole search. */
+    val name: String = "",
     val artist: MbArtistRef? = null,
 )
 

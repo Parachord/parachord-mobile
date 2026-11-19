@@ -8,6 +8,7 @@ import com.parachord.shared.plugin.needsAccount
 import com.parachord.shared.recommendations.FriendExclusions
 import com.parachord.shared.recommendations.SimilarUser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +96,8 @@ class SimilarUsersStore(
     private val load: suspend () -> String?,
     private val save: suspend (String) -> Unit,
     private val nowMs: () -> Long = { currentTimeMillis() },
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /** Runs late answers. The default logs an uncaught failure instead of crashing (SIGABRT on iOS). */
+    private val scope: CoroutineScope = similarUsersBackgroundScope(),
 ) {
     companion object {
         private const val TAG = "SimilarUsersStore"
@@ -314,3 +316,14 @@ fun similarUsersConfig(id: String, configs: Map<String, String>?): String? {
     val key = (obj["apiKey"] as? JsonPrimitive)?.contentOrNull
     return if (key.isNullOrBlank()) JsonObject(obj + ("credentialsPending" to JsonPrimitive(true))).toString() else raw
 }
+
+/**
+ * A handler-less scope would crash Android and abort the process on iOS on an
+ * uncaught failure; this one logs it. A top-level function, not a lambda in
+ * the default argument: Kotlin/Native 2.1.0 can't compile a local
+ * `CoroutineExceptionHandler` class there.
+ */
+private fun similarUsersBackgroundScope(): CoroutineScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.Default +
+        CoroutineExceptionHandler { _, e -> Log.e("SimilarUsersStore", "Similar users background work failed (ignored): ${e.message}", e) },
+)

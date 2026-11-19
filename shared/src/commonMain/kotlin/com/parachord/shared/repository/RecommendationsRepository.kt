@@ -28,6 +28,7 @@ import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.ui.UiMessages
 import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -103,8 +104,12 @@ class RecommendationsRepository(
     /** The saved similar users, shown at once while [similarUsers] asks again (an older shape among them). */
     private val cachedSimilarUsers: suspend () -> Map<String, List<SimilarUser>> = { emptyMap() },
     private val nowMs: () -> Long = { currentTimeMillis() },
-    /** Runs late answers, Shuffleupagus and release-date lookups past the caller. */
-    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    /**
+     * Runs late answers, Shuffleupagus and release-date lookups past the caller.
+     * The default logs an uncaught failure: on a handler-less scope it would
+     * crash Android and abort the process on iOS.
+     */
+    private val scope: CoroutineScope = recommendationsBackgroundScope(),
 ) {
     companion object {
         private const val TAG = "RecommendationsRepo"
@@ -493,7 +498,7 @@ class RecommendationsRepository(
     /** Stores an answer even when empty (it replaces the older one; an empty one is never served). */
     private suspend fun accept(run: LoadRun, provider: RecommendationProvider, account: String, raw: String) {
         val sections = normalizeRecommendationSections(json.parseToJsonElement(raw), provider.id, provider.name)
-        val answer = ProviderAnswer(provider.id, provider.name, sections, nowMs(), account)
+        val answer = ProviderAnswer(provider.id, provider.name, sections, nowMs(), account, provider.isMetaService, provider.needsAccount)
         mutex.withLock {
             run.fresh[provider.id] = answer
             cache[provider.id] = answer
@@ -593,27 +598,37 @@ class RecommendationsRepository(
 
     // ── Merge ────────────────────────────────────────────────────────
 
-    /** Re-merges the page from what's held now. Cheap; the blocklist applies at every merge. */
+    /**
+     * Re-merges the page from what's held now. Cheap; the blocklist applies at
+     * every merge. A failure keeps the page as it was, so a later change can
+     * still rebuild it.
+     */
     private suspend fun rebuild() = rebuildMutex.withLock {
-        val (providers, pages, users, playlists, names, busy) = mutex.withLock {
-            Snapshot(shown, expanded.toMap(), similar, excludedPlaylists, providerNames, loadingMore.toSet())
+        try {
+            val (providers, pages, users, playlists, names, busy) = mutex.withLock {
+                Snapshot(shown, expanded.toMap(), similar, excludedPlaylists, providerNames, loadingMore.toSet())
+            }
+            val blocked = safely(emptySet()) { settingsStore.getBlockedRecommendations() }
+            val ai = safely(null) { aiRecommendations.cached() }
+            val exclude = safely(FriendExclusions()) { friendExclusions() }
+            val sections = withReleaseDates(
+                buildRecommendationPage(
+                    providers = providers,
+                    shuffleupagus = ai?.let { shuffleupagusSection(it.albums, it.artists) },
+                    expanded = pages,
+                    similarUsers = users,
+                    exclude = exclude,
+                    excludePlaylistIds = playlists,
+                    blocked = blocked,
+                    providerNames = names,
+                ),
+            )
+            _page.update { it.copy(sections = sections, sources = pageSources(sections), loadingMore = busy, paging = pages) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Recommendations page rebuild failed; keeping the last page", e)
         }
-        val blocked = safely(emptySet()) { settingsStore.getBlockedRecommendations() }
-        val ai = safely(null) { aiRecommendations.cached() }
-        val exclude = safely(FriendExclusions()) { friendExclusions() }
-        val sections = withReleaseDates(
-            buildRecommendationPage(
-                providers = providers,
-                shuffleupagus = ai?.let { shuffleupagusSection(it.albums, it.artists) },
-                expanded = pages,
-                similarUsers = users,
-                exclude = exclude,
-                excludePlaylistIds = playlists,
-                blocked = blocked,
-                providerNames = names,
-            ),
-        )
-        _page.update { it.copy(sections = sections, sources = pageSources(sections), loadingMore = busy, paging = pages) }
     }
 
     private data class Snapshot(
@@ -657,13 +672,30 @@ class RecommendationsRepository(
         val lastFm = settingsStore.getLastFmUsername()?.takeIf { it.isNotBlank() }
         val listenBrainz = settingsStore.getListenBrainzUsername()?.takeIf { it.isNotBlank() }
         val now = nowMs()
+        // The same gate a load applies, so a provider switched off since its
+        // answer was saved never shows, not even until the load replaces it.
+        val off = safely(emptySet()) { settingsStore.getRecommendationsOffResolvers() }
+        val allowed = saved?.answers?.values.orEmpty()
+            .filter { a ->
+                a.resolverId !in off && safely(false) {
+                    providerIsOn(
+                        RecommendationProvider(
+                            id = a.resolverId,
+                            name = a.resolverName,
+                            isMetaService = a.isMetaService || a.resolverId == LASTFM || a.resolverId == LISTENBRAINZ,
+                            needsAccount = a.needsAccount,
+                        ),
+                    )
+                }
+            }
+            .map { it.resolverId }.toSet()
         val changed = mutex.withLock {
             if (diskLoaded) return@withLock false
             diskLoaded = true
             saved?.answers?.forEach { (id, answer) -> if (id !in cache) cache[id] = answer }
             if (shown.isNotEmpty()) return@withLock false
             shown = cache.values
-                .filter { it.sections.isNotEmpty() && now - it.fetchedAt < STALE_MS && it.account == accountFor(it.resolverId, lastFm, listenBrainz) }
+                .filter { it.resolverId in allowed && it.sections.isNotEmpty() && now - it.fetchedAt < STALE_MS && it.account == accountFor(it.resolverId, lastFm, listenBrainz) }
                 .map { ProviderRecommendations(it.resolverId, it.resolverName, it.sections, canExpand = false) }
             providerNames = cache.values.associate { it.resolverId to it.resolverName }
             shown.isNotEmpty()
@@ -715,3 +747,14 @@ class RecommendationsRepository(
         fallback
     }
 }
+
+/**
+ * A handler-less scope would crash Android and abort the process on iOS on an
+ * uncaught failure; this one logs it. A top-level function, not a lambda in
+ * the default argument: Kotlin/Native 2.1.0 can't compile a local
+ * `CoroutineExceptionHandler` class there.
+ */
+private fun recommendationsBackgroundScope(): CoroutineScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.Default +
+        CoroutineExceptionHandler { _, e -> Log.e("RecommendationsRepo", "Recommendations background work failed (ignored): ${e.message}", e) },
+)

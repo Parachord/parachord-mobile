@@ -85,5 +85,13 @@ class AppleMusicPersonalRecommendationsTest {
         assertEquals("""{"ok":{"a":1}}""", PersonalRecommendationsResult.Ok("""{"a":1}""").toJsEnvelope())
         assertEquals("""{"notReady":"not-signed-in"}""", PersonalRecommendationsResult.NotReady("not-signed-in").toJsEnvelope())
         assertEquals("""{"failed":500}""", PersonalRecommendationsResult.Failed(500).toJsEnvelope())
+        // A 2xx body that isn't JSON would be a syntax error in the JS call, and the hook would never answer.
+        assertEquals("""{"failed":0}""", PersonalRecommendationsResult.Ok("<html>oops</html>").toJsEnvelope())
+        assertEquals("""{"failed":0}""", PersonalRecommendationsResult.Ok("").toJsEnvelope())
+        assertEquals("""{"failed":0}""", PersonalRecommendationsResult.Ok("""{"a":oops}""").toJsEnvelope())
+        assertEquals(
+            """{"ok":{"data":[{"n":-1.5e3,"b":true,"x":null}]}}""",
+            PersonalRecommendationsResult.Ok("""{"data":[{"n":-1.5e3,"b":true,"x":null}]}""").toJsEnvelope(),
+        )
     }
 }

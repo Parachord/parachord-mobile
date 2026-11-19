@@ -3,6 +3,8 @@ package com.parachord.shared.recommendations
 import com.parachord.shared.api.MbArtistCredit
 import com.parachord.shared.api.MbArtistRef
 import com.parachord.shared.api.MbReleaseGroup
+import com.parachord.shared.api.MbReleaseGroupSearchResponse
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
 import kotlin.test.Test
@@ -15,6 +17,17 @@ import kotlin.test.assertNull
  * one test per desktop `test(...)`. Change a rule on desktop first.
  */
 class ReleaseDateTest {
+
+    @Test
+    fun `a credit without a name doesn't fail the whole search`() {
+        val body = """{"release-groups":[
+            {"id":"1","title":"Record","first-release-date":"2026-01-02","artist-credit":[{"artist":{"id":"a","name":"A"}}]},
+            {"id":"2","title":"Other","artist-credit":[{"name":"B"}]}
+        ]}"""
+        val parsed = Json { ignoreUnknownKeys = true }.decodeFromString(MbReleaseGroupSearchResponse.serializer(), body)
+        assertEquals(listOf("Record", "Other"), parsed.releaseGroups.map { it.title })
+        assertEquals("", parsed.releaseGroups[0].artistCredit.single().name)
+    }
 
     @Test
     fun `dates are kept a week — announced dates move`() {

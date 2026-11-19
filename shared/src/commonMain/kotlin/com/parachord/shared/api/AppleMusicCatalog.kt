@@ -161,10 +161,34 @@ sealed interface PersonalRecommendationsResult {
     /**
      * What both hosts hand the JS hook: `{"ok":<body>}`, `{"notReady":"<code>"}`
      * or `{"failed":<status>}`. The hook turns the last two into rejections.
+     * A body that isn't JSON goes as `{"failed":0}`: spliced into the JS call
+     * it would be a syntax error, and the hook would never answer.
      */
     fun toJsEnvelope(): String = when (this) {
-        is Ok -> """{"ok":$body}"""
+        is Ok -> if (isJson(body)) """{"ok":$body}""" else """{"failed":0}"""
         is NotReady -> """{"notReady":"$code"}"""
         is Failed -> """{"failed":$status}"""
     }
+
+    /**
+     * Apple's body is a JSON object. kotlinx's parser tolerates unquoted
+     * tokens, so each bare value is checked too: only a number, `true`,
+     * `false` or `null` is valid JSON (and a valid JS expression).
+     */
+    private fun isJson(text: String): Boolean = try {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(text)
+        root is kotlinx.serialization.json.JsonObject && strictJson(root)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun strictJson(e: kotlinx.serialization.json.JsonElement): Boolean = when (e) {
+        is kotlinx.serialization.json.JsonObject -> e.values.all { strictJson(it) }
+        is kotlinx.serialization.json.JsonArray -> e.all { strictJson(it) }
+        is kotlinx.serialization.json.JsonPrimitive ->
+            e.isString || e.content == "true" || e.content == "false" || e is kotlinx.serialization.json.JsonNull ||
+                JSON_NUMBER.matches(e.content)
+    }
 }
+
+private val JSON_NUMBER = Regex("""-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?""")

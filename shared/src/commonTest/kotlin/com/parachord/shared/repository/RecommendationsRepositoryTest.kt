@@ -538,6 +538,114 @@ class RecommendationsRepositoryTest {
         assertTrue(emptyRecommendationsMessage(true, false).startsWith("ListenBrainz hasn't made recommendations"))
         assertTrue(emptyRecommendationsMessage(true, true).startsWith("Neither ListenBrainz nor Last.fm"))
         assertTrue(emptyRecommendationsMessage(false, true).startsWith("Last.fm doesn't have"))
+        assertEquals(
+            "No recommendations right now. Check back once your services have more of your listening history.",
+            emptyRecommendationsMessage(false, false),
+        )
+    }
+
+    @Test
+    fun `an Apple-Music-only user's empty old lists name no service they never connected`() = runTest {
+        val am = RecommendationProvider("applemusic", "Apple Music", isMetaService = false, needsAccount = true, canExpand = true)
+        val source = FakeSource(providerList = listOf(LASTFM, LISTENBRAINZ, am)).apply { answer("applemusic", { empty }) }
+        val r = rig(source, listenBrainz = null)
+        val generic = emptyRecommendationsMessage(hasListenBrainz = false, hasLastFm = false)
+        assertEquals(Resource.Error(generic), r.repo.getRecommendedTracks().toList().last())
+        assertEquals(Resource.Error(generic), r.repo.getRecommendedArtists().toList().last())
+        assertFalse("Last.fm" in generic || "ListenBrainz" in generic)
+    }
+
+    @Test
+    fun `a saved list from a provider switched off since doesn't show at launch`() = runTest {
+        val am = RecommendationProvider("applemusic", "Apple Music", isMetaService = false, needsAccount = true, canExpand = true)
+        val first = rig(
+            FakeSource(providerList = listOf(LASTFM, LISTENBRAINZ, am)).apply {
+                answer("listenbrainz", { songs(song("From LB")) })
+                answer("applemusic", { songs(song("From AM")) })
+            },
+        )
+        first.repo.load()
+        assertEquals(setOf("From LB", "From AM"), first.names().toSet())
+
+        // Next launch: Apple Music's plug-in is off, and ListenBrainz is off for recommendations.
+        val gate = CompletableDeferred<String>()
+        val next = rig(
+            FakeSource(providerList = listOf(LASTFM, LISTENBRAINZ, am)).apply { answer("listenbrainz", { gate.await() }) },
+            disk = Disk(first.disk.saved),
+            isOn = { it.id != "applemusic" },
+        )
+        val seen = mutableListOf<List<String>>()
+        val watch = launch { next.repo.page.collect { seen += next.names() } }
+        val tracks = launch { next.repo.getRecommendedTracks().toList() }
+        runCurrent()
+        assertTrue(seen.none { "From AM" in it }, "$seen")
+        assertEquals(listOf("From LB"), next.names())
+        gate.complete(songs(song("From LB")))
+        tracks.join()
+        watch.cancel()
+
+        val off = rig(
+            FakeSource(providerList = listOf(LASTFM, LISTENBRAINZ, am)).apply { answer("listenbrainz", { CompletableDeferred<String>().await() }) },
+            disk = Disk(first.disk.saved),
+        )
+        off.settings.setRecommendationsOffResolvers(setOf("listenbrainz"))
+        val offTracks = launch { off.repo.getRecommendedTracks().toList() }
+        runCurrent()
+        assertTrue("From LB" !in off.names(), "${off.names()}")
+        offTracks.cancel()
+    }
+
+    @Test
+    fun `a failing release-date or exclusions read doesn't stop later rebuilds`() = runTest {
+        var failExclusions = true
+        val clock = Clock()
+        val dates = ReleaseDates(
+            load = { throw IllegalStateException("disk") },
+            save = { throw IllegalStateException("disk full") },
+            lookup = { title, _ -> if (title == "Broken") throw IllegalStateException("mb") else "2026-01-0${title.last()}" },
+            nowMs = { clock.now },
+        )
+        val prefs = SettingsStore(FakeSecureStore(), KvStore(MapSettings(SettingsStore.LISTENBRAINZ_USERNAME to "listener")))
+        val source = FakeSource().apply {
+            answer("listenbrainz", {
+                songs(
+                    song("One"),
+                    """{"type":"album","name":"Broken","artist":"A"}""",
+                    """{"type":"album","name":"Record 1","artist":"A"}""",
+                    """{"type":"album","name":"Record 2","artist":"A"}""",
+                )
+            })
+        }
+        val repo = RecommendationsRepository(
+            source = source,
+            settingsStore = prefs,
+            metadataService = MetadataService(emptyList(), getDisabledProviders = { emptySet() }),
+            aiRecommendations = FakePicks(),
+            releaseDates = dates,
+            providerIsOn = { true },
+            cacheRead = { null },
+            cacheWrite = {},
+            friendExclusions = {
+                if (failExclusions) throw IllegalStateException("friends") else com.parachord.shared.recommendations.FriendExclusions()
+            },
+            nowMs = { clock.now },
+            scope = backgroundScope,
+        )
+        repo.load()
+        fun albums() = flattenRecommendationItems(repo.page.value.sections.filter { it.type == RecommendationType.ALBUM })
+        fun album(name: String) = albums().first { it.name == name }
+
+        // A lookup that throws and a rebuild whose exclusions read throws.
+        repo.requestReleaseDates(listOf(album("Broken"), album("Record 1")))
+        runCurrent()
+        assertEquals("2026-01-01", album("Record 1").releaseDate)
+        assertEquals(listOf("One"), flattenRecommendationItems(repo.page.value.sections.filter { it.type == RecommendationType.SONG }).map { it.name })
+
+        // Later changes still rebuild the page.
+        failExclusions = false
+        repo.requestReleaseDates(listOf(album("Record 2")))
+        runCurrent()
+        assertEquals("2026-01-02", album("Record 2").releaseDate)
     }
 
     private companion object {

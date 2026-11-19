@@ -59,7 +59,7 @@ These are from the Android app; the iOS app follows the same layout with native 
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/recommendations.png" alt="Recommendations" width="240"><br>
-      <sub><b>Recommendations</b> — ListenBrainz + Last.fm blended feed</sub>
+      <sub><b>Recommendations</b> — ListenBrainz, Last.fm + Apple Music blended feed</sub>
     </td>
   </tr>
   <tr>
@@ -120,7 +120,7 @@ Default order: `spotify > applemusic > bandcamp > soundcloud > localfiles > yout
 Apple Music's API can't delete or rename playlists or remove tracks from them, so those changes have to be made in the Apple Music app.
 
 ### Discovery
-- **Recommendations**: personalized albums and artists from Last.fm and ListenBrainz, plus an AI-generated feed using your own ChatGPT, Claude or Gemini key.
+- **Recommendations**: personalized picks from Last.fm, ListenBrainz and Apple Music (any plugin that offers recommendations), plus an AI-generated feed using your own ChatGPT, Claude or Gemini key.
 - **Fresh Drops** and **Critical Darlings**: curated new releases.
 - **Pop of the Tops**: chart albums and songs by country, with songs from Apple Music or Last.fm (including a global Last.fm chart).
 - **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz.

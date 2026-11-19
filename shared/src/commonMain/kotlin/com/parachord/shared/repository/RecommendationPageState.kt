@@ -49,6 +49,9 @@ internal data class ProviderAnswer(
     val fetchedAt: Long = 0,
     /** The account it answered for: Last.fm's or ListenBrainz's username, else "". */
     val account: String = "",
+    /** The provider's kind, so a saved answer can be gated by `providerIsOn` before the plugins list. */
+    val isMetaService: Boolean = false,
+    val needsAccount: Boolean = false,
 )
 
 /** `recommendations_cache.json`. A file from before this shape decodes empty. */
@@ -81,13 +84,17 @@ internal fun RecommendationItem.toRecommendedTrack(): RecommendedTrack? {
  * What the page says when no connected service has anything to recommend.
  * Port of desktop's `recommendations-empty.js` (parachord#1121). ListenBrainz
  * builds its recommendation playlist from a few weeks of listens, so a new
- * account has none.
+ * account has none. With neither service connected (only a content provider
+ * such as Apple Music), the message names none.
  */
 fun emptyRecommendationsMessage(hasListenBrainz: Boolean, hasLastFm: Boolean): String = when {
     hasListenBrainz && !hasLastFm ->
         "ListenBrainz hasn't made recommendations for you yet. It builds them from a few weeks of listens, so check back later, or connect Last.fm in Settings for recommendations now."
     hasListenBrainz && hasLastFm ->
         "Neither ListenBrainz nor Last.fm has recommendations for you yet. ListenBrainz builds them from a few weeks of listens, so check back later."
-    else ->
+    hasLastFm ->
         "Last.fm doesn't have recommendations for you yet. Check back once it has more of your listening history."
+    // Neither scrobbler (an Apple-Music-only user): name no service they never connected.
+    else ->
+        "No recommendations right now. Check back once your services have more of your listening history."
 }

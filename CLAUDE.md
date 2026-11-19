@@ -933,7 +933,7 @@ On Android, `WeeklyPlaylistsRepository` mirrors this pattern. The home screen sh
 
 Ephemeral playlists use the ID format `listenbrainz-{playlistMbid}` when saved to Room.
 
-The Recommendations page lists the newest week of each weekly playlist (Jams, Exploration) in its Playlists row, through the shared `RecommendationPage.kt` (see "Recommendations come from the plugins"); `WeeklyPlaylistsRepository` still feeds Home's carousels.
+The shared page model (`RecommendationPage.kt`, see "Recommendations come from the plugins") puts the newest week of each weekly playlist (Jams, Exploration) in the Playlists row it builds; no screen shows that row yet (the new Recommendations page lands in PRs 2 and 3 of `docs/superpowers/specs/2026-11-19-home-and-recommendations-design.md`). `WeeklyPlaylistsRepository` still feeds Home's carousels.
 
 ### Album Context Menus
 
