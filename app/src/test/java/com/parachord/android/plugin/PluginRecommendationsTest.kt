@@ -3,6 +3,7 @@ package com.parachord.android.plugin
 import com.parachord.shared.plugin.JsRuntime
 import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
+import com.parachord.shared.plugin.PluginNotReadyException
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -109,5 +110,33 @@ class PluginRecommendationsTest {
         val pm = manager(FakeRuntime("error:Failed to fetch Last.fm recommendations: 500"))
         val thrown = assertThrows(IllegalStateException::class.java) { runBlocking { pm.getRecommendations("lastfm") } }
         assertTrue(thrown.message.orEmpty().contains("Failed to fetch Last.fm recommendations: 500"))
+    }
+
+    @Test
+    fun `both resolver-loader copies carry desktop's similar-users and history-mix calls`() {
+        val android = File(androidJs, "resolver-loader.js").readText()
+        assertEquals(android, File(iosResources, "resolver-loader.js").readText())
+        for (method in listOf(
+            "getSimilarUsersResolvers()",
+            "async getSimilarUsers(resolverId, configOverride = null)",
+            "getHistoryMixResolvers()",
+            "async getHistoryMixes(resolverId, configOverride = null)",
+        )) {
+            assertTrue("resolver-loader.js lacks $method", android.contains(method))
+        }
+    }
+
+    @Test
+    fun `a notReady error from a plugin call is a PluginNotReadyException`() {
+        val pm = manager(FakeRuntime("error:notReady:not-signed-in"))
+        val thrown = assertThrows(PluginNotReadyException::class.java) { runBlocking { pm.getRecommendations("applemusic") } }
+        assertTrue(thrown.message.orEmpty().contains("not-signed-in"))
+    }
+
+    @Test
+    fun `any other plugin error is a plain failure`() {
+        val pm = manager(FakeRuntime("error:boom"))
+        val thrown = assertThrows(IllegalStateException::class.java) { runBlocking { pm.getRecommendations("applemusic") } }
+        assertTrue(thrown !is PluginNotReadyException)
     }
 }
