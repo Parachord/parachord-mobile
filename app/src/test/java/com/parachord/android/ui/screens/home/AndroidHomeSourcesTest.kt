@@ -42,6 +42,7 @@ class AndroidHomeSourcesTest {
     private fun TestScope.sources(
         configured: Boolean,
         ai: AiRecommendationService = mockk(relaxed = true),
+        tracks: kotlinx.coroutines.flow.Flow<List<com.parachord.shared.model.Track>> = flowOf(emptyList()),
     ): AndroidHomeSources {
         val settings = mockk<SettingsStore>(relaxed = true)
         every { settings.getSpotifyAccessTokenFlow() } returns flowOf(null)
@@ -57,7 +58,7 @@ class AndroidHomeSourcesTest {
         val holder = mockk<PlaybackStateHolder>(relaxed = true)
         every { holder.state } returns MutableStateFlow(PlaybackState())
         val library = mockk<LibraryRepository>(relaxed = true)
-        every { library.getAllTracks() } returns flowOf(emptyList())
+        every { library.getAllTracks() } returns tracks
         every { library.getAllAlbums() } returns flowOf(emptyList())
         every { library.getAllArtists() } returns flowOf(emptyList())
         every { library.getAllPlaylists() } returns flowOf(emptyList())
@@ -112,5 +113,18 @@ class AndroidHomeSourcesTest {
         val values = sources(configured = false, ai = ai).chatAvailable.take(2).toList()
         assertNull(values[0])
         assertEquals(true, values[1])
+    }
+
+    @Test
+    fun `the collection is read once for every flow that needs it`() = runTest {
+        var reads = 0
+        val local = com.parachord.shared.model.Track(id = "local-1", title = "t", artist = "a", resolver = "localfiles")
+        val tracks = kotlinx.coroutines.flow.flow { reads++; emit(listOf(local)); kotlinx.coroutines.awaitCancellation() }
+        val s = sources(configured = false, tracks = tracks)
+        val collected = kotlinx.coroutines.flow.combine(s.collectionTracks, s.hasCollection, s.folderAdded) { t, has, folder ->
+            Triple(t.size, has, folder)
+        }.first()
+        assertEquals(Triple(1, true, true), collected)
+        assertEquals(1, reads)
     }
 }

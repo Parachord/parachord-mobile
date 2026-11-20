@@ -52,6 +52,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -110,11 +111,21 @@ class AndroidHomeSources(
 
     override val playlists: Flow<List<Playlist>> = library.getAllPlaylists()
 
-    override val collectionTracks: Flow<List<Track>> = library.getAllTracks()
+    /**
+     * The collection's tracks, read once for Home: [hasCollection],
+     * [folderAdded] and the view model's Recent Loves all derive from this one
+     * shared flow. No replay is kept once nobody listens, so a new visit's
+     * first value is what's stored, not the last visit's list.
+     */
+    override val collectionTracks: Flow<List<Track>> = library.getAllTracks().shareIn(
+        scope,
+        SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000, replayExpirationMillis = 0),
+        replay = 1,
+    )
 
     /** Desktop's `hasMusic`: any track (loves and local files), album or artist in the collection. */
     override val hasCollection: Flow<Boolean> = combine(
-        library.getAllTracks().map { it.isNotEmpty() }.distinctUntilChanged(),
+        collectionTracks.map { it.isNotEmpty() }.distinctUntilChanged(),
         library.getAllAlbums().map { it.isNotEmpty() }.distinctUntilChanged(),
         library.getAllArtists().map { it.isNotEmpty() }.distinctUntilChanged(),
     ) { tracks, albums, artists -> tracks || albums || artists }.distinctUntilChanged()
@@ -226,7 +237,7 @@ class AndroidHomeSources(
 
     /** Local-file tracks are in the library. */
     override val folderAdded: Flow<Boolean> =
-        library.getAllTracks().map { tracks -> tracks.any { it.resolver == LOCAL_FILES_ID } }.distinctUntilChanged()
+        collectionTracks.map { tracks -> tracks.any { it.resolver == LOCAL_FILES_ID } }.distinctUntilChanged()
 
     /** Last.fm and ListenBrainz by their usernames; Libre.fm saves none, so its session stands for it. */
     override val scrobblerAccounts: Flow<Map<String, Boolean>> = combine(
