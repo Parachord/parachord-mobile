@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
+import com.parachord.android.ui.navigation.bottomNavSelected
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -638,8 +639,10 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 BottomNavItem.entries.forEach { item ->
-                                    val selected = item.route != null &&
-                                        currentDestination?.hierarchy?.any { it.route == item.route } == true
+                                    val selected = bottomNavSelected(
+                                        item.route,
+                                        currentDestination?.hierarchy?.map { it.route } ?: emptySequence(),
+                                    )
 
                                     Box(
                                         modifier = Modifier
