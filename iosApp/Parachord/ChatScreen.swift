@@ -13,7 +13,25 @@ import Shared
 final class ChatViewModel {
     private let container = IosContainer.companion.shared
 
-    struct Msg: Identifiable { let id = UUID(); let role: String; let content: String }
+    struct Msg: Identifiable {
+        let id = UUID()
+        let role: String
+        let content: String
+        /// The assistant message laid out once (shared `ChatContent`), not on every redraw.
+        let blocks: [ChatBlock]
+        init(role: String, content: String) {
+            self.role = role
+            self.content = content
+            if role == "user" {
+                blocks = []
+            } else {
+                // Messages saved before replies were converted still get desktop's
+                // plain-text fallback (it leaves a message that has cards alone).
+                let c = ChatContent.shared
+                blocks = c.blocks(content: c.convertPlainTextToCards(content: content))
+            }
+        }
+    }
     struct Provider: Identifiable { let id: String; let name: String; let configured: Bool }
 
     var messages: [Msg] = []
@@ -22,6 +40,9 @@ final class ChatViewModel {
     var input = ""
     var isLoading = false
     var progress: String?
+    /// False once this chat screen has gone: a send that finishes later must not
+    /// take a prompt queued for the next chat.
+    var isOpen = true
 
     var selectedProvider: Provider? { providers.first { $0.id == selectedProviderId } }
     /// The providers were read and none has a key: the screen says how to set
@@ -74,14 +95,14 @@ final class ChatViewModel {
     }
 
     /// Home's Ask: puts the queued in-app prompt in the input when it can be sent now
-    /// (shared `ChatPrompt.shouldSend`); true when the caller should send it. Checked
+    /// (shared `takeSendableChatPrompt`, Android's rule); true when the caller should send it. Checked
     /// once the provider's messages are loaded (`start()` awaits `select`), so the
     /// load can't replace the shown prompt, and again after each reply.
     func takeQueuedInAppPrompt() -> Bool {
-        let pending = container.pendingInAppChatPrompt()
-        guard ChatPrompt.shared.shouldSend(pending: pending, chatOpen: true,
-                                           providerId: selectedProviderId, loading: isLoading),
-              let prompt = container.consumeInAppChatPrompt() else { return false }
+        // Only a provider that can send takes the prompt; otherwise it stays queued.
+        let sendable = selectedProvider?.configured == true ? selectedProviderId : nil
+        guard let prompt = container.takeSendableInAppChatPrompt(chatOpen: isOpen, providerId: sendable, loading: isLoading)
+        else { return false }
         input = prompt
         return true
     }
@@ -100,6 +121,8 @@ struct ChatScreen: View {
     /// Deep-link prefill (#256): pre-fills the input bar (not auto-sent) so the
     /// user can review/edit the seeded Shuffleupagus prompt before sending.
     var seedPrompt: String? = nil
+    /// Opens a saved playlist (a playlist card's tap); the caller closes the chat.
+    var onOpenPlaylist: (String) -> Void = { _ in }
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @State private var model = ChatViewModel()
     @FocusState private var inputFocused: Bool
@@ -131,6 +154,8 @@ struct ChatScreen: View {
         }
         .background(PC.Player.bg.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .environment(\.chatOpenPlaylist, ChatOpenPlaylist(open: onOpenPlaylist))
+        .onDisappear { model.isOpen = false }
         .task {
             await model.start()
             // Home's Ask (in-app, sent at once) before a link's prefill (sent by the user).
@@ -184,7 +209,7 @@ struct ChatScreen: View {
                         emptyState.padding(.top, 80)
                     }
                     ForEach(model.messages) { m in
-                        if m.role == "user" { userBubble(m.content) } else { assistantBubble(m.content) }
+                        if m.role == "user" { userBubble(m.content) } else { assistantBubble(m) }
                     }
                     if model.isLoading { loadingBubble }
                     Color.clear.frame(height: 1).id("bottom")
@@ -226,11 +251,11 @@ struct ChatScreen: View {
         }
     }
 
-    private func assistantBubble(_ text: String) -> some View {
+    private func assistantBubble(_ m: ChatViewModel.Msg) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(PC.accentSoft).padding(.top, 10)
             VStack(alignment: .leading, spacing: 6) {
-                ChatBlocksView(text: text)
+                ChatBlocksView(blocks: m.blocks, message: m.content)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(.white.opacity(0.07), in: .rect(topLeadingRadius: 16, bottomLeadingRadius: 4, bottomTrailingRadius: 16, topTrailingRadius: 16))
@@ -283,13 +308,8 @@ struct ChatScreen: View {
 /// A Shuffleupagus message: the shared `ChatContent.blocks`, drawn.
 private struct ChatBlocksView: View {
     let blocks: [ChatBlock]
-
-    init(text: String) {
-        // Messages saved before replies were converted still get desktop's
-        // plain-text fallback (it leaves a message that has cards alone).
-        let content = ChatContent.shared
-        blocks = content.blocks(content: content.convertPlainTextToCards(content: text))
-    }
+    /// The message's text, for a playlist card that saves the tracks it lists.
+    let message: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -302,24 +322,25 @@ private struct ChatBlocksView: View {
     @ViewBuilder
     private func blockView(_ block: ChatBlock, first: Bool) -> some View {
         if let h = block as? ChatBlock.Header {
-            let size: CGFloat = h.level == 1 ? 18 : h.level == 2 ? 16 : h.level == 3 ? 14 : 13
+            let size: CGFloat = h.level == 1 ? 18 : h.level == 2 ? 16 : h.level <= 4 ? 14 : 13
             Text(h.text).font(.system(size: size, weight: .semibold)).foregroundStyle(.white)
                 .padding(.top, first ? 0 : 12).padding(.bottom, 4)
         } else if let c = block as? ChatBlock.CardLine {
-            ChatCardView(card: c.card).padding(.vertical, 4)
+            ChatCardView(card: c.card, message: message).padding(.vertical, 4)
         } else if let item = block as? ChatBlock.ListItem {
             // A card item centres its number on the card; a text item keeps
             // the line's top alignment (desktop).
             HStack(alignment: item.isCard ? .center : .top, spacing: 8) {
                 Text("\(item.number).").font(.system(size: 14)).foregroundStyle(.white.opacity(0.45))
                     .frame(minWidth: 20, alignment: .leading)
-                ChatInlinesView(inlines: item.inlines)
+                // The item's own 4 pt gap spaces a card item; no second padding.
+                ChatInlinesView(inlines: item.inlines, message: message, cardPadding: 0)
             }
             .padding(.top, first ? 0 : (item.isCard ? 4 : 12))
         } else if block is ChatBlock.Blank {
             Color.clear.frame(height: 8)
         } else if let line = block as? ChatBlock.Line {
-            ChatInlinesView(inlines: line.inlines)
+            ChatInlinesView(inlines: line.inlines, message: message)
         }
     }
 }
@@ -328,6 +349,8 @@ private struct ChatBlocksView: View {
 /// breaks the line and is drawn as its own row.
 private struct ChatInlinesView: View {
     let inlines: [ChatInline]
+    let message: String
+    var cardPadding: CGFloat = 4
 
     private enum Piece { case text(AttributedString); case card(ChatCardRef) }
 
@@ -383,17 +406,32 @@ private struct ChatInlinesView: View {
                     Text(a).font(.system(size: 14)).foregroundStyle(Color(white: 0.9))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case .card(let c):
-                    ChatCardView(card: c).padding(.vertical, 4)
+                    ChatCardView(card: c, message: message).padding(.vertical, cardPadding)
                 }
             }
         }
     }
 }
 
+/// Opens a saved playlist from a chat card (set by `ChatScreen` from its caller).
+struct ChatOpenPlaylist { var open: (String) -> Void = { _ in } }
+private struct ChatOpenPlaylistKey: EnvironmentKey { static let defaultValue = ChatOpenPlaylist() }
+extension EnvironmentValues {
+    var chatOpenPlaylist: ChatOpenPlaylist {
+        get { self[ChatOpenPlaylistKey.self] }
+        set { self[ChatOpenPlaylistKey.self] = newValue }
+    }
+}
+
 private struct ChatCardView: View {
     let card: ChatCardRef
+    /// The message the card is in (a playlist card saves the tracks it lists).
+    let message: String
     private let container = IosContainer.companion.shared
+    @Environment(\.chatOpenPlaylist) private var openPlaylist
     @State private var art: String?
+    @State private var saveOffer: String?
+    @State private var unavailable: String?
 
     var body: some View {
         Button { play() } label: {
@@ -415,6 +453,13 @@ private struct ChatCardView: View {
             .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .alert(title, isPresented: Binding(get: { saveOffer != nil }, set: { if !$0 { saveOffer = nil } })) {
+            Button("Save") { savePlaylist() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text(saveOffer ?? "") }
+        .alert(unavailable ?? "", isPresented: Binding(get: { unavailable != nil }, set: { if !$0 { unavailable = nil } })) {
+            Button("OK", role: .cancel) {}
+        }
         .task {
             if let t = card as? ChatCardRef.Track {
                 art = try? await container.chatTrackArtwork(title: t.title, artist: t.artist, album: t.album)
@@ -460,7 +505,27 @@ private struct ChatCardView: View {
             } else if let a = card as? ChatCardRef.Artist {
                 try? await container.chatPlayArtist(name: a.name)
             }
-            // A playlist card opens nothing yet on iOS (no saved-playlist route from the chat).
+            else if let p = card as? ChatCardRef.Playlist {
+                // Desktop's playlist card (shared ChatPlaylistCards): open the saved
+                // playlist, or offer to save the tracks the message lists.
+                guard let tap = try? await container.chatPlaylistCardTap(
+                    name: p.name, id: p.id, trackCount: p.trackCount, messageContent: message) else { return }
+                switch tap.kind {
+                case "open": if let id = tap.playlistId { openPlaylist.open(id) }
+                case "offerSave": saveOffer = tap.message
+                default: unavailable = tap.message
+                }
+            }
+        }
+    }
+
+    private func savePlaylist() {
+        guard let p = card as? ChatCardRef.Playlist else { return }
+        Task {
+            if let id = try? await container.saveChatPlaylistCard(
+                name: p.name, id: p.id, trackCount: p.trackCount, messageContent: message) {
+                openPlaylist.open(id)
+            }
         }
     }
 }

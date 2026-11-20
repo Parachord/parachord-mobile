@@ -51,7 +51,7 @@ class ChatViewModelPendingPromptTest {
         override suspend fun deleteOlderThan(cutoffMillis: Long) {}
         override suspend fun getByProvider(providerId: String): List<ChatMessageRecord> {
             delay(200)
-            return listOf(ChatMessageRecord(providerId = providerId, role = "USER", content = "earlier", timestamp = Long.MAX_VALUE / 2))
+            return listOf(ChatMessageRecord(providerId = providerId, role = "USER", content = if (providerId == "chatgpt") "earlier" else "earlier for $providerId", timestamp = Long.MAX_VALUE / 2))
         }
         override suspend fun insert(record: ChatMessageRecord) {}
         override suspend fun clearByProvider(providerId: String) {}
@@ -67,20 +67,30 @@ class ChatViewModelPendingPromptTest {
         json = Json,
     )
 
-    private fun viewModel(): ChatViewModel {
+    private fun viewModel(
+        claudeConfigured: Boolean = false,
+        chatGptConfigured: Boolean = true,
+        keyLookupThrows: Boolean = false,
+        replyGate: kotlinx.coroutines.CompletableDeferred<Unit>? = null,
+    ): ChatViewModel {
         val settings = mockk<SettingsStore>(relaxed = true)
-        every { settings.getAiProviderApiKeyFlow("chatgpt") } returns flowOf("key")
-        every { settings.getAiProviderApiKeyFlow("claude") } returns flowOf(null)
+        every { settings.getAiProviderApiKeyFlow("chatgpt") } returns flowOf(if (chatGptConfigured) "key" else null)
+        every { settings.getAiProviderApiKeyFlow("claude") } returns flowOf(if (claudeConfigured) "key" else null)
         every { settings.getAiProviderApiKeyFlow("gemini") } returns flowOf(null)
         coEvery { settings.getSelectedChatProvider() } returns null
         coEvery { settings.setSelectedChatProvider(any()) } coAnswers { delay(50) }
-        coEvery { settings.getAiProviderApiKey(any()) } returns "key"
+        if (keyLookupThrows) {
+            coEvery { settings.getAiProviderApiKey(any()) } throws IllegalStateException("keystore locked")
+        } else {
+            coEvery { settings.getAiProviderApiKey(any()) } returns "key"
+        }
         coEvery { settings.getAiProviderModel(any()) } returns ""
 
         val chatGpt = mockk<ChatGptProvider>()
         every { chatGpt.id } returns "chatgpt"
         every { chatGpt.name } returns "ChatGPT"
         coEvery { chatGpt.chat(any(), any(), any()) } coAnswers {
+            replyGate?.await()
             val messages = firstArg<List<ChatMessage>>()
             AiChatResponse(content = "reply to " + messages.last().content)
         }
@@ -89,7 +99,7 @@ class ChatViewModelPendingPromptTest {
         val plugins = mockk<com.parachord.android.plugin.PluginManager>(relaxed = true)
         every { plugins.plugins } returns MutableStateFlow(emptyList())
 
-        return ChatViewModel(chatService, settings, chatGpt, claude, gemini, mockk(relaxed = true), plugins)
+        return ChatViewModel(chatService, settings, chatGpt, claude, gemini, mockk(relaxed = true), plugins, mockk(relaxed = true))
     }
 
     @Test
@@ -134,5 +144,43 @@ class ChatViewModelPendingPromptTest {
 
         assertEquals("for the new screen", chatService.pendingChatPrompt.value)
         assertEquals(listOf("earlier"), vm.messages.value.map { it.content })
+    }
+
+    @Test
+    fun `a send that throws resets loading`() = runTest(testDispatcher) {
+        val vm = viewModel(keyLookupThrows = true)
+        backgroundScope.launch { vm.availableProviders.collect {} }
+        vm.setChatOpen(true)
+        advanceUntilIdle()
+        vm.sendMessage("hello")
+        advanceUntilIdle()
+        assertEquals(false, vm.isLoading.value)
+    }
+
+    @Test
+    fun `a prompt waits while no provider can send it`() = runTest(testDispatcher) {
+        chatService.setPendingChatPrompt("hold on", fromApp = true)
+        val vm = viewModel(chatGptConfigured = false)
+        backgroundScope.launch { vm.availableProviders.collect {} }
+        vm.setChatOpen(true)
+        advanceUntilIdle()
+        assertEquals("hold on", chatService.pendingChatPrompt.value)
+    }
+
+    @Test
+    fun `switching provider during a reply shows the selected provider afterwards`() = runTest(testDispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vm = viewModel(claudeConfigured = true, replyGate = gate)
+        backgroundScope.launch { vm.availableProviders.collect {} }
+        vm.setChatOpen(true)
+        advanceUntilIdle()
+        assertEquals("chatgpt", vm.selectedProviderId.value)
+        vm.sendMessage("hello")
+        advanceUntilIdle()
+        vm.selectProvider("claude")
+        advanceUntilIdle()
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("earlier for claude"), vm.messages.value.map { it.content })
     }
 }

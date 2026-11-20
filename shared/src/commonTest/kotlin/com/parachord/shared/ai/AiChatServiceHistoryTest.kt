@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The chat history for a provider is loaded once and never replaced while
@@ -82,5 +83,77 @@ class AiChatServiceHistoryTest {
         val shown = chat.getDisplayMessages("fake").map { it.content }
         assertEquals(listOf("earlier", "new prompt", "reply to new prompt"), shown)
         assertEquals(1, store.reads)
+    }
+
+    /** A store that answers at once and keeps what's inserted. */
+    private class MemoryStore : ChatHistoryStore {
+        val inserted = mutableListOf<ChatMessageRecord>()
+        override suspend fun deleteOlderThan(cutoffMillis: Long) {}
+        override suspend fun getByProvider(providerId: String): List<ChatMessageRecord> = emptyList()
+        override suspend fun insert(record: ChatMessageRecord) { inserted += record }
+        override suspend fun clearByProvider(providerId: String) { inserted.clear() }
+        override suspend fun clearAll() { inserted.clear() }
+    }
+
+    /** Asks for one tool, then answers [then] (or throws when it's null). */
+    private class ToolThenProvider(private val then: String?) : AiChatProvider {
+        override val id = "fake"
+        override val name = "Fake"
+        var calls = 0
+        override suspend fun chat(
+            messages: List<ChatMessage>,
+            tools: List<DjToolDefinition>,
+            config: AiProviderConfig,
+        ): AiChatResponse {
+            calls++
+            if (calls == 1) return AiChatResponse(content = "", toolCalls = listOf(ToolCall("t1", "play", emptyMap())))
+            return AiChatResponse(content = then ?: throw IllegalStateException("ChatGPT API error (500): boom"))
+        }
+    }
+
+    private object ThrowingTools : DjToolExecutor {
+        override suspend fun execute(name: String, args: Map<String, Any?>): Map<String, Any?> =
+            throw IllegalStateException("playback controller gone")
+    }
+
+    @Test
+    fun `a tool that throws answers with an error result and the reply still comes`() = runTest {
+        val store = MemoryStore()
+        val chat = AiChatService(ThrowingTools, systemPrompt = { "system" }, historyStore = store, json = Json)
+        val reply = chat.sendMessage(ToolThenProvider("Sorry, I couldn't play that"), AiProviderConfig(), "play x")
+        assertEquals("Sorry, I couldn't play that", reply)
+        val tool = chat.getFullHistory("fake").single { it.role == ChatRole.TOOL }
+        assertTrue("playback controller gone" in tool.content, tool.content)
+    }
+
+    @Test
+    fun `a failed tool round is shown and kept`() = runTest {
+        val store = MemoryStore()
+        val chat = service(store)
+        val reply = chat.sendMessage(ToolThenProvider(null), AiProviderConfig(), "play x")
+        assertEquals(reply, chat.getDisplayMessages("fake").last().content)
+        assertEquals(reply, store.inserted.last().content)
+    }
+
+    @Test
+    fun `clearing the chat during a send leaves no row from that send`() = runTest {
+        val store = MemoryStore()
+        val chat = service(store)
+        val gate = CompletableDeferred<Unit>()
+        val slow = object : AiChatProvider {
+            override val id = "fake"
+            override val name = "Fake"
+            override suspend fun chat(messages: List<ChatMessage>, tools: List<DjToolDefinition>, config: AiProviderConfig): AiChatResponse {
+                gate.await()
+                return AiChatResponse(content = "late reply")
+            }
+        }
+        launch { chat.sendMessage(slow, AiProviderConfig(), "hello") }
+        runCurrent()
+        chat.clearHistory("fake")
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(emptyList(), store.inserted)
+        assertEquals(emptyList(), chat.getDisplayMessages("fake"))
     }
 }

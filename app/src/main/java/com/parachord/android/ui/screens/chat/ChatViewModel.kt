@@ -18,6 +18,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import com.parachord.shared.ai.ChatCardRef
+import com.parachord.shared.ai.ChatPlaylistCards
+import com.parachord.shared.ai.ChatPlaylistTap
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 class ChatViewModel constructor(
@@ -28,6 +32,7 @@ class ChatViewModel constructor(
     private val geminiProvider: GeminiProvider,
     val cardEnricher: ChatCardEnricher,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
+    private val libraryRepository: com.parachord.shared.repository.LibraryRepository,
 ) : ViewModel() {
 
     // Native providers + .axe-only AI providers (e.g., Ollama)
@@ -117,14 +122,21 @@ class ChatViewModel constructor(
                 _chatOpen,
                 _loadedProviderId,
                 _isLoading,
-            ) { pending, open, providerId, loading -> PromptCheck(pending, open, providerId, loading) }
-                .collect { check ->
-                    if (check.open && check.pending != null) {
-                        seenPromptGeneration = chatService.pendingChatPromptGeneration
-                    }
-                    chatService.takeSendableChatPrompt(check.open, check.providerId, check.loading)
-                        ?.let { prompt -> sendMessage(prompt) }
+                availableProviders,
+            ) { pending, open, providerId, loading, infos ->
+                // Only a provider that can send takes the prompt; otherwise it
+                // stays queued rather than being consumed and lost.
+                val sendable = providerId?.takeIf { id ->
+                    providers.any { it.id == id } && infos.any { it.id == id && it.isConfigured }
                 }
+                PromptCheck(pending, open, sendable, loading)
+            }.collect { check ->
+                if (check.open && check.pending != null) {
+                    seenPromptGeneration = chatService.pendingChatPromptGeneration
+                }
+                chatService.takeSendableChatPrompt(check.open, check.providerId, check.loading)
+                    ?.let { prompt -> sendMessage(prompt) }
+            }
         }
     }
 
@@ -160,25 +172,72 @@ class ChatViewModel constructor(
         _messages.value = _messages.value + ChatMessage(role = ChatRole.USER, content = text)
 
         viewModelScope.launch {
-            val config = AiProviderConfig(
-                apiKey = settingsStore.getAiProviderApiKey(providerId) ?: "",
-                model = settingsStore.getAiProviderModel(providerId),
-            )
-
-            chatService.sendMessage(
-                provider = provider,
-                config = config,
-                userMessage = text,
-                onProgress = { _progressText.value = it },
-            )
-
-            // Refresh from service (includes assistant response)
-            if (_selectedProviderId.value == providerId) {
-                _messages.value = chatService.getDisplayMessages(providerId)
+            try {
+                val config = AiProviderConfig(
+                    apiKey = settingsStore.getAiProviderApiKey(providerId) ?: "",
+                    model = settingsStore.getAiProviderModel(providerId),
+                )
+                chatService.sendMessage(
+                    provider = provider,
+                    config = config,
+                    userMessage = text,
+                    onProgress = { _progressText.value = it },
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("ChatViewModel", "Send failed: ${e::class.simpleName}")
+            } finally {
+                _isLoading.value = false
+                _progressText.value = null
             }
-            _isLoading.value = false
-            _progressText.value = null
+            // Show the provider selected now, which may not be the one that
+            // answered (the user switched during the reply).
+            _selectedProviderId.value?.let { current ->
+                _messages.value = chatService.getDisplayMessages(current)
+            }
         }
+    }
+
+    private val _playlistOffer = MutableStateFlow<PlaylistOffer?>(null)
+    /** A playlist card the model never saved, waiting for the user's Save. */
+    val playlistOffer: StateFlow<PlaylistOffer?> = _playlistOffer.asStateFlow()
+
+    private val _playlistToOpen = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+    /** A saved playlist a card tap should open. */
+    val playlistToOpen: kotlinx.coroutines.flow.SharedFlow<String> = _playlistToOpen
+
+    private val _notice = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val notice: kotlinx.coroutines.flow.SharedFlow<String> = _notice
+
+    data class PlaylistOffer(val card: ChatCardRef.Playlist, val messageContent: String, val message: String)
+
+    /** A tap on a playlist card (shared [ChatPlaylistCards], desktop's playlist card). */
+    fun openPlaylistCard(card: ChatCardRef.Playlist, messageContent: String) {
+        viewModelScope.launch {
+            val playlists = libraryRepository.getAllPlaylists().first()
+            when (val tap = ChatPlaylistCards.tap(card, messageContent, playlists)) {
+                is ChatPlaylistTap.Open -> _playlistToOpen.tryEmit(tap.playlistId)
+                is ChatPlaylistTap.OfferSave -> _playlistOffer.value =
+                    PlaylistOffer(card, messageContent, ChatPlaylistCards.saveOfferMessage(tap.name, tap.trackCount))
+                is ChatPlaylistTap.Unavailable -> _notice.tryEmit(tap.message)
+            }
+        }
+    }
+
+    /** The user saved the offered playlist: create it from the message's tracks and open it. */
+    fun saveOfferedPlaylist() {
+        val offer = _playlistOffer.value ?: return
+        _playlistOffer.value = null
+        viewModelScope.launch {
+            val (playlist, tracks) = ChatPlaylistCards.draft(offer.card, offer.messageContent)
+            libraryRepository.createPlaylistWithTracks(playlist, tracks)
+            _playlistToOpen.tryEmit(playlist.id)
+        }
+    }
+
+    fun dismissPlaylistOffer() {
+        _playlistOffer.value = null
     }
 
     fun clearChat() {

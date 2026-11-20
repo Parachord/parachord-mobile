@@ -1,5 +1,7 @@
 package com.parachord.shared.ai
 
+import com.parachord.shared.api.SecretRedaction
+
 /**
  * What Shuffleupagus says when the AI provider's request fails. A port of
  * desktop's `src/renderer/lib/ai-provider-errors.js` (`describeProviderError`),
@@ -37,6 +39,8 @@ object AiProviderErrors {
         "unable to resolve host", "failed to connect", "connect timed out", "no address associated",
         // Darwin
         "internet connection appears to be offline", "could not connect to the server",
+        // Ktor's HttpTimeout ("Request timeout has expired [url=…]")
+        "timeout has expired",
     )
 
     /**
@@ -60,20 +64,13 @@ object AiProviderErrors {
         return "Error: $short"
     }
 
-    private val QUERY_SECRET = Regex("""([?&](?:key|api_key|apikey|access_token|token)=)[^&\s\]"']+""", RegexOption.IGNORE_CASE)
-    private val BEARER = Regex("""(Bearer\s+)[A-Za-z0-9._\-]+""", RegexOption.IGNORE_CASE)
-    private val KEY_LITERAL = Regex("""\b(sk-(?:ant-)?)[A-Za-z0-9_\-]{8,}|\bAIza[A-Za-z0-9_\-]{20,}""")
-
     /**
-     * [text] with credentials removed: a URL's `key=` (Gemini sends its key in
-     * the query), `api_key=`, `token=`, a Bearer token, and OpenAI, Anthropic
-     * and Google key literals. A timeout's message carries the request URL, so
-     * this runs before anything is shown, saved or logged.
+     * [text] with credentials removed (shared [SecretRedaction.redactSecrets]):
+     * a URL's `key=` (Gemini used to send its key in the query), `api_key=`,
+     * `token=`, a Bearer token, and key literals. A timeout's message carries
+     * the request URL, so this runs before anything is shown, saved or logged.
      */
-    fun redactSecrets(text: String): String = text
-        .replace(QUERY_SECRET) { it.groupValues[1] + "REDACTED" }
-        .replace(BEARER) { it.groupValues[1] + "REDACTED" }
-        .replace(KEY_LITERAL, "REDACTED")
+    fun redactSecrets(text: String): String = SecretRedaction.redactSecrets(text)
 }
 
 /**

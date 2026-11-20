@@ -12,6 +12,7 @@ import com.parachord.shared.ai.jsonElementToMap
 import com.parachord.shared.ai.mapToJsonElement
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
+import io.ktor.client.plugins.retry
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -77,6 +78,8 @@ class ChatGptProvider(
         }
 
         val response = httpClient.post(endpoint) {
+            // A billable request: never re-sent after a connection failure.
+            retry { noRetry() }
             header("Authorization", "Bearer ${config.apiKey}")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(JsonElement.serializer(), body))

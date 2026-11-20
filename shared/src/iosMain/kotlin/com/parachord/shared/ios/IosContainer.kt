@@ -3861,7 +3861,7 @@ class IosContainer private constructor() {
     private val aiChatService: AiChatService by lazy {
         AiChatService(djToolExecutor, chatContextProvider, chatMessageDao, chatJson)
     }
-    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService, imageEnrichmentService) }
+    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService, imageEnrichmentService, com.parachord.shared.metadata.CatalogTrackArtwork(httpClient)) }
 
     // Flat Swift-facing API (mirrors Android's ChatViewModel calls).
     suspend fun chatSend(providerId: String, userMessage: String, onProgress: (String) -> Unit): String {
@@ -3905,6 +3905,38 @@ class IosContainer private constructor() {
 
     /** Takes the queued in-app prompt to send it; null when there is none. */
     fun consumeInAppChatPrompt(): String? = aiChatService.consumeInAppChatPrompt()
+
+    /**
+     * Takes the queued in-app prompt (Home's Ask) when the chat can send it now:
+     * [chatOpen], a provider that can send ([providerId], null when none can),
+     * no reply in flight (shared `takeSendableChatPrompt`, Android's rule).
+     * A link's prompt is left queued; the chat pre-fills that one instead.
+     */
+    fun takeSendableInAppChatPrompt(chatOpen: Boolean, providerId: String?, loading: Boolean): String? =
+        aiChatService.takeSendableChatPrompt(chatOpen, providerId, loading, inAppOnly = true)
+
+    /**
+     * A tap on a `{{playlist|…}}` chat card (shared `ChatPlaylistCards`, desktop's
+     * playlist card): `open` with the saved playlist's id, `offerSave` with the
+     * question to ask, or `unavailable` with the message to show.
+     */
+    suspend fun chatPlaylistCardTap(name: String, id: String, trackCount: String, messageContent: String): IosChatPlaylistTap {
+        val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
+        return when (val tap = com.parachord.shared.ai.ChatPlaylistCards.tap(card, messageContent, playlistDao.getAllSync())) {
+            is com.parachord.shared.ai.ChatPlaylistTap.Open -> IosChatPlaylistTap("open", tap.playlistId, null)
+            is com.parachord.shared.ai.ChatPlaylistTap.OfferSave ->
+                IosChatPlaylistTap("offerSave", null, com.parachord.shared.ai.ChatPlaylistCards.saveOfferMessage(tap.name, tap.trackCount))
+            is com.parachord.shared.ai.ChatPlaylistTap.Unavailable -> IosChatPlaylistTap("unavailable", null, tap.message)
+        }
+    }
+
+    /** Saves a playlist card the model never saved, from the tracks its message lists; returns the new id. */
+    suspend fun saveChatPlaylistCard(name: String, id: String, trackCount: String, messageContent: String): String {
+        val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
+        val (playlist, tracks) = com.parachord.shared.ai.ChatPlaylistCards.draft(card, messageContent)
+        libraryRepository.createPlaylistWithTracks(playlist, tracks)
+        return playlist.id
+    }
 
     /** The chat screen opened or closed; closing drops a prompt that never went out. */
     fun chatVisibilityChanged(wasOpen: Boolean, chatOpen: Boolean) =
@@ -4302,3 +4334,6 @@ class FlowWatcher(private val scope: CoroutineScope) {
 class Cancellable(private val onCancel: () -> Unit) {
     fun cancel() = onCancel()
 }
+
+/** What a playlist chat card's tap does, flattened for Swift: `kind` is open, offerSave or unavailable. */
+data class IosChatPlaylistTap(val kind: String, val playlistId: String?, val message: String?)

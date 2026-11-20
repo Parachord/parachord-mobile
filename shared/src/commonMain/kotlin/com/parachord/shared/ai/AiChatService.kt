@@ -152,10 +152,17 @@ class AiChatService(
         messages
     }
 
-    /** Add [message] to [history] (under the lock) and persist it. */
+    /**
+     * Add [message] to [history] (under the lock) and persist it. Nothing is
+     * added or saved once [history] is no longer the provider's list: the
+     * chat was cleared while this send was under way, and a late reply must
+     * not leave a row in the cleared conversation.
+     */
     private suspend fun append(providerId: String, history: MutableList<ChatMessage>, message: ChatMessage) {
-        historyLock.withLock { history.add(message) }
-        persistMessage(providerId, message)
+        val current = historyLock.withLock {
+            (histories[providerId] === history).also { if (it) history.add(message) }
+        }
+        if (current) persistMessage(providerId, message)
     }
 
     /** The system prompt followed by a copy of [history], for one provider call. */
@@ -248,7 +255,16 @@ class AiChatService(
             for (toolCall in currentResponse.toolCalls.orEmpty()) {
                 onProgress(toolProgressText(toolCall.name))
 
-                val result = toolExecutor.execute(toolCall.name, toolCall.arguments)
+                // A tool that throws answers with an error result, so the model
+                // can say what went wrong; the exception never reaches the screen.
+                val result = try {
+                    toolExecutor.execute(toolCall.name, toolCall.arguments)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Tool ${toolCall.name} failed: ${AiProviderErrors.redactSecrets(e.message ?: e::class.simpleName.orEmpty())}")
+                    mapOf("success" to false, "error" to (e.message ?: "The ${toolCall.name} tool failed."))
+                }
                 val resultJson = json.encodeToString(
                     JsonElement.serializer(),
                     mapToJsonElement(result),
@@ -272,7 +288,10 @@ class AiChatService(
                 throw e
             } catch (e: Exception) {
                 logProviderFailure(provider.id, e)
-                return "I encountered an error while processing. Please try again."
+                // Shown and kept, as desktop does (`app.js` ~L3020).
+                val failure = "I encountered an error while processing. Please try again."
+                append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = failure))
+                return failure
             }
         }
 

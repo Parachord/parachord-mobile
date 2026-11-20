@@ -402,6 +402,7 @@ fun ParachordNavHost(
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
+                onNavigateToPlaylist = { id -> navController.navigate(Routes.playlistDetail(id)) },
             )
         }
 

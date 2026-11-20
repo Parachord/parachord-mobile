@@ -53,6 +53,7 @@ class AiProviderErrorsTest {
         assertEquals(AiProviderErrors.CONNECTION, describe("failed to connect to api.anthropic.com/1.2.3.4 (port 443)"))
         assertEquals(AiProviderErrors.CONNECTION, describe("The Internet connection appears to be offline."))
         assertEquals(AiProviderErrors.CONNECTION, describe("ECONNREFUSED 127.0.0.1:11434"))
+        assertEquals(AiProviderErrors.CONNECTION, describe("Request timeout has expired [url=https://api.openai.com/v1/chat/completions, request_timeout=60000 ms]"))
     }
 
     @Test

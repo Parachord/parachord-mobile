@@ -11,7 +11,9 @@ import io.ktor.client.plugins.HttpRequestRetry
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.plugins.logging.DEFAULT
 import io.ktor.client.plugins.logging.LogLevel
+import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.header
 import io.ktor.http.HttpHeaders
@@ -49,11 +51,17 @@ internal fun HttpClientConfig<*>.installSharedPlugins(
     authProvider: AuthTokenProvider,
     tokenRefresher: OAuthTokenRefresher,
     lbTokenProvider: suspend () -> String? = { null },
+    logSink: (String) -> Unit = { Logger.DEFAULT.log(it) },
 ) {
     install(ContentNegotiation) { json(json) }
+    // Credentials never reach the log: secret headers are hidden, every line
+    // is run through SecretRedaction (a URL's `key=` / `api_key=` / token
+    // values), and release builds log nothing (iOS's default logger prints
+    // to stdout).
     install(Logging) {
-        level = if (appConfig.isDebug) LogLevel.HEADERS else LogLevel.INFO
-        sanitizeHeader { it == HttpHeaders.Authorization }
+        level = if (appConfig.isDebug) LogLevel.HEADERS else LogLevel.NONE
+        logger = RedactingLogger(logSink)
+        sanitizeHeader { SecretRedaction.isSecretHeader(it) }
     }
     defaultRequest {
         header(HttpHeaders.UserAgent, appConfig.userAgent)
@@ -104,4 +112,9 @@ internal fun HttpClientConfig<*>.installSharedPlugins(
         socketTimeoutMillis = 30_000
     }
     expectSuccess = false
+}
+
+/** Ktor's logger, with every line passed through [SecretRedaction.redactSecrets] first. */
+internal class RedactingLogger(private val sink: (String) -> Unit) : Logger {
+    override fun log(message: String) = sink(SecretRedaction.redactSecrets(message))
 }

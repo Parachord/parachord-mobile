@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.ai.ChatCardEnricher
@@ -101,6 +102,7 @@ fun ChatScreen(
     onNavigateToArtist: (artistName: String) -> Unit = {},
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onPlayTrack: (title: String, artist: String) -> Unit = { _, _ -> },
+    onNavigateToPlaylist: (playlistId: String) -> Unit = {},
     viewModel: ChatViewModel = koinViewModel(),
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -114,6 +116,28 @@ fun ChatScreen(
     LifecycleStartEffect(viewModel) {
         viewModel.setChatOpen(true)
         onStopOrDispose { viewModel.setChatOpen(false) }
+    }
+
+    // Playlist cards: open a saved playlist, offer to save one the model
+    // never saved, or say there's nothing to open (shared ChatPlaylistCards).
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(viewModel) {
+        launch { viewModel.playlistToOpen.collect { onNavigateToPlaylist(it) } }
+        launch {
+            viewModel.notice.collect {
+                android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val playlistOffer by viewModel.playlistOffer.collectAsStateWithLifecycle()
+    playlistOffer?.let { offer ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::dismissPlaylistOffer,
+            title = { Text(offer.card.name) },
+            text = { Text(offer.message) },
+            confirmButton = { TextButton(onClick = viewModel::saveOfferedPlaylist) { Text("Save") } },
+            dismissButton = { TextButton(onClick = viewModel::dismissPlaylistOffer) { Text("Cancel") } },
+        )
     }
 
     val hasConfiguredProvider = availableProviders.any { it.isConfigured }
@@ -164,6 +188,7 @@ fun ChatScreen(
                 onNavigateToArtist = onNavigateToArtist,
                 onNavigateToAlbum = onNavigateToAlbum,
                 onPlayTrack = onPlayTrack,
+                onOpenPlaylistCard = viewModel::openPlaylistCard,
                 cardEnricher = viewModel.cardEnricher,
                 modifier = Modifier.weight(1f),
             )
@@ -328,6 +353,7 @@ private fun MessageArea(
     onNavigateToArtist: (String) -> Unit,
     onNavigateToAlbum: (String, String) -> Unit,
     onPlayTrack: (String, String) -> Unit,
+    onOpenPlaylistCard: (ChatCardRef.Playlist, String) -> Unit,
     cardEnricher: ChatCardEnricher,
     modifier: Modifier = Modifier,
 ) {
@@ -383,6 +409,7 @@ private fun MessageArea(
                         onNavigateToArtist = onNavigateToArtist,
                         onNavigateToAlbum = onNavigateToAlbum,
                         onPlayTrack = onPlayTrack,
+                        onOpenPlaylistCard = onOpenPlaylistCard,
                         cardEnricher = cardEnricher,
                     )
                     else -> {}
@@ -439,6 +466,7 @@ private fun AssistantMessageBubble(
     onNavigateToArtist: (String) -> Unit,
     onNavigateToAlbum: (String, String) -> Unit,
     onPlayTrack: (String, String) -> Unit,
+    onOpenPlaylistCard: (ChatCardRef.Playlist, String) -> Unit,
     cardEnricher: ChatCardEnricher,
 ) {
     // Messages saved before replies were converted still get desktop's
@@ -450,6 +478,7 @@ private fun AssistantMessageBubble(
             onNavigateToArtist = onNavigateToArtist,
             onNavigateToAlbum = onNavigateToAlbum,
             onPlayTrack = onPlayTrack,
+            onOpenPlaylist = { onOpenPlaylistCard(it, text) },
             cardEnricher = cardEnricher,
         )
     }
@@ -487,7 +516,7 @@ private fun AssistantMessageBubble(
                     when (block) {
                         is ChatBlock.Header -> Text(
                             text = block.text,
-                            fontSize = when (block.level) { 1 -> 18.sp; 2 -> 16.sp; 3 -> 14.sp; else -> 13.sp },
+                            fontSize = when (block.level) { 1 -> 18.sp; 2 -> 16.sp; 3, 4 -> 14.sp; else -> 13.sp },
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(top = if (index > 0) 12.dp else 0.dp, bottom = 4.dp),
@@ -508,7 +537,8 @@ private fun AssistantMessageBubble(
                                 modifier = Modifier.widthIn(min = 20.dp),
                             )
                             Spacer(Modifier.width(8.dp))
-                            Column(Modifier.weight(1f)) { ChatInlines(block.inlines, cardRow) }
+                            // The item's own 4 dp gap spaces a card item; no second padding.
+                            Column(Modifier.weight(1f)) { ChatInlines(block.inlines, cardRow, cardPadding = 0.dp) }
                         }
                         ChatBlock.Blank -> Spacer(Modifier.height(8.dp))
                         is ChatBlock.Line -> ChatInlines(block.inlines, cardRow)
@@ -524,7 +554,11 @@ private fun AssistantMessageBubble(
  * breaks the line and is drawn as its own row.
  */
 @Composable
-private fun ChatInlines(inlines: List<ChatInline>, cardRow: @Composable (ChatCardRef) -> Unit) {
+private fun ChatInlines(
+    inlines: List<ChatInline>,
+    cardRow: @Composable (ChatCardRef) -> Unit,
+    cardPadding: Dp = 4.dp,
+) {
     val linkColor = MaterialTheme.colorScheme.primary
     val codeBackground = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
     val runs = mutableListOf<List<ChatInline>>()
@@ -570,7 +604,7 @@ private fun ChatInlines(inlines: List<ChatInline>, cardRow: @Composable (ChatCar
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
-        cardsAfter[i]?.let { card -> Box(Modifier.padding(vertical = 4.dp)) { cardRow(card) } }
+        cardsAfter[i]?.let { card -> Box(Modifier.padding(vertical = cardPadding)) { cardRow(card) } }
     }
 }
 
@@ -590,6 +624,7 @@ private fun ChatCardRow(
     onNavigateToArtist: (String) -> Unit,
     onNavigateToAlbum: (String, String) -> Unit,
     onPlayTrack: (String, String) -> Unit,
+    onOpenPlaylist: (ChatCardRef.Playlist) -> Unit,
     cardEnricher: ChatCardEnricher,
 ) {
     // Fetch artwork URL asynchronously from metadata providers
@@ -622,8 +657,7 @@ private fun ChatCardRow(
                     is ChatCardRef.Track -> onPlayTrack(card.title, card.artist)
                     is ChatCardRef.Album -> onNavigateToAlbum(card.title, card.artist)
                     is ChatCardRef.Artist -> onNavigateToArtist(card.name)
-                    // Opening a playlist from the chat needs a route here (follow-up).
-                    is ChatCardRef.Playlist -> Unit
+                    is ChatCardRef.Playlist -> onOpenPlaylist(card)
                 }
             }
             .padding(8.dp),

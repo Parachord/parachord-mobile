@@ -1,11 +1,13 @@
 package com.parachord.shared.ai
 
+import com.parachord.shared.metadata.CatalogTrackArtwork
 import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.resolver.selectBestMatch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -19,8 +21,8 @@ import kotlinx.coroutines.sync.withLock
  * - **track:** the album-art pipeline for its album. A card with no album
  *   (common when the model answers in prose) first searches for the song to
  *   find its album, as desktop's `searchResolvers` + `pickTrackMatch` does;
- *   with no album found, the matched song's own art (desktop's
- *   `getTrackArt`, the catalog's song search).
+ *   with no album found, the matched song's own art, then the store
+ *   catalogs' song search ([CatalogTrackArtwork], desktop's `getTrackArt`).
  *
  * The search keeps only a real match ([selectBestMatch]), so a card never
  * shows another song's cover. It used to take the first result whatever it
@@ -31,21 +33,25 @@ import kotlinx.coroutines.sync.withLock
  * [MISS_TTL_MS], then asked again: lower layers can turn a network failure
  * into a plain null. A lookup that threw is never kept, so the next showing
  * asks again. It used to keep every miss, failures included, for the session.
+ * Cards showing the same cover at once share one lookup.
  */
 class ChatCardEnricher(
     private val albumArt: suspend (albumTitle: String, artist: String) -> String?,
     private val artistImage: suspend (artistName: String) -> String?,
     private val trackSearch: suspend (title: String, artist: String) -> List<TrackSearchResult>,
+    private val catalogTrackArt: suspend (title: String, artist: String) -> String? = { _, _ -> null },
     private val nowMs: () -> Long = { currentTimeMillis() },
 ) {
     /** The app's wiring. */
     constructor(
         metadataService: MetadataService,
         imageEnrichmentService: ImageEnrichmentService,
+        catalogTrackArtwork: CatalogTrackArtwork,
     ) : this(
         albumArt = { album, artist -> imageEnrichmentService.lookupAlbumArt(album, artist) },
         artistImage = { name -> metadataService.getArtistImage(name) },
         trackSearch = { title, artist -> metadataService.searchTracks("$artist $title", limit = 5) },
+        catalogTrackArt = { title, artist -> catalogTrackArtwork.trackArtwork(artist, title) },
     )
 
     companion object {
@@ -72,7 +78,7 @@ class ChatCardEnricher(
                 artistOf = { it.artist },
             )
             val foundAlbum = match?.album?.takeIf { it.isNotBlank() }
-            (foundAlbum?.let { albumArt(it, artist) }) ?: match?.artworkUrl
+            (foundAlbum?.let { albumArt(it, artist) }) ?: match?.artworkUrl ?: catalogTrackArt(title, artist)
         }
     }
 
@@ -90,19 +96,34 @@ class ChatCardEnricher(
         return getOrFetch(key) { if (artistName.isBlank()) null else artistImage(artistName) }
     }
 
+    /** Lookups under way, by key: a second card asking the same waits for the first. */
+    private val inFlight = mutableMapOf<String, CompletableDeferred<String?>>()
+
     private suspend fun getOrFetch(key: String, fetch: suspend () -> String?): String? {
-        mutex.withLock {
+        val (deferred, mine) = mutex.withLock {
             val entry = cache[key]
             if (entry != null && (entry.url != null || nowMs() - entry.at < MISS_TTL_MS)) return entry.url
+            inFlight[key]?.let { return@withLock it to false }
+            CompletableDeferred<String?>().also { inFlight[key] = it } to true
         }
-        val result = try {
-            fetch()
+        if (!mine) return deferred.await()
+        try {
+            val result = fetch()
+            mutex.withLock {
+                cache[key] = Entry(result, nowMs())
+                inFlight.remove(key)
+            }
+            deferred.complete(result)
+            return result
         } catch (e: CancellationException) {
+            mutex.withLock { inFlight.remove(key) }
+            deferred.complete(null)
             throw e
         } catch (_: Exception) {
-            return null // not cached: the next showing asks again
+            // Not cached: the next showing asks again.
+            mutex.withLock { inFlight.remove(key) }
+            deferred.complete(null)
+            return null
         }
-        mutex.withLock { cache[key] = Entry(result, nowMs()) }
-        return result
     }
 }

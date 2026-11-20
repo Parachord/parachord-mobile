@@ -1,6 +1,9 @@
 package com.parachord.shared.ai
 
 import com.parachord.shared.metadata.TrackSearchResult
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,6 +16,7 @@ class ChatCardEnricherTest {
         val albumArt = mutableListOf<Pair<String, String>>()
         val artistImage = mutableListOf<String>()
         val trackSearch = mutableListOf<String>()
+        val catalog = mutableListOf<String>()
     }
 
     private var now = 0L
@@ -22,10 +26,12 @@ class ChatCardEnricherTest {
         albumArt: suspend (String, String) -> String? = { _, _ -> null },
         artistImage: suspend (String) -> String? = { null },
         trackSearch: suspend (String, String) -> List<TrackSearchResult> = { _, _ -> emptyList() },
+        catalog: suspend (String, String) -> String? = { _, _ -> null },
     ) = ChatCardEnricher(
         albumArt = { album, artist -> calls.albumArt += album to artist; albumArt(album, artist) },
         artistImage = { name -> calls.artistImage += name; artistImage(name) },
         trackSearch = { title, artist -> calls.trackSearch += "$artist $title"; trackSearch(title, artist) },
+        catalogTrackArt = { title, artist -> calls.catalog += "$artist $title"; catalog(title, artist) },
         nowMs = { now },
     )
 
@@ -120,5 +126,27 @@ class ChatCardEnricherTest {
         now += ChatCardEnricher.MISS_TTL_MS
         assertEquals("a.jpg", e.getAlbumArtwork("Kid A", "Radiohead"))
         assertEquals(2, calls.albumArt.size)
+    }
+
+    @Test
+    fun `no album and no match falls back to the catalog song search`() = runTest {
+        val calls = Calls()
+        val e = enricher(calls, catalog = { _, _ -> "itunes.jpg" })
+        assertEquals("itunes.jpg", e.getTrackArtwork("Song", "Band", ""))
+        assertEquals(listOf("Band Song"), calls.catalog)
+    }
+
+    @Test
+    fun `cards asking at once share one lookup`() = runTest {
+        val calls = Calls()
+        val gate = CompletableDeferred<Unit>()
+        val e = enricher(calls, artistImage = { gate.await(); "p.jpg" })
+        val first = async { e.getArtistImage("Radiohead") }
+        val second = async { e.getArtistImage("Radiohead") }
+        runCurrent()
+        gate.complete(Unit)
+        assertEquals("p.jpg", first.await())
+        assertEquals("p.jpg", second.await())
+        assertEquals(1, calls.artistImage.size)
     }
 }
