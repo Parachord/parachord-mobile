@@ -38,6 +38,7 @@
 		AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000068 /* PopOfTheTopsScreen.swift */; };
 		AA000000000000000000006B /* DetailScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006A /* DetailScreens.swift */; };
 		AA000000000000000000006D /* RecommendationsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006C /* RecommendationsScreen.swift */; };
+		AA0000000000000000000119 /* ServicePlaylistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000118 /* ServicePlaylistView.swift */; };
 		AA000000000000000000006F /* CuratedAlbumScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000006E /* CuratedAlbumScreens.swift */; };
 		AA0000000000000000000071 /* HistoryScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000070 /* HistoryScreen.swift */; };
 		AA0000000000000000000090 /* IosLocationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000091 /* IosLocationManager.swift */; };
@@ -123,6 +124,7 @@
 		AA000000000000000000006A /* DetailScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailScreens.swift; sourceTree = "<group>"; };
 		AA0000000000000000000116 /* RecommendationCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendationCards.swift; sourceTree = "<group>"; };
 		AA000000000000000000006C /* RecommendationsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecommendationsScreen.swift; sourceTree = "<group>"; };
+		AA0000000000000000000118 /* ServicePlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServicePlaylistView.swift; sourceTree = "<group>"; };
 		AA000000000000000000006E /* CuratedAlbumScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CuratedAlbumScreens.swift; sourceTree = "<group>"; };
 		AA0000000000000000000070 /* HistoryScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryScreen.swift; sourceTree = "<group>"; };
 		AA0000000000000000000091 /* IosLocationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosLocationManager.swift; sourceTree = "<group>"; };
@@ -275,6 +277,7 @@
 				AA0000000000000000000068 /* PopOfTheTopsScreen.swift */,
 				AA000000000000000000006A /* DetailScreens.swift */,
 				AA000000000000000000006C /* RecommendationsScreen.swift */,
+				AA0000000000000000000118 /* ServicePlaylistView.swift */,
 				AA0000000000000000000116 /* RecommendationCards.swift */,
 				AA0000000000000000000070 /* HistoryScreen.swift */,
 				AA00000000000000000000D0 /* CollectionView.swift */,
@@ -483,6 +486,7 @@
 				AA0000000000000000000069 /* PopOfTheTopsScreen.swift in Sources */,
 				AA000000000000000000006B /* DetailScreens.swift in Sources */,
 				AA000000000000000000006D /* RecommendationsScreen.swift in Sources */,
+				AA0000000000000000000119 /* ServicePlaylistView.swift in Sources */,
 				AA0000000000000000000117 /* RecommendationCards.swift in Sources */,
 				AA0000000000000000000071 /* HistoryScreen.swift in Sources */,
 				AA00000000000000000000D1 /* CollectionView.swift in Sources */,

@@ -524,10 +524,9 @@ private struct RecCardFor: View {
             .pcArtistContextMenu(name: item.name, imageUrl: item.imageUrl, coordinator: coordinator)
     }
 
-    // Task 5: open the service playlist view (`.servicePlaylist`) when `item.opensView`.
-    // Until that route exists, a tap plays the playlist.
+    /// A card with a link opens the playlist view; otherwise a tap plays it. Long-press keeps Play / Add to Queue.
     private var playlist: some View {
-        RecPlaylistCard(item: item, width: width, onOpen: { playService(queue: false) })
+        RecPlaylistCard(item: item, width: width, onOpen: openPlaylist)
             .contextMenu {
                 Button { playService(queue: false) } label: {
                     Label(RecommendationCopy.shared.PLAY, systemImage: "play.fill")
@@ -536,6 +535,14 @@ private struct RecCardFor: View {
                     Label(RecommendationCopy.shared.ADD_TO_QUEUE, systemImage: "text.append")
                 }
             }
+    }
+
+    private func openPlaylist() {
+        if item.opensView, let url = item.url {
+            actions.open(.servicePlaylist(url: url, name: item.name, source: item.sourceName, image: item.imageUrl))
+        } else {
+            playService(queue: false)
+        }
     }
 
     private func playService(queue: Bool) {

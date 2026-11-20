@@ -27,6 +27,8 @@ enum PCRoute: Hashable {
     case savedPlaylist(id: String)
     /// A friend's listening profile (#235 / #196); `tab`/`period` from a deep link (#470).
     case friend(id: String, username: String, service: String, name: String, tab: String? = nil, period: String? = nil)
+    /// A recommended service playlist opened in a playlist view (not saved until Save).
+    case servicePlaylist(url: String, name: String, source: String, image: String?)
 }
 
 /// Single source of truth for every pushed destination. Used by EVERY tab's
@@ -50,9 +52,8 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
             return .artist(artist.name)
         case let playlist as ContextDestination.Playlist:
             return .playlist(id: playlist.id, title: ctx.name)
-        case is ContextDestination.ServicePlaylist:
-            // Task 5: map to `.servicePlaylist(url:name:)` once that route exists.
-            return nil
+        case let sp as ContextDestination.ServicePlaylist:
+            return .servicePlaylist(url: sp.url, name: ctx.name, source: "", image: nil)
         default:
             return nil
         }
@@ -95,6 +96,8 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
     case .savedPlaylist(let id):       SavedPlaylistDetailView(playlistId: id)
+    case .servicePlaylist(let url, let name, let source, let image):
+        ServicePlaylistView(url: url, name: name, source: source, image: image)
     case .friend(let id, let username, let service, let name, let tab, let period):
         FriendProfileScreen(friendId: id, username: username, service: service, name: name, tab: tab, period: period)
     }
