@@ -58,6 +58,8 @@ class PluginManager constructor(
         val configFields: List<PluginConfigField> = emptyList(),
         /** `settings.requiresAuth`: the plugin needs its config set before it can answer. */
         val requiresAuth: Boolean = false,
+        /** `settings.authType` (e.g. `oauth`), informational: [needsAccount] follows [requiresAuth]. */
+        val authType: String? = null,
     )
 
     /** One `settings.configurable` field of a plugin manifest, rendered by the settings screen. */
@@ -541,11 +543,78 @@ class PluginManager constructor(
         ensureInitialized()
         return pollAsync(
             "rec",
-            "await window.__resolverLoader.getRecommendations('${escapeForJs(resolverId)}')",
+            loaderCall("await window.__resolverLoader.getRecommendations('${escapeForJs(resolverId)}')"),
             attempts = RECOMMENDATION_POLL_ATTEMPTS,
             throwOnFailure = true,
         ) ?: "[]"
     }
+
+    /** Loaded plugins that declare `capabilities.similarUsers`, as (id, name). */
+    suspend fun similarUsersResolvers(): List<Pair<String, String>> {
+        ensureInitialized()
+        return plugins.value.filter { it.capabilities["similarUsers"] == true }.map { it.id to it.name }
+    }
+
+    /**
+     * One plugin's `getSimilarUsers(config)`: the raw JSON array of
+     * `{ username, similarity, avatarUrl? }`. [configOverrideJson] is the
+     * plugin's stored config merged with `excludeUsernames` by the caller.
+     * Throws [PluginNotReadyException] / [IllegalStateException] like [getRecommendations].
+     */
+    @OptIn(ExperimentalEncodingApi::class)
+    suspend fun getSimilarUsers(resolverId: String, configOverrideJson: String): String {
+        ensureInitialized()
+        val b64 = Base64.encode(configOverrideJson.encodeToByteArray())
+        return pollAsync(
+            "su",
+            loaderCall("await window.__resolverLoader.getSimilarUsers('${escapeForJs(resolverId)}', JSON.parse(atob('$b64')))"),
+            attempts = RECOMMENDATION_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        ) ?: "[]"
+    }
+
+    /**
+     * The next page of an expandable recommendation section: the raw
+     * `{items,nextCursor}`, or null when the plugin doesn't paginate.
+     */
+    suspend fun expandRecommendationSection(resolverId: String, sectionId: String, cursor: String?): String? {
+        ensureInitialized()
+        val cursorJs = cursor?.let { "'${escapeForJs(it)}'" } ?: "null"
+        return pollAsync(
+            "recx",
+            loaderCall(
+                "await window.__resolverLoader.expandRecommendationSection(" +
+                    "'${escapeForJs(resolverId)}', '${escapeForJs(sectionId)}', $cursorJs)",
+            ),
+            attempts = RECOMMENDATION_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        )
+    }
+
+    /** Loaded plugins that declare `capabilities.historyMixes`, as (id, name). */
+    suspend fun historyMixResolvers(): List<Pair<String, String>> {
+        ensureInitialized()
+        return plugins.value.filter { it.capabilities["historyMixes"] == true }.map { it.id to it.name }
+    }
+
+    /** One plugin's `getHistoryMixes(config)`: the raw JSON array of mixes. */
+    suspend fun getHistoryMixes(resolverId: String): String {
+        ensureInitialized()
+        return pollAsync(
+            "hm",
+            loaderCall("await window.__resolverLoader.getHistoryMixes('${escapeForJs(resolverId)}')"),
+            attempts = RECOMMENDATION_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        ) ?: "[]"
+    }
+
+    /**
+     * Wraps a loader [call] as one async-IIFE expression (pollAsync splices it into
+     * `var result = <expression>`) that tags a `notReady` plugin error so the poll can
+     * tell "not ready yet" from a failure.
+     */
+    private fun loaderCall(call: String): String =
+        "await (async()=>{try{return $call}catch(e){throw new Error((e&&e.notReady?'notReady:':'')+(e&&e.message||e))}})()"
 
     /**
      * Run an async JS [expression] and return its JSON-stringified result via the
@@ -582,6 +651,9 @@ class PluginManager constructor(
             val raw = jsRuntime.evaluate("window.__resolveResults['$key']")?.unquote()
             if (raw != null && raw != "pending") {
                 jsRuntime.evaluate("delete window.__resolveResults['$key']; null")
+                if (raw.startsWith("error:notReady:") && throwOnFailure) {
+                    throw PluginNotReadyException("Plugin not ready: ${raw.removePrefix("error:notReady:")}")
+                }
                 if (raw.startsWith("error:") && throwOnFailure) throw IllegalStateException("Plugin call failed: ${raw.removePrefix("error:")}")
                 if (raw == "null" || raw.startsWith("error:")) return null
                 return raw
@@ -776,6 +848,7 @@ class PluginManager constructor(
                     )
                 } ?: emptyList(),
                 requiresAuth = axe.settings?.requiresAuth ?: false,
+                authType = axe.settings?.authType,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse .axe manifest: ${e.message}", e)

@@ -105,6 +105,7 @@ import com.parachord.shared.repository.FreshDrop
 import com.parachord.shared.repository.FreshDropsRepository
 import com.parachord.shared.repository.FriendsRepository
 import com.parachord.shared.repository.RecommendationsRepository
+import com.parachord.shared.recommendations.releaseDateLookup
 import com.parachord.shared.ai.AiChatProvider
 import com.parachord.shared.ai.AiChatService
 import com.parachord.shared.ai.AiProviderConfig
@@ -1957,10 +1958,56 @@ class IosContainer private constructor() {
             // from ListenBrainz, not metadata, so this costs nothing (artist
             // images already came from Last.fm/MusicBrainz, not Spotify).
             metadataService = enrichMetadataService,
+            aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(aiRecommendationService, settingsStore),
+            releaseDates = com.parachord.shared.recommendations.ReleaseDates(
+                load = { IosFileCache.read("release_dates_cache.json") },
+                save = { IosFileCache.write("release_dates_cache.json", it) },
+                lookup = { title, artist -> musicBrainzClient.releaseDateLookup(title, artist) },
+                nowMs = { com.parachord.shared.platform.currentTimeMillis() },
+            ),
+            providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
             cacheRead = { IosFileCache.read("recommendations_cache.json") },
             cacheWrite = { IosFileCache.write("recommendations_cache.json", it) },
+            similarUsers = { force -> similarUsersStore.usersFor(force) },
+            friendExclusions = { similarUsersStore.exclusions() },
+            cachedSimilarUsers = { similarUsersStore.cached() },
         )
     }
+
+    /** Listeners' people, from the plugins with `similarUsers` and `friends` (similar_users_cache.json). */
+    val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore by lazy {
+        com.parachord.shared.repository.SimilarUsersStore(
+            source = com.parachord.shared.repository.PluginSimilarUsersSource(pluginManager),
+            friends = {
+                com.parachord.shared.repository.friendExclusionsOf(
+                    friends = friendDao.getAllFriendsSync(),
+                    deletedFriendKeys = settingsStore.getDeletedFriendKeys(),
+                    selfAccounts = mapOf(
+                        "lastfm" to settingsStore.getLastFmUsername(),
+                        "listenbrainz" to settingsStore.getListenBrainzUsername(),
+                    ),
+                )
+            },
+            configFor = { id ->
+                com.parachord.shared.repository.similarUsersConfig(id, pluginManager.resolverConfigProvider?.invoke())
+            },
+            providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
+            load = { IosFileCache.read("similar_users_cache.json") },
+            save = { IosFileCache.write("similar_users_cache.json", it) },
+        )
+    }
+
+    /** `pluginIsOn` as iOS decides it: its active_resolvers already reflects connections. */
+    private suspend fun iosPluginIsOn(id: String, isMetaService: Boolean, needsAccount: Boolean): Boolean =
+        com.parachord.shared.plugin.pluginIsOn(
+            id = id,
+            isMetaService = isMetaService,
+            needsAccount = needsAccount,
+            connected = true,
+            activeResolvers = settingsStore.getActiveResolvers(),
+            disabledPlugins = settingsStore.getDisabledPlugins(),
+            disabledMetaProviders = settingsStore.getDisabledMetaProviders(),
+        )
 
     suspend fun loadRecommendedTracks(): List<RecommendedTrack> {
         var out = emptyList<RecommendedTrack>()
@@ -2664,7 +2711,7 @@ class IosContainer private constructor() {
             // getRecommendations (#606).
             resolverConfigProvider = {
                 mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
-                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore)
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, appConfig.lastFmApiKey)
             }
         }
     }
@@ -3081,6 +3128,24 @@ class IosContainer private constructor() {
     } catch (e: Exception) {
         Log.w("IosContainer", "appleMusicCatalogGet failed: ${e.message}")
         null
+    }
+
+    /**
+     * The Apple Music plugin's personal recommendations, for the host hook
+     * `appleMusicPersonalRecommendations` (`IosJsRuntime`'s bootstrap). The Swift
+     * `NativeBridge.appleMusicPersonalRecommendations` forwards the limit here and
+     * resumes the JS promise with the returned envelope (`{"ok":…}`,
+     * `{"notReady":"<code>"}` or `{"failed":<status>}`). The Music User Token is
+     * read here and never reaches JavaScript. Android parity:
+     * `NativeBridge.appleMusicPersonalRecommendations`.
+     */
+    suspend fun appleMusicPersonalRecommendations(limit: Int): String = try {
+        appleMusicCatalog.personalRecommendations(limit, settingsStore.getAppleMusicUserToken()).toJsEnvelope()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "appleMusicPersonalRecommendations failed: ${e.message}")
+        """{"failed":0}"""
     }
 
     private val MBID_REGEX =

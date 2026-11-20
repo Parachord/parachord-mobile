@@ -3,6 +3,7 @@ package com.parachord.android.plugin
 import com.parachord.shared.plugin.JsRuntime
 import com.parachord.shared.plugin.PluginFileAccess
 import com.parachord.shared.plugin.PluginManager
+import com.parachord.shared.plugin.PluginNotReadyException
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +51,31 @@ class PluginRecommendationsTest {
             val axe = Json.parseToJsonElement(android).jsonObject
             assertTrue("$id declares the capability", axe.getValue("capabilities").jsonObject.getValue("recommendations").jsonPrimitive.boolean)
             assertTrue("$id implements getRecommendations", axe.getValue("implementation").jsonObject.containsKey("getRecommendations"))
+        }
+    }
+
+    @Test
+    fun `the bundled Last_fm and ListenBrainz plugins offer Listeners on both apps`() {
+        fun atLeast(v: String, floor: String): Boolean {
+            val a = v.split(".").map { it.toInt() }
+            val b = floor.split(".").map { it.toInt() }
+            for (i in 0 until 3) if (a[i] != b[i]) return a[i] > b[i]
+            return true
+        }
+        val floors = mapOf("lastfm" to "1.2.15", "listenbrainz" to "1.6.12", "applemusic" to "1.5.7")
+        for ((id, floor) in floors) {
+            for (dir in listOf(androidPlugins, iosPlugins)) {
+                val axe = Json.parseToJsonElement(File(dir, "$id.axe").readText()).jsonObject
+                val manifest = axe.getValue("manifest").jsonObject
+                val version = manifest.getValue("version").jsonPrimitive.content
+                assertTrue("$id $version in ${dir.path} is below $floor", atLeast(version, floor))
+                if (id == "applemusic") continue
+                val caps = axe.getValue("capabilities").jsonObject
+                for (cap in listOf("friends", "similarUsers", "recommendations")) {
+                    assertTrue("$id declares $cap in ${dir.path}", caps.getValue(cap).jsonPrimitive.boolean)
+                }
+                if (id == "listenbrainz") assertTrue("listenbrainz declares historyMixes", caps.getValue("historyMixes").jsonPrimitive.boolean)
+            }
         }
     }
 
@@ -109,5 +135,33 @@ class PluginRecommendationsTest {
         val pm = manager(FakeRuntime("error:Failed to fetch Last.fm recommendations: 500"))
         val thrown = assertThrows(IllegalStateException::class.java) { runBlocking { pm.getRecommendations("lastfm") } }
         assertTrue(thrown.message.orEmpty().contains("Failed to fetch Last.fm recommendations: 500"))
+    }
+
+    @Test
+    fun `both resolver-loader copies carry desktop's similar-users and history-mix calls`() {
+        val android = File(androidJs, "resolver-loader.js").readText()
+        assertEquals(android, File(iosResources, "resolver-loader.js").readText())
+        for (method in listOf(
+            "getSimilarUsersResolvers()",
+            "async getSimilarUsers(resolverId, configOverride = null)",
+            "getHistoryMixResolvers()",
+            "async getHistoryMixes(resolverId, configOverride = null)",
+        )) {
+            assertTrue("resolver-loader.js lacks $method", android.contains(method))
+        }
+    }
+
+    @Test
+    fun `a notReady error from a plugin call is a PluginNotReadyException`() {
+        val pm = manager(FakeRuntime("error:notReady:not-signed-in"))
+        val thrown = assertThrows(PluginNotReadyException::class.java) { runBlocking { pm.getRecommendations("applemusic") } }
+        assertTrue(thrown.message.orEmpty().contains("not-signed-in"))
+    }
+
+    @Test
+    fun `any other plugin error is a plain failure`() {
+        val pm = manager(FakeRuntime("error:boom"))
+        val thrown = assertThrows(IllegalStateException::class.java) { runBlocking { pm.getRecommendations("applemusic") } }
+        assertTrue(thrown !is PluginNotReadyException)
     }
 }

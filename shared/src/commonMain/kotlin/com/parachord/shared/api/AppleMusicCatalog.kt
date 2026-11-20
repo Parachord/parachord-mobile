@@ -69,6 +69,52 @@ class AppleMusicCatalog(
         return null
     }
 
+    /**
+     * The signed-in user's personal recommendations: `GET /v1/me/recommendations`
+     * with the developer token and the Music User Token ([userToken], read by
+     * the platform; it never reaches JS). For `applemusic.axe`'s
+     * `getRecommendations` through the host hook
+     * `appleMusicPersonalRecommendations`, a port of desktop's. Narrow on
+     * purpose: this one account call, never a general proxy. [limit] is
+     * clamped to 1-30.
+     *
+     * Not signed in, no developer token or a 401 / 403 is [PersonalRecommendationsResult.NotReady],
+     * so the Recommendations page doesn't cache a refusal as "nothing for you";
+     * any other failure (a rate limit included) is [PersonalRecommendationsResult.Failed].
+     */
+    suspend fun personalRecommendations(limit: Int, userToken: String?): PersonalRecommendationsResult {
+        val token = developerToken()?.takeIf { it.isNotBlank() }
+            ?: return PersonalRecommendationsResult.NotReady("no-developer-token")
+        val mut = userToken?.takeIf { it.isNotBlank() }
+            ?: return PersonalRecommendationsResult.NotReady("not-signed-in")
+        val url = "https://api.music.apple.com/v1/me/recommendations?limit=${limit.coerceIn(1, 30)}"
+        val outcome = limiter.runThrottled {
+            try {
+                val resp = httpClient.get(url) {
+                    header("Authorization", "Bearer $token")
+                    header("Music-User-Token", mut)
+                }
+                val status = resp.status.value
+                val text = resp.bodyAsText()
+                when {
+                    status in 200..299 && text.isNotBlank() -> PersonalRecommendationsResult.Ok(text)
+                    status == 401 || status == 403 -> PersonalRecommendationsResult.NotReady("token-refused")
+                    else -> PersonalRecommendationsResult.Failed(status)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PersonalRecommendationsResult.Failed(0)
+            }
+        } ?: return PersonalRecommendationsResult.Failed(429) // cooling down
+        when {
+            outcome is PersonalRecommendationsResult.Ok -> limiter.reportSuccess()
+            outcome is PersonalRecommendationsResult.Failed && outcome.status == 429 -> limiter.reportRateLimit()
+        }
+        if (outcome is PersonalRecommendationsResult.Failed) Log.w(TAG, "Personal recommendations failed: ${outcome.status}")
+        return outcome
+    }
+
     private suspend fun fetchOnce(url: String, token: String): Attempt = try {
         val resp = httpClient.get(url) { header("Authorization", "Bearer $token") }
         val status = resp.status.value
@@ -100,3 +146,49 @@ class AppleMusicCatalog(
             path.startsWith("/v1/catalog/") && ".." !in path && "://" !in path && '\\' !in path
     }
 }
+
+/** The answer to [AppleMusicCatalog.personalRecommendations]. */
+sealed interface PersonalRecommendationsResult {
+    /** Apple's JSON response body. */
+    data class Ok(val body: String) : PersonalRecommendationsResult
+
+    /** Not ready, not empty: [code] is `no-developer-token`, `not-signed-in` or `token-refused`. */
+    data class NotReady(val code: String) : PersonalRecommendationsResult
+
+    /** Any other failure ([status] 0 when the request itself failed). */
+    data class Failed(val status: Int) : PersonalRecommendationsResult
+
+    /**
+     * What both hosts hand the JS hook: `{"ok":<body>}`, `{"notReady":"<code>"}`
+     * or `{"failed":<status>}`. The hook turns the last two into rejections.
+     * A body that isn't JSON goes as `{"failed":0}`: spliced into the JS call
+     * it would be a syntax error, and the hook would never answer.
+     */
+    fun toJsEnvelope(): String = when (this) {
+        is Ok -> if (isJson(body)) """{"ok":$body}""" else """{"failed":0}"""
+        is NotReady -> """{"notReady":"$code"}"""
+        is Failed -> """{"failed":$status}"""
+    }
+
+    /**
+     * Apple's body is a JSON object. kotlinx's parser tolerates unquoted
+     * tokens, so each bare value is checked too: only a number, `true`,
+     * `false` or `null` is valid JSON (and a valid JS expression).
+     */
+    private fun isJson(text: String): Boolean = try {
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(text)
+        root is kotlinx.serialization.json.JsonObject && strictJson(root)
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun strictJson(e: kotlinx.serialization.json.JsonElement): Boolean = when (e) {
+        is kotlinx.serialization.json.JsonObject -> e.values.all { strictJson(it) }
+        is kotlinx.serialization.json.JsonArray -> e.all { strictJson(it) }
+        is kotlinx.serialization.json.JsonPrimitive ->
+            e.isString || e.content == "true" || e.content == "false" || e is kotlinx.serialization.json.JsonNull ||
+                JSON_NUMBER.matches(e.content)
+    }
+}
+
+private val JSON_NUMBER = Regex("""-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?""")

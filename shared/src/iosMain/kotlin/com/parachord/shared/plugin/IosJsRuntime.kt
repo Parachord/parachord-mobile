@@ -547,6 +547,43 @@ class IosJsRuntime : JsRuntime {
                         });
                 };
 
+                // The plugin's personal recommendations (applemusic.axe
+                // getRecommendations and the history mixes): GET
+                // /v1/me/recommendations, done natively with the developer
+                // token and the Music User Token, which never reach JS. A port
+                // of desktop's hook. Resolves Apple's JSON; a not-ready answer
+                // (no sign-in, a refused token) rejects with notReady = true
+                // and a code, so the Recommendations page doesn't cache it as
+                // "nothing for you"; any other failure rejects plainly.
+                // Android parity: bootstrap.html (JSC hands back a string).
+                window.__amRecsCallbacks = {};
+                var __amRecsIdCounter = 0;
+                window.appleMusicPersonalRecommendations = function(limit) {
+                    return new Promise(function(resolve, reject) {
+                        var callbackId = 'amr_' + (++__amRecsIdCounter);
+                        window.__amRecsCallbacks[callbackId] = function(envelope) {
+                            delete window.__amRecsCallbacks[callbackId];
+                            var res = null;
+                            try { res = JSON.parse(envelope); } catch (e) {}
+                            if (res && res.ok !== undefined) { resolve(res.ok); return; }
+                            if (res && res.notReady) {
+                                var err = new Error('Apple Music not ready: ' + res.notReady);
+                                err.notReady = true;
+                                err.code = res.notReady;
+                                reject(err);
+                                return;
+                            }
+                            reject(new Error('Apple Music recommendations failed: ' + (res && res.failed)));
+                        };
+                        try {
+                            NativeBridge.appleMusicPersonalRecommendations(callbackId, Math.max(1, Math.min(30, Number(limit) || 30)));
+                        } catch (e) {
+                            delete window.__amRecsCallbacks[callbackId];
+                            reject(e);
+                        }
+                    });
+                };
+
                 window.appleMusicLookupPlaylist = async function(playlistId, storefront) {
                     storefront = storefront || 'us';
                     var data = await __amCatalog('/v1/catalog/' + encodeURIComponent(storefront) +

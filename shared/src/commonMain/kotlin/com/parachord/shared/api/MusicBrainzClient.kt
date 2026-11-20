@@ -225,6 +225,12 @@ class MusicBrainzClient(
     suspend fun searchReleases(query: String, limit: Int = 10): MbReleaseSearchResponse =
         guardedGet("$BASE_URL/release/") { parameter("query", query); parameter("limit", limit) }
 
+    /** Release-group search (`/ws/2/release-group/`), through the same 1 req/s gate. */
+    suspend fun searchReleaseGroups(query: String, limit: Int = 5): List<MbReleaseGroup> =
+        guardedGet<MbReleaseGroupSearchResponse>("$BASE_URL/release-group/") {
+            parameter("query", query); parameter("limit", limit)
+        }.releaseGroups
+
     suspend fun searchArtists(query: String, limit: Int = 10): MbArtistSearchResponse =
         guardedGet("$BASE_URL/artist/") { parameter("query", query); parameter("limit", limit) }
 
@@ -351,7 +357,8 @@ data class MbRecording(
 
 @Serializable
 data class MbArtistCredit(
-    val name: String,
+    /** Defaults to "" so one credit without a name doesn't fail decoding a whole search. */
+    val name: String = "",
     val artist: MbArtistRef? = null,
 )
 
@@ -393,6 +400,15 @@ data class MbReleaseGroup(
     val id: String? = null,
     @SerialName("primary-type") val primaryType: String? = null,
     @SerialName("secondary-types") val secondaryTypes: List<String> = emptyList(),
+    // Present on release-group search results.
+    val title: String? = null,
+    @SerialName("first-release-date") val firstReleaseDate: String? = null,
+    @SerialName("artist-credit") val artistCredit: List<MbArtistCredit> = emptyList(),
+)
+
+@Serializable
+data class MbReleaseGroupSearchResponse(
+    @SerialName("release-groups") val releaseGroups: List<MbReleaseGroup> = emptyList(),
 )
 
 @Serializable

@@ -1,265 +1,265 @@
 package com.parachord.shared.repository
 
-import com.parachord.shared.deeplink.isValidMbid
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.model.RecommendedArtist
 import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
-import com.parachord.shared.plugin.PluginManager
+import com.parachord.shared.plugin.PluginNotReadyException
+import com.parachord.shared.recommendations.EXPANSION_PAGE_CAP
+import com.parachord.shared.recommendations.ExpandedSection
+import com.parachord.shared.recommendations.FriendExclusions
+import com.parachord.shared.recommendations.PageableSection
 import com.parachord.shared.recommendations.ProviderRecommendations
+import com.parachord.shared.recommendations.RecommendationCategories
 import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
-import com.parachord.shared.recommendations.buildRecommendationSections
+import com.parachord.shared.recommendations.ReleaseDates
+import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
+import com.parachord.shared.recommendations.SimilarUser
+import com.parachord.shared.recommendations.buildRecommendationPage
+import com.parachord.shared.recommendations.normalizeRecommendationItem
 import com.parachord.shared.recommendations.normalizeRecommendationSections
-import com.parachord.shared.resolver.validateIsrc
+import com.parachord.shared.recommendations.pageSources
+import com.parachord.shared.recommendations.shuffleupagusSection
 import com.parachord.shared.settings.SettingsStore
+import com.parachord.shared.ui.UiMessages
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
-
-/** A plugin that can recommend music. */
-data class RecommendationProvider(val id: String, val name: String)
-
-/**
- * Where recommendations come from. The real one is
- * [PluginRecommendationSource]; tests supply their own.
- */
-interface RecommendationSource {
-    /** The providers to ask, in the order the page shows them. */
-    suspend fun providers(): List<RecommendationProvider>
-
-    /**
-     * One provider's raw `getRecommendations` answer (its sections, as JSON).
-     * An answer with no sections is a miss. Throws when the provider couldn't
-     * answer.
-     */
-    suspend fun fetch(providerId: String): String
-}
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * The plugins that declare `capabilities.recommendations` (desktop
- * parachord#1309): `lastfm.axe` and `listenbrainz.axe` today. A new provider
- * needs only a plugin.
- */
-class PluginRecommendationSource(private val pluginManager: PluginManager) : RecommendationSource {
-    override suspend fun providers(): List<RecommendationProvider> =
-        pluginManager.recommendationResolvers().map { (id, name) -> RecommendationProvider(id, name) }
-
-    override suspend fun fetch(providerId: String): String = pluginManager.getRecommendations(providerId)
-}
-
-/**
- * Recommendations, from the plugins that provide them (#606, desktop
- * parachord#1309). Each provider answers `getRecommendations` with sections of
- * typed items; the shared model (`RecommendationModel.kt`, a port of desktop's
- * `recommendation-model.js`) merges them, and this class hands the pages the
- * generic Songs and Artists buckets.
+ * The Recommendations page's data, shared: a port of desktop's
+ * `loadRecommendations`, `refreshMergedRecommendations` and
+ * `loadMoreRecommendationSection` (`app.js` ~L27622–28440), without the UI.
  *
- * - Providers are asked in parallel. One that fails keeps its last answer; a
- *   failure is never read as "nothing to recommend".
- * - Last.fm and ListenBrainz are asked only when a username is set (their
- *   plugins would answer empty without a request anyway).
- * - The Songs and Artists flows share one fetch ([SHARE_WINDOW_MS]).
- * - Titled sections, albums and playlists are merged by the model but not
- *   shown: no plugin the phones load sends them yet.
+ * - **Providers:** plugins with `capabilities.recommendations` that
+ *   [providerIsOn] (the platform's `pluginIsOn`) and that aren't in
+ *   `recommendations_off_resolvers`; Last.fm and ListenBrainz only with a
+ *   username. Content resolvers first in the user's resolver order, then
+ *   meta-services.
+ * - **Per provider:** 20 s each ([PROVIDER_TIMEOUT_MS]; a late answer is still
+ *   applied and saved); fresh for an hour, shown while it refreshes for 7
+ *   days; keyed to the account. An empty answer replaces the stored one but is
+ *   never served from the cache. A failure keeps the last answer;
+ *   `PluginNotReadyException` drops it. Only the latest load paints; a forced
+ *   refresh forgets the paged items.
+ * - **Paging:** one request per `pagingKey` at a time, at most
+ *   [EXPANSION_PAGE_CAP] pages; an empty page or a cursor that doesn't move
+ *   ends it. [openRow] pages every pageable section of a row until done.
+ * - **Listeners:** [cachedSimilarUsers] show at once, then [similarUsers]
+ *   (a [SimilarUsersStore]) replaces them when it answers.
+ * - **Merge:** [buildRecommendationPage] with Shuffleupagus's picks, the
+ *   similar users and the blocklist, re-run on every change so a block takes
+ *   effect at once.
  *
- * File I/O for the disk cache goes through the `cacheRead` / `cacheWrite`
- * lambdas (as `CriticalDarlingsRepository` / `FreshDropsRepository`).
+ * [getRecommendedTracks] / [getRecommendedArtists] keep today's screens
+ * working from the page's Tracks and Artists rows until they move to [page].
  */
 class RecommendationsRepository(
     private val source: RecommendationSource,
     private val settingsStore: SettingsStore,
     private val metadataService: MetadataService,
-    /** Read JSON from `recommendations_cache.json`; null if missing/fails. */
+    private val aiRecommendations: ShuffleupagusPicks,
+    /** Album release dates; the screens ask for the albums they show ([requestReleaseDates]). */
+    val releaseDates: ReleaseDates,
+    /** Whether a provider's plugin is on: the platform's `pluginIsOn` with its own settings. */
+    private val providerIsOn: suspend (RecommendationProvider) -> Boolean,
+    /** Read `recommendations_cache.json`; null if missing. */
     private val cacheRead: suspend () -> String?,
-    /** Write JSON to `recommendations_cache.json`. Failures are swallowed. */
+    /** Write `recommendations_cache.json`. */
     private val cacheWrite: suspend (String) -> Unit,
+    /** Each similar-users service's people, by service id (Listeners). */
+    private val similarUsers: suspend (force: Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
+    /** Who Listeners leaves out, read at every merge. */
+    private val friendExclusions: suspend () -> FriendExclusions = { FriendExclusions() },
+    /** The saved similar users, shown at once while [similarUsers] asks again (an older shape among them). */
+    private val cachedSimilarUsers: suspend () -> Map<String, List<SimilarUser>> = { emptyMap() },
     private val nowMs: () -> Long = { currentTimeMillis() },
+    /**
+     * Runs late answers, Shuffleupagus and release-date lookups past the caller.
+     * The default logs an uncaught failure: on a handler-less scope it would
+     * crash Android and abort the process on iOS.
+     */
+    private val scope: CoroutineScope = recommendationsBackgroundScope(),
 ) {
     companion object {
         private const val TAG = "RecommendationsRepo"
         const val LASTFM = "lastfm"
         const val LISTENBRAINZ = "listenbrainz"
+        const val PROVIDER_TIMEOUT_MS = 20_000L
+        const val FRESH_MS = 60L * 60 * 1000
+        const val STALE_MS = 7L * 24 * 60 * 60 * 1000
         const val NOT_CONFIGURED_MESSAGE = "Connect Last.fm or ListenBrainz in Settings to get recommendations"
+        /** The old screens' failure text. */
         const val FAILED_MESSAGE = "Failed to load recommendations"
-
-        /**
-         * How long one fetch serves both flows. The pages collect Songs and
-         * Artists together; each used to ask every service itself.
-         */
-        const val SHARE_WINDOW_MS = 10_000L
+        /** The page's, desktop's. */
+        const val PAGE_FAILED_MESSAGE = "Failed to load recommendations. Please try again."
+        const val HERO_FALLBACK = "Personalized picks from your services"
+        fun heroFor(username: String?): String =
+            username?.takeIf { it.isNotBlank() }?.let { "Personalized picks for $it" } ?: HERO_FALLBACK
+        private const val ARTIST_IMAGE_LOOKUPS = 15
     }
 
-    private val diskJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    /** In-memory cache for stale-while-revalidate. */
-    private var cachedTracks: List<RecommendedTrack>? = null
-    private var cachedArtists: List<RecommendedArtist>? = null
-    /** Each provider's last answer, by id. Kept when that provider fails. */
-    private var providerResults: Map<String, ProviderRecommendations> = emptyMap()
-    private var diskCacheLoaded = false
+    /** Guards every field below. Never held across a provider call. */
+    private val mutex = Mutex()
+    private val rebuildMutex = Mutex()
+    private var diskLoaded = false
+    private val cache = LinkedHashMap<String, ProviderAnswer>()
+    private var shown: List<ProviderRecommendations> = emptyList()
+    private var providerNames: Map<String, String> = emptyMap()
+    private val expanded = mutableMapOf<String, ExpandedSection>()
+    /** Providers whose last answer was empty: no skeleton for them. */
+    private val quiet = mutableSetOf<String>()
+    private val loadingMore = mutableSetOf<String>()
+    private var similar: Map<String, List<SimilarUser>> = emptyMap()
+    private var excludedPlaylists: Set<String> = emptySet()
+    private var generation = 0
+    private var inFlight: Deferred<LoadOutcome>? = null
+    private var aiInFlight = false
 
-    private val loadMutex = Mutex()
-    private var lastLoad: Loaded? = null
+    /** Photos found for the old Artists list, by lowercased name. */
+    @Volatile private var artistImages: Map<String, String> = emptyMap()
 
-    /** Synchronous access to cached data (for ViewModel initial state). */
-    val cachedTracksList: List<RecommendedTrack>?
-        get() = cachedTracks
-    val cachedArtistsList: List<RecommendedArtist>?
-        get() = cachedArtists
+    private val _page = MutableStateFlow(RecommendationPageState())
+    val page: StateFlow<RecommendationPageState> = _page.asStateFlow()
 
-    private suspend fun loadDiskCacheIfNeeded() {
-        if (diskCacheLoaded) return
-        diskCacheLoaded = true
-        try {
-            val json = cacheRead() ?: return
-            val wrapper = diskJson.decodeFromString<RecommendationsDiskCache>(json)
-            // An empty list means nothing was saved (see the empty-answer
-            // branches below), not a cached empty answer, so the next load asks
-            // again.
-            cachedTracks = wrapper.tracks.takeIf { it.isNotEmpty() }
-            cachedArtists = wrapper.artists.takeIf { it.isNotEmpty() }
-            providerResults = wrapper.providers.mapNotNull { p -> p.resolverId?.let { it to p } }.toMap()
-            Log.d(TAG, "Loaded ${wrapper.tracks.size} tracks, ${wrapper.artists.size} artists from disk cache")
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to load disk cache", e)
-        }
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** One-off messages for a snackbar ("Couldn't load more from …"). */
+    val messages: SharedFlow<String> get() = _messages
+
+    init {
+        scope.launch { releaseDates.changes.collect { rebuild() } }
     }
 
-    private suspend fun saveDiskCache() {
-        try {
-            val wrapper = RecommendationsDiskCache(
-                tracks = cachedTracks ?: emptyList(),
-                artists = cachedArtists ?: emptyList(),
-                providers = providerResults.values.toList(),
-            )
-            cacheWrite(diskJson.encodeToString(wrapper))
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to save disk cache", e)
-        }
-    }
+    // ── Public surface ───────────────────────────────────────────────
 
-    /** The recommended songs: the generic Songs bucket of every provider's answer. */
-    fun getRecommendedTracks(): Flow<Resource<List<RecommendedTrack>>> = flow {
-        loadDiskCacheIfNeeded()
-        // Show stale cache immediately while refreshing
-        if (cachedTracks != null) {
-            emit(Resource.Success(cachedTracks!!))
-        } else {
-            emit(Resource.Loading)
-        }
+    /** Loads the page: every provider (cache rules above), the similar users and Shuffleupagus. */
+    suspend fun load(force: Boolean = false) {
+        maybeLoadShuffleupagus(force)
         try {
-            val loaded = load()
-            if (!loaded.configured) {
-                emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
-                return@flow
-            }
-            if (loaded.tracks.isEmpty()) {
-                if (loaded.anyFailed) {
-                    // A provider couldn't answer: that isn't "nothing to
-                    // recommend", so keep what's shown.
-                    emit(Resource.Error(FAILED_MESSAGE))
-                } else {
-                    cachedTracks = null
-                    saveDiskCache()
-                    emit(Resource.Success(emptyList()))
-                    emit(Resource.Error(emptyRecommendationsMessage(loaded.hasListenBrainz, loaded.hasLastFm)))
-                }
-                return@flow
-            }
-            Log.d(TAG, "Merged recommendations → ${loaded.tracks.size} unique tracks")
-            cachedTracks = loaded.tracks
-            saveDiskCache()
-            emit(Resource.Success(loaded.tracks))
+            loadProviders(force)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load recommendations", e)
+            Log.e(TAG, "Recommendations load failed", e)
+            _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.Message(PAGE_FAILED_MESSAGE)) }
+        }
+    }
+
+    /** "See all": pages every pageable section of the row until each is exhausted, capped or fails. */
+    suspend fun openRow(rowKey: String) {
+        while (true) {
+            val row = _page.value.sections.flatMap { it.rows }.firstOrNull { it.key == rowKey } ?: return
+            val todo = mutex.withLock { row.pageable.filter { it.pagingKey !in loadingMore } }
+            if (todo.isEmpty()) return
+            val progressed = coroutineScope { todo.map { async { loadMore(it) } }.awaitAll() }
+            if (progressed.none { it }) return
+        }
+    }
+
+    /** Home's history mixes: play history, not recommendations, so the Playlists row leaves them out. */
+    fun excludePlaylistIds(ids: Set<String>) {
+        scope.launch {
+            mutex.withLock { excludedPlaylists = ids }
+            rebuild()
+        }
+    }
+
+    /** Looks up the release dates of albums on screen; the page re-merges as they land. */
+    fun requestReleaseDates(items: List<RecommendationItem>) {
+        scope.launch { releaseDates.requestLookups(items) }
+    }
+
+    // ── Today's screens (removed when they move to [page]) ───────────
+
+    val cachedTracksList: List<RecommendedTrack>?
+        get() = currentTracks().takeIf { it.isNotEmpty() }
+    val cachedArtistsList: List<RecommendedArtist>?
+        get() = currentArtists().takeIf { it.isNotEmpty() }
+
+    /** The page's Tracks row as [RecommendedTrack]s. */
+    fun getRecommendedTracks(): Flow<Resource<List<RecommendedTrack>>> = flow {
+        ensureDiskLoaded()
+        emit(cachedTracksList?.let { Resource.Success(it) } ?: Resource.Loading)
+        try {
+            val outcome = loadProviders(false)
+            if (!outcome.legacyConfigured) {
+                emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
+                return@flow
+            }
+            val tracks = currentTracks()
+            if (tracks.isEmpty()) {
+                emitEmpty(outcome)
+                return@flow
+            }
+            emit(Resource.Success(tracks))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load recommended tracks", e)
             emit(Resource.Error(FAILED_MESSAGE))
         }
     }
 
-    /**
-     * The recommended artists: the generic Artists bucket (the artists a
-     * provider sent, then the artists of the recommended songs), with photos
-     * filled in one by one, as desktop's page does.
-     */
+    /** The page's Artists row as [RecommendedArtist]s, with photos filled in one by one. */
     fun getRecommendedArtists(): Flow<Resource<List<RecommendedArtist>>> = flow {
-        loadDiskCacheIfNeeded()
-        // Show stale cache immediately while refreshing
-        if (cachedArtists != null) {
-            emit(Resource.Success(cachedArtists!!))
-        } else {
-            emit(Resource.Loading)
-        }
+        ensureDiskLoaded()
+        emit(cachedArtistsList?.let { Resource.Success(it) } ?: Resource.Loading)
         try {
-            val loaded = load()
-            if (!loaded.configured) {
+            val outcome = loadProviders(false)
+            if (!outcome.legacyConfigured) {
                 emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
                 return@flow
             }
-            if (loaded.artists.isEmpty()) {
-                if (loaded.anyFailed) {
-                    emit(Resource.Error(FAILED_MESSAGE))
-                } else {
-                    cachedArtists = null
-                    saveDiskCache()
-                    emit(Resource.Success(emptyList()))
-                    emit(Resource.Error(emptyRecommendationsMessage(loaded.hasListenBrainz, loaded.hasLastFm)))
-                }
+            val artists = currentArtists().toMutableList()
+            if (artists.isEmpty()) {
+                emitEmpty(outcome)
                 return@flow
             }
-
-            // Carry over photos already found for the same artists.
-            val cachedImagesByName = cachedArtists?.associateBy(
-                { it.name.lowercase().trim() },
-                { it.imageUrl },
-            ) ?: emptyMap()
-            val artists = loaded.artists.map { item ->
-                RecommendedArtist(
-                    name = item.name,
-                    source = item.resolverId.orEmpty(),
-                    imageUrl = item.imageUrl ?: cachedImagesByName[item.name.lowercase().trim()],
-                    reason = item.reason,
-                )
-            }
-
-            cachedArtists = artists
-            saveDiskCache()
-            emit(Resource.Success(artists))
-
-            // Progressively resolve images only for artists that still need them.
-            val mutableArtists = artists.toMutableList()
-            val toEnrich = mutableArtists.withIndex()
-                .filter { it.value.imageUrl == null }
-                .take(15)
-
-            Log.d(TAG, "Fetching images for ${toEnrich.size} recommended artists...")
-            for ((index, artist) in toEnrich) {
-                try {
-                    val info = metadataService.getArtistInfo(artist.name)
-                    val imageUrl = info?.imageUrl
-                    if (imageUrl != null) {
-                        mutableArtists[index] = artist.copy(imageUrl = imageUrl)
-                        cachedArtists = mutableArtists.toList()
-                        emit(Resource.Success(mutableArtists.toList()))
-                    }
+            emit(Resource.Success(artists.toList()))
+            for ((index, artist) in artists.withIndex().filter { it.value.imageUrl == null }.take(ARTIST_IMAGE_LOOKUPS)) {
+                val url = try {
+                    metadataService.getArtistInfo(artist.name)?.imageUrl
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) { /* skip */ }
+                } catch (_: Exception) {
+                    null
+                } ?: continue
+                artistImages = artistImages + (artist.name.lowercase().trim() to url)
+                artists[index] = artist.copy(imageUrl = url)
+                emit(Resource.Success(artists.toList()))
             }
-            // Save final enriched data to disk
-            saveDiskCache()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -268,133 +268,493 @@ class RecommendationsRepository(
         }
     }
 
-    /** One round of asking the providers, as both flows read it. */
-    private class Loaded(
-        val tracks: List<RecommendedTrack>,
-        val artists: List<RecommendationItem>,
-        /** A provider that should have answered didn't. */
-        val anyFailed: Boolean,
-        val configured: Boolean,
-        val hasListenBrainz: Boolean,
-        val hasLastFm: Boolean,
-        val at: Long,
-    )
-
-    private suspend fun load(): Loaded = loadMutex.withLock {
-        lastLoad?.takeIf { nowMs() - it.at in 0 until SHARE_WINDOW_MS }?.let { return@withLock it }
-        askProviders().also { lastLoad = it }
+    private suspend fun <T> kotlinx.coroutines.flow.FlowCollector<Resource<List<T>>>.emitEmpty(outcome: LoadOutcome) {
+        if (outcome.anyFailed) {
+            // A provider couldn't answer: that isn't "nothing to recommend".
+            emit(Resource.Error(FAILED_MESSAGE))
+        } else {
+            emit(Resource.Success(emptyList()))
+            emit(Resource.Error(emptyRecommendationsMessage(outcome.hasListenBrainz, outcome.hasLastFm)))
+        }
     }
 
-    private suspend fun askProviders(): Loaded {
-        val hasLastFm = !settingsStore.getLastFmUsername().isNullOrBlank()
-        val hasListenBrainz = !settingsStore.getListenBrainzUsername().isNullOrBlank()
-        val providers = try {
+    private fun rowItems(key: String): List<RecommendationItem> =
+        _page.value.sections.flatMap { it.rows }.firstOrNull { it.key == key }?.items.orEmpty()
+
+    /** The old lists show the providers' picks only, never Shuffleupagus's. */
+    private fun legacyRowItems(key: String): List<RecommendationItem> =
+        rowItems(key).filter { item -> (item.sourceIds.ifEmpty { listOfNotNull(item.resolverId) }).any { it != SHUFFLEUPAGUS_ID } }
+
+    private fun currentTracks(): List<RecommendedTrack> = legacyRowItems("type:song").mapNotNull { it.toRecommendedTrack() }
+
+    private fun currentArtists(): List<RecommendedArtist> {
+        val images = artistImages
+        return legacyRowItems("type:artist").map { item ->
+            RecommendedArtist(
+                name = item.name,
+                imageUrl = item.imageUrl ?: images[item.name.lowercase().trim()],
+                reason = item.reason,
+                source = item.resolverId.orEmpty(),
+            )
+        }
+    }
+
+    // ── Loading ──────────────────────────────────────────────────────
+
+    /** What one load found, for the old flows' messages. */
+    private class LoadOutcome(
+        val configured: Boolean,
+        /**
+         * The old screens' rule: a Last.fm or ListenBrainz username, or a
+         * content provider on. Shuffleupagus doesn't count there: they don't
+         * show its picks, and its "nothing yet" would name a service the user
+         * never connected.
+         */
+        val legacyConfigured: Boolean = configured,
+        val anyFailed: Boolean = false,
+        val hasListenBrainz: Boolean = false,
+        val hasLastFm: Boolean = false,
+    )
+
+    /** One load's providers and answers; [fresh] and [stale] are guarded by [mutex]. */
+    private class LoadRun(val generation: Int, val providers: List<RecommendationProvider>) {
+        val fresh = mutableMapOf<String, ProviderAnswer>()
+        val stale = mutableMapOf<String, ProviderAnswer>()
+        var failed = 0
+    }
+
+    /** A non-forced load joins one already running (both old flows share one fetch); a forced one starts anew. */
+    private suspend fun loadProviders(force: Boolean): LoadOutcome {
+        val job = mutex.withLock {
+            val running = inFlight
+            if (!force && running != null && running.isActive) running
+            else scope.async { runLoad(force) }.also { inFlight = it }
+        }
+        return job.await()
+    }
+
+    private suspend fun runLoad(force: Boolean): LoadOutcome {
+        ensureDiskLoaded()
+        val lastFm = settingsStore.getLastFmUsername()?.takeIf { it.isNotBlank() }
+        val listenBrainz = settingsStore.getListenBrainzUsername()?.takeIf { it.isNotBlank() }
+        val hero = heroFor(listenBrainz ?: lastFm)
+        val all = try {
             source.providers()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Couldn't list recommendation providers", e)
+            Log.w(TAG, "Couldn't list recommendation providers: ${e.message}")
             emptyList()
         }
-        // Last.fm and ListenBrainz need a username; any other provider decides
-        // for itself whether it has anything.
-        val connected = buildSet {
-            if (hasLastFm) add(LASTFM)
-            if (hasListenBrainz) add(LISTENBRAINZ)
+        val off = settingsStore.getRecommendationsOffResolvers()
+        val candidates = all.filter { p ->
+            p.id !in off && when (p.id) {
+                LASTFM -> lastFm != null
+                LISTENBRAINZ -> listenBrainz != null
+                else -> true
+            } && providerIsOn(p)
         }
-        val toAsk = providers.filter { it.id in connected || (it.id != LASTFM && it.id != LISTENBRAINZ) }
-        if (connected.isEmpty() && toAsk.isEmpty()) {
-            return Loaded(emptyList(), emptyList(), anyFailed = false, configured = false, hasListenBrainz = false, hasLastFm = false, at = nowMs())
-        }
+        val providers = orderProviders(candidates, settingsStore.getResolverOrder())
+        val aiPossible = safely(false) { aiRecommendations.hasProvider() && aiRecommendations.sharesHistory() }
+        val names = all.associate { it.id to it.name }
 
-        val answers = coroutineScope {
-            toAsk.map { provider ->
-                async {
-                    try {
-                        val raw = diskJson.parseToJsonElement(source.fetch(provider.id))
-                        normalizeRecommendationSections(raw, provider.id, provider.name).copy(fetchedAt = nowMs())
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Recommendations from ${provider.name} failed: ${e.message}")
-                        null
-                    }
-                }
-            }.awaitAll()
+        if (lastFm == null && listenBrainz == null && providers.none { !it.isMetaService } && !aiPossible) {
+            mutex.withLock {
+                generation++
+                shown = emptyList()
+                providerNames = names
+            }
+            _page.update {
+                it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.NotConfigured, hero = hero)
+            }
+            rebuild()
+            return LoadOutcome(configured = false)
         }
+        val legacyConfigured = lastFm != null || listenBrainz != null || providers.any { !it.isMetaService }
+
         // A connected service whose plugin isn't loaded (the plugin runtime
         // didn't start) couldn't answer either.
-        var anyFailed = connected.any { id -> providers.none { it.id == id } }
-        val results = LinkedHashMap<String, ProviderRecommendations>()
-        toAsk.forEachIndexed { index, provider ->
-            val answer = answers[index]
-            if (answer != null) {
-                results[provider.id] = answer
+        val missing = listOfNotNull(LASTFM.takeIf { lastFm != null }, LISTENBRAINZ.takeIf { listenBrainz != null })
+            .count { id -> id !in off && all.none { it.id == id } }
+
+        val now = nowMs()
+        val toFetch = mutableListOf<RecommendationProvider>()
+        val run = mutex.withLock {
+            val run = LoadRun(++generation, providers)
+            for (p in providers) {
+                val cached = cache[p.id]?.takeIf { it.account == accountFor(p.id, lastFm, listenBrainz) }
+                val hasSections = cached != null && cached.sections.isNotEmpty()
+                if (!force && hasSections && now - cached!!.fetchedAt < FRESH_MS) {
+                    run.fresh[p.id] = cached
+                    continue
+                }
+                if (hasSections && now - cached!!.fetchedAt < STALE_MS) run.stale[p.id] = cached
+                toFetch += p
+            }
+            if (force) expanded.clear()
+            providerNames = names
+            run
+        }
+
+        val savedUsers = safely(emptyMap()) { cachedSimilarUsers() }
+        if (savedUsers.isNotEmpty()) mutex.withLock { if (generation == run.generation) similar = savedUsers }
+        applyFresh(run)
+        val pending = mutex.withLock { toFetch.filter { it.id !in run.stale && it.id !in quiet }.map { it.id }.toSet() }
+        _page.update {
+            it.copy(loading = it.sections.isEmpty() && toFetch.isNotEmpty(), pendingProviders = pending, error = null, hero = hero)
+        }
+
+        coroutineScope {
+            launch {
+                val users = try {
+                    similarUsers(force)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Similar users failed: ${e.message}")
+                    null
+                }
+                if (users != null) {
+                    val latest = mutex.withLock { (generation == run.generation).also { if (it) similar = users } }
+                    if (latest) rebuild()
+                }
+            }
+            for (provider in toFetch) launch { fetchOne(run, provider, accountFor(provider.id, lastFm, listenBrainz)) }
+        }
+
+        save()
+        val failed = mutex.withLock { run.failed } + missing
+        val outcome = LoadOutcome(configured = true, legacyConfigured = legacyConfigured, anyFailed = failed > 0, hasListenBrainz = listenBrainz != null, hasLastFm = lastFm != null)
+        if (!isLatest(run)) return outcome
+
+        val anySections = mutex.withLock { shown.any { it.sections.isNotEmpty() } }
+        val aiHas = safely(null) { aiRecommendations.cached() }?.let { it.albums.isNotEmpty() || it.artists.isNotEmpty() } == true
+        val anyListeners = _page.value.sections.any { it.type == null }
+        val error = if (!anySections && !aiHas && !anyListeners) {
+            if (failed > 0 && failed == toFetch.size + missing) RecommendationsError.Message(PAGE_FAILED_MESSAGE)
+            else RecommendationsError.Message(emptyRecommendationsMessage(listenBrainz != null, lastFm != null))
+        } else null
+        _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = error) }
+        return outcome
+    }
+
+    private suspend fun fetchOne(run: LoadRun, provider: RecommendationProvider, account: String) {
+        // The result travels as a Result, so a failure reaches this caller
+        // (or the late path) and never fails [scope].
+        val request = scope.async { runCatching { source.fetch(provider.id) } }
+        try {
+            val raw = withTimeoutOrNull(PROVIDER_TIMEOUT_MS) { request.await() }?.getOrThrow()
+            if (raw == null) {
+                // The bound only ends this provider's wait; a late answer is
+                // still applied (if this load is still the latest) and saved.
+                Log.w(TAG, "Recommendations from ${provider.name} timed out")
+                scope.launch { applyLate(run, provider, account, request) }
+                keepCached(run, provider, account)
             } else {
-                anyFailed = true
-                // Keep its last answer, so a failure doesn't take rows off the page.
-                providerResults[provider.id]?.let { results[provider.id] = it }
+                accept(run, provider, account, raw)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: PluginNotReadyException) {
+            // Not ready is an answer: the cached sections belong to a session
+            // that can't refresh them, so they go, on screen and on disk.
+            Log.d(TAG, "Recommendations from ${provider.name} not ready: ${e.message}")
+            mutex.withLock {
+                run.failed++
+                quiet += provider.id
+                run.stale.remove(provider.id)
+                cache.remove(provider.id)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Recommendations from ${provider.name} failed: ${e.message}")
+            keepCached(run, provider, account)
+        }
+        applyFresh(run)
+        if (isLatest(run)) _page.update { it.copy(pendingProviders = it.pendingProviders - provider.id) }
+    }
+
+    /** A failure says nothing: keep the cached answer, even an expired one. */
+    private suspend fun keepCached(run: LoadRun, provider: RecommendationProvider, account: String) {
+        mutex.withLock {
+            run.failed++
+            cache[provider.id]?.takeIf { it.account == account }?.let { run.fresh[provider.id] = it }
+        }
+    }
+
+    private suspend fun applyLate(run: LoadRun, provider: RecommendationProvider, account: String, request: Deferred<Result<String>>) {
+        try {
+            accept(run, provider, account, request.await().getOrThrow())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return
+        }
+        applyFresh(run)
+        save()
+        val hasSections = mutex.withLock { run.fresh[provider.id]?.sections?.isNotEmpty() == true }
+        if (isLatest(run) && hasSections) _page.update { it.copy(loading = false, error = null) }
+    }
+
+    /** Stores an answer even when empty (it replaces the older one; an empty one is never served). */
+    private suspend fun accept(run: LoadRun, provider: RecommendationProvider, account: String, raw: String) {
+        val sections = normalizeRecommendationSections(json.parseToJsonElement(raw), provider.id, provider.name)
+        val answer = ProviderAnswer(provider.id, provider.name, sections, nowMs(), account, provider.isMetaService, provider.needsAccount)
+        mutex.withLock {
+            run.fresh[provider.id] = answer
+            cache[provider.id] = answer
+            if (sections.isNotEmpty()) quiet -= provider.id else quiet += provider.id
+        }
+    }
+
+    private suspend fun isLatest(run: LoadRun) = mutex.withLock { generation == run.generation }
+
+    /** Puts this load's answers on screen, in provider order, if it's the latest. */
+    private suspend fun applyFresh(run: LoadRun) {
+        val applied = mutex.withLock {
+            if (generation != run.generation) return@withLock false
+            shown = run.providers.mapNotNull { p ->
+                (run.fresh[p.id] ?: run.stale[p.id])?.let { ProviderRecommendations(p.id, p.name, it.sections, p.canExpand) }
+            }
+            true
+        }
+        if (applied) rebuild()
+    }
+
+    private suspend fun maybeLoadShuffleupagus(force: Boolean) {
+        if (!safely(false) { aiRecommendations.hasProvider() }) return
+        if (!force && safely(null) { aiRecommendations.cached() } != null) return
+        if (!mutex.withLock { if (aiInFlight) false else { aiInFlight = true; true } }) return
+        _page.update { it.copy(aiLoading = true) }
+        scope.launch {
+            try {
+                aiRecommendations.load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Shuffleupagus failed: ${e.message}")
+            } finally {
+                withContext(NonCancellable) {
+                    mutex.withLock { aiInFlight = false }
+                    _page.update { it.copy(aiLoading = false) }
+                }
+            }
+            rebuild()
+            // Its picks may be all an empty page has.
+            if (_page.value.sections.isNotEmpty()) {
+                _page.update { if (it.error is RecommendationsError.Message) it.copy(error = null) else it }
             }
         }
-        providerResults = results
+    }
 
-        val sections = buildRecommendationSections(results.values.toList())
-        val songs = sections.firstOrNull { it.bucketType == RecommendationType.SONG }?.items.orEmpty()
-        val artists = sections.firstOrNull { it.bucketType == RecommendationType.ARTIST }?.items.orEmpty()
-        return Loaded(
-            tracks = songs.mapNotNull { it.toRecommendedTrack() },
-            artists = artists,
-            anyFailed = anyFailed,
-            configured = true,
-            hasListenBrainz = hasListenBrainz,
-            hasLastFm = hasLastFm,
-            at = nowMs(),
-        )
+    // ── Paging ───────────────────────────────────────────────────────
+
+    /** One page of [section]; true when the section changed (a page landed or it ran out), false on a failure. */
+    private suspend fun loadMore(section: PageableSection): Boolean {
+        val key = section.pagingKey
+        if (!mutex.withLock { loadingMore.add(key) }) return false
+        rebuild()
+        try {
+            val raw = source.expand(section.resolverId, section.sectionId, section.nextCursor)
+            val obj = raw?.let { json.parseToJsonElement(it) as? JsonObject }
+            val items = (obj?.get("items") as? JsonArray)
+                ?.mapNotNull { normalizeRecommendationItem(it, section.resolverId) }.orEmpty()
+            mutex.withLock {
+                val prior = expanded[key] ?: ExpandedSection(emptyList())
+                expanded[key] = if (items.isEmpty()) {
+                    // Nothing more: the row's "load more" goes (a forced refresh resets it).
+                    prior.copy(exhausted = true, lastPageTypes = emptyList(), lastPageCategories = emptyList())
+                } else {
+                    val answered = (obj?.get("nextCursor") as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content?.takeIf { it.isNotEmpty() }
+                    // A provider answering the cursor it was sent re-served the same window.
+                    val nextCursor = answered?.takeIf { it != section.nextCursor }
+                    val pages = prior.pages + 1
+                    ExpandedSection(
+                        items = prior.items + items,
+                        nextCursor = nextCursor,
+                        exhausted = nextCursor == null || pages >= EXPANSION_PAGE_CAP,
+                        pages = pages,
+                        lastPageTypes = items.map { it.type }.distinct(),
+                        lastPageCategories = items
+                            .filter { it.type == RecommendationType.ALBUM || it.type == RecommendationType.PLAYLIST }
+                            .map { "${it.type.wire}:${RecommendationCategories.categoryFor(it.type, it, section.category)}" }
+                            .distinct(),
+                    )
+                }
+            }
+            return true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to expand ${section.title ?: key}: ${e.message}")
+            _messages.tryEmit(UiMessages.couldntLoadMoreFrom(section.resolverName))
+            return false
+        } finally {
+            withContext(NonCancellable) {
+                mutex.withLock { loadingMore.remove(key) }
+                rebuild()
+            }
+        }
+    }
+
+    // ── Merge ────────────────────────────────────────────────────────
+
+    /**
+     * Re-merges the page from what's held now. Cheap; the blocklist applies at
+     * every merge. A failure keeps the page as it was, so a later change can
+     * still rebuild it.
+     */
+    private suspend fun rebuild() = rebuildMutex.withLock {
+        try {
+            val (providers, pages, users, playlists, names, busy) = mutex.withLock {
+                Snapshot(shown, expanded.toMap(), similar, excludedPlaylists, providerNames, loadingMore.toSet())
+            }
+            val blocked = safely(emptySet()) { settingsStore.getBlockedRecommendations() }
+            val ai = safely(null) { aiRecommendations.cached() }
+            val exclude = safely(FriendExclusions()) { friendExclusions() }
+            val sections = withReleaseDates(
+                buildRecommendationPage(
+                    providers = providers,
+                    shuffleupagus = ai?.let { shuffleupagusSection(it.albums, it.artists) },
+                    expanded = pages,
+                    similarUsers = users,
+                    exclude = exclude,
+                    excludePlaylistIds = playlists,
+                    blocked = blocked,
+                    providerNames = names,
+                ),
+            )
+            _page.update { it.copy(sections = sections, sources = pageSources(sections), loadingMore = busy, paging = pages) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Recommendations page rebuild failed; keeping the last page", e)
+        }
+    }
+
+    private data class Snapshot(
+        val providers: List<ProviderRecommendations>,
+        val pages: Map<String, ExpandedSection>,
+        val users: Map<String, List<SimilarUser>>,
+        val playlists: Set<String>,
+        val names: Map<String, String>,
+        val busy: Set<String>,
+    )
+
+    /** Fills each album's release date from [releaseDates] when the provider sent none. */
+    private suspend fun withReleaseDates(sections: List<RecommendationPageSection>): List<RecommendationPageSection> =
+        sections.map { section ->
+            if (section.type != RecommendationType.ALBUM) return@map section
+            section.copy(
+                rows = section.rows.map { row ->
+                    row.copy(
+                        items = row.items.map { item ->
+                            if (item.releaseDate != null) item
+                            else safely(null) { releaseDates.dateFor(item) }?.let { item.copy(releaseDate = it) } ?: item
+                        },
+                    )
+                },
+            )
+        }
+
+    // ── Disk ─────────────────────────────────────────────────────────
+
+    /** Reads the saved answers once; this account's, younger than 7 days, show at once. */
+    private suspend fun ensureDiskLoaded() {
+        if (mutex.withLock { diskLoaded }) return
+        val saved = try {
+            cacheRead()?.let { json.decodeFromString(RecommendationsDiskCache.serializer(), it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Recommendations cache unreadable: ${e.message}")
+            null
+        }
+        val lastFm = settingsStore.getLastFmUsername()?.takeIf { it.isNotBlank() }
+        val listenBrainz = settingsStore.getListenBrainzUsername()?.takeIf { it.isNotBlank() }
+        val now = nowMs()
+        // The same gate a load applies, so a provider switched off since its
+        // answer was saved never shows, not even until the load replaces it.
+        val off = safely(emptySet()) { settingsStore.getRecommendationsOffResolvers() }
+        val allowed = saved?.answers?.values.orEmpty()
+            .filter { a ->
+                a.resolverId !in off && safely(false) {
+                    providerIsOn(
+                        RecommendationProvider(
+                            id = a.resolverId,
+                            name = a.resolverName,
+                            isMetaService = a.isMetaService || a.resolverId == LASTFM || a.resolverId == LISTENBRAINZ,
+                            needsAccount = a.needsAccount,
+                        ),
+                    )
+                }
+            }
+            .map { it.resolverId }.toSet()
+        val changed = mutex.withLock {
+            if (diskLoaded) return@withLock false
+            diskLoaded = true
+            saved?.answers?.forEach { (id, answer) -> if (id !in cache) cache[id] = answer }
+            if (shown.isNotEmpty()) return@withLock false
+            shown = cache.values
+                .filter { it.resolverId in allowed && it.sections.isNotEmpty() && now - it.fetchedAt < STALE_MS && it.account == accountFor(it.resolverId, lastFm, listenBrainz) }
+                .map { ProviderRecommendations(it.resolverId, it.resolverName, it.sections, canExpand = false) }
+            providerNames = cache.values.associate { it.resolverId to it.resolverName }
+            shown.isNotEmpty()
+        }
+        if (changed) rebuild()
+    }
+
+    /** Saves the answers that have sections and are young enough to show again, in page order. */
+    private suspend fun save() {
+        val now = nowMs()
+        val answers = mutex.withLock {
+            val order = shown.map { it.resolverId } + cache.keys
+            val out = LinkedHashMap<String, ProviderAnswer>()
+            for (id in order) {
+                val a = cache[id] ?: continue
+                if (id !in out && a.sections.isNotEmpty() && now - a.fetchedAt < STALE_MS) out[id] = a
+            }
+            out
+        }
+        try {
+            cacheWrite(json.encodeToString(RecommendationsDiskCache.serializer(), RecommendationsDiskCache(answers, now)))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Recommendations cache not saved: ${e.message}")
+        }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    private fun accountFor(id: String, lastFm: String?, listenBrainz: String?): String = when (id) {
+        LASTFM -> lastFm.orEmpty()
+        LISTENBRAINZ -> listenBrainz.orEmpty()
+        else -> ""
+    }
+
+    /** Content resolvers in the user's resolver order, then meta-services in their own order. */
+    private fun orderProviders(list: List<RecommendationProvider>, order: List<String>): List<RecommendationProvider> {
+        val rank = order.withIndex().associate { it.value to it.index }
+        val (meta, content) = list.partition { it.isMetaService }
+        return content.sortedBy { rank[it.id] ?: Int.MAX_VALUE } + meta
+    }
+
+    private suspend inline fun <T> safely(fallback: T, block: () -> T): T = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        fallback
     }
 }
 
 /**
- * A recommended song as the pages show it. Plugins send seconds;
- * [RecommendedTrack.duration], like `Track.duration`, is milliseconds (#349).
- * The ids are kept only when well-formed. A song with no artist can't be
- * resolved, so it's left out.
+ * A handler-less scope would crash Android and abort the process on iOS on an
+ * uncaught failure; this one logs it. A top-level function, not a lambda in
+ * the default argument: Kotlin/Native 2.1.0 can't compile a local
+ * `CoroutineExceptionHandler` class there.
  */
-internal fun RecommendationItem.toRecommendedTrack(): RecommendedTrack? {
-    val artistName = artist?.takeIf { it.isNotBlank() } ?: return null
-    return RecommendedTrack(
-        title = name,
-        artist = artistName,
-        duration = durationSeconds?.let { (it * 1000).toLong() }?.takeIf { it > 0 },
-        source = resolverId.orEmpty(),
-        recordingMbid = mbid?.lowercase()?.takeIf { isValidMbid(it) },
-        isrc = validateIsrc(isrc),
-    )
-}
-
-/**
- * What the Recommendations page says when no connected service has anything
- * to recommend. Port of desktop's `recommendations-empty.js` (parachord#1121).
- * ListenBrainz builds its recommendation playlist from a few weeks of listens,
- * so a new account has none.
- */
-fun emptyRecommendationsMessage(hasListenBrainz: Boolean, hasLastFm: Boolean): String = when {
-    hasListenBrainz && !hasLastFm ->
-        "ListenBrainz hasn't made recommendations for you yet. It builds them from a few weeks of listens, so check back later, or connect Last.fm in Settings for recommendations now."
-    hasListenBrainz && hasLastFm ->
-        "Neither ListenBrainz nor Last.fm has recommendations for you yet. ListenBrainz builds them from a few weeks of listens, so check back later."
-    else ->
-        "Last.fm doesn't have recommendations for you yet. Check back once it has more of your listening history."
-}
-
-/**
- * Disk cache wrapper for JSON serialization. [tracks] and [artists] are what
- * the page shows first; [providers] is each provider's last answer, kept so a
- * provider that fails keeps its rows. A file from before #606 has no
- * [providers].
- */
-@Serializable
-private data class RecommendationsDiskCache(
-    val tracks: List<RecommendedTrack> = emptyList(),
-    val artists: List<RecommendedArtist> = emptyList(),
-    val providers: List<ProviderRecommendations> = emptyList(),
+private fun recommendationsBackgroundScope(): CoroutineScope = CoroutineScope(
+    SupervisorJob() + Dispatchers.Default +
+        CoroutineExceptionHandler { _, e -> Log.e("RecommendationsRepo", "Recommendations background work failed (ignored): ${e.message}", e) },
 )
