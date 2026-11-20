@@ -177,6 +177,9 @@ Page (same structure and copy as Android's `RecommendationsScreen.kt`; read it):
    - **Service playlist:** open `.servicePlaylist(...)` (Task 5); menu Play / Add to Queue.
    - **Listener:** open the profile; play via `recommendationsListenerPlay`; menu View history / Follow / View on Achordion (when `showsAchordion`, opening `achordionUserUrl` in Safari).
 5. **Messages:** any message from a result shows as the app's existing toast (find how other screens show one).
+6. **"Playing from" routing.** iOS's `pcRouteForContext` (`HomeScreen.swift` ~L42-57) has no `service-playlist` case, so the queue's "Playing from" line for a recommended playlist would lead nowhere.
+   - Route the album, playlist, artist and service-playlist types through the shared `playbackContextDestination` (`shared/.../playback/PlaybackContext.kt`; `SERVICE_PLAYLIST_CONTEXT` opens `.servicePlaylist`).
+   - Keep iOS's extra types (charts, recommendations, history, listen-along) as they are.
 
 The model is a `@MainActor @Observable final class RecommendationsModel`:
 - It holds the `IosRecPage`, starts the watch on appear, and stops it on disappear.
@@ -222,7 +225,7 @@ The view:
   - The header has the cover the card showed (else a 2×2 mosaic of the first 4 track covers), the name, `recommendedBy(source)`, Play (`PC.fillAccent`) and Save.
   - Rows resolve on appear; a tap plays from that row with context `("playlist", name, url)`.
   - An error shows `couldntLoad(name)` with Try again.
-  - **Save:**
+  - **Save:** it passes the shared `recommendedPlaylistKey(url)` as `savedKey` to `importPlaylistFromUrl`. Expose a keyed variant on `IosContainer` if the current one takes no key. The shared importer then returns the copy already saved under that key, across visits, instead of importing again.
     - imports once: the button stays disabled after success and the saved id is remembered, so another tap opens it instead of importing again;
     - shows `saved(name)`, then pushes `.savedPlaylist(id:)`;
     - a failure shows `couldntSave(name)` and re-enables the button.
