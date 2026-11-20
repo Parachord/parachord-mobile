@@ -1,5 +1,7 @@
 package com.parachord.shared.ui
 
+import com.parachord.shared.playback.resolverDisplayName
+
 /**
  * Messages both apps show for empty and error states, in one place so Android
  * and iOS say the same thing. A repository's own error text
@@ -25,17 +27,17 @@ object UiMessages {
     /** A "load more" page that failed (desktop's toast). */
     fun couldntLoadMoreFrom(provider: String): String = "Couldn't load more from $provider"
 
-    // ── Listeners ──────────────────────────────────────────────────────
-    /** Play on a listener with no 7-day or 1-month top tracks (desktop's toast); `%s` is their name. */
-    const val LISTENER_NO_TOP_TRACKS = "%s has no recent top tracks"
-    /** Play on a listener whose top tracks couldn't be fetched (desktop's, curly apostrophes). */
-    const val LISTENER_TOP_TRACKS_FAILED = "Couldn’t load %s’s top tracks. Try again in a moment."
-    /** A Follow that couldn't reach the service; `%s` is the service's name. */
-    const val COULDNT_REACH_SERVICE = "Couldn't reach %s"
+    // ── Friends and Listeners ──────────────────────────────────────────
+    /** Add Friend or Follow for a name the service doesn't know. */
+    const val USER_NOT_FOUND = "User not found"
 
-    fun listenerNoTopTracks(name: String): String = LISTENER_NO_TOP_TRACKS.replace("%s", name)
-    fun listenerTopTracksFailed(name: String): String = LISTENER_TOP_TRACKS_FAILED.replace("%s", name)
-    fun couldntReachService(service: String): String = COULDNT_REACH_SERVICE.replace("%s", service)
+    /**
+     * A request that couldn't reach a service (a failed Follow, a listener's
+     * history). [serviceId] is a service id ("lastfm"); a blank one reads
+     * "the service". Curly apostrophe, as desktop's.
+     */
+    fun couldntReach(serviceId: String?): String =
+        "Couldn’t reach ${serviceId?.takeIf { it.isNotBlank() }?.let { resolverDisplayName(it) } ?: "the service"}"
 
     // ── Fresh Drops / Critical Darlings ────────────────────────────────
     const val FRESH_DROPS_EMPTY =

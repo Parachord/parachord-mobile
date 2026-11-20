@@ -1,9 +1,11 @@
 package com.parachord.shared.recommendations
 
+import com.parachord.shared.api.LbPlaylistTrack
 import com.parachord.shared.deeplink.ProtocolTrack
 import com.parachord.shared.deeplink.ResolvedProtocolPlay
 import com.parachord.shared.model.Track
 import com.parachord.shared.playback.PlaybackContext
+import com.parachord.shared.playback.SERVICE_PLAYLIST_CONTEXT
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -75,7 +77,8 @@ class RecommendationQueuesTest {
             ResolvedProtocolPlay("Mix", listOf(ProtocolTrack("A", "one"), ProtocolTrack("B", "two")), providerId = "plug")
         }!!
         assertEquals(listOf("one", "two"), q.tracks.map { it.title })
-        assertEquals(PlaybackContext("playlist", "Mix", "https://x/p"), q.context)
+        assertEquals(PlaybackContext(SERVICE_PLAYLIST_CONTEXT, "Mix", "https://x/p"), q.context)
+        assertEquals(q.context, servicePlaylistContext("Mix", "https://x/p"))
     }
 
     @Test
@@ -136,5 +139,74 @@ class RecommendationQueuesTest {
         val ctx = songQueue(items, 0, r)!!.context
         assertEquals(RECOMMENDATIONS_CONTEXT, ctx.type)
         assertEquals("type:song", ctx.id)
+    }
+
+    @Test
+    fun `weeklyTracks keeps order — ids are weekly-playlist-track and the fields carry over`() {
+        val weekly = WeeklyInfo("wk1", "weekly-jam", "Weekly Jams", "Week of Nov 17")
+        val tracks = weeklyTracks(
+            weekly,
+            listOf(
+                LbPlaylistTrack(id = "t1", title = "One", artist = "A", album = "Al", albumArt = "https://art/1", durationMs = 1000, mbid = "m1"),
+                LbPlaylistTrack(id = "t2", title = "Two", artist = "B"),
+            ),
+        )
+        assertEquals(listOf("weekly-wk1-t1", "weekly-wk1-t2"), tracks.map { it.id })
+        val t = tracks[0]
+        assertEquals(listOf("One", "A", "Al", "https://art/1"), listOf(t.title, t.artist, t.album, t.artworkUrl))
+        assertEquals(1000L, t.duration)
+        assertEquals("m1", t.recordingMbid)
+    }
+
+    @Test
+    fun `playlistCovers takes the first four distinct covers and skips blanks`() {
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            playlistCovers(listOf("a", null, " ", "a", "b", "", "c", "d", "e")),
+        )
+        assertEquals(emptyList(), playlistCovers(listOf(null, "")))
+    }
+
+    @Test
+    fun `WeeklyCovers loads once — an empty or failed load is asked again`() = runTest {
+        var calls = 0
+        var answer: () -> List<String?> = { throw IllegalStateException("down") }
+        val covers = WeeklyCovers(backgroundScope) { calls++; answer() }
+        covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(1, calls)
+        assertEquals(emptyList(), covers.covers("w").value)
+        testScheduler.runCurrent()
+        assertEquals(2, calls)
+        answer = { emptyList() }
+        covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(3, calls)
+        answer = { listOf("x", "x", "y") }
+        covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(4, calls)
+        val flow = covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(listOf("x", "y"), flow.value)
+        assertEquals(4, calls)
+    }
+
+    @Test
+    fun `a playlist card with a link opens its view — without one it plays`() {
+        assertTrue(playlistTapOpensView(playlist))
+        assertFalse(playlistTapOpensView(playlist.copy(url = null)))
+        assertFalse(playlistTapOpensView(playlist.copy(url = " ")))
+        assertFalse(playlistTapOpensView(playlist.copy(weekly = WeeklyInfo("w", "weekly-jam", "Weekly Jams", "Week"))))
+        assertFalse(playlistTapOpensView(song("s").copy(url = "https://x")))
+    }
+
+    @Test
+    fun `recommendedPlaylistKey is stable per link`() {
+        val a = recommendedPlaylistKey("https://music.apple.com/us/playlist/pl.1")
+        assertEquals(a, recommendedPlaylistKey("  https://music.apple.com/us/playlist/pl.1 "))
+        assertTrue(a.startsWith("rec-"))
+        assertTrue(a != recommendedPlaylistKey("https://music.apple.com/us/playlist/pl.2"))
+        assertEquals(recommendedPlaylistKey("https://open.spotify.com/playlist/X"), recommendedPlaylistKey("spotify:playlist:X"))
     }
 }

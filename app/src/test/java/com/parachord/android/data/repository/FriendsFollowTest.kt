@@ -79,6 +79,21 @@ class FriendsFollowTest {
     }
 
     @Test
+    fun `a follow that can't reach the service says so in shared words — never the exception's text`() = runBlocking {
+        val r = rig { _, _ -> respond("oops", HttpStatusCode.InternalServerError) }
+        val out = r.repo.follow("lastfm", "bob")
+        assertEquals(com.parachord.shared.ui.UiMessages.couldntReach("lastfm"), (out as Resource.Error).message)
+        assertEquals("Couldn’t reach Last.fm", out.message)
+    }
+
+    @Test
+    fun `a follow of someone the service doesn't know is User not found`() = runBlocking {
+        val r = rig { _, _ -> respond("""{"code":404,"error":"Cannot find user"}""", HttpStatusCode.NotFound, json) }
+        val out = r.repo.follow("listenbrainz", "nobody")
+        assertEquals(com.parachord.shared.ui.UiMessages.USER_NOT_FOUND, (out as Resource.Error).message)
+    }
+
+    @Test
     fun `top tracks fall back to a month`() = runBlocking {
         val r = rig { path, query ->
             if ("recordings" in path && "range=week" in query) respond("""{"payload":{"recordings":[]}}""", HttpStatusCode.OK, json)

@@ -1,14 +1,24 @@
 package com.parachord.shared.recommendations
 
+import com.parachord.shared.api.LbPlaylistTrack
 import com.parachord.shared.deeplink.ResolvedProtocolPlay
 import com.parachord.shared.deeplink.isValidMbid
+import com.parachord.shared.metadata.PlaylistMosaicPaths
 import com.parachord.shared.model.Track
 import com.parachord.shared.playback.CatalogQueue
 import com.parachord.shared.playback.PlaybackContext
+import com.parachord.shared.playback.SERVICE_PLAYLIST_CONTEXT
+import com.parachord.shared.playlist.normalizePlaylistUrl
 import com.parachord.shared.playlist.protocolPlayTrack
 import com.parachord.shared.resolver.validateIsrc
 import io.ktor.http.encodeURLParameter
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /* What a tap on a Recommendations card plays. Both apps call these. */
 
@@ -40,18 +50,89 @@ fun recommendedSongTrack(item: RecommendationItem): Track? {
 
 /** The tapped song and every song after it in [rowItems] (songs with no artist are left out). */
 fun songQueue(rowItems: List<RecommendationItem>, index: Int, row: RecommendationRow): CatalogQueue? {
-    val tracks = rowItems.mapNotNull { recommendedSongTrack(it) }
-    val tapped = rowItems.getOrNull(index)?.let { recommendedSongTrack(it) } ?: return null
-    val start = rowItems.take(index).count { recommendedSongTrack(it) != null }
-    check(tracks.getOrNull(start)?.id == tapped.id)
+    if (rowItems.getOrNull(index)?.let { recommendedSongTrack(it) } == null) return null
+    val tracks = rowItems.drop(index).mapNotNull { recommendedSongTrack(it) }
     return CatalogQueue(
-        tracks.drop(start),
-        PlaybackContext(RECOMMENDATIONS_CONTEXT, row.title ?: "Recommendations", row.key),
+        tracks,
+        PlaybackContext(RECOMMENDATIONS_CONTEXT, row.title ?: RecommendationCopy.TITLE, row.key),
     )
 }
 
 fun weeklyContext(weekly: WeeklyInfo): PlaybackContext =
     PlaybackContext(weekly.contextType, "${weekly.weekLabel}'s ${weekly.label}", weekly.id)
+
+/** A weekly playlist's tracks as metadata-only tracks, in order; ids are `weekly-<playlist>-<track>`. */
+fun weeklyTracks(weekly: WeeklyInfo, tracks: List<LbPlaylistTrack>): List<Track> = tracks.map {
+    Track(
+        id = "weekly-${weekly.id}-${it.id}",
+        title = it.title,
+        artist = it.artist,
+        album = it.album,
+        duration = it.durationMs,
+        artworkUrl = it.albumArt,
+        recordingMbid = it.mbid,
+    )
+}
+
+/** A playlist's mosaic: its first 4 distinct covers, blanks skipped (the saved mosaic's rule, [PlaylistMosaicPaths.covers]). */
+fun playlistCovers(artworks: List<String?>): List<String> = PlaylistMosaicPaths.covers(artworks)
+
+/**
+ * Weekly playlist cards' mosaics, loaded once per playlist id through [loadArtwork]
+ * (its tracks' covers) on [scope]. A load that found no covers or failed isn't kept,
+ * so the next [covers] call for that id asks again.
+ */
+class WeeklyCovers(
+    private val scope: CoroutineScope,
+    private val loadArtwork: suspend (playlistId: String) -> List<String?>,
+) {
+    private val mutex = Mutex()
+    private val flows = mutableMapOf<String, MutableStateFlow<List<String>>>()
+    /** Ids loading or loaded with covers. */
+    private val started = mutableSetOf<String>()
+
+    /** The playlist's covers (empty until they load); starts a load unless one ran and found covers. */
+    fun covers(playlistId: String): StateFlow<List<String>> {
+        val flow = flows.getOrPut(playlistId) { MutableStateFlow(emptyList()) }
+        scope.launch {
+            val go = mutex.withLock { started.add(playlistId) }
+            if (!go) return@launch
+            val found = try {
+                playlistCovers(loadArtwork(playlistId))
+            } catch (e: CancellationException) {
+                mutex.withLock { started.remove(playlistId) }
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (found.isEmpty()) mutex.withLock { started.remove(playlistId) }
+            flow.value = found
+        }
+        return flow
+    }
+}
+
+/**
+ * What a tap on a (non-weekly) recommended playlist card does, as desktop: a card
+ * with a link opens the playlist view for it (`openServicePlaylist`); one without a
+ * link has no view to open, so the tap plays it ([servicePlaylistQueue]).
+ */
+fun playlistTapOpensView(item: RecommendationItem): Boolean =
+    item.type == RecommendationType.PLAYLIST && item.weekly == null && !item.url.isNullOrBlank()
+
+/**
+ * The key a recommended service playlist is saved under ([com.parachord.shared.playlist.PlaylistUrlImporter]'s
+ * `savedKey`), so saving it again, on a later visit or from Now Playing's "Playing from",
+ * opens the first copy. Desktop keys its view by `<resolverId>-rec-<itemId>`; the link is
+ * used here because the view can also be opened from a queue's context, which carries
+ * only the link. A fingerprint of the link (FNV-1a, the same on every platform).
+ */
+fun recommendedPlaylistKey(url: String): String =
+    "rec-" + PlaylistMosaicPaths.coverSignature(listOf(normalizePlaylistUrl(url)))
+
+/** The context of a queue played from an unsaved service playlist: its id is the link. */
+fun servicePlaylistContext(name: String, url: String): PlaybackContext =
+    PlaybackContext(SERVICE_PLAYLIST_CONTEXT, name, url)
 
 /** A resolved service playlist's tracks, in order; the playlist view and [servicePlaylistQueue] both use it. */
 fun servicePlaylistTracks(play: ResolvedProtocolPlay): List<Track> {
@@ -73,7 +154,7 @@ suspend fun servicePlaylistQueue(
         null
     } ?: return null
     if (play.tracks.isEmpty()) return null
-    return CatalogQueue(servicePlaylistTracks(play), PlaybackContext("playlist", item.name, url))
+    return CatalogQueue(servicePlaylistTracks(play), servicePlaylistContext(item.name, url))
 }
 
 sealed class ListenerPlay {

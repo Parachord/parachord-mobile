@@ -31,10 +31,12 @@ import com.parachord.shared.recommendations.listenerPlay
 import com.parachord.shared.recommendations.servicePlaylistQueue
 import com.parachord.shared.recommendations.songQueue
 import com.parachord.shared.recommendations.weeklyContext
+import com.parachord.shared.recommendations.weeklyTracks
+import com.parachord.shared.recommendations.WeeklyCovers
+import com.parachord.shared.ui.UiMessages
 import com.parachord.shared.repository.RecommendationPageState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -69,8 +71,6 @@ class RecommendationsViewModel(
 
     companion object {
         private const val TAG = "RecommendationsVM"
-        private const val ALBUM_BATCH_MS = 300L
-        private const val WEEKLY_COVERS = 4
     }
 
     val page: StateFlow<RecommendationPageState> = repository.page
@@ -129,25 +129,8 @@ class RecommendationsViewModel(
 
     // ── Release dates and images ────────────────────────────────────
 
-    private val shownBatch = mutableListOf<RecommendationItem>()
-    private var shownBatchJob: Job? = null
-
-    /**
-     * Collects album and artist cards that come on screen for 300 ms, then asks
-     * once for the albums' release dates and the covers and photos they lack.
-     */
-    fun cardShown(item: RecommendationItem) {
-        synchronized(shownBatch) { shownBatch.add(item) }
-        if (shownBatchJob?.isActive == true) return
-        shownBatchJob = viewModelScope.launch {
-            delay(ALBUM_BATCH_MS)
-            val batch = synchronized(shownBatch) { shownBatch.toList().also { shownBatch.clear() } }
-            if (batch.isEmpty()) return@launch
-            batch.filter { it.type == RecommendationType.ALBUM }.takeIf { it.isNotEmpty() }
-                ?.let { repository.requestReleaseDates(it) }
-            repository.requestImages(batch)
-        }
-    }
+    /** An album or artist card came on screen: the shared repository batches the lookups. */
+    fun cardShown(item: RecommendationItem) = repository.cardShown(item)
 
     /** Resolve one song while its row is visible (#177); cancelled when the row leaves. */
     fun resolveVisible(track: Track): Job =
@@ -191,17 +174,7 @@ class RecommendationsViewModel(
         val weekly = item.weekly ?: return
         viewModelScope.launch {
             try {
-                val tracks = weeklyPlaylistsRepository.loadPlaylistTracks(weekly.id).map {
-                    Track(
-                        id = "weekly-${weekly.id}-${it.id}",
-                        title = it.title,
-                        artist = it.artist,
-                        album = it.album,
-                        duration = it.durationMs,
-                        artworkUrl = it.albumArt,
-                        recordingMbid = it.mbid,
-                    )
-                }
+                val tracks = weeklyTracks(weekly, weeklyPlaylistsRepository.loadPlaylistTracks(weekly.id))
                 if (tracks.isEmpty()) {
                     say(RecommendationCopy.couldntLoad(item.name))
                     return@launch
@@ -217,33 +190,12 @@ class RecommendationsViewModel(
         }
     }
 
-    private val weeklyCoverFlows = mutableMapOf<String, MutableStateFlow<List<String>>>()
-    private val weeklyCoverLoaded = mutableSetOf<String>()
-
-    /** The first four distinct album covers of a weekly playlist, loaded once per id. */
-    fun weeklyCovers(id: String): StateFlow<List<String>> {
-        val flow = synchronized(weeklyCoverFlows) {
-            weeklyCoverFlows.getOrPut(id) { MutableStateFlow(emptyList()) }
-        }
-        val start = synchronized(weeklyCoverFlows) { weeklyCoverLoaded.add(id) }
-        if (start) {
-            viewModelScope.launch {
-                try {
-                    val covers = weeklyPlaylistsRepository.loadPlaylistTracks(id)
-                        .mapNotNull { it.albumArt?.takeIf { a -> a.isNotBlank() } }
-                        .distinct().take(WEEKLY_COVERS)
-                    if (covers.isEmpty()) synchronized(weeklyCoverFlows) { weeklyCoverLoaded.remove(id) }
-                    flow.value = covers
-                } catch (e: CancellationException) {
-                    synchronized(weeklyCoverFlows) { weeklyCoverLoaded.remove(id) }
-                    throw e
-                } catch (e: Exception) {
-                    synchronized(weeklyCoverFlows) { weeklyCoverLoaded.remove(id) }
-                }
-            }
-        }
-        return flow
+    private val weeklyCoverLoader = WeeklyCovers(viewModelScope) { id ->
+        weeklyPlaylistsRepository.loadPlaylistTracks(id).map { it.albumArt }
     }
+
+    /** A weekly playlist card's mosaic (the shared [WeeklyCovers] rule). */
+    fun weeklyCovers(id: String): StateFlow<List<String>> = weeklyCoverLoader.covers(id)
 
     fun playServicePlaylist(item: RecommendationItem) = withServiceQueue(item) { q ->
         playbackController.playQueue(q.tracks, startIndex = 0, context = q.context)
@@ -280,6 +232,7 @@ class RecommendationsViewModel(
         viewModelScope.launch {
             try {
                 when (val result = friendsRepository.follow(item.service, item.name)) {
+                    // Shared copy from the repository (UiMessages.couldntReach / USER_NOT_FOUND).
                     is Resource.Error -> say(result.message)
                     else -> repository.load(false)
                 }
@@ -287,7 +240,7 @@ class RecommendationsViewModel(
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to follow ${item.name}", e)
-                say(e.message ?: RecommendationCopy.couldntLoad(item.name))
+                say(UiMessages.couldntReach(item.service))
             }
         }
     }

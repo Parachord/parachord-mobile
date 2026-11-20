@@ -683,7 +683,7 @@ private fun ArtistGridItem(
 
 @Composable
 private fun ErrorState(service: String?, onRetry: (() -> Unit)? = null) {
-    val message = RecommendationCopy.couldntReach(service)
+    val message = com.parachord.shared.ui.UiMessages.couldntReach(service)
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,

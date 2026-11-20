@@ -138,15 +138,11 @@ class FriendDetailViewModel constructor(
         viewModelScope.launch {
             when (val result = friendsRepository.follow(current.service, current.username)) {
                 is Resource.Success -> _friend.value = result.data
+                // The repository's error is shared copy (couldntReach / USER_NOT_FOUND), never raw text.
                 is Resource.Error -> _messages.emit(result.message)
                 else -> {}
             }
         }
-    }
-
-    fun refresh() {
-        val friend = _friend.value ?: return
-        loadRecentTracks(friend)
     }
 
     fun togglePin() {

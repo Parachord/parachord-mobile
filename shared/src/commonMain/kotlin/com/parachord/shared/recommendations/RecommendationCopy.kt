@@ -1,6 +1,5 @@
 package com.parachord.shared.recommendations
 
-import com.parachord.shared.playback.resolverDisplayName
 import kotlin.math.roundToInt
 
 /**
@@ -51,9 +50,6 @@ object RecommendationCopy {
     /** A recommended playlist's line under its title; [sourceName] blank reads "the service" (desktop's `sourceName || 'the service'`). */
     fun recommendedBy(sourceName: String) = "Recommended by ${sourceName.trim().ifEmpty { "the service" }}"
     fun couldntLoad(name: String) = "Couldn’t load $name"
-    /** [serviceId] is a service id ("lastfm"); a blank one reads "the service". */
-    fun couldntReach(serviceId: String?): String =
-        "Couldn’t reach ${serviceId?.takeIf { it.isNotBlank() }?.let { resolverDisplayName(it) } ?: "the service"}"
 
     /** A listener's similarity as a whole percent ("88%"); null when the service sent none. */
     fun similarityBadge(similarity: Double?): String? =

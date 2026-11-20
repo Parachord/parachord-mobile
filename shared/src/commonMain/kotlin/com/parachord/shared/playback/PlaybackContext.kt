@@ -8,3 +8,38 @@ data class PlaybackContext(
     val name: String,
     val id: String? = null,
 )
+
+/**
+ * The context type of a queue started from a service playlist that isn't saved
+ * (a recommended Apple Music or Spotify playlist): its id is the playlist's
+ * link, not a local playlist id, so "Playing from" opens the playlist view for
+ * that link rather than a saved playlist.
+ */
+const val SERVICE_PLAYLIST_CONTEXT = "service-playlist"
+
+/** Where Now Playing's "Playing from" line opens. */
+sealed class ContextDestination {
+    /** [artist] is the context's id when it carries one (the album page's form). */
+    data class Album(val title: String, val artist: String?) : ContextDestination()
+    data class Artist(val name: String) : ContextDestination()
+    /** A saved playlist by its local id. */
+    data class Playlist(val id: String) : ContextDestination()
+    /** An unsaved service playlist's own view, by its link. */
+    data class ServicePlaylist(val url: String, val name: String) : ContextDestination()
+}
+
+/**
+ * Where a queue's context opens, or null when it opens nothing here (a spinoff,
+ * Listen Along, a context with no id to open). Both apps' Now Playing call it;
+ * a platform may also link contexts this doesn't cover to pages only it has.
+ */
+fun playbackContextDestination(ctx: PlaybackContext): ContextDestination? {
+    val id = ctx.id?.takeIf { it.isNotBlank() }
+    return when (ctx.type) {
+        "album" -> ContextDestination.Album(ctx.name, id)
+        "artist" -> ContextDestination.Artist(ctx.name)
+        "playlist" -> id?.let { ContextDestination.Playlist(it) }
+        SERVICE_PLAYLIST_CONTEXT -> id?.let { ContextDestination.ServicePlaylist(it, ctx.name) }
+        else -> null
+    }
+}

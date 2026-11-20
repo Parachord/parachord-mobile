@@ -1,5 +1,6 @@
 package com.parachord.shared.repository
 
+import com.parachord.shared.ui.UiMessages
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.api.LastFmHiddenListeningException
 import com.parachord.shared.api.LastFmRateLimitedException
@@ -347,13 +348,14 @@ class FriendsRepository(
                 val updated = friendDao.getFriendById(friend.id) ?: friend
                 Resource.Success(updated)
             } else {
-                Resource.Error("User not found")
+                Resource.Error(UiMessages.USER_NOT_FOUND)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // The exception's text goes to the log only; people see shared words.
             Log.e(TAG, "Failed to add friend: ${parsed.username}", e)
-            Resource.Error("Failed to add friend: ${e.message}")
+            Resource.Error(UiMessages.couldntReach(parsed.service))
         }
     }
 
