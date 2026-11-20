@@ -41,11 +41,31 @@ class PluginUserConfig(
         fun secretKey(pluginId: String, field: String): String = "plugin_secret_${pluginId}_$field"
 
         private val json = Json { ignoreUnknownKeys = true }
+
+        /**
+         * Plugins the apps set up themselves: a sign-in (Spotify, SoundCloud,
+         * Apple Music, Last.fm, ListenBrainz, Libre.fm), an API key screen (the
+         * AI and concert services) or an on/off switch. Most bundled plugins
+         * declare `settings.configurable` for desktop's settings page, so the
+         * declaration alone can't choose the generic editor: for these it would
+         * hide the sign-in, and its empty config would replace the one the app
+         * supplies (SoundCloud's token, the Last.fm and ListenBrainz usernames).
+         */
+        val HOST_CONFIGURED_PLUGIN_IDS: Set<String> = setOf(
+            "spotify", "soundcloud", "applemusic", "localfiles", "local-files",
+            "lastfm", "listenbrainz", "librefm", "discogs", "wikipedia",
+            "chatgpt", "claude", "gemini", "ollama",
+            "ticketmaster", "seatgeek", "bandsintown", "songkick",
+        )
+
+        /** Whether the plugin's settings are the generic field editor (Subsonic), not a screen of the app's own. */
+        fun usesGenericSettings(pluginId: String): Boolean = pluginId !in HOST_CONFIGURED_PLUGIN_IDS
     }
 
     /** The plugin's configurable fields, in manifest order. */
     fun fields(pluginId: String): List<PluginManager.PluginConfigField> =
-        plugins().find { it.id == pluginId }?.configFields ?: emptyList()
+        if (!usesGenericSettings(pluginId)) emptyList()
+        else plugins().find { it.id == pluginId }?.configFields ?: emptyList()
 
     /** The value of one field (passwords from the secure store); "" when unset. */
     suspend fun value(pluginId: String, field: PluginManager.PluginConfigField): String =
@@ -94,14 +114,15 @@ class PluginUserConfig(
     }.toString()
 
     /**
-     * Configs for every loaded plugin with configurable fields, for the
+     * Configs for every loaded plugin edited through the generic editor
+     * ([usesGenericSettings]) with configurable fields, for the
      * resolver config provider (merged after the per-service configs so a
      * plugin's own fields win). Cached — the provider runs before every plugin
      * call, and building this decrypts the secure store once per password
      * field — and the cache drops on [save] or a plugin-set change.
      */
     suspend fun pluginConfigs(): Map<String, String> {
-        val plugins = plugins().filter { it.configFields.isNotEmpty() }
+        val plugins = plugins().filter { it.configFields.isNotEmpty() && usesGenericSettings(it.id) }
         val fingerprint = plugins.joinToString(";") { p -> p.id + ":" + p.configFields.joinToString(",") { it.key } }
         val generationAtBuild: Long
         configCacheMutex.withLock {

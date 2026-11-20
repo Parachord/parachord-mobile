@@ -781,6 +781,7 @@ private fun PlugInsTab(
                         // A plugin whose own config isn't complete (Subsonic without
                         // its server URL) shows "Set up" (plan parachord-mobile#664).
                         val needsSetup = plugin.requiresAuth && plugin.configFields.isNotEmpty() &&
+                            com.parachord.shared.plugin.PluginUserConfig.usesGenericSettings(plugin.id) &&
                             pluginConfigured[plugin.id] == false
                         PluginTile(
                             plugin = plugin,
@@ -1370,9 +1371,12 @@ private fun PluginConfigSheet(
             }
 
             // Plugin-specific config. A plugin with `settings.configurable`
-            // fields (Subsonic's server URL / username / password) gets the
-            // generic field editor; everything else keeps its per-plugin UI.
-            if (plugin.configFields.isNotEmpty()) {
+            // fields and no settings of the app's own (Subsonic's server URL /
+            // username / password) gets the generic field editor; the plugins
+            // the app sets up itself keep their own UI (`usesGenericSettings`).
+            if (plugin.configFields.isNotEmpty() &&
+                com.parachord.shared.plugin.PluginUserConfig.usesGenericSettings(plugin.id)
+            ) {
                 PluginFieldsConfig(
                     plugin = plugin,
                     savedValues = pluginConfigValues[plugin.id] ?: emptyMap(),
