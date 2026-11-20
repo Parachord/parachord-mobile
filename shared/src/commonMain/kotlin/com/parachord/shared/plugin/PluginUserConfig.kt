@@ -115,9 +115,10 @@ class PluginUserConfig(
 
     /**
      * Configs for every loaded plugin edited through the generic editor
-     * ([usesGenericSettings]) with configurable fields, for the
-     * resolver config provider (merged after the per-service configs so a
-     * plugin's own fields win). Cached — the provider runs before every plugin
+     * ([usesGenericSettings]) with configurable fields, for the resolver
+     * config provider (merged field by field after the per-service configs,
+     * [mergeResolverConfigs], so a plugin's own fields win and its unset ones
+     * leave the per-service values in place). Cached — the provider runs before every plugin
      * call, and building this decrypts the secure store once per password
      * field — and the cache drops on [save] or a plugin-set change.
      */
