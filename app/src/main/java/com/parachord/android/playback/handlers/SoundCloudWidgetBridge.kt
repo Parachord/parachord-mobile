@@ -165,7 +165,9 @@ class SoundCloudWidgetBridge constructor(
                     }
 
                     override fun onConsoleMessage(message: ConsoleMessage?): Boolean {
-                        message?.let { Log.d(TAG, "console: ${it.message()} (${it.sourceId()}:${it.lineNumber()})") }
+                        message?.let {
+                            Log.d(TAG, com.parachord.shared.api.SecretRedaction.redactSecrets("console: ${it.message()} (${it.sourceId()}:${it.lineNumber()})"))
+                        }
                         return true
                     }
                 }

@@ -313,7 +313,10 @@ class IosContainer private constructor() {
             userAgent = parachordUserAgent(appVersionString(), "iOS"),
             parachordClient = "ios",
             appVersion = appVersionString(),
-            isDebug = true,
+            // A debug framework (Xcode's Debug configuration) logs HTTP headers,
+            // redacted; a Release build logs nothing. Only the shared client's
+            // logging reads this flag.
+            isDebug = iosDebugBinary(),
             spotifyClientId = "",   // BYO — Parachord ships no Spotify key; user adds theirs in Settings
             lastFmApiKey = plist("LastFmApiKey"),
             lastFmSharedSecret = plist("LastFmSharedSecret"),
@@ -4337,3 +4340,7 @@ class Cancellable(private val onCancel: () -> Unit) {
 
 /** What a playlist chat card's tap does, flattened for Swift: `kind` is open, offerSave or unavailable. */
 data class IosChatPlaylistTap(val kind: String, val playlistId: String?, val message: String?)
+
+/** Whether this is a debug build of the Shared framework (Xcode's Debug configuration builds one). */
+@OptIn(kotlin.experimental.ExperimentalNativeApi::class)
+internal fun iosDebugBinary(): Boolean = kotlin.native.Platform.isDebugBinary

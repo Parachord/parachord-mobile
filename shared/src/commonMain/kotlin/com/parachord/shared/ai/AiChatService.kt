@@ -159,10 +159,14 @@ class AiChatService(
      * not leave a row in the cleared conversation.
      */
     private suspend fun append(providerId: String, history: MutableList<ChatMessage>, message: ChatMessage) {
-        val current = historyLock.withLock {
-            (histories[providerId] === history).also { if (it) history.add(message) }
+        // Checked and saved under the lock, so a clear can't land between the
+        // check and the insert.
+        historyLock.withLock {
+            if (histories[providerId] === history) {
+                history.add(message)
+                persistMessage(providerId, message)
+            }
         }
-        if (current) persistMessage(providerId, message)
     }
 
     /** The system prompt followed by a copy of [history], for one provider call. */
@@ -262,8 +266,10 @@ class AiChatService(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.w(TAG, "Tool ${toolCall.name} failed: ${AiProviderErrors.redactSecrets(e.message ?: e::class.simpleName.orEmpty())}")
-                    mapOf("success" to false, "error" to (e.message ?: "The ${toolCall.name} tool failed."))
+                    // Redacted before it's logged, sent to the model or saved.
+                    val reason = AiProviderErrors.redactSecrets(e.message ?: "The ${toolCall.name} tool failed.")
+                    Log.w(TAG, "Tool ${toolCall.name} failed: $reason")
+                    mapOf("success" to false, "error" to reason)
                 }
                 val resultJson = json.encodeToString(
                     JsonElement.serializer(),
@@ -317,14 +323,18 @@ class AiChatService(
 
     /** Clear history for a specific provider. */
     suspend fun clearHistory(providerId: String) {
-        historyLock.withLock { histories.remove(providerId) }
-        historyStore.clearByProvider(providerId)
+        historyLock.withLock {
+            histories.remove(providerId)
+            historyStore.clearByProvider(providerId)
+        }
     }
 
     /** Clear all provider histories. */
     suspend fun clearAllHistories() {
-        historyLock.withLock { histories.clear() }
-        historyStore.clearAll()
+        historyLock.withLock {
+            histories.clear()
+            historyStore.clearAll()
+        }
     }
 
     /**

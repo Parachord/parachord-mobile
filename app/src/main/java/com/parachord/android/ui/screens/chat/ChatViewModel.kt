@@ -183,6 +183,12 @@ class ChatViewModel constructor(
                     userMessage = text,
                     onProgress = { _progressText.value = it },
                 )
+                // Show the provider selected now, which may not be the one that
+                // answered (the user switched during the reply). Before loading
+                // ends, so a queued prompt can't be sent before the reply shows.
+                _selectedProviderId.value?.let { current ->
+                    _messages.value = chatService.getDisplayMessages(current)
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -190,11 +196,6 @@ class ChatViewModel constructor(
             } finally {
                 _isLoading.value = false
                 _progressText.value = null
-            }
-            // Show the provider selected now, which may not be the one that
-            // answered (the user switched during the reply).
-            _selectedProviderId.value?.let { current ->
-                _messages.value = chatService.getDisplayMessages(current)
             }
         }
     }

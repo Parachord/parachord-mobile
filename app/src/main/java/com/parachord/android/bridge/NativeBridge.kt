@@ -1,5 +1,6 @@
 package com.parachord.android.bridge
 
+import com.parachord.shared.api.SecretRedaction
 import com.parachord.shared.platform.Log
 import android.webkit.JavascriptInterface
 import androidx.datastore.core.DataStore
@@ -21,6 +22,14 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 private const val TAG = "NativeBridge"
+
+/**
+ * The log line for a plugin fetch that failed, with credentials removed: a
+ * plugin URL can carry a key (an old `gemini.axe`'s `?key=`, Last.fm's
+ * `api_key=`, Subsonic's `t=` / `s=`), and so can the error's message.
+ */
+internal fun fetchErrorLine(call: String, method: String, url: String, error: String?): String =
+    SecretRedaction.redactSecrets("$call error ($method $url): $error")
 
 /** 36-char MusicBrainz Identifier (8-4-4-4-12 hex with dashes). Plugins
  *  validate `track.mbid` against this same shape; we mirror the regex
@@ -96,7 +105,8 @@ class NativeBridge(
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse headers: $headersJson", e)
+                    // Header values are credentials (API keys), so only the size is logged.
+                    Log.w(TAG, "Failed to parse headers (${headersJson.length} chars): ${e::class.simpleName}")
                 }
             }
 
@@ -115,7 +125,7 @@ class NativeBridge(
 
             """{"status":$statusCode,"ok":$isOk,"body":${escapeJsonString(responseBody)}}"""
         } catch (e: Exception) {
-            Log.e(TAG, "fetch error ($method $url): ${e.message}")
+            Log.e(TAG, fetchErrorLine("fetch", method, url, e.message))
             """{"status":0,"ok":false,"body":${escapeJsonString(e.message ?: "Network error")}}"""
         }
     }
@@ -166,7 +176,7 @@ class NativeBridge(
                 val responseBody = response.body?.string() ?: ""
                 """{"status":${response.code},"ok":${response.isSuccessful},"body":${escapeJsonString(responseBody)}}"""
             } catch (e: Exception) {
-                Log.e(TAG, "fetchAsync error ($method $url): ${e.message}")
+                Log.e(TAG, fetchErrorLine("fetchAsync", method, url, e.message))
                 """{"status":0,"ok":false,"body":${escapeJsonString(e.message ?: "Network error")}}"""
             }
 
@@ -220,7 +230,7 @@ class NativeBridge(
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "resolveMbidForLove($callbackId) failed: ${e.message}")
+                Log.w(TAG, "resolveMbidForLove($callbackId) failed: ${SecretRedaction.redactSecrets(e.message.orEmpty())}")
                 null
             }
 
@@ -251,7 +261,7 @@ class NativeBridge(
                 appleMusicCatalog.get(path)
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "appleMusicCatalogGet($callbackId) failed: ${e.message}")
+                Log.w(TAG, "appleMusicCatalogGet($callbackId) failed: ${SecretRedaction.redactSecrets(e.message.orEmpty())}")
                 null
             }
             // The body is JSON, so it goes in as a JS expression.
@@ -280,7 +290,7 @@ class NativeBridge(
                 appleMusicCatalog.personalRecommendations(limit, settingsStore.getAppleMusicUserToken()).toJsEnvelope()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.w(TAG, "appleMusicPersonalRecommendations($callbackId) failed: ${e.message}")
+                Log.w(TAG, "appleMusicPersonalRecommendations($callbackId) failed: ${SecretRedaction.redactSecrets(e.message.orEmpty())}")
                 """{"failed":0}"""
             }
             // The envelope is JSON, so it goes in as a JS expression.
@@ -298,10 +308,12 @@ class NativeBridge(
     @JavascriptInterface
     fun log(level: String, message: String) {
         when (level) {
-            "error" -> Log.e(TAG, message)
-            "warn" -> Log.w(TAG, message)
-            "info" -> Log.i(TAG, message)
-            else -> Log.d(TAG, message)
+            // Plugin console output can carry the URLs it fetches (an old
+            // gemini.axe's ?key=, Subsonic's t= / s=), so it's redacted too.
+            "error" -> Log.e(TAG, SecretRedaction.redactSecrets(message))
+            "warn" -> Log.w(TAG, SecretRedaction.redactSecrets(message))
+            "info" -> Log.i(TAG, SecretRedaction.redactSecrets(message))
+            else -> Log.d(TAG, SecretRedaction.redactSecrets(message))
         }
     }
 
