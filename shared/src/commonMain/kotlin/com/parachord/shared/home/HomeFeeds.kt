@@ -43,15 +43,23 @@ import kotlinx.coroutines.sync.withLock
  *   empty, keeping a loaded one.
  * - A load already running is left alone. A [Resource.Error] or a throw marks
  *   the list failed (its last items stay) and the next plain load asks again.
+ * - The state starts `loading` ([startsLoading], the default) until the first
+ *   load answers, so a half shows its skeleton from the start rather than
+ *   appearing only once its load begins. A list that may never load (concerts
+ *   without a location) starts not loading.
  */
 class HomeFeedLoader<T> internal constructor(
     private val what: String,
     /** Its own lock; a test passes one it can hold. */
     private val mutex: Mutex,
+    startsLoading: Boolean = true,
 ) {
-    constructor(what: String) : this(what, Mutex())
+    constructor(what: String, startsLoading: Boolean = true) : this(what, Mutex(), startsLoading)
 
-    private val _state = MutableStateFlow(HomeFeed<T>())
+    private val _state = MutableStateFlow(HomeFeed<T>(loading = startsLoading))
+
+    /** A load is under way; kept apart from `state.loading`, which starts true before any load. */
+    private var running = false
     val state: StateFlow<HomeFeed<T>> = _state.asStateFlow()
 
     private var loadedOk = false
@@ -65,10 +73,11 @@ class HomeFeedLoader<T> internal constructor(
     suspend fun load(force: Boolean, key: Any? = null, fetch: (refresh: Boolean) -> Flow<Resource<List<T>>>): Boolean {
         val refresh = mutex.withLock {
             val s = _state.value
-            if (s.loading) return false
+            if (running) return false
             val keyChanged = loadedKey != null && key != loadedKey
             val want = keyChanged || if (force) s.failed || s.items.isEmpty() else !loadedOk || key != loadedKey
             if (!want) return false
+            running = true
             // Another location's concerts aren't this one's.
             _state.value = if (keyChanged) HomeFeed(loading = true) else s.copy(loading = true, failed = false)
             force || keyChanged
@@ -96,6 +105,7 @@ class HomeFeedLoader<T> internal constructor(
                 mutex.withLock {
                     loadedOk = ok
                     loadedKey = key
+                    running = false
                     _state.update { it.copy(loading = false) }
                 }
             }
@@ -151,7 +161,7 @@ class HomeConcertsLoader(
     constructor(seed: ConcertArtistSeedSource, repository: ConcertsRepository) :
         this({ loc, refresh -> concertEvents(seed, repository, loc, refresh) })
 
-    private val loader = HomeFeedLoader<ConcertEvent>("Concerts")
+    private val loader = HomeFeedLoader<ConcertEvent>("Concerts", startsLoading = false)
     val state: StateFlow<HomeFeed<ConcertEvent>> = loader.state
 
     /** With no [location], nothing. The location is the list's key. */

@@ -181,4 +181,30 @@ class HomeFeedsTest {
         assertTrue(feed.load(false) { flowOf(Resource.Success(listOf("b"))) })
         assertEquals(listOf("b"), feed.state.value.items)
     }
+
+    @Test
+    fun `a feed starts loading so its half shows a skeleton until the first answer`() = runTest {
+        val feed = HomeFeedLoader<String>("t")
+        assertTrue(feed.state.value.loading)
+        assertTrue(homeHalves(0, feed.state.value.loading, 0, false, 0, false, false).fresh)
+        assertTrue(feed.load(false) { flowOf(Resource.Success(listOf("a"))) })
+        assertEquals(HomeFeed(listOf("a")), feed.state.value)
+    }
+
+    @Test
+    fun `a feed that starts loading still answers a failed first load`() = runTest {
+        val feed = HomeFeedLoader<String>("t")
+        assertTrue(feed.load(false) { flowOf(Resource.Error("offline")) })
+        assertFalse(feed.state.value.loading)
+        assertTrue(feed.state.value.failed)
+    }
+
+    @Test
+    fun `concerts don't start loading since they load only with a location`() = runTest {
+        val concerts = HomeConcertsLoader { _, _ -> flowOf(Resource.Success(emptyList())) }
+        assertFalse(concerts.state.value.loading)
+        concerts.load(null)
+        assertFalse(concerts.state.value.loading)
+    }
 }
+

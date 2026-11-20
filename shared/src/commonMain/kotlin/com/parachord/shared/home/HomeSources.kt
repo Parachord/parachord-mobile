@@ -18,8 +18,11 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * One of Home's remote lists as the platform holds it. [loading] is true while
- * a load runs or before the first one has answered; [failed] after a load that
- * couldn't answer (the last items, if any, stay).
+ * a load runs; a [HomeFeedLoader] also starts it true, before its first load
+ * has answered (concerts excepted, which load only with a location), while a
+ * bare `HomeFeed()` (the session's state before any source answers) is not
+ * loading. [failed] after a load that couldn't answer (the last items, if
+ * any, stay).
  */
 data class HomeFeed<T>(
     val items: List<T> = emptyList(),
