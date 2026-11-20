@@ -298,8 +298,28 @@ container (`recommendationsSongQueue`, `recommendationsWeeklyQueue`,
 `followListener`, the shared `albumQueue`), messages show as the coordinator's
 `notice`, and the Connect buttons open Settings on the plugin's sheet through
 the `pcOpenPluginSettings` environment action (`SettingsView(initialService:)`).
-An open row's grid uses the shared `recommendationGridColumns`. Don't add a
-rule here; add it to `RecommendationPageView.kt` and draw it.
+The bridge is `IosRecommendationsPage.kt` (flat DTOs: `IosRecPage` and its
+blocks, rows, cards and listeners, so no Kotlin sealed type reaches Swift). No
+rules live in Swift: which rows show under the filter, the previews, See all /
+Show less, the skeletons and the states are `RecommendationPageView.kt` and
+`recommendationPageLayout`; an open row's grid uses the shared
+`recommendationGridColumns`. Add a rule there and draw it.
+
+**The page keeps its place.** While the user is at the top, it stays pinned
+there as blocks arrive (`RecScrollTopKey` tracks the offset; the first block is
+scrolled to again), so a late row doesn't push the content down. The session (the
+picked source filter, the open rows) is reset only on the screen's first appear
+(`didResetSession`): back from a pushed screen it comes back as it was, and
+pull-to-refresh and Try again reload without resetting it.
+
+**A recommended playlist opens in `ServicePlaylistView`** (`PCRoute.servicePlaylist`,
+Android's `ServicePlaylistScreen`): "Recommended by <service>", Play, and Save,
+which calls `IosContainer.saveRecommendedPlaylist(url)` under the shared
+`recommendedPlaylistKey`, so a second Save opens the first copy. It never throws:
+a failure is a null id, shown as a failure, while a double tap while saving is
+ignored. Now Playing's "Playing from" returns to it through `pcRouteForContext`
+(`playbackContextDestination`). A Listener who isn't a saved friend opens as an
+unsaved profile, and `FriendProfileScreen`'s Follow calls `followProfile`.
 
 **Keychain items must be readable after first unlock.** A CarPlay launch can
 happen with the phone locked, and iOS's default accessibility
