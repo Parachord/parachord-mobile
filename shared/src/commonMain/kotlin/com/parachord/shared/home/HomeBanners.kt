@@ -5,8 +5,10 @@ import com.parachord.shared.api.Cta
 
 // The banner list for Home, a port of desktop's `home-banners.js`. The
 // announcements arrive already filtered (surface, version, expiry,
-// dismissals), so this only normalises them, keeping their order. The CSS
-// severity colours stay in the design tokens.
+// dismissals), so this only normalises them, keeping their order. A CTA
+// whose link isn't http(s) is dropped, so no button shows and no click is
+// counted (desktop's banner only opens http(s) links). The CSS severity
+// colours stay in the design tokens.
 
 data class HomeBannerItem(
     val id: String,
@@ -25,7 +27,7 @@ fun homeBannerItems(announcements: List<Announcement>): List<HomeBannerItem> =
             title = it.title,
             body = it.body,
             iconUrl = it.iconUrl?.ifEmpty { null },
-            cta = it.cta,
+            cta = it.cta?.takeIf { cta -> isHttpUrl(cta.url.trim()) },
             severity = it.severity?.ifEmpty { null } ?: "info",
         )
     }

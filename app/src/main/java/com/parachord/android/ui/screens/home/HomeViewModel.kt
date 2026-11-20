@@ -24,23 +24,23 @@ import com.parachord.shared.home.HomeSources
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.JumpTile
 import com.parachord.shared.home.JumpTileArt
-import com.parachord.shared.home.jumpTileArt
+import com.parachord.shared.home.JumpTileArtLookup
+import com.parachord.shared.home.jumpTilesArt
 import com.parachord.shared.home.jumpTileKey
 import com.parachord.shared.metadata.ImageEnrichmentService
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.update
 import com.parachord.shared.playback.CatalogQueues
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.servicePlaylistTracks
 import com.parachord.shared.repository.AnnouncementsRepository
+import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.repository.recentLoves
 import com.parachord.shared.ui.UiMessages
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -65,6 +65,7 @@ class HomeViewModel(
     private val providerPlaylistResolver: ProviderPlaylistResolver,
     private val announcementsRepository: AnnouncementsRepository,
     private val imageEnrichmentService: ImageEnrichmentService,
+    private val recommendationsRepository: RecommendationsRepository,
 ) : ViewModel() {
 
     private companion object {
@@ -81,49 +82,39 @@ class HomeViewModel(
 
     // ── Jump back in art ─────────────────────────────────────────────
 
-    /** Album covers looked up for tiles that came without one, by [jumpTileKey]. */
-    private val foundArt = MutableStateFlow<Map<String, String>>(emptyMap())
-    private val artAsked = mutableSetOf<String>()
+    /** Covers looked up for album tiles that came without one (shared rule, both apps). */
+    private val artLookup = JumpTileArtLookup(viewModelScope) { album, artist ->
+        imageEnrichmentService.lookupAlbumArt(album, artist)
+    }
 
     private val loves = sources.collectionTracks
         .map { recentLoves(it, HOME_RECENT_LOVES) }
         .distinctUntilChanged()
 
-    /** Each tile's art by [jumpTileKey] (shared [jumpTileArt], then a looked-up album cover). */
+    /** Each tile's art by [jumpTileKey] (shared [jumpTilesArt]). */
     val tileArt: StateFlow<Map<String, JumpTileArt>> = combine(
         state.map { it.tiles }.distinctUntilChanged(),
         loves,
-        foundArt,
-    ) { tiles, loves, found ->
-        tiles.associate { tile ->
-            val key = jumpTileKey(tile)
-            val art = jumpTileArt(tile, loves)
-            key to if (art.isEmpty) found[key]?.let { JumpTileArt(imageUrl = it) } ?: art else art
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+        artLookup.found,
+    ) { tiles, loves, found -> jumpTilesArt(tiles, loves, found) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** A tile came on screen: an album tile with no cover looks one up ([JumpTileArtLookup]). */
+    fun tileShown(tile: JumpTile) {
+        artLookup.shown(tile, tileArt.value[jumpTileKey(tile)] ?: JumpTileArt())
+    }
+
+    // ── Album cards ──────────────────────────────────────────────────
 
     /**
-     * A tile came on screen. An album tile with no cover looks one up once,
-     * as the Recommendations album cards do (`ImageEnrichmentService.lookupAlbumArt`);
-     * a lookup that threw is asked again next time.
+     * An album card came on screen: the Recommendations repository looks up its
+     * release date and, when it has none, its cover, batched with the other
+     * cards shown at the same time (as the Recommendations page's cards do).
      */
-    fun tileShown(tile: JumpTile) {
-        if (tile !is JumpTile.Album) return
-        val key = jumpTileKey(tile)
-        if (tileArt.value[key]?.isEmpty == false || !artAsked.add(key)) return
-        viewModelScope.launch {
-            try {
-                val url = imageEnrichmentService.lookupAlbumArt(tile.album.album, tile.album.artist)
-                if (!url.isNullOrBlank()) foundArt.update { it + (key to url) }
-            } catch (e: CancellationException) {
-                artAsked.remove(key)
-                throw e
-            } catch (e: Exception) {
-                artAsked.remove(key)
-                Log.w(TAG, "Album art for '${tile.album.album}' failed: ${e.message}")
-            }
-        }
-    }
+    fun albumShown(item: RecommendationItem) = recommendationsRepository.cardShown(item)
+
+    fun isAlbumInCollection(title: String, artist: String): Flow<Boolean> =
+        repository.isAlbumInCollection(title, artist)
 
     /** Album and top-songs queues, shared with iOS (#588). */
     private val catalogQueues = CatalogQueues(metadataService)

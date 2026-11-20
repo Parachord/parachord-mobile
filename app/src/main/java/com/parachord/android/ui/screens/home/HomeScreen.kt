@@ -49,6 +49,14 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.parachord.android.share.rememberShareAlbumLite
+import com.parachord.android.share.rememberSharePlaylistById
+import com.parachord.android.ui.components.AlbumContextMenu
+import com.parachord.android.ui.components.DeletePlaylistDialog
+import com.parachord.android.ui.components.PlaylistContextMenu
+import com.parachord.android.ui.components.PlaylistSyncChannelsSheet
+import com.parachord.shared.model.Playlist
+import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.android.ui.components.AnnouncementBanner
 import com.parachord.android.ui.components.AppleMusicReauthBanner
 import com.parachord.android.ui.components.ShimmerAlbumCard
@@ -67,6 +75,9 @@ import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 
 private val OnFill = tokenColor(DesignTokens.ON_ACCENT)
+
+/** Space between Home's sections (the section header adds 16 more above its title). */
+private val SectionGap = 16.dp
 
 /** The hero band's height on a phone (desktop's `HOME_HERO_HEIGHT` is 80 px). */
 private val HeroHeight = 64.dp
@@ -106,7 +117,7 @@ fun HomeScreen(
     val tileArt by viewModel.tileArt.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    LaunchedEffect(Unit) { viewModel.onVisible() }
+    // ON_RESUME also fires on entering composition, so this is once per visit.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onVisible() }
 
     // Playlist-action toasts (Apple Music's unsupported delete, D8).
@@ -123,6 +134,70 @@ fun HomeScreen(
                 tile.mix.url, tile.mix.title, tile.mix.resolverName.orEmpty(), tile.mix.imageUrl,
             )
         }
+    }
+
+    // ── Card menus, hosted here so they outlive a card scrolled away ──
+    val sharePlaylistById = rememberSharePlaylistById()
+    val shareAlbum = rememberShareAlbumLite()
+    var playlistMenu by remember { mutableStateOf<Playlist?>(null) }
+    var syncTarget by remember { mutableStateOf<Playlist?>(null) }
+    var deleteTarget by remember { mutableStateOf<Playlist?>(null) }
+    var albumMenu by remember { mutableStateOf<RecommendationItem?>(null) }
+
+    playlistMenu?.let { pl ->
+        PlaylistContextMenu(
+            playlistName = pl.name,
+            artworkUrl = pl.artworkUrl,
+            trackCount = pl.trackCount,
+            onDismiss = { playlistMenu = null },
+            onPlayPlaylist = { playlistMenu = null; viewModel.playPlaylist(pl.id, pl.name) },
+            onShare = { playlistMenu = null; sharePlaylistById(pl.id) },
+            onOpenSync = { playlistMenu = null; syncTarget = pl },
+            onDeletePlaylist = { playlistMenu = null; deleteTarget = pl },
+        )
+    }
+    syncTarget?.let { pl ->
+        PlaylistSyncChannelsSheet(
+            playlistId = pl.id,
+            playlistName = pl.name,
+            onDismiss = { syncTarget = null },
+        )
+    }
+    // Deleting asks first and names the services, like every other delete (#684).
+    deleteTarget?.let { pl ->
+        DeletePlaylistDialog(
+            playlistId = pl.id,
+            playlistName = pl.name,
+            loadMirrors = viewModel::getDeletableMirrors,
+            onConfirm = { fromProviders ->
+                viewModel.deletePlaylist(pl, fromProviders)
+                deleteTarget = null
+            },
+            onDismiss = { deleteTarget = null },
+        )
+    }
+    albumMenu?.let { item ->
+        val artist = item.artist.orEmpty()
+        val inCollection by remember(item.id) { viewModel.isAlbumInCollection(item.name, artist) }.collectAsState(false)
+        AlbumContextMenu(
+            albumTitle = item.name,
+            artistName = artist,
+            artworkUrl = item.imageUrl,
+            isInCollection = inCollection,
+            onDismiss = { albumMenu = null },
+            onPlayAlbum = { albumMenu = null; viewModel.playAlbum(item) },
+            onQueueAlbum = { albumMenu = null; viewModel.queueAlbumByName(item.name, artist) },
+            onGoToAlbum = { albumMenu = null; onNavigateToAlbum(item.name, artist) },
+            onGoToArtist = if (artist.isNotBlank()) {
+                { albumMenu = null; onNavigateToArtist(artist) }
+            } else null,
+            onToggleCollection = {
+                albumMenu = null
+                if (inCollection) viewModel.removeAlbumFromCollection(item.name, artist)
+                else viewModel.addAlbumToCollection(item.name, artist, item.imageUrl)
+            },
+            onShare = { albumMenu = null; shareAlbum(item.name, artist, item.imageUrl) },
+        )
     }
 
     // ── Account banners, kept from the old Home as they were ─────────
@@ -276,9 +351,44 @@ fun HomeScreen(
                         )
                     }
 
+                    item(key = "mixes") {
+                        HomeMixesRow(
+                            state = state,
+                            onSelectSource = viewModel::setMixSource,
+                            onOpenLoves = onOpenRecentLoves,
+                            onPlayLoves = viewModel::playRecentLoves,
+                            onOpenMix = { card ->
+                                val mix = card.mix
+                                onOpenServicePlaylist(mix.url, mix.title, mix.resolverName.orEmpty(), mix.imageUrl)
+                            },
+                            onPlayMix = { card -> viewModel.playMix(card.mix) },
+                            modifier = Modifier.padding(top = SectionGap),
+                        )
+                    }
+                    item(key = "playlists") {
+                        HomePlaylistsRow(
+                            state = state,
+                            onOpen = { onNavigateToPlaylist(it.id) },
+                            onPlay = { viewModel.playPlaylist(it.id, it.name) },
+                            onLongPress = { playlistMenu = it },
+                            onSeeAll = onNavigateToPlaylists,
+                            modifier = Modifier.padding(top = SectionGap),
+                        )
+                    }
+                    item(key = "albums") {
+                        HomeAlbumsRow(
+                            state = state,
+                            onSelectSource = viewModel::setAlbumSource,
+                            onShown = viewModel::albumShown,
+                            onOpen = { onNavigateToAlbum(it.name, it.artist.orEmpty()) },
+                            onPlay = viewModel::playAlbum,
+                            onLongPress = { albumMenu = it },
+                            onSeeAll = onNavigateToRecommendations,
+                            modifier = Modifier.padding(top = SectionGap),
+                        )
+                    }
+
                     // ── Sections from later tasks go here, in desktop's order ──
-                    // Task 5: Made from your listening, Your playlists freshest
-                    //         first, Albums you might love.
                     // Task 6: Fresh Drops + Critical Darlings (or Pop of the
                     //         Tops), Concerts near you, Ask Shuffleupagus.
                 }

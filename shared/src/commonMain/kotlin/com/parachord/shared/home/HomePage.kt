@@ -58,7 +58,7 @@ fun concertVenue(e: ConcertEvent): String =
 
 data class TicketLink(val label: String, val url: String, val source: String)
 
-private fun isHttpUrl(u: String): Boolean =
+internal fun isHttpUrl(u: String): Boolean =
     u.startsWith("https://", ignoreCase = true) || u.startsWith("http://", ignoreCase = true)
 
 /** The event's ticket links: http(s) only, one per URL. Falls back to `ticketUrl` as "Tickets". */
@@ -93,6 +93,12 @@ object HomeCopy {
     const val CONCERTS_TITLE = "Concerts near you"
     const val CONCERTS_SUBTITLE = "Artists from your collection playing soon"
     const val ASK_TITLE = "Ask Shuffleupagus"
+    /** The source chips' first chip. */
+    const val ALL = "All"
+    /** A Shuffleupagus pick's reason badge when it gave no reason. */
+    const val PICKED_BY_SHUFFLEUPAGUS = "Picked by Shuffleupagus"
+    /** The reason badge's accessibility label. */
+    const val WHY_SHUFFLEUPAGUS = "Why Shuffleupagus picked this"
 
     const val IMPORT_TITLE = "Build your collection"
     const val IMPORT_BODY = "Import your playlists and loved tracks from the services you use."

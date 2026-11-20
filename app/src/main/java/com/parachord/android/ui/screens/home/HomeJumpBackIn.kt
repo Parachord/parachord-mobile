@@ -20,6 +20,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,14 +86,17 @@ fun HomeJumpBackIn(
                 tiles.chunked(2).forEach { pair ->
                     Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
                         pair.forEach { tile ->
-                            JumpTileView(
-                                tile = tile,
-                                art = art[jumpTileKey(tile)] ?: JumpTileArt(),
-                                onOpen = { onOpenTile(tile) },
-                                onPlay = { onPlayTile(tile) },
-                                onShown = { onTileShown(tile) },
-                                modifier = Modifier.weight(1f),
-                            )
+                            val tileKey = jumpTileKey(tile)
+                            key(tileKey) {
+                                JumpTileView(
+                                    tile = tile,
+                                    art = art[tileKey] ?: JumpTileArt(),
+                                    onOpen = { onOpenTile(tile) },
+                                    onPlay = { onPlayTile(tile) },
+                                    onShown = { onTileShown(tile) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
                         // An odd last tile keeps its half width.
                         if (pair.size == 1) Spacer(Modifier.weight(1f))

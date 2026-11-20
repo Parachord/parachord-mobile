@@ -17,10 +17,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 
-/** Top-level route definitions. */
 /** Collection's Songs tab index (LibraryScreen: Artists, Albums, Songs, Friends). */
 private const val COLLECTION_SONGS_TAB = 2
 
+/** Top-level route definitions. */
 object Routes {
     const val HOME = "home"
     const val COLLECTION = "collection?tab={tab}"

@@ -26,6 +26,7 @@ import com.parachord.shared.repository.ConcertEvent
 import com.parachord.shared.repository.CriticsPickAlbum
 import com.parachord.shared.repository.FreshDrop
 import com.parachord.shared.repository.HistoryMixesState
+import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.settings.SettingsStore
 import io.mockk.coEvery
 import io.mockk.every
@@ -113,6 +114,7 @@ class HomeViewModelTest {
             providerPlaylistResolver = mockk<ProviderPlaylistResolver>(relaxed = true),
             announcementsRepository = mockk<AnnouncementsRepository>(relaxed = true),
             imageEnrichmentService = mockk<ImageEnrichmentService>(relaxed = true),
+            recommendationsRepository = mockk<RecommendationsRepository>(relaxed = true),
         )
     }
 
