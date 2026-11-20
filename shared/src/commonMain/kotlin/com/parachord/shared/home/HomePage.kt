@@ -82,8 +82,13 @@ fun concertArtistKey(artist: String): String = artist.trim().lowercase()
 
 /**
  * The concert card's photo: the artist's photo from [artistImages] (keyed by
- * [concertArtistKey] of [concertTourArtist]) when it's an http(s) URL, else the
+ * [concertArtistKey] of [concertTourArtist]) when it's an https URL, else the
  * event's own image when that is, else null (the card's placeholder).
+ *
+ * https only ([concertPhotoHttpsUrl]): Android's network security config and
+ * iOS's ATS block cleartext, so an `http://` photo would never load. It's
+ * treated as absent rather than upgraded to https, since not every host
+ * serves the same image over https, and the event's image is the fallback.
  *
  * Desktop shows only the artist's photo. Falling back to the event's image
  * is a deliberate mobile difference: Ticketmaster and SeatGeek send one for
@@ -91,8 +96,11 @@ fun concertArtistKey(artist: String): String = artist.trim().lowercase()
  * photo is missing or still being looked up.
  */
 fun concertPhotoUrl(e: ConcertEvent, artistImages: Map<String, String> = emptyMap()): String? =
-    concertTourArtist(e)?.let { artistImages[concertArtistKey(it)] }?.trim()?.takeIf { isHttpUrl(it) }
-        ?: e.imageUrl?.trim()?.takeIf { isHttpUrl(it) }
+    concertTourArtist(e)?.let { artistImages[concertArtistKey(it)] }?.let { concertPhotoHttpsUrl(it) }
+        ?: e.imageUrl?.let { concertPhotoHttpsUrl(it) }
+
+/** [u] trimmed when it's an https URL, else null: the only photo URLs the apps can load. */
+fun concertPhotoHttpsUrl(u: String): String? = u.trim().takeIf { it.startsWith("https://", ignoreCase = true) && it.length > 8 }
 
 /** Where a concert photo is cropped vertically: a quarter of the way down, desktop's `center 25%`, so faces stay in. */
 const val CONCERT_PHOTO_FOCUS_Y = 0.25f

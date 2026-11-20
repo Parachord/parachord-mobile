@@ -104,11 +104,19 @@ class HomePageTest {
     }
 
     @Test
-    fun `concert photo is an http url only`() {
+    fun `concert photo is an https url only`() {
         assertEquals("https://x/a.jpg", concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = " https://x/a.jpg ")))
-        assertEquals("http://x/a.jpg", concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "http://x/a.jpg")))
+        // Cleartext is blocked on both apps, so an http photo counts as none.
+        assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "http://x/a.jpg")))
         assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "content://x")))
         assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "")))
         assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n")))
+    }
+
+    @Test
+    fun `an http artist photo falls back to the event's https image`() {
+        val e = ConcertEvent(id = "1", name = "n", artistName = "Wilco", imageUrl = "https://x/event.jpg")
+        assertEquals("https://x/event.jpg", concertPhotoUrl(e, mapOf("wilco" to "http://x/artist.jpg")))
+        assertEquals("https://x/artist.jpg", concertPhotoUrl(e, mapOf("wilco" to "https://x/artist.jpg")))
     }
 }

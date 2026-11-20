@@ -24,9 +24,13 @@ import kotlin.coroutines.coroutineContext
  * keeps its own persistent cache), [BATCH_SIZE] at a time, each batch's
  * answers merged into [images] as they arrive, keyed by [concertArtistKey].
  *
- * Each artist is asked once a session: one already found or tried (even if
- * it threw or found nothing) is skipped, and a failure is left out of
- * [images], so the card keeps its fallback ([concertPhotoUrl]).
+ * Each artist is asked once a session once a lookup answers: one already
+ * found, or answered with no photo, is skipped. A lookup that threw (offline,
+ * a failed request) doesn't count as tried: it's left out of [images], so the
+ * card keeps its fallback ([concertPhotoUrl]), and the next [load] call asks
+ * again, as `ShownAlbumArtLookup` does. It's never retried within a load, and
+ * a load waiting on it doesn't ask again either, so a failing lookup can't
+ * loop.
  *
  * **Overlapping loads.** Each lookup in flight has a per-artist [CompletableDeferred]
  * owned by the load that started it. Another load that wants the same artist
@@ -45,13 +49,16 @@ class ConcertArtistImages(private val artistImage: suspend (artistName: String) 
     }
 
     private val _images = MutableStateFlow<Map<String, String>>(emptyMap())
-    /** Found photos by [concertArtistKey], http(s) only. */
+    /** Found photos by [concertArtistKey], https only ([concertPhotoHttpsUrl]). */
     val images: StateFlow<Map<String, String>> = _images.asStateFlow()
 
     private val mutex = Mutex()
     private val tried = mutableSetOf<String>()
-    /** The lookup in flight per artist; completed when it ends, answered or abandoned. */
-    private val pending = mutableMapOf<String, CompletableDeferred<Unit>>()
+    /**
+     * The lookup in flight per artist; completed when it ends, with true when
+     * it was abandoned (its load cancelled) so a waiting load takes it over.
+     */
+    private val pending = mutableMapOf<String, CompletableDeferred<Boolean>>()
 
     /**
      * Looks up the photos of [artistNames] not yet found or tried, joining any
@@ -83,34 +90,35 @@ class ConcertArtistImages(private val artistImage: suspend (artistName: String) 
                 if (running != null) {
                     running to false
                 } else {
-                    CompletableDeferred<Unit>().also { pending[key] = it } to true
+                    CompletableDeferred<Boolean>().also { pending[key] = it } to true
                 }
             }
             if (!owner) {
-                // Answered: the check at the top returns. Abandoned: look again, and own it.
-                deferred.await()
-                continue
+                // Abandoned: look again, and own it. Answered or failed: done
+                // (a failure is asked again on the next load, not here).
+                if (deferred.await()) continue
+                return
             }
             var answered = false
+            var finished = false
             try {
-                val url = try {
-                    artistImage(name)
+                try {
+                    val usable = artistImage(name)?.trim()?.let { concertPhotoHttpsUrl(it) }
+                    if (usable != null) _images.update { it + (key to usable) }
+                    answered = true
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.w(TAG, "Artist photo lookup failed: ${e.message}")
-                    null
                 }
-                val usable = url?.trim()?.takeIf { isHttpUrl(it) }
-                if (usable != null) _images.update { it + (key to usable) }
-                answered = true
+                finished = true
             } finally {
                 withContext(NonCancellable) {
                     mutex.withLock {
                         if (answered) tried += key
                         pending.remove(key)
                     }
-                    deferred.complete(Unit)
+                    deferred.complete(!finished)
                 }
             }
             return

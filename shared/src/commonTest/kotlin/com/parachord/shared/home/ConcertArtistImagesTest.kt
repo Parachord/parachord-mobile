@@ -49,23 +49,47 @@ class ConcertArtistImagesTest {
     }
 
     @Test
-    fun `a lookup that throws leaves the artist out and isn't retried`() = runTest {
+    fun `a lookup that throws is left out and asked again on the next load only`() = runTest {
         var calls = 0
         val images = ConcertArtistImages { name ->
             calls++
             if (name == "Bad") throw IllegalStateException("offline") else "https://img/$name"
         }
         images.load(listOf("Bad", "Good"))
-        images.load(listOf("Bad"))
-        assertEquals(2, calls)
+        assertEquals(2, calls) // no retry inside the same load
         assertNull(images.images.value["bad"])
         assertEquals("https://img/Good", images.images.value["good"])
+        images.load(listOf("Bad", "Good"))
+        assertEquals(3, calls) // Bad again; Good was answered
     }
 
     @Test
-    fun `a non-http answer is left out`() = runTest {
-        val images = ConcertArtistImages { "content://x" }
+    fun `a load waiting on a lookup that throws doesn't ask again itself`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var calls = 0
+        val images = ConcertArtistImages { calls++; gate.await(); throw IllegalStateException("offline") }
+        val first = launch { images.load(listOf("A")) }
+        runCurrent()
+        val second = launch { images.load(listOf("A")) }
+        runCurrent()
+        gate.complete(Unit)
+        first.join(); second.join()
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `a lookup that answered nothing isn't asked again`() = runTest {
+        var calls = 0
+        val images = ConcertArtistImages { calls++; null }
         images.load(listOf("A"))
+        images.load(listOf("A"))
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `a non-https answer is left out`() = runTest {
+        val images = ConcertArtistImages { name -> if (name == "A") "content://x" else "http://x/b.jpg" }
+        images.load(listOf("A", "B"))
         assertTrue(images.images.value.isEmpty())
     }
 
