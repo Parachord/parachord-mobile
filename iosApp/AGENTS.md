@@ -361,6 +361,11 @@ The runtime split: **Kotlin owns lifecycle, Swift owns polyfills.**
   so `.axe` plugins ported from the Android WebView host work unmodified.
 - Match Android's `bootstrap.html` Promise/Response shape byte-for-byte
   so plugins don't need per-platform forks.
+- **The plug-in host (`this.host`) comes from `BOOTSTRAP_JS`'s `plugin-host-supplier`
+  block**, the same text as Android's `bootstrap.html` (a test compares them):
+  `IosJsRuntime` builds the loader with `new ResolverLoader({ host: window.__parachordHostSupplier })`,
+  and `openExternal` is a Swift callable on `NativeBridge` (`JsPolyfills`). Root
+  `CLAUDE.md` → "The plug-in host contract".
 - Storage polyfill enforces the same allowlist as Android
   (`parachord.*` / `plugin.*` key prefixes only).
 

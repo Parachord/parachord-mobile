@@ -44,6 +44,14 @@ class PluginManager constructor(
     /** This app's version and platform key (`android`/`ios`), for [PluginCompat]. */
     private val appVersion: String = "",
     private val platform: String = "",
+    /**
+     * The host bridges this app supplies plugins (the plug-in host contract,
+     * desktop parachord#1561). A plugin whose `requires.hostBridges` names one
+     * not here is never loaded ([PluginCompat.missingHostBridges]). Each
+     * bridge must also be on the JS supplier's `bridges` map and in
+     * `window.__parachordHostBridges` (the `plugin-host-supplier` block).
+     */
+    private val hostBridges: Set<String> = emptySet(),
 ) {
     @Serializable
     data class PluginInfo(
@@ -207,10 +215,23 @@ class PluginManager constructor(
 
         Log.d(TAG, "Loading ${all.size} plugins (${bundled.size} bundled, ${cached.size} cached)")
 
+        // this.host.appVersion() reads it (the plugin-host-supplier block).
+        jsRuntime.evaluate("window.__parachordAppVersion = '${escapeForJs(appVersion)}';")
+        val bridgeHidden = mutableListOf<PluginInfo>()
+
         // Load into resolver-loader.js
         val pluginInfos = mutableListOf<PluginInfo>()
         for ((id, pair) in all) {
             val (_, axeJson) = pair
+            // A plugin that needs a host bridge this app lacks isn't loaded at
+            // all, as on desktop: loaded, its URL patterns would claim links it
+            // can't open and every resolve would throw not-ready (#1355).
+            val missing = PluginCompat.missingHostBridges(parseRequires(axeJson), hostBridges)
+            if (missing.isNotEmpty()) {
+                parsePluginInfo(axeJson)?.let { bridgeHidden += it }
+                Log.d(TAG, "Not loading '$id': needs ${missing.joinToString()}")
+                continue
+            }
             try {
                 // Base64-encode the .axe JSON to avoid escaping issues with
                 // backticks, $, quotes, and newlines in the embedded JS code.
@@ -240,7 +261,7 @@ class PluginManager constructor(
         }
 
         // Publish the full unfiltered set for version-comparison purposes.
-        _allLoadedPlugins.value = pluginInfos.sortedBy { it.name }
+        _allLoadedPlugins.value = (pluginInfos + bridgeHidden).sortedBy { it.name }
         // Service colours come from the manifests, as on desktop.
         ServiceColors.update(pluginInfos.associate { it.id to it.color })
 
@@ -837,6 +858,10 @@ class PluginManager constructor(
      * has a suspicious/missing manifest ID.
      * security: M7
      */
+    /** An `.axe`'s top-level `requires`, or null when absent or unreadable. */
+    private fun parseRequires(axeJson: String): JsonElement? =
+        try { json.decodeFromString<AxeFile>(axeJson).requires } catch (_: Exception) { null }
+
     private fun parsePluginInfo(axeJson: String): PluginInfo? {
         return try {
             val axe = json.decodeFromString<AxeFile>(axeJson)
@@ -928,6 +953,8 @@ class PluginManager constructor(
         val manifest: AxeManifest,
         val capabilities: Map<String, Boolean>? = null,
         val settings: AxeSettings? = null,
+        /** `requires.hostBridges` / `optionalHostBridges` (desktop parachord#1355, #1561). */
+        val requires: JsonElement? = null,
     )
 
     @Serializable
