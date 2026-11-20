@@ -45,6 +45,7 @@ import com.parachord.android.playback.scrobbler.*
 import com.parachord.android.playlist.HostedPlaylistPoller
 import com.parachord.android.playlist.HostedPlaylistScheduler
 import com.parachord.android.playlist.PlaylistImportManager
+import com.parachord.android.ui.screens.playlists.ServicePlaylistViewModel
 import com.parachord.android.plugin.PluginManager
 import com.parachord.android.plugin.PluginSyncService
 import com.parachord.android.resolver.AndroidResolverRuntime
@@ -1334,6 +1335,7 @@ val androidModule = module {
     viewModelOf(::PlaylistDetailViewModel)
     viewModelOf(::EditPlaylistViewModel)
     viewModelOf(::WeeklyPlaylistViewModel)
+    viewModelOf(::ServicePlaylistViewModel)
     viewModelOf(::RecommendationsViewModel)
     viewModelOf(::FreshDropsViewModel)
     viewModelOf(::CriticalDarlingsViewModel)

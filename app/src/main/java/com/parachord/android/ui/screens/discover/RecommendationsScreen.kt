@@ -147,6 +147,7 @@ fun RecommendationsScreen(
     onNavigateToArtist: (String) -> Unit = {},
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onNavigateToWeekly: (playlistId: String, contextType: String) -> Unit = { _, _ -> },
+    onNavigateToServicePlaylist: (url: String, name: String, source: String, image: String?) -> Unit = { _, _, _, _ -> },
     onNavigateToFriend: (friendId: String) -> Unit = {},
     onNavigateToPluginSettings: (pluginId: String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -230,6 +231,7 @@ fun RecommendationsScreen(
                 onNavigateToArtist = onNavigateToArtist,
                 onNavigateToAlbum = onNavigateToAlbum,
                 onNavigateToWeekly = onNavigateToWeekly,
+                onNavigateToServicePlaylist = onNavigateToServicePlaylist,
                 onNavigateToFriend = onNavigateToFriend,
             )
         }
@@ -377,6 +379,7 @@ private fun PageContent(
     onNavigateToArtist: (String) -> Unit,
     onNavigateToAlbum: (String, String) -> Unit,
     onNavigateToWeekly: (String, String) -> Unit,
+    onNavigateToServicePlaylist: (String, String, String, String?) -> Unit,
     onNavigateToFriend: (String) -> Unit,
 ) {
     val playback by viewModel.playbackState.collectAsState()
@@ -406,6 +409,7 @@ private fun PageContent(
         onNavigateToArtist = onNavigateToArtist,
         onNavigateToAlbum = onNavigateToAlbum,
         onNavigateToWeekly = onNavigateToWeekly,
+        onNavigateToServicePlaylist = onNavigateToServicePlaylist,
         onNavigateToFriend = onNavigateToFriend,
         onAlbumMenu = { albumMenu = it },
         onArtistMenu = { artistMenu = it },
@@ -564,6 +568,7 @@ private class CardActions(
     val onNavigateToArtist: (String) -> Unit,
     val onNavigateToAlbum: (String, String) -> Unit,
     val onNavigateToWeekly: (String, String) -> Unit,
+    val onNavigateToServicePlaylist: (String, String, String, String?) -> Unit,
     val onNavigateToFriend: (String) -> Unit,
     val onAlbumMenu: (RecommendationItem) -> Unit,
     val onArtistMenu: (RecommendationItem) -> Unit,
@@ -716,7 +721,14 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
                 RecPlaylistCard(
                     item = item,
                     sourceName = itemSourceName(item, row),
-                    onOpen = { vm.playServicePlaylist(item) },
+                    onOpen = {
+                        val url = item.url
+                        if (url != null) {
+                            cards.onNavigateToServicePlaylist(url, item.name, itemSourceName(item, row), item.imageUrl)
+                        } else {
+                            vm.playServicePlaylist(item)
+                        }
+                    },
                     onLongPress = { cards.onPlaylistMenu(item) },
                 )
             }

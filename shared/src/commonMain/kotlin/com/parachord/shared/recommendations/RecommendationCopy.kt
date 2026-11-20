@@ -45,6 +45,10 @@ object RecommendationCopy {
     fun listenerTracksFailed(name: String) = "Couldn’t load $name’s top tracks. Try again in a moment."
     fun playing(name: String) = "Playing $name"
     fun loading(name: String) = "Loading $name…"
+    const val SAVE = "Save"
+    fun saved(name: String) = "Saved $name"
+    /** A recommended playlist's line under its title; [sourceName] blank reads "the service" (desktop's `sourceName || 'the service'`). */
+    fun recommendedBy(sourceName: String) = "Recommended by ${sourceName.trim().ifEmpty { "the service" }}"
     fun couldntLoad(name: String) = "Couldn’t load $name"
     /** [serviceId] is a service id ("lastfm"); a blank one reads "the service". */
     fun couldntReach(serviceId: String?): String =

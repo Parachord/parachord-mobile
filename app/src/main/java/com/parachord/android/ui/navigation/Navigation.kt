@@ -52,6 +52,12 @@ object Routes {
     const val FRIEND_DETAIL = "friend/{friendId}?tab={tab}&period={period}"
     const val WEEKLY_PLAYLIST = "weekly_playlist/{playlistId}/{contextType}"
 
+    const val SERVICE_PLAYLIST = "service_playlist?url={url}&name={name}&source={source}&image={image}"
+
+    /** A recommended service playlist's own view (desktop's `openServicePlaylist`). */
+    fun servicePlaylist(url: String, name: String, sourceName: String, imageUrl: String?): String =
+        "service_playlist?url=${Uri.encode(url)}&name=${Uri.encode(name)}&source=${Uri.encode(sourceName)}&image=${Uri.encode(imageUrl ?: "")}"
+
     fun weeklyPlaylist(playlistId: String, contextType: String): String =
         "weekly_playlist/${Uri.encode(playlistId)}/${Uri.encode(contextType)}"
 
@@ -204,6 +210,25 @@ fun ParachordNavHost(
         ) {
             com.parachord.android.ui.screens.playlists.WeeklyPlaylistScreen(
                 onBack = { navController.popBackStack() },
+                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToAlbum = { albumTitle, artistName ->
+                    navController.navigate(Routes.album(albumTitle, artistName))
+                },
+            )
+        }
+        composable(
+            route = Routes.SERVICE_PLAYLIST,
+            arguments = listOf("url", "name", "source", "image").map { key ->
+                navArgument(key) { type = NavType.StringType; defaultValue = "" }
+            },
+        ) {
+            com.parachord.android.ui.screens.playlists.ServicePlaylistScreen(
+                onBack = { navController.popBackStack() },
+                onOpenSaved = { playlistId ->
+                    navController.navigate(Routes.playlistDetail(playlistId)) {
+                        popUpTo(Routes.SERVICE_PLAYLIST) { inclusive = true }
+                    }
+                },
                 onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -391,6 +416,9 @@ fun ParachordNavHost(
                 },
                 onNavigateToWeekly = { id, contextType ->
                     navController.navigate(Routes.weeklyPlaylist(id, contextType))
+                },
+                onNavigateToServicePlaylist = { url, name, source, image ->
+                    navController.navigate(Routes.servicePlaylist(url, name, source, image))
                 },
                 onNavigateToFriend = { friendId ->
                     navController.navigate(Routes.friendDetail(friendId))

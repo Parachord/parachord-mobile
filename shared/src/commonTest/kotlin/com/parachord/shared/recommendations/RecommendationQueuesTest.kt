@@ -79,6 +79,30 @@ class RecommendationQueuesTest {
     }
 
     @Test
+    fun `servicePlaylistTracks keeps order and ids`() {
+        val play = ResolvedProtocolPlay(
+            "Mix",
+            listOf(ProtocolTrack("A", "one", spotifyId = "sp1"), ProtocolTrack("B", "two"), ProtocolTrack("C", "three", appleMusicId = "123")),
+            providerId = "plug",
+        )
+        val tracks = servicePlaylistTracks(play)
+        assertEquals(listOf("one", "two", "three"), tracks.map { it.title })
+        assertEquals("spotify:sp1", tracks[0].id)
+        assertEquals("plug-import:B:two:1", tracks[1].id)
+        assertEquals("applemusic:123", tracks[2].id)
+        assertEquals(tracks, servicePlaylistTracks(play.copy(providerId = "plug")))
+    }
+
+    @Test
+    fun `recommendedBy falls back for a blank source`() {
+        assertEquals("Recommended by Apple Music", RecommendationCopy.recommendedBy("Apple Music"))
+        assertEquals("Recommended by the service", RecommendationCopy.recommendedBy(""))
+        assertEquals("Recommended by the service", RecommendationCopy.recommendedBy("  "))
+        assertEquals("Save", RecommendationCopy.SAVE)
+        assertEquals("Saved Mix", RecommendationCopy.saved("Mix"))
+    }
+
+    @Test
     fun `listenerPlay — tracks play — none and failures say why`() = runTest {
         val tracks = listOf(Track(id = "1", title = "t", artist = "a"))
         val ok = listenerPlay("lastfm", "bob", "Bob") { _, _ -> tracks }

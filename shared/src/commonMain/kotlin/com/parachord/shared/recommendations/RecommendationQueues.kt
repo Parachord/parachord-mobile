@@ -53,6 +53,12 @@ fun songQueue(rowItems: List<RecommendationItem>, index: Int, row: Recommendatio
 fun weeklyContext(weekly: WeeklyInfo): PlaybackContext =
     PlaybackContext(weekly.contextType, "${weekly.weekLabel}'s ${weekly.label}", weekly.id)
 
+/** A resolved service playlist's tracks, in order; the playlist view and [servicePlaylistQueue] both use it. */
+fun servicePlaylistTracks(play: ResolvedProtocolPlay): List<Track> {
+    val provider = play.providerId ?: "link"
+    return play.tracks.mapIndexed { i, t -> protocolPlayTrack(t, provider, i) }
+}
+
 /** A service playlist's tracks through [resolve] (the registry's link lookup); null when it can't be played. */
 suspend fun servicePlaylistQueue(
     item: RecommendationItem,
@@ -67,9 +73,7 @@ suspend fun servicePlaylistQueue(
         null
     } ?: return null
     if (play.tracks.isEmpty()) return null
-    val provider = play.providerId ?: "link"
-    val tracks = play.tracks.mapIndexed { i, t -> protocolPlayTrack(t, provider, i) }
-    return CatalogQueue(tracks, PlaybackContext("playlist", item.name, url))
+    return CatalogQueue(servicePlaylistTracks(play), PlaybackContext("playlist", item.name, url))
 }
 
 sealed class ListenerPlay {
