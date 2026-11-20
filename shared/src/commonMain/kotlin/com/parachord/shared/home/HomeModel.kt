@@ -153,6 +153,13 @@ private fun isUnsafeChar(c: Char): Boolean {
         n in 0x202A..0x202E || n in 0x2066..0x2069
 }
 
+/** JavaScript's regex `\s` set, which differs from Kotlin's `isWhitespace` (U+FEFF in, U+001C-001F out). */
+private fun isJsWhitespace(c: Char): Boolean {
+    val n = c.code
+    return n in 0x09..0x0D || n == 0x20 || n == 0xA0 || n == 0x1680 || n in 0x2000..0x200A ||
+        n == 0x2028 || n == 0x2029 || n == 0x202F || n == 0x205F || n == 0x3000 || n == 0xFEFF
+}
+
 /**
  * An artist name as it may appear in the prompt: control, bidi and zero-width
  * characters removed, whitespace collapsed, capped at 40 code points (never
@@ -164,7 +171,7 @@ fun promptName(name: String?): String {
     val sb = StringBuilder()
     var lastSpace = false
     for (c in name) {
-        if (c.isWhitespace()) {
+        if (isJsWhitespace(c)) {
             if (!lastSpace) sb.append(' ')
             lastSpace = true
             continue

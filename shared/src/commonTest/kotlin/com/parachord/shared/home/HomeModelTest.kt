@@ -190,6 +190,14 @@ class HomeModelTest {
     }
 
     @Test
+    fun whitespaceIsJavaScriptsSet() {
+        // U+FEFF is whitespace to desktop's \s (becomes a space); U+001F is deleted, not spaced
+        assertEquals("A rainy Sunday playlist built around Frog evil", exampleShufflePrompt(listOf("Frog\uFEFFevil"), 0))
+        assertEquals("A rainy Sunday playlist built around Frogevil", exampleShufflePrompt(listOf("Frog\u001Fevil"), 0))
+        assertEquals("Frog evil", promptName("\uFEFF Frog\u00A0\u3000evil\uFEFF"))
+    }
+
+    @Test
     fun eachNameIsCappedAtFortyCharacters() {
         assertEquals("A rainy Sunday playlist built around ${"y".repeat(40)} and Frog",
             exampleShufflePrompt(listOf("y".repeat(60), "Frog"), 0))
