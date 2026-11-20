@@ -4,11 +4,15 @@ import com.parachord.shared.model.Resource
 import com.parachord.shared.plugin.PluginManager.PluginInfo
 import com.parachord.shared.repository.RecommendationPageState
 import com.parachord.shared.settings.SettingsStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -156,5 +160,25 @@ class HomeFeedsTest {
         val configured = homePluginAccounts(plugins, host) { true }
         val on = homePlaybackResolvers(plugins, configured) { true }
         assertTrue(serviceConnected(stepOnePlugins(plugins).services, configured, playbackResolvers = on))
+    }
+
+    @Test
+    fun `a load cancelled while another holds the lock still ends — a later load runs`() = runTest {
+        val lock = Mutex()
+        val feed = HomeFeedLoader<String>("t", lock)
+        val gate = CompletableDeferred<Unit>()
+        val job = launch {
+            feed.load(false) { flow { gate.await(); emit(Resource.Success(listOf("a"))) } }
+        }
+        runCurrent()
+        assertTrue(feed.state.value.loading)
+        lock.lock()
+        job.cancel()
+        runCurrent()
+        lock.unlock()
+        job.join()
+        assertFalse(feed.state.value.loading)
+        assertTrue(feed.load(false) { flowOf(Resource.Success(listOf("b"))) })
+        assertEquals(listOf("b"), feed.state.value.items)
     }
 }

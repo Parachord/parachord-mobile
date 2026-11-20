@@ -118,8 +118,18 @@ object HomeCopy {
     const val ASK_BUTTON = "Ask"
 
     const val SETUP_DIALOG = "Finish setting up"
+    /** An open setup item's button (desktop `home-setup.js`). */
+    const val SET_UP = "Set up"
+    /** The getting-started layout's title (desktop `home-getting-started.js`). */
+    const val WELCOME = "Welcome to Parachord"
 
     fun lovesSubtitle(n: Int): String = if (n == 1) "Your latest love" else "Your $n latest loves"
 
     fun setupPill(done: Int, total: Int): String = "Finish setting up · $done of $total"
+
+    /** Accessibility labels, as desktop's `aria-label`s. */
+    fun setUpLabel(item: String): String = "Set up $item"
+    fun dismissLabel(item: String): String = "Dismiss $item"
+    fun playLabel(title: String): String = "Play $title"
+    fun openLabel(title: String): String = "Open $title"
 }

@@ -18,6 +18,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 
 /** Top-level route definitions. */
+/** Collection's Songs tab index (LibraryScreen: Artists, Albums, Songs, Friends). */
+private const val COLLECTION_SONGS_TAB = 2
+
 object Routes {
     const val HOME = "home"
     const val COLLECTION = "collection?tab={tab}"
@@ -96,7 +99,10 @@ fun ParachordNavHost(
     navController: NavHostController,
     onOpenDrawer: () -> Unit,
     onOpenChat: () -> Unit = {},
-    onListenAlong: (com.parachord.android.data.db.entity.FriendEntity) -> Unit = {},
+    /** MainActivity's import-playlist dialog. */
+    onOpenImportPlaylist: () -> Unit = {},
+    /** Ask Shuffleupagus from Home: `DeepLinkViewModel.handleInAppChatPrompt`. */
+    onAsk: (String) -> Unit = {},
     listenAlongFriend: com.parachord.android.data.db.entity.FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
     listenAlongSuspendedQueue: List<com.parachord.android.data.db.entity.TrackEntity> = emptyList(),
@@ -132,7 +138,6 @@ fun ParachordNavHost(
     ) {
         composable(Routes.HOME) {
             com.parachord.android.ui.screens.home.HomeScreen(
-                onNavigateToNowPlaying = { navController.navigate(Routes.NOW_PLAYING) },
                 onOpenDrawer = onOpenDrawer,
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -143,19 +148,21 @@ fun ParachordNavHost(
                 onNavigateToArtist = { name ->
                     navController.navigate(Routes.artist(name))
                 },
-                onNavigateToFriend = { friendId ->
-                    navController.navigate(Routes.friendDetail(friendId))
-                },
-                onListenAlong = onListenAlong,
                 onNavigateToRecommendations = { navController.navigate(Routes.RECOMMENDATIONS) },
                 onNavigateToCriticalDarlings = { navController.navigate(Routes.CRITICAL_DARLINGS) },
                 onNavigateToPopOfTheTops = { navController.navigate(Routes.POP_OF_THE_TOPS) },
                 onNavigateToFreshDrops = { navController.navigate(Routes.FRESH_DROPS) },
-                onNavigateToCollection = { tab -> navController.navigate(Routes.collection(tab)) },
                 onNavigateToPlaylists = { navController.navigate(Routes.PLAYLISTS) },
-                onNavigateToWeeklyPlaylist = { playlistId, contextType ->
-                    navController.navigate(Routes.weeklyPlaylist(playlistId, contextType))
+                // Collection's Songs tab (LibraryScreen's tabs: Artists, Albums, Songs, Friends).
+                onOpenRecentLoves = { navController.navigate(Routes.collection(COLLECTION_SONGS_TAB)) },
+                onOpenImportPlaylist = onOpenImportPlaylist,
+                onOpenSettings = { pluginId -> navController.navigate(Routes.settings(pluginId)) },
+                onOpenSearch = { navController.navigate(Routes.SEARCH) },
+                onOpenServicePlaylist = { url, name, source, imageUrl ->
+                    navController.navigate(Routes.servicePlaylist(url, name, source, imageUrl))
                 },
+                onOpenConcerts = { navController.navigate(Routes.CONCERTS) },
+                onAsk = onAsk,
             )
         }
         composable(

@@ -13,6 +13,8 @@ import com.parachord.shared.repository.ConcertsRepository
 import com.parachord.shared.repository.RecommendationPageState
 import com.parachord.shared.settings.SettingsStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,11 +44,16 @@ import kotlinx.coroutines.sync.withLock
  * - A load already running is left alone. A [Resource.Error] or a throw marks
  *   the list failed (its last items stay) and the next plain load asks again.
  */
-class HomeFeedLoader<T>(private val what: String) {
+class HomeFeedLoader<T> internal constructor(
+    private val what: String,
+    /** Its own lock; a test passes one it can hold. */
+    private val mutex: Mutex,
+) {
+    constructor(what: String) : this(what, Mutex())
+
     private val _state = MutableStateFlow(HomeFeed<T>())
     val state: StateFlow<HomeFeed<T>> = _state.asStateFlow()
 
-    private val mutex = Mutex()
     private var loadedOk = false
     private var loadedKey: Any? = null
 
@@ -82,10 +89,15 @@ class HomeFeedLoader<T>(private val what: String) {
             Log.w("HomeFeedLoader", "$what failed: ${e.message}")
             _state.update { it.copy(failed = true) }
         } finally {
-            mutex.withLock {
-                loadedOk = ok
-                loadedKey = key
-                _state.update { it.copy(loading = false) }
+            // Non-cancellable: a cancelled load that finds the lock held would
+            // otherwise throw here, leave `loading` true, and the feed (a Koin
+            // single) would never load again in this process.
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    loadedOk = ok
+                    loadedKey = key
+                    _state.update { it.copy(loading = false) }
+                }
             }
         }
         return true

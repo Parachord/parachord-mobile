@@ -3,8 +3,6 @@ package com.parachord.android.ui.screens.home
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.playback.PlaybackController
-import com.parachord.android.playback.PlaybackState
-import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.shared.ai.AiAlbumSuggestion
 import com.parachord.shared.api.Announcement
@@ -16,6 +14,7 @@ import com.parachord.shared.home.GettingStartedState
 import com.parachord.shared.home.HomeFeed
 import com.parachord.shared.home.HomeRecsLoad
 import com.parachord.shared.home.HomeSources
+import com.parachord.shared.metadata.ImageEnrichmentService
 import com.parachord.shared.model.ChartAlbum
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.Track
@@ -98,8 +97,6 @@ class HomeViewModelTest {
         coEvery { settings.getHomeGettingStarted() } returns GettingStartedState(active = false)
         coEvery { settings.getHomeSetupDismissed() } returns emptySet()
         every { settings.getResolverOrderFlow() } returns flowOf(emptyList())
-        val holder = mockk<PlaybackStateHolder>(relaxed = true)
-        every { holder.state } returns MutableStateFlow(PlaybackState())
         val library = mockk<LibraryRepository>(relaxed = true)
         every { library.getAllTracks() } returns flowOf(emptyList())
         every { library.getAllPlaylists() } returns flowOf(emptyList())
@@ -110,12 +107,12 @@ class HomeViewModelTest {
             settingsStore = settings,
             repository = library,
             playbackController = controller,
-            playbackStateHolder = holder,
             trackResolverCache = cache,
             metadataService = mockk<MetadataService>(relaxed = true),
             carBrowse = carBrowse,
             providerPlaylistResolver = mockk<ProviderPlaylistResolver>(relaxed = true),
             announcementsRepository = mockk<AnnouncementsRepository>(relaxed = true),
+            imageEnrichmentService = mockk<ImageEnrichmentService>(relaxed = true),
         )
     }
 

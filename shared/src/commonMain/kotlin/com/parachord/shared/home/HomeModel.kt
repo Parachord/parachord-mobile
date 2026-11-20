@@ -289,3 +289,52 @@ fun lovesMosaicAlbums(loves: List<Track>, n: Int = 4): List<LovesMosaicAlbum> {
     }
     return out
 }
+
+// ── Jump back in art ────────────────────────────────────────────────────────
+
+/** A Jump back in tile's art: one cover, or a 2x2 of covers ([mosaic] holds four). */
+data class JumpTileArt(val imageUrl: String? = null, val mosaic: List<String> = emptyList()) {
+    val isEmpty: Boolean get() = imageUrl == null && mosaic.isEmpty()
+}
+
+/** A stable key per tile: the same playlist, album or mix keeps it across rebuilds. */
+fun jumpTileKey(tile: JumpTile): String = when (tile) {
+    is JumpTile.Playlist -> "playlist:${tile.playlist.id}"
+    is JumpTile.Loves -> "loves"
+    is JumpTile.Album -> "album:${tile.album.artist.trim().lowercase()}\u0000${tile.album.album.trim().lowercase()}"
+    is JumpTile.Mix -> "mix:${tile.mix.id}"
+}
+
+/**
+ * The art a tile shows from what Home already holds, with no lookup (desktop's
+ * `JumpTile` art): a playlist's own cover; Recent Loves' 2x2 of the newest
+ * four loved albums when all four have covers ([lovesMosaicAlbums]), else the
+ * newest love's cover; the album behind the latest love from a love on that
+ * album ([loves] are the newest first); a mix's image, else its mosaic. An
+ * empty answer for an album means the platform looks the cover up; otherwise
+ * it draws its placeholder.
+ */
+fun jumpTileArt(tile: JumpTile, loves: List<Track>): JumpTileArt {
+    fun clean(u: String?) = u?.trim()?.takeIf { it.isNotEmpty() }
+    return when (tile) {
+        is JumpTile.Playlist -> JumpTileArt(imageUrl = clean(tile.playlist.artworkUrl))
+        is JumpTile.Loves -> {
+            val covers = lovesMosaicAlbums(tile.tracks).mapNotNull { clean(it.albumArt) }
+            if (covers.size >= 4) JumpTileArt(mosaic = covers.take(4))
+            else JumpTileArt(imageUrl = tile.tracks.firstNotNullOfOrNull { clean(it.artworkUrl) })
+        }
+        is JumpTile.Album -> {
+            val album = tile.album.album.trim().lowercase()
+            val artist = tile.album.artist.trim().lowercase()
+            val cover = loves.firstNotNullOfOrNull { t ->
+                if (t.album?.trim()?.lowercase() == album && t.artist.trim().lowercase() == artist) clean(t.artworkUrl) else null
+            }
+            JumpTileArt(imageUrl = cover)
+        }
+        is JumpTile.Mix -> {
+            val image = clean(tile.mix.imageUrl)
+            if (image != null) JumpTileArt(imageUrl = image)
+            else JumpTileArt(mosaic = tile.mix.mosaic.mapNotNull { clean(it) }.take(4))
+        }
+    }
+}

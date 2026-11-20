@@ -698,9 +698,8 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                         navController = navController,
                         onOpenDrawer = onOpenDrawer,
                         onOpenChat = onOpenChat,
-                        onListenAlong = { friend ->
-                            mainViewModel.startListenAlong(friend)
-                        },
+                        onOpenImportPlaylist = { showImportPlaylistDialog = true },
+                        onAsk = { prompt -> deepLinkViewModel.handleInAppChatPrompt(prompt) },
                         listenAlongFriend = listenAlongFriend,
                         onStopListenAlong = { mainViewModel.stopListenAlong() },
                         listenAlongSuspendedQueue = listenAlongSuspendedQueue,
