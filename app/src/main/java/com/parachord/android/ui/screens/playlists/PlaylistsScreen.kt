@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.shared.sync.impliedPlaylistProvider
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.hapticCombinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -303,9 +304,8 @@ fun PlaylistsScreen(
                                         // Music shows both, and a cross-provider
                                         // duplicate shows two service chips.
                                         val providerSet = buildSet {
-                                            if (playlist.spotifyId != null || playlist.id.startsWith("spotify-")) add("spotify")
-                                            if (playlist.id.startsWith("applemusic-")) add("applemusic")
-                                            if (playlist.id.startsWith("listenbrainz-")) add("listenbrainz")
+                                            if (playlist.spotifyId != null) add("spotify")
+                                            impliedPlaylistProvider(playlist.id)?.let { add(it) }
                                             addAll(mirrors[playlist.id].orEmpty())
                                         }
                                         if ("spotify" in providerSet) PlaylistSourceChip("Spotify", SpotifyGreen)

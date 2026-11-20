@@ -41,19 +41,22 @@ fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, provi
     // so it's never a Spotify push candidate). The per-copy write-back guard for
     // N-way propagation uses `playlist.writable`. So no blanket writable gate here.
     val base = playlist.id.startsWith("local-") || playlist.sourceUrl != null
+    // A playlist imported from a link (`<provider>-import-…`) is a local snapshot:
+    // it can mirror to any service but the one it came from, opt-in only
+    // ([autoMirrorsByDefault]). Its id prefix doesn't make it that provider's.
+    linkImportOrigin(playlist.id)?.let { origin ->
+        return providerId != origin && (providerId != "spotify" || playlist.spotifyId == null)
+    }
+    val owner = impliedPlaylistProvider(playlist.id)
     return when (providerId) {
         // `listenbrainz-*` is now eligible to RE-EXPORT to streaming services — a
         // playlist created/edited on ListenBrainz (Achordion) can mirror to Spotify
         // / Apple Music. It is OPT-IN ONLY ([autoMirrorsByDefault]) so a pulled LB
         // library doesn't auto-flood them with the user's whole archive.
         "spotify" -> playlist.spotifyId == null &&
-            (base || playlist.id.startsWith("listenbrainz-"))
-        "applemusic" -> base ||
-            playlist.id.startsWith("spotify-") ||
-            playlist.id.startsWith("listenbrainz-")
-        "listenbrainz" -> base ||
-            playlist.id.startsWith("spotify-") ||
-            playlist.id.startsWith("applemusic-")
+            (base || owner == "listenbrainz")
+        "applemusic" -> base || owner == "spotify" || owner == "listenbrainz"
+        "listenbrainz" -> base || owner == "spotify" || owner == "applemusic"
         else -> base
     }
 }
@@ -70,9 +73,12 @@ fun isPlaylistPushCandidate(playlist: com.parachord.shared.model.Playlist, provi
  * toggling the service on in its Sync menu — which writes the channel override,
  * the authoritative path that bypasses this gate. Local / hosted / Spotify-imported
  * rows auto-mirror by default, unchanged.
+ *
+ * A playlist imported from a link (`<provider>-import-…`) is opt-in too: it's a
+ * copy of someone else's playlist, so mode=ALL mustn't push it to every service.
  */
 fun autoMirrorsByDefault(playlist: com.parachord.shared.model.Playlist): Boolean =
-    !playlist.id.startsWith("listenbrainz-")
+    impliedPlaylistProvider(playlist.id) != "listenbrainz" && !isLinkImportedPlaylistId(playlist.id)
 
 enum class PlaylistSyncMode { ALL, NONE, SELECTED }
 

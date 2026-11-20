@@ -318,6 +318,12 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `soundcloud-import`: the provider comes from `ResolvedProtocolPlay.providerId`) and the
   native ids the tracklist carries (`ProtocolTrack.spotifyId` / `appleMusicId`, plus album
   id, length and cover); anything else is a hosted XSPF (`HostedXspfService.importHostedXspf`).
+  Its id is `<source>-<uuid>` (`spotify-import-…`), which no provider owns: sync reads a
+  playlist's provider from its id only through the shared `impliedPlaylistProvider`
+  (`shared/.../sync/PlaylistIdProvider.kt`), which answers null for `<provider>-import-…`
+  ids (saved recommendations' `-import-rec-…` too). So a link import has no pull source,
+  no mirror chip from its id and no mode=ALL auto-mirror (`autoMirrorsByDefault` false);
+  it can be mirrored by hand to any service but the one it came from.
   Both apps used to choose by URL shape (`open.spotify.com` / `music.apple.com`, else XSPF),
   so a SoundCloud set was fetched as XSPF and failed. A Spotify link imports without a
   Spotify connection too, from the public embed page (tracks keep their Spotify ids).
@@ -496,7 +502,7 @@ Only if all three miss does `createPlaylistOnSpotify` run. The link is written *
 
 **Startup link backfill (`migrateLinksFromPlaylists`):** runs at the top of every `syncPlaylists`. For every playlist row with a non-null `spotifyId`, upserts a matching link row. Idempotent — protects against upgrades from pre-link-map installs and older push paths that wrote `spotifyId` without a link.
 
-**Startup syncedFrom heal (`healImportedSyncedFromMismatch`).** Cross-platform invariant. Runs in `syncPlaylists` between `migrateSourceFromPlaylists` and `migrateMergeCrossProviderDuplicates`. For every playlist with an ID prefix (`spotify-*` or `applemusic-*`), if `sync_playlist_source.providerId` doesn't match the implied prefix: (1) demote the wrong source into `sync_playlist_link` (only if no link exists for that provider — preserves more-recent snapshots), (2) restore `sync_playlist_source` with `impliedProvider + externalIdFromPrefix` (snapshotId null so the next sync repopulates), (3) clear `playlist.locallyModified`. Idempotent; no-op on healthy data. **Both platforms must implement it.** When one client has a sync bug that corrupts `syncedFrom`, the other client's launch silently restores it — without this on Android, an Android regression would corrupt a fleet of playlists and only desktop could heal.
+**Startup syncedFrom heal (`healImportedSyncedFromMismatch`).** Cross-platform invariant. Runs in `syncPlaylists` between `migrateSourceFromPlaylists` and `migrateMergeCrossProviderDuplicates`. For every playlist whose id names a provider (`spotify-*`, `applemusic-*`, `listenbrainz-*`, through `impliedPlaylistProvider`; never a link import's `spotify-import-*`), if `sync_playlist_source.providerId` doesn't match the implied prefix: (1) demote the wrong source into `sync_playlist_link` (only if no link exists for that provider — preserves more-recent snapshots), (2) restore `sync_playlist_source` with `impliedProvider + externalIdFromPrefix` (snapshotId null so the next sync repopulates), (3) clear `playlist.locallyModified`. Idempotent; no-op on healthy data. Before link imports were left out it gave them a bogus source (`externalId = "import-<uuid>"`); `removeLinkImportPullSources`, run right after it, deletes those. **Both platforms must implement it.** When one client has a sync bug that corrupts `syncedFrom`, the other client's launch silently restores it — without this on Android, an Android regression would corrupt a fleet of playlists and only desktop could heal.
 
 **Skip-if-held mutex (not wait-if-held):** `SyncEngine.syncAll` uses `syncMutex.tryLock()` and returns early if held. `LibrarySyncWorker` (hourly), `SyncScheduler` (15 min in-app timer), and `SyncViewModel.syncNow` can all fire concurrently — wait-if-held would just queue wasted work behind the in-flight sync. Always use `tryLock` here, never `withLock`.
 
