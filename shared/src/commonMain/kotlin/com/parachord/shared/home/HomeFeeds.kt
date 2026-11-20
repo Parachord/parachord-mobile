@@ -207,13 +207,16 @@ class HomeRecommendations(
 suspend fun homePluginAccounts(
     plugins: List<PluginInfo>,
     host: Map<String, Boolean>,
-    isConfigured: suspend (String) -> Boolean,
+    isConfigured: suspend (String) -> Boolean?,
 ): Map<String, Boolean> {
     val out = host.toMutableMap()
     for (p in plugins) {
         if (p.id in out || !p.requiresAuth || !PluginUserConfig.usesGenericSettings(p.id)) continue
+        // No answer (the plugin runtime not ready, or the plugin threw)
+        // counts as not connected: it must never show a plugin that isn't
+        // set up as connected.
         out[p.id] = try {
-            isConfigured(p.id)
+            isConfigured(p.id) ?: false
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

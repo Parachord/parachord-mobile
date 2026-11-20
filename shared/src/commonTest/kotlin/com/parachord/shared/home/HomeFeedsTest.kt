@@ -163,6 +163,25 @@ class HomeFeedsTest {
     }
 
     @Test
+    fun `a plug-in whose configured check gave no answer is not connected`() = runTest {
+        val plugins = listOf(
+            plugin("subsonic", auth = true),
+        )
+        val accounts = homePluginAccounts(plugins, emptyMap()) { null }
+        assertEquals(false, accounts["subsonic"])
+        assertFalse("subsonic" in homePlaybackResolvers(plugins, accounts) { true })
+    }
+
+    @Test
+    fun `a plug-in whose configured check threw is not connected`() = runTest {
+        val plugins = listOf(
+            plugin("subsonic", auth = true),
+        )
+        val accounts = homePluginAccounts(plugins, emptyMap()) { error("plugin crashed") }
+        assertEquals(false, accounts["subsonic"])
+    }
+
+    @Test
     fun `a load cancelled while another holds the lock still ends — a later load runs`() = runTest {
         val lock = Mutex()
         val feed = HomeFeedLoader<String>("t", lock)

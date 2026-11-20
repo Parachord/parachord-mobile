@@ -716,7 +716,22 @@ class PluginManager constructor(
      * counts as configured. Sync, one evaluate, no request. Answer cached until
      * the config changes ([refreshConfiguredCache]).
      */
-    suspend fun isPluginConfigured(resolverId: String): Boolean {
+    suspend fun isPluginConfigured(resolverId: String): Boolean =
+        isPluginConfiguredOrNull(resolverId) ?: true
+
+    /**
+     * The plugin's own `isConfigured` answer, or null when it gave none: the
+     * runtime isn't ready yet (a cold start can run before the WebView has
+     * loaded) or the evaluate failed (the plugin threw). A null is never
+     * cached, so the next ask answers once the runtime can.
+     *
+     * Callers choose what "no answer" means. Resolution ([isPluginConfigured])
+     * treats it as configured: a plugin that isn't set up answers null to a
+     * resolve anyway, and refusing would record a miss. Home's account state
+     * treats it as not connected, so a plugin that isn't set up never shows as
+     * connected because its answer was lost.
+     */
+    suspend fun isPluginConfiguredOrNull(resolverId: String): Boolean? {
         if (plugins.value.find { it.id == resolverId }?.requiresAuth != true) return true
         // The app gates the plugins it sets up itself on its own sign-in state,
         // and nothing refreshes this cache when that changes.
@@ -725,15 +740,17 @@ class PluginManager constructor(
             if (configuredCache.containsKey(resolverId)) return configuredCache[resolverId]!!
         }
         ensureInitialized()
-        val raw = jsRuntime.evaluate(
-            "(function() { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
-                "if (!r || !r.isConfigured) return true; return !!r.isConfigured(r.config || {}); })()",
-        )?.unquote()
-        // No answer (the runtime isn't ready yet — a cold start can run before
-        // the WebView finishes loading — or the evaluate failed): not a
-        // "not configured" verdict. Assume configured and cache nothing, so
-        // the next ask answers when the runtime can.
-        if (raw != "true" && raw != "false") return true
+        val raw = try {
+            jsRuntime.evaluate(
+                "(function() { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                    "if (!r || !r.isConfigured) return true; return !!r.isConfigured(r.config || {}); })()",
+            )?.unquote()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        if (raw != "true" && raw != "false") return null
         val configured = raw == "true"
         configuredMutex.withLock { configuredCache[resolverId] = configured }
         return configured

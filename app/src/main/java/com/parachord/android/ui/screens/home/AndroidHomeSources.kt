@@ -222,7 +222,7 @@ class AndroidHomeSources(
                 "applemusic" to (settings.getAppleMusicUserToken() != null),
                 "soundcloud" to (soundCloud != null),
             )
-            val accounts = homePluginAccounts(plugins, host) { id -> pluginManager.isPluginConfigured(id) }
+            val accounts = homePluginAccounts(plugins, host) { id -> pluginManager.isPluginConfiguredOrNull(id) }
             val resolvers = homePlaybackResolvers(plugins, accounts) { p ->
                 pluginIsOn(p.id, p.type == "meta-service", needsAccount(p))
             }
