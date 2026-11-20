@@ -1,10 +1,10 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.recommendations.playlistTapOpensView
+import com.parachord.shared.ui.UiMessages
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -185,7 +186,7 @@ fun RecommendationsScreen(
             },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = UiMessages.BACK)
                 }
             },
             windowInsets = WindowInsets(0),
@@ -406,6 +407,12 @@ private fun PageContent(
     val listenersView = views.firstOrNull { it.section.type == null }
     val albumsSlotAt = albumsSlotIndex(page, filter, views)
 
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    val grid = remember(maxWidth, density) {
+        gridCardWidth(maxWidth - Gutter * 2, CardGap, density).let { (cols, w) -> GridSpec(cols, w) }
+    }
+
     val cards = CardActions(
         viewModel = viewModel,
         today = today,
@@ -418,6 +425,7 @@ private fun PageContent(
         onArtistMenu = { artistMenu = it },
         onPlaylistMenu = { playlistMenu = it },
         onListenerMenu = { listenerMenu = it },
+        grid = grid,
     )
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -479,6 +487,7 @@ private fun PageContent(
                 ) { items(LISTENER_SKELETONS) { ListenerCardSkeleton() } }
             }
         }
+    }
     }
 
     TrackContextMenuHost(
@@ -577,6 +586,8 @@ private class CardActions(
     val onArtistMenu: (RecommendationItem) -> Unit,
     val onPlaylistMenu: (RecommendationItem) -> Unit,
     val onListenerMenu: (ListenerItem) -> Unit,
+    /** An open row's grid, from the page's width. */
+    val grid: GridSpec,
 )
 
 /** One section: its title when its rows are categories, then each row (desktop's `renderTypeSection`). */
@@ -636,28 +647,43 @@ private fun LazyListScope.row(
             }
             if (rv.loadingTail) items(SONG_PREVIEW, key = { "${row.key}:song-more:$it" }) { ShimmerTrackRow() }
         }
-        row.type == null -> item(key = "${row.key}:listeners") {
-            CardsBody(expanded, tail = 0, lines = 1) {
-                rv.listeners.forEach { listener -> card { w -> ListenerCardFor(listener, cards, w) } }
-            }
-        }
-        else -> item(key = "${row.key}:cards") {
-            val tail = (if (rv.loadingTail) CARD_PREVIEW else 0) + rv.aiTail
-            CardsBody(expanded, tail = tail, lines = cardLines(row.type)) {
-                rv.items.forEach { item -> card { w -> CardFor(item, row, cards, w) } }
-            }
-        }
+        row.type == null -> cardsBody(
+            rowKey = "${row.key}:listeners",
+            expanded = expanded,
+            tail = 0,
+            lines = 1,
+            grid = cards.grid,
+            cardList = CardList().apply {
+                rv.listeners.forEach { listener -> card(listener.id) { w -> ListenerCardFor(listener, cards, w) } }
+            },
+        )
+        else -> cardsBody(
+            rowKey = "${row.key}:cards",
+            expanded = expanded,
+            tail = (if (rv.loadingTail) CARD_PREVIEW else 0) + rv.aiTail,
+            lines = cardLines(row.type),
+            grid = cards.grid,
+            cardList = CardList().apply {
+                rv.items.forEach { item -> card(item.id) { w -> CardFor(item, row, cards, w) } }
+            },
+        )
     }
 }
 
-/** Cards collected for [CardsBody]. */
+/** Cards collected for [cardsBody], each with a lazy-list key. */
 private class CardList {
-    val cards = mutableListOf<@Composable (Dp) -> Unit>()
-    /** [content] draws one card at the width it's given. */
-    fun card(content: @Composable (width: Dp) -> Unit) {
-        cards += content
+    val cards = mutableListOf<Pair<String, @Composable (Dp) -> Unit>>()
+    private val seen = mutableSetOf<String>()
+    /** [content] draws one card at the width it's given; [key] is the item's id (made unique within the row). */
+    fun card(key: String, content: @Composable (width: Dp) -> Unit) {
+        val unique = if (seen.add(key)) key else "$key#${cards.size}"
+        seen += unique
+        cards += unique to content
     }
 }
+
+/** An open row's grid: how many cards per line and each card's width. */
+private data class GridSpec(val columns: Int, val cardWidth: Dp)
 
 /**
  * An open row's grid, as desktop's `repeat(auto-fill, minmax(160px, 1fr))`:
@@ -672,32 +698,44 @@ private fun gridCardWidth(available: Dp, gap: Dp, density: androidx.compose.ui.u
     return columns to with(density) { px.toDp() }
 }
 
-/** Collapsed: one scrolling row of 140 dp cards. Expanded: a grid whose cards fill the width. Then [tail] skeletons. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun CardsBody(expanded: Boolean, tail: Int, lines: Int, build: CardList.() -> Unit) {
-    val list = CardList().apply(build)
+/**
+ * Collapsed: one scrolling row of 140 dp cards, keyed by item. Expanded: a grid whose
+ * cards fill the width, emitted as one lazy-list item per grid line, so only the lines
+ * on screen compose (each card asks for its release date and image as it composes).
+ * Then [tail] skeletons.
+ */
+private fun LazyListScope.cardsBody(
+    rowKey: String,
+    expanded: Boolean,
+    tail: Int,
+    lines: Int,
+    grid: GridSpec,
+    cardList: CardList,
+) {
     if (expanded) {
-        val density = LocalDensity.current
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = Gutter)) {
-            val (columns, width) = gridCardWidth(maxWidth, CardGap, density)
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(CardGap),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                maxItemsInEachRow = columns,
-            ) {
-                list.cards.forEach { it(width) }
-                repeat(tail) { RecCardSkeleton(lines, width = width) }
+        val slots: List<Pair<String, @Composable (Dp) -> Unit>> = cardList.cards +
+            List(tail) { i -> "skeleton:$i" to @Composable { w: Dp -> RecCardSkeleton(lines, width = w) } }
+        slots.chunked(grid.columns).forEach { line ->
+            item(key = "$rowKey:grid:${line.first().first}") {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = Gutter, end = Gutter, bottom = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(CardGap),
+                ) {
+                    line.forEach { (_, draw) -> draw(grid.cardWidth) }
+                }
             }
         }
     } else {
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = Gutter),
-            horizontalArrangement = Arrangement.spacedBy(CardGap),
-        ) {
-            items(list.cards.size) { list.cards[it](RecCardWidth) }
-            items(tail) { RecCardSkeleton(lines) }
+        item(key = rowKey) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = Gutter),
+                horizontalArrangement = Arrangement.spacedBy(CardGap),
+            ) {
+                items(cardList.cards, key = { it.first }) { (_, draw) -> draw(RecCardWidth) }
+                items(tail) { RecCardSkeleton(lines) }
+            }
         }
     }
 }
@@ -747,7 +785,7 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
                     sourceName = itemSourceName(item, row),
                     onOpen = {
                         val url = item.url
-                        if (url != null) {
+                        if (playlistTapOpensView(item) && url != null) {
                             cards.onNavigateToServicePlaylist(url, item.name, itemSourceName(item, row), item.imageUrl)
                         } else {
                             vm.playServicePlaylist(item)
@@ -863,14 +901,19 @@ private fun MenuSheet(title: String, subtitle: String?, onDismiss: () -> Unit, e
 @Composable
 private fun ExpandedGridPreview() {
     com.parachord.android.ui.theme.ParachordTheme(darkTheme = true) {
-        Column(Modifier.background(MaterialTheme.colorScheme.background)) {
-            CardsBody(expanded = true, tail = 2, lines = 3) {
-                repeat(4) { i ->
-                    card { w ->
-                        RecAlbumCard(sampleRecAlbum.copy(id = "a$i"), "2026", null, {}, {}, {}, width = w)
+        val density = LocalDensity.current
+        val grid = gridCardWidth(412.dp - Gutter * 2, CardGap, density).let { (c, w) -> GridSpec(c, w) }
+        LazyColumn(Modifier.background(MaterialTheme.colorScheme.background)) {
+            cardsBody(
+                rowKey = "preview", expanded = true, tail = 2, lines = 3, grid = grid,
+                cardList = CardList().apply {
+                    repeat(4) { i ->
+                        card("a$i") { w ->
+                            RecAlbumCard(sampleRecAlbum.copy(id = "a$i"), "2026", null, {}, {}, {}, width = w)
+                        }
                     }
-                }
-            }
+                },
+            )
         }
     }
 }

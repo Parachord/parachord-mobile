@@ -1,5 +1,10 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.hapticClickable
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +56,7 @@ internal val RecCardWidth = 140.dp
 /** The narrowest a card gets in an open grid before the grid drops a column. */
 internal val RecCardMinGridWidth = 104.dp
 private val PlayButton = 32.dp
+private val PlayTouchTarget = 48.dp
 
 /** The listener hexagon keeps its 120:140 share of the card. */
 private fun listenerAvatar(width: Dp): Dp = width * (120f / 140f)
@@ -84,17 +90,29 @@ private fun CardText(
     )
 }
 
+/**
+ * The 32 dp play disc, inside a 48 dp touch target (the disc sits 8 dp in from the
+ * target's edge, so a target placed at a card's corner shows the disc 8 dp in).
+ */
 @Composable
 private fun PlayDisc(onPlay: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .size(PlayButton)
+            .size(PlayTouchTarget)
             .clip(CircleShape)
-            .background(FillAccent)
-            .hapticCombinedClickable(onClick = onPlay),
+            .semantics { role = Role.Button }
+            .hapticClickable(onClick = onPlay),
         contentAlignment = Alignment.Center,
     ) {
-        ParachordIcon(AppIcon.Play, contentDescription = "Play", size = 16.dp, tint = OnFill)
+        Box(
+            Modifier
+                .size(PlayButton)
+                .clip(CircleShape)
+                .background(FillAccent),
+            contentAlignment = Alignment.Center,
+        ) {
+            ParachordIcon(AppIcon.Play, contentDescription = RecommendationCopy.PLAY, size = 16.dp, tint = OnFill)
+        }
     }
 }
 
@@ -141,7 +159,7 @@ fun RecAlbumCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true)
@@ -262,7 +280,7 @@ fun RecWeeklyCard(
                     }
                 }
             }
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd).padding(8.dp))
+            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
         }
         Spacer(Modifier.height(8.dp))
         CardText(weekly?.label ?: item.name, primary = true)
@@ -340,7 +358,7 @@ fun ListenerCard(
                 )
             }
             // Desktop's friend card plays the person's top tracks.
-            PlayDisc(onPlay, Modifier.align(Alignment.TopEnd))
+            PlayDisc(onPlay, Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp))
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true, center = true, modifier = Modifier.fillMaxWidth())
