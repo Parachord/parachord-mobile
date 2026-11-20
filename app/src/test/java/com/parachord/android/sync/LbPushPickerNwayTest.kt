@@ -512,4 +512,20 @@ class LbPushPickerNwayTest {
         assertTrue("4) re-selected ⇒ checked + pushable again",
             "local-A" in h.engine.linkedPlaylistIdsForProvider(LB) && h.engine.shouldPushToProvider(h.playlistDao.getById("local-A")!!, LB))
     }
+
+    // ── Link imports show no phantom mirror ─────────────────────────
+
+    @Test
+    fun `a link-imported playlist has no mirror from its id`() = runBlocking {
+        val h = Harness()
+        h.seedPlaylist("spotify-import-1234")
+        h.seedPlaylist("applemusic-import-rec-abc")
+
+        assertTrue(h.engine.getPlaylistMirrors("spotify-import-1234").isEmpty())
+        assertTrue(h.engine.getPlaylistMirrors("applemusic-import-rec-abc").isEmpty())
+        val channels = h.engine.getAllEffectivePlaylistChannels()
+        assertTrue(channels["spotify-import-1234"].orEmpty().isEmpty())
+        assertTrue(channels["applemusic-import-rec-abc"].orEmpty().isEmpty())
+    }
 }
+

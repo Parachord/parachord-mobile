@@ -90,7 +90,7 @@ class PlaylistSyncChannelManager(
         val effective = override ?: mirrors
         val playlist = playlistDao.getById(localId)
         return syncChannelProviders.map { pid ->
-            val isSource = localId.startsWith("$pid-")
+            val isSource = impliedPlaylistProvider(localId) == pid
             val canPush = playlist != null && isPlaylistPushCandidate(playlist, pid)
             PlaylistSyncChannel(
                 providerId = pid,
@@ -133,10 +133,10 @@ class PlaylistSyncChannelManager(
                 // playlist that CAN sync to this provider). Both show; checked =
                 // currently synced, unchecked = available to enable.
                 it.name.isNotBlank() &&
-                    (it.id.startsWith("$providerId-") || isPlaylistPushCandidate(it, providerId))
+                    (impliedPlaylistProvider(it.id) == providerId || isPlaylistPushCandidate(it, providerId))
             }
             .map { p ->
-                val isNative = p.id.startsWith("$providerId-")
+                val isNative = impliedPlaylistProvider(p.id) == providerId
                 val override = settingsStore.getPlaylistChannels(p.id)
                 val effective = override ?: libraryRepository.getPlaylistMirrors(p.id).keys
                 ProviderChannelPlaylist(
@@ -155,13 +155,15 @@ class PlaylistSyncChannelManager(
     }
 
     /** A non-native playlist's home-provider chip label (by id prefix). */
-    private fun originLabelFor(localId: String): String? = when {
-        localId.startsWith("spotify-") -> "Spotify"
-        localId.startsWith("applemusic-") -> "Apple Music"
-        localId.startsWith("listenbrainz-") -> "ListenBrainz"
-        localId.startsWith("local-") -> "Local"
-        localId.startsWith("hosted-") -> "Hosted"
-        else -> null
+    private fun originLabelFor(localId: String): String? = when (impliedPlaylistProvider(localId)) {
+        "spotify" -> "Spotify"
+        "applemusic" -> "Apple Music"
+        "listenbrainz" -> "ListenBrainz"
+        else -> when {
+            localId.startsWith("local-") -> "Local"
+            localId.startsWith("hosted-") -> "Hosted"
+            else -> null
+        }
     }
 
     /** Effective + forced one-way-mirror state for this playlist's Sync toggle.

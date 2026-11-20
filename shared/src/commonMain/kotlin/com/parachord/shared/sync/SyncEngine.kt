@@ -186,7 +186,7 @@ class SyncEngine constructor(
             val now = currentTimeMillis()
             var added = 0
             for (playlist in db.playlistQueries.getAll().executeAsList()) {
-                if (!playlist.id.startsWith("$providerId-")) continue
+                if (impliedPlaylistProvider(playlist.id) != providerId) continue
                 val spotifyId = playlist.spotifyId ?: continue
                 val existing = sourceDao.selectForLocal(playlist.id)
                 if (existing != null
@@ -252,17 +252,12 @@ class SyncEngine constructor(
             syncPlaylistSourceDao: SyncPlaylistSourceDao,
             syncPlaylistLinkDao: SyncPlaylistLinkDao,
         ) {
-            val supportedProviders = listOf(
-                SpotifySyncProvider.PROVIDER_ID,
-                AppleMusicSyncProvider.PROVIDER_ID,
-                ListenBrainzSyncProvider.PROVIDER_ID,
-            )
             var healed = 0
             for (playlist in playlistDao.getAllSync()) {
-                val impliedProvider = supportedProviders.firstOrNull {
-                    playlist.id.startsWith("$it-")
-                } ?: continue
-                val externalIdFromPrefix = playlist.id.substringAfter("$impliedProvider-")
+                // Null for local, hosted and link-imported (`spotify-import-…`) rows,
+                // which have no pull source.
+                val impliedProvider = impliedPlaylistProvider(playlist.id) ?: continue
+                val externalIdFromPrefix = impliedPlaylistExternalId(playlist.id) ?: continue
 
                 val existing = syncPlaylistSourceDao.selectForLocal(playlist.id)
                 if (existing != null && existing.providerId == impliedProvider) {
@@ -312,6 +307,25 @@ class SyncEngine constructor(
             }
             if (healed > 0) {
                 Log.d(TAG, "Healed $healed imported-playlist syncedFrom mismatches")
+            }
+        }
+
+        /**
+         * Remove the pull sources [healImportedSyncedFromMismatch] used to write for
+         * playlists imported from a link: it read `spotify-import-<uuid>` as a
+         * Spotify playlist with remote id `import-<uuid>`. Such a source showed a
+         * phantom mirror chip and became the authoritative copy in the N-way
+         * reconcile. Idempotent and cheap (one query); nothing writes these rows
+         * any more, so after the first run it finds nothing.
+         */
+        // static for test isolation — avoids constructing SyncEngine with unrelated deps
+        suspend fun removeLinkImportPullSources(sourceDao: SyncPlaylistSourceDao) {
+            val bogus = sourceDao.selectAll().filter {
+                isLinkImportedPlaylistId(it.localPlaylistId) && it.externalId.startsWith("import-")
+            }
+            bogus.forEach { sourceDao.deleteForLocal(it.localPlaylistId) }
+            if (bogus.isNotEmpty()) {
+                Log.d(TAG, "Removed ${bogus.size} bogus pull source(s) from link-imported playlists")
             }
         }
     }
@@ -1942,7 +1956,7 @@ class SyncEngine constructor(
         // (read-only) source must not receive merged changes back. `local` and
         // every other (owned/collaborative) mirror stay writable. #269: this is
         // exactly what keeps followed playlists mirroring OUT but never back IN.
-        val sourcePrefix = localId.substringBefore('-')
+        val sourcePrefix = impliedPlaylistProvider(localId)
         val writableById = inputs.associate { c ->
             c.id to if (c.id != "local" && c.id == sourcePrefix) playlist.writable else true
         }
@@ -2415,6 +2429,7 @@ class SyncEngine constructor(
             syncPlaylistSourceDao,
             syncPlaylistLinkDao,
         )
+        removeLinkImportPullSources(syncPlaylistSourceDao)
 
         // N-way migration bootstrap (Phase 2) — gated on isNwayEnabled (OFF by
         // default → inert). Seeds the baseline + per-provider state for every
@@ -4342,13 +4357,9 @@ class SyncEngine constructor(
      */
     suspend fun getPlaylistMirrors(localPlaylistId: String): Map<String, String> {
         val out = linkedMapOf<String, String>()
-        when {
-            localPlaylistId.startsWith("spotify-") ->
-                out["spotify"] = localPlaylistId.removePrefix("spotify-")
-            localPlaylistId.startsWith("applemusic-") ->
-                out["applemusic"] = localPlaylistId.removePrefix("applemusic-")
-            localPlaylistId.startsWith("listenbrainz-") ->
-                out["listenbrainz"] = localPlaylistId.removePrefix("listenbrainz-")
+        // Not for a link-imported `spotify-import-…` row: no provider owns it.
+        impliedPlaylistProvider(localPlaylistId)?.let { provider ->
+            impliedPlaylistExternalId(localPlaylistId)?.let { out[provider] = it }
         }
         syncPlaylistSourceDao.selectForLocal(localPlaylistId)?.let { out[it.providerId] = it.externalId }
         // Push links last — they carry the authoritative externalId.
@@ -4373,11 +4384,7 @@ class SyncEngine constructor(
         for (p in playlistDao.getAllSync()) {
             val override = settingsStore.getPlaylistChannels(p.id)
             val effective = override ?: buildSet {
-                when {
-                    p.id.startsWith("spotify-") -> add("spotify")
-                    p.id.startsWith("applemusic-") -> add("applemusic")
-                    p.id.startsWith("listenbrainz-") -> add("listenbrainz")
-                }
+                impliedPlaylistProvider(p.id)?.let { add(it) }
                 links[p.id]?.let { addAll(it) }
             }
             out[p.id] = effective.toList()

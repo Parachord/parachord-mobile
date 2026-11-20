@@ -369,4 +369,42 @@ class HealImportedSyncedFromTest {
         val pl = playlistDao.getAllSync().first { it.id == "spotify-X" }
         assertFalse(pl.locallyModified)
     }
+
+    // ── Link imports (PlaylistUrlImporter: `<provider>-import-<uuid>`) ──
+
+    @Test
+    fun `link-imported playlist gets no pull source`() = runBlocking {
+        val db = TestDatabaseFactory.create()
+        db.insertPlaylist(id = "spotify-import-1234", locallyModified = 1L)
+        db.insertPlaylist(id = "applemusic-import-rec-abc", locallyModified = 1L)
+        val sourceDao = SyncPlaylistSourceDao(db)
+        val linkDao = SyncPlaylistLinkDao(db)
+        val playlistDao = PlaylistDao(db)
+
+        com.parachord.shared.sync.SyncEngine.healImportedSyncedFromMismatch(
+            playlistDao, sourceDao, linkDao,
+        )
+
+        assertNull(sourceDao.selectForLocal("spotify-import-1234"))
+        assertNull(sourceDao.selectForLocal("applemusic-import-rec-abc"))
+        // Its local edits still count.
+        assertTrue(playlistDao.getAllSync().first { it.id == "spotify-import-1234" }.locallyModified)
+    }
+
+    @Test
+    fun `cleanup removes the bogus import pull sources`() = runBlocking {
+        val db = TestDatabaseFactory.create()
+        db.insertPlaylist(id = "spotify-import-1234")
+        db.insertPlaylist(id = "spotify-X", spotifyId = "X")
+        val sourceDao = SyncPlaylistSourceDao(db)
+        sourceDao.upsert("spotify-import-1234", "spotify", "import-1234", null, null, 1L)
+        sourceDao.upsert("spotify-X", "spotify", "X", "snap", null, 1L)
+
+        com.parachord.shared.sync.SyncEngine.removeLinkImportPullSources(sourceDao)
+
+        assertNull(sourceDao.selectForLocal("spotify-import-1234"))
+        // A real source is left alone.
+        assertEquals("X", sourceDao.selectForLocal("spotify-X")?.externalId)
+    }
 }
+

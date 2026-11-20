@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.sync
 
+import com.parachord.shared.sync.impliedPlaylistProvider
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -669,7 +670,7 @@ class SyncViewModel constructor(
             }
             if (isPullProvider(providerId)) {
                 val imported = playlistDao.getAllSync()
-                    .filter { it.id.startsWith("$providerId-") && it.name.isNotBlank() }
+                    .filter { impliedPlaylistProvider(it.id) == providerId && it.name.isNotBlank() }
                     .map { ConfigPlaylist(it.id, it.name, it.trackCount, it.ownerName, it.createdAt, it.updatedAt, it.lastModified) }
                 val allow = settingsStore.getPullPlaylists(providerId)
                 _configImported.value = imported
