@@ -2118,10 +2118,16 @@ class IosContainer private constructor() {
     /** One-off messages from the repository ("Couldn't load more from …"). */
     fun recommendationsMessages(): Flow<String> = recommendationsRepository.messages
 
-    /** Loads the page ([force] is Try again or pull to refresh). Never throws. */
+    /** Loads the page and, alongside it, Home's history mixes ([force] is Try again or pull to refresh). Never throws. */
     suspend fun loadRecommendations(force: Boolean) {
         try {
-            recommendationsRepository.load(force)
+            // Home's history mixes load alongside: their ids leave the Playlists row.
+            com.parachord.shared.repository.loadRecommendationsPage(
+                force = force,
+                background = appScope,
+                mixes = { historyMixesRepository.load(it) },
+                page = { recommendationsRepository.load(it) },
+            )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

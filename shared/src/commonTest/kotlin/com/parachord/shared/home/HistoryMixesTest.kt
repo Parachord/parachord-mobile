@@ -9,7 +9,6 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
-import kotlin.test.assertTrue
 
 /**
  * Desktop's history-mix rules (`home-model.js`): vectors from
@@ -159,7 +158,6 @@ class HistoryMixesTest {
     fun `retry constants match desktop`() {
         assertEquals(3, HOME_MIX_COVER_ATTEMPTS)
         assertEquals(60_000L, HOME_MIX_COVER_RETRY_MS)
-        assertTrue(HOME_MIX_COVER_RETRY_MS > 0)
     }
 
     @Test

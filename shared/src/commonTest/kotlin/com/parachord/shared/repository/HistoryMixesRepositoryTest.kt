@@ -232,16 +232,23 @@ class HistoryMixesRepositoryTest {
     fun `a load within 10 minutes of a finished load is skipped unless forced`() = runTest {
         val source = FakeSource().apply { answer("listenbrainz", { mixes("j1") }) }
         val r = rig(source)
-        r.repo.load()
-        r.clock.now += 5 * MINUTE
+        r.repo.load() // t0: fetches
+        assertEquals(1, source.asked.size)
+        // t0+55 min: the throttle is open, the cache fresh: no fetch, but the load counts.
+        r.clock.now += 55 * MINUTE
         r.repo.load()
         assertEquals(1, source.asked.size)
-        r.repo.load(force = true)
-        assertEquals(2, source.asked.size)
-        // After 10 minutes the next plain load runs (a fresh cache still needs no fetch).
-        r.clock.now += 11 * MINUTE
+        // t0+61 min: the cache is stale, but the last load was 6 minutes ago: skipped.
+        r.clock.now += 6 * MINUTE
+        r.repo.load()
+        assertEquals(1, source.asked.size)
+        // t0+66 min: 11 minutes after the last load, the stale cache is fetched again.
+        r.clock.now += 5 * MINUTE
         r.repo.load()
         assertEquals(2, source.asked.size)
+        // Forced: fetches though a load just finished.
+        r.repo.load(force = true)
+        assertEquals(3, source.asked.size)
         assertEquals(listOf("j1"), r.shown())
     }
 
