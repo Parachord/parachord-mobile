@@ -48,15 +48,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -504,51 +499,20 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         }
     }
 
-    // NestedScrollConnection: catches HorizontalPager boundary overscroll on tab screens.
-    // Left overscroll (swipe right) → open drawer. Chat opens only from the
-    // right-edge swipe zone below, never from overscroll: a carousel swiped
-    // to its end used to open the chat.
-    val overscrollConnection = remember(onOpenDrawer) {
-        object : NestedScrollConnection {
-            private var accumulatedX = 0f
-
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (available.x != 0f && (available.x > 0f) != (accumulatedX > 0f)) {
-                    accumulatedX = 0f
-                }
-                return Offset.Zero
-            }
-
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                if (source == NestedScrollSource.UserInput) {
-                    accumulatedX += available.x
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                val accumulated = accumulatedX
-                accumulatedX = 0f
-                if (accumulated > 60f || available.x > 400f) {
-                    onOpenDrawer()
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-
-    // Right-edge swipe threshold for opening chat
+    // The drawer and the chat open only from a swipe that starts at the
+    // screen's edge (the 24dp zones below): left edge → drawer, right edge →
+    // chat. A carousel or tab strip swiped past either end no longer opens
+    // either one (it used to, through an overscroll catcher on the content).
+    // Edge-swipe threshold for opening the drawer or the chat
     val density = LocalDensity.current
     val edgeSwipeThresholdPx = with(density) { 60.dp.toPx() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
-            gesturesEnabled = showBottomBar, // Disable drawer swipe on full-screen routes
+            // Swiping anywhere only closes an open drawer; opening is the
+            // left-edge zone's job, so a carousel's drag can't open it.
+            gesturesEnabled = showBottomBar && drawerState.isOpen,
             drawerContent = {
                 ModalDrawerSheet {
                     DrawerContent(
@@ -690,8 +654,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
             ) { innerPadding ->
                 Column(
                     modifier = Modifier
-                        .padding(innerPadding)
-                        .nestedScroll(overscrollConnection),
+                        .padding(innerPadding),
                 ) {
                     // Network connectivity banner — slides in when offline
                     NetworkBanner(isOnline = isOnline)
@@ -711,8 +674,33 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                         onListenAlongNext = { mainViewModel.advanceToFriend() },
                     )
 
-                    // Right-edge swipe zone — swipe left from the right edge to open chat.
-                    // The ModalNavigationDrawer handles left-edge swipe for the sidebar.
+                    // Left-edge swipe zone: swipe right from the left edge to open the drawer.
+                    if (showBottomBar) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .width(24.dp)
+                                .fillMaxHeight()
+                                .pointerInput(onOpenDrawer) {
+                                    var accumulated = 0f
+                                    detectHorizontalDragGestures(
+                                        onDragStart = { accumulated = 0f },
+                                        onDragEnd = {
+                                            if (accumulated > edgeSwipeThresholdPx) {
+                                                onOpenDrawer()
+                                            }
+                                            accumulated = 0f
+                                        },
+                                        onDragCancel = { accumulated = 0f },
+                                        onHorizontalDrag = { _, dragAmount ->
+                                            accumulated += dragAmount
+                                        },
+                                    )
+                                },
+                        )
+                    }
+
+                    // Right-edge swipe zone: swipe left from the right edge to open chat.
                     if (showBottomBar) {
                         Box(
                             modifier = Modifier
