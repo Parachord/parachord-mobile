@@ -762,6 +762,9 @@ final class ArtistDetailModel {
     var tourDates: [ConcertEvent] = []
     /// The repository's error when the tour dates failed to load with none to show.
     var tourError: String?
+    /// True while the tour dates load: the On Tour tab shows a spinner, not
+    /// "No upcoming tour dates", until they land (a concert card opens the tab at once).
+    var isTourLoading = false
     /// True when the artist has any upcoming dates → the On Tour tab appears (last).
     var isOnTour = false
     var isLoading = false
@@ -831,7 +834,9 @@ final class ArtistDetailModel {
     /// Fetch the unfiltered tour schedule and toggle the On Tour tab on/off.
     /// Non-blocking — runs in its own Task so the rest of the page isn't delayed.
     private func loadTourDates() {
+        isTourLoading = true
         Task {
+            defer { isTourLoading = false }
             do {
                 let ev = try await container.getArtistEvents(artistName: name)
                 tourDates = ev
@@ -1414,7 +1419,10 @@ struct ArtistScreen: View {
     // the artist has dates, and is appended last (see `visibleTabs`).
     private var onTourTab: some View {
         Group {
-            if model.tourDates.isEmpty {
+            if model.tourDates.isEmpty && model.isTourLoading {
+                // Android's OnTourTab spinner.
+                ProgressView().tint(PC.accent).frame(maxWidth: .infinity).padding(40)
+            } else if model.tourDates.isEmpty {
                 Text(model.tourError ?? UiMessages.shared.TOUR_DATES_EMPTY).font(.system(size: 14)).foregroundStyle(PC.fg3)
                     .frame(maxWidth: .infinity).padding(40)
             } else {

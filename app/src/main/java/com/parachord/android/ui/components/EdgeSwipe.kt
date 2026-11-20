@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.composed
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import kotlin.math.abs
 
 /** How wide each edge's swipe zone is. */
@@ -66,6 +68,10 @@ fun Modifier.edgeSwipes(onLeft: () -> Unit, onRight: () -> Unit): Modifier = com
     val zonePx = with(density) { EDGE_SWIPE_ZONE.toPx() }
     val bandPx = with(density) { EDGE_SWIPE_BAND.toPx() }
     val distancePx = with(density) { EDGE_SWIPE_DISTANCE.toPx() }
+    // Read through state, so the gesture loop isn't restarted when a caller
+    // passes new lambdas on recomposition.
+    val currentOnLeft by rememberUpdatedState(onLeft)
+    val currentOnRight by rememberUpdatedState(onRight)
     this
         .systemGestureExclusion { coords ->
             // One rect per call; the band on the left edge.
@@ -76,7 +82,7 @@ fun Modifier.edgeSwipes(onLeft: () -> Unit, onRight: () -> Unit): Modifier = com
             val s = coords.size
             edgeSwipeBands(s.width.toFloat(), s.height.toFloat(), zonePx, bandPx)[1]
         }
-        .pointerInput(onLeft, onRight) {
+        .pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                 val edge = swipeEdgeAt(
@@ -97,13 +103,16 @@ fun Modifier.edgeSwipes(onLeft: () -> Unit, onRight: () -> Unit): Modifier = com
                         val inward = if (edge == SwipeEdge.LEFT) dx else -dx
                         // A vertical move first: leave it to the content's scroll.
                         if (abs(dy) > viewConfiguration.touchSlop && abs(dy) > abs(dx)) break
+                        // An outward move first: the content has it (a carousel
+                        // dragged toward the edge); a reversal can't claim it later.
+                        if (-inward > viewConfiguration.touchSlop) break
                         if (inward > viewConfiguration.touchSlop && abs(dx) > abs(dy)) claimed = true
                     }
                     if (claimed) {
                         change.consume()
                         val inward = if (edge == SwipeEdge.LEFT) dx else -dx
                         if (inward >= distancePx) {
-                            if (edge == SwipeEdge.LEFT) onLeft() else onRight()
+                            if (edge == SwipeEdge.LEFT) currentOnLeft() else currentOnRight()
                             // Swallow the rest of this gesture.
                             while (true) {
                                 val rest = awaitPointerEvent(PointerEventPass.Initial)

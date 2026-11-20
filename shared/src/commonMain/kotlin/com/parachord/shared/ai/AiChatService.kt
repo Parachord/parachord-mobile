@@ -220,7 +220,8 @@ class AiChatService(
         if (response.toolCalls.isNullOrEmpty()) {
             // Plain-text music references as cards (desktop converts before it
             // stores the reply, so later turns see the cards too).
-            val content = ChatContent.convertPlainTextToCards(response.content)
+            // A blank reply still shows something (desktop's tool summary for no tools).
+            val content = ChatContent.convertPlainTextToCards(response.content.ifBlank { ToolSummary.DONE })
             append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = content))
             return content
         }
@@ -243,6 +244,7 @@ class AiChatService(
     ): String {
         var currentResponse = initialResponse
         var iterations = 0
+        val runs = mutableListOf<ToolRun>()
 
         while (!currentResponse.toolCalls.isNullOrEmpty() && iterations < MAX_TOOL_ITERATIONS) {
             iterations++
@@ -271,6 +273,7 @@ class AiChatService(
                     Log.w(TAG, "Tool ${toolCall.name} failed: $reason")
                     mapOf("success" to false, "error" to reason)
                 }
+                runs += ToolRun(toolCall.name, result)
                 val resultJson = json.encodeToString(
                     JsonElement.serializer(),
                     mapToJsonElement(result),
@@ -302,7 +305,12 @@ class AiChatService(
         }
 
         // Add final assistant message to history
-        val finalContent = ChatContent.convertPlainTextToCards(currentResponse.content)
+        // A turn that ends without text of its own (a blank reply, or the
+        // iteration cap reached mid-loop) says what its tools did, as desktop
+        // does (`rawFinal = content || summarizeToolResults(toolResults)`).
+        val finalContent = ChatContent.convertPlainTextToCards(
+            currentResponse.content.ifBlank { ToolSummary.summarize(runs) },
+        )
         append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = finalContent))
         return finalContent
     }

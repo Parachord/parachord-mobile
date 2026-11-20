@@ -200,4 +200,46 @@ class AiChatServiceHistoryTest {
         // The model still sees the whole loop.
         assertEquals(saved.size, chat.getFullHistory("fake").size)
     }
+
+    private object PlayTools : DjToolExecutor {
+        override suspend fun execute(name: String, args: Map<String, Any?>): Map<String, Any?> =
+            mapOf("success" to true, "track" to mapOf("title" to "Creep", "artist" to "Radiohead"))
+    }
+
+    @Test
+    fun `a blank reply after tools says what the tools did`() = runTest {
+        val chat = AiChatService(PlayTools, systemPrompt = { "system" }, historyStore = MemoryStore(), json = Json)
+        val reply = chat.sendMessage(ToolThenProvider(""), AiProviderConfig(), "play creep")
+        // Desktop runs the summary through convertPlainTextToCards too, so the
+        // track it names is a card.
+        assertEquals("Now playing {{track|Creep|Radiohead|}}.", reply)
+        assertEquals(reply, chat.getDisplayMessages("fake").last().content)
+    }
+
+    @Test
+    fun `the iteration cap ending mid loop still shows a summary`() = runTest {
+        val alwaysTools = object : AiChatProvider {
+            override val id = "fake"
+            override val name = "Fake"
+            override suspend fun chat(messages: List<ChatMessage>, tools: List<DjToolDefinition>, config: AiProviderConfig) =
+                AiChatResponse(content = "", toolCalls = listOf(ToolCall("t", "play", emptyMap())))
+        }
+        val chat = AiChatService(PlayTools, systemPrompt = { "system" }, historyStore = MemoryStore(), json = Json)
+        val reply = chat.sendMessage(alwaysTools, AiProviderConfig(), "play creep")
+        assertTrue(reply.startsWith("Now playing {{track|Creep|Radiohead|}}."), reply)
+        assertEquals(reply, chat.getDisplayMessages("fake").last().content)
+    }
+
+    @Test
+    fun `a blank reply with no tools shows the short fallback`() = runTest {
+        val blank = object : AiChatProvider {
+            override val id = "fake"
+            override val name = "Fake"
+            override suspend fun chat(messages: List<ChatMessage>, tools: List<DjToolDefinition>, config: AiProviderConfig) =
+                AiChatResponse(content = "  ")
+        }
+        val chat = service(MemoryStore())
+        assertEquals(ToolSummary.DONE, chat.sendMessage(blank, AiProviderConfig(), "hi"))
+        assertEquals(listOf("hi", ToolSummary.DONE), chat.getDisplayMessages("fake").map { it.content })
+    }
 }
