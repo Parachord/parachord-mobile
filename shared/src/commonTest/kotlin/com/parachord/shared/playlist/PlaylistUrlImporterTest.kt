@@ -81,7 +81,22 @@ class PlaylistUrlImporterTest {
                 XspfImportResult("hosted-xspf-1", "Hosted", 1)
             },
             createPlaylist = { p, t -> saved.add(p to t) },
+            findPlaylist = { id -> saved.firstOrNull { it.first.id == id }?.first },
         )
+    }
+
+    @Test fun `a saved key imports once — a second save finds the first playlist`() = runTest {
+        val imp = importer()
+        val first = imp.importFromUrl("https://open.spotify.com/playlist/P1", savedKey = "rec-spotify-P1")
+        assertEquals("spotify-import-rec-spotify-P1", first.playlistId)
+        val again = imp.importFromUrl("https://open.spotify.com/playlist/P1", savedKey = "rec-spotify-P1")
+        assertEquals(first.playlistId, again.playlistId)
+        assertEquals(first.trackCount, again.trackCount)
+        assertEquals(1, saved.size)
+        // Without a key every import is a new playlist, as before.
+        val other = imp.importFromUrl("https://open.spotify.com/playlist/P1")
+        assertTrue(other.playlistId != first.playlistId)
+        assertEquals(2, saved.size)
     }
 
     @Test fun `a Spotify playlist imports with its Spotify ids`() = runTest {

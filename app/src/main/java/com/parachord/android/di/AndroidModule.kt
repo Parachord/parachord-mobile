@@ -45,6 +45,7 @@ import com.parachord.android.playback.scrobbler.*
 import com.parachord.android.playlist.HostedPlaylistPoller
 import com.parachord.android.playlist.HostedPlaylistScheduler
 import com.parachord.android.playlist.PlaylistImportManager
+import com.parachord.android.ui.screens.playlists.ServicePlaylistViewModel
 import com.parachord.android.plugin.PluginManager
 import com.parachord.android.plugin.PluginSyncService
 import com.parachord.android.resolver.AndroidResolverRuntime
@@ -911,10 +912,12 @@ val androidModule = module {
         val settings: com.parachord.shared.settings.SettingsStore = get()
         val musicBrainz: com.parachord.shared.api.MusicBrainzClient = get()
         val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore = get()
+        val metadataService: com.parachord.shared.metadata.MetadataService = get()
+        val imageEnrichment: com.parachord.shared.metadata.ImageEnrichmentService = get()
         com.parachord.shared.repository.RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(get()),
             settingsStore = settings,
-            metadataService = get(),
+            metadataService = metadataService,
             aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(
                 get<com.parachord.shared.ai.AiRecommendationService>(), settings,
             ),
@@ -935,6 +938,11 @@ val androidModule = module {
             similarUsers = { force -> similarUsersStore.usersFor(force) },
             friendExclusions = { similarUsersStore.exclusions() },
             cachedSimilarUsers = { similarUsersStore.cached() },
+            canAskSimilarUsers = { similarUsersStore.canAsk() },
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { name -> metadataService.getArtistImage(name) },
+                albumArt = { title, artist -> imageEnrichment.lookupAlbumArt(title, artist) },
+            ),
         )
     }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`
@@ -1161,12 +1169,15 @@ val androidModule = module {
             val pluginUserConfig = get<com.parachord.shared.plugin.PluginUserConfig>()
             val appConfig = get<com.parachord.shared.config.AppConfig>()
             resolverConfigProvider = {
-                mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
-                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, appConfig.lastFmApiKey) +
+                com.parachord.shared.plugin.mergeResolverConfigs(
+                    mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()),
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, appConfig.lastFmApiKey),
                     // A plugin's own configurable fields (Subsonic's server URL /
                     // username / password; plan parachord-mobile#664) — last, so
-                    // they win over the per-service configs in code.
-                    pluginUserConfig.pluginConfigs()
+                    // a field the user set wins, field by field: an unset one
+                    // must not erase the account the per-service config supplies.
+                    pluginUserConfig.pluginConfigs(),
+                )
             }
         }
     }
@@ -1235,6 +1246,7 @@ val androidModule = module {
             createPlaylist = { playlist, tracks ->
                 get<com.parachord.shared.repository.LibraryRepository>().createPlaylistWithTracks(playlist, tracks)
             },
+            findPlaylist = { id -> get<com.parachord.shared.db.dao.PlaylistDao>().getById(id) },
         )
     }
     single { com.parachord.android.deeplink.AndroidProtocolPlayTeardown(playbackController = get()) }
@@ -1327,6 +1339,7 @@ val androidModule = module {
     viewModelOf(::PlaylistDetailViewModel)
     viewModelOf(::EditPlaylistViewModel)
     viewModelOf(::WeeklyPlaylistViewModel)
+    viewModelOf(::ServicePlaylistViewModel)
     viewModelOf(::RecommendationsViewModel)
     viewModelOf(::FreshDropsViewModel)
     viewModelOf(::CriticalDarlingsViewModel)

@@ -1,5 +1,6 @@
 package com.parachord.shared.repository
 
+import com.parachord.shared.ui.UiMessages
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.api.LastFmHiddenListeningException
 import com.parachord.shared.api.LastFmRateLimitedException
@@ -62,6 +63,20 @@ class FriendsRepository(
 
     /** Get a single friend by ID. */
     suspend fun getFriendById(id: String): Friend? = friendDao.getFriendById(id)
+
+    /**
+     * The friend a profile page shows for [id]: the saved friend, or for an unsaved id
+     * (`transient:service:user`, see [unsavedFriendId]) the saved friend with that service and
+     * username when there is one, else an unsaved friend with no cached track. A failed read of
+     * the saved list falls back to the unsaved friend; null for an id that isn't either.
+     */
+    suspend fun profileFriend(id: String): Friend? {
+        val byId = try { friendDao.getFriendById(id) } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+        if (byId != null) return byId
+        if (parseUnsavedFriendId(id) == null) return null
+        val all = try { friendDao.getAllFriendsSync() } catch (e: CancellationException) { throw e } catch (e: Exception) { emptyList() }
+        return chooseProfileFriend(id, savedById = null, allSaved = all)
+    }
 
     /**
      * The friend a `parachord://friend/{id}` link names. Desktop writes the
@@ -206,7 +221,7 @@ class FriendsRepository(
         artworkUrl: String?,
         timestamp: Long = currentTimeMillis() / 1000,
     ): Friend = Friend(
-        id = "transient:$service:$user",
+        id = unsavedFriendId(service, user),
         username = user,
         service = service,
         displayName = user,
@@ -333,13 +348,14 @@ class FriendsRepository(
                 val updated = friendDao.getFriendById(friend.id) ?: friend
                 Resource.Success(updated)
             } else {
-                Resource.Error("User not found")
+                Resource.Error(UiMessages.USER_NOT_FOUND)
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // The exception's text goes to the log only; people see shared words.
             Log.e(TAG, "Failed to add friend: ${parsed.username}", e)
-            Resource.Error("Failed to add friend: ${e.message}")
+            Resource.Error(UiMessages.couldntReach(parsed.service))
         }
     }
 
@@ -824,7 +840,12 @@ class FriendsRepository(
         }
     }
 
-    fun getFriendRecentTracks(username: String, service: String): Flow<Resource<List<RecentTrack>>> = flow {
+    fun getFriendRecentTracks(
+        username: String,
+        service: String,
+        /** Told whether the Last.fm profile hides its listening, for a friend with no saved row to record it on. */
+        onHidesListening: ((Boolean) -> Unit)? = null,
+    ): Flow<Resource<List<RecentTrack>>> = flow {
         emit(Resource.Loading)
         try {
             val tracks = when (service) {
@@ -840,10 +861,12 @@ class FriendsRepository(
                         // The Recent tab says the profile hides its listening
                         // (from the friend's flag); the other tabs still load.
                         stored?.let { recordHidesListening(it, true) }
+                        onHidesListening?.invoke(true)
                         emit(Resource.Success(emptyList()))
                         return@flow
                     }
                     stored?.let { recordHidesListening(it, false) }
+                    onHidesListening?.invoke(false)
                     response.recenttracks?.track?.map { track ->
                         RecentTrack(
                             title = track.name,
@@ -908,4 +931,34 @@ class FriendsRepository(
             if (enrichedUrl != null) artist.copy(imageUrl = enrichedUrl) else artist
         }
     }
+}
+
+
+private const val UNSAVED_PREFIX = "transient:"
+
+/** The id of a friend who isn't followed: `transient:<service>:<username>`. */
+fun unsavedFriendId(service: String, username: String): String = "$UNSAVED_PREFIX$service:$username"
+
+/** Splits an [unsavedFriendId] into (service, username); the username may hold `:`. Null if not one. */
+fun parseUnsavedFriendId(id: String): Pair<String, String>? {
+    if (!id.startsWith(UNSAVED_PREFIX)) return null
+    val rest = id.removePrefix(UNSAVED_PREFIX)
+    val cut = rest.indexOf(':')
+    if (cut <= 0 || cut == rest.length - 1) return null
+    return rest.substring(0, cut) to rest.substring(cut + 1)
+}
+
+/** The rule behind [FriendsRepository.profileFriend], over what was read. */
+fun chooseProfileFriend(id: String, savedById: Friend?, allSaved: List<Friend>): Friend? {
+    if (savedById != null) return savedById
+    val (service, username) = parseUnsavedFriendId(id) ?: return null
+    allSaved.firstOrNull { it.service == service && it.username.equals(username, ignoreCase = true) }?.let { return it }
+    return Friend(
+        id = unsavedFriendId(service, username),
+        username = username,
+        service = service,
+        displayName = username,
+        addedAt = currentTimeMillis(),
+        transient = true,
+    )
 }

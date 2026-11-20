@@ -986,6 +986,7 @@ class IosContainer private constructor() {
             ),
             importHostedXspf = { u -> hostedXspfService.importHostedXspf(u) },
             createPlaylist = { playlist, tracks -> libraryRepository.createPlaylistWithTracks(playlist, tracks) },
+            findPlaylist = { id -> playlistDao.getById(id) },
         )
     }
 
@@ -1971,6 +1972,11 @@ class IosContainer private constructor() {
             similarUsers = { force -> similarUsersStore.usersFor(force) },
             friendExclusions = { similarUsersStore.exclusions() },
             cachedSimilarUsers = { similarUsersStore.cached() },
+            canAskSimilarUsers = { similarUsersStore.canAsk() },
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { name -> enrichMetadataService.getArtistImage(name) },
+                albumArt = { title, artist -> imageEnrichmentService.lookupAlbumArt(title, artist) },
+            ),
         )
     }
 

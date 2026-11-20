@@ -17,6 +17,7 @@ import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
+import com.parachord.shared.recommendations.RecommendationImages
 import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.SimilarUser
 import com.parachord.shared.recommendations.buildRecommendationPage
@@ -32,6 +33,8 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -80,6 +83,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * - **Merge:** [buildRecommendationPage] with Shuffleupagus's picks, the
  *   similar users and the blocklist, re-run on every change so a block takes
  *   effect at once.
+ * - **Shuffleupagus:** asked when it has no cached answer; a plain load
+ *   doesn't ask again within [AI_RETRY_MS] of the last try (a forced one does).
  *
  * [getRecommendedTracks] / [getRecommendedArtists] keep today's screens
  * working from the page's Tracks and Artists rows until they move to [page].
@@ -101,6 +106,8 @@ class RecommendationsRepository(
     private val similarUsers: suspend (force: Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
     /** Who Listeners leaves out, read at every merge. */
     private val friendExclusions: suspend () -> FriendExclusions = { FriendExclusions() },
+    /** Some similar-users provider is on and ready, so [similarUsers] will really ask (the Listeners skeleton shows only then). */
+    private val canAskSimilarUsers: suspend () -> Boolean = { false },
     /** The saved similar users, shown at once while [similarUsers] asks again (an older shape among them). */
     private val cachedSimilarUsers: suspend () -> Map<String, List<SimilarUser>> = { emptyMap() },
     private val nowMs: () -> Long = { currentTimeMillis() },
@@ -110,6 +117,8 @@ class RecommendationsRepository(
      * crash Android and abort the process on iOS.
      */
     private val scope: CoroutineScope = recommendationsBackgroundScope(),
+    /** Album covers and artist photos for cards that came without one; the screens ask for the cards they show ([requestImages]). */
+    val images: RecommendationImages = RecommendationImages({ null }, { _, _ -> null }),
 ) {
     companion object {
         private const val TAG = "RecommendationsRepo"
@@ -127,6 +136,10 @@ class RecommendationsRepository(
         fun heroFor(username: String?): String =
             username?.takeIf { it.isNotBlank() }?.let { "Personalized picks for $it" } ?: HERO_FALLBACK
         private const val ARTIST_IMAGE_LOOKUPS = 15
+        /** A Shuffleupagus answer is a 30–60 s paid call: with none cached, a plain load waits this long after the last try. */
+        const val AI_RETRY_MS = 30L * 60 * 1000
+        /** How long [cardShown] gathers cards before asking about them. */
+        const val CARD_BATCH_MS = 300L
     }
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -147,6 +160,8 @@ class RecommendationsRepository(
     private var generation = 0
     private var inFlight: Deferred<LoadOutcome>? = null
     private var aiInFlight = false
+    /** When Shuffleupagus was last asked; a non-forced load doesn't ask again within [AI_RETRY_MS]. */
+    private var lastAiAttemptMs: Long? = null
 
     /** Photos found for the old Artists list, by lowercased name. */
     @Volatile private var artistImages: Map<String, String> = emptyMap()
@@ -160,6 +175,7 @@ class RecommendationsRepository(
 
     init {
         scope.launch { releaseDates.changes.collect { rebuild() } }
+        scope.launch { images.changes.collect { rebuild() } }
     }
 
     // ── Public surface ───────────────────────────────────────────────
@@ -173,7 +189,7 @@ class RecommendationsRepository(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Recommendations load failed", e)
-            _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.Message(PAGE_FAILED_MESSAGE)) }
+            _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.Message(PAGE_FAILED_MESSAGE), listenersPending = false) }
         }
     }
 
@@ -196,9 +212,41 @@ class RecommendationsRepository(
         }
     }
 
+    private val shownMutex = Mutex()
+    private val shownBatch = mutableListOf<RecommendationItem>()
+    private var shownBatchJob: Job? = null
+
+    /**
+     * A card came on screen. Cards shown within [CARD_BATCH_MS] of the first are
+     * asked about together: the albums' release dates ([requestReleaseDates]),
+     * then covers and photos for every card that lacks one ([requestImages]).
+     * Both apps call it from each card as it appears.
+     */
+    fun cardShown(item: RecommendationItem) {
+        scope.launch {
+            shownMutex.withLock {
+                shownBatch.add(item)
+                if (shownBatchJob?.isActive == true) return@withLock
+                shownBatchJob = scope.launch {
+                    delay(CARD_BATCH_MS)
+                    val batch = shownMutex.withLock { shownBatch.toList().also { shownBatch.clear() } }
+                    if (batch.isEmpty()) return@launch
+                    val albums = batch.filter { it.type == RecommendationType.ALBUM }
+                    if (albums.isNotEmpty()) requestReleaseDates(albums)
+                    requestImages(batch)
+                }
+            }
+        }
+    }
+
     /** Looks up the release dates of albums on screen; the page re-merges as they land. */
     fun requestReleaseDates(items: List<RecommendationItem>) {
         scope.launch { releaseDates.requestLookups(items) }
+    }
+
+    /** Looks up covers and photos for the album and artist cards on screen that have none ([images]). */
+    fun requestImages(items: List<RecommendationItem>) {
+        scope.launch { images.requestLookups(items) }
     }
 
     // ── Today's screens (removed when they move to [page]) ───────────
@@ -365,7 +413,7 @@ class RecommendationsRepository(
                 providerNames = names
             }
             _page.update {
-                it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.NotConfigured, hero = hero)
+                it.copy(loading = false, pendingProviders = emptySet(), listenersPending = false, error = RecommendationsError.NotConfigured, hero = hero)
             }
             rebuild()
             return LoadOutcome(configured = false)
@@ -400,8 +448,16 @@ class RecommendationsRepository(
         if (savedUsers.isNotEmpty()) mutex.withLock { if (generation == run.generation) similar = savedUsers }
         applyFresh(run)
         val pending = mutex.withLock { toFetch.filter { it.id !in run.stale && it.id !in quiet }.map { it.id }.toSet() }
+        val asking = safely(false) { canAskSimilarUsers() }
         _page.update {
-            it.copy(loading = it.sections.isEmpty() && toFetch.isNotEmpty(), pendingProviders = pending, error = null, hero = hero)
+            it.copy(
+                loading = it.sections.isEmpty() && toFetch.isNotEmpty(),
+                pendingProviders = pending,
+                // The similar-users lookup is out and no Listeners row is on screen yet.
+                listenersPending = asking && it.sections.none { section -> section.type == null },
+                error = null,
+                hero = hero,
+            )
         }
 
         coroutineScope {
@@ -414,10 +470,9 @@ class RecommendationsRepository(
                     Log.w(TAG, "Similar users failed: ${e.message}")
                     null
                 }
-                if (users != null) {
-                    val latest = mutex.withLock { (generation == run.generation).also { if (it) similar = users } }
-                    if (latest) rebuild()
-                }
+                val latest = mutex.withLock { (generation == run.generation).also { if (it && users != null) similar = users } }
+                if (latest && users != null) rebuild()
+                if (latest) _page.update { it.copy(listenersPending = false) }
             }
             for (provider in toFetch) launch { fetchOne(run, provider, accountFor(provider.id, lastFm, listenBrainz)) }
         }
@@ -434,7 +489,7 @@ class RecommendationsRepository(
             if (failed > 0 && failed == toFetch.size + missing) RecommendationsError.Message(PAGE_FAILED_MESSAGE)
             else RecommendationsError.Message(emptyRecommendationsMessage(listenBrainz != null, lastFm != null))
         } else null
-        _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = error) }
+        _page.update { it.copy(loading = false, pendingProviders = emptySet(), listenersPending = false, error = error) }
         return outcome
     }
 
@@ -523,7 +578,13 @@ class RecommendationsRepository(
     private suspend fun maybeLoadShuffleupagus(force: Boolean) {
         if (!safely(false) { aiRecommendations.hasProvider() }) return
         if (!force && safely(null) { aiRecommendations.cached() } != null) return
-        if (!mutex.withLock { if (aiInFlight) false else { aiInFlight = true; true } }) return
+        val now = nowMs()
+        val go = mutex.withLock {
+            val recent = lastAiAttemptMs?.let { now - it < AI_RETRY_MS } == true
+            if (aiInFlight || (!force && recent)) false
+            else { aiInFlight = true; lastAiAttemptMs = now; true }
+        }
+        if (!go) return
         _page.update { it.copy(aiLoading = true) }
         scope.launch {
             try {
@@ -611,7 +672,7 @@ class RecommendationsRepository(
             val blocked = safely(emptySet()) { settingsStore.getBlockedRecommendations() }
             val ai = safely(null) { aiRecommendations.cached() }
             val exclude = safely(FriendExclusions()) { friendExclusions() }
-            val sections = withReleaseDates(
+            val sections = withImages(withReleaseDates(
                 buildRecommendationPage(
                     providers = providers,
                     shuffleupagus = ai?.let { shuffleupagusSection(it.albums, it.artists) },
@@ -622,7 +683,7 @@ class RecommendationsRepository(
                     blocked = blocked,
                     providerNames = names,
                 ),
-            )
+            ))
             _page.update { it.copy(sections = sections, sources = pageSources(sections), loadingMore = busy, paging = pages) }
         } catch (e: CancellationException) {
             throw e
@@ -650,6 +711,21 @@ class RecommendationsRepository(
                         items = row.items.map { item ->
                             if (item.releaseDate != null) item
                             else safely(null) { releaseDates.dateFor(item) }?.let { item.copy(releaseDate = it) } ?: item
+                        },
+                    )
+                },
+            )
+        }
+
+    /** Fills each album's cover and artist's photo from [images] when the provider sent none. */
+    private suspend fun withImages(sections: List<RecommendationPageSection>): List<RecommendationPageSection> =
+        sections.map { section ->
+            section.copy(
+                rows = section.rows.map { row ->
+                    row.copy(
+                        items = row.items.map { item ->
+                            if (!item.imageUrl.isNullOrBlank() || RecommendationImages.imageKey(item) == null) item
+                            else safely(null) { images.imageFor(item) }?.let { item.copy(imageUrl = it) } ?: item
                         },
                     )
                 },

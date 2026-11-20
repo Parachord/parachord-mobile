@@ -1,0 +1,212 @@
+package com.parachord.shared.recommendations
+
+import com.parachord.shared.api.LbPlaylistTrack
+import com.parachord.shared.deeplink.ProtocolTrack
+import com.parachord.shared.deeplink.ResolvedProtocolPlay
+import com.parachord.shared.model.Track
+import com.parachord.shared.playback.PlaybackContext
+import com.parachord.shared.playback.SERVICE_PLAYLIST_CONTEXT
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+
+class RecommendationQueuesTest {
+
+    private fun song(name: String, artist: String? = "Artist", duration: Double? = null, mbid: String? = null, isrc: String? = null) =
+        RecommendationItem(
+            type = RecommendationType.SONG, id = "id-$name", name = name, artist = artist,
+            imageUrl = "https://img/$name", duration = duration, mbid = mbid, isrc = isrc,
+        )
+
+    @Test
+    fun `recommendedSongTrack converts seconds to ms and keeps only valid ids`() {
+        val t = recommendedSongTrack(song("Hello", duration = 215.0, mbid = "not-an-mbid", isrc = "gbaye0601498"))!!
+        assertEquals(215000L, t.duration)
+        assertNull(t.recordingMbid)
+        assertEquals("GBAYE0601498", t.isrc)
+        assertEquals("rec-" + trackSlug("Artist", "Hello"), t.id)
+        assertEquals("https://img/Hello", t.artworkUrl)
+        assertNull(recommendedSongTrack(song("X", artist = null)))
+        assertNull(recommendedSongTrack(song("X", duration = 0.0))!!.duration)
+    }
+
+    @Test
+    fun `songQueue starts at the tapped song of the filtered list`() {
+        val items = listOf("a", "b", "c", "d").map { song(it) }
+        val row = RecommendationRow(key = "type:song", type = RecommendationType.SONG, title = "For you")
+        val q = songQueue(items, 2, row)!!
+        assertEquals(listOf("c", "d"), q.tracks.map { it.title })
+        assertEquals(PlaybackContext("recommendations", "For you", "type:song"), q.context)
+        assertEquals("Recommendations", songQueue(items, 0, row.copy(title = null))!!.context.name)
+    }
+
+    @Test
+    fun `songQueue skips songs with no artist`() {
+        val items = listOf(song("a"), song("b", artist = null), song("c"))
+        val row = RecommendationRow(key = "type:song", type = RecommendationType.SONG)
+        assertEquals(listOf("c"), songQueue(items, 2, row)!!.tracks.map { it.title })
+    }
+
+    @Test
+    fun `weeklyContext names the week`() {
+        assertEquals(
+            PlaybackContext("weekly-jam", "Week of Nov 17's Weekly Jams", "abc"),
+            weeklyContext(WeeklyInfo("abc", "weekly-jam", "Weekly Jams", "Week of Nov 17")),
+        )
+    }
+
+    private val playlist = RecommendationItem(
+        type = RecommendationType.PLAYLIST, id = "p", name = "Mix", url = "https://x/p",
+    )
+
+    @Test
+    fun `servicePlaylistQueue — no url or no tracks or a throw or null all give null`() = runTest {
+        assertNull(servicePlaylistQueue(playlist.copy(url = null)) { error("not called") })
+        assertNull(servicePlaylistQueue(playlist) { null })
+        assertNull(servicePlaylistQueue(playlist) { ResolvedProtocolPlay("Mix", emptyList()) })
+        assertNull(servicePlaylistQueue(playlist) { throw IllegalStateException("boom") })
+    }
+
+    @Test
+    fun `servicePlaylistQueue — tracks keep their order with a playlist context`() = runTest {
+        val q = servicePlaylistQueue(playlist) {
+            ResolvedProtocolPlay("Mix", listOf(ProtocolTrack("A", "one"), ProtocolTrack("B", "two")), providerId = "plug")
+        }!!
+        assertEquals(listOf("one", "two"), q.tracks.map { it.title })
+        assertEquals(PlaybackContext(SERVICE_PLAYLIST_CONTEXT, "Mix", "https://x/p"), q.context)
+        assertEquals(q.context, servicePlaylistContext("Mix", "https://x/p"))
+    }
+
+    @Test
+    fun `servicePlaylistTracks keeps order and ids`() {
+        val play = ResolvedProtocolPlay(
+            "Mix",
+            listOf(ProtocolTrack("A", "one", spotifyId = "sp1"), ProtocolTrack("B", "two"), ProtocolTrack("C", "three", appleMusicId = "123")),
+            providerId = "plug",
+        )
+        val tracks = servicePlaylistTracks(play)
+        assertEquals(listOf("one", "two", "three"), tracks.map { it.title })
+        assertEquals("spotify:sp1", tracks[0].id)
+        assertEquals("plug-import:B:two:1", tracks[1].id)
+        assertEquals("applemusic:123", tracks[2].id)
+        assertEquals(tracks, servicePlaylistTracks(play.copy(providerId = "plug")))
+    }
+
+    @Test
+    fun `recommendedBy falls back for a blank source`() {
+        assertEquals("Recommended by Apple Music", RecommendationCopy.recommendedBy("Apple Music"))
+        assertEquals("Recommended by the service", RecommendationCopy.recommendedBy(""))
+        assertEquals("Recommended by the service", RecommendationCopy.recommendedBy("  "))
+        assertEquals("Save", RecommendationCopy.SAVE)
+        assertEquals("Saved Mix", RecommendationCopy.saved("Mix"))
+        assertEquals("Couldn’t save Mix", RecommendationCopy.couldntSave("Mix"))
+    }
+
+    @Test
+    fun `listenerPlay — tracks play — none and failures say why`() = runTest {
+        val tracks = listOf(Track(id = "1", title = "t", artist = "a"))
+        val ok = listenerPlay("lastfm", "bob", "Bob") { _, _ -> tracks }
+        assertEquals(PlaybackContext("friend", "Bob", "lastfm:bob"), assertIs<ListenerPlay.Play>(ok).queue.context)
+        assertEquals(
+            ListenerPlay.Message(RecommendationCopy.listenerNoTracks("Bob")),
+            listenerPlay("lastfm", "bob", "Bob") { _, _ -> emptyList() },
+        )
+        assertEquals(
+            ListenerPlay.Message(RecommendationCopy.listenerTracksFailed("Bob")),
+            listenerPlay("lastfm", "bob", "Bob") { _, _ -> throw IllegalStateException("x") },
+        )
+    }
+
+    @Test
+    fun `achordionUserUrl escapes the name`() {
+        assertEquals("https://achordion.xyz/user/a%20b%2Fc", achordionUserUrl("a b/c"))
+    }
+
+    @Test
+    fun `View on Achordion is for ListenBrainz listeners only`() {
+        assertTrue(showsAchordionLink("listenbrainz"))
+        assertFalse(showsAchordionLink("lastfm"))
+    }
+
+    @Test
+    fun `a song queue's context is the Recommendations context keyed by the row`() {
+        val r = RecommendationRow(key = "type:song", type = RecommendationType.SONG, title = "Tracks")
+        val items = listOf(RecommendationItem(type = RecommendationType.SONG, id = "s", name = "Song", artist = "A"))
+        val ctx = songQueue(items, 0, r)!!.context
+        assertEquals(RECOMMENDATIONS_CONTEXT, ctx.type)
+        assertEquals("type:song", ctx.id)
+    }
+
+    @Test
+    fun `weeklyTracks keeps order — ids are weekly-playlist-track and the fields carry over`() {
+        val weekly = WeeklyInfo("wk1", "weekly-jam", "Weekly Jams", "Week of Nov 17")
+        val tracks = weeklyTracks(
+            weekly,
+            listOf(
+                LbPlaylistTrack(id = "t1", title = "One", artist = "A", album = "Al", albumArt = "https://art/1", durationMs = 1000, mbid = "m1"),
+                LbPlaylistTrack(id = "t2", title = "Two", artist = "B"),
+            ),
+        )
+        assertEquals(listOf("weekly-wk1-t1", "weekly-wk1-t2"), tracks.map { it.id })
+        val t = tracks[0]
+        assertEquals(listOf("One", "A", "Al", "https://art/1"), listOf(t.title, t.artist, t.album, t.artworkUrl))
+        assertEquals(1000L, t.duration)
+        assertEquals("m1", t.recordingMbid)
+    }
+
+    @Test
+    fun `playlistCovers takes the first four distinct covers and skips blanks`() {
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            playlistCovers(listOf("a", null, " ", "a", "b", "", "c", "d", "e")),
+        )
+        assertEquals(emptyList(), playlistCovers(listOf(null, "")))
+    }
+
+    @Test
+    fun `WeeklyCovers loads once — an empty or failed load is asked again`() = runTest {
+        var calls = 0
+        var answer: () -> List<String?> = { throw IllegalStateException("down") }
+        val covers = WeeklyCovers(backgroundScope) { calls++; answer() }
+        covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(1, calls)
+        assertEquals(emptyList(), covers.covers("w").value)
+        testScheduler.runCurrent()
+        assertEquals(2, calls)
+        answer = { emptyList() }
+        covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(3, calls)
+        answer = { listOf("x", "x", "y") }
+        covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(4, calls)
+        val flow = covers.covers("w")
+        testScheduler.runCurrent()
+        assertEquals(listOf("x", "y"), flow.value)
+        assertEquals(4, calls)
+    }
+
+    @Test
+    fun `a playlist card with a link opens its view — without one it plays`() {
+        assertTrue(playlistTapOpensView(playlist))
+        assertFalse(playlistTapOpensView(playlist.copy(url = null)))
+        assertFalse(playlistTapOpensView(playlist.copy(url = " ")))
+        assertFalse(playlistTapOpensView(playlist.copy(weekly = WeeklyInfo("w", "weekly-jam", "Weekly Jams", "Week"))))
+        assertFalse(playlistTapOpensView(song("s").copy(url = "https://x")))
+    }
+
+    @Test
+    fun `recommendedPlaylistKey is stable per link`() {
+        val a = recommendedPlaylistKey("https://music.apple.com/us/playlist/pl.1")
+        assertEquals(a, recommendedPlaylistKey("  https://music.apple.com/us/playlist/pl.1 "))
+        assertTrue(a.startsWith("rec-"))
+        assertTrue(a != recommendedPlaylistKey("https://music.apple.com/us/playlist/pl.2"))
+        assertEquals(recommendedPlaylistKey("https://open.spotify.com/playlist/X"), recommendedPlaylistKey("spotify:playlist:X"))
+    }
+}

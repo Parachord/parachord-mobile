@@ -11,6 +11,7 @@ import com.parachord.shared.plugin.PluginNotReadyException
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
+import com.parachord.shared.recommendations.SimilarUser
 import com.parachord.shared.recommendations.flattenRecommendationItems
 import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.store.KvStore
@@ -108,6 +109,8 @@ class RecommendationsRepositoryTest {
         picks: FakePicks = FakePicks(),
         isOn: (RecommendationProvider) -> Boolean = { true },
         clock: Clock = Clock(),
+        similarUsers: suspend (Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
+        canAskSimilarUsers: Boolean = true,
     ): Rig {
         val prefs = listOfNotNull(
             lastFm?.let { SettingsStore.LASTFM_USERNAME to it },
@@ -123,6 +126,8 @@ class RecommendationsRepositoryTest {
             providerIsOn = { isOn(it) },
             cacheRead = { disk.saved },
             cacheWrite = { disk.saved = it; disk.writes += it },
+            similarUsers = similarUsers,
+            canAskSimilarUsers = { canAskSimilarUsers },
             nowMs = { clock.now },
             scope = backgroundScope,
         )
@@ -406,6 +411,42 @@ class RecommendationsRepositoryTest {
     // ── Shuffleupagus, the blocklist, the old flows ──────────────────
 
     @Test
+    fun `listenersPending is true while similar users are fetched — false after`() = runTest {
+        val gate = CompletableDeferred<Map<String, List<SimilarUser>>>()
+        val r = rig(similarUsers = { gate.await() })
+        val job = launch { r.repo.load() }
+        runCurrent()
+        assertTrue(r.repo.page.value.listenersPending)
+        gate.complete(emptyMap())
+        job.join()
+        assertFalse(r.repo.page.value.listenersPending)
+    }
+
+    @Test
+    fun `listenersPending stays false when no similar-users provider can be asked`() = runTest {
+        val gate = CompletableDeferred<Map<String, List<SimilarUser>>>()
+        val r = rig(similarUsers = { gate.await() }, canAskSimilarUsers = false)
+        val job = launch { r.repo.load() }
+        runCurrent()
+        assertFalse(r.repo.page.value.listenersPending)
+        gate.complete(emptyMap())
+        job.join()
+        assertFalse(r.repo.page.value.listenersPending)
+    }
+
+    @Test
+    fun `listenersPending ends false when the lookup throws`() = runTest {
+        val gate = CompletableDeferred<Map<String, List<SimilarUser>>>()
+        val r = rig(similarUsers = { gate.await() })
+        val job = launch { r.repo.load() }
+        runCurrent()
+        assertTrue(r.repo.page.value.listenersPending)
+        gate.completeExceptionally(IllegalStateException("down"))
+        job.join()
+        assertFalse(r.repo.page.value.listenersPending)
+    }
+
+    @Test
     fun `Shuffleupagus picks land under Based on your listening`() = runTest {
         val gate = CompletableDeferred<AiRecommendations>()
         val picks = FakePicks(hasProvider = true, next = { gate.await() })
@@ -428,6 +469,32 @@ class RecommendationsRepositoryTest {
         // A load with picks already cached doesn't ask the AI again.
         r.repo.load()
         assertEquals(1, picks.loads)
+    }
+
+    @Test
+    fun `a failed Shuffleupagus load isn't retried for 30 minutes unless forced`() = runTest {
+        val picks = FakePicks(hasProvider = true, next = { throw IllegalStateException("AI down") })
+        val r = rig(picks = picks)
+        r.repo.load()
+        runCurrent()
+        assertEquals(1, picks.loads)
+
+        // Returning to the page soon after: no second paid call.
+        r.clock.now += 29L * 60 * 1000
+        r.repo.load()
+        runCurrent()
+        assertEquals(1, picks.loads)
+
+        // Try again (forced) asks at once.
+        r.repo.load(force = true)
+        runCurrent()
+        assertEquals(2, picks.loads)
+
+        // Past 30 minutes from the last attempt a plain load asks again.
+        r.clock.now += 31L * 60 * 1000
+        r.repo.load()
+        runCurrent()
+        assertEquals(3, picks.loads)
     }
 
     @Test
@@ -646,6 +713,92 @@ class RecommendationsRepositoryTest {
         repo.requestReleaseDates(listOf(album("Record 2")))
         runCurrent()
         assertEquals("2026-01-02", album("Record 2").releaseDate)
+    }
+
+    @Test
+    fun `found covers and photos are applied to the page's album and artist cards`() = runTest {
+        val clock = Clock()
+        var artistCalls = 0
+        val prefs = SettingsStore(FakeSecureStore(), KvStore(MapSettings(SettingsStore.LISTENBRAINZ_USERNAME to "listener")))
+        val source = FakeSource().apply {
+            answer("listenbrainz", {
+                songs(
+                    """{"type":"album","name":"Dummy","artist":"Portishead"}""",
+                    """{"type":"album","name":"Mezzanine","artist":"Massive Attack","imageUrl":"https://own"}""",
+                    """{"type":"artist","name":"Tricky"}""",
+                )
+            })
+        }
+        val repo = RecommendationsRepository(
+            source = source,
+            settingsStore = prefs,
+            metadataService = MetadataService(emptyList(), getDisabledProviders = { emptySet() }),
+            aiRecommendations = FakePicks(),
+            releaseDates = ReleaseDates(load = { null }, save = {}, lookup = { _, _ -> null }, nowMs = { clock.now }),
+            providerIsOn = { true },
+            cacheRead = { null },
+            cacheWrite = {},
+            nowMs = { clock.now },
+            scope = backgroundScope,
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { artistCalls++; "https://photo/$it" },
+                albumArt = { title, _ -> "https://cover/$title" },
+            ),
+        )
+        repo.load()
+        fun item(name: String) = flattenRecommendationItems(repo.page.value.sections).first { it.name == name }
+        repo.requestImages(listOf(item("Dummy"), item("Mezzanine"), item("Tricky")))
+        runCurrent()
+        assertEquals("https://cover/Dummy", item("Dummy").imageUrl)
+        assertEquals("https://own", item("Mezzanine").imageUrl)
+        assertEquals("https://photo/Tricky", item("Tricky").imageUrl)
+        repo.requestImages(listOf(item("Tricky")))
+        runCurrent()
+        assertEquals(1, artistCalls)
+    }
+
+    @Test
+    fun `cards shown within 300 ms are looked up together — albums get release dates and every card an image`() = runTest {
+        val clock = Clock()
+        val dateAsks = mutableListOf<String>()
+        val imageAsks = mutableListOf<String>()
+        val prefs = SettingsStore(FakeSecureStore(), KvStore(MapSettings(SettingsStore.LISTENBRAINZ_USERNAME to "listener")))
+        val source = FakeSource().apply {
+            answer("listenbrainz", {
+                songs(
+                    """{"type":"album","name":"Dummy","artist":"Portishead"}""",
+                    """{"type":"artist","name":"Tricky"}""",
+                )
+            })
+        }
+        val repo = RecommendationsRepository(
+            source = source,
+            settingsStore = prefs,
+            metadataService = MetadataService(emptyList(), getDisabledProviders = { emptySet() }),
+            aiRecommendations = FakePicks(),
+            releaseDates = ReleaseDates(load = { null }, save = {}, lookup = { t, _ -> dateAsks += t; null }, nowMs = { clock.now }),
+            providerIsOn = { true },
+            cacheRead = { null },
+            cacheWrite = {},
+            nowMs = { clock.now },
+            scope = backgroundScope,
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { imageAsks += it; null },
+                albumArt = { title, _ -> imageAsks += title; null },
+            ),
+        )
+        repo.load()
+        fun item(name: String) = flattenRecommendationItems(repo.page.value.sections).first { it.name == name }
+        repo.cardShown(item("Dummy"))
+        advanceTimeBy(100)
+        repo.cardShown(item("Tricky"))
+        advanceTimeBy(150)
+        runCurrent()
+        assertTrue(dateAsks.isEmpty() && imageAsks.isEmpty())
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(listOf("Dummy"), dateAsks)
+        assertEquals(listOf("Dummy", "Tricky"), imageAsks)
     }
 
     private companion object {

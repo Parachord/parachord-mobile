@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.library
 
+import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -513,24 +514,6 @@ private val MiniPlaybarBgLight = Color(0xF21F2937)
 private val MiniPlaybarBgDark = Color(0xF2262626)
 
 // Uses ModalBg, ModalBgDarker, ModalDivider from TrackContextMenu.kt
-
-/** Hexagonal clip path matching the desktop's friend avatar treatment. */
-private val HexagonShape = object : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.5f, 0f)
-            lineTo(w, h * 0.25f)
-            lineTo(w, h * 0.75f)
-            lineTo(w * 0.5f, h)
-            lineTo(0f, h * 0.75f)
-            lineTo(0f, h * 0.25f)
-            close()
-        }
-        return Outline.Generic(path)
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable

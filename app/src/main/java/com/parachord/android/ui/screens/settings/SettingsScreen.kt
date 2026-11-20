@@ -221,8 +221,12 @@ private val builtInPluginsFallback = listOf(
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
+    /** A plugin to open the sheet for on arrival (`settings?plugin=<id>`), once. */
+    initialPluginId: String? = null,
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
+    // Cleared once its sheet opens, so swiping back to Plug-Ins doesn't reopen it.
+    var pendingPluginId by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(initialPluginId) }
     // Surface one-shot Settings messages (e.g. a failed Apple Music connect).
     // Without this, a failed Connect leaves the user staring at an unchanged
     // screen with no idea anything happened.
@@ -283,6 +287,8 @@ fun SettingsScreen(
         ) { page ->
             when (page) {
                 0 -> PlugInsTab(
+                    initialPluginId = pendingPluginId,
+                    onInitialPluginOpened = { pendingPluginId = null },
                     spotifyConnected = spotifyConnected,
                     hasPreferredSpotifyDevice = hasPreferredSpotifyDevice,
                     onClearPreferredSpotifyDevice = { viewModel.clearPreferredSpotifyDevice() },
@@ -373,6 +379,8 @@ fun SettingsScreen(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun PlugInsTab(
+    initialPluginId: String? = null,
+    onInitialPluginOpened: () -> Unit = {},
     spotifyConnected: Boolean,
     hasPreferredSpotifyDevice: Boolean = false,
     onClearPreferredSpotifyDevice: () -> Unit = {},
@@ -464,6 +472,15 @@ private fun PlugInsTab(
     // Lookup can be by id or resolverId
     fun findPlugin(key: String): PluginInfo? =
         allPlugins.find { it.id == key || it.resolverId == key }
+
+    // Open the plugin a link asked for, once it's in the list.
+    LaunchedEffect(initialPluginId, allPlugins) {
+        val id = initialPluginId ?: return@LaunchedEffect
+        findPlugin(id)?.let {
+            selectedPlugin = it
+            onInitialPluginOpened()
+        }
+    }
 
     fun isConnected(key: String): Boolean {
         val plugin = findPlugin(key)

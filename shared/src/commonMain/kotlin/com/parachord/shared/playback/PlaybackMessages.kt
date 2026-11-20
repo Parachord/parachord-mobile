@@ -49,5 +49,8 @@ fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) 
     "subsonic" -> "Subsonic"
     "qobuz" -> "Qobuz"
     "direct" -> "Direct"
+    "lastfm" -> "Last.fm"
+    "listenbrainz" -> "ListenBrainz"
+    "librefm" -> "Libre.fm"
     else -> resolver.replaceFirstChar { it.uppercase() }
 }

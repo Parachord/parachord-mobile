@@ -8,6 +8,8 @@ import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationSection
 import com.parachord.shared.recommendations.RecommendationType
+import com.parachord.shared.recommendations.durationMs
+import com.parachord.shared.recommendations.validRecordingMbid
 import com.parachord.shared.resolver.validateIsrc
 import kotlinx.serialization.Serializable
 
@@ -29,6 +31,8 @@ data class RecommendationPageState(
     val loading: Boolean = false,
     /** Providers still answering that have nothing on screen (each one's skeleton). */
     val pendingProviders: Set<String> = emptySet(),
+    /** The similar-users lookup is out and no Listeners row is on screen yet: the Listeners skeleton. */
+    val listenersPending: Boolean = false,
     /** Shuffleupagus is picking: the album and artist rows show trailing skeleton cards. */
     val aiLoading: Boolean = false,
     val error: RecommendationsError? = null,
@@ -73,9 +77,9 @@ internal fun RecommendationItem.toRecommendedTrack(): RecommendedTrack? {
     return RecommendedTrack(
         title = name,
         artist = artistName,
-        duration = duration?.let { (it * 1000).toLong() }?.takeIf { it > 0 },
+        duration = durationMs(),
         source = resolverId.orEmpty(),
-        recordingMbid = mbid?.lowercase()?.takeIf { isValidMbid(it) },
+        recordingMbid = validRecordingMbid(),
         isrc = validateIsrc(isrc),
     )
 }

@@ -26,7 +26,13 @@ import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
 import com.parachord.shared.deeplink.HistoryLinkTab
 import com.parachord.shared.deeplink.parseFriendLink
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 class FriendDetailViewModel constructor(
@@ -61,6 +67,15 @@ class FriendDetailViewModel constructor(
     private val _friend = MutableStateFlow<FriendEntity?>(null)
     val friend: StateFlow<FriendEntity?> = _friend
 
+    /** False for someone opened from Listeners who isn't followed yet. */
+    val isFollowed: StateFlow<Boolean> = _friend
+        .map { it != null && !it.transient }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    /** One-shot messages (a failed Follow) for the screen's toast. */
+    val messages: SharedFlow<String> = _messages
+
     val selectedPeriod = MutableStateFlow(link.period ?: com.parachord.shared.format.DEFAULT_HISTORY_PERIOD)
 
     private val _recentTracks = MutableStateFlow<Resource<List<RecentTrack>>>(Resource.Loading)
@@ -93,7 +108,7 @@ class FriendDetailViewModel constructor(
 
     private fun loadFriend() {
         viewModelScope.launch {
-            val friend = friendsRepository.getFriendById(friendId) ?: return@launch
+            val friend = friendsRepository.profileFriend(friendId) ?: return@launch
             _friend.value = friend
             loadRecentTracks(friend)
             loadTopCharts(friend)
@@ -106,13 +121,33 @@ class FriendDetailViewModel constructor(
         loadTopCharts(friend)
     }
 
-    fun refresh() {
+    /** Reload one tab: 0 Recent, 1 Top tracks, 2 Top albums, 3 Top artists. */
+    fun retryTab(tab: Int) {
         val friend = _friend.value ?: return
-        loadRecentTracks(friend)
+        when (tab) {
+            0 -> loadRecentTracks(friend)
+            1 -> loadTopTracks(friend)
+            2 -> loadTopAlbums(friend)
+            3 -> loadTopArtists(friend)
+        }
+    }
+
+    fun follow() {
+        val current = _friend.value ?: return
+        if (!current.transient) return
+        viewModelScope.launch {
+            when (val result = friendsRepository.follow(current.service, current.username)) {
+                is Resource.Success -> _friend.value = result.data
+                // The repository's error is shared copy (couldntReach / USER_NOT_FOUND), never raw text.
+                is Resource.Error -> _messages.emit(result.message)
+                else -> {}
+            }
+        }
     }
 
     fun togglePin() {
         val current = _friend.value ?: return
+        if (current.transient) return
         viewModelScope.launch {
             val newPinned = !current.pinnedToSidebar
             friendsRepository.pinFriend(current.id, newPinned)
@@ -246,37 +281,52 @@ class FriendDetailViewModel constructor(
 
     private fun loadRecentTracks(friend: FriendEntity) {
         viewModelScope.launch {
-            friendsRepository.getFriendRecentTracks(friend.username, friend.service)
+            friendsRepository.getFriendRecentTracks(friend.username, friend.service) { hides ->
+                // No saved row to record it on for someone not followed: keep it on the profile.
+                if (friend.transient) _friend.update { f -> f?.takeIf { it.transient }?.copy(hidesListening = hides) ?: f }
+            }
                 .collect {
                     _recentTracks.value = it
                 }
             // The fetch records whether the profile hides its recent listening
             // (desktop parachord#1140); re-read so the Recent tab can say so.
-            friendsRepository.getFriendById(friend.id)?.let { _friend.value = it }
+            if (!friend.transient) friendsRepository.getFriendById(friend.id)?.let { _friend.value = it }
         }
     }
 
     private fun loadTopCharts(friend: FriendEntity) {
+        loadTopTracks(friend)
+        loadTopAlbums(friend)
+        loadTopArtists(friend)
+    }
+
+    private fun friendTopKey(friend: FriendEntity, period: String) = com.parachord.shared.repository.TopListsCache
+        .friendKey(friend.username, friend.service, period)
+
+    private fun loadTopTracks(friend: FriendEntity) {
         val period = selectedPeriod.value
         viewModelScope.launch {
-            topLists.tracks(com.parachord.shared.repository.TopListsCache.friendKey(friend.username, friend.service, period)) {
+            topLists.tracks(friendTopKey(friend, period)) {
                 friendsRepository.getFriendTopTracks(friend.username, friend.service, period)
-            }
-                .collect {
-                    _topTracks.value = it
-                }
+            }.collect { _topTracks.value = it }
         }
+    }
+
+    private fun loadTopAlbums(friend: FriendEntity) {
+        val period = selectedPeriod.value
         viewModelScope.launch {
-            topLists.albums(com.parachord.shared.repository.TopListsCache.friendKey(friend.username, friend.service, period)) {
+            topLists.albums(friendTopKey(friend, period)) {
                 friendsRepository.getFriendTopAlbums(friend.username, friend.service, period)
-            }
-                .collect { _topAlbums.value = it }
+            }.collect { _topAlbums.value = it }
         }
+    }
+
+    private fun loadTopArtists(friend: FriendEntity) {
+        val period = selectedPeriod.value
         viewModelScope.launch {
-            topLists.artists(com.parachord.shared.repository.TopListsCache.friendKey(friend.username, friend.service, period)) {
+            topLists.artists(friendTopKey(friend, period)) {
                 friendsRepository.getFriendTopArtists(friend.username, friend.service, period)
-            }
-                .collect { _topArtists.value = it }
+            }.collect { _topArtists.value = it }
         }
     }
 

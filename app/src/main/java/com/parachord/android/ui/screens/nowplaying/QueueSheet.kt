@@ -116,7 +116,7 @@ fun QueueSheet(
                     }
                     // Navigable context types link to their source page
                     val isNavigable = onNavigateToContext != null &&
-                        playbackContext.type in listOf("album", "playlist", "artist")
+                        com.parachord.shared.playback.playbackContextDestination(playbackContext) != null
                     Text(
                         text = contextLabel,
                         style = MaterialTheme.typography.bodySmall,

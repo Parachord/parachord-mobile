@@ -16,6 +16,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -53,6 +54,14 @@ class SimilarUsersStoreTest {
 
     private fun diskWith(users: String, fetchedAt: Long, shape: Int = SimilarUsersStore.SHAPE) =
         """{"providers":{"listenbrainz":{"users":$users,"fetchedAt":$fetchedAt,"account":"me","shape":$shape}}}"""
+
+    @Test
+    fun `canAsk only with an on provider whose config names an account`() = runTest {
+        val source = FakeSource { _, _ -> "[]" }
+        assertTrue(store(source, backgroundScope).canAsk())
+        assertFalse(store(source, backgroundScope, config = null).canAsk())
+        assertFalse(store(source, backgroundScope, config = "{}").canAsk())
+    }
 
     @Test
     fun `an empty answer is cached as fresh`() = runTest {

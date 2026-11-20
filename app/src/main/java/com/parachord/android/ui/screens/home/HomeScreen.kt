@@ -2,6 +2,7 @@ package com.parachord.android.ui.screens.home
 
 import com.parachord.android.ui.theme.composeGradient
 import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import android.Manifest
@@ -1238,24 +1239,6 @@ private val LastFmRed = Color(0xFFD51007)
 private val ListenBrainzOrange = Color(0xFFE8702A)
 private val HomeMiniPlaybarBg = Color(0xF2262626)
 
-/** Hexagonal clip path matching the desktop's friend avatar treatment. */
-private val HomeHexagonShape = object : Shape {
-    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
-        val w = size.width
-        val h = size.height
-        val path = Path().apply {
-            moveTo(w * 0.5f, 0f)
-            lineTo(w, h * 0.25f)
-            lineTo(w, h * 0.75f)
-            lineTo(w * 0.5f, h)
-            lineTo(0f, h * 0.75f)
-            lineTo(0f, h * 0.25f)
-            close()
-        }
-        return Outline.Generic(path)
-    }
-}
-
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun FriendActivityRow(
@@ -1283,7 +1266,7 @@ private fun FriendActivityRow(
             Box(
                 modifier = Modifier
                     .size(44.dp)
-                    .clip(HomeHexagonShape),
+                    .clip(HexagonShape),
                 contentAlignment = Alignment.Center,
             ) {
                 if (!friend.avatarUrl.isNullOrBlank()) {

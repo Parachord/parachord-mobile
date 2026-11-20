@@ -28,6 +28,11 @@ object Routes {
     const val PLAYLIST_EDIT = "playlist/{playlistId}/edit"
     const val NOW_PLAYING = "now_playing"
     const val SETTINGS = "settings"
+    /** [SETTINGS] opening one plugin's sheet (`plugin` is a plugin or resolver id; optional). */
+    const val SETTINGS_WITH_PLUGIN = "settings?plugin={plugin}"
+
+    fun settings(pluginId: String?): String =
+        if (pluginId == null) SETTINGS else "settings?plugin=${Uri.encode(pluginId)}"
     /** `mbid`: the artist's MusicBrainz id when the caller has one (#478). */
     const val ARTIST = "artist/{artistName}?tab={tab}&mbid={mbid}"
     const val ALBUM = "album/{albumTitle}/{artistName}"
@@ -46,6 +51,12 @@ object Routes {
     const val FRIENDS = "friends"
     const val FRIEND_DETAIL = "friend/{friendId}?tab={tab}&period={period}"
     const val WEEKLY_PLAYLIST = "weekly_playlist/{playlistId}/{contextType}"
+
+    const val SERVICE_PLAYLIST = "service_playlist?url={url}&name={name}&source={source}&image={image}"
+
+    /** A recommended service playlist's own view (desktop's `openServicePlaylist`). */
+    fun servicePlaylist(url: String, name: String, sourceName: String, imageUrl: String?): String =
+        "service_playlist?url=${Uri.encode(url)}&name=${Uri.encode(name)}&source=${Uri.encode(sourceName)}&image=${Uri.encode(imageUrl ?: "")}"
 
     fun weeklyPlaylist(playlistId: String, contextType: String): String =
         "weekly_playlist/${Uri.encode(playlistId)}/${Uri.encode(contextType)}"
@@ -206,6 +217,25 @@ fun ParachordNavHost(
             )
         }
         composable(
+            route = Routes.SERVICE_PLAYLIST,
+            arguments = listOf("url", "name", "source", "image").map { key ->
+                navArgument(key) { type = NavType.StringType; defaultValue = "" }
+            },
+        ) {
+            com.parachord.android.ui.screens.playlists.ServicePlaylistScreen(
+                onBack = { navController.popBackStack() },
+                onOpenSaved = { playlistId ->
+                    navController.navigate(Routes.playlistDetail(playlistId)) {
+                        popUpTo(Routes.SERVICE_PLAYLIST) { inclusive = true }
+                    }
+                },
+                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToAlbum = { albumTitle, artistName ->
+                    navController.navigate(Routes.album(albumTitle, artistName))
+                },
+            )
+        }
+        composable(
             route = Routes.PLAYLIST_EDIT,
             arguments = listOf(navArgument("playlistId") { type = NavType.StringType }),
         ) {
@@ -265,6 +295,10 @@ fun ParachordNavHost(
                 onNavigateToPlaylist = { playlistId ->
                     navController.navigate(Routes.playlistDetail(playlistId))
                 },
+                // A recommended playlist's queue: its view by link (the source name isn't carried).
+                onNavigateToServicePlaylist = { url, name ->
+                    navController.navigate(Routes.servicePlaylist(url, name, sourceName = "", imageUrl = null))
+                },
                 listenAlongFriend = listenAlongFriend,
                 onStopListenAlong = onStopListenAlong,
                 suspendedQueue = listenAlongSuspendedQueue,
@@ -272,8 +306,15 @@ fun ParachordNavHost(
                 onListenAlongNext = onListenAlongNext,
             )
         }
-        composable(Routes.SETTINGS) {
-            com.parachord.android.ui.screens.settings.SettingsScreen()
+        composable(
+            route = Routes.SETTINGS_WITH_PLUGIN,
+            arguments = listOf(
+                navArgument("plugin") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
+        ) { backStackEntry ->
+            com.parachord.android.ui.screens.settings.SettingsScreen(
+                initialPluginId = backStackEntry.arguments?.getString("plugin"),
+            )
         }
         composable(
             route = Routes.ARTIST,
@@ -373,6 +414,21 @@ fun ParachordNavHost(
                 onBack = { navController.popBackStack() },
                 onNavigateToArtist = { name ->
                     navController.navigate(Routes.artist(name))
+                },
+                onNavigateToAlbum = { albumTitle, artistName ->
+                    navController.navigate(Routes.album(albumTitle, artistName))
+                },
+                onNavigateToWeekly = { id, contextType ->
+                    navController.navigate(Routes.weeklyPlaylist(id, contextType))
+                },
+                onNavigateToServicePlaylist = { url, name, source, image ->
+                    navController.navigate(Routes.servicePlaylist(url, name, source, image))
+                },
+                onNavigateToFriend = { friendId ->
+                    navController.navigate(Routes.friendDetail(friendId))
+                },
+                onNavigateToPluginSettings = { pluginId ->
+                    navController.navigate(Routes.settings(pluginId))
                 },
             )
         }
