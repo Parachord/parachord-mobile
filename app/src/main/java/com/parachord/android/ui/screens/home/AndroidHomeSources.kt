@@ -65,7 +65,7 @@ import java.util.Calendar
  * Koin single, so the feeds a visit loaded stay for the next one.
  *
  * Every flow the getting-started decision reads ([accounts], [hasCollection],
- * [playlists], [folderAdded], [scrobblerUsernames]) is a cold database or
+ * [playlists], [folderAdded], [scrobblerAccounts]) is a cold database or
  * settings flow, so its first value is what's stored, never a placeholder.
  * [plugins], [accounts] and [playbackResolvers] come from one snapshot, so the
  * plug-in list is never ahead of the accounts and resolvers worked out from it.
@@ -228,12 +228,18 @@ class AndroidHomeSources(
     override val folderAdded: Flow<Boolean> =
         library.getAllTracks().map { tracks -> tracks.any { it.resolver == LOCAL_FILES_ID } }.distinctUntilChanged()
 
-    /** Last.fm and ListenBrainz usernames; Libre.fm saves none, so its session stands for it. */
-    override val scrobblerUsernames: Flow<List<String?>> = combine(
+    /** Last.fm and ListenBrainz by their usernames; Libre.fm saves none, so its session stands for it. */
+    override val scrobblerAccounts: Flow<Map<String, Boolean>> = combine(
         settings.getLastFmUsernameFlow(),
         settings.getListenBrainzUsernameFlow(),
-        settings.getLibreFmSessionKeyFlow().map { key -> if (key.isNullOrBlank()) null else "librefm" },
-    ) { lastFm, listenBrainz, libreFm -> listOf(lastFm, listenBrainz, libreFm) }
+        settings.getLibreFmSessionKeyFlow(),
+    ) { lastFm, listenBrainz, libreFm ->
+        mapOf(
+            "lastfm" to !lastFm.isNullOrBlank(),
+            "listenbrainz" to !listenBrainz.isNullOrBlank(),
+            "librefm" to !libreFm.isNullOrBlank(),
+        )
+    }
         .distinctUntilChanged()
 
     // ── Clock ────────────────────────────────────────────────────────

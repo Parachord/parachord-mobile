@@ -1,6 +1,8 @@
 package com.parachord.shared.home
 
+import com.parachord.shared.model.Playlist
 import com.parachord.shared.plugin.PluginManager.PluginInfo
+import com.parachord.shared.settings.SettingsTab
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -104,5 +106,55 @@ class GettingStartedLayoutTest {
         val none = exploreHalves(0, false, 0, false, false)
         assertFalse(none.critical || none.charts)
         assertTrue(exploreHalves(0, true, 0, true, false).let { it.critical && it.charts })
+    }
+
+    private fun meta(id: String, scrobbling: Boolean) = PluginInfo(
+        id = id, name = id, version = "1", type = "meta-service", capabilities = mapOf("scrobbling" to scrobbling),
+    )
+
+    @Test
+    fun `scrobbler plug-ins are the ones that scrobble`() {
+        val list = listOf(meta("lastfm", true), meta("discogs", false), meta("librefm", true))
+        assertEquals(listOf("lastfm", "librefm"), scrobblerPlugins(list).map { it.id })
+    }
+
+    @Test
+    fun `scrobbler tiles pair each plug-in with its account`() {
+        val tiles = scrobblerTiles(listOf(meta("lastfm", true), meta("librefm", true)), mapOf("lastfm" to true))
+        assertEquals(listOf(true, false), tiles.map { it.second })
+    }
+
+    @Test
+    fun `a scrobbler tile reads Connected or Connect`() {
+        assertEquals("Connected", scrobblerTileDescription(true))
+        assertEquals("Connect", scrobblerTileDescription(false))
+        assertEquals("Last.fm: connected", scrobblerTileLabel("Last.fm", true))
+        assertEquals("Connect Last.fm", scrobblerTileLabel("Last.fm", false))
+    }
+
+    @Test
+    fun `a playlist tile has its title and track count`() {
+        val p = Playlist(id = "p", name = "Daily Brew", trackCount = 1)
+        assertEquals("Daily Brew", playlistTileTitle(p))
+        assertEquals("1 track", playlistTileDescription(p))
+        assertEquals("Untitled playlist", playlistTileTitle(p.copy(name = " ")))
+        assertEquals("12 tracks", playlistTileDescription(p.copy(trackCount = 12)))
+    }
+
+    @Test
+    fun `step 3 offers at most three playlists — freshest first`() {
+        val list = (1..5).map { Playlist(id = "p$it", name = "P$it", createdAt = it.toLong()) }
+        assertEquals(listOf("p5", "p4", "p3"), gettingStartedPlaylists(list).map { it.id })
+    }
+
+    @Test
+    fun `Sync your library opens Settings on the Sync tab`() {
+        assertEquals("sync", SYNC_LIBRARY_SETTINGS_TAB)
+        assertEquals(SettingsTab.SYNC, SYNC_LIBRARY_SETTINGS_TAB)
+    }
+
+    @Test
+    fun `a service still needing setup says so`() {
+        assertEquals("Set up X: set up", serviceTileLabel("X", ServiceState("setup", null)))
     }
 }

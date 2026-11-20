@@ -29,6 +29,10 @@ data class GettingStartedView(
     val playbackResolvers: List<String> = emptyList(),
     /** Local files are in the library (the folder tile stops asking for one). */
     val folderAdded: Boolean = false,
+    /** Step 2's "Listening history": each scrobbling plug-in and whether it's connected. */
+    val scrobblers: List<Pair<PluginInfo, Boolean>> = emptyList(),
+    /** Step 3's playlists, at most [GETTING_STARTED_PLAYLISTS], freshest first. */
+    val playlists: List<Playlist> = emptyList(),
 ) {
     fun isOn(p: PluginInfo): Boolean = p.id in playbackResolvers
 }

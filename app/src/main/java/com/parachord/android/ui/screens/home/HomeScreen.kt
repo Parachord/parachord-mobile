@@ -104,6 +104,8 @@ fun HomeScreen(
     onOpenImportPlaylist: () -> Unit = {},
     /** Settings, on a plugin's sheet when [pluginId] is set. */
     onOpenSettings: (pluginId: String?) -> Unit = {},
+    /** Settings on a tab, by [com.parachord.shared.settings.SettingsTab] name. */
+    onOpenSettingsTab: (tab: String) -> Unit = {},
     onOpenSearch: () -> Unit = {},
     onOpenServicePlaylist: (url: String, name: String, source: String, imageUrl: String?) -> Unit = { _, _, _, _ -> },
     onOpenConcerts: () -> Unit = {},
@@ -322,7 +324,9 @@ fun HomeScreen(
                             hasCollection = state.hasCollection,
                             onSkip = viewModel::skipSetup,
                             onOpenSettings = onOpenSettings,
+                            onOpenSettingsTab = onOpenSettingsTab,
                             onOpenImportPlaylist = onOpenImportPlaylist,
+                            onOpenPlaylist = onNavigateToPlaylist,
                             onCollectionRadio = viewModel::playCollectionRadio,
                             onSearch = onOpenSearch,
                             modifier = Modifier.padding(top = 24.dp),

@@ -202,11 +202,17 @@ object HomeCopy {
     const val IMPORT_A_PLAYLIST_SUB = "Paste a link from any service"
     const val SYNC_YOUR_LIBRARY = "Sync your library"
     const val SYNC_YOUR_LIBRARY_SUB = "From a service you connected"
+    const val GROUP_LISTENING_HISTORY = "Listening history"
 
     // Step 3.
     const val LISTEN_LINE_WITH_MUSIC = "Play your collection, or open a playlist you brought in."
     const val LISTEN_LINE_EMPTY = "Play an album from Explore below, or search for a song."
     const val SEARCH = "Search"
+    const val UNTITLED_PLAYLIST = "Untitled playlist"
+
+    /** A step header's state for a screen reader. */
+    const val EXPANDED = "Expanded"
+    const val COLLAPSED = "Collapsed"
 
     const val EXPLORE_TITLE = "Explore while you set up"
     const val EXPLORE_SUBTITLE =
@@ -217,7 +223,7 @@ object HomeCopy {
     fun setupPill(done: Int, total: Int): String = "Finish setting up · $done of $total"
 
     /** Accessibility labels, as desktop's `aria-label`s. */
-    fun setUpLabel(item: String): String = "Set up $item"
+    fun setUpLabel(item: String): String = "$SET_UP $item"
     fun dismissLabel(item: String): String = "Dismiss $item"
     fun playLabel(title: String): String = "Play $title"
     fun openLabel(title: String): String = "Open $title"

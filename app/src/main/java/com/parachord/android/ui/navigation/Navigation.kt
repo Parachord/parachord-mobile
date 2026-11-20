@@ -31,11 +31,20 @@ object Routes {
     const val PLAYLIST_EDIT = "playlist/{playlistId}/edit"
     const val NOW_PLAYING = "now_playing"
     const val SETTINGS = "settings"
-    /** [SETTINGS] opening one plugin's sheet (`plugin` is a plugin or resolver id; optional). */
-    const val SETTINGS_WITH_PLUGIN = "settings?plugin={plugin}"
+    /**
+     * [SETTINGS] opening one plugin's sheet (`plugin` is a plugin or resolver
+     * id) or a tab (`tab`, a [com.parachord.shared.settings.SettingsTab] name);
+     * both optional, Plug-Ins without them.
+     */
+    const val SETTINGS_WITH_PLUGIN = "settings?plugin={plugin}&tab={tab}"
 
-    fun settings(pluginId: String?): String =
-        if (pluginId == null) SETTINGS else "settings?plugin=${Uri.encode(pluginId)}"
+    fun settings(pluginId: String?, tab: String? = null): String {
+        val query = buildList {
+            if (pluginId != null) add("plugin=${Uri.encode(pluginId)}")
+            if (tab != null) add("tab=${Uri.encode(tab)}")
+        }
+        return if (query.isEmpty()) SETTINGS else "settings?" + query.joinToString("&")
+    }
     /** `mbid`: the artist's MusicBrainz id when the caller has one (#478). */
     const val ARTIST = "artist/{artistName}?tab={tab}&mbid={mbid}"
     const val ALBUM = "album/{albumTitle}/{artistName}"
@@ -157,6 +166,7 @@ fun ParachordNavHost(
                 onOpenRecentLoves = { navController.navigate(Routes.collection(COLLECTION_SONGS_TAB)) },
                 onOpenImportPlaylist = onOpenImportPlaylist,
                 onOpenSettings = { pluginId -> navController.navigate(Routes.settings(pluginId)) },
+                onOpenSettingsTab = { tab -> navController.navigate(Routes.settings(null, tab)) },
                 onOpenSearch = { navController.navigate(Routes.SEARCH) },
                 onOpenServicePlaylist = { url, name, source, imageUrl ->
                     navController.navigate(Routes.servicePlaylist(url, name, source, imageUrl))
@@ -320,10 +330,12 @@ fun ParachordNavHost(
             route = Routes.SETTINGS_WITH_PLUGIN,
             arguments = listOf(
                 navArgument("plugin") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null },
             ),
         ) { backStackEntry ->
             com.parachord.android.ui.screens.settings.SettingsScreen(
                 initialPluginId = backStackEntry.arguments?.getString("plugin"),
+                initialTab = backStackEntry.arguments?.getString("tab"),
             )
         }
         composable(

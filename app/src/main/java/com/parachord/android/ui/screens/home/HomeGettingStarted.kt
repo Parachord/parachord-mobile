@@ -44,6 +44,17 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.ResolverIconSquare
+import com.parachord.android.ui.components.serviceLogoVector
+import com.parachord.android.ui.theme.serviceColorOrNull
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import com.parachord.shared.ui.icons.ServiceLogos
+import com.parachord.shared.home.SYNC_LIBRARY_SETTINGS_TAB
+import com.parachord.shared.home.playlistTileDescription
+import com.parachord.shared.home.playlistTileTitle
+import com.parachord.shared.home.scrobblerTileDescription
+import com.parachord.shared.home.scrobblerTileLabel
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.theme.FillAccent
@@ -109,7 +120,10 @@ fun HomeGettingStarted(
     onSkip: () -> Unit,
     /** Settings, on a plug-in's sheet when the id is set, else the Plug-Ins list. */
     onOpenSettings: (pluginId: String?) -> Unit,
+    /** Settings on a tab ([com.parachord.shared.settings.SettingsTab]). */
+    onOpenSettingsTab: (tab: String) -> Unit,
     onOpenImportPlaylist: () -> Unit,
+    onOpenPlaylist: (playlistId: String) -> Unit,
     onCollectionRadio: () -> Unit,
     onSearch: () -> Unit,
     modifier: Modifier = Modifier,
@@ -159,8 +173,13 @@ fun HomeGettingStarted(
                     ) {
                         when (step.id) {
                             "connect" -> ConnectStep(view, onOpenSettings)
-                            "music" -> MusicStep(onOpenImportPlaylist, onSyncLibrary = { onOpenSettings(null) })
-                            else -> ListenStep(view.hasMusic, hasCollection, onCollectionRadio, onSearch)
+                            "music" -> MusicStep(
+                                view = view,
+                                onImportLink = onOpenImportPlaylist,
+                                onSyncLibrary = { onOpenSettingsTab(SYNC_LIBRARY_SETTINGS_TAB) },
+                                onOpenPlugin = { onOpenSettings(it) },
+                            )
+                            else -> ListenStep(view, hasCollection, onOpenPlaylist, onCollectionRadio, onSearch)
                         }
                     }
                 }
@@ -190,7 +209,7 @@ private fun StepHeader(
             .background(if (open) DesignTokens.accentSurface.current() else DesignTokens.cardBg.current())
             .semantics(mergeDescendants = true) {
                 role = Role.Button
-                stateDescription = if (open) "Expanded" else "Collapsed"
+                stateDescription = if (open) HomeCopy.EXPANDED else HomeCopy.COLLAPSED
             }
             .hapticClickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -288,7 +307,12 @@ private fun ConnectStep(view: GettingStartedView, onOpenSettings: (String?) -> U
 }
 
 @Composable
-private fun MusicStep(onImportLink: () -> Unit, onSyncLibrary: () -> Unit) {
+private fun MusicStep(
+    view: GettingStartedView,
+    onImportLink: () -> Unit,
+    onSyncLibrary: () -> Unit,
+    onOpenPlugin: (String) -> Unit,
+) {
     StepLine(HomeCopy.MUSIC_LINE)
     Group(HomeCopy.GROUP_PLAYLISTS) {
         Tile(
@@ -304,21 +328,54 @@ private fun MusicStep(onImportLink: () -> Unit, onSyncLibrary: () -> Unit) {
             onClick = onSyncLibrary,
         )
     }
+    if (view.scrobblers.isNotEmpty()) {
+        Group(HomeCopy.GROUP_LISTENING_HISTORY) {
+            view.scrobblers.forEach { (p, connected) ->
+                Tile(
+                    mark = { ServiceMark(p.id) },
+                    title = p.name,
+                    description = scrobblerTileDescription(connected),
+                    badge = connected,
+                    label = scrobblerTileLabel(p.name, connected),
+                    onClick = { onOpenPlugin(p.id) },
+                )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ListenStep(hasMusic: Boolean, hasCollection: Boolean, onCollectionRadio: () -> Unit, onSearch: () -> Unit) {
-    StepLine(listenStepLine(hasMusic))
+private fun ListenStep(
+    view: GettingStartedView,
+    hasCollection: Boolean,
+    onOpenPlaylist: (String) -> Unit,
+    onCollectionRadio: () -> Unit,
+    onSearch: () -> Unit,
+) {
+    StepLine(listenStepLine(view.hasMusic))
+    if (view.playlists.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            view.playlists.forEach { p ->
+                Tile(
+                    mark = { IconMark(PageIcon.PLAYLISTS.icon, DesignTokens.Page.PLAYLISTS.composeFill) },
+                    title = playlistTileTitle(p),
+                    description = playlistTileDescription(p),
+                    onClick = { onOpenPlaylist(p.id) },
+                )
+            }
+        }
+    }
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (hasCollection) CollectionRadioButton(onCollectionRadio)
-        // Desktop's secondary button: an outline, the Search icon and its label.
+        // Desktop's secondary button (`button.js`): rounded-lg, an outline in
+        // line-strong, the Search icon and its label in medium weight.
         Surface(
             onClick = onSearch,
-            shape = CircleShape,
+            shape = RoundedCornerShape(DesignTokens.RADIUS_BUTTON.dp),
             color = DesignTokens.cardBg.current(),
             contentColor = DesignTokens.textPrimary.current(),
             border = BorderStroke(1.dp, DesignTokens.borderStrong.current()),
@@ -330,7 +387,7 @@ private fun ListenStep(hasMusic: Boolean, hasCollection: Boolean, onCollectionRa
             ) {
                 ParachordIcon(AppIcon.Search, contentDescription = null, size = 16.dp)
                 Spacer(Modifier.width(8.dp))
-                Text(text = HomeCopy.SEARCH, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(text = HomeCopy.SEARCH, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
@@ -380,9 +437,11 @@ private fun Tile(
             .heightIn(min = TileHeight)
             .clip(TileShape)
             .border(1.dp, DesignTokens.borderDefault.current(), TileShape)
-            .semantics(mergeDescendants = true) {
+            // One label for the whole tile, so the logo's own description
+            // (a raw plug-in id) isn't read.
+            .clearAndSetSemantics {
                 role = Role.Button
-                if (label != null) contentDescription = label
+                contentDescription = label ?: "$title, $description"
             }
             .hapticClickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
@@ -412,11 +471,36 @@ private fun ConnectedBadge(text: String) {
     }
 }
 
-/** A service's logo on its own colour (desktop `ServiceMark`). */
+/**
+ * A service's logo on its own colour (desktop `ServiceMark`): the plug-in's
+ * colour, else the neutral fill; its logo in white (a wide one, Libre.fm's
+ * wordmark, at 30 dp), else the Music icon.
+ */
 @Composable
 private fun ServiceMark(id: String) {
-    Box(Modifier.size(MarkSize).clip(MarkShape).background(FillNeutral)) {
-        ResolverIconSquare(resolver = id, size = MarkSize)
+    val color = serviceColorOrNull(id)
+    val key = id.lowercase()
+    // SoundCloud's and Subsonic's logos are bitmaps, drawn by the source icon.
+    if (color != null && (key == "soundcloud" || key == "subsonic")) {
+        Box(Modifier.size(MarkSize).clip(MarkShape)) { ResolverIconSquare(resolver = id, size = MarkSize) }
+        return
+    }
+    val spec = remember(key) { ServiceLogos.badgeOrLarge(key) }
+    val logo = remember(key) { serviceLogoVector(key, OnFill) }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(MarkSize).clip(MarkShape).background(color ?: FillNeutral),
+    ) {
+        if (logo != null && spec != null) {
+            val wide = spec.height > 0f && spec.width / spec.height > 1.5f
+            Image(
+                painter = rememberVectorPainter(logo),
+                contentDescription = null,
+                modifier = Modifier.size(if (wide) 30.dp else 22.dp),
+            )
+        } else {
+            ParachordIcon(AppIcon.Music, contentDescription = null, size = 18.dp, tint = OnFill)
+        }
     }
 }
 

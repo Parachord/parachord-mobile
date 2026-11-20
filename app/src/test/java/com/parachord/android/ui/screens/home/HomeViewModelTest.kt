@@ -82,7 +82,7 @@ class HomeViewModelTest {
         override val accounts: Flow<Map<String, Boolean>> = MutableStateFlow(emptyMap())
         override val playbackResolvers: Flow<List<String>> = MutableStateFlow(emptyList())
         override val folderAdded: Flow<Boolean> = MutableStateFlow(false)
-        override val scrobblerUsernames: Flow<List<String?>> = MutableStateFlow(emptyList())
+        override val scrobblerAccounts: Flow<Map<String, Boolean>> = MutableStateFlow(emptyMap())
         override fun nowMs(): Long = 1_000_000_000L
         override fun hour(): Int = 9
     }

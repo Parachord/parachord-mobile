@@ -41,7 +41,7 @@ data class HomeRecsLoad(val fetched: Int, val failed: Int, val sectionCount: Int
  *
  * The flows should emit real values only: the getting-started decision is made
  * once, from the first values of [accounts], [playbackResolvers],
- * [folderAdded], [scrobblerUsernames], [hasCollection] and [playlists] once
+ * [folderAdded], [scrobblerAccounts], [hasCollection] and [playlists] once
  * [plugins] is non-empty (the session waits for the plugins, as desktop gates
  * on loaded resolvers), so a placeholder (`false` before the database
  * answers, no accounts before the tokens are read) can show the layout to a
@@ -104,8 +104,11 @@ interface HomeSources {
     val playbackResolvers: Flow<List<String>>
     /** A music folder (local files) is set up. */
     val folderAdded: Flow<Boolean>
-    /** Each scrobbling service's saved username (null or blank when not connected). */
-    val scrobblerUsernames: Flow<List<String?>>
+    /**
+     * Scrobbling plug-in id (`lastfm`, `listenbrainz`, `librefm`) to whether its
+     * account is connected (desktop's `scrobblerStates`: a saved username).
+     */
+    val scrobblerAccounts: Flow<Map<String, Boolean>>
 
     /**
      * Home came on screen: read again what has no flow (a token, the AI keys).

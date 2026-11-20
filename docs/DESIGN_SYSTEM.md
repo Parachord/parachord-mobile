@@ -41,6 +41,7 @@ Values from desktop's design audit ([parachord#1393](https://github.com/Parachor
 | accent-surface | `#ede9fe` | `#8b5cf6` at 15% | accent-tinted surface |
 | **fill-accent** | `#7c3aed` | `#7c3aed` | anything filled that carries white text (hover `#6d28d9`) |
 | on-accent | `#ffffff` | `#ffffff` | text on any fill |
+| fill-neutral | `#4b5563` | `#4b5563` | a mark or fill with white text that has no page or service colour (Android `FillNeutral`, iOS `PC.fillNeutral`) |
 | on-tour | `#10c9b4` | `#10c9b4` | On Tour dot |
 | hosted chip | `#3b82f6` on `#eff6ff` | same | the `🌐 Hosted` chip |
 
@@ -51,6 +52,8 @@ Status colours, three kinds:
 | Dots, icons, indicators (light / dark) | `#10b981` / `#34d399` | `#f59e0b` / `#fbbf24` | `#ef4444` / `#f87171` | `#2563eb` / `#60a5fa` |
 | Status text on a page or card, ≥ 4.5:1 (light / dark) | `#15803d` / `#4ade80` | `#b45309` / `#fbbf24` | `#b91c1c` / `#f87171` | `#1d4ed8` / `#93c5fd` |
 | Fills with white text: toasts, banners, a confirm button (both themes) | `#15803d` | `#b45309` | `#b91c1c` (hover `#991b1b`) | `#2563eb` |
+
+The neutral fill with white text, for a mark with no page or service colour (a getting-started tile with no service colour), is **fill-neutral** `#4b5563` in both themes.
 
 Always-dark player surfaces (mini player, Now Playing, the queue, the car-style surfaces): bg `#161616`, elevated `#1e1e1e`, text `#f3f4f6` / `#9ca3af`, in both themes.
 

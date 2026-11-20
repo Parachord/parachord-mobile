@@ -4,6 +4,7 @@ import com.parachord.shared.ai.AiAlbumSuggestion
 import com.parachord.shared.api.Announcement
 import com.parachord.shared.model.ChartAlbum
 import com.parachord.shared.model.Playlist
+import com.parachord.shared.plugin.PluginManager.PluginInfo
 import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
 import com.parachord.shared.playback.PlaybackContext
@@ -112,9 +113,11 @@ class HomeSession(
         val accounts: Map<String, Boolean>,
         val resolvers: List<String>,
         val folderAdded: Boolean,
-        val scrobbling: Boolean,
+        val scrobblers: List<Pair<PluginInfo, Boolean>>,
         val hasMusic: Boolean,
     ) {
+        val scrobbling: Boolean get() = scrobblers.any { it.second }
+
         val connectDone: Boolean
             get() = serviceConnected(stepOne.services, accounts, playbackResolvers = resolvers) || folderAdded
         val musicDone: Boolean get() = hasMusic || scrobbling
@@ -130,11 +133,14 @@ class HomeSession(
 
     private val gsInputs: Flow<GsInputs> = combine(
         combine(sources.plugins, sources.accounts, sources.playbackResolvers) { p, a, r -> Triple(p, a, r) },
-        combine(sources.folderAdded, sources.scrobblerUsernames, sources.hasCollection, sources.playlists) { f, u, c, pl ->
-            Triple(f, scrobblerConnected(u), c || pl.isNotEmpty())
+        combine(sources.folderAdded, sources.scrobblerAccounts, sources.hasCollection, sources.playlists) { f, sa, c, pl ->
+            Triple(f, sa, c || pl.isNotEmpty())
         },
-    ) { (plugins, accounts, resolvers), (folder, scrobbling, hasMusic) ->
-        GsInputs(plugins.isNotEmpty(), stepOnePlugins(plugins), accounts, resolvers, folder, scrobbling, hasMusic)
+    ) { (plugins, accounts, resolvers), (folder, scrobblerAccounts, hasMusic) ->
+        GsInputs(
+            plugins.isNotEmpty(), stepOnePlugins(plugins), accounts, resolvers, folder,
+            scrobblerTiles(plugins, scrobblerAccounts), hasMusic,
+        )
     }
 
     private data class LibraryIn(
@@ -441,6 +447,8 @@ class HomeSession(
                 hasMusic = inputs.hasMusic,
                 playbackResolvers = inputs.resolvers,
                 folderAdded = inputs.folderAdded,
+                scrobblers = inputs.scrobblers,
+                playlists = gettingStartedPlaylists(lib.playlists),
             )
         } else null
         val setup = homeSetupItems(gettingStartedLeft(gsState, status), u.dismissed).takeIf { it.items.isNotEmpty() }

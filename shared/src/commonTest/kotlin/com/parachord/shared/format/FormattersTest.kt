@@ -51,4 +51,14 @@ class FormattersTest {
     @Test fun `history opens on 7 days`() {
         assertEquals("7day", DEFAULT_HISTORY_PERIOD)
     }
+
+    @Test fun `countOf groups the number and picks the word`() {
+        assertEquals("1 track", countOf(1, "track"))
+        assertEquals("0 tracks", countOf(0, "track"))
+        assertEquals("2 tracks", countOf(2, "track"))
+        assertEquals("1,204 tracks", countOf(1204, "track"))
+        assertEquals("1,000,000 tracks", countOf(1_000_000, "track"))
+        assertEquals("3 people", countOf(3, "person", "people"))
+        assertEquals("-1,500 tracks", countOf(-1500, "track"))
+    }
 }

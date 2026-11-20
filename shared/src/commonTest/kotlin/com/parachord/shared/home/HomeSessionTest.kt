@@ -90,7 +90,7 @@ class HomeSessionTest {
         override val accounts = MutableStateFlow<Map<String, Boolean>>(emptyMap())
         override val playbackResolvers = MutableStateFlow<List<String>>(emptyList())
         override val folderAdded = MutableStateFlow(false)
-        override val scrobblerUsernames = MutableStateFlow<List<String?>>(emptyList())
+        override val scrobblerAccounts = MutableStateFlow<Map<String, Boolean>>(emptyMap())
 
         override fun nowMs(): Long = now
         override fun hour(): Int = hourOfDay
@@ -576,5 +576,51 @@ class HomeSessionTest {
         advanceUntilIdle()
         assertEquals(listOf("new", "old"), s.state.value.playlists.map { it.playlist.id })
         assertEquals(playlistSubtitle(src.playlists.value[1], src.now), s.state.value.playlists[0].subtitle)
+    }
+
+    @Test
+    fun `the view carries the playing plug-ins and the local files flag`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        val bandcamp = PluginInfo(id = "bandcamp", name = "Bandcamp", version = "1", capabilities = mapOf("resolve" to true, "stream" to true))
+        src.plugins.value = listOf(SPOTIFY, bandcamp)
+        src.playbackResolvers.value = listOf("bandcamp")
+        val store = settings()
+        store.setHomeGettingStarted(GettingStartedState(active = true))
+        val s = session(scope, src, store)
+        advanceUntilIdle()
+        src.folderAdded.value = true
+        advanceUntilIdle()
+        val view = s.state.value.gettingStarted!!
+        assertEquals(listOf("bandcamp"), view.playbackResolvers)
+        assertTrue(view.folderAdded)
+        assertTrue(view.isOn(bandcamp))
+    }
+
+    @Test
+    fun `the view carries the scrobblers and up to three playlists`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        val lastfm = PluginInfo(id = "lastfm", name = "Last.fm", version = "1", type = "meta-service", capabilities = mapOf("scrobbling" to true))
+        val librefm = PluginInfo(id = "librefm", name = "Libre.fm", version = "1", type = "meta-service", capabilities = mapOf("scrobbling" to true))
+        src.plugins.value = listOf(SPOTIFY, lastfm, librefm)
+        src.scrobblerAccounts.value = mapOf("lastfm" to true, "librefm" to false)
+        src.playlists.value = (1..5).map { Playlist(id = "p$it", name = "P$it", createdAt = it.toLong()) }
+        val store = settings()
+        store.setHomeGettingStarted(GettingStartedState(active = true))
+        val s = session(scope, src, store)
+        advanceUntilIdle()
+        val view = s.state.value.gettingStarted!!
+        assertEquals(listOf("lastfm" to true, "librefm" to false), view.scrobblers.map { it.first.id to it.second })
+        assertEquals(listOf("p5", "p4", "p3"), view.playlists.map { it.id })
+        // A connected scrobbler completes step 2.
+        assertTrue(view.status.steps.first { it.id == "music" }.done)
+    }
+
+    @Test
+    fun `a scrobbler with no account leaves step 2 open`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.scrobblerAccounts.value = mapOf("lastfm" to false)
+        val s = session(scope, src)
+        advanceUntilIdle()
+        assertEquals(false, s.state.value.gettingStarted!!.status.steps.first { it.id == "music" }.done)
     }
 }

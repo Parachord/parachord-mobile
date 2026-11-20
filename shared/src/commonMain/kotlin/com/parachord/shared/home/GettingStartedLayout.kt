@@ -1,5 +1,10 @@
 package com.parachord.shared.home
 
+import com.parachord.shared.format.countOf
+import com.parachord.shared.model.Playlist
+import com.parachord.shared.plugin.PluginManager.PluginInfo
+import com.parachord.shared.settings.SettingsTab
+
 // What the getting-started layout draws, a port of desktop's
 // `src/renderer/components/home-getting-started.js` (#1493): the three steps,
 // which one is open, and what each tile in a step says. The words are in
@@ -48,7 +53,7 @@ fun serviceTileDescription(s: ServiceState): String = when (s.state) {
 /** A service tile's accessibility label (desktop's `aria-label`). */
 fun serviceTileLabel(name: String, s: ServiceState): String = when (s.state) {
     "connect" -> "${HomeCopy.CONNECT} $name"
-    "setup" -> "Set up $name: ${(s.label ?: HomeCopy.SET_UP).lowercase()}"
+    "setup" -> "${HomeCopy.SET_UP} $name: ${(s.label ?: HomeCopy.SET_UP).lowercase()}"
     "connected" -> "$name: connected"
     else -> "$name: ${s.label ?: s.state}"
 }
@@ -90,3 +95,31 @@ fun exploreHalves(
     critical = criticalCount > 0 || criticalLoading,
     charts = chartsCount > 0 || chartsLoading || chartsFailed,
 )
+
+// ── Step 2: listening history ────────────────────────────────────────
+
+/** Each scrobbling plug-in with whether its account is connected (desktop `scrobblerStates`). */
+fun scrobblerTiles(plugins: List<PluginInfo>, accounts: Map<String, Boolean>): List<Pair<PluginInfo, Boolean>> =
+    scrobblerPlugins(plugins).map { it to (accounts[it.id] == true) }
+
+/** A scrobbler tile: the "Connected" badge, else "Connect". */
+fun scrobblerTileDescription(connected: Boolean): String = if (connected) HomeCopy.CONNECTED else HomeCopy.CONNECT
+
+fun scrobblerTileLabel(name: String, connected: Boolean): String =
+    if (connected) "$name: connected" else "${HomeCopy.CONNECT} $name"
+
+/** Where "Sync your library" opens Settings: the tab with library sync. */
+const val SYNC_LIBRARY_SETTINGS_TAB = SettingsTab.SYNC
+
+// ── Step 3: playlists ────────────────────────────────────────────────
+
+/** Step 3 offers this many playlists (desktop's `ListenStep`). */
+const val GETTING_STARTED_PLAYLISTS = 3
+
+/** Step 3's playlists: Home's freshest-first order, the first [GETTING_STARTED_PLAYLISTS]. */
+fun gettingStartedPlaylists(playlists: List<Playlist>): List<Playlist> =
+    freshestPlaylists(playlists, GETTING_STARTED_PLAYLISTS)
+
+fun playlistTileTitle(p: Playlist): String = p.name.trim().ifEmpty { HomeCopy.UNTITLED_PLAYLIST }
+
+fun playlistTileDescription(p: Playlist): String = countOf(p.trackCount, "track")
