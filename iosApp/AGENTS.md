@@ -277,7 +277,7 @@ username" for every History failure).
 
 Where iOS shows these: Fresh Drops, Critical
 Darlings, Concerts (the repository's message, no retry, as Android), History
-and a friend's profile (per tab; a friend's Retry only on Recent, as Android),
+and a friend's profile (per tab: `couldntReach(service)` with Try again on every tab, as Android),
 an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
 throttle line instead of "No results"), Home's AI suggestions (the provider's
 message), Settings (an invalid ListenBrainz token is refused, not saved), Sync
@@ -289,16 +289,19 @@ configured"), and a track only Apple Music could play while the app may not use
 Apple Music (the sign-in message, an "Open Settings" action, stops on the track).
 
 **The Recommendations page draws the shared page, nothing else.**
-`RecommendationsScreen.swift` watches `IosContainer.watchRecommendationsPage()`
-(`IosRecPage`, the blocks already in `recommendationPageLayout`'s order, the
-same Android draws) and shows its states (loading, not configured, failed,
-empty) from `status`, with `RecommendationCopy`'s words. Taps go to the
-container (`recommendationsSongQueue`, `recommendationsWeeklyQueue`,
+`RecommendationsScreen.swift` watches its session's page
+(`IosRecommendationsSession.watch()`: `IosRecPage`, the blocks already in
+`recommendationPageLayout`'s order, the same Android draws) and shows its states
+(loading, not configured, failed, empty) from `status`, with `RecommendationCopy`'s
+words. A song's tap builds its queue then (`session.songQueue`) and its menu
+reads the one track (`session.songTrack`), both under the session's filter.
+Other taps go to the container (`recommendationsWeeklyQueue`,
 `recommendationsServicePlaylist`, `recommendationsListenerPlay`,
 `followListener`, the shared `albumQueue`), messages show as the coordinator's
 `notice`, and the Connect buttons open Settings on the plugin's sheet through
 the `pcOpenPluginSettings` environment action (`SettingsView(initialService:)`).
-The bridge is `IosRecommendationsPage.kt` (flat DTOs: `IosRecPage` and its
+Card text on a filled surface uses `PC.onAccent`, and every word comes from
+`RecommendationCopy` or `UiMessages`. The bridge is `IosRecommendationsPage.kt` (flat DTOs: `IosRecPage` and its
 blocks, rows, cards and listeners, so no Kotlin sealed type reaches Swift). No
 rules live in Swift: which rows show under the filter, the previews, See all /
 Show less, the skeletons and the states are `RecommendationPageView.kt` and
@@ -307,17 +310,23 @@ Show less, the skeletons and the states are `RecommendationPageView.kt` and
 
 **The page keeps its place.** While the user is at the top, it stays pinned
 there as blocks arrive (`RecScrollTopKey` tracks the offset; the first block is
-scrolled to again), so a late row doesn't push the content down. The session (the
-picked source filter, the open rows) is reset only on the screen's first appear
-(`didResetSession`): back from a pushed screen it comes back as it was, and
-pull-to-refresh and Try again reload without resetting it.
+scrolled to again when the blocks' keys, the shared `RecommendationPageBlock.key`,
+change), so a late row doesn't push the content down; Android's page does the
+same. The session (the picked source filter, the open rows) belongs to the
+screen: `RecommendationsModel` makes its own `IosRecommendationsSession`
+(`IosContainer.makeRecommendationsSession()`), so a new screen starts at All with
+every row closed, back from a pushed screen it comes back as it was, a second
+Recommendations screen (from Now Playing's "Playing from") doesn't touch the
+first one's, and pull-to-refresh and Try again reload without resetting it.
 
 **A recommended playlist opens in `ServicePlaylistView`** (`PCRoute.servicePlaylist`,
 Android's `ServicePlaylistScreen`): "Recommended by <service>", Play, and Save,
 which calls `IosContainer.saveRecommendedPlaylist(url)` under the shared
 `recommendedPlaylistKey`, so a second Save opens the first copy. It never throws:
 a failure is a null id, shown as a failure, while a double tap while saving is
-ignored. Now Playing's "Playing from" returns to it through `pcRouteForContext`
+ignored. Its header shows the card's cover, else the lookup's own
+(`IosRecQueueResult.cover`), else a mosaic of the first track covers, as
+Android's. Now Playing's "Playing from" returns to it through `pcRouteForContext`
 (`playbackContextDestination`). A Listener who isn't a saved friend opens as an
 unsaved profile, and `FriendProfileScreen`'s Follow calls `followProfile`.
 
