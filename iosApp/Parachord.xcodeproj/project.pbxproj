@@ -57,6 +57,9 @@
 		AA00000000000000000000F7 /* AppleMusicReauthBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */; };
 		AA00000000000000000000F9 /* BackgroundSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000F8 /* BackgroundSync.swift */; };
 		AA00000000000000000000FB /* HomeFeedModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FA /* HomeFeedModel.swift */; };
+		AA000000000000000000011F /* HomeJumpBackIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011E /* HomeJumpBackIn.swift */; };
+		AA000000000000000000011D /* HomeHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011C /* HomeHeader.swift */; };
+		AA000000000000000000011B /* HomeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011A /* HomeModel.swift */; };
 		AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FC /* SoundCloudWidget.swift */; };
 		AA00000000000000000000FF /* soundcloud-widget.html in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FE /* soundcloud-widget.html */; };
 		AA0000000000000000000101 /* soundcloud-widget-player.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000100 /* soundcloud-widget-player.js */; };
@@ -144,6 +147,9 @@
 		AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleMusicReauthBanner.swift; sourceTree = "<group>"; };
 		AA00000000000000000000F8 /* BackgroundSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundSync.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FA /* HomeFeedModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFeedModel.swift; sourceTree = "<group>"; };
+		AA000000000000000000011E /* HomeJumpBackIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeJumpBackIn.swift; sourceTree = "<group>"; };
+		AA000000000000000000011C /* HomeHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeHeader.swift; sourceTree = "<group>"; };
+		AA000000000000000000011A /* HomeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeModel.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FC /* SoundCloudWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundCloudWidget.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FE /* soundcloud-widget.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "Resources/soundcloud-widget.html"; sourceTree = "<group>"; };
 		AA0000000000000000000100 /* soundcloud-widget-player.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/soundcloud-widget-player.js"; sourceTree = "<group>"; };
@@ -258,6 +264,9 @@
 				AA00000000000000000000F6 /* AppleMusicReauthBanner.swift */,
 				AA00000000000000000000F8 /* BackgroundSync.swift */,
 				AA00000000000000000000FA /* HomeFeedModel.swift */,
+				AA000000000000000000011E /* HomeJumpBackIn.swift */,
+				AA000000000000000000011C /* HomeHeader.swift */,
+				AA000000000000000000011A /* HomeModel.swift */,
 				AA00000000000000000000E2 /* ListenAlongController.swift */,
 				AA00000000000000000000E8 /* SpinoffController.swift */,
 				AA00000000000000000000FC /* SoundCloudWidget.swift */,
@@ -467,6 +476,9 @@
 				AA00000000000000000000F7 /* AppleMusicReauthBanner.swift in Sources */,
 				AA00000000000000000000F9 /* BackgroundSync.swift in Sources */,
 				AA00000000000000000000FB /* HomeFeedModel.swift in Sources */,
+				AA000000000000000000011F /* HomeJumpBackIn.swift in Sources */,
+				AA000000000000000000011D /* HomeHeader.swift in Sources */,
+				AA000000000000000000011B /* HomeModel.swift in Sources */,
 				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,
 				AA00000000000000000000E9 /* SpinoffController.swift in Sources */,
 				AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */,

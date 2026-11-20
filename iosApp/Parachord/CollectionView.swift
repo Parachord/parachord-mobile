@@ -91,7 +91,21 @@ final class CollectionModel {
     func syncFriends() { container.syncFriends() }
 
     // ── Sorted + filtered views: the shared CollectionSort (#593) ──────
-    var sortedTracks: [Track] { CollectionSort.shared.tracks(list: tracks, sort: trackSort, query: searchQuery) }
+    var sortedTracks: [Track] { CollectionSort.shared.tracks(list: tracks, sort: shownTrackSort, query: searchQuery) }
+
+    /// A songs sort for this visit only, never saved (Home's Recent Loves opens
+    /// Collection sorted Recently Added: Android's `takeLinkTrackSort`). The
+    /// person's own pick, or leaving the tab, drops it.
+    private(set) var linkTrackSort: CollectionTrackSort?
+    /// The songs sort shown: this visit's link sort, else the saved one.
+    var shownTrackSort: CollectionTrackSort { linkTrackSort ?? trackSort }
+
+    /// Applies a one-shot songs sort for this visit, without saving it.
+    func applyLinkTrackSort(_ sort: TrackSort) { linkTrackSort = sort }
+    /// The person picked a sort: it's theirs, and saved.
+    func pickTrackSort(_ sort: TrackSort) { linkTrackSort = nil; trackSort = sort }
+    /// The visit ended.
+    func endLinkTrackSort() { linkTrackSort = nil }
     var sortedAlbums: [Album] { CollectionSort.shared.albums(list: albums, sort: albumSort, query: searchQuery) }
     var sortedArtists: [Artist] { CollectionSort.shared.artists(list: artists, sort: artistSort, query: searchQuery) }
     var sortedFriends: [Friend] { CollectionSort.shared.friends(list: friends, sort: friendSort, query: searchQuery) }
@@ -116,6 +130,8 @@ struct CollectionView: View {
     /// banner (#209) — e.g. "Playing from: Collection" lands on Songs. Consumed
     /// once on appear, then cleared.
     @Binding var pendingTab: CollectionTab?
+    /// One-shot songs sort for this visit (Home's Recent Loves), not saved.
+    var pendingTrackSort: Binding<TrackSort?> = .constant(nil)
 
     @State private var model = CollectionModel.shared
     @State private var tab: CollectionTab = .artists
@@ -162,6 +178,10 @@ struct CollectionView: View {
         .onChange(of: pendingTab, initial: true) { _, t in
             if let t { tab = t; pendingTab = nil }
         }
+        .onChange(of: pendingTrackSort.wrappedValue, initial: true) { _, s in
+            if let s { model.applyLinkTrackSort(s); pendingTrackSort.wrappedValue = nil }
+        }
+        .onDisappear { model.endLinkTrackSort() }
     }
 
     private var tabLabels: [String] {
@@ -226,7 +246,7 @@ struct CollectionView: View {
 
     private var currentSortLabel: String {
         switch tab {
-        case .songs:   return model.trackSort.label
+        case .songs:   return model.shownTrackSort.label
         case .albums:  return model.albumSort.label
         case .artists: return model.artistSort.label
         case .friends: return model.friendSort.label
@@ -239,7 +259,7 @@ struct CollectionView: View {
         switch tab {
         case .songs:
             ForEach(TrackSort.entries, id: \.self) { s in
-                Button { model.trackSort = s } label: { sortItemLabel(s.label, s == model.trackSort) }
+                Button { model.pickTrackSort(s) } label: { sortItemLabel(s.label, s == model.shownTrackSort) }
             }
         case .albums:
             ForEach(AlbumSort.entries, id: \.self) { s in

@@ -45,6 +45,9 @@ struct ContentView: View {
     /// One-shot sub-tab for the Collection tab, set when the queue-source banner
     /// links to "Collection" so it opens on Songs rather than the default. (#209)
     @State private var collectionPendingTab: CollectionTab?
+    /// One-shot songs sort for the Collection tab's next visit, not saved
+    /// (Home's Recent Loves: Recently Added, Android's `takeLinkTrackSort`).
+    @State private var collectionPendingTrackSort: TrackSort?
     /// Deep-link (#228): transient ack banner + the queue-mutating command
     /// awaiting confirmation (queue add / clear).
     @State private var dlToast: String?
@@ -59,9 +62,13 @@ struct ContentView: View {
             // ── Active tab content ───────────────────────────────────
             Group {
                 switch tab {
-                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { showSettings = true }, onSelectTab: { t, sub in if let sub { collectionPendingTab = sub }; tab = t })
+                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { showSettings = true }, onSelectTab: { t, sub in if let sub { collectionPendingTab = sub }; tab = t }, onOpenRecentLoves: {
+                    collectionPendingTab = .songs
+                    collectionPendingTrackSort = TrackSort.recent
+                    tab = .collection
+                })
                 case .search:     SearchView(onMenu: { showSidebar = true }, pendingQuery: $pendingSearchQuery)
-                case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab)
+                case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab, pendingTrackSort: $collectionPendingTrackSort)
                 case .playlists:  PlaylistsScreen(onMenu: { showSidebar = true })
                 }
             }
@@ -216,6 +223,8 @@ struct ContentView: View {
             settingsTab = nil
             showSettings = true
         })
+        // Opens the playlist import dialog (Home's "Build your collection" card).
+        .environment(\.pcOpenImport, PCOpenImport { importer.showOptions = true })
         // Opens Settings on one tab (Home's "Sync your library", Android's `Routes.settings(pluginId, tab)`).
         .environment(\.pcOpenSettingsTab, PCOpenSettingsTab { tab in
             settingsService = nil
@@ -780,6 +789,16 @@ struct PCOpenSettingsTab {
     func callAsFunction(_ tab: String) { open(tab) }
 }
 
+/// Opens the playlist import dialog (`PlaylistImporter.showOptions`).
+struct PCOpenImport {
+    let open: () -> Void
+    func callAsFunction() { open() }
+}
+
+private struct PCOpenImportKey: EnvironmentKey {
+    static let defaultValue = PCOpenImport {}
+}
+
 private struct PCOpenSettingsTabKey: EnvironmentKey {
     static let defaultValue = PCOpenSettingsTab { _ in }
 }
@@ -798,6 +817,11 @@ extension EnvironmentValues {
     var pcOpenSettingsTab: PCOpenSettingsTab {
         get { self[PCOpenSettingsTabKey.self] }
         set { self[PCOpenSettingsTabKey.self] = newValue }
+    }
+    /// Set by RootView; a no-op outside it.
+    var pcOpenImport: PCOpenImport {
+        get { self[PCOpenImportKey.self] }
+        set { self[PCOpenImportKey.self] = newValue }
     }
     /// Set by RootView; a no-op outside it.
     var pcAskShuffleupagus: PCAskShuffleupagus {

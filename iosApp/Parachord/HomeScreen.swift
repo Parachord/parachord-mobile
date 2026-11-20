@@ -1,12 +1,12 @@
 import SwiftUI
 import Shared
 
-// MARK: - Home (Phase 3 — docs/design/parachord-ios HomeScreen)
+// MARK: - Home (desktop's home-page.js, Android's HomeScreen.kt)
 //
-// API-backed sections only (no iOS DB yet): Continue Listening, the Discover
-// tile grid, and the real ListenBrainz Weekly Jams / Weekly Exploration
-// carousels. DB/AI sections (Recently Added, Your Playlists, Stats, Recent
-// Loves, Friend Activity, Suggestions) land with the data layer.
+// The frame (hero, the reauth banners, the announcement, the skeleton) and
+// the sections, drawn from the app-wide shared session (`HomeModel`,
+// `IosHomePage`). Every rule is shared; Swift only draws. This file also holds
+// the app's value-based routes (`PCRoute`) and their destinations.
 
 /// Value-based routes pushed onto the Home tab's stack — driven by both the
 /// Discover tiles and the sidebar, so the sidebar navigates with the tab bar
@@ -113,116 +113,146 @@ struct HomeScreen: View {
     /// Opened by the Spotify reauth banner when there's no stored Client ID to
     /// OAuth with (the user sets it + connects in Settings).
     var onOpenSettings: () -> Void = {}
-    /// Switch the shell's main tab (Collection / Playlists) for the stats row —
-    /// these are tabs, not pushable routes. Optional CollectionTab sub-selection.
+    /// Switch the shell's main tab (Collection / Playlists); these are tabs, not
+    /// pushable routes. Optional CollectionTab sub-selection.
     var onSelectTab: (PCTab, CollectionTab?) -> Void = { _, _ in }
+    /// Recent Loves: Collection's songs, sorted Recently Added for that visit
+    /// (desktop's `setCollectionSort({ tracks: 'recent' })`, Android's link sort).
+    var onOpenRecentLoves: () -> Void = {}
 
     @State private var path: [PCRoute] = []
-    @State private var model = DiscoverViewModel.shared
-    @State private var feed = HomeFeedModel()
+    @State private var home = HomeModel()
     @State private var reauth = SpotifyReauthModel()
     @State private var amReauth = AppleMusicReauthModel()
+    // The old sections' state, kept only for their helpers below until they
+    // are deleted (plan Task 9); nothing starts them.
+    @State private var model = DiscoverViewModel.shared
+    @State private var feed = HomeFeedModel()
     @State private var scanner = MediaLibraryScanner.shared
     private let container = IosContainer.companion.shared
     private let resolverCache = IosTrackResolverCache.shared
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.pcOpenImport) private var openImport
+
+    private var session: IosHomeSession { home.session }
 
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                PCTopBar(title: "Parachord", leading: .menu, onLeading: onMenu)
+                HomeHero(onMenu: onMenu)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        // ── Banners (announcement → AM reauth → Spotify reauth) ──
-                        if let ann = feed.announcement {
-                            announcementBanner(ann)
-                        }
-                        if amReauth.required {
-                            PCAppleMusicReauthBanner(connecting: amReauth.connecting, error: amReauth.error) { amReauth.reconnect() }
-                                .padding(.top, 12)
-                        }
-                        if reauth.required {
-                            PCSpotifyReauthBanner(connecting: reauth.connecting) {
-                                reauth.reconnect(onNeedsSetup: onOpenSettings)
+                        reauthBanners
+                        if let page = home.page {
+                            if page.showBanner, let banner = page.banner {
+                                HomeBannerSlot(banner: banner, session: session)
+                                    .id("banner-\(banner.id)")
                             }
-                        } else if let message = reauth.expiryMessage {
-                            PCSpotifyExpiryBanner(
-                                message: message,
-                                connecting: reauth.connecting,
-                                onReconnect: { reauth.reconnect(onNeedsSetup: onOpenSettings) },
-                                onDismiss: { reauth.dismissExpiry() }
-                            )
-                        }
-
-                        // Empty-library prompt (no saved tracks/albums/playlists yet).
-                        if feed.libraryLoaded && feed.libraryEmpty {
-                            welcomeScanCard
-                        }
-
-                        if let t = coordinator.currentTrack {
-                            sectionHeader("Continue listening")
-                            continueCard(t)
-                        }
-
-                        if !feed.recentAlbums.isEmpty {
-                            sectionHeader("Recently added")
-                            recentAlbumsRow
-                        }
-
-                        if !feed.recentPlaylists.isEmpty {
-                            sectionHeader("Your playlists")
-                            recentPlaylistsRow
-                        }
-
-                        sectionHeader("Discover")
-                        discoverGrid
-
-                        if model.isLoading && !model.loaded {
-                            weeklySkeleton("Weekly Jams")
-                            weeklySkeleton("Weekly Exploration")
+                            if !page.ready {
+                                HomeSkeleton()
+                            } else {
+                                sections(page)
+                            }
                         } else {
-                            weeklySection("Weekly Jams", model.jams)
-                            weeklySection("Weekly Exploration", model.exploration)
-                        }
-
-                        if !model.friendActivity.isEmpty {
-                            sectionHeader("Friend activity")
-                            friendActivitySection
-                        }
-
-                        aiSuggestionsSection
-
-                        if !feed.libraryEmpty {
-                            sectionHeader("Your collection")
-                            collectionStatsRow
-                        }
-
-                        if !feed.recentLoves.isEmpty {
-                            sectionHeader("Recent loves")
-                            recentLovesList
+                            HomeSkeleton()
                         }
                     }
                     .padding(.bottom, 130) // clear the floating tab bar
                 }
             }
+            .background(PC.bgPrimary)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: PCRoute.self) { pcRouteDestination($0) }
+            // A fresh entry or a return from a pushed page: the loads, under their throttles.
+            .onAppear {
+                session.onVisible()
+                Task { await reauth.refreshExpiry() }
+            }
         }
         .onChange(of: pendingRoute, initial: true) { _, route in
             if let route { path = [route]; pendingRoute = nil }
         }
-        .task { model.start(); await model.load() }
+        // The view's creation (a tab switch or a re-tap recreates it), not a
+        // return from a pushed page: a new phrasing for the Ask example.
+        .task { home.start(); session.enteredHome() }
         .task { reauth.start() }
-        .onAppear { Task { await reauth.refreshExpiry() } }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await reauth.refreshExpiry() } }
+            if phase == .active {
+                session.onVisible()
+                Task { await reauth.refreshExpiry() }
+            }
         }
-        .task { feed.start(); amReauth.start() }
-        .onDisappear { feed.stop(); amReauth.stop() }
+        .task { amReauth.start() }
+        .onDisappear { home.stop(); amReauth.stop() }
     }
 
-    // MARK: Sections
+    // MARK: Frame
+
+    /// The Apple Music and Spotify reauth banners, kept from the old Home.
+    @ViewBuilder private var reauthBanners: some View {
+        if amReauth.required {
+            PCAppleMusicReauthBanner(connecting: amReauth.connecting, error: amReauth.error) { amReauth.reconnect() }
+                .padding(.top, 12)
+        }
+        if reauth.required {
+            PCSpotifyReauthBanner(connecting: reauth.connecting) {
+                reauth.reconnect(onNeedsSetup: onOpenSettings)
+            }
+        } else if let message = reauth.expiryMessage {
+            PCSpotifyExpiryBanner(
+                message: message,
+                connecting: reauth.connecting,
+                onReconnect: { reauth.reconnect(onNeedsSetup: onOpenSettings) },
+                onDismiss: { reauth.dismissExpiry() }
+            )
+        }
+    }
+
+    /// The page once it's ready. The getting-started layout and the sections
+    /// after Jump back in arrive with later tasks.
+    @ViewBuilder private func sections(_ page: IosHomePage) -> some View {
+        if page.gettingStarted == nil {
+            HomeHeaderView(
+                page: page,
+                onCollectionRadio: { home.play(coordinator: coordinator) { try await $0.collectionRadio() } },
+                onSetupAction: { id in if id == "getting-started" { session.resumeSetup() } },
+                onDismissSetupItem: { session.dismissSetupItem(id: $0) }
+            )
+            .padding(.top, 24)
+            if page.showJump {
+                HomeJumpBackIn(
+                    page: page,
+                    onOpen: openTile,
+                    onPlay: { tile in
+                        let key = tile.key
+                        home.play(coordinator: coordinator) { try await $0.tileQueue(key: key) }
+                    },
+                    onShown: { session.tileShown(key: $0.key) },
+                    onImport: { openImport() }
+                )
+                .padding(.top, 8)
+            }
+        }
+    }
+
+    /// What a Jump back in tile opens, by kind.
+    private func openTile(_ tile: IosJumpTile) {
+        switch tile.kind {
+        case "playlist":
+            path.append(.savedPlaylist(id: tile.targetId))
+        case "album":
+            path.append(.album(title: tile.targetName, artist: tile.targetArtist ?? ""))
+        case "mix":
+            guard let url = tile.targetUrl, !url.isEmpty else { return }
+            path.append(.servicePlaylist(url: url, name: tile.targetName, source: tile.targetArtist ?? "", image: tile.imageUrl))
+        case "loves":
+            onOpenRecentLoves()
+        default:
+            break
+        }
+    }
+    // MARK: Old sections (dead until plan Task 9 deletes them)
 
     // ── Friend Activity (#235) — friends with a now-playing/last track, on-air
     // first, tap → profile, long-press → Listen Along / Pin. Matches Android.
