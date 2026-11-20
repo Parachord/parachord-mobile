@@ -53,8 +53,8 @@ class AndroidHomeSourcesTest {
         every { settings.getActiveResolversFlow() } returns flowOf(emptyList())
         val plugins = mockk<PluginManager>(relaxed = true)
         every { plugins.plugins } returns MutableStateFlow(bundled)
-        coEvery { plugins.isPluginConfigured(any()) } returns true
-        coEvery { plugins.isPluginConfigured("subsonic") } returns configured
+        coEvery { plugins.isPluginConfiguredOrNull(any()) } returns true
+        coEvery { plugins.isPluginConfiguredOrNull("subsonic") } returns configured
         val holder = mockk<PlaybackStateHolder>(relaxed = true)
         every { holder.state } returns MutableStateFlow(PlaybackState())
         val library = mockk<LibraryRepository>(relaxed = true)
