@@ -120,7 +120,7 @@ Default order: `spotify > applemusic > bandcamp > soundcloud > localfiles > yout
 Apple Music's API can't delete or rename playlists or remove tracks from them, so those changes have to be made in the Apple Music app.
 
 ### Discovery
-- **Recommendations**: personalized Tracks, Albums, Artists, Playlists and Listeners (people with a similar taste) from Last.fm, ListenBrainz and Apple Music (any plugin that offers recommendations), blended with Shuffleupagus's AI picks from your own ChatGPT, Claude or Gemini key, with a filter for each source.
+- **Recommendations** (Android and iOS): personalized Tracks, Albums, Artists, Playlists and Listeners (people with a similar taste) from Last.fm, ListenBrainz and Apple Music (any plugin that offers recommendations), blended with Shuffleupagus's AI picks from your own ChatGPT, Claude or Gemini key, with a filter for each source.
 - **Fresh Drops** and **Critical Darlings**: curated new releases.
 - **Pop of the Tops**: chart albums and songs by country, with songs from Apple Music or Last.fm (including a global Last.fm chart).
 - **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz.

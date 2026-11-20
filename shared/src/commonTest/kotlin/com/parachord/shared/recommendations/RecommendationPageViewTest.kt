@@ -33,6 +33,17 @@ class RecommendationPageViewTest {
         ListenerItem("similar:$service:$name", name, service, 0.5, null, emptyList(), service, listOf(service))
 
     @Test
+    fun `an open grid fits as many 104 pt cards as it can and never fewer than 2`() {
+        // A 412 dp phone less 16 dp gutters: 380 wide, 12 gap -> 3 across.
+        assertEquals(3, recommendationGridColumns(380.0, 12.0))
+        // An iPhone 17 Pro (402 pt) less gutters: 370 -> 3.
+        assertEquals(3, recommendationGridColumns(370.0, 12.0))
+        // Exactly 4 cards and 3 gaps.
+        assertEquals(4, recommendationGridColumns(4 * 104.0 + 3 * 12.0, 12.0))
+        assertEquals(2, recommendationGridColumns(150.0, 12.0))
+    }
+
+    @Test
     fun `activeSourceFilter keeps a source on the page — falls back to All when it left`() {
         assertEquals("lastfm", activeSourceFilter("lastfm", listOf(PageSource("lastfm", "Last.fm"))))
         assertNull(activeSourceFilter("lastfm", listOf(PageSource("applemusic", "Apple Music"))))

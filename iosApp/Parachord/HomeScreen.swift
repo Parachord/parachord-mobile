@@ -27,6 +27,8 @@ enum PCRoute: Hashable {
     case savedPlaylist(id: String)
     /// A friend's listening profile (#235 / #196); `tab`/`period` from a deep link (#470).
     case friend(id: String, username: String, service: String, name: String, tab: String? = nil, period: String? = nil)
+    /// A recommended service playlist opened in a playlist view (not saved until Save).
+    case servicePlaylist(url: String, name: String, source: String, image: String?)
 }
 
 /// Single source of truth for every pushed destination. Used by EVERY tab's
@@ -40,10 +42,26 @@ enum PCRoute: Hashable {
 /// (set in AlbumScreen.albumContext). Returns nil for types with no iOS page
 /// (listen-along / spinoff / unknown).
 func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
+    // Album, artist, playlist and service-playlist contexts open where the
+    // shared `playbackContextDestination` says (Android's Now Playing asks it too).
+    if let dest = PlaybackContextKt.playbackContextDestination(ctx: ctx) {
+        switch dest {
+        case let album as ContextDestination.Album:
+            return .album(title: album.title, artist: album.artist ?? "")
+        case let artist as ContextDestination.Artist:
+            return .artist(artist.name)
+        case let playlist as ContextDestination.Playlist:
+            return .playlist(id: playlist.id, title: ctx.name)
+        case let sp as ContextDestination.ServicePlaylist:
+            return .servicePlaylist(url: sp.url, name: ctx.name, source: "", image: nil)
+        default:
+            return nil
+        }
+    }
     switch ctx.type {
-    case "album":           return .album(title: ctx.name, artist: ctx.id ?? "")
-    case "playlist":        return .playlist(id: ctx.id ?? "", title: ctx.name)
-    case "artist":          return .artist(ctx.name)
+    case "album", "artist", "playlist", PlaybackContextKt.SERVICE_PLAYLIST_CONTEXT:
+        // The shared rule found nothing to open (a playlist or service playlist with no id).
+        return nil
     case "charts":          return .pop
     case "recommendations": return .recommendations
     case "history":         return .history()
@@ -78,6 +96,8 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
     case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
     case .savedPlaylist(let id):       SavedPlaylistDetailView(playlistId: id)
+    case .servicePlaylist(let url, let name, let source, let image):
+        ServicePlaylistView(url: url, name: name, source: source, image: image)
     case .friend(let id, let username, let service, let name, let tab, let period):
         FriendProfileScreen(friendId: id, username: username, service: service, name: name, tab: tab, period: period)
     }

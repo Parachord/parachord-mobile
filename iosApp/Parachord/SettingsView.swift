@@ -687,6 +687,9 @@ struct SettingsView: View {
     @State private var model = SettingsViewModel()
     @State private var tab = 0
     @State private var configService: PCService?
+    /// A plugin whose settings sheet shows on open (`PCOpenPluginSettings`), once.
+    var initialService: String? = nil
+    @State private var openedInitial = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -706,7 +709,13 @@ struct SettingsView: View {
         .sheet(item: $configService) { svc in
             PluginConfigSheet(service: svc, model: model)
         }
-        .onAppear { model.start() }
+        .onAppear {
+            model.start()
+            if !openedInitial, let id = initialService {
+                openedInitial = true
+                configService = PCServices.find(id)
+            }
+        }
         .onDisappear { model.stop() }
     }
 }

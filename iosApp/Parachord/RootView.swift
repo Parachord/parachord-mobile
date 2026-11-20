@@ -25,6 +25,8 @@ struct ContentView: View {
     @State private var showAdd = false
     @State private var showNowPlaying = false
     @State private var showSettings = false
+    /// The plugin whose settings sheet Settings opens on (`PCOpenPluginSettings`); nil for the plain page.
+    @State private var settingsService: String?
     @State private var showChat = false
     @State private var pendingChat = false
     // Deep-link prefills (#256): seed the Search query / Shuffleupagus prompt.
@@ -198,6 +200,12 @@ struct ContentView: View {
         // status bar / camera housing and is non-standard. (A real ActivityKit
         // Live Activity for background playback is a separate, larger feature.)
         .environment(coordinator)
+        // Opens Settings on one plugin's sheet (Recommendations' Connect buttons, Android's
+        // `Routes.settings(pluginId)`).
+        .environment(\.pcOpenPluginSettings, PCOpenPluginSettings { id in
+            settingsService = id
+            showSettings = true
+        })
         // #234: honor the Settings › General theme override (system/light/dark).
         // Forcing the scheme here also flips the `dyn()` palette (SwiftUI overrides
         // the trait). NowPlaying stays dark regardless — its surfaces use the
@@ -349,8 +357,8 @@ struct ContentView: View {
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.
-        .fullScreenCover(isPresented: $showSettings) {
-            NavigationStack { SettingsView() }
+        .fullScreenCover(isPresented: $showSettings, onDismiss: { settingsService = nil }) {
+            NavigationStack { SettingsView(initialService: settingsService) }
         }
         // Spotify Connect device picker (Phase: Spotify) — hosted at the shell.
         .sheet(item: Binding(
@@ -728,5 +736,23 @@ struct PCOfflineBanner: View {
             guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.25)) { shown = true }
         }
+    }
+}
+
+/// Opens Settings with one plugin's settings sheet showing (its id, e.g. "listenbrainz").
+struct PCOpenPluginSettings {
+    let open: (String) -> Void
+    func callAsFunction(_ pluginId: String) { open(pluginId) }
+}
+
+private struct PCOpenPluginSettingsKey: EnvironmentKey {
+    static let defaultValue = PCOpenPluginSettings { _ in }
+}
+
+extension EnvironmentValues {
+    /// Set by RootView; a no-op outside it.
+    var pcOpenPluginSettings: PCOpenPluginSettings {
+        get { self[PCOpenPluginSettingsKey.self] }
+        set { self[PCOpenPluginSettingsKey.self] = newValue }
     }
 }

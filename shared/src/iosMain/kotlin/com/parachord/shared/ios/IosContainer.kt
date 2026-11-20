@@ -70,8 +70,6 @@ import com.parachord.shared.metadata.SpotifyProvider
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.ChartAlbum
 import com.parachord.shared.model.ChartSong
-import com.parachord.shared.model.RecommendedArtist
-import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
 import com.parachord.shared.model.keepDataOnError
 import com.parachord.shared.model.settle
@@ -146,6 +144,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.datetime.todayIn
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
@@ -264,6 +264,8 @@ class IosContainer private constructor() {
          *  Android's `spotify_rate_limit_cooldown_ms`). */
         private const val SPOTIFY_COOLDOWN_KEY = "spotify_rate_limit_cooldown_ms"
         private const val SPOTIFY_STRIKES_KEY = "spotify_rate_limit_strikes"
+        /** How long [weeklyCovers] waits for a weekly playlist's tracks to load. */
+        private const val WEEKLY_COVERS_WAIT_MS = 15_000L
     }
 
     /** App-wide coroutine scope for fire-and-forget settings writes. */
@@ -972,18 +974,45 @@ class IosContainer private constructor() {
     suspend fun importPlaylistFromUrl(url: String): com.parachord.shared.playlist.XspfImportResult =
         playlistUrlImporter.importFromUrl(url)
 
+    /**
+     * [importPlaylistFromUrl] under a stable key ([PlaylistUrlImporter]'s `savedKey`):
+     * a recommended service playlist passes `recommendedPlaylistKey(url)`, so saving
+     * it again opens the first copy instead of making another.
+     */
+    suspend fun importPlaylistFromUrl(url: String, savedKey: String): com.parachord.shared.playlist.XspfImportResult =
+        playlistUrlImporter.importFromUrl(url, savedKey)
+
+    /** Saves a recommended service playlist under its key; never throws (a failure is a null id). */
+    suspend fun saveRecommendedPlaylist(url: String): IosSaveResult = try {
+        IosSaveResult(importPlaylistFromUrl(url, recommendedPlaylistKey(url)).playlistId)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "saveRecommendedPlaylist failed: ${e.message}")
+        IosSaveResult(null)
+    }
+
+    /** The key a recommended service playlist is saved under (shared `recommendedPlaylistKey`). */
+    fun recommendedPlaylistKey(url: String): String =
+        com.parachord.shared.recommendations.recommendedPlaylistKey(url)
+
+    /** Playlist link → tracks: native Spotify / Apple Music, then whichever plugin claims the URL. */
+    private val providerPlaylistResolver: com.parachord.shared.deeplink.ProviderPlaylistResolver by lazy {
+        com.parachord.shared.deeplink.ProviderPlaylistResolver(
+            spotifyClient, appleMusicClient, httpClient,
+            appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
+            spotifyAccessToken = { settingsStore.getSpotifyAccessToken() },
+            pluginLookupPlaylistJson = { url ->
+                // Brings soundcloud.axe's token up to date before the lookup.
+                pluginManager.ensureInitialized()
+                resolverRuntime.lookupPlaylist(url)
+            },
+        )
+    }
+
     private val playlistUrlImporter: com.parachord.shared.playlist.PlaylistUrlImporter by lazy {
         com.parachord.shared.playlist.PlaylistUrlImporter(
-            providerPlaylists = com.parachord.shared.deeplink.ProviderPlaylistResolver(
-                spotifyClient, appleMusicClient, httpClient,
-                appleMusicDeveloperToken = appConfig.appleMusicDeveloperToken,
-                spotifyAccessToken = { settingsStore.getSpotifyAccessToken() },
-                pluginLookupPlaylistJson = { url ->
-                    // Brings soundcloud.axe's token up to date before the lookup.
-                    pluginManager.ensureInitialized()
-                    resolverRuntime.lookupPlaylist(url)
-                },
-            ),
+            providerPlaylists = providerPlaylistResolver,
             importHostedXspf = { u -> hostedXspfService.importHostedXspf(u) },
             createPlaylist = { playlist, tracks -> libraryRepository.createPlaylistWithTracks(playlist, tracks) },
             findPlaylist = { id -> playlistDao.getById(id) },
@@ -1641,6 +1670,42 @@ class IosContainer private constructor() {
     suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> =
         friendsRepository.getFriendRecentTracks(username, service).shownOrThrow(emptyList())
 
+    /** A friend's recent tracks plus whether their Last.fm profile hides its listening (null: not reported). */
+    @Throws(Throwable::class)
+    suspend fun getFriendRecentWithHidden(username: String, service: String): IosFriendRecent {
+        var hides: Boolean? = null
+        val tracks = friendsRepository.getFriendRecentTracks(username, service) { hides = it }
+            .shownOrThrow(emptyList())
+        return IosFriendRecent(tracks, hides)
+    }
+
+    /** [friend] with its hidden-listening flag set (for someone with no saved row to record it on). */
+    fun friendWithHidesListening(friend: Friend, hides: Boolean): Friend = friend.copy(hidesListening = hides)
+
+    /** The profile's person: the saved friend, or an unsaved one (`transient`) for a Listener not followed. Never throws. */
+    suspend fun profileFriend(friendId: String): Friend? = try {
+        friendsRepository.profileFriend(friendId)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "profileFriend failed: ${e.message}")
+        null
+    }
+
+    /** Follows the profile's person: the saved friend on success, else the shared message to show. Never throws. */
+    suspend fun followProfile(service: String, username: String): IosFollowProfileResult = try {
+        when (val result = friendsRepository.follow(service, username)) {
+            is Resource.Success -> IosFollowProfileResult(result.data, null)
+            is Resource.Error -> IosFollowProfileResult(null, result.message)
+            else -> IosFollowProfileResult(null, com.parachord.shared.ui.UiMessages.couldntReach(service))
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "followProfile failed: ${e.message}")
+        IosFollowProfileResult(null, com.parachord.shared.ui.UiMessages.couldntReach(service))
+    }
+
     // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
     fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(trackDao.existsByTitleAndArtist(title, artist)) { onEach((it as? Boolean) ?: false) }
@@ -2015,20 +2080,116 @@ class IosContainer private constructor() {
             disabledMetaProviders = settingsStore.getDisabledMetaProviders(),
         )
 
-    suspend fun loadRecommendedTracks(): List<RecommendedTrack> {
-        var out = emptyList<RecommendedTrack>()
-        recommendationsRepository.getRecommendedTracks().collect { res ->
-            if (res is Resource.Success) out = res.data
+    // ── The Recommendations page (PR 3): the shared page, flattened for SwiftUI ──
+
+    /**
+     * A new screen's session (the picked source, the open rows), as Android's
+     * `RecommendationsViewModel` holds per screen: each Recommendations screen
+     * makes one and keeps it while it's on the stack.
+     */
+    fun makeRecommendationsSession(): IosRecommendationsSession = IosRecommendationsSession(
+        page = recommendationsRepository.page,
+        scope = appScope,
+        openRow = { recommendationsRepository.openRow(it) },
+        today = ::todayLocal,
+    )
+
+    private fun todayLocal(): kotlinx.datetime.LocalDate =
+        kotlinx.datetime.Clock.System.todayIn(kotlinx.datetime.TimeZone.currentSystemDefault())
+
+    /** One-off messages from the repository ("Couldn't load more from …"). */
+    fun recommendationsMessages(): Flow<String> = recommendationsRepository.messages
+
+    /** Loads the page ([force] is Try again or pull to refresh). Never throws. */
+    suspend fun loadRecommendations(force: Boolean) {
+        try {
+            recommendationsRepository.load(force)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("IosContainer", "loadRecommendations failed: ${e.message}")
         }
-        return out
     }
 
-    suspend fun loadRecommendedArtists(): List<RecommendedArtist> {
-        var out = emptyList<RecommendedArtist>()
-        recommendationsRepository.getRecommendedArtists().collect { res ->
-            if (res is Resource.Success) out = res.data
+    private fun recommendationRows(): List<com.parachord.shared.recommendations.RecommendationRow> =
+        recommendationsRepository.page.value.sections.flatMap { it.rows }
+
+    private fun recommendationItem(predicate: (com.parachord.shared.recommendations.RecommendationItem) -> Boolean) =
+        recommendationRows().firstNotNullOfOrNull { row -> row.items.firstOrNull(predicate) }
+
+    /** A card came on screen: the repository batches its release-date and image lookups (Android's `cardShown`). */
+    fun recommendationsCardShown(itemId: String) {
+        recommendationItem { it.id == itemId }?.let { recommendationsRepository.cardShown(it) }
+    }
+
+    /** A weekly playlist card's play: its tracks, "Playing [name]", or "Couldn't load [name]" ([name] is the card's title). */
+    suspend fun recommendationsWeeklyQueue(weeklyId: String, name: String): IosRecQueueResult =
+        weeklyQueueResult(recommendationItem { it.weekly?.id == weeklyId }, name) { id ->
+            weeklyPlaylistsRepository.loadPlaylistTracks(id)
         }
-        return out
+
+    /** A recommended service playlist's tracks through the registry's link lookup ([servicePlaylistQueue]); [name] is the card's or view's title. */
+    suspend fun recommendationsServicePlaylist(url: String, name: String): IosRecQueueResult {
+        // The card the page holds, else one built from the link (a view opened from a queue's context).
+        val item = (recommendationItem { it.weekly == null && it.url == url }
+            ?: com.parachord.shared.recommendations.RecommendationItem(
+                type = com.parachord.shared.recommendations.RecommendationType.PLAYLIST,
+                id = url, name = name, url = url,
+            )).copy(name = name)
+        // The lookup's own cover, for the view's header when the card had none (Android's `play.albumArt`).
+        var cover: String? = null
+        val queue = try {
+            com.parachord.shared.recommendations.servicePlaylistQueue(item) { u ->
+                providerPlaylistResolver.resolve(u)?.also { cover = it.albumArt?.takeIf { a -> a.isNotBlank() } }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        return IosRecQueueResult(
+            queue,
+            if (queue == null) com.parachord.shared.recommendations.RecommendationCopy.couldntLoad(name) else null,
+            cover = if (queue == null) null else cover,
+        )
+    }
+
+    /** A listener card's play: their top tracks, or the shared message when there are none or they failed. */
+    suspend fun recommendationsListenerPlay(service: String, username: String): IosRecQueueResult =
+        listenerQueueResult(service, username, username) { s, u -> friendsRepository.listenerTopTracks(s, u) }
+
+    /** Follows a listener: null on success (the page reloads without them), else the message to show. */
+    suspend fun followListener(service: String, username: String): String? = try {
+        when (val result = friendsRepository.follow(service, username)) {
+            is Resource.Error -> result.message
+            else -> {
+                appScope.launch { loadRecommendations(force = false) }
+                null
+            }
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "followListener failed: ${e.message}")
+        com.parachord.shared.ui.UiMessages.couldntReach(service)
+    }
+
+    private val weeklyCoverLoader by lazy {
+        com.parachord.shared.recommendations.WeeklyCovers(appScope) { id ->
+            weeklyPlaylistsRepository.loadPlaylistTracks(id).map { it.albumArt }
+        }
+    }
+
+    /** A weekly card's mosaic: its first 4 distinct covers ([WeeklyCovers]); empty when none or the load failed. */
+    suspend fun weeklyCovers(weeklyId: String): List<String> = try {
+        val flow = weeklyCoverLoader.covers(weeklyId)
+        flow.value.ifEmpty {
+            kotlinx.coroutines.withTimeoutOrNull(WEEKLY_COVERS_WAIT_MS) { flow.first { it.isNotEmpty() } } ?: emptyList()
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        emptyList()
     }
 
     // ── Curated lists that need DB DAOs (now unblocked) ────────────────
@@ -2188,9 +2349,6 @@ class IosContainer private constructor() {
     // (architecture realignment, plan 2026-06-12).
     fun freshDropsFlow(): Flow<Any> =
         freshDropsRepository.getFreshDrops(false).forDisplay()
-
-    fun recommendedTracksFlow(): Flow<Any> =
-        recommendationsRepository.getRecommendedTracks().forDisplay()
 
     fun recommendedArtistsFlow(): Flow<Any> =
         recommendationsRepository.getRecommendedArtists().forDisplay()
@@ -3907,6 +4065,10 @@ data class IosAiSuggestionsResult(val suggestions: IosAiSuggestions?, val error:
  * (the same text Android shows); Swift reads it with `pcLoadErrorMessage`.
  */
 class IosLoadException(message: String) : Exception(message)
+
+data class IosFriendRecent(val tracks: List<RecentTrack>, val hidesListening: Boolean?)
+
+data class IosFollowProfileResult(val saved: Friend?, val message: String?)
 
 /** A "Sync now": [error] is empty on success; [notices] are what Android lists after a sync (`FullSyncResult.notices`). */
 data class IosSyncOutcome(val error: String, val notices: List<String>)

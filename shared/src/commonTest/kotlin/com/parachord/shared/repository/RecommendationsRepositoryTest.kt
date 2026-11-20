@@ -5,7 +5,6 @@ import com.parachord.shared.ai.AiArtistSuggestion
 import com.parachord.shared.ai.AiRecommendations
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.model.RecommendedArtist
-import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
 import com.parachord.shared.plugin.PluginNotReadyException
 import com.parachord.shared.recommendations.RecommendationPageSection
@@ -523,58 +522,37 @@ class RecommendationsRepositoryTest {
     }
 
     @Test
-    fun `the old tracks and artists flows still come from the page`() = runTest {
+    fun `the old artists flow still comes from the page`() = runTest {
         val source = FakeSource().apply {
             answer(
                 "listenbrainz",
-                {
-                    songs(
-                        """{"type":"song","name":"Dream House","artist":"Deafheaven","duration":555,"mbid":"9D59B396-1F9D-4A70-8B17-6B1DD97D1C73","isrc":"gb5ep1400001"}""",
-                        song("Two", "deafheaven"),
-                        song("Three", "Anathema"),
-                    )
-                },
+                { songs(song("Dream House", "Deafheaven"), song("Two", "deafheaven"), song("Three", "Anathema")) },
             )
         }
         val r = rig(source)
-        assertNull(r.repo.cachedTracksList)
-        val tracks = r.repo.getRecommendedTracks().toList()
-        assertEquals(Resource.Loading, tracks.first())
-        assertEquals(
-            listOf(
-                RecommendedTrack(
-                    title = "Dream House", artist = "Deafheaven", duration = 555_000, source = "listenbrainz",
-                    recordingMbid = "9d59b396-1f9d-4a70-8b17-6b1dd97d1c73", isrc = "GB5EP1400001",
-                ),
-                RecommendedTrack(title = "Two", artist = "deafheaven", source = "listenbrainz"),
-                RecommendedTrack(title = "Three", artist = "Anathema", source = "listenbrainz"),
-            ),
-            (tracks.last() as Resource.Success).data,
-        )
-        val artists = r.repo.getRecommendedArtists().toList()
-            .filterIsInstance<Resource.Success<List<RecommendedArtist>>>().last().data
+        val all = r.repo.getRecommendedArtists().toList()
+        assertEquals(Resource.Loading, all.first())
+        val artists = all.filterIsInstance<Resource.Success<List<RecommendedArtist>>>().last().data
         assertEquals(listOf("Deafheaven", "Anathema"), artists.map { it.name })
-        assertEquals(1, source.asked.size, "the second list read the first one's answer")
-        assertEquals(3, r.repo.cachedTracksList?.size)
+        assertEquals(1, source.asked.size)
 
         // A miss: the list empties and says why.
         val miss = rig(FakeSource().apply { answer("listenbrainz", { empty }) })
         assertEquals(
             listOf(Resource.Loading, Resource.Success(emptyList()), Resource.Error(emptyRecommendationsMessage(true, false))),
-            miss.repo.getRecommendedTracks().toList(),
+            miss.repo.getRecommendedArtists().toList(),
         )
         // A failure with nothing to show.
         val fail = rig(FakeSource().apply { answer("listenbrainz", { throw IllegalStateException("x") }) })
-        assertEquals(Resource.Error(RecommendationsRepository.FAILED_MESSAGE), fail.repo.getRecommendedTracks().toList().last())
+        assertEquals(Resource.Error(RecommendationsRepository.FAILED_MESSAGE), fail.repo.getRecommendedArtists().toList().last())
         // Nothing connected.
         val none = rig(FakeSource(), listenBrainz = null)
-        assertEquals(Resource.Error(RecommendationsRepository.NOT_CONFIGURED_MESSAGE), none.repo.getRecommendedTracks().toList().last())
+        assertEquals(Resource.Error(RecommendationsRepository.NOT_CONFIGURED_MESSAGE), none.repo.getRecommendedArtists().toList().last())
     }
 
     @Test
     fun `the old lists say not configured for an AI-only user`() = runTest {
         val r = rig(FakeSource(), listenBrainz = null, picks = FakePicks(hasProvider = true, shares = true))
-        assertEquals(Resource.Error(RecommendationsRepository.NOT_CONFIGURED_MESSAGE), r.repo.getRecommendedTracks().toList().last())
         assertEquals(Resource.Error(RecommendationsRepository.NOT_CONFIGURED_MESSAGE), r.repo.getRecommendedArtists().toList().last())
         // The page itself counts the AI as a source.
         r.repo.load()
@@ -597,7 +575,7 @@ class RecommendationsRepositoryTest {
     @Test
     fun `a connected service whose plugin isn't loaded is a failure — not a miss`() = runTest {
         val r = rig(FakeSource(providerList = emptyList()))
-        assertEquals(Resource.Error(RecommendationsRepository.FAILED_MESSAGE), r.repo.getRecommendedTracks().toList().last())
+        assertEquals(Resource.Error(RecommendationsRepository.FAILED_MESSAGE), r.repo.getRecommendedArtists().toList().last())
     }
 
     @Test
@@ -617,7 +595,6 @@ class RecommendationsRepositoryTest {
         val source = FakeSource(providerList = listOf(LASTFM, LISTENBRAINZ, am)).apply { answer("applemusic", { empty }) }
         val r = rig(source, listenBrainz = null)
         val generic = emptyRecommendationsMessage(hasListenBrainz = false, hasLastFm = false)
-        assertEquals(Resource.Error(generic), r.repo.getRecommendedTracks().toList().last())
         assertEquals(Resource.Error(generic), r.repo.getRecommendedArtists().toList().last())
         assertFalse("Last.fm" in generic || "ListenBrainz" in generic)
     }
@@ -643,7 +620,7 @@ class RecommendationsRepositoryTest {
         )
         val seen = mutableListOf<List<String>>()
         val watch = launch { next.repo.page.collect { seen += next.names() } }
-        val tracks = launch { next.repo.getRecommendedTracks().toList() }
+        val tracks = launch { next.repo.getRecommendedArtists().toList() }
         runCurrent()
         assertTrue(seen.none { "From AM" in it }, "$seen")
         assertEquals(listOf("From LB"), next.names())
@@ -656,7 +633,7 @@ class RecommendationsRepositoryTest {
             disk = Disk(first.disk.saved),
         )
         off.settings.setRecommendationsOffResolvers(setOf("listenbrainz"))
-        val offTracks = launch { off.repo.getRecommendedTracks().toList() }
+        val offTracks = launch { off.repo.getRecommendedArtists().toList() }
         runCurrent()
         assertTrue("From LB" !in off.names(), "${off.names()}")
         offTracks.cancel()

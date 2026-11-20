@@ -8,7 +8,6 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import kotlin.math.floor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -49,6 +49,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,18 +96,18 @@ import com.parachord.shared.recommendations.ListenerItem
 import com.parachord.shared.recommendations.PageStatus
 import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.RecommendationPageBlock
+import com.parachord.shared.recommendations.key
+import com.parachord.shared.recommendations.recommendationPageLayout
+import com.parachord.shared.recommendations.recommendationGridColumns
 import com.parachord.shared.recommendations.RecommendationRow
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.RowView
 import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.SONG_PREVIEW
-import com.parachord.shared.recommendations.SectionView
 import com.parachord.shared.recommendations.achordionUserUrl
 import com.parachord.shared.recommendations.activeSourceFilter
 import com.parachord.shared.recommendations.RECOMMENDATIONS_CONTEXT
-import com.parachord.shared.recommendations.albumsSlotIndex
-import com.parachord.shared.recommendations.listenersSkeleton
-import com.parachord.shared.recommendations.pendingSkeleton
 import com.parachord.shared.recommendations.showsAchordionLink
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -114,10 +116,9 @@ import com.parachord.shared.recommendations.itemSourceName
 import com.parachord.shared.recommendations.pageStatus
 import com.parachord.shared.recommendations.recommendedSongTrack
 import com.parachord.shared.recommendations.releaseYear
-import com.parachord.shared.recommendations.rowView
-import com.parachord.shared.recommendations.sectionViews
 import com.parachord.shared.recommendations.upcomingLabel
 import com.parachord.shared.repository.RecommendationPageState
+import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.repository.unsavedFriendId
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.ServiceColors
@@ -214,8 +215,8 @@ fun RecommendationsScreen(
             PageStatus.NotConfigured -> PageMessage(
                 title = RecommendationCopy.NOT_CONFIGURED_TITLE,
                 body = RecommendationCopy.NOT_CONFIGURED_BODY,
-                primary = RecommendationCopy.CONNECT_LISTENBRAINZ to { onNavigateToPluginSettings("listenbrainz") },
-                secondary = RecommendationCopy.CONNECT_LASTFM to { onNavigateToPluginSettings("lastfm") },
+                primary = RecommendationCopy.CONNECT_LISTENBRAINZ to { onNavigateToPluginSettings(RecommendationsRepository.LISTENBRAINZ) },
+                secondary = RecommendationCopy.CONNECT_LASTFM to { onNavigateToPluginSettings(RecommendationsRepository.LASTFM) },
             )
             is PageStatus.Failed -> PageMessage(
                 title = RecommendationCopy.FAILED_TITLE,
@@ -402,10 +403,8 @@ private fun PageContent(
     var playlistMenu by remember { mutableStateOf<RecommendationItem?>(null) }
     var listenerMenu by remember { mutableStateOf<ListenerItem?>(null) }
 
-    val views = sectionViews(page, filter)
-    val contentViews = views.filter { it.section.type != null }
-    val listenersView = views.firstOrNull { it.section.type == null }
-    val albumsSlotAt = albumsSlotIndex(page, filter, views)
+    // The page's blocks in drawing order: the shared layout iOS draws too.
+    val blocks = recommendationPageLayout(page, filter, expandedRows)
 
     val density = LocalDensity.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -428,63 +427,84 @@ private fun PageContent(
         grid = grid,
     )
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
-        contentViews.forEachIndexed { i, view ->
-            if (i == albumsSlotAt) cardsSkeletonSection("skeleton:albums-slot", RecommendationCopy.ALBUMS, lines = 3)
-            section(
-                view, page, filter, expandedRows, cards,
-                songRow = { row, items, index, item ->
-                    SongRow(
-                        row = row,
-                        items = items,
-                        index = index,
-                        item = item,
-                        viewModel = viewModel,
-                        isPlaying = { track ->
-                            val ctx = playback.playbackContext
-                            ctx?.type == RECOMMENDATIONS_CONTEXT && ctx.id == row.key && playback.currentTrack?.id == track.id
-                        },
-                        resolvers = { key -> trackResolvers[key] },
-                        confidences = { key -> trackConfidences[key] },
-                        artwork = { key -> trackArtwork[key] },
-                        onLongPress = { track ->
-                            scope.launch {
-                                // A loved song's menu offers Remove from Collection.
-                                val loved = viewModel.isTrackInCollection(track.title, track.artist)
-                                trackMenu.show(
-                                    TrackContextInfo(
-                                        title = track.title,
-                                        artist = track.artist,
-                                        artworkUrl = track.artworkUrl,
-                                        duration = track.duration,
-                                        isInCollection = loved,
-                                    ),
-                                    track,
-                                )
-                            }
-                        },
+    val songRow: @Composable (RecommendationRow, List<RecommendationItem>, Int, RecommendationItem) -> Unit = { row, items, index, item ->
+        SongRow(
+            row = row,
+            items = items,
+            index = index,
+            item = item,
+            viewModel = viewModel,
+            isPlaying = { track ->
+                val ctx = playback.playbackContext
+                ctx?.type == RECOMMENDATIONS_CONTEXT && ctx.id == row.key && playback.currentTrack?.id == track.id
+            },
+            resolvers = { key -> trackResolvers[key] },
+            confidences = { key -> trackConfidences[key] },
+            artwork = { key -> trackArtwork[key] },
+            onLongPress = { track ->
+                scope.launch {
+                    // A loved song's menu offers Remove from Collection.
+                    val loved = viewModel.isTrackInCollection(track.title, track.artist)
+                    trackMenu.show(
+                        TrackContextInfo(
+                            title = track.title,
+                            artist = track.artist,
+                            artworkUrl = track.artworkUrl,
+                            duration = track.duration,
+                            isInCollection = loved,
+                        ),
+                        track,
                     )
-                },
-            )
+                }
+            },
+        )
+    }
+
+    // Blocks arrive one provider at a time, and the shared layout can put a new one
+    // above those on screen (an earlier section, the Albums slot). A keyed LazyColumn
+    // keeps the first visible item where it was, so the page looked scrolled down.
+    // While the user hasn't scrolled away from the top, keep it there as blocks
+    // arrive (iOS's page does the same); once they have, never move them.
+    val listState = rememberLazyListState()
+    var pinnedToTop by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        // Only the user's own scrolling decides; an insertion that moves the first
+        // visible item isn't a scroll in progress.
+        snapshotFlow {
+            Triple(listState.isScrollInProgress, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+        }.collect { (scrolling, index, offset) ->
+            if (scrolling) pinnedToTop = index == 0 && offset == 0
         }
-        if (albumsSlotAt == contentViews.size) {
-            cardsSkeletonSection("skeleton:albums-slot", RecommendationCopy.ALBUMS, lines = 3)
-        }
-        // Providers still answering with nothing on screen: one unlabeled
-        // skeleton after the content and before Listeners (desktop).
-        if (pendingSkeleton(page, filter)) {
-            cardsSkeletonSection("skeleton:pending", null, lines = 3)
-        }
-        if (listenersView != null) {
-            section(listenersView, page, filter, expandedRows, cards, songRow = { _, _, _, _ -> })
-        } else if (listenersSkeleton(page, filter)) {
-            item(key = "skeleton:listeners:header") { SectionHeader(title = RecommendationCopy.LISTENERS) }
-            item(key = "skeleton:listeners:cards") {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = Gutter),
-                    horizontalArrangement = Arrangement.spacedBy(CardGap),
-                    userScrollEnabled = false,
-                ) { items(LISTENER_SKELETONS) { ListenerCardSkeleton() } }
+    }
+    val blockKeys = blocks.map { it.key }
+    LaunchedEffect(blockKeys) {
+        if (pinnedToTop && blockKeys.isNotEmpty()) listState.requestScrollToItem(0)
+    }
+
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is RecommendationPageBlock.SectionTitle ->
+                    item(key = "section:${block.section.type?.wire ?: "listeners"}:header") {
+                        SectionHeader(title = block.section.title)
+                    }
+                is RecommendationPageBlock.Row -> row(block, filter, cards, songRow)
+                RecommendationPageBlock.PersonalSkeleton -> personalPendingRow()
+                RecommendationPageBlock.AlbumsSkeleton ->
+                    cardsSkeletonSection("skeleton:albums-slot", RecommendationCopy.ALBUMS, lines = 3)
+                // Providers still answering with nothing on screen: one unlabeled
+                // skeleton after the content and before Listeners (desktop).
+                RecommendationPageBlock.PendingSkeleton -> cardsSkeletonSection("skeleton:pending", null, lines = 3)
+                RecommendationPageBlock.ListenersSkeleton -> {
+                    item(key = "skeleton:listeners:header") { SectionHeader(title = RecommendationCopy.LISTENERS) }
+                    item(key = "skeleton:listeners:cards") {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = Gutter),
+                            horizontalArrangement = Arrangement.spacedBy(CardGap),
+                            userScrollEnabled = false,
+                        ) { items(LISTENER_SKELETONS) { ListenerCardSkeleton() } }
+                    }
+                }
             }
         }
     }
@@ -590,28 +610,6 @@ private class CardActions(
     val grid: GridSpec,
 )
 
-/** One section: its title when its rows are categories, then each row (desktop's `renderTypeSection`). */
-private fun LazyListScope.section(
-    view: SectionView,
-    page: RecommendationPageState,
-    filter: String?,
-    expandedRows: Set<String>,
-    cards: CardActions,
-    songRow: @Composable (RecommendationRow, List<RecommendationItem>, Int, RecommendationItem) -> Unit,
-) {
-    val categorized = view.rows.any { it.category != null }
-    if (categorized) {
-        item(key = "section:${view.section.type?.wire ?: "listeners"}:header") {
-            SectionHeader(title = view.section.title)
-        }
-    }
-    view.rows.forEachIndexed { index, row ->
-        if (index == view.personalPendingAt) personalPendingRow()
-        row(row, view, page, filter, row.key in expandedRows, cards, songRow)
-    }
-    if (view.personalPendingAt == view.rows.size) personalPendingRow()
-}
-
 /** Shuffleupagus's placeholder row in a categorized Albums section. */
 private fun LazyListScope.personalPendingRow() {
     item(key = "albums:personal-pending:header") {
@@ -622,19 +620,18 @@ private fun LazyListScope.personalPendingRow() {
 
 /** One row: its header, then its songs or cards (desktop's `renderSubsection`). */
 private fun LazyListScope.row(
-    row: RecommendationRow,
-    view: SectionView,
-    page: RecommendationPageState,
+    block: RecommendationPageBlock.Row,
     filter: String?,
-    expanded: Boolean,
     cards: CardActions,
     songRow: @Composable (RecommendationRow, List<RecommendationItem>, Int, RecommendationItem) -> Unit,
 ) {
-    val rv: RowView = rowView(row, page, filter, expanded)
+    val row = block.row
+    val rv: RowView = block.view
+    val expanded = block.expanded
     item(key = "${row.key}:header") {
         SectionHeader(
-            title = row.title ?: view.section.title,
-            sub = row.category != null,
+            title = block.title,
+            sub = block.subtitle,
             action = if (rv.showToggle) SectionAction(rv.toggleLabel) { cards.viewModel.toggleRow(row.key) } else null,
         )
     }
@@ -686,14 +683,13 @@ private class CardList {
 private data class GridSpec(val columns: Int, val cardWidth: Dp)
 
 /**
- * An open row's grid, as desktop's `repeat(auto-fill, minmax(160px, 1fr))`:
- * as many columns as fit at [RecCardMinGridWidth] (at least 2), each card
+ * An open row's grid: the shared [recommendationGridColumns] rule, each card
  * stretched so the row fills [available] edge to edge with [gap] between.
  * The width is floored to a whole pixel so rounding can't push a card onto
  * the next line.
  */
 private fun gridCardWidth(available: Dp, gap: Dp, density: androidx.compose.ui.unit.Density): Pair<Int, Dp> {
-    val columns = maxOf(2, floor((available + gap) / (RecCardMinGridWidth + gap)).toInt())
+    val columns = recommendationGridColumns(available.value.toDouble(), gap.value.toDouble())
     val px = with(density) { ((available - gap * (columns - 1)).toPx() / columns).toInt() }
     return columns to with(density) { px.toDp() }
 }
