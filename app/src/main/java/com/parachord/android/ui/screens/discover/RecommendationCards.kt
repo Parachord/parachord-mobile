@@ -91,7 +91,7 @@ private fun PlayDisc(onPlay: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** A release: cover, title, artist, year, optional "Coming …" pill and reason. */
+/** A release: cover, title, artist, year, optional "Coming …" pill (top right, as desktop) and reason. */
 @Composable
 fun RecAlbumCard(
     item: RecommendationItem,
@@ -126,7 +126,7 @@ fun RecAlbumCard(
                     color = OnFill,
                     maxLines = 1,
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
+                        .align(Alignment.TopEnd)
                         .padding(8.dp)
                         .clip(RoundedCornerShape(percent = 50))
                         .background(FillAccent)
@@ -289,7 +289,7 @@ private fun Cover(url: String, modifier: Modifier) {
     )
 }
 
-/** A listener with a similar taste: hexagon avatar, similarity pill, name, service, top artists. */
+/** A listener with a similar taste: hexagon avatar, play disc, similarity pill, name, service, top artists. */
 @Composable
 fun ListenerCard(
     item: ListenerItem,
@@ -345,6 +345,8 @@ fun ListenerCard(
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
             }
+            // Desktop's friend card plays the person's top tracks.
+            PlayDisc(onPlay, Modifier.align(Alignment.TopEnd))
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true, center = true, modifier = Modifier.fillMaxWidth())

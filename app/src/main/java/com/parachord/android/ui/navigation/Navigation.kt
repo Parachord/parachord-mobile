@@ -28,6 +28,11 @@ object Routes {
     const val PLAYLIST_EDIT = "playlist/{playlistId}/edit"
     const val NOW_PLAYING = "now_playing"
     const val SETTINGS = "settings"
+    /** [SETTINGS] opening one plugin's sheet (`plugin` is a plugin or resolver id; optional). */
+    const val SETTINGS_WITH_PLUGIN = "settings?plugin={plugin}"
+
+    fun settings(pluginId: String?): String =
+        if (pluginId == null) SETTINGS else "settings?plugin=${Uri.encode(pluginId)}"
     /** `mbid`: the artist's MusicBrainz id when the caller has one (#478). */
     const val ARTIST = "artist/{artistName}?tab={tab}&mbid={mbid}"
     const val ALBUM = "album/{albumTitle}/{artistName}"
@@ -272,8 +277,15 @@ fun ParachordNavHost(
                 onListenAlongNext = onListenAlongNext,
             )
         }
-        composable(Routes.SETTINGS) {
-            com.parachord.android.ui.screens.settings.SettingsScreen()
+        composable(
+            route = Routes.SETTINGS_WITH_PLUGIN,
+            arguments = listOf(
+                navArgument("plugin") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
+        ) { backStackEntry ->
+            com.parachord.android.ui.screens.settings.SettingsScreen(
+                initialPluginId = backStackEntry.arguments?.getString("plugin"),
+            )
         }
         composable(
             route = Routes.ARTIST,
@@ -373,6 +385,18 @@ fun ParachordNavHost(
                 onBack = { navController.popBackStack() },
                 onNavigateToArtist = { name ->
                     navController.navigate(Routes.artist(name))
+                },
+                onNavigateToAlbum = { albumTitle, artistName ->
+                    navController.navigate(Routes.album(albumTitle, artistName))
+                },
+                onNavigateToWeekly = { id, contextType ->
+                    navController.navigate(Routes.weeklyPlaylist(id, contextType))
+                },
+                onNavigateToFriend = { friendId ->
+                    navController.navigate(Routes.friendDetail(friendId))
+                },
+                onNavigateToPluginSettings = { pluginId ->
+                    navController.navigate(Routes.settings(pluginId))
                 },
             )
         }

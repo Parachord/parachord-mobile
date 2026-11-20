@@ -9,7 +9,12 @@ import com.parachord.android.data.repository.FriendsRepository
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.repository.RecommendationsRepository
 import com.parachord.android.data.repository.WeeklyPlaylistsRepository
+import com.parachord.android.data.db.entity.AlbumEntity
+import com.parachord.android.data.db.entity.PlaylistEntity
+import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.playback.PlaybackController
+import com.parachord.android.playback.PlaybackState
+import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.shared.deeplink.ProviderPlaylistResolver
 import com.parachord.shared.model.Resource
@@ -29,7 +34,10 @@ import com.parachord.shared.repository.RecommendationPageState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +62,7 @@ class RecommendationsViewModel(
     private val weeklyPlaylistsRepository: WeeklyPlaylistsRepository,
     private val providerPlaylistResolver: ProviderPlaylistResolver,
     private val friendsRepository: FriendsRepository,
+    playbackStateHolder: PlaybackStateHolder,
 ) : ViewModel() {
 
     companion object {
@@ -86,6 +95,13 @@ class RecommendationsViewModel(
     val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
 
     private val catalogQueues = CatalogQueues(metadataService)
+
+    /** What's playing, for the song rows' now-playing highlight. */
+    val playbackState: StateFlow<PlaybackState> = playbackStateHolder.state
+
+    /** Every playlist, for the track menu's Add to Playlist. */
+    val playlists: StateFlow<List<PlaylistEntity>> = libraryRepository.getAllPlaylists()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
         viewModelScope.launch { repository.load(false) }
@@ -267,6 +283,52 @@ class RecommendationsViewModel(
             }
         }
     }
+
+    // ── Track menu ──────────────────────────────────────────────────
+
+    fun playNext(track: TrackEntity) {
+        playbackController.insertNext(listOf(track))
+    }
+
+    fun addToQueue(track: TrackEntity) {
+        playbackController.addToQueue(listOf(track))
+    }
+
+    fun addToPlaylist(playlist: PlaylistEntity, track: TrackEntity) {
+        viewModelScope.launch { libraryRepository.addTracksToPlaylist(playlist.id, listOf(track)) }
+    }
+
+    fun toggleTrackCollection(track: TrackEntity, isInCollection: Boolean) {
+        viewModelScope.launch {
+            if (isInCollection) libraryRepository.removeFromCollection(track)
+            else libraryRepository.addToCollection(track)
+        }
+    }
+
+    // ── Album menu ──────────────────────────────────────────────────
+
+    fun isAlbumInCollection(title: String, artist: String): Flow<Boolean> =
+        libraryRepository.isAlbumInCollection(title, artist)
+
+    fun toggleAlbumCollection(item: RecommendationItem, isInCollection: Boolean) {
+        val artist = item.artist.orEmpty()
+        val album = AlbumEntity(
+            id = "album-${item.name.hashCode()}-${artist.hashCode()}",
+            title = item.name,
+            artist = artist,
+            artworkUrl = item.imageUrl,
+        )
+        viewModelScope.launch {
+            if (isInCollection) {
+                libraryRepository.getAlbumByTitleAndArtist(item.name, artist)
+                    ?.let { libraryRepository.deleteAlbumWithSync(it) }
+            } else {
+                libraryRepository.addAlbumToCollection(album)
+            }
+        }
+    }
+
+    fun isArtistInCollection(name: String): Flow<Boolean> = libraryRepository.isArtistInCollection(name)
 
     // ── Artist actions ──────────────────────────────────────────────
 

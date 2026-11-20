@@ -229,6 +229,8 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
     implementation(libs.kotlinx.serialization.json)
+    // Today's date for the Recommendations page's "Coming …" pills (shared upcomingLabel).
+    implementation(libs.kotlinx.datetime)
 
     // Image Loading
     implementation(libs.coil.compose)

@@ -32,6 +32,11 @@ object RecommendationCopy {
     const val ALBUMS = "Albums"
     const val BASED_ON_LISTENING = "Based on your listening"
 
+    /** The filter bar's first chip. */
+    const val ALL = "All"
+    const val PLAY = "Play"
+    const val ADD_TO_QUEUE = "Add to Queue"
+
     const val VIEW_HISTORY = "View history"
     const val FOLLOW = "Follow"
     const val VIEW_ON_ACHORDION = "View on Achordion"
