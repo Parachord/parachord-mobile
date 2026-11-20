@@ -22,7 +22,7 @@ fun playsHere(p: PluginInfo): Boolean {
  * Local on purpose: the shared [com.parachord.shared.plugin.needsAccount] follows
  * `requiresAuth` only, and widening it would gate other plug-ins.
  */
-fun needsAccount(p: PluginInfo): Boolean =
+fun stepOneNeedsAccount(p: PluginInfo): Boolean =
     p.requiresAuth || (p.authType?.let { it.isNotBlank() && it != "none" } == true)
 
 /** Step 1's tiles: services that need signing in, free plug-ins that play here, the music folder. */
@@ -35,8 +35,8 @@ data class StepOnePlugins(
 fun stepOnePlugins(plugins: List<PluginInfo>): StepOnePlugins {
     val list = plugins.filter(::playsHere)
     return StepOnePlugins(
-        services = list.filter { it.id != LOCAL_FILES_ID && needsAccount(it) },
-        free = list.filter { it.id != LOCAL_FILES_ID && !needsAccount(it) },
+        services = list.filter { it.id != LOCAL_FILES_ID && stepOneNeedsAccount(it) },
+        free = list.filter { it.id != LOCAL_FILES_ID && !stepOneNeedsAccount(it) },
         folder = list.firstOrNull { it.id == LOCAL_FILES_ID },
     )
 }

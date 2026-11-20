@@ -17,4 +17,11 @@ class TimeAgoTest {
         assertEquals("1y ago", TimeAgo.ago(now - 400 * 24 * 60 * min, now))
         assertEquals("just now", TimeAgo.ago(now + min, now))
     }
+
+    @Test
+    fun theLastDaysOfTheYearStayInMonths() {
+        val day = 24 * 60 * min
+        assertEquals("12mo ago", TimeAgo.ago(now - 362 * day, now))
+        assertEquals("1y ago", TimeAgo.ago(now - 365 * day, now))
+    }
 }

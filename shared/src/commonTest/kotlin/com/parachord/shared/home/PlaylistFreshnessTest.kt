@@ -87,39 +87,39 @@ class PlaylistFreshnessTest {
 
     @Test
     fun `the same tracks in the same order is not a change`() {
-        assertNull(PlaylistFreshness.stamp(listOf(a, b), listOf(a, b), t0, now))
-        assertNull(PlaylistFreshness.stamp(emptyList(), emptyList(), null, now))
+        assertNull(PlaylistFreshness.stamp(listOf(a, b), listOf(a, b), now))
+        assertNull(PlaylistFreshness.stamp(emptyList(), emptyList(), now))
     }
 
     @Test
     fun `the same tracks reordered is a change that added nothing`() {
-        assertEquals(PlaylistFreshness.Stamp(now, 0), PlaylistFreshness.stamp(listOf(a, b), listOf(b, a), t0, now))
-        assertEquals(PlaylistFreshness.Stamp(now, 0), PlaylistFreshness.stamp(listOf(a, b, c), listOf(c, a, b), t0, now))
+        assertEquals(PlaylistFreshness.Stamp(now, 0), PlaylistFreshness.stamp(listOf(a, b), listOf(b, a), now))
+        assertEquals(PlaylistFreshness.Stamp(now, 0), PlaylistFreshness.stamp(listOf(a, b, c), listOf(c, a, b), now))
     }
 
     @Test
     fun `two tracks added gives lastChangeAdded 2`() {
         val d = PlaylistFreshness.trackKey("D", "Four")
         val e = PlaylistFreshness.trackKey("E", "Five")
-        assertEquals(PlaylistFreshness.Stamp(now, 2), PlaylistFreshness.stamp(listOf(a, b, c), listOf(a, b, c, d, e), t0, now))
+        assertEquals(PlaylistFreshness.Stamp(now, 2), PlaylistFreshness.stamp(listOf(a, b, c), listOf(a, b, c, d, e), now))
     }
 
     @Test
     fun `a removal stamps with nothing added and a swap counts the new ones`() {
-        assertEquals(PlaylistFreshness.Stamp(now, 0), PlaylistFreshness.stamp(listOf(a, b, c), listOf(b, c), t0, now))
+        assertEquals(PlaylistFreshness.Stamp(now, 0), PlaylistFreshness.stamp(listOf(a, b, c), listOf(b, c), now))
         val z = PlaylistFreshness.trackKey("Z", "New")
-        assertEquals(PlaylistFreshness.Stamp(now, 1), PlaylistFreshness.stamp(listOf(a, b, c), listOf(a, z), t0, now))
+        assertEquals(PlaylistFreshness.Stamp(now, 1), PlaylistFreshness.stamp(listOf(a, b, c), listOf(a, z), now))
     }
 
     @Test
     fun `a second copy of a track already there counts as added`() {
-        assertEquals(PlaylistFreshness.Stamp(now, 1), PlaylistFreshness.stamp(listOf(a), listOf(a, a), t0, now))
+        assertEquals(PlaylistFreshness.Stamp(now, 1), PlaylistFreshness.stamp(listOf(a), listOf(a, a), now))
     }
 
     @Test
     fun `no earlier tracks counts every track as added`() {
-        assertEquals(PlaylistFreshness.Stamp(now, 3), PlaylistFreshness.stamp(null, listOf(a, b, c), null, now))
-        assertEquals(PlaylistFreshness.Stamp(now, 4), PlaylistFreshness.stamp(null, keys("W" to "1", "X" to "2", "Y" to "3", "Z" to "4"), null, now))
+        assertEquals(PlaylistFreshness.Stamp(now, 3), PlaylistFreshness.stamp(null, listOf(a, b, c), now))
+        assertEquals(PlaylistFreshness.Stamp(now, 4), PlaylistFreshness.stamp(null, keys("W" to "1", "X" to "2", "Y" to "3", "Z" to "4"), now))
     }
 
     @Test

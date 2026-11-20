@@ -49,8 +49,7 @@ class PlaylistTrackDao(
         write()
         val now = nowMs()
         for ((id, prevKeys) in before) {
-            val prevAt = playlistQueries.getTrackStamp(id).executeAsOneOrNull()?.tracksChangedAt
-            val stamp = PlaylistFreshness.stamp(prevKeys, trackKeys(id), prevAt, now) ?: continue
+            val stamp = PlaylistFreshness.stamp(prevKeys, trackKeys(id), now) ?: continue
             playlistQueries.stampTrackChange(stamp.tracksChangedAt, stamp.lastChangeAdded.toLong(), id)
         }
     }

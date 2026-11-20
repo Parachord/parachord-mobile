@@ -51,12 +51,9 @@ object PlaylistFreshness {
      * The stamp for a write that took a playlist's tracks from [prevKeys] to
      * [nextKeys] (both in order), or null when the keys are equal, order
      * included. [prevKeys] null means no earlier tracks were known, so every
-     * track counts as added. [prevAt] is the stored stamp; it doesn't change the
-     * answer (the DAO compares keys it read itself), but is kept beside the
-     * keys so callers pass what desktop's `stampAgainst` sees.
+     * track counts as added. 
      */
-    @Suppress("UNUSED_PARAMETER")
-    fun stamp(prevKeys: List<String>?, nextKeys: List<String>, prevAt: Long?, now: Long): Stamp? {
+    fun stamp(prevKeys: List<String>?, nextKeys: List<String>, now: Long): Stamp? {
         if (prevKeys != null && prevKeys == nextKeys) return null
         return Stamp(now, prevKeys?.let { countAdded(it, nextKeys) } ?: nextKeys.size)
     }

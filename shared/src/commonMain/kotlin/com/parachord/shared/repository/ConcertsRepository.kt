@@ -616,7 +616,7 @@ internal fun withFirstVenueCoordinates(kept: ConcertEvent, other: ConcertEvent):
 
 // ── Extension mappers ───────────────────────────────────────────
 
-private fun com.parachord.shared.api.TmEvent.toConcertEvent(): ConcertEvent {
+internal fun com.parachord.shared.api.TmEvent.toConcertEvent(): ConcertEvent {
     val venue = embedded?.venues?.firstOrNull()
     val attraction = embedded?.attractions?.firstOrNull()
     // Pick best image — prefer 16:9 ratio, largest
@@ -645,12 +645,12 @@ private fun com.parachord.shared.api.TmEvent.toConcertEvent(): ConcertEvent {
         lineup = embedded?.attractions?.mapNotNull { it.name } ?: emptyList(),
         source = "ticketmaster",
         status = dates?.status?.code,
-        venueLatitude = venue?.location?.latitude?.trim()?.toDoubleOrNull(),
-        venueLongitude = venue?.location?.longitude?.trim()?.toDoubleOrNull(),
+        venueLatitude = venue?.location?.latitude?.trim()?.toDoubleOrNull()?.takeIf { it.isFinite() },
+        venueLongitude = venue?.location?.longitude?.trim()?.toDoubleOrNull()?.takeIf { it.isFinite() },
     )
 }
 
-private fun com.parachord.shared.api.SgEvent.toConcertEvent(): ConcertEvent {
+internal fun com.parachord.shared.api.SgEvent.toConcertEvent(): ConcertEvent {
     val mainPerformer = performers.firstOrNull()
     val dateStr = datetimeLocal?.take(10) // "2026-03-22T20:00:00" → "2026-03-22"
     val timeStr = datetimeLocal?.let {
@@ -673,8 +673,8 @@ private fun com.parachord.shared.api.SgEvent.toConcertEvent(): ConcertEvent {
         ticketUrl = url,
         lineup = performers.mapNotNull { it.name },
         source = "seatgeek",
-        venueLatitude = venue?.location?.lat,
-        venueLongitude = venue?.location?.lon,
+        venueLatitude = venue?.location?.lat?.takeIf { it.isFinite() },
+        venueLongitude = venue?.location?.lon?.takeIf { it.isFinite() },
     )
 }
 
