@@ -82,6 +82,8 @@ object DesignTokens {
     const val FILL_ERROR = 0xB91C1C
     const val FILL_ERROR_HOVER = 0x991B1B
     const val FILL_INFO = 0x2563EB
+    /** A neutral fill with white text (a tile mark with no page or service colour, desktop `--fill-neutral`). */
+    const val FILL_NEUTRAL = 0x4B5563
 
     const val ON_TOUR = 0x10C9B4
     const val HOSTED_FG = 0x3B82F6

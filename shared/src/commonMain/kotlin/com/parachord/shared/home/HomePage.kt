@@ -138,6 +138,55 @@ object HomeCopy {
     const val SET_UP = "Set up"
     /** The getting-started layout's title (desktop `home-getting-started.js`). */
     const val WELCOME = "Welcome to Parachord"
+    const val WELCOME_INTRO = "All your music, from every service, in one player. Three steps:"
+    const val SKIP_SETUP = "Skip setup for now"
+
+    const val STEP_CONNECT = "Connect where you listen"
+    const val STEP_MUSIC = "Bring in your music"
+    const val STEP_LISTEN = "Start listening"
+    const val STEP_DONE = "Done"
+    const val STEP_NEXT = "Next"
+    const val STEP_NOT_YET = "Not yet"
+
+    // Step 1.
+    const val CONNECT_LINE =
+        "Sign in to the services you use, and your own music server if you have one. Parachord finds each song wherever you have it and plays it here."
+    const val GROUP_SERVICES = "Services"
+    const val GROUP_NO_ACCOUNT = "On already, no account needed"
+    const val CONNECTED = "Connected"
+    const val CONNECT = "Connect"
+    const val MORE_PLUGINS = "More plug-ins"
+    const val BROWSE = "Browse"
+    const val MUSIC_FOLDER = "Your music folder"
+    const val ADD_A_FOLDER = "Add a folder"
+    const val ADD_A_MUSIC_FOLDER = "Add a music folder"
+    const val ON = "On"
+    const val OFF = "Off"
+    /**
+     * Desktop's order note without its sound-quality clause: the phones have no
+     * sound-quality setting, so neither the clause nor its button is here.
+     */
+    const val ORDER_NOTE =
+        "With more than one source, Parachord plays each song from the first one in your order that has it. Drag plug-ins to change the order."
+    const val SET_THE_ORDER = "Set the order"
+
+    // Step 2.
+    const val MUSIC_LINE =
+        "Bring in your playlists and liked songs, and your listening history for recommendations and friends."
+    const val GROUP_PLAYLISTS = "Playlists and liked songs"
+    const val IMPORT_A_PLAYLIST = "Import a playlist"
+    const val IMPORT_A_PLAYLIST_SUB = "Paste a link from any service"
+    const val SYNC_YOUR_LIBRARY = "Sync your library"
+    const val SYNC_YOUR_LIBRARY_SUB = "From a service you connected"
+
+    // Step 3.
+    const val LISTEN_LINE_WITH_MUSIC = "Play your collection, or open a playlist you brought in."
+    const val LISTEN_LINE_EMPTY = "Play an album from Explore below, or search for a song."
+    const val SEARCH = "Search"
+
+    const val EXPLORE_TITLE = "Explore while you set up"
+    const val EXPLORE_SUBTITLE =
+        "Albums critics love, and the most played right now. Playing needs a connected service; Bandcamp plays some of these already."
 
     fun lovesSubtitle(n: Int): String = if (n == 1) "Your latest love" else "Your $n latest loves"
 

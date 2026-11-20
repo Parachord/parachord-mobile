@@ -25,7 +25,13 @@ data class GettingStartedView(
     val free: List<PluginInfo>,
     val folder: PluginInfo?,
     val hasMusic: Boolean,
-)
+    /** The plug-ins that are on and can play: a free plug-in's and the folder's On / Off. */
+    val playbackResolvers: List<String> = emptyList(),
+    /** Local files are in the library (the folder tile stops asking for one). */
+    val folderAdded: Boolean = false,
+) {
+    fun isOn(p: PluginInfo): Boolean = p.id in playbackResolvers
+}
 
 /** A card in "Made from your listening". */
 sealed class HomeMixCard {

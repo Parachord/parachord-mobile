@@ -422,6 +422,8 @@ class HomeSession(
                 free = inputs.stepOne.free,
                 folder = inputs.stepOne.folder,
                 hasMusic = inputs.hasMusic,
+                playbackResolvers = inputs.resolvers,
+                folderAdded = inputs.folderAdded,
             )
         } else null
         val setup = homeSetupItems(gettingStartedLeft(gsState, status), u.dismissed).takeIf { it.items.isNotEmpty() }

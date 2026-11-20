@@ -312,16 +312,30 @@ fun HomeScreen(
                 !state.ready -> item(key = "skeleton") { HomeSkeleton() }
 
                 state.gettingStarted != null -> {
-                    // Task 7 replaces this with the getting-started layout and Explore.
+                    // Only the getting-started layout, then Explore (desktop `home-page.js`).
+                    val view = state.gettingStarted!!
                     item(key = "getting-started") {
-                        Text(
-                            text = HomeCopy.WELCOME,
-                            fontSize = 28.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = DesignTokens.textPrimary.current(),
-                            modifier = Modifier
-                                .padding(horizontal = DesignTokens.SCREEN_GUTTER.dp, vertical = 24.dp)
-                                .semantics { heading() },
+                        HomeGettingStarted(
+                            view = view,
+                            hasCollection = state.hasCollection,
+                            onSkip = viewModel::skipSetup,
+                            onOpenSettings = onOpenSettings,
+                            onOpenImportPlaylist = onOpenImportPlaylist,
+                            onCollectionRadio = viewModel::playCollectionRadio,
+                            onSearch = onOpenSearch,
+                            modifier = Modifier.padding(top = 24.dp),
+                        )
+                    }
+                    item(key = "explore") {
+                        HomeExploreSection(
+                            state = state,
+                            onSeeAllCritical = onNavigateToCriticalDarlings,
+                            onSeeAllCharts = onNavigateToPopOfTheTops,
+                            onOpen = { onNavigateToAlbum(it.title, it.artist) },
+                            onPlay = { viewModel.playAlbumByName(it.title, it.artist) },
+                            onLongPress = { albumMenu = AlbumMenuTarget(it.title, it.artist, it.imageUrl) },
+                            onRetryCharts = viewModel::retryCharts,
+                            modifier = Modifier.padding(top = SectionGap),
                         )
                     }
                 }
