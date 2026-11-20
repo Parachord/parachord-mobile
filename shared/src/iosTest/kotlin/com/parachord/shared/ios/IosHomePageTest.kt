@@ -10,6 +10,7 @@ import com.parachord.shared.home.HomeFeed
 import com.parachord.shared.home.HomeQueues
 import com.parachord.shared.home.HomeRecsLoad
 import com.parachord.shared.home.HomeSources
+import com.parachord.shared.home.HomeHalves
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.model.ChartAlbum
@@ -238,5 +239,14 @@ class IosHomePageTest {
         assertEquals("yes", iosHomePage(HomeState(chatAvailable = true), emptyMap(), emptyMap(), TODAY).chatAvailable)
         assertEquals("no", iosHomePage(HomeState(chatAvailable = false), emptyMap(), emptyMap(), TODAY).chatAvailable)
         assertNotNull(iosHomePage(HomeState(), emptyMap(), emptyMap(), TODAY).askExample)
+    }
+
+    @Test
+    fun `the halves draw Fresh Drops then Critical Darlings then Pop of the Tops`() {
+        fun kinds(h: HomeHalves) =
+            iosHomePage(HomeState(halves = h), emptyMap(), emptyMap(), TODAY).halves.map { it.kind }
+        assertEquals(listOf("fresh", "critical"), kinds(HomeHalves(fresh = true, critical = true, charts = false)))
+        assertEquals(listOf("fresh", "critical", "charts"), kinds(HomeHalves(fresh = true, critical = true, charts = true)))
+        assertEquals(listOf("critical", "charts"), kinds(HomeHalves(fresh = false, critical = true, charts = true)))
     }
 }

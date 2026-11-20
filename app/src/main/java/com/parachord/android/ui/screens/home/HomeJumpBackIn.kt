@@ -42,6 +42,7 @@ import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.theme.current
 import com.parachord.android.ui.theme.tokenColor
 import com.parachord.shared.home.HOME_JUMP_TILES
+import com.parachord.shared.home.homeSectionVisibility
 import com.parachord.shared.home.HomeCopy
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.JumpTile
@@ -76,7 +77,7 @@ fun HomeJumpBackIn(
     modifier: Modifier = Modifier,
 ) {
     val tiles = state.tiles.take(HOME_JUMP_TILES)
-    if (tiles.isEmpty() && !state.showImportCard) return
+    if (!homeSectionVisibility(state).showJump) return
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(title = HomeCopy.JUMP_BACK_IN)
         Column(

@@ -73,6 +73,7 @@ import com.parachord.android.ui.theme.releaseTypeColor
 import com.parachord.android.ui.theme.serviceColorOrNull
 import com.parachord.android.ui.theme.tokenColor
 import com.parachord.shared.home.AskField
+import com.parachord.shared.home.homeSectionVisibility
 import com.parachord.shared.home.HOME_HALF_ROW_CARDS
 import com.parachord.shared.home.HomeCopy
 import com.parachord.shared.home.HomeHalfBody
@@ -356,7 +357,7 @@ fun HomeConcertsSection(
     modifier: Modifier = Modifier,
 ) {
     // Nothing until there are shows (desktop's `ConcertsRow` returns null with none).
-    if (!state.sections.concerts || state.concerts.isEmpty()) return
+    if (!homeSectionVisibility(state).showConcerts) return
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.CONCERTS_TITLE,

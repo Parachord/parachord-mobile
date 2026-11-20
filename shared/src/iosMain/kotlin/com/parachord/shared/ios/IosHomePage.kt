@@ -39,6 +39,7 @@ import com.parachord.shared.home.freshHalfCards
 import com.parachord.shared.home.halfCardArtKey
 import com.parachord.shared.home.halfCardNeedsArt
 import com.parachord.shared.home.homeHalfBody
+import com.parachord.shared.home.homeSectionVisibility
 import com.parachord.shared.home.homeSourceChipColor
 import com.parachord.shared.home.jumpTileKey
 import com.parachord.shared.home.jumpTileTitle
@@ -120,14 +121,13 @@ data class IosHomePage(
     val showAlbumChips: Boolean,
     /** No albums yet and a load is coming: the row shows skeleton cards. */
     val albumsLoading: Boolean,
-    /** Fresh Drops or Pop of the Tops, then Critical Darlings. */
+    /** Fresh Drops (when shown), Critical Darlings, then Pop of the Tops (only while Fresh Drops isn't shown). */
     val halves: List<IosHomeHalf>,
     val concerts: List<IosHomeConcert>,
     val askExample: String,
     /** "yes", "no" (offer "Set up Shuffleupagus") or "unknown". */
     val chatAvailable: String,
     val showBanner: Boolean,
-    /** Jump back in: tiles, or the import card. */
     val showJump: Boolean,
     val showImport: Boolean,
     val showMixes: Boolean,
@@ -312,9 +312,8 @@ fun iosHomePage(
     pickedStep: String? = null,
     playlistArt: (String) -> String = { it },
 ): IosHomePage {
-    val sections = state.sections
     val tiles = state.tiles.take(HOME_JUMP_TILES)
-    val albumsLoading = state.albums.isEmpty() && state.albumsLoading
+    val visibility = homeSectionVisibility(state)
     return IosHomePage(
         ready = state.ready,
         greeting = state.greeting,
@@ -353,7 +352,7 @@ fun iosHomePage(
         albumChips = chips(state.albumSources),
         albumSource = state.albumSource,
         showAlbumChips = showSourceChips(state.albumSources),
-        albumsLoading = albumsLoading,
+        albumsLoading = visibility.albumsLoading,
         halves = halves(state, halfArt),
         concerts = state.concerts.map { concert(it, state.concertArtistImages) },
         askExample = state.askExample,
@@ -362,14 +361,14 @@ fun iosHomePage(
             false -> "no"
             null -> "unknown"
         },
-        showBanner = sections.banner && state.banner != null,
-        showJump = tiles.isNotEmpty() || state.showImportCard,
-        showImport = tiles.isEmpty() && state.showImportCard,
-        showMixes = sections.mixes && state.mixRow.isNotEmpty(),
-        showPlaylists = sections.playlists && state.playlists.isNotEmpty(),
-        showAlbums = albumsLoading || (sections.albums && state.albums.isNotEmpty()),
-        showConcerts = sections.concerts && state.concerts.isNotEmpty(),
-        showAsk = sections.ask,
+        showBanner = visibility.showBanner,
+        showJump = visibility.showJump,
+        showImport = visibility.showImport,
+        showMixes = visibility.showMixes,
+        showPlaylists = visibility.showPlaylists,
+        showAlbums = visibility.showAlbums,
+        showConcerts = visibility.showConcerts,
+        showAsk = visibility.showAsk,
     )
 }
 
@@ -437,11 +436,11 @@ private fun halfCardKey(kind: String, card: HomeHalfCard): String = "$kind:${car
 
 private fun halves(state: HomeState, halfArt: Map<String, String>): List<IosHomeHalf> {
     val h = state.halves
-    // Pop of the Tops takes Fresh Drops' half while Fresh Drops has nothing.
+    // As desktop and Android draw them; Pop of the Tops shows only while Fresh Drops doesn't.
     return listOfNotNull(
         freshFeed(state).takeIf { h.fresh },
-        chartsFeed(state).takeIf { h.charts },
         criticalFeed(state).takeIf { h.critical },
+        chartsFeed(state).takeIf { h.charts },
     ).map { half(it, halfArt) }
 }
 

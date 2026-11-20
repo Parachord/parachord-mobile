@@ -1,5 +1,6 @@
 package com.parachord.shared.home
 
+import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.Track
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationType
@@ -8,6 +9,8 @@ import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.ServiceColors
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
@@ -78,5 +81,57 @@ class HomeRowsTest {
         assertEquals(false, showSourceChips(emptyList()))
         assertEquals(true, showSourceChips(listOf(FilterChipSource("listenbrainz", "ListenBrainz"))))
         assertEquals(true, showSourceChips(listOf(FilterChipSource("a", "A"), FilterChipSource("b", "B"))))
+    }
+
+    private val allOn = HomeSections(
+        banner = true, jump = true, importCard = false, mixes = true, playlists = true,
+        albums = true, fresh = true, critical = true, concerts = true, ask = true,
+    )
+
+    @Test
+    fun `a section with nothing to show is hidden even when its flag is on`() {
+        val v = homeSectionVisibility(HomeState(sections = allOn))
+        assertFalse(v.showBanner)
+        assertFalse(v.showJump)
+        assertFalse(v.showImport)
+        assertFalse(v.showMixes)
+        assertFalse(v.showPlaylists)
+        assertFalse(v.showAlbums)
+        assertFalse(v.showConcerts)
+        assertTrue(v.showAsk)
+    }
+
+    @Test
+    fun `a section with items shows only when its flag is on`() {
+        val p = HomePlaylistCard(Playlist(id = "p", name = "P"), null, PlaylistSubtitle("Refreshed now", null))
+        val on = homeSectionVisibility(HomeState(sections = allOn, playlists = listOf(p)))
+        assertTrue(on.showPlaylists)
+        val off = homeSectionVisibility(HomeState(sections = allOn.copy(playlists = false), playlists = listOf(p)))
+        assertFalse(off.showPlaylists)
+    }
+
+    @Test
+    fun `albums show their skeleton while loading with none and the import card takes Jump back in's place`() {
+        val loading = homeSectionVisibility(HomeState(sections = allOn.copy(albums = false), albumsLoading = true))
+        assertTrue(loading.albumsLoading)
+        assertTrue(loading.showAlbums)
+        val withAlbums = homeSectionVisibility(
+            HomeState(sections = allOn, albumsLoading = true, albums = listOf(RecommendationItem(RecommendationType.ALBUM, "a", "A"))),
+        )
+        assertFalse(withAlbums.albumsLoading)
+        assertTrue(withAlbums.showAlbums)
+
+        val import = homeSectionVisibility(HomeState(showImportCard = true))
+        assertTrue(import.showJump)
+        assertTrue(import.showImport)
+        val tiles = homeSectionVisibility(HomeState(showImportCard = true, tiles = listOf(JumpTile.Loves(emptyList()))))
+        assertTrue(tiles.showJump)
+        assertFalse(tiles.showImport)
+    }
+
+    @Test
+    fun `the banner shows when there is one`() {
+        val b = HomeBannerItem("a1", "Title", null, null, null, "info")
+        assertTrue(homeSectionVisibility(HomeState(banner = b)).showBanner)
     }
 }
