@@ -3931,8 +3931,17 @@ class IosContainer private constructor() {
      * question to ask, or `unavailable` with the message to show.
      */
     suspend fun chatPlaylistCardTap(name: String, id: String, trackCount: String, messageContent: String): IosChatPlaylistTap {
+        // Caught here: a Kotlin exception through a Swift-bridged suspend aborts the app, even under try?.
         val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
-        return when (val tap = com.parachord.shared.ai.ChatPlaylistCards.tap(card, messageContent, playlistDao.getAllSync())) {
+        val playlists = try {
+            playlistDao.getAllSync()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("IosContainer", "Chat playlist card lookup failed: ${e.message}")
+            return IosChatPlaylistTap("unavailable", null, com.parachord.shared.ai.ChatPlaylistCards.OPEN_FAILED_MESSAGE)
+        }
+        return when (val tap = com.parachord.shared.ai.ChatPlaylistCards.tap(card, messageContent, playlists)) {
             is com.parachord.shared.ai.ChatPlaylistTap.Open -> IosChatPlaylistTap("open", tap.playlistId, null)
             is com.parachord.shared.ai.ChatPlaylistTap.OfferSave ->
                 IosChatPlaylistTap("offerSave", null, com.parachord.shared.ai.ChatPlaylistCards.saveOfferMessage(tap.name, tap.trackCount))
@@ -3940,12 +3949,21 @@ class IosContainer private constructor() {
         }
     }
 
-    /** Saves a playlist card the model never saved, from the tracks its message lists; returns the new id. */
-    suspend fun saveChatPlaylistCard(name: String, id: String, trackCount: String, messageContent: String): String {
+    /**
+     * Saves a playlist card the model never saved, from the tracks its message
+     * lists; returns the new id, or null when the save failed (caught here, as
+     * a Kotlin exception through a Swift-bridged suspend aborts the app).
+     */
+    suspend fun saveChatPlaylistCard(name: String, id: String, trackCount: String, messageContent: String): String? = try {
         val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
         val (playlist, tracks) = com.parachord.shared.ai.ChatPlaylistCards.draft(card, messageContent)
         libraryRepository.createPlaylistWithTracks(playlist, tracks)
-        return playlist.id
+        playlist.id
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "Saving a chat playlist failed: ${e.message}")
+        null
     }
 
     /** The chat screen opened or closed; closing drops a prompt that never went out. */

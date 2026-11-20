@@ -216,7 +216,15 @@ class ChatViewModel constructor(
     /** A tap on a playlist card (shared [ChatPlaylistCards], desktop's playlist card). */
     fun openPlaylistCard(card: ChatCardRef.Playlist, messageContent: String) {
         viewModelScope.launch {
-            val playlists = libraryRepository.getAllPlaylists().first()
+            val playlists = try {
+                libraryRepository.getAllPlaylists().first()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("ChatViewModel", "Playlist card lookup failed: ${e::class.simpleName}")
+                _notice.tryEmit(ChatPlaylistCards.OPEN_FAILED_MESSAGE)
+                return@launch
+            }
             when (val tap = ChatPlaylistCards.tap(card, messageContent, playlists)) {
                 is ChatPlaylistTap.Open -> _playlistToOpen.tryEmit(tap.playlistId)
                 is ChatPlaylistTap.OfferSave -> _playlistOffer.value =
@@ -231,9 +239,16 @@ class ChatViewModel constructor(
         val offer = _playlistOffer.value ?: return
         _playlistOffer.value = null
         viewModelScope.launch {
-            val (playlist, tracks) = ChatPlaylistCards.draft(offer.card, offer.messageContent)
-            libraryRepository.createPlaylistWithTracks(playlist, tracks)
-            _playlistToOpen.tryEmit(playlist.id)
+            try {
+                val (playlist, tracks) = ChatPlaylistCards.draft(offer.card, offer.messageContent)
+                libraryRepository.createPlaylistWithTracks(playlist, tracks)
+                _playlistToOpen.tryEmit(playlist.id)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("ChatViewModel", "Saving a chat playlist failed: ${e::class.simpleName}")
+                _notice.tryEmit(ChatPlaylistCards.SAVE_FAILED_MESSAGE)
+            }
         }
     }
 

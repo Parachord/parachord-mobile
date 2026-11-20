@@ -123,6 +123,8 @@ struct ChatScreen: View {
     var seedPrompt: String? = nil
     /// Opens a saved playlist (a playlist card's tap); the caller closes the chat.
     var onOpenPlaylist: (String) -> Void = { _ in }
+    /// A kept `parachord://` link in a message: the app's own link handling.
+    var onOpenInAppLink: (URL) -> Void = { _ in }
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @State private var model = ChatViewModel()
     @FocusState private var inputFocused: Bool
@@ -155,6 +157,18 @@ struct ChatScreen: View {
         .background(PC.Player.bg.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .environment(\.chatOpenPlaylist, ChatOpenPlaylist(open: onOpenPlaylist))
+        // Chat links (shared ChatContent keeps only openable ones): parachord://
+        // goes through the app's own link handling, http(s) to the system, and
+        // nothing else is opened.
+        .environment(\.openURL, OpenURLAction { url in
+            let s = url.absoluteString
+            guard ChatContent.shared.isOpenableLink(url: s) else { return .discarded }
+            if ChatContent.shared.isInAppLink(url: s) {
+                onOpenInAppLink(url)
+                return .handled
+            }
+            return .systemAction
+        })
         .onDisappear { model.isOpen = false }
         .task {
             await model.start()
@@ -525,6 +539,8 @@ private struct ChatCardView: View {
             if let id = try? await container.saveChatPlaylistCard(
                 name: p.name, id: p.id, trackCount: p.trackCount, messageContent: message) {
                 openPlaylist.open(id)
+            } else {
+                unavailable = ChatPlaylistCards.shared.SAVE_FAILED_MESSAGE
             }
         }
     }

@@ -124,6 +124,8 @@ fun ParachordNavHost(
     onOpenImportPlaylist: () -> Unit = {},
     /** Ask Shuffleupagus from Home: `DeepLinkViewModel.handleInAppChatPrompt`. */
     onAsk: (String) -> Unit = {},
+    /** A `parachord://` link tapped in the chat: `DeepLinkViewModel.handleUri`. */
+    onOpenInAppLink: (String) -> Unit = {},
     listenAlongFriend: com.parachord.android.data.db.entity.FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
     listenAlongSuspendedQueue: List<com.parachord.android.data.db.entity.TrackEntity> = emptyList(),
@@ -422,6 +424,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
                 onNavigateToPlaylist = { id -> navController.navigate(Routes.playlistDetail(id)) },
+                onOpenInAppLink = onOpenInAppLink,
             )
         }
 

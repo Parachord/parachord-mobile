@@ -173,4 +173,58 @@ class ChatContentTest {
             ChatContent.convertPlainTextToCards("Try \"Creep\" by Radiohead tonight"),
         )
     }
+
+    @Test
+    fun `http and https links stay links`() {
+        assertEquals(listOf(Link("site", "http://example.com")), ChatContent.inlines("[site](http://example.com)"))
+        assertEquals(listOf(Link("site", "https://example.com/a")), ChatContent.inlines("[site](https://example.com/a)"))
+        assertEquals(listOf(Link("https://x.org", "https://x.org")), ChatContent.inlines("https://x.org"))
+    }
+
+    @Test
+    fun `parachord links desktop handles in chat stay links`() {
+        for (url in listOf(
+            "parachord://artist/Radiohead",
+            "parachord://album/Radiohead/OK%20Computer",
+            "parachord://play?artist=Radiohead&title=Creep",
+            "parachord://queue/add?artist=Radiohead&title=Creep",
+            "parachord://playlist/abc",
+            "parachord://search?q=jazz",
+            "PARACHORD://Artist/Radiohead",
+        )) {
+            assertEquals(listOf(Link("go", url)), ChatContent.inlines("[go]($url)"), url)
+        }
+    }
+
+    @Test
+    fun `parachord links desktop's chat doesn't handle become plain text`() {
+        for (url in listOf("parachord://chat?prompt=hi", "parachord://auth/callback/spotify", "parachord://", "parachord:artist")) {
+            assertEquals(listOf(Text("go")), ChatContent.inlines("[go]($url)"), url)
+        }
+    }
+
+    @Test
+    fun `other schemes become plain text`() {
+        for (url in listOf(
+            "intent://scan#Intent;scheme=zxing;end",
+            "tel:5551234",
+            "file:///etc/passwd",
+            "javascript:alert",
+            "content://media/1",
+            "mailto:a@b.c",
+            "httpx://example.com",
+        )) {
+            assertEquals(listOf(Text("go")), ChatContent.inlines("[go]($url)"), url)
+            assertEquals(false, ChatContent.isOpenableLink(url), url)
+        }
+        assertEquals(listOf(Text("pic")), ChatContent.inlines("![pic](javascript:void)"))
+    }
+
+    @Test
+    fun `page links open a page and play links act in place`() {
+        assertEquals(true, ChatContent.inAppLinkOpensPage("parachord://artist/Radiohead"))
+        assertEquals(true, ChatContent.inAppLinkOpensPage("parachord://search?q=x"))
+        assertEquals(false, ChatContent.inAppLinkOpensPage("parachord://play?artist=a&title=b"))
+        assertEquals(false, ChatContent.inAppLinkOpensPage("https://example.com"))
+    }
 }

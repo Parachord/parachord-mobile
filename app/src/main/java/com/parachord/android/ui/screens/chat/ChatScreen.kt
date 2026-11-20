@@ -103,6 +103,8 @@ fun ChatScreen(
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onPlayTrack: (title: String, artist: String) -> Unit = { _, _ -> },
     onNavigateToPlaylist: (playlistId: String) -> Unit = {},
+    /** A kept `parachord://` link in a message: `DeepLinkViewModel.handleUri`. */
+    onOpenInAppLink: (url: String) -> Unit = {},
     viewModel: ChatViewModel = koinViewModel(),
 ) {
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -147,56 +149,81 @@ fun ChatScreen(
     val density = LocalDensity.current
     val dismissThresholdPx = with(density) { 80.dp.toPx() }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .pointerInput(onBack) {
-                var accumulated = 0f
-                detectHorizontalDragGestures(
-                    onDragStart = { accumulated = 0f },
-                    onDragEnd = {
-                        if (accumulated > dismissThresholdPx) {
-                            onBack()
-                        }
-                        accumulated = 0f
-                    },
-                    onDragCancel = { accumulated = 0f },
-                    onHorizontalDrag = { _, dragAmount ->
-                        accumulated += dragAmount
-                    },
+    // Chat links (shared ChatContent keeps only openable ones): a parachord://
+    // link goes through the app's own link handling, an http(s) one opens in
+    // the browser, and nothing else is opened.
+    val linkHandler = remember(context, onOpenInAppLink) {
+        object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) {
+                if (!ChatContent.isOpenableLink(uri)) return
+                if (ChatContent.isInAppLink(uri)) {
+                    onOpenInAppLink(uri)
+                    return
+                }
+                try {
+                    context.startActivity(
+                        android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri))
+                            .addCategory(android.content.Intent.CATEGORY_BROWSABLE),
+                    )
+                } catch (_: android.content.ActivityNotFoundException) {
+                    android.widget.Toast.makeText(context, "No app can open this link", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides linkHandler) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .pointerInput(onBack) {
+                    var accumulated = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { accumulated = 0f },
+                        onDragEnd = {
+                            if (accumulated > dismissThresholdPx) {
+                                onBack()
+                            }
+                            accumulated = 0f
+                        },
+                        onDragCancel = { accumulated = 0f },
+                        onHorizontalDrag = { _, dragAmount ->
+                            accumulated += dragAmount
+                        },
+                    )
+                },
+        ) {
+            // Top Bar
+            ChatTopBar(
+                selectedProviderId = selectedProviderId,
+                availableProviders = availableProviders,
+                hasMessages = displayMessages.isNotEmpty(),
+                onBack = onBack,
+                onSelectProvider = viewModel::selectProvider,
+                onClearChat = viewModel::clearChat,
+            )
+
+            if (!hasConfiguredProvider) {
+                NoProvidersContent(modifier = Modifier.weight(1f))
+            } else {
+                MessageArea(
+                    messages = displayMessages,
+                    isLoading = isLoading,
+                    progressText = progressText,
+                    onNavigateToArtist = onNavigateToArtist,
+                    onNavigateToAlbum = onNavigateToAlbum,
+                    onPlayTrack = onPlayTrack,
+                    onOpenPlaylistCard = viewModel::openPlaylistCard,
+                    cardEnricher = viewModel.cardEnricher,
+                    modifier = Modifier.weight(1f),
                 )
-            },
-    ) {
-        // Top Bar
-        ChatTopBar(
-            selectedProviderId = selectedProviderId,
-            availableProviders = availableProviders,
-            hasMessages = displayMessages.isNotEmpty(),
-            onBack = onBack,
-            onSelectProvider = viewModel::selectProvider,
-            onClearChat = viewModel::clearChat,
-        )
 
-        if (!hasConfiguredProvider) {
-            NoProvidersContent(modifier = Modifier.weight(1f))
-        } else {
-            MessageArea(
-                messages = displayMessages,
-                isLoading = isLoading,
-                progressText = progressText,
-                onNavigateToArtist = onNavigateToArtist,
-                onNavigateToAlbum = onNavigateToAlbum,
-                onPlayTrack = onPlayTrack,
-                onOpenPlaylistCard = viewModel::openPlaylistCard,
-                cardEnricher = viewModel.cardEnricher,
-                modifier = Modifier.weight(1f),
-            )
-
-            ChatInput(
-                isLoading = isLoading,
-                onSend = viewModel::sendMessage,
-            )
+                ChatInput(
+                    isLoading = isLoading,
+                    onSend = viewModel::sendMessage,
+                )
+            }
         }
     }
 }

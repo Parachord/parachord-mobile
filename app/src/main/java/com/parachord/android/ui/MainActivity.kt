@@ -703,6 +703,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                         onOpenChat = onOpenChat,
                         onOpenImportPlaylist = { showImportPlaylistDialog = true },
                         onAsk = { prompt -> deepLinkViewModel.handleInAppChatPrompt(prompt) },
+                        onOpenInAppLink = { url -> deepLinkViewModel.handleUri(android.net.Uri.parse(url)) },
                         listenAlongFriend = listenAlongFriend,
                         onStopListenAlong = { mainViewModel.stopListenAlong() },
                         listenAlongSuspendedQueue = listenAlongSuspendedQueue,

@@ -30,6 +30,12 @@ object ChatPlaylistCards {
     /** Desktop's words for a playlist the model never made. */
     const val NOT_MADE_MESSAGE = "Shuffleupagus didn’t make this playlist. Ask it to create the playlist again."
 
+    /** A card's tap couldn't read the saved playlists. */
+    const val OPEN_FAILED_MESSAGE = "Couldn’t open the playlist. Try again."
+
+    /** Saving the offered playlist failed. */
+    const val SAVE_FAILED_MESSAGE = "Couldn’t save the playlist. Try again."
+
     /** Shown with the Save offer. */
     fun saveOfferMessage(name: String, trackCount: Int): String =
         "Shuffleupagus didn’t save “$name”. Save the ${com.parachord.shared.format.countOf(trackCount, "track")} it listed as a playlist?"

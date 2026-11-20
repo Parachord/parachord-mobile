@@ -51,6 +51,9 @@ sealed class ChatBlock {
  * - Headers, numbered items (a card item centres its number), blank lines,
  *   links (an image link reads as a link), bare URLs (stopping before
  *   sentence punctuation), bold, italic and code.
+ * - **Only openable links are links** ([isOpenableLink]): http(s), and the
+ *   `parachord://` commands desktop's chat handles in the app. Any other
+ *   link is shown as its text.
  *
  * One difference: desktop's whole-line card pattern is greedy, so a line of
  * two cards ("{{a}} and {{b}}") read as one card with mangled fields; here a
@@ -164,10 +167,11 @@ object ChatContent {
                     lastWasCard = true
                 }
                 Kind.IMAGE_LINK, Kind.LINK -> {
-                    val url = g[2]
-                    result += ChatInline.Link(g[1].ifEmpty { url.substringAfterLast('/') }, url)
+                    val url = g[2].trim()
+                    val label = g[1].ifEmpty { url.substringAfterLast('/') }
+                    result += if (isOpenableLink(url)) ChatInline.Link(label, url) else ChatInline.Text(label)
                 }
-                Kind.BARE_URL -> result += ChatInline.Link(g[0], g[0])
+                Kind.BARE_URL -> result += if (isOpenableLink(g[0])) ChatInline.Link(g[0], g[0]) else ChatInline.Text(g[0])
                 Kind.BOLD -> result += ChatInline.Bold(g[1])
                 Kind.ITALIC -> result += ChatInline.Italic(g[1])
                 Kind.CODE -> result += ChatInline.Code(g[1])
@@ -195,6 +199,46 @@ object ChatContent {
             if (title.isEmpty() || artist.isEmpty()) null
             else ChatCardRef.Track(title, artist, parts.getOrElse(2) { "" }.trim())
         }.toList()
+
+    /**
+     * The `parachord://` commands desktop's chat handles in the app
+     * (`parseInlineMarkdown`'s link branch, `app.js` ~L17690).
+     */
+    val IN_APP_LINK_COMMANDS: Set<String> = setOf("artist", "album", "play", "queue", "playlist", "search")
+
+    /**
+     * Whether a chat link may be opened: an http(s) URL, or a `parachord://`
+     * link whose command is one of [IN_APP_LINK_COMMANDS]. Any other link
+     * (`intent:`, `tel:`, `file:`, `javascript:`, other `parachord://`
+     * commands) is shown as its plain text. Desktop hands every other link to
+     * `shell.openExternal`; a model's text shouldn't open arbitrary schemes on
+     * a phone.
+     */
+    fun isOpenableLink(url: String): Boolean {
+        val u = url.trim()
+        val lower = u.lowercase()
+        if (lower.startsWith("https://") || lower.startsWith("http://")) return u.length > lower.indexOf("//") + 2
+        if (!lower.startsWith("parachord://")) return false
+        return parachordLinkCommand(u) in IN_APP_LINK_COMMANDS
+    }
+
+    /** A `parachord://` link's command: its host, else its first path segment (desktop's parse). */
+    private fun parachordLinkCommand(url: String): String? {
+        val rest = url.substring("parachord://".length).substringBefore('?').substringBefore('#')
+        val first = rest.split('/').firstOrNull { it.isNotEmpty() } ?: return null
+        return first.lowercase()
+    }
+
+    /**
+     * Whether an in-app chat link opens a page (artist, album, playlist,
+     * search) rather than acting in place (play, queue): iOS closes the chat
+     * over it first.
+     */
+    fun inAppLinkOpensPage(url: String): Boolean =
+        isInAppLink(url) && parachordLinkCommand(url.trim()) in setOf("artist", "album", "playlist", "search")
+
+    /** Whether [url] is a `parachord://` link (opened in the app, not by an outside app). */
+    fun isInAppLink(url: String): Boolean = url.trim().lowercase().startsWith("parachord://")
 
     private fun card(type: String, fields: String): ChatCardRef? {
         val p = fields.split('|').map { it.trim() }
