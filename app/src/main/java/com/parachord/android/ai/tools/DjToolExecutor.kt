@@ -2,7 +2,6 @@ package com.parachord.android.ai.tools
 
 import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.data.db.entity.TrackEntity
-import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.metadata.TrackSearchResult
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.store.SettingsStore
@@ -15,17 +14,21 @@ import com.parachord.shared.ai.tools.djTrackNotFoundError
 import com.parachord.shared.ai.tools.findRequestedTrack
 import com.parachord.shared.ai.tools.findRequestedTracks
 import com.parachord.shared.ai.tools.runQueueAdd
+import com.parachord.shared.resolver.ResolverSearch
+import com.parachord.shared.resolver.searchToolResult
 import java.util.UUID
 
 /**
  * Executes DJ tool calls from the AI chat.
- * Maps tool names + arguments to PlaybackController / MetadataService / etc. calls.
- * Mirrors the desktop app's dj-tools.js executor logic.
+ * Maps tool names + arguments to PlaybackController / ResolverSearch / etc. calls.
+ * Mirrors the desktop app's dj-tools.js executor logic: `search`, `play`,
+ * `queue_add` and `create_playlist` search the person's streaming services in
+ * their order ([ResolverSearch], desktop's `searchResolvers`).
  */
 class DjToolExecutor constructor(
     private val playbackController: PlaybackController,
     private val stateHolder: PlaybackStateHolder,
-    private val metadataService: MetadataService,
+    private val resolverSearch: ResolverSearch,
     private val libraryRepository: LibraryRepository,
     private val settingsStore: SettingsStore,
     private val resolverManager: ResolverManager,
@@ -58,7 +61,7 @@ class DjToolExecutor constructor(
         val artist = args["artist"] as? String ?: return mapOf("error" to "Missing artist")
         val title = args["title"] as? String ?: return mapOf("error" to "Missing title")
 
-        val bestMatch = findRequestedTrack(artist, title, libraryRepository::getLocalFiles, metadataService::searchTracks)
+        val bestMatch = findRequestedTrack(artist, title, libraryRepository::getLocalFiles, resolverSearch::search)
             ?: return mapOf("success" to false, "error" to djTrackNotFoundError(artist, title))
 
         val track = bestMatch.toTrackEntity()
@@ -70,6 +73,7 @@ class DjToolExecutor constructor(
                 "title" to track.title,
                 "artist" to track.artist,
                 "album" to track.album,
+                "source" to bestMatch.provider,
             ),
         )
     }
@@ -96,18 +100,7 @@ class DjToolExecutor constructor(
     private suspend fun executeSearch(args: Map<String, Any?>): Map<String, Any?> {
         val query = args["query"] as? String ?: return mapOf("error" to "Missing query")
         val limit = (args["limit"] as? Number)?.toInt() ?: 10
-
-        val results = metadataService.searchTracks(query, limit)
-        return mapOf(
-            "success" to true,
-            "results" to results.map { result ->
-                mapOf(
-                    "artist" to result.artist,
-                    "title" to result.title,
-                    "album" to result.album,
-                )
-            },
-        )
+        return searchToolResult(query, resolverSearch.search(query, Int.MAX_VALUE), limit)
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -121,7 +114,7 @@ class DjToolExecutor constructor(
         }
 
         return runQueueAdd(
-            requested = findRequestedTracks(tracksArg, libraryRepository::getLocalFiles, metadataService::searchTracks),
+            requested = findRequestedTracks(tracksArg, libraryRepository::getLocalFiles, resolverSearch::search),
             playFirst = playFirst,
             toTrack = { it.toTrackEntity() },
             clearQueue = playbackController::clearQueue,
@@ -143,7 +136,7 @@ class DjToolExecutor constructor(
 
         // A wrong song saved here could sync out to Spotify, Apple Music and the
         // person's other clients, so a track that isn't found stays out.
-        val requested = findRequestedTracks(tracksArg, libraryRepository::getLocalFiles, metadataService::searchTracks)
+        val requested = findRequestedTracks(tracksArg, libraryRepository::getLocalFiles, resolverSearch::search)
         if (requested.found.isEmpty() && requested.notFound.isNotEmpty()) {
             return mapOf("success" to false, "error" to DJ_NONE_FOUND_ERROR, "notFound" to requested.notFound)
         }
@@ -225,8 +218,11 @@ class DjToolExecutor constructor(
         val sources = resolverManager.resolveWithHints(
             query = query,
             spotifyId = spotifyId,
+            appleMusicId = appleMusicId,
             targetTitle = title,
             targetArtist = artist,
+            targetIsrc = isrc,
+            targetMbid = mbid,
         )
         val best = resolverScoring.selectBest(sources)
 
@@ -244,7 +240,9 @@ class DjToolExecutor constructor(
             spotifyUri = best?.spotifyUri ?: spotifyId?.let { "spotify:track:$it" },
             spotifyId = best?.spotifyId ?: spotifyId,
             soundcloudId = best?.soundcloudId,
-            appleMusicId = best?.appleMusicId,
+            appleMusicId = best?.appleMusicId ?: appleMusicId,
+            isrc = best?.isrc ?: isrc,
+            recordingMbid = mbid,
         )
     }
 }
