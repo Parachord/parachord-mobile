@@ -75,8 +75,49 @@ class AppleMusicCatalogResolver(
         return AppleMusicCatalogLookup.Found(source)
     }
 
+    /**
+     * The catalog's songs for [query], in the catalog's order, for the resolver
+     * search ([ResolverSearch]). Null while Apple Music isn't connected (no
+     * Music User Token), so it isn't offered, as in [lookup]. Throws when the
+     * catalog couldn't answer (no developer token, the limiter cooling down, a
+     * failed request), so the search skips it rather than reading a miss.
+     */
+    suspend fun search(query: String, limit: Int = ResolverSearch.SERVICE_SEARCH_LIMIT): List<com.parachord.shared.metadata.TrackSearchResult>? {
+        if (settingsStore.getAppleMusicUserToken().isNullOrBlank()) return null
+        val term = query.trim().ifBlank { return emptyList() }
+        val storefront = storefrontOrDefault(settingsStore.getAppleMusicStorefront())
+        val path = "/v1/catalog/$storefront/search?types=songs&limit=${limit.coerceIn(1, 25)}&term=${term.encodeURLParameter()}"
+        val body = catalog.get(path) ?: throw IllegalStateException("Apple Music catalog unavailable")
+        return catalogSongs(body)
+    }
+
     companion object {
         private const val TAG = "AppleMusicCatalogResolver"
+
+        /** Every song in a catalog search response, as search results. */
+        fun catalogSongs(body: String): List<com.parachord.shared.metadata.TrackSearchResult> {
+            val songs = runCatching {
+                json.parseToJsonElement(body).jsonObject["results"]?.jsonObject
+                    ?.get("songs")?.jsonObject?.get("data")?.jsonArray
+            }.getOrNull()?.mapNotNull { it as? JsonObject }.orEmpty()
+            return songs.mapNotNull { song ->
+                val id = song["id"]?.jsonPrimitive?.contentOrNull?.ifBlank { null } ?: return@mapNotNull null
+                val attrs = song["attributes"]?.jsonObject ?: return@mapNotNull null
+                fun attr(key: String) = attrs[key]?.jsonPrimitive?.contentOrNull
+                val name = attr("name")?.ifBlank { null } ?: return@mapNotNull null
+                com.parachord.shared.metadata.TrackSearchResult(
+                    title = name,
+                    artist = attr("artistName").orEmpty(),
+                    album = attr("albumName"),
+                    duration = attrs["durationInMillis"]?.jsonPrimitive?.longOrNull,
+                    artworkUrl = attrs["artwork"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
+                        ?.replace("{w}", "600")?.replace("{h}", "600")?.replace("{f}", "jpg"),
+                    appleMusicId = id,
+                    isrc = validateIsrc(attr("isrc")),
+                    provider = "applemusic",
+                )
+            }
+        }
         const val SEARCH_LIMIT = 10
         private val json = Json { ignoreUnknownKeys = true; isLenient = true }
         private val STOREFRONT = Regex("^[a-z]{2}$")

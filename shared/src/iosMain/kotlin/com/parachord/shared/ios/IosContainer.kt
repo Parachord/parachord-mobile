@@ -3148,6 +3148,21 @@ class IosContainer private constructor() {
         )
     }
 
+    /**
+     * The streaming-service search Shuffleupagus's tools use (desktop's
+     * `searchResolvers`): native Spotify, the Apple Music catalog, local files
+     * and every searching `.axe`, in the person's resolver order.
+     */
+    val resolverSearch: com.parachord.shared.resolver.ResolverSearch by lazy {
+        com.parachord.shared.resolver.streamingResolverSearch(
+            settingsStore = settingsStore,
+            pluginManager = pluginManager,
+            spotifyClient = spotifyClient,
+            appleMusic = com.parachord.shared.resolver.AppleMusicCatalogResolver(appleMusicCatalog, settingsStore),
+            localFiles = { trackDao.getLocalFiles() },
+        )
+    }
+
     val resolverCoordinator: IosResolverCoordinator by lazy {
         IosResolverCoordinator(
             coordinator = sharedResolverCoordinator,
@@ -3859,7 +3874,7 @@ class IosContainer private constructor() {
     private val claudeProvider: ClaudeProvider by lazy { ClaudeProvider(httpClient, chatJson) }
     private val geminiProvider: GeminiProvider by lazy { GeminiProvider(httpClient, chatJson) }
     private val chatProviders: List<AiChatProvider> by lazy { listOf(chatGptProvider, claudeProvider, geminiProvider) }
-    private val djToolExecutor: IosDjToolExecutor by lazy { IosDjToolExecutor(metadataService, settingsStore, chatPlaybackBridge, localFiles = { trackDao.getLocalFiles() }) }
+    private val djToolExecutor: IosDjToolExecutor by lazy { IosDjToolExecutor(resolverSearch::search, settingsStore, chatPlaybackBridge, localFiles = { trackDao.getLocalFiles() }) }
     private val chatContextProvider: ChatContextProvider by lazy {
         ChatContextProvider(
             getPlaybackSnapshot = { chatPlaybackBridge.current },

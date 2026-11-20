@@ -20,6 +20,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * has (the bundled one, or an older cached one).
  *
  * A port of desktop's `main-process/plugin-compat.js`; keep the two in step.
+ * It also holds desktop's host-bridge rule ([missingHostBridges]): a plugin
+ * that requires a bridge this app doesn't supply isn't loaded.
  * `capabilities.mobile: false` is separate: it keeps a plugin off mobile
  * entirely, where this is a version floor for plugins that do run here.
  */
@@ -67,4 +69,35 @@ object PluginCompat {
         if (parseVersion(appVersion) == null) return null
         return requires.takeIf { compareVersions(appVersion, it) < 0 }
     }
+
+    /**
+     * The host bridges a plugin requires (`requires.hostBridges`, a top-level
+     * `.axe` field, desktop parachord#1355), or null when it requires none. A
+     * plugin that calls a host bridge (`webSession`, ...) declares it, and a
+     * host that doesn't supply every one HIDES the plugin: never loaded, so
+     * its URL patterns don't claim links it can't open and its resolves don't
+     * throw `not-ready` forever. Absent or malformed is no requirement, as on
+     * desktop (its build step rejects a malformed one at source).
+     */
+    fun requiredHostBridges(requires: JsonElement?): List<String>? = bridgeList(requires, "hostBridges")
+
+    /**
+     * The bridges a plugin uses when the host has them and works without
+     * (`requires.optionalHostBridges`, the plug-in host contract, #1561). A
+     * missing one never hides a plugin; the loader leaves it off `this.host`.
+     */
+    fun optionalHostBridges(requires: JsonElement?): List<String>? = bridgeList(requires, "optionalHostBridges")
+
+    /** The required bridges [supplied] lacks; empty when the host can run the plugin. */
+    fun missingHostBridges(requires: JsonElement?, supplied: Set<String>): List<String> =
+        requiredHostBridges(requires)?.filter { it !in supplied } ?: emptyList()
+
+    private fun bridgeList(requires: JsonElement?, field: String): List<String>? {
+        val obj = requires as? JsonObject ?: return null
+        val list = obj[field] as? kotlinx.serialization.json.JsonArray ?: return null
+        val names = list.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        if (names.any { it.isNullOrEmpty() }) return null
+        return names.filterNotNull()
+    }
 }
+

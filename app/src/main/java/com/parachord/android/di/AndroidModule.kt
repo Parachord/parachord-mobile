@@ -1224,6 +1224,17 @@ val androidModule = module {
     singleOf(::ChatGptProvider)
     singleOf(::ClaudeProvider)
     singleOf(::GeminiProvider)
+    // The streaming-service search Shuffleupagus's tools use (desktop's
+    // `searchResolvers`), shared with iOS.
+    single {
+        com.parachord.shared.resolver.streamingResolverSearch(
+            settingsStore = get(),
+            pluginManager = get(),
+            spotifyClient = get(),
+            appleMusic = get(),
+            localFiles = { get<com.parachord.android.data.repository.LibraryRepository>().getLocalFiles() },
+        )
+    }
     singleOf(::DjToolExecutor)
 
     // ── Plugins ──────────────────────────────────────────────────────

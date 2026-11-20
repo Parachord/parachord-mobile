@@ -6,9 +6,9 @@ import com.parachord.shared.ai.tools.djTrackNotFoundError
 import com.parachord.shared.ai.tools.findRequestedTrack
 import com.parachord.shared.ai.tools.findRequestedTracks
 import com.parachord.shared.ai.tools.runQueueAdd
-import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.Track
+import com.parachord.shared.resolver.searchToolResult
 import com.parachord.shared.settings.SettingsStore
 
 /**
@@ -22,11 +22,15 @@ import com.parachord.shared.settings.SettingsStore
  * coordinator, which resolves them on-the-fly at play time (the same path as
  * Spinoff / Listen Along), so no ResolverManager is needed on iOS.
  *
+ * [search] is the shared resolver search (`ResolverSearch`, the person's streaming
+ * services in their order), which `search`, `play` and `queue_add` all use, as on
+ * desktop and Android.
+ *
  * Contract (shared interface): NEVER throw — return `{"error": ...}` so the AI can
  * see the failure and recover.
  */
 class IosDjToolExecutor(
-    private val metadataService: MetadataService,
+    private val search: suspend (query: String, limit: Int) -> List<TrackSearchResult>,
     private val settingsStore: SettingsStore,
     private val bridge: IosChatPlaybackBridge,
     private val localFiles: suspend () -> List<Track>,
@@ -57,13 +61,13 @@ class IosDjToolExecutor(
     private suspend fun executePlay(args: Map<String, Any?>): Map<String, Any?> {
         val artist = args["artist"] as? String ?: return mapOf("error" to "Missing artist")
         val title = args["title"] as? String ?: return mapOf("error" to "Missing title")
-        val best = findRequestedTrack(artist, title, localFiles, metadataService::searchTracks)
+        val best = findRequestedTrack(artist, title, localFiles, search)
             ?: return mapOf("success" to false, "error" to djTrackNotFoundError(artist, title))
         val track = best.toTrack()
         bridge.onPlayTrack(track)
         return mapOf(
             "success" to true,
-            "track" to mapOf("title" to track.title, "artist" to track.artist, "album" to (track.album ?: "")),
+            "track" to mapOf("title" to track.title, "artist" to track.artist, "album" to (track.album ?: ""), "source" to best.provider),
         )
     }
 
@@ -82,13 +86,7 @@ class IosDjToolExecutor(
     private suspend fun executeSearch(args: Map<String, Any?>): Map<String, Any?> {
         val query = args["query"] as? String ?: return mapOf("error" to "Missing query")
         val limit = (args["limit"] as? Number)?.toInt() ?: 10
-        val results = metadataService.searchTracks(query, limit)
-        return mapOf(
-            "success" to true,
-            "results" to results.map {
-                mapOf("artist" to it.artist, "title" to it.title, "album" to (it.album ?: ""))
-            },
-        )
+        return searchToolResult(query, search(query, Int.MAX_VALUE), limit)
     }
 
     private suspend fun executeQueueAdd(args: Map<String, Any?>): Map<String, Any?> {
@@ -99,7 +97,7 @@ class IosDjToolExecutor(
         val playFirst = args["playFirst"] as? Boolean ?: true
 
         return runQueueAdd(
-            requested = findRequestedTracks(tracksArg, localFiles, metadataService::searchTracks),
+            requested = findRequestedTracks(tracksArg, localFiles, search),
             playFirst = playFirst,
             toTrack = { it.toTrack() },
             clearQueue = { bridge.onClearQueue() },
@@ -141,7 +139,7 @@ class IosDjToolExecutor(
         duration = duration ?: 0, artworkUrl = artworkUrl,
         sourceType = null, sourceUrl = null, addedAt = 0,
         resolver = null, spotifyUri = null, soundcloudId = null,
-        spotifyId = spotifyId, appleMusicId = null, isrc = null,
+        spotifyId = spotifyId, appleMusicId = appleMusicId, isrc = isrc,
         recordingMbid = mbid, artistMbid = null, releaseMbid = null, crossResolverEnrichedAt = null,
     )
 }

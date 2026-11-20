@@ -303,6 +303,27 @@ class NativeBridge(
         }
     }
 
+    // ── Links ────────────────────────────────────────────────────────
+
+    /**
+     * The plug-in host contract's `openExternal` (desktop parachord#1561):
+     * opens an https link in the person's browser. The resolver-loader admits
+     * https only before calling this; it's checked again here.
+     */
+    @JavascriptInterface
+    fun openExternal(url: String) {
+        if (!url.startsWith("https://", ignoreCase = true)) return
+        val context = webView?.context ?: return
+        try {
+            context.startActivity(
+                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "openExternal failed: ${e.message}")
+        }
+    }
+
     // ── Logging ──────────────────────────────────────────────────────
 
     @JavascriptInterface

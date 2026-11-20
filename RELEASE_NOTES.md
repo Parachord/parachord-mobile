@@ -1,3 +1,29 @@
+# Parachord v0.9.12
+
+**Release date:** 2026-11-20
+
+> Last.fm, ListenBrainz and the other services get their own sign-in screens back after v0.9.11 replaced them with a plain settings form. Recommendations is rebuilt as desktop's page on both phones, and desktop's icons, service logos and section headers now appear across the app.
+
+---
+
+## Fixes
+
+- **Sign-in screens are back.** In v0.9.11 the settings for Last.fm, ListenBrainz, Spotify, SoundCloud, Apple Music and other services showed a plain form with no Connect button, and their saved usernames and sign-ins stopped reaching the plug-ins, so recommendations came back empty (Android).
+- **Imported playlist links sync correctly.** A playlist imported from a Spotify, Apple Music or SoundCloud link is no longer mistaken for that service's own copy.
+- **Search on iOS** keeps each section's results apart.
+
+## Recommendations
+
+- **Desktop's Recommendations page, on Android and iOS.** Tracks, Albums, Artists, Playlists and Listeners rows from your Last.fm, ListenBrainz and Apple Music plug-ins, with a filter for each source, Shuffleupagus's picks blended in, and release years and "Coming" badges on albums.
+- **A recommended playlist opens in its own view** with Play and Save, and saving it twice opens the first copy.
+
+## Look and feel
+
+- **Desktop's icons and service logos** across both apps, including each page's icon in the tab bar and side menu.
+- **One section header and one set of filter chips** on every page, styled as on desktop.
+
+---
+
 # Parachord v0.9.11
 
 **Release date:** 2026-11-18

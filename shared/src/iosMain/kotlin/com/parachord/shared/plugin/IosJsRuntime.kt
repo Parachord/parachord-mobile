@@ -35,7 +35,8 @@ import platform.JavaScriptCore.JSValue
  *      all backed by `NativeBridge`. Byte-compatible with Android's
  *      bootstrap so the SAME `.axe` files run unmodified.
  *   4. Load the bundled `resolver-loader.js` (unchanged from desktop)
- *      and instantiate `window.__resolverLoader = new ResolverLoader()`.
+ *      and instantiate `window.__resolverLoader = new ResolverLoader({ host })` with the
+ *      plug-in host supplier (the block between the `plugin-host-supplier` markers).
  *
  * After init, `PluginManager` (shared, common to all platforms) loads
  * the `.axe` files into the resolver-loader and drives resolve / search.
@@ -85,7 +86,7 @@ class IosJsRuntime : JsRuntime {
             if (loaderJs != null) {
                 ctx.evaluateScript(loaderJs)
                 ctx.evaluateScript(
-                    "if (typeof ResolverLoader !== 'undefined') { window.__resolverLoader = new ResolverLoader(); }"
+                    "if (typeof ResolverLoader !== 'undefined') { window.__resolverLoader = new ResolverLoader({ host: window.__parachordHostSupplier }); }"
                 )
             } else {
                 println("[IosJsRuntime] resolver-loader.js not found in bundle — plugin host disabled")
@@ -618,6 +619,36 @@ class IosJsRuntime : JsRuntime {
                 };
 
                 window.__parachordClient = 'ios';
+                window.__parachordPlatform = 'ios';
+
+                // <plugin-host-supplier>
+                // The plug-in host contract (desktop parachord#1561, docs/architecture/
+                // plugins.md "The plug-in host contract"): the resolver-loader builds each
+                // plugin a frozen `this.host` from this supplier. The core every plugin gets
+                // (platform, appVersion, getConfig, openExternal), plus `bridges`, the host
+                // bridges this app has. A bridge is listed in __parachordHostBridges and
+                // added to `bridges` (name -> () => object) before plugins load; a plugin
+                // whose `requires.hostBridges` this app lacks is never loaded
+                // (PluginCompat.missingHostBridges). Identical in Android's bootstrap.html
+                // and iOS's IosJsRuntime; a unit test keeps the two copies in step.
+                window.__parachordHostBridges = window.__parachordHostBridges || [];
+                window.__parachordHostSupplier = {
+                    platform: window.__parachordPlatform,
+                    // PluginManager sets __parachordAppVersion before it loads plugins.
+                    appVersion: function () { return window.__parachordAppVersion || 'dev'; },
+                    // The config the app applied to the plugin (PluginManager.applyResolverConfigs).
+                    getConfig: function (pluginId) {
+                        var r = window.__resolverLoader && window.__resolverLoader.getResolver(pluginId);
+                        return (r && r.config) || {};
+                    },
+                    // The loader admits https links only before this runs.
+                    openExternal: function (url) {
+                        NativeBridge.openExternal(String(url));
+                        return Promise.resolve(true);
+                    },
+                    bridges: {},
+                };
+                // </plugin-host-supplier>
             })();
         """.trimIndent()
     }

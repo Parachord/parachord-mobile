@@ -59,6 +59,10 @@ data class TrackSearchResult(
      * providers' rows merged into this one. Search tries them ([SearchArtwork]).
      */
     val artworkCandidates: List<String> = emptyList(),
+    /** The Apple Music catalog id, when the row came from an Apple Music search (the resolver search). */
+    val appleMusicId: String? = null,
+    /** The recording's ISRC, when the service gave one (the resolver search). */
+    val isrc: String? = null,
 )
 
 @Serializable

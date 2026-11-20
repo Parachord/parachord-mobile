@@ -124,6 +124,36 @@
     // <window.__parachordClient>` on every fetch so Achordion's server
     // can split metrics across desktop / android / future-ios.
     window.__parachordClient = 'android';
+    window.__parachordPlatform = 'android';
+
+    // <plugin-host-supplier>
+    // The plug-in host contract (desktop parachord#1561, docs/architecture/
+    // plugins.md "The plug-in host contract"): the resolver-loader builds each
+    // plugin a frozen `this.host` from this supplier. The core every plugin gets
+    // (platform, appVersion, getConfig, openExternal), plus `bridges`, the host
+    // bridges this app has. A bridge is listed in __parachordHostBridges and
+    // added to `bridges` (name -> () => object) before plugins load; a plugin
+    // whose `requires.hostBridges` this app lacks is never loaded
+    // (PluginCompat.missingHostBridges). Identical in Android's bootstrap.html
+    // and iOS's IosJsRuntime; a unit test keeps the two copies in step.
+    window.__parachordHostBridges = window.__parachordHostBridges || [];
+    window.__parachordHostSupplier = {
+        platform: window.__parachordPlatform,
+        // PluginManager sets __parachordAppVersion before it loads plugins.
+        appVersion: function () { return window.__parachordAppVersion || 'dev'; },
+        // The config the app applied to the plugin (PluginManager.applyResolverConfigs).
+        getConfig: function (pluginId) {
+            var r = window.__resolverLoader && window.__resolverLoader.getResolver(pluginId);
+            return (r && r.config) || {};
+        },
+        // The loader admits https links only before this runs.
+        openExternal: function (url) {
+            NativeBridge.openExternal(String(url));
+            return Promise.resolve(true);
+        },
+        bridges: {},
+    };
+    // </plugin-host-supplier>
 
     // ── ScrobbleManager registry ─────────────────────────────────────
     // Public, stable contract documented in desktop CLAUDE.md
@@ -501,13 +531,13 @@
     console.log('Parachord JS runtime: polyfills loaded');
 </script>
 
-<!-- Load the resolver-loader.js from desktop (unchanged) -->
+<!-- desktop's resolver-loader.js, byte for byte -->
 <script src="resolver-loader.js"></script>
 
 <script>
     // Create global ResolverLoader instance for PluginManager to use
     if (typeof ResolverLoader !== 'undefined') {
-        window.__resolverLoader = new ResolverLoader();
+        window.__resolverLoader = new ResolverLoader({ host: window.__parachordHostSupplier });
         console.log('Parachord JS runtime: ResolverLoader ready');
     } else {
         console.error('ResolverLoader class not found — resolver-loader.js failed to load');
