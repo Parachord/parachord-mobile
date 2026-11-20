@@ -207,8 +207,11 @@ class AiChatService(
 
         // If no tool calls, just add the assistant message and return
         if (response.toolCalls.isNullOrEmpty()) {
-            append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = response.content))
-            return response.content
+            // Plain-text music references as cards (desktop converts before it
+            // stores the reply, so later turns see the cards too).
+            val content = ChatContent.convertPlainTextToCards(response.content)
+            append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = content))
+            return content
         }
 
         // Enter tool loop
@@ -274,7 +277,7 @@ class AiChatService(
         }
 
         // Add final assistant message to history
-        val finalContent = currentResponse.content
+        val finalContent = ChatContent.convertPlainTextToCards(currentResponse.content)
         append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = finalContent))
         return finalContent
     }

@@ -3858,7 +3858,7 @@ class IosContainer private constructor() {
     private val aiChatService: AiChatService by lazy {
         AiChatService(djToolExecutor, chatContextProvider, chatMessageDao, chatJson)
     }
-    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService) }
+    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService, imageEnrichmentService) }
 
     // Flat Swift-facing API (mirrors Android's ChatViewModel calls).
     suspend fun chatSend(providerId: String, userMessage: String, onProgress: (String) -> Unit): String {

@@ -6,7 +6,7 @@ import Shared
 // iOS port of Android's ChatScreen. All orchestration (tool loop, per-provider
 // history, providers, system prompt) is the SHARED AiChatService, reached through
 // flat IosContainer methods. This file is just the SwiftUI surface + the
-// {{type|…}} card parsing (mirrors Android's parseMessage / ChatCardRow).
+// drawing of the shared ChatContent blocks (Android draws the same).
 
 @MainActor
 @Observable
@@ -230,16 +230,7 @@ struct ChatScreen: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "sparkles").font(.system(size: 13)).foregroundStyle(PC.accentSoft).padding(.top, 10)
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(parseSegments(text).enumerated()), id: \.offset) { _, seg in
-                    switch seg {
-                    case .text(let t):
-                        if let clean = cleanSegment(t) {
-                            markdownText(clean).font(.system(size: 14)).foregroundStyle(Color(white: 0.9))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    case .card(let c): ChatCardView(card: c)
-                    }
-                }
+                ChatBlocksView(text: text)
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(.white.opacity(0.07), in: .rect(topLeadingRadius: 16, bottomLeadingRadius: 4, bottomTrailingRadius: 16, topTrailingRadius: 16))
@@ -283,74 +274,124 @@ struct ChatScreen: View {
     }
 }
 
-// MARK: - Card parsing + view (mirrors Android parseMessage / ChatCardRow)
+// MARK: - Message layout + card view
+//
+// The parsing and the punctuation rules around cards are the shared
+// `ChatContent` (desktop's renderChatContent, Android draws the same blocks);
+// this file only draws them.
 
-enum ChatCard: Equatable {
-    case track(title: String, artist: String, album: String)
-    case album(title: String, artist: String)
-    case artist(name: String)
-}
+/// A Shuffleupagus message: the shared `ChatContent.blocks`, drawn.
+private struct ChatBlocksView: View {
+    let blocks: [ChatBlock]
 
-private enum ChatSegment { case text(String); case card(ChatCard) }
-
-/// Lifting cards out of inline prose ("…tracks: {{card}}, {{card}}.") leaves the
-/// joining punctuation as standalone text segments. In the vertical card layout a
-/// lone "," / "." / "and" renders as an orphaned line — drop those; otherwise
-/// return the trimmed text.
-private func cleanSegment(_ raw: String) -> String? {
-    var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    if t.isEmpty { return nil }
-    // Drop a segment that's ONLY separator/markdown noise — a lone "." / "," or a
-    // "* " / "- " / "• " bullet left when a card was lifted out of a list.
-    let orphan = CharacterSet(charactersIn: " ,.;:!?&·•*_#>~`-–—\n\t")
-    if t.unicodeScalars.allSatisfy({ orphan.contains($0) }) { return nil }
-    if ["and", "&", "plus", "with"].contains(t.lowercased()) { return nil }
-    // Strip leading SENTENCE punctuation from a card continuation (". It shares…")
-    // — but NOT markdown markers (* _ `), which carry bold/italic for the render.
-    let lead = CharacterSet(charactersIn: " ,.;:!?\n\t")
-    while let f = t.unicodeScalars.first, lead.contains(f) { t.removeFirst() }
-    t = t.trimmingCharacters(in: .whitespacesAndNewlines)
-    return t.isEmpty ? nil : t
-}
-
-/// Render assistant text as inline markdown (bold/italic/links/code) — falls back
-/// to plain text if the run isn't valid markdown.
-private func markdownText(_ s: String) -> Text {
-    if let a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-        return Text(a)
+    init(text: String) {
+        // Messages saved before replies were converted still get desktop's
+        // plain-text fallback (it leaves a message that has cards alone).
+        let content = ChatContent.shared
+        blocks = content.blocks(content: content.convertPlainTextToCards(content: text))
     }
-    return Text(s)
-}
 
-/// Split assistant text into plain-text + `{{type|…}}` card segments.
-private func parseSegments(_ text: String) -> [ChatSegment] {
-    guard let regex = try? NSRegularExpression(pattern: "\\{\\{(track|album|artist|playlist)\\|([^}]*)\\}\\}") else {
-        return [.text(text)]
-    }
-    let ns = text as NSString
-    var out: [ChatSegment] = []
-    var cursor = 0
-    regex.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-        guard let m = m else { return }
-        if m.range.location > cursor {
-            out.append(.text(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor))))
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                blockView(block, first: index == 0)
+            }
         }
-        let type = ns.substring(with: m.range(at: 1))
-        let parts = ns.substring(with: m.range(at: 2)).components(separatedBy: "|")
-        switch type {
-        case "track": out.append(.card(.track(title: parts.first ?? "", artist: parts.count > 1 ? parts[1] : "", album: parts.count > 2 ? parts[2] : "")))
-        case "album": out.append(.card(.album(title: parts.first ?? "", artist: parts.count > 1 ? parts[1] : "")))
-        case "artist": out.append(.card(.artist(name: parts.first ?? "")))
-        default: break // playlist cards (no iOS playlist entity yet) render as nothing
-        }
-        cursor = m.range.location + m.range.length
     }
-    if cursor < ns.length { out.append(.text(ns.substring(from: cursor))) }
-    return out.isEmpty ? [.text(text)] : out
+
+    @ViewBuilder
+    private func blockView(_ block: ChatBlock, first: Bool) -> some View {
+        if let h = block as? ChatBlock.Header {
+            let size: CGFloat = h.level == 1 ? 18 : h.level == 2 ? 16 : h.level == 3 ? 14 : 13
+            Text(h.text).font(.system(size: size, weight: .semibold)).foregroundStyle(.white)
+                .padding(.top, first ? 0 : 12).padding(.bottom, 4)
+        } else if let c = block as? ChatBlock.CardLine {
+            ChatCardView(card: c.card).padding(.vertical, 4)
+        } else if let item = block as? ChatBlock.ListItem {
+            // A card item centres its number on the card; a text item keeps
+            // the line's top alignment (desktop).
+            HStack(alignment: item.isCard ? .center : .top, spacing: 8) {
+                Text("\(item.number).").font(.system(size: 14)).foregroundStyle(.white.opacity(0.45))
+                    .frame(minWidth: 20, alignment: .leading)
+                ChatInlinesView(inlines: item.inlines)
+            }
+            .padding(.top, first ? 0 : (item.isCard ? 4 : 12))
+        } else if block is ChatBlock.Blank {
+            Color.clear.frame(height: 8)
+        } else if let line = block as? ChatBlock.Line {
+            ChatInlinesView(inlines: line.inlines)
+        }
+    }
+}
+
+/// One line's runs: text, links, bold, italic and code flow together; a card
+/// breaks the line and is drawn as its own row.
+private struct ChatInlinesView: View {
+    let inlines: [ChatInline]
+
+    private enum Piece { case text(AttributedString); case card(ChatCardRef) }
+
+    private var pieces: [Piece] {
+        var out: [Piece] = []
+        var run = AttributedString()
+        func flush() {
+            let trimmed = String(run.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { out.append(.text(Self.trim(run))) }
+            run = AttributedString()
+        }
+        for inline in inlines {
+            if let card = inline as? ChatInline.Card {
+                flush(); out.append(.card(card.card)); continue
+            }
+            var piece: AttributedString
+            if let t = inline as? ChatInline.Text {
+                piece = AttributedString(t.text)
+            } else if let b = inline as? ChatInline.Bold {
+                piece = AttributedString(b.text); piece.font = .system(size: 14, weight: .bold)
+            } else if let i = inline as? ChatInline.Italic {
+                piece = AttributedString(i.text); piece.font = .system(size: 14).italic()
+            } else if let c = inline as? ChatInline.Code {
+                piece = AttributedString(c.text); piece.font = .system(size: 13, design: .monospaced)
+                piece.backgroundColor = .white.opacity(0.1)
+            } else if let l = inline as? ChatInline.Link {
+                piece = AttributedString(l.text)
+                if let url = URL(string: l.url) { piece.link = url }
+                piece.foregroundColor = PC.accentSoft
+                piece.underlineStyle = .single
+            } else {
+                continue
+            }
+            run += piece
+        }
+        flush()
+        return out
+    }
+
+    /// [s] without leading and trailing whitespace, attributes kept.
+    private static func trim(_ s: AttributedString) -> AttributedString {
+        var s = s
+        while let f = s.characters.first, f.isWhitespace { s.characters.removeFirst() }
+        while let l = s.characters.last, l.isWhitespace { s.characters.removeLast() }
+        return s
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                switch piece {
+                case .text(let a):
+                    Text(a).font(.system(size: 14)).foregroundStyle(Color(white: 0.9))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .card(let c):
+                    ChatCardView(card: c).padding(.vertical, 4)
+                }
+            }
+        }
+    }
 }
 
 private struct ChatCardView: View {
-    let card: ChatCard
+    let card: ChatCardRef
     private let container = IosContainer.companion.shared
     @State private var art: String?
 
@@ -366,43 +407,60 @@ private struct ChatCardView: View {
                 }
                 Spacer(minLength: 4)
                 Text(badge).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white.opacity(0.4))
-                Image(systemName: "play.circle.fill").font(.system(size: 22)).foregroundStyle(PC.accentSoft)
+                if !isPlaylist {
+                    Image(systemName: "play.circle.fill").font(.system(size: 22)).foregroundStyle(PC.accentSoft)
+                }
             }
             .padding(8)
             .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .task {
-            art = switch card {
-            case .track(let t, let a, let al): try? await container.chatTrackArtwork(title: t, artist: a, album: al)
-            case .album(let t, let a): try? await container.chatAlbumArtwork(title: t, artist: a)
-            case .artist(let n): try? await container.chatArtistImage(name: n)
+            if let t = card as? ChatCardRef.Track {
+                art = try? await container.chatTrackArtwork(title: t.title, artist: t.artist, album: t.album)
+            } else if let a = card as? ChatCardRef.Album {
+                art = try? await container.chatAlbumArtwork(title: a.title, artist: a.artist)
+            } else if let a = card as? ChatCardRef.Artist {
+                art = try? await container.chatArtistImage(name: a.name)
             }
         }
     }
 
-    private var isArtist: Bool { if case .artist = card { return true }; return false }
+    private var isArtist: Bool { card is ChatCardRef.Artist }
+    private var isPlaylist: Bool { card is ChatCardRef.Playlist }
     private var title: String {
-        switch card { case .track(let t, _, _): return t; case .album(let t, _): return t; case .artist(let n): return n }
+        if let t = card as? ChatCardRef.Track { return t.title }
+        if let a = card as? ChatCardRef.Album { return a.title }
+        if let a = card as? ChatCardRef.Artist { return a.name }
+        if let p = card as? ChatCardRef.Playlist { return p.name }
+        return ""
     }
     private var subtitle: String {
-        switch card {
-        case .track(_, let a, let al): return al.isEmpty ? a : "\(a) • \(al)"
-        case .album(_, let a): return a
-        case .artist: return ""
+        if let t = card as? ChatCardRef.Track { return t.album.isEmpty ? t.artist : "\(t.artist) • \(t.album)" }
+        if let a = card as? ChatCardRef.Album { return a.artist }
+        if let p = card as? ChatCardRef.Playlist {
+            if let n = Int32(p.trackCount) { return "Playlist · " + FormattersKt.countOf(n: n, singular: "track", plural: nil) }
+            return "Playlist"
         }
+        return ""
     }
     private var badge: String {
-        switch card { case .track: return "TRACK"; case .album: return "ALBUM"; case .artist: return "ARTIST" }
+        if card is ChatCardRef.Track { return "TRACK" }
+        if card is ChatCardRef.Album { return "ALBUM" }
+        if card is ChatCardRef.Artist { return "ARTIST" }
+        return "PLAYLIST"
     }
 
     private func play() {
         Task {
-            switch card {
-            case .track(let t, let a, let al): try? await container.chatPlayTrack(title: t, artist: a, album: al.isEmpty ? nil : al)
-            case .album(let t, let a): try? await container.chatPlayAlbum(title: t, artist: a)
-            case .artist(let n): try? await container.chatPlayArtist(name: n)
+            if let t = card as? ChatCardRef.Track {
+                try? await container.chatPlayTrack(title: t.title, artist: t.artist, album: t.album.isEmpty ? nil : t.album)
+            } else if let a = card as? ChatCardRef.Album {
+                try? await container.chatPlayAlbum(title: a.title, artist: a.artist)
+            } else if let a = card as? ChatCardRef.Artist {
+                try? await container.chatPlayArtist(name: a.name)
             }
+            // A playlist card opens nothing yet on iOS (no saved-playlist route from the chat).
         }
     }
 }

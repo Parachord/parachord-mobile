@@ -60,7 +60,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -74,124 +80,18 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.ai.ChatCardEnricher
 import com.parachord.android.ai.ChatRole
+import com.parachord.shared.ai.ChatBlock
+import com.parachord.shared.ai.ChatCardRef
+import com.parachord.shared.ai.ChatContent
+import com.parachord.shared.ai.ChatInline
+import com.parachord.shared.format.countOf
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.icons.ParachordIcons
 
-// ── Card Data Model ─────────────────────────────────────────────────
-
-/** Parsed card from AI response text. */
-private sealed class ChatCard {
-    data class Track(val title: String, val artist: String, val album: String) : ChatCard()
-    data class Album(val title: String, val artist: String) : ChatCard()
-    data class Artist(val name: String) : ChatCard()
-}
-
-/** A segment of parsed message content — either plain text or a card. */
-private sealed class MessageSegment {
-    data class PlainText(val text: String) : MessageSegment()
-    data class CardSegment(val card: ChatCard) : MessageSegment()
-}
-
-/** Card syntax regex: {{type|field1|field2|...}} */
-private val CARD_REGEX = Regex("""\{\{(track|artist|album)\|([^}]+?)\}\}""")
-
-/**
- * Fallback: convert bold artist names (**Name**) to card syntax when AI models
- * don't use the card format. Matches the desktop's convertPlainTextToCards().
- *
- * Also converts patterns like:
- * - "Song Title" by Artist Name → track card
- * - "Song Title" by **Artist** from "Album" → track card
- */
-private val BOLD_ARTIST_REGEX = Regex("""\*\*([^*]{2,40})\*\*""")
-private val QUOTED_TRACK_BY_REGEX = Regex(""""([^"]+)"\s+by\s+([^,.\n]+?)(?:\s+from\s+(?:the\s+album\s+)?"?([^".\n]+?)"?)?(?=[,.\n]|$)""", RegexOption.IGNORE_CASE)
-
-/**
- * Pre-process text: convert plain-text artist/track mentions to card syntax
- * when the AI didn't use the proper format.
- */
-private fun convertPlainTextToCards(text: String): String {
-    var result = text
-
-    // Convert "Song Title" by Artist (from "Album") → track card
-    result = QUOTED_TRACK_BY_REGEX.replace(result) { match ->
-        val title = match.groupValues[1].trim()
-        val artist = match.groupValues[2].trim().removeSuffix("**").removePrefix("**")
-        val album = match.groupValues[3].trim()
-        if (album.isNotBlank()) {
-            "{{track|$title|$artist|$album}}"
-        } else {
-            "{{track|$title|$artist|}}"
-        }
-    }
-
-    // Convert remaining **Bold Name** → artist card (only if not already inside a card)
-    result = BOLD_ARTIST_REGEX.replace(result) { match ->
-        val name = match.groupValues[1].trim()
-        val before = result.substring(0, match.range.first)
-        // Don't convert if it's inside a card already or looks like a non-artist label
-        if (before.endsWith("{{") || before.endsWith("|") ||
-            name.lowercase().let { it.startsWith("note") || it.startsWith("tip") || it.startsWith("important") }
-        ) {
-            match.value // leave as-is
-        } else {
-            "{{artist|$name}}"
-        }
-    }
-
-    return result
-}
-
-/** Parse a message string into segments of text and cards. */
-private fun parseMessage(text: String): List<MessageSegment> {
-    // First pass: convert plain-text mentions to card syntax
-    val enrichedText = convertPlainTextToCards(text)
-
-    val segments = mutableListOf<MessageSegment>()
-    var lastIndex = 0
-
-    for (match in CARD_REGEX.findAll(enrichedText)) {
-        // Add plain text before the card
-        if (match.range.first > lastIndex) {
-            segments.add(MessageSegment.PlainText(enrichedText.substring(lastIndex, match.range.first)))
-        }
-
-        val type = match.groupValues[1]
-        val fields = match.groupValues[2].split("|").map { it.trim() }
-
-        val card = when (type) {
-            "track" -> {
-                val title = fields.getOrElse(0) { "" }
-                val artist = fields.getOrElse(1) { "" }
-                val album = fields.getOrElse(2) { "" }
-                ChatCard.Track(title, artist, album)
-            }
-            "album" -> {
-                val title = fields.getOrElse(0) { "" }
-                val artist = fields.getOrElse(1) { "" }
-                ChatCard.Album(title, artist)
-            }
-            "artist" -> {
-                val name = fields.getOrElse(0) { "" }
-                ChatCard.Artist(name)
-            }
-            else -> null
-        }
-
-        if (card != null) {
-            segments.add(MessageSegment.CardSegment(card))
-        }
-
-        lastIndex = match.range.last + 1
-    }
-
-    // Remaining text after last card
-    if (lastIndex < enrichedText.length) {
-        segments.add(MessageSegment.PlainText(enrichedText.substring(lastIndex)))
-    }
-
-    return segments
-}
+// ── Message layout ──────────────────────────────────────────────────
+//
+// The parsing and the punctuation rules around cards are the shared
+// ChatContent (desktop's renderChatContent); this file only draws its blocks.
 
 // ── Main Screen ─────────────────────────────────────────────────────
 
@@ -541,7 +441,18 @@ private fun AssistantMessageBubble(
     onPlayTrack: (String, String) -> Unit,
     cardEnricher: ChatCardEnricher,
 ) {
-    val segments = remember(text) { parseMessage(text) }
+    // Messages saved before replies were converted still get desktop's
+    // plain-text fallback (it leaves a message that has cards alone).
+    val blocks = remember(text) { ChatContent.blocks(ChatContent.convertPlainTextToCards(text)) }
+    val cardRow: @Composable (ChatCardRef) -> Unit = { card ->
+        ChatCardRow(
+            card = card,
+            onNavigateToArtist = onNavigateToArtist,
+            onNavigateToAlbum = onNavigateToAlbum,
+            onPlayTrack = onPlayTrack,
+            cardEnricher = cardEnricher,
+        )
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -572,29 +483,35 @@ private fun AssistantMessageBubble(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Column {
-                segments.forEach { segment ->
-                    when (segment) {
-                        is MessageSegment.PlainText -> {
-                            val trimmed = segment.text.trim()
-                            if (trimmed.isNotEmpty()) {
-                                Text(
-                                    text = trimmed,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        }
-                        is MessageSegment.CardSegment -> {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            ChatCardRow(
-                                card = segment.card,
-                                onNavigateToArtist = onNavigateToArtist,
-                                onNavigateToAlbum = onNavigateToAlbum,
-                                onPlayTrack = onPlayTrack,
-                                cardEnricher = cardEnricher,
+                blocks.forEachIndexed { index, block ->
+                    when (block) {
+                        is ChatBlock.Header -> Text(
+                            text = block.text,
+                            fontSize = when (block.level) { 1 -> 18.sp; 2 -> 16.sp; 3 -> 14.sp; else -> 13.sp },
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = if (index > 0) 12.dp else 0.dp, bottom = 4.dp),
+                        )
+                        is ChatBlock.CardLine -> Box(Modifier.padding(vertical = 4.dp)) { cardRow(block.card) }
+                        is ChatBlock.ListItem -> Row(
+                            modifier = Modifier.padding(
+                                top = if (index == 0) 0.dp else if (block.isCard) 4.dp else 12.dp,
+                            ),
+                            // A card item centres its number on the card; a text
+                            // item keeps the line's top alignment (desktop).
+                            verticalAlignment = if (block.isCard) Alignment.CenterVertically else Alignment.Top,
+                        ) {
+                            Text(
+                                text = "${block.number}.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.widthIn(min = 20.dp),
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) { ChatInlines(block.inlines, cardRow) }
                         }
+                        ChatBlock.Blank -> Spacer(Modifier.height(8.dp))
+                        is ChatBlock.Line -> ChatInlines(block.inlines, cardRow)
                     }
                 }
             }
@@ -602,11 +519,74 @@ private fun AssistantMessageBubble(
     }
 }
 
+/**
+ * One line's runs: text, links, bold, italic and code flow together; a card
+ * breaks the line and is drawn as its own row.
+ */
+@Composable
+private fun ChatInlines(inlines: List<ChatInline>, cardRow: @Composable (ChatCardRef) -> Unit) {
+    val linkColor = MaterialTheme.colorScheme.primary
+    val codeBackground = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+    val runs = mutableListOf<List<ChatInline>>()
+    var current = mutableListOf<ChatInline>()
+    val cardsAfter = mutableMapOf<Int, ChatCardRef>()
+    for (inline in inlines) {
+        if (inline is ChatInline.Card) {
+            runs += current
+            cardsAfter[runs.lastIndex] = inline.card
+            current = mutableListOf()
+        } else {
+            current += inline
+        }
+    }
+    runs += current
+
+    runs.forEachIndexed { i, run ->
+        val annotated = buildAnnotatedString {
+            for (inline in run) {
+                when (inline) {
+                    is ChatInline.Text -> append(inline.text)
+                    is ChatInline.Bold -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inline.text) }
+                    is ChatInline.Italic -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(inline.text) }
+                    is ChatInline.Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)) {
+                        append(inline.text)
+                    }
+                    is ChatInline.Link -> withLink(
+                        LinkAnnotation.Url(
+                            inline.url,
+                            TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                        ),
+                    ) { append(inline.text) }
+                    is ChatInline.Card -> Unit
+                }
+            }
+        }
+        // Space next to a card is the card row's gap, not text.
+        val shown = if (cardsAfter.containsKey(i) || i > 0) annotated.trimmed() else annotated
+        if (shown.text.isNotBlank()) {
+            Text(
+                text = shown,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        cardsAfter[i]?.let { card -> Box(Modifier.padding(vertical = 4.dp)) { cardRow(card) } }
+    }
+}
+
+/** [this] without leading and trailing whitespace, styles kept. */
+private fun androidx.compose.ui.text.AnnotatedString.trimmed(): androidx.compose.ui.text.AnnotatedString {
+    val start = text.indexOfFirst { !it.isWhitespace() }
+    if (start < 0) return androidx.compose.ui.text.AnnotatedString("")
+    val end = text.indexOfLast { !it.isWhitespace() } + 1
+    return subSequence(start, end)
+}
+
 // ── Chat Card ───────────────────────────────────────────────────────
 
 @Composable
 private fun ChatCardRow(
-    card: ChatCard,
+    card: ChatCardRef,
     onNavigateToArtist: (String) -> Unit,
     onNavigateToAlbum: (String, String) -> Unit,
     onPlayTrack: (String, String) -> Unit,
@@ -616,19 +596,21 @@ private fun ChatCardRow(
     var artworkUrl by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(card) {
         artworkUrl = when (card) {
-            is ChatCard.Track -> cardEnricher.getTrackArtwork(card.title, card.artist, card.album)
-            is ChatCard.Album -> cardEnricher.getAlbumArtwork(card.title, card.artist)
-            is ChatCard.Artist -> cardEnricher.getArtistImage(card.name)
+            is ChatCardRef.Track -> cardEnricher.getTrackArtwork(card.title, card.artist, card.album)
+            is ChatCardRef.Album -> cardEnricher.getAlbumArtwork(card.title, card.artist)
+            is ChatCardRef.Artist -> cardEnricher.getArtistImage(card.name)
+            is ChatCardRef.Playlist -> null
         }
     }
 
     val cardBg = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
     val placeholderName = when (card) {
-        is ChatCard.Track -> card.artist
-        is ChatCard.Album -> card.artist
-        is ChatCard.Artist -> card.name
+        is ChatCardRef.Track -> card.artist
+        is ChatCardRef.Album -> card.artist
+        is ChatCardRef.Artist -> card.name
+        is ChatCardRef.Playlist -> card.name
     }
-    val isArtist = card is ChatCard.Artist
+    val isArtist = card is ChatCardRef.Artist
 
     Row(
         modifier = Modifier
@@ -637,9 +619,11 @@ private fun ChatCardRow(
             .background(cardBg)
             .clickable {
                 when (card) {
-                    is ChatCard.Track -> onPlayTrack(card.title, card.artist)
-                    is ChatCard.Album -> onNavigateToAlbum(card.title, card.artist)
-                    is ChatCard.Artist -> onNavigateToArtist(card.name)
+                    is ChatCardRef.Track -> onPlayTrack(card.title, card.artist)
+                    is ChatCardRef.Album -> onNavigateToAlbum(card.title, card.artist)
+                    is ChatCardRef.Artist -> onNavigateToArtist(card.name)
+                    // Opening a playlist from the chat needs a route here (follow-up).
+                    is ChatCardRef.Playlist -> Unit
                 }
             }
             .padding(8.dp),
@@ -659,7 +643,7 @@ private fun ChatCardRow(
         // Text content
         Column(modifier = Modifier.weight(1f)) {
             when (card) {
-                is ChatCard.Track -> {
+                is ChatCardRef.Track -> {
                     Text(
                         text = card.title,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
@@ -682,7 +666,7 @@ private fun ChatCardRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                is ChatCard.Album -> {
+                is ChatCardRef.Album -> {
                     Text(
                         text = card.title,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
@@ -698,11 +682,27 @@ private fun ChatCardRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                is ChatCard.Artist -> {
+                is ChatCardRef.Artist -> {
                     Text(
                         text = card.name,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
                         color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                is ChatCardRef.Playlist -> {
+                    Text(
+                        text = card.name,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = card.trackCount.toIntOrNull()?.let { "Playlist · ${countOf(it, "track")}" } ?: "Playlist",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -712,9 +712,10 @@ private fun ChatCardRow(
 
         // Type badge
         val badgeText = when (card) {
-            is ChatCard.Track -> "TRACK"
-            is ChatCard.Album -> "ALBUM"
-            is ChatCard.Artist -> "ARTIST"
+            is ChatCardRef.Track -> "TRACK"
+            is ChatCardRef.Album -> "ALBUM"
+            is ChatCardRef.Artist -> "ARTIST"
+            is ChatCardRef.Playlist -> "PLAYLIST"
         }
         Text(
             text = badgeText,
@@ -723,7 +724,7 @@ private fun ChatCardRow(
         )
 
         // Play button for tracks and albums
-        if (card is ChatCard.Track || card is ChatCard.Album) {
+        if (card is ChatCardRef.Track || card is ChatCardRef.Album) {
             Spacer(modifier = Modifier.width(4.dp))
             Box(
                 modifier = Modifier

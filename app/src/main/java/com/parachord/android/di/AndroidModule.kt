@@ -1207,7 +1207,7 @@ val androidModule = module {
             libraryRepository = get(),
         )
     }
-    singleOf(::ChatCardEnricher)
+    single { ChatCardEnricher(metadataService = get(), imageEnrichmentService = get()) }
     singleOf(::ChatGptProvider)
     singleOf(::ClaudeProvider)
     singleOf(::GeminiProvider)
