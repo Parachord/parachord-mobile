@@ -39,14 +39,15 @@ import kotlinx.datetime.toLocalDateTime
  * shared Home rules, and runs Home's loads. Android's `HomeViewModel` and
  * iOS's bridge wrap it and only draw.
  *
- * - **Loads** ([onVisible]): recommendations and history mixes on the
- *   10-minute throttle ([shouldLoadHomeRecommendations]; a load counts only
- *   when [shouldStampHomeRecommendationsLoad] says so, and one that throws
- *   never counts), the feeds where not loaded, and concerts only with a saved
+ * - **Loads** ([onVisible]): recommendations and history mixes, each on its
+ *   own 10-minute throttle ([shouldLoadHomeRecommendations]; a load counts
+ *   only when [shouldStampHomeRecommendationsLoad] says so, and one that
+ *   throws never counts), the feeds where not loaded, and concerts only with a saved
  *   location. Each runs on its own; a failure is logged and the rest go on.
  * - **Getting started:** decided once from the saved state, else
  *   [initialGettingStarted] on the first values of the sources, and saved.
- *   The first non-null current track while it's on saves `played`; when every
+ *   Nothing is decided (and [HomeState.ready] stays false) until the plugins
+ *   have loaded. Playback starting while it's on saves `played`; when every
  *   step is done it goes off and is saved.
  * - **Jump back in** leaves out what's playing: [ActiveContexts] with the
  *   playing context only (mobile queue entries carry no context).
@@ -82,6 +83,8 @@ class HomeSession(
     private val recsInFlight = MutableStateFlow(false)
     private val recsAttempted = MutableStateFlow(false)
     private val askSeed = MutableStateFlow(AskSeed(0, seedNow()))
+    /** Bumped on each visit, so the greeting and the time phrases are worked out again. */
+    private val tick = MutableStateFlow(0)
 
     /** Read and written only by the state's single collector. */
     private var askLatch: AskLatch? = null
@@ -97,6 +100,7 @@ class HomeSession(
     // ── Inputs ──────────────────────────────────────────────────────────────
 
     private data class GsInputs(
+        val pluginsLoaded: Boolean,
         val stepOne: StepOnePlugins,
         val accounts: Map<String, Boolean>,
         val resolvers: List<String>,
@@ -123,7 +127,7 @@ class HomeSession(
             Triple(f, scrobblerConnected(u), c || pl.isNotEmpty())
         },
     ) { (plugins, accounts, resolvers), (folder, scrobbling, hasMusic) ->
-        GsInputs(stepOnePlugins(plugins), accounts, resolvers, folder, scrobbling, hasMusic)
+        GsInputs(plugins.isNotEmpty(), stepOnePlugins(plugins), accounts, resolvers, folder, scrobbling, hasMusic)
     }
 
     private data class LibraryIn(
@@ -156,6 +160,7 @@ class HomeSession(
         val mixSource: String,
         val albumSource: String,
         val askSeed: AskSeed,
+        val tick: Int,
     )
 
     private val library = combine(
@@ -170,7 +175,9 @@ class HomeSession(
         sources.freshDrops, sources.criticalDarlings, sources.charts, sources.concerts, location,
     ) { f, c, ch, co, l -> FeedsIn(f, c, ch, co, l) }
 
-    private val ui = combine(gs, dismissed, mixSource, albumSource, askSeed) { g, d, m, a, s -> UiIn(g, d, m, a, s) }
+    private val ui = combine(gs, dismissed, combine(mixSource, albumSource) { m, a -> m to a }, askSeed, tick) { g, d, (m, a), s, t ->
+        UiIn(g, d, m, a, s, t)
+    }
 
     private val chat = sources.chatAvailable
 
@@ -189,11 +196,12 @@ class HomeSession(
                 if (st.active && inputs.status(st.played).allDone) updateGs { it.copy(active = false) }
             }
         }
-        // The first track while the layout is on counts as played.
+        // Playback while the layout is on counts as played (desktop: `isPlaying`;
+        // a failed play or a restored, paused queue doesn't).
         this.scope.launch {
-            combine(gs, sources.currentTrack) { holder, track -> holder to track }.collect { (holder, track) ->
+            combine(gs, sources.isPlaying) { holder, playing -> holder to playing }.collect { (holder, playing) ->
                 val st = holder.state ?: return@collect
-                if (track != null && st.active && !st.played) updateGs { it.copy(played = true) }
+                if (playing && st.active && !st.played) updateGs { it.copy(played = true) }
             }
         }
     }
@@ -202,6 +210,7 @@ class HomeSession(
 
     /** Home came on screen: the loads, under their throttles. Nothing waits on the network. */
     fun onVisible() {
+        tick.value = tick.value + 1
         scope.launch { loadRecommendations() }
         scope.launch { loadMixes() }
         scope.launch { guard("feeds") { sources.loadFeeds(false) } }
@@ -237,7 +246,8 @@ class HomeSession(
             val next = gsMutex.withLock {
                 (dismissed.value + id).also { dismissed.value = it }
             }
-            guard("save dismissed setup items") { settings.setHomeSetupDismissed(next) }
+            // Merged with the saved set, in case this lands before it was read.
+            guard("save dismissed setup items") { settings.setHomeSetupDismissed(settings.getHomeSetupDismissed() + next) }
         }
     }
 
@@ -296,9 +306,8 @@ class HomeSession(
         }
         if (!go) return
         try {
-            sources.loadHistoryMixes(false)
-            // The repository keeps its provider counts; a load counts here once it left mixes to show.
-            if (shouldStampHomeRecommendationsLoad(0, 0, sources.historyMixes.value.flat.size)) {
+            val result = sources.loadHistoryMixes(false)
+            if (shouldStampHomeRecommendationsLoad(result.fetched, result.failed, result.sectionCount)) {
                 throttleMutex.withLock { mixesLastAt = sources.nowMs() }
             }
         } catch (e: CancellationException) {
@@ -334,7 +343,8 @@ class HomeSession(
 
     private suspend fun decideGettingStarted() {
         try {
-            dismissed.value = settings.getHomeSetupDismissed()
+            val saved = settings.getHomeSetupDismissed()
+            gsMutex.withLock { dismissed.value = saved + dismissed.value }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -348,7 +358,10 @@ class HomeSession(
             Log.w(TAG, "Couldn't read the getting-started state: ${e.message}")
             null
         }
-        val inputs = gsInputs.first()
+        // Desktop decides only once resolvers have loaded: an empty list here
+        // would read a connected user as having nothing to play from.
+        sources.plugins.first { it.isNotEmpty() }
+        val inputs = gsInputs.first { it.pluginsLoaded }
         val decided = initialGettingStarted(saved, inputs.connectDone, inputs.musicDone)
         gsMutex.withLock {
             // An action that came first (skip, resume) wins.

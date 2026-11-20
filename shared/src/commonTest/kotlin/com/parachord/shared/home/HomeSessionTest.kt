@@ -54,12 +54,13 @@ class HomeSessionTest {
         override val collectionTracks = MutableStateFlow<List<Track>>(emptyList())
         override val hasCollection = MutableStateFlow(false)
         override val playingContext = MutableStateFlow<PlaybackContext?>(null)
-        override val currentTrack = MutableStateFlow<Track?>(null)
+        override val isPlaying = MutableStateFlow(false)
         override val announcements = MutableStateFlow<List<Announcement>>(emptyList())
 
         override val historyMixes = MutableStateFlow(HistoryMixesState())
         var mixLoads = 0
-        override suspend fun loadHistoryMixes(force: Boolean) { mixLoads++ }
+        var mixResult = HomeRecsLoad(fetched = 1, failed = 0, sectionCount = 2)
+        override suspend fun loadHistoryMixes(force: Boolean): HomeRecsLoad { mixLoads++; return mixResult }
 
         override val recommendationSections = MutableStateFlow<List<RecommendationPageSection>?>(null)
         override val aiAlbums = MutableStateFlow<List<AiAlbumSuggestion>?>(null)
@@ -80,7 +81,7 @@ class HomeSessionTest {
         override suspend fun loadConcerts() { concertLoads++ }
 
         override val chatAvailable = MutableStateFlow<Boolean?>(true)
-        override val plugins = MutableStateFlow<List<PluginInfo>>(emptyList())
+        override val plugins = MutableStateFlow(listOf(SPOTIFY))
         override val accounts = MutableStateFlow<Map<String, Boolean>>(emptyMap())
         override val playbackResolvers = MutableStateFlow<List<String>>(emptyList())
         override val folderAdded = MutableStateFlow(false)
@@ -88,6 +89,14 @@ class HomeSessionTest {
 
         override fun nowMs(): Long = now
         override fun hour(): Int = hourOfDay
+    }
+
+    private companion object {
+        /** A service that needs an account and plays here (step 1's tile). */
+        val SPOTIFY = PluginInfo(
+            id = "spotify", name = "Spotify", version = "1.0.0",
+            capabilities = mapOf("resolve" to true, "stream" to true), requiresAuth = true,
+        )
     }
 
     private fun settings(): SettingsStore = SettingsStore(FakeSecureStore(), KvStore(MapSettings()))
@@ -153,14 +162,36 @@ class HomeSessionTest {
     }
 
     @Test
-    fun `the first track played while it shows is saved as played`(): TestResult = homeTest { scope ->
+    fun `playback while it shows is saved as played but a track that isn't playing is not`(): TestResult = homeTest { scope ->
         val src = FakeSources()
         val store = settings()
         session(scope, src, store)
         advanceUntilIdle()
-        src.currentTrack.value = love("x", "Someone", 1)
+        // A failed play, or a restored queue left paused: a track, nothing playing.
+        assertEquals(false, store.getHomeGettingStarted()?.played)
+        src.isPlaying.value = true
         advanceUntilIdle()
         assertEquals(true, store.getHomeGettingStarted()?.played)
+    }
+
+    @Test
+    fun `nothing is decided until the plugins load`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.plugins.value = emptyList()
+        src.accounts.value = mapOf("spotify" to true)
+        src.playbackResolvers.value = listOf("spotify")
+        val store = settings()
+        val s = session(scope, src, store)
+        advanceUntilIdle()
+        assertFalse(s.state.value.ready)
+        assertNull(s.state.value.gettingStarted)
+        assertNull(store.getHomeGettingStarted())
+
+        src.plugins.value = listOf(SPOTIFY)
+        advanceUntilIdle()
+        assertTrue(s.state.value.ready)
+        assertNull(s.state.value.gettingStarted)
+        assertEquals(false, store.getHomeGettingStarted()?.active)
     }
 
     @Test
@@ -192,9 +223,22 @@ class HomeSessionTest {
     }
 
     @Test
+    fun `a mix playing gives Jump back in the next mix`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.hasCollection.value = true
+        src.historyMixes.value = HistoryMixesState(flat = listOf(mix("a", "listenbrainz"), mix("b", "listenbrainz")))
+        val s = session(scope, src)
+        advanceUntilIdle()
+        assertEquals("a", (s.state.value.tiles.single { it is JumpTile.Mix } as JumpTile.Mix).mix.id)
+
+        src.playingContext.value = PlaybackContext(type = "mix", name = "Mix a", id = "a")
+        advanceUntilIdle()
+        assertEquals("b", (s.state.value.tiles.single { it is JumpTile.Mix } as JumpTile.Mix).mix.id)
+    }
+
+    @Test
     fun `recommendations and mixes load once within ten minutes`(): TestResult = homeTest { scope ->
         val src = FakeSources()
-        src.historyMixes.value = HistoryMixesState(flat = listOf(mix("a", "listenbrainz")))
         val s = session(scope, src)
         advanceUntilIdle()
         s.onVisible()
@@ -215,11 +259,26 @@ class HomeSessionTest {
     @Test
     fun `mixes with nothing to show don't count for the throttle`(): TestResult = homeTest { scope ->
         val src = FakeSources()
+        src.mixResult = HomeRecsLoad(fetched = 1, failed = 0, sectionCount = 0)
         val s = session(scope, src)
         advanceUntilIdle()
         s.onVisible()
         advanceUntilIdle()
-        // The fake's mixes stay empty, so the next visit asks again.
+        // No mixes to show, so the next visit asks again.
+        src.now += 60_000L
+        s.onVisible()
+        advanceUntilIdle()
+        assertEquals(2, src.mixLoads)
+    }
+
+    @Test
+    fun `a mixes load where every provider failed is asked again next visit`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.mixResult = HomeRecsLoad(fetched = 2, failed = 2, sectionCount = 4)
+        val s = session(scope, src)
+        advanceUntilIdle()
+        s.onVisible()
+        advanceUntilIdle()
         src.now += 60_000L
         s.onVisible()
         advanceUntilIdle()
@@ -242,15 +301,19 @@ class HomeSessionTest {
 
     @Test
     fun `a load that throws keeps the other loads and the session running`(): TestResult = homeTest { scope ->
-        val src = object : HomeSources by FakeSources() {
+        val fake = FakeSources()
+        fake.location = SettingsStore.ConcertLocation(latitude = null, longitude = null, city = "Austin", radiusMiles = 50)
+        val src = object : HomeSources by fake {
             override suspend fun loadRecommendations(force: Boolean): HomeRecsLoad = error("offline")
-            override suspend fun loadHistoryMixes(force: Boolean) = error("offline")
+            override suspend fun loadHistoryMixes(force: Boolean): HomeRecsLoad = error("offline")
         }
         val s = session(scope, src)
         advanceUntilIdle()
         s.onVisible()
         advanceUntilIdle()
         assertTrue(s.state.value.ready)
+        assertEquals(listOf(false), fake.feedLoads)
+        assertEquals(1, fake.concertLoads)
     }
 
     @Test
@@ -395,6 +458,31 @@ class HomeSessionTest {
         assertEquals(HomeCopy.GREETING_EVENING, s.state.value.greeting)
         assertEquals("a1", s.state.value.banner?.id)
         assertTrue(s.state.value.sections.banner)
+    }
+
+    @Test
+    fun `the greeting follows the hour from one visit to the next`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        val s = session(scope, src)
+        advanceUntilIdle()
+        s.onVisible()
+        advanceUntilIdle()
+        assertEquals(HomeCopy.GREETING_MORNING, s.state.value.greeting)
+        src.hourOfDay = 14
+        s.onVisible()
+        advanceUntilIdle()
+        assertEquals(HomeCopy.GREETING_AFTERNOON, s.state.value.greeting)
+    }
+
+    @Test
+    fun `a dismiss that lands before the saved set is read keeps both`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        val store = settings()
+        store.setHomeSetupDismissed(setOf("old"))
+        val s = session(scope, src, store)
+        s.dismissSetupItem("getting-started")
+        advanceUntilIdle()
+        assertEquals(setOf("old", "getting-started"), store.getHomeSetupDismissed())
     }
 
     @Test

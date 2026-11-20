@@ -40,10 +40,12 @@ data class HomeRecsLoad(val fetched: Int, val failed: Int, val sectionCount: Int
  * every rule.
  *
  * The flows should emit real values only: the getting-started decision is made
- * once, from the first values of [plugins], [accounts], [playbackResolvers],
- * [folderAdded], [scrobblerUsernames], [hasCollection] and [playlists], so a
- * placeholder (an empty plugin list before the plugins load, `false` before
- * the database answers) can show the layout to a user who doesn't need it.
+ * once, from the first values of [accounts], [playbackResolvers],
+ * [folderAdded], [scrobblerUsernames], [hasCollection] and [playlists] once
+ * [plugins] is non-empty (the session waits for the plugins, as desktop gates
+ * on loaded resolvers), so a placeholder (`false` before the database
+ * answers, no accounts before the tokens are read) can show the layout to a
+ * user who doesn't need it.
  */
 interface HomeSources {
     val playlists: Flow<List<Playlist>>
@@ -53,13 +55,17 @@ interface HomeSources {
     val hasCollection: Flow<Boolean>
     /** The playing queue's context, for Jump back in's active check. */
     val playingContext: Flow<PlaybackContext?>
-    val currentTrack: Flow<Track?>
+    /** Something is playing (not paused, not stopped on a failed track). Marks getting-started's step 3. */
+    val isPlaying: Flow<Boolean>
     /** Already filtered (surface, version, expiry, dismissals). */
     val announcements: Flow<List<Announcement>>
 
     val historyMixes: StateFlow<HistoryMixesState>
-    /** `HistoryMixesRepository.load`. May throw; the session catches it. */
-    suspend fun loadHistoryMixes(force: Boolean)
+    /**
+     * `HistoryMixesRepository.load`: providers asked, how many failed, and the
+     * mixes there are to show, for the throttle. May throw; the session catches it.
+     */
+    suspend fun loadHistoryMixes(force: Boolean): HomeRecsLoad
 
     /** The Recommendations page's sections; null before the first answer. */
     val recommendationSections: Flow<List<RecommendationPageSection>?>
