@@ -19,8 +19,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +44,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.ShimmerTrackRow
 import com.parachord.android.ui.components.TrackContextInfo
@@ -55,6 +54,8 @@ import com.parachord.android.ui.components.rememberTrackContextMenuState
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.shared.model.Resource
 import com.parachord.shared.recommendations.RecommendationCopy
+import com.parachord.shared.ui.UiMessages
+import com.parachord.shared.ui.icons.AppIcon
 import org.koin.androidx.compose.koinViewModel
 
 private const val SKELETON_ROWS = 8
@@ -101,7 +102,7 @@ fun ServicePlaylistScreen(
             title = {},
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = UiMessages.BACK)
                 }
             },
             windowInsets = WindowInsets(0),
@@ -138,7 +139,7 @@ fun ServicePlaylistScreen(
                                 shape = RoundedCornerShape(24.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = FillAccent, contentColor = Color.White),
                             ) {
-                                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                                ParachordIcon(AppIcon.Play, contentDescription = null, size = 20.dp)
                                 Spacer(Modifier.width(4.dp))
                                 Text(RecommendationCopy.PLAY)
                             }
@@ -230,8 +231,8 @@ private fun ServicePlaylistCover(cover: String?, trackCovers: List<String>, size
                 }
             }
             trackCovers.isNotEmpty() -> AsyncImage(trackCovers[0], null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            else -> Box(Modifier.fillMaxSize().background(Color(0xFF2D2D2D)), contentAlignment = Alignment.Center) {
-                Icon(Icons.AutoMirrored.Filled.QueueMusic, null, tint = Color(0xFF6B7280), modifier = Modifier.size(48.dp))
+            else -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                ParachordIcon(AppIcon.Music, null, size = 48.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

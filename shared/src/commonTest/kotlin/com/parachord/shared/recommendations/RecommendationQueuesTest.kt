@@ -100,6 +100,7 @@ class RecommendationQueuesTest {
         assertEquals("Recommended by the service", RecommendationCopy.recommendedBy("  "))
         assertEquals("Save", RecommendationCopy.SAVE)
         assertEquals("Saved Mix", RecommendationCopy.saved("Mix"))
+        assertEquals("Couldn’t save Mix", RecommendationCopy.couldntSave("Mix"))
     }
 
     @Test

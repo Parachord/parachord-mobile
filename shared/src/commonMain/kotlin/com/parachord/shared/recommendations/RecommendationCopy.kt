@@ -47,6 +47,7 @@ object RecommendationCopy {
     fun loading(name: String) = "Loading $name…"
     const val SAVE = "Save"
     fun saved(name: String) = "Saved $name"
+    fun couldntSave(name: String) = "Couldn’t save $name"
     /** A recommended playlist's line under its title; [sourceName] blank reads "the service" (desktop's `sourceName || 'the service'`). */
     fun recommendedBy(sourceName: String) = "Recommended by ${sourceName.trim().ifEmpty { "the service" }}"
     fun couldntLoad(name: String) = "Couldn’t load $name"

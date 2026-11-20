@@ -10,6 +10,9 @@ object UiMessages {
     /** The error state's button on most screens. */
     const val TRY_AGAIN = "Try Again"
 
+    /** The accessibility label of a screen's back button. */
+    const val BACK = "Back"
+
     /** The error state's button on a friend's profile. */
     const val RETRY = "Retry"
 

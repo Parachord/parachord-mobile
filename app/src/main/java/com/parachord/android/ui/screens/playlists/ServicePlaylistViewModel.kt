@@ -136,20 +136,29 @@ class ServicePlaylistViewModel(
         }
     }
 
-    /** Saves the playlist through the link importer, then asks the screen to open the saved one. */
+    private var savedPlaylistId: String? = null
+
+    /**
+     * Saves the playlist through the link importer, then asks the screen to open the saved one.
+     * A save that went through stays "saving" and remembers the playlist, so another tap before
+     * the screen navigates opens it instead of importing a duplicate (the importer mints a new id
+     * on every call).
+     */
     fun save() {
+        savedPlaylistId?.let { _events.tryEmit(ServicePlaylistEvent.Saved(it, title)); return }
         if (_saving.value) return
         _saving.value = true
         viewModelScope.launch {
             try {
                 val result = playlistImportManager.importFromUrl(url)
+                savedPlaylistId = result.playlistId
                 _events.tryEmit(ServicePlaylistEvent.Saved(result.playlistId, title))
             } catch (e: CancellationException) {
+                _saving.value = false
                 throw e
             } catch (e: Exception) {
-                _events.tryEmit(ServicePlaylistEvent.Message(RecommendationCopy.couldntLoad(title)))
-            } finally {
                 _saving.value = false
+                _events.tryEmit(ServicePlaylistEvent.Message(RecommendationCopy.couldntSave(title)))
             }
         }
     }
