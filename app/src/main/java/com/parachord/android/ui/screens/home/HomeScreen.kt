@@ -178,7 +178,7 @@ fun HomeScreen(
     }
     albumMenu?.let { item ->
         val artist = item.artist.orEmpty()
-        val inCollection by remember(item.id) { viewModel.isAlbumInCollection(item.name, artist) }.collectAsState(false)
+        val inCollection by remember(item.name, artist) { viewModel.isAlbumInCollection(item.name, artist) }.collectAsState(false)
         AlbumContextMenu(
             albumTitle = item.name,
             artistName = artist,

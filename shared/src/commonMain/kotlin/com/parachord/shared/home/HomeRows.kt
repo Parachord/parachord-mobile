@@ -29,17 +29,23 @@ fun mixCardArt(card: HomeMixCard): JumpTileArt = when (card) {
     is HomeMixCard.Mix -> jumpTileArt(JumpTile.Mix(card.mix), emptyList())
 }
 
-/** A mix card's line under the title: the mix's description, else its service (desktop `description || subtitle`). */
+/** A mix card's line under the title: the mix's description, else blank (desktop `description || subtitle`; a mix has no subtitle). */
 fun mixCardSubtitle(card: HomeMixCard): String = when (card) {
     is HomeMixCard.Loves -> card.subtitle
-    is HomeMixCard.Mix -> card.mix.description?.trim()?.takeIf { it.isNotEmpty() } ?: card.mix.resolverName.orEmpty()
+    is HomeMixCard.Mix -> card.mix.description?.trim().orEmpty()
 }
 
+/** Whether a row shows its source chips: with any source, since "All" is a chip too (desktop `chips.length > 1`). */
+fun showSourceChips(sources: List<FilterChipSource>): Boolean = sources.isNotEmpty()
+
 /**
- * The reason badge on an album card (desktop `HomeAlbumCard`): Shuffleupagus's
- * picks say why ([RecommendationItem.reason], else "Picked by Shuffleupagus");
+ * The reason badge on an album card (desktop `shuffleupagusBadgeProps`): an
+ * item Shuffleupagus sent (its own, or a merged item whose sources include it)
+ * says why ([RecommendationItem.reason], else "Picked by Shuffleupagus");
  * other sources get none. Critical Darlings' badge is on its own half.
  */
-fun albumReasonBadge(item: RecommendationItem): String? =
-    if (item.resolverId == SHUFFLEUPAGUS_ID) item.reason?.trim()?.takeIf { it.isNotEmpty() } ?: HomeCopy.PICKED_BY_SHUFFLEUPAGUS
-    else null
+fun albumReasonBadge(item: RecommendationItem): String? {
+    val fromShuffleupagus = item.resolverId == SHUFFLEUPAGUS_ID || SHUFFLEUPAGUS_ID in item.sourceIds
+    if (!fromShuffleupagus) return null
+    return item.reason?.trim()?.takeIf { it.isNotEmpty() } ?: HomeCopy.PICKED_BY_SHUFFLEUPAGUS
+}

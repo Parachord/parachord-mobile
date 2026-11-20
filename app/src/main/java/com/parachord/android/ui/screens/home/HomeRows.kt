@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
@@ -25,14 +26,17 @@ import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -50,7 +54,8 @@ import com.parachord.android.ui.screens.discover.PlayDisc
 import com.parachord.android.ui.screens.discover.RecAlbumCard
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
 import com.parachord.android.ui.screens.discover.RecCardWidth
-import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.components.serviceLogoVector
+import com.parachord.android.ui.theme.current
 import com.parachord.android.ui.theme.tokenColor
 import com.parachord.shared.home.FilterChipSource
 import com.parachord.shared.home.HOME_ALL_SOURCES
@@ -61,35 +66,37 @@ import com.parachord.shared.home.HomePlaylistCard
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.albumReasonBadge
 import com.parachord.shared.home.homeSourceChipColor
+import com.parachord.shared.home.showSourceChips
 import com.parachord.shared.home.mixCardArt
 import com.parachord.shared.home.mixCardKey
 import com.parachord.shared.home.mixCardSubtitle
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.releaseYear
-import com.parachord.shared.recommendations.upcomingLabel
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.icons.AppIcon
 import kotlinx.coroutines.launch
-import kotlinx.datetime.Clock
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.todayIn
 
-private val OnFill = tokenColor(DesignTokens.ON_ACCENT)
 /** Desktop's `HOME_ROW_GAP`. */
 private val CardGap = 16.dp
 private val Gutter = DesignTokens.SCREEN_GUTTER.dp
 private val ArtShape = RoundedCornerShape(DesignTokens.RADIUS_ART.dp)
+/** The reason badge: desktop's 26 px disc and 18 px logo, on the 4-point and icon scales. */
+private val BadgeDisc = 28.dp
+private val BadgeLogo = 20.dp
+private val BadgeChip = tokenColor(DesignTokens.ON_COLOR_CHIP, DesignTokens.ON_COLOR_CHIP_ALPHA)
+private val BadgeInk = tokenColor(DesignTokens.ON_ART_INK)
 
 // The three card rows of desktop's Home (`home-sections.js`): Made from your
 // listening, Your playlists freshest first, Albums you might love. What each
 // card shows is worked out in shared code (`HomeSession`, `HomeRows.kt`);
 // these only draw it.
 
-/** A row's source chips ("All" first), shown only with two or more sources. */
+/** A row's source chips ("All" first), shown with any source ([showSourceChips]). */
 @Composable
 private fun SourceChips(sources: List<FilterChipSource>, selected: String, onSelect: (String) -> Unit) {
-    if (sources.size < 2) return
+    if (!showSourceChips(sources)) return
     FilterChips(
         chips = listOf(FilterChipItem(HOME_ALL_SOURCES, HomeCopy.ALL)) +
             sources.map { FilterChipItem(it.id, it.label, homeSourceChipColor(it.id)) },
@@ -130,7 +137,8 @@ fun HomeMixesRow(
                 }
                 HomeCard(
                     title = title,
-                    lines = listOf(mixCardSubtitle(card)),
+                    // A description clamps to two lines (desktop `CLAMP2`).
+                    lines = listOf(CardLine(mixCardSubtitle(card), maxLines = 2)),
                     onOpen = { if (card is HomeMixCard.Mix) onOpenMix(card) else onOpenLoves() },
                     onPlay = { if (card is HomeMixCard.Mix) onPlayMix(card) else onPlayLoves() },
                 ) { size ->
@@ -186,7 +194,7 @@ private fun PlaylistCard(
     val playlist = card.playlist
     HomeCard(
         title = playlist.name,
-        lines = listOf(card.subtitle.refreshed, card.subtitle.since.orEmpty()),
+        lines = listOf(CardLine(card.subtitle.refreshed, maxLines = 2), CardLine(card.subtitle.since.orEmpty())),
         onOpen = { onOpen(playlist) },
         onPlay = { onPlay(playlist) },
         onLongPress = { onLongPress(playlist) },
@@ -220,8 +228,6 @@ fun HomeAlbumsRow(
 ) {
     val loading = state.albums.isEmpty() && state.albumsLoading
     if (!loading && (!state.sections.albums || state.albums.isEmpty())) return
-    // Read on every composition, so a page left open past midnight updates its "Coming" pills.
-    val today = Clock.System.todayIn(TimeZone.currentSystemDefault())
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.ALBUMS_TITLE,
@@ -234,7 +240,7 @@ fun HomeAlbumsRow(
             horizontalArrangement = Arrangement.spacedBy(CardGap),
         ) {
             if (loading) {
-                items(HOME_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 3) }
+                items(HOME_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 2) }
             } else {
                 // Artist + title is unique in the list (homeRecommendationAlbums dedups by it); an id may be blank.
                 items(state.albums, key = { "${it.artist.orEmpty()}\u0000${it.name}" }) { item ->
@@ -243,7 +249,8 @@ fun HomeAlbumsRow(
                     RecAlbumCard(
                         item = item,
                         year = releaseYear(item.releaseDate),
-                        comingLabel = upcomingLabel(item.releaseDate, today),
+                        // Desktop's Home album card has no "Coming" pill.
+                        comingLabel = null,
                         onOpen = { onOpen(item) },
                         onPlay = { onPlay(item) },
                         onLongPress = { onLongPress(item) },
@@ -255,6 +262,9 @@ fun HomeAlbumsRow(
     }
 }
 
+/** A line under a card's title, clamped to [maxLines]. */
+private data class CardLine(val text: String, val maxLines: Int = 1)
+
 /**
  * A Home card in a row: the art (drawn by [art] at the card's width), an
  * optional [badge] over it, the play disc at its bottom-right, then the title
@@ -263,7 +273,7 @@ fun HomeAlbumsRow(
 @Composable
 private fun HomeCard(
     title: String,
-    lines: List<String>,
+    lines: List<CardLine>,
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     onLongPress: (() -> Unit)? = null,
@@ -283,30 +293,36 @@ private fun HomeCard(
         }
         Spacer(Modifier.height(8.dp))
         CardText(title, primary = true)
-        lines.forEach { CardText(it.ifBlank { " " }) }
+        lines.forEach { CardText(it.text.ifBlank { " " }, maxLines = it.maxLines) }
     }
 }
 
-/** The "Δ N" badge: the tracks a playlist's latest change added (fill accent, white). */
+/**
+ * The "Δ N" badge: the tracks a playlist's latest change added. Desktop
+ * `playlist-card.js`: a pill in bg-primary with text-primary, 11 / 700, 8 in
+ * from the corner (its 3×8 padding is 4×8 here, on the 4-point scale).
+ */
 @Composable
 private fun ChangeBadge(text: String, modifier: Modifier) {
     Text(
         text = text,
         fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = OnFill,
+        fontWeight = FontWeight.Bold,
+        color = DesignTokens.textPrimary.current(),
         maxLines = 1,
         modifier = modifier
             .padding(8.dp)
-            .clip(RoundedCornerShape(DesignTokens.RADIUS_BADGE.dp))
-            .background(FillAccent)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .clip(CircleShape)
+            .background(DesignTokens.bgPrimary.current())
+            .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }
 
 /**
- * A Shuffleupagus pick's reason badge: a small round mark on the cover; a tap
- * shows why in a tooltip. Bottom-left, since the play disc has the cover's
+ * A Shuffleupagus pick's reason badge (desktop `reason-badge.js`): a white
+ * chip disc over the art with Shuffleupagus's logo in dark ink, the same in
+ * both themes; a tap shows why in a tooltip, and TalkBack reads the reason as
+ * the badge's state. Bottom-left, since the play disc has the cover's
  * bottom-right on a phone (desktop puts the badge bottom-right and shows Play on hover).
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -328,14 +344,20 @@ private fun ReasonBadge(text: String, modifier: Modifier) {
                 .semantics {
                     role = Role.Button
                     contentDescription = HomeCopy.WHY_SHUFFLEUPAGUS
+                    stateDescription = text
                 }
                 .hapticClickable { scope.launch { tooltip.show() } },
         ) {
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.size(24.dp).clip(CircleShape).background(FillAccent),
+                modifier = Modifier.size(BadgeDisc).clip(CircleShape).background(BadgeChip),
             ) {
-                ParachordIcon(AppIcon.Sparkles, contentDescription = null, size = 12.dp, tint = OnFill)
+                val logo = remember { serviceLogoVector(SHUFFLEUPAGUS_ID, BadgeInk) }
+                if (logo != null) {
+                    Icon(logo, contentDescription = null, tint = Color.Unspecified, modifier = Modifier.size(BadgeLogo))
+                } else {
+                    ParachordIcon(AppIcon.Sparkles, contentDescription = null, size = BadgeLogo, tint = BadgeInk)
+                }
             }
         }
     }

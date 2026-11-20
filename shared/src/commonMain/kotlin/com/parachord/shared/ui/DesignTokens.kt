@@ -56,6 +56,14 @@ object DesignTokens {
     const val FILL_ACCENT_HOVER = 0x6D28D9
     /** Text on any fill. */
     const val ON_ACCENT = 0xFFFFFF
+    /**
+     * A white chip over art or a cover (a reason badge), the same in both
+     * themes: white at [ON_COLOR_CHIP_ALPHA] (desktop `--on-color-chip`).
+     */
+    const val ON_COLOR_CHIP = 0xFFFFFF
+    const val ON_COLOR_CHIP_ALPHA = 0.95f
+    /** Dark ink on an [ON_COLOR_CHIP] over art, both themes (desktop `--on-art-ink`). */
+    const val ON_ART_INK = 0x111827
 
     // ── Status ───────────────────────────────────────────────────────
     /** Dots, icons and indicators. */

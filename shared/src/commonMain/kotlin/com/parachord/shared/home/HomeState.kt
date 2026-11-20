@@ -15,7 +15,7 @@ const val HOME_ALL_SOURCES = "All"
 /** Recent loves Home takes from the collection (desktop's `recentLoves(…, 50)`). */
 const val HOME_RECENT_LOVES = 50
 
-/** A source chip. "All" isn't in the lists: a row shows its chips only when it has two or more sources. */
+/** A source chip. "All" isn't in the lists; a row shows its chips with any source ([showSourceChips]), "All" being the other chip. */
 data class FilterChipSource(val id: String, val label: String)
 
 /** The getting-started layout: its steps, step 1's tiles, and whether there's music to play yet. */

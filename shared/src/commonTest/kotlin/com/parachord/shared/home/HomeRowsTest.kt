@@ -21,8 +21,9 @@ class HomeRowsTest {
         HistoryMix(id = id, name = id, title = "Daily Jams", description = description, imageUrl = image,
             url = "https://x", resolverId = "listenbrainz", resolverName = "ListenBrainz", mosaic = mosaic)
 
-    private fun album(resolverId: String?, reason: String? = null) =
-        RecommendationItem(type = RecommendationType.ALBUM, id = "a", name = "Album", artist = "Artist", reason = reason, resolverId = resolverId)
+    private fun album(resolverId: String?, reason: String? = null, sourceIds: List<String> = emptyList()) =
+        RecommendationItem(type = RecommendationType.ALBUM, id = "a", name = "Album", artist = "Artist", reason = reason,
+            resolverId = resolverId, sourceIds = sourceIds)
 
     @Test
     fun `chips take the plug-in colour — Shuffleupagus the fill accent`() {
@@ -47,9 +48,10 @@ class HomeRowsTest {
     }
 
     @Test
-    fun `a mix card's subtitle is its description — else its service`() {
+    fun `a mix card's subtitle is its description — else blank`() {
         assertEquals("Your daily mix", mixCardSubtitle(HomeMixCard.Mix(mix(description = "Your daily mix"))))
-        assertEquals("ListenBrainz", mixCardSubtitle(HomeMixCard.Mix(mix(description = " "))))
+        assertEquals("", mixCardSubtitle(HomeMixCard.Mix(mix(description = " "))))
+        assertEquals("", mixCardSubtitle(HomeMixCard.Mix(mix(description = null))))
         val loves = HomeMixCard.Loves(emptyList(), emptyList(), "Your latest love")
         assertEquals("Your latest love", mixCardSubtitle(loves))
     }
@@ -67,5 +69,14 @@ class HomeRowsTest {
         assertEquals(HomeCopy.PICKED_BY_SHUFFLEUPAGUS, albumReasonBadge(album(SHUFFLEUPAGUS_ID, "  ")))
         assertNull(albumReasonBadge(album("lastfm", "similar to X")))
         assertNull(albumReasonBadge(album(null)))
+        // A merged item Shuffleupagus also sent carries the badge.
+        assertEquals("why", albumReasonBadge(album("lastfm", "why", sourceIds = listOf("lastfm", SHUFFLEUPAGUS_ID))))
+    }
+
+    @Test
+    fun `chips show with any source — All is the other chip`() {
+        assertEquals(false, showSourceChips(emptyList()))
+        assertEquals(true, showSourceChips(listOf(FilterChipSource("listenbrainz", "ListenBrainz"))))
+        assertEquals(true, showSourceChips(listOf(FilterChipSource("a", "A"), FilterChipSource("b", "B"))))
     }
 }

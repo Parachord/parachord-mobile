@@ -52,6 +52,6 @@ class HomeBannersTest {
         assertNull(cta("parachord://settings"))
         assertNull(cta(""))
         assertEquals(Cta("Go", "http://x"), cta("http://x"))
-        assertEquals(Cta("Go", " HTTPS://x "), cta(" HTTPS://x "))
+        assertEquals(Cta("Go", "HTTPS://x"), cta(" HTTPS://x "))
     }
 }

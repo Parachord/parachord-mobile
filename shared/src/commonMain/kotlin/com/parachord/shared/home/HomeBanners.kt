@@ -27,7 +27,7 @@ fun homeBannerItems(announcements: List<Announcement>): List<HomeBannerItem> =
             title = it.title,
             body = it.body,
             iconUrl = it.iconUrl?.ifEmpty { null },
-            cta = it.cta?.takeIf { cta -> isHttpUrl(cta.url.trim()) },
+            cta = it.cta?.let { cta -> cta.url.trim().takeIf(::isHttpUrl)?.let { url -> cta.copy(url = url) } },
             severity = it.severity?.ifEmpty { null } ?: "info",
         )
     }
