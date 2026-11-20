@@ -28,6 +28,8 @@ import com.parachord.shared.home.ShownAlbumArtLookup
 import com.parachord.shared.home.halfCardArtKey
 import com.parachord.shared.home.jumpTilesArt
 import com.parachord.shared.home.jumpTileKey
+import com.parachord.shared.home.jumpTileContext
+import com.parachord.shared.home.PLAYLIST_CONTEXT
 import com.parachord.shared.metadata.ImageEnrichmentService
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -69,9 +71,6 @@ class HomeViewModel(
 
     private companion object {
         const val TAG = "HomeViewModel"
-        const val LOVES_CONTEXT = "loves"
-        const val LOVES_NAME = "Recent Loves"
-        const val MIX_CONTEXT = "mix"
     }
 
     private val session = HomeSession(sources, settingsStore, viewModelScope)
@@ -188,6 +187,7 @@ class HomeViewModel(
         }
     }
 
+    /** A Jump back in tile, under its shared context ([jumpTileContext]), so its active check sees it. */
     fun playTile(tile: JumpTile) {
         when (tile) {
             is JumpTile.Playlist -> playPlaylist(tile.playlist.id, tile.playlist.name)
@@ -204,7 +204,7 @@ class HomeViewModel(
                 val play = providerPlaylistResolver.resolve(mix.url) ?: return@guard
                 val tracks = servicePlaylistTracks(play)
                 if (tracks.isEmpty()) return@guard
-                playbackController.playQueue(tracks, 0, context = PlaybackContext(MIX_CONTEXT, mix.title, mix.id))
+                playbackController.playQueue(tracks, 0, context = jumpTileContext(JumpTile.Mix(mix)))
             }
         }
     }
@@ -213,7 +213,7 @@ class HomeViewModel(
         viewModelScope.launch {
             val loves = currentLoves()
             if (loves.isEmpty()) return@launch
-            playbackController.playQueue(loves, 0, context = PlaybackContext(LOVES_CONTEXT, LOVES_NAME))
+            playbackController.playQueue(loves, 0, context = jumpTileContext(JumpTile.Loves(loves)))
         }
     }
 
@@ -229,7 +229,7 @@ class HomeViewModel(
             playbackController.playQueue(
                 entities,
                 startIndex = 0,
-                context = PlaybackContext(type = "playlist", name = playlistName, id = playlistId),
+                context = PlaybackContext(type = PLAYLIST_CONTEXT, name = playlistName, id = playlistId),
             )
         }
     }
