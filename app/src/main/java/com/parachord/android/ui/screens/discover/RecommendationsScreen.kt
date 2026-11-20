@@ -114,6 +114,7 @@ import com.parachord.shared.recommendations.recommendedSongTrack
 import com.parachord.shared.recommendations.releaseYear
 import com.parachord.shared.recommendations.upcomingLabel
 import com.parachord.shared.repository.RecommendationPageState
+import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.repository.unsavedFriendId
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.ServiceColors
@@ -210,8 +211,8 @@ fun RecommendationsScreen(
             PageStatus.NotConfigured -> PageMessage(
                 title = RecommendationCopy.NOT_CONFIGURED_TITLE,
                 body = RecommendationCopy.NOT_CONFIGURED_BODY,
-                primary = RecommendationCopy.CONNECT_LISTENBRAINZ to { onNavigateToPluginSettings("listenbrainz") },
-                secondary = RecommendationCopy.CONNECT_LASTFM to { onNavigateToPluginSettings("lastfm") },
+                primary = RecommendationCopy.CONNECT_LISTENBRAINZ to { onNavigateToPluginSettings(RecommendationsRepository.LISTENBRAINZ) },
+                secondary = RecommendationCopy.CONNECT_LASTFM to { onNavigateToPluginSettings(RecommendationsRepository.LASTFM) },
             )
             is PageStatus.Failed -> PageMessage(
                 title = RecommendationCopy.FAILED_TITLE,

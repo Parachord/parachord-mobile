@@ -16,6 +16,9 @@ final class RecommendationsModel {
     @ObservationIgnored private var pageSub: Cancellable?
     @ObservationIgnored private var messageSub: Cancellable?
     @ObservationIgnored private var loading = false
+    /// The session (picked source, open rows) is reset on the screen's first appear
+    /// only; coming back from a pushed page keeps it, as Android's back stack does.
+    @ObservationIgnored private var didResetSession = false
 
     var page: IosRecPage?
 
@@ -41,6 +44,14 @@ final class RecommendationsModel {
         messageSub?.cancel(); messageSub = nil
     }
 
+    /// On appear: the first one starts a new session, later ones (back from a
+    /// pushed page) only refresh what's stale (Android's `refreshIfStale`).
+    func appeared() async {
+        let reset = !didResetSession
+        didResetSession = true
+        await load(force: false, resetSession: reset)
+    }
+
     /// Loads the page; [force] is Try again or pull to refresh. No load starts
     /// while one is running.
     func load(force: Bool, resetSession: Bool) async {
@@ -61,6 +72,9 @@ struct RecommendationsScreen: View {
     @State private var width: CGFloat = 0
     /// A card's or menu's destination, pushed on the tab's stack.
     @State private var route: PCRoute?
+    /// The page is scrolled to its top (measured from the content's offset, not from
+    /// content changes); while it is, it stays pinned there as blocks arrive.
+    @State private var atTop = true
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     @Environment(\.pcOpenPluginSettings) private var openPluginSettings
@@ -85,7 +99,7 @@ struct RecommendationsScreen: View {
         .navigationDestination(item: $route) { pcRouteDestination($0) }
         .onAppear {
             model.start(onMessage: { say($0) })
-            Task { await model.load(force: false, resetSession: true) }
+            Task { await model.appeared() }
         }
         .onDisappear { model.stop() }
     }
@@ -120,8 +134,8 @@ struct RecommendationsScreen: View {
             RecPageSkeleton()
         case "notConfigured":
             RecPageMessage(title: copy.NOT_CONFIGURED_TITLE, message: copy.NOT_CONFIGURED_BODY,
-                           primary: (copy.CONNECT_LISTENBRAINZ, { openPluginSettings("listenbrainz") }),
-                           secondary: (copy.CONNECT_LASTFM, { openPluginSettings("lastfm") }))
+                           primary: (copy.CONNECT_LISTENBRAINZ, { openPluginSettings(RecommendationsRepository.companion.LISTENBRAINZ) }),
+                           secondary: (copy.CONNECT_LASTFM, { openPluginSettings(RecommendationsRepository.companion.LASTFM) }))
         case "failed":
             RecPageMessage(title: copy.FAILED_TITLE, message: page.statusText ?? "",
                            primary: (copy.TRY_AGAIN, retry))
@@ -130,13 +144,31 @@ struct RecommendationsScreen: View {
                            message: page.filteringOne ? copy.EMPTY_SOURCE_BODY : copy.EMPTY_BODY,
                            primary: (copy.TRY_AGAIN, retry))
         default:
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(page.blocks, id: \.id) { block in
-                        RecBlockView(block: block, gridWidth: max(width - recGutter * 2, 0), actions: actions)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(page.blocks, id: \.id) { block in
+                            RecBlockView(block: block, gridWidth: max(width - recGutter * 2, 0), actions: actions)
+                                .id(block.id)
+                        }
                     }
+                    .padding(.bottom, 120)
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: RecScrollTopKey.self, value: g.frame(in: .named("recScroll")).minY)
+                    })
                 }
-                .padding(.bottom, 120)
+                .coordinateSpace(name: "recScroll")
+                .onPreferenceChange(RecScrollTopKey.self) { y in atTop = y > -8 }
+                // Blocks arrive one provider at a time, and the shared layout can put a
+                // new one above those on screen (an earlier section, the Albums slot).
+                // The scroll view keeps the first visible block where it was, so the
+                // page looked scrolled down. While the page is at its top (the offset as
+                // laid out before this change), keep it there; once the user has scrolled
+                // away, never move them.
+                .onChange(of: page.blocks.map(\.id)) { _, ids in
+                    guard atTop, let first = ids.first else { return }
+                    proxy.scrollTo(first, anchor: .top)
+                }
             }
             .refreshable { await model.load(force: true, resetSession: false) }
         }
@@ -145,6 +177,12 @@ struct RecommendationsScreen: View {
     private func retry() {
         Task { await model.load(force: true, resetSession: false) }
     }
+}
+
+/// The content's top edge in the scroll view (0 at the top, negative once scrolled).
+private struct RecScrollTopKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
 // MARK: - Hero and page states
@@ -621,7 +659,7 @@ private struct RecSongRow: View {
                 pcCover(pcTrackArt(item.imageUrl, artist: artist, title: item.name, album: nil),
                         seed: item.name + artist, size: 44, radius: 6, artist: artist, album: nil)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name).font(.system(size: 15, weight: .medium))
+                    Text(item.name).font(.system(size: 14, weight: .medium))
                         .foregroundStyle(noMatch ? PC.fg3 : (isCurrent ? PC.accent : PC.fg1)).lineLimit(1)
                     Text(artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
                 }
