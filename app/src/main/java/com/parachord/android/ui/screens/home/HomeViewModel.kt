@@ -99,9 +99,8 @@ class HomeViewModel(
 
     // ── Session actions ──────────────────────────────────────────────
 
-    /** Home came on screen: the loads, under their throttles. */
+    /** Home came on screen: the sources' refresh, then the loads, under their throttles. */
     fun onVisible() {
-        (sources as? RefreshableHomeSources)?.refresh()
         session.onVisible()
     }
 

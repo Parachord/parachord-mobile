@@ -220,24 +220,12 @@ class ConcertsViewModel constructor(
         loadJob = viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                // The shared seed: collection, library and 6-month history (#589)
-                val artists = concertArtistSeed.gather()
-                Log.d(TAG, "Gathered ${artists.size} artists for concert search")
-
-                if (artists.isEmpty()) {
-                    // No artists to search with: no concerts, as on iOS and desktop.
-                    _events.value = Resource.Success(emptyList())
-                } else {
-                    // Personalized: search for user's artists' concerts
-                    val loc = settingsStore.getConcertLocation()
-                    concertsRepository.getPersonalizedEvents(
-                        artists = artists,
-                        lat = loc.latitude,
-                        lon = loc.longitude,
-                        radiusMiles = loc.radiusMiles,
-                        forceRefresh = forceRefresh,
-                    ).collect { _events.value = it }
-                }
+                // The shared load Home uses too: the seed (collection, library and
+                // 6-month history, #589), then the personalized search; no artists,
+                // no concerts, as on iOS and desktop.
+                val loc = settingsStore.getConcertLocation()
+                com.parachord.shared.home.concertEvents(concertArtistSeed, concertsRepository, loc, forceRefresh)
+                    .collect { _events.value = it }
             } catch (e: Exception) {
                 // A newer load cancelled this one (refresh, a location change): not a failure.
                 if (e is kotlinx.coroutines.CancellationException) throw e

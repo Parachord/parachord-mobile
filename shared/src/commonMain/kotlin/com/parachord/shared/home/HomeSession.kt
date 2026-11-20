@@ -213,9 +213,10 @@ class HomeSession(
 
     // ── Actions ─────────────────────────────────────────────────────────────
 
-    /** Home came on screen: the loads, under their throttles. Nothing waits on the network. */
+    /** Home came on screen: [HomeSources.refresh], then the loads, under their throttles. Nothing waits on the network. */
     fun onVisible() {
         tick.value = tick.value + 1
+        scope.launch { guard("refresh") { sources.refresh() } }
         scope.launch { loadRecommendations() }
         scope.launch { loadMixes() }
         scope.launch { guard("feeds") { sources.loadFeeds(false) } }

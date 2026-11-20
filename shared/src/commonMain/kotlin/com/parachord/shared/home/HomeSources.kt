@@ -102,6 +102,12 @@ interface HomeSources {
     /** Each scrobbling service's saved username (null or blank when not connected). */
     val scrobblerUsernames: Flow<List<String?>>
 
+    /**
+     * Home came on screen: read again what has no flow (a token, the AI keys).
+     * The session calls it first on each visit.
+     */
+    suspend fun refresh() {}
+
     /** Reports the announcement Home painted (the `view` event). The session calls it once per id. */
     suspend fun bannerViewed(id: String) {}
 
