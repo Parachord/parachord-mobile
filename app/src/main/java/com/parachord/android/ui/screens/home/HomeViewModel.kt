@@ -18,6 +18,8 @@ import com.parachord.shared.deeplink.ProviderPlaylistResolver
 import com.parachord.shared.home.HOME_RECENT_LOVES
 import com.parachord.shared.home.HistoryMix
 import com.parachord.shared.home.HomeCopy
+import com.parachord.shared.home.HomeQueue
+import com.parachord.shared.home.HomeQueues
 import com.parachord.shared.home.HomeSession
 import com.parachord.shared.home.HomeSources
 import com.parachord.shared.home.HomeState
@@ -178,88 +180,55 @@ class HomeViewModel(
 
     // ── Play ─────────────────────────────────────────────────────────
 
-    /** "Play Collection Radio": the car's Collection Radio (every track row, shuffled). */
-    fun playCollectionRadio() {
+    /** What each tap plays (shared with iOS); this only plays the answer. */
+    private val queues = HomeQueues(
+        lovedTracks = { currentLoves() },
+        playlistTracks = { id ->
+            repository.getPlaylistTracks(id).first().map { repository.playlistTrackToTrackEntity(it) }
+        },
+        mixTracks = { url -> providerPlaylistResolver.resolve(url)?.let { servicePlaylistTracks(it) }.orEmpty() },
+        catalogQueues = catalogQueues,
+        collectionRadio = { carBrowse.playRequest(CarIds.COLLECTION_RADIO) },
+    )
+
+    private fun play(what: String, queue: suspend () -> HomeQueue) {
         viewModelScope.launch {
-            guard("Collection Radio") {
-                val request = carBrowse.playRequest(CarIds.COLLECTION_RADIO) ?: return@guard
-                playbackController.playQueue(request.tracks, request.startIndex, shuffle = request.shuffle ?: true)
+            guard(what) {
+                when (val q = queue()) {
+                    is HomeQueue.Play ->
+                        if (q.shuffle == null) playbackController.playQueue(q.tracks, 0, q.context)
+                        else playbackController.playQueue(q.tracks, 0, q.context, q.shuffle!!)
+                    is HomeQueue.Failed -> _toastEvents.trySend(q.message)
+                    HomeQueue.Empty -> Unit
+                }
             }
         }
     }
+
+    /** "Play Collection Radio": the car's Collection Radio (every track row, shuffled). */
+    fun playCollectionRadio() = play("Collection Radio") { queues.collectionRadio() }
 
     /** A Jump back in tile, under its shared context ([jumpTileContext]), so its active check sees it. */
-    fun playTile(tile: JumpTile) {
-        when (tile) {
-            is JumpTile.Playlist -> playPlaylist(tile.playlist.id, tile.playlist.name)
-            is JumpTile.Loves -> playRecentLoves()
-            is JumpTile.Album -> playAlbumByName(tile.album.album, tile.album.artist)
-            is JumpTile.Mix -> playMix(tile.mix)
-        }
-    }
+    fun playTile(tile: JumpTile) = play("tile") { queues.tile(tile) }
 
-    /**
-     * A history mix: its tracks through the registry's link lookup, as a `mix`
-     * queue (Jump back in's active check reads it). A lookup that fails or
-     * finds no tracks says so (desktop's `playServicePlaylist` toast).
-     */
-    fun playMix(mix: HistoryMix) {
-        viewModelScope.launch {
-            val tracks = try {
-                providerPlaylistResolver.resolve(mix.url)?.let { servicePlaylistTracks(it) }.orEmpty()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load mix '${mix.title}'", e)
-                emptyList()
-            }
-            if (tracks.isEmpty()) {
-                _toastEvents.trySend(HomeCopy.couldNotLoad(mix.title))
-                return@launch
-            }
-            guard("mix '${mix.title}'") {
-                playbackController.playQueue(tracks, 0, context = jumpTileContext(JumpTile.Mix(mix)))
-            }
-        }
-    }
+    /** A history mix, as a `mix` queue under its link; a failed lookup says so (desktop's toast). */
+    fun playMix(mix: HistoryMix) = play("mix '${mix.title}'") { queues.mix(mix) }
 
-    fun playRecentLoves() {
-        viewModelScope.launch {
-            val loves = currentLoves()
-            if (loves.isEmpty()) return@launch
-            playbackController.playQueue(loves, 0, context = jumpTileContext(JumpTile.Loves(loves)))
-        }
-    }
+    fun playRecentLoves() = play("Recent Loves") { queues.loves() }
 
     private suspend fun currentLoves(): List<TrackEntity> =
         recentLoves(sources.collectionTracks.first(), HOME_RECENT_LOVES)
 
     /** A saved playlist, from the top. */
-    fun playPlaylist(playlistId: String, playlistName: String) {
-        viewModelScope.launch {
-            val tracks = repository.getPlaylistTracks(playlistId).first()
-            if (tracks.isEmpty()) return@launch
-            val entities = tracks.map { repository.playlistTrackToTrackEntity(it) }
-            playbackController.playQueue(
-                entities,
-                startIndex = 0,
-                context = PlaybackContext(type = PLAYLIST_CONTEXT, name = playlistName, id = playlistId),
-            )
-        }
-    }
+    fun playPlaylist(playlistId: String, playlistName: String) =
+        play("playlist") { queues.playlist(playlistId, playlistName) }
 
     /** A recommended album card's Play. */
     fun playAlbum(item: RecommendationItem) = playAlbumByName(item.name, item.artist.orEmpty())
 
     /** An album that isn't in the library (#588): its tracks from the catalog, as an `album` queue. */
-    fun playAlbumByName(albumTitle: String, artistName: String) {
-        viewModelScope.launch {
-            guard("album '$albumTitle'") {
-                val queue = catalogQueues.album(albumTitle, artistName) ?: return@guard
-                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
-            }
-        }
-    }
+    fun playAlbumByName(albumTitle: String, artistName: String) =
+        play("album '$albumTitle'") { queues.album(albumTitle, artistName) }
 
     fun queueAlbumByName(albumTitle: String, artistName: String) {
         viewModelScope.launch {

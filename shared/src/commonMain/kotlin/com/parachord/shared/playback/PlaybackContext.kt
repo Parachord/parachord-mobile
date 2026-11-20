@@ -40,6 +40,11 @@ fun playbackContextDestination(ctx: PlaybackContext): ContextDestination? {
         "artist" -> ContextDestination.Artist(ctx.name)
         "playlist" -> id?.let { ContextDestination.Playlist(it) }
         SERVICE_PLAYLIST_CONTEXT -> id?.let { ContextDestination.ServicePlaylist(it, ctx.name) }
+        // A mix queue's id is the mix's link (HomeModel's jumpTileContext). Desktop keeps the
+        // mix id and opens Home today; parachord#1592. A queue saved before this carries the
+        // old id, which isn't a link, so it opens nothing.
+        "mix" -> id?.takeIf { it.startsWith("https://", true) || it.startsWith("http://", true) }
+            ?.let { ContextDestination.ServicePlaylist(it, ctx.name) }
         else -> null
     }
 }
