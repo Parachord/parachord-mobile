@@ -122,8 +122,7 @@ class HostedXspfService(
                 addedAt = now,
             )
         }
-        playlistTrackDao.deleteByPlaylistId(playlist.id)
-        playlistTrackDao.insertAll(rows)
+        playlistTrackDao.replaceAll(playlist.id, rows)
         // Bumps trackCount + sourceContentHash + lastModified + locallyModified=1
         // → the next SyncEngine push overwrites the mirror with the XSPF content.
         playlistDao.updateHostedSnapshot(

@@ -35,6 +35,10 @@ actual class DriverFactory {
         addColumnIfMissing(driver, table = "playlists", column = "sourceContentHash", type = "TEXT")
         addColumnIfMissing(driver, table = "playlists", column = "localOnly", type = "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing(driver, table = "playlists", column = "writable", type = "INTEGER NOT NULL DEFAULT 1")
+        // Playlist freshness (PlaylistFreshness). Added after `writable`, in the
+        // CREATE's order, so `SELECT *` reads the same columns on every install.
+        addColumnIfMissing(driver, table = "playlists", column = "tracksChangedAt", type = "INTEGER")
+        addColumnIfMissing(driver, table = "playlists", column = "lastChangeAdded", type = "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing(driver, table = "sync_playlist_link", column = "snapshotId", type = "TEXT")
         addColumnIfMissing(driver, table = "sync_playlist_link", column = "pendingAction", type = "TEXT")
         addColumnIfMissing(driver, table = "playlist_tracks", column = "trackIsrc", type = "TEXT")

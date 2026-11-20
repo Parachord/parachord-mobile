@@ -151,8 +151,7 @@ class PlaylistDetailViewModel constructor(
                 val remoteTracks = spotifySyncProvider.fetchPlaylistTracks(spotifyId)
                 val remoteSnapshot = spotifySyncProvider.getPlaylistSnapshotId(spotifyId)
 
-                playlistTrackDao.deleteByPlaylistId(playlistId)
-                playlistTrackDao.insertAll(remoteTracks)
+                playlistTrackDao.replaceAll(playlistId, remoteTracks)
 
                 val now = System.currentTimeMillis()
                 // Fix 1 (multi-provider mirror propagation): if this playlist

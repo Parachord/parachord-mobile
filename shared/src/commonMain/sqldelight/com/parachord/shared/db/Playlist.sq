@@ -18,7 +18,12 @@ CREATE TABLE IF NOT EXISTS playlists (
     -- (owned OR collaborative). Read-only followed playlists are writable=0 and
     -- must never be push/mirror candidates (#269). Default 1 — local-created and
     -- owned playlists are writable; only a non-writable pull marks it 0.
-    writable INTEGER NOT NULL DEFAULT 1
+    writable INTEGER NOT NULL DEFAULT 1,
+    -- Playlist freshness (PlaylistFreshness, desktop playlist-freshness.js):
+    -- when the tracks last changed (added, removed or reordered) and how many
+    -- tracks that change added. Local only; stamped by PlaylistTrackDao.
+    tracksChangedAt INTEGER,
+    lastChangeAdded INTEGER NOT NULL DEFAULT 0
 );
 
 getAll:
@@ -98,6 +103,14 @@ UPDATE playlists SET lastModified = COALESCE(
     (SELECT MAX(addedAt) FROM playlist_tracks WHERE playlist_tracks.playlistId = playlists.id),
     updatedAt
 ) WHERE lastModified = 0;
+
+-- Playlist freshness: set by PlaylistTrackDao when a write changes the
+-- tracks, and re-applied by PlaylistDao.insert (INSERT OR REPLACE would reset it).
+stampTrackChange:
+UPDATE playlists SET tracksChangedAt = ?, lastChangeAdded = ? WHERE id = ?;
+
+getTrackStamp:
+SELECT tracksChangedAt, lastChangeAdded FROM playlists WHERE id = ?;
 
 deleteById:
 DELETE FROM playlists WHERE id = ?;

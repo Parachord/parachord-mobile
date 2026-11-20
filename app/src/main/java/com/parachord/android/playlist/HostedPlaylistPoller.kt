@@ -143,8 +143,7 @@ class HostedPlaylistPoller constructor(
             )
         }
 
-        playlistTrackDao.deleteByPlaylistId(playlist.id)
-        playlistTrackDao.insertAll(trackRows)
+        playlistTrackDao.replaceAll(playlist.id, trackRows)
         // Updates trackCount + sourceContentHash + lastModified + locallyModified=1.
         // The locallyModified flag triggers the next SyncEngine push to
         // overwrite Spotify with the XSPF content.

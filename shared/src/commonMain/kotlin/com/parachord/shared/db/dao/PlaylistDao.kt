@@ -39,6 +39,8 @@ class PlaylistDao(private val db: ParachordDb) {
         sourceContentHash = sourceContentHash,
         localOnly = localOnly != 0L,
         writable = writable != 0L,
+        tracksChangedAt = tracksChangedAt,
+        lastChangeAdded = lastChangeAdded.toInt(),
     )
 
     /* ---- Queries returning Flow ---- */
@@ -79,7 +81,8 @@ class PlaylistDao(private val db: ParachordDb) {
             id,
         ) { rowId, name, description, artworkUrl, trackCount, createdAt, updatedAt,
             spotifyId, snapshotId, lastModified, locallyModified, ownerName, sourceUrl,
-            sourceContentHash, localOnly, writable, linkSpotifyId, linkSnapshotId ->
+            sourceContentHash, localOnly, writable, tracksChangedAt, lastChangeAdded,
+            linkSpotifyId, linkSnapshotId ->
             PlaylistWithLink(
                 entity = Playlist(
                     id = rowId,
@@ -98,6 +101,8 @@ class PlaylistDao(private val db: ParachordDb) {
                     sourceContentHash = sourceContentHash,
                     localOnly = localOnly != 0L,
                     writable = writable != 0L,
+                    tracksChangedAt = tracksChangedAt,
+                    lastChangeAdded = lastChangeAdded.toInt(),
                 ),
                 linkSpotifyId = linkSpotifyId,
                 linkSnapshotId = linkSnapshotId,
@@ -115,25 +120,43 @@ class PlaylistDao(private val db: ParachordDb) {
 
     /* ---- Writes ---- */
 
+    /**
+     * Save [playlist] (INSERT OR REPLACE). The freshness stamp is kept: the
+     * newer of the stored one and the one [playlist] carries is written back,
+     * so a save built from a copy read before a track write (a rename, a sync
+     * stamp) can't undo that write's stamp. Desktop's `stampAgainst` "keep the
+     * newer". Only [PlaylistTrackDao] moves the stamp forward to now.
+     */
     suspend fun insert(playlist: Playlist): Unit = withContext(Dispatchers.Default) {
-        queries.insert(
-            id = playlist.id,
-            name = playlist.name,
-            description = playlist.description,
-            artworkUrl = playlist.artworkUrl,
-            trackCount = playlist.trackCount.toLong(),
-            createdAt = playlist.createdAt,
-            updatedAt = playlist.updatedAt,
-            spotifyId = playlist.spotifyId,
-            snapshotId = playlist.snapshotId,
-            lastModified = playlist.lastModified,
-            locallyModified = if (playlist.locallyModified) 1L else 0L,
-            ownerName = playlist.ownerName,
-            sourceUrl = playlist.sourceUrl,
-            sourceContentHash = playlist.sourceContentHash,
-            localOnly = if (playlist.localOnly) 1L else 0L,
-            writable = if (playlist.writable) 1L else 0L,
-        )
+        queries.transaction {
+            val stored = queries.getTrackStamp(playlist.id).executeAsOneOrNull()
+            queries.insert(
+                id = playlist.id,
+                name = playlist.name,
+                description = playlist.description,
+                artworkUrl = playlist.artworkUrl,
+                trackCount = playlist.trackCount.toLong(),
+                createdAt = playlist.createdAt,
+                updatedAt = playlist.updatedAt,
+                spotifyId = playlist.spotifyId,
+                snapshotId = playlist.snapshotId,
+                lastModified = playlist.lastModified,
+                locallyModified = if (playlist.locallyModified) 1L else 0L,
+                ownerName = playlist.ownerName,
+                sourceUrl = playlist.sourceUrl,
+                sourceContentHash = playlist.sourceContentHash,
+                localOnly = if (playlist.localOnly) 1L else 0L,
+                writable = if (playlist.writable) 1L else 0L,
+            )
+            val storedAt = stored?.tracksChangedAt
+            val incomingAt = playlist.tracksChangedAt
+            when {
+                incomingAt != null && (storedAt == null || incomingAt > storedAt) ->
+                    queries.stampTrackChange(incomingAt, playlist.lastChangeAdded.toLong(), playlist.id)
+                storedAt != null ->
+                    queries.stampTrackChange(storedAt, stored.lastChangeAdded, playlist.id)
+            }
+        }
     }
 
     /** #269: refresh the writable flag in place (the pull skips unchanged rows). */
@@ -168,6 +191,8 @@ class PlaylistDao(private val db: ParachordDb) {
         sourceContentHash = sourceContentHash,
         localOnly = localOnly != 0L,
         writable = writable != 0L,
+        tracksChangedAt = tracksChangedAt,
+        lastChangeAdded = lastChangeAdded.toInt(),
     )
 
     suspend fun updateHostedSnapshot(

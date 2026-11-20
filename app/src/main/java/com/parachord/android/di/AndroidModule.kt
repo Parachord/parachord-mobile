@@ -222,6 +222,18 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // Playlist freshness (PlaylistFreshness): when the tracks last changed
+        // and how many that change added. Existing rows start unstamped.
+        try {
+            driver.execute(null, "ALTER TABLE playlists ADD COLUMN tracksChangedAt INTEGER", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
+        try {
+            driver.execute(null, "ALTER TABLE playlists ADD COLUMN lastChangeAdded INTEGER NOT NULL DEFAULT 0", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // N-way reconciliation redesign: persist ISRC on playlist tracks so the
         // unify isrc-tier can bridge the same recording across services (different
         // recording-MBID / drifted title, same ISRC) — the no-false-drop fix.
