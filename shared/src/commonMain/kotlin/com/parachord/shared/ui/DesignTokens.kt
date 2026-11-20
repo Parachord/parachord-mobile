@@ -56,6 +56,14 @@ object DesignTokens {
     const val FILL_ACCENT_HOVER = 0x6D28D9
     /** Text on any fill. */
     const val ON_ACCENT = 0xFFFFFF
+    /**
+     * A white chip over art or a cover (a reason badge), the same in both
+     * themes: white at [ON_COLOR_CHIP_ALPHA] (desktop `--on-color-chip`).
+     */
+    const val ON_COLOR_CHIP = 0xFFFFFF
+    const val ON_COLOR_CHIP_ALPHA = 0.95f
+    /** Dark ink on an [ON_COLOR_CHIP] over art, both themes (desktop `--on-art-ink`). */
+    const val ON_ART_INK = 0x111827
 
     // ── Status ───────────────────────────────────────────────────────
     /** Dots, icons and indicators. */
@@ -74,6 +82,8 @@ object DesignTokens {
     const val FILL_ERROR = 0xB91C1C
     const val FILL_ERROR_HOVER = 0x991B1B
     const val FILL_INFO = 0x2563EB
+    /** A neutral fill with white text (a tile mark with no page or service colour, desktop `--fill-neutral`). */
+    const val FILL_NEUTRAL = 0x4B5563
 
     const val ON_TOUR = 0x10C9B4
     const val HOSTED_FG = 0x3B82F6
@@ -127,6 +137,13 @@ object DesignTokens {
     /** Spacing, 4-point steps. The phone gutter is [SCREEN_GUTTER]. */
     val spacingScale = listOf(2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48)
     const val SCREEN_GUTTER = 16
+    /**
+     * Body text's line height, as a multiple of its size: desktop's 1.5
+     * (Tailwind's preflight on `html`, which every paragraph inherits).
+     * Android sets it on secondary text that wraps; left alone, a Compose
+     * `Text` takes the theme's body style's 24 sp, twice a 12 sp caption.
+     */
+    const val LINE_HEIGHT = 1.5f
 
     const val RADIUS_BADGE = 4
     const val RADIUS_ART = 6

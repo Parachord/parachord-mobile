@@ -55,6 +55,8 @@ object SectionHeaderSpec {
     const val LINK_WEIGHT = 600
     /** Between the title block and the link. */
     const val ROW_GAP = 12
+    /** When the link doesn't fit beside the title, it goes on its own line this far under the title block. */
+    const val LINK_GAP_BELOW_TITLE = 4
     /** Under the header, before its content. */
     const val GAP_BELOW = 16
 
@@ -95,4 +97,26 @@ object FilterChipSpec {
         color != null -> Look(fill = color, text = ReadableText.on(color), dot = null)
         else -> Look(fill = pageFill ?: DesignTokens.FILL_ACCENT, text = DesignTokens.ON_ACCENT, dot = null)
     }
+}
+
+/**
+ * The play button over art (desktop `card-art.js` `APP_PLAY_BTN` / `PLAY_ICON`):
+ * a white disc with a large shadow and the play triangle in on-art ink
+ * ([DesignTokens.ON_ART_INK]), the icon [ICON_FRACTION] of the disc and nudged
+ * right [ICON_NUDGE] of it to look centred. Always shown on a phone (no
+ * hover), and the art isn't dimmed. A standalone Play control is the
+ * fill-accent circle instead.
+ */
+object ArtPlayButtonSpec {
+    /** The disc on a 140-wide card. */
+    const val SIZE = 40
+    /** The disc on a 72-high Jump back in tile (half its art, so the cover still reads). */
+    const val TILE_SIZE = 36
+    const val MIN_TOUCH = 48
+    const val ICON_FRACTION = 0.46f
+    const val ICON_NUDGE = 0.04f
+    /** Elevation standing in for desktop's `shadow-lg`. */
+    const val ELEVATION = 6
+
+    fun label(title: String): String = if (title.isBlank()) "Play" else "Play $title"
 }

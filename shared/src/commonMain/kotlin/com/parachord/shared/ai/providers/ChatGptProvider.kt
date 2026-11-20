@@ -1,6 +1,7 @@
 package com.parachord.shared.ai.providers
 
 import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiProviderHttpException
 import com.parachord.shared.ai.AiChatResponse
 import com.parachord.shared.ai.AiProviderConfig
 import com.parachord.shared.ai.ChatMessage
@@ -11,6 +12,7 @@ import com.parachord.shared.ai.jsonElementToMap
 import com.parachord.shared.ai.mapToJsonElement
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
+import io.ktor.client.plugins.retry
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -76,6 +78,8 @@ class ChatGptProvider(
         }
 
         val response = httpClient.post(endpoint) {
+            // A billable request: never re-sent after a connection failure.
+            retry { noRetry() }
             header("Authorization", "Bearer ${config.apiKey}")
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(JsonElement.serializer(), body))
@@ -90,7 +94,12 @@ class ChatGptProvider(
             } catch (_: Exception) {
                 responseBody
             }
-            throw Exception("ChatGPT API error (${response.status.value}): $errorMessage")
+            throw AiProviderHttpException(
+                providerId = id,
+                status = response.status.value,
+                providerMessage = errorMessage,
+                message = "ChatGPT API error (${response.status.value}): $errorMessage",
+            )
         }
 
         val responseJson = json.parseToJsonElement(responseBody).jsonObject

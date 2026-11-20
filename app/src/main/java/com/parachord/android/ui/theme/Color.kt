@@ -72,6 +72,7 @@ val FillSuccess = tokenColor(DesignTokens.FILL_SUCCESS)
 val FillWarning = tokenColor(DesignTokens.FILL_WARNING)
 val FillError = tokenColor(DesignTokens.FILL_ERROR)
 val FillInfo = tokenColor(DesignTokens.FILL_INFO)
+val FillNeutral = tokenColor(DesignTokens.FILL_NEUTRAL)
 
 val ErrorLight = DesignTokens.error.lightColor()
 val ErrorDark = DesignTokens.error.darkColor()

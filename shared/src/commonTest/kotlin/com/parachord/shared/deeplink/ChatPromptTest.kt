@@ -153,4 +153,45 @@ class ChatPromptTest {
         pending.set(null, fromApp = true)
         assertFalse(pending.fromApp)
     }
+
+    @Test
+    fun `a chat screen closing drops only the prompt it saw`() {
+        val pending = PendingChatPrompt()
+        pending.set("first", fromApp = true)
+        val seenByOldScreen = pending.generation
+        pending.consume()
+        // Home's Ask queues a prompt for the next chat screen.
+        pending.set("for the next screen", fromApp = true)
+        // The old screen is cleared late: it must not drop the new prompt.
+        pending.dropIfGeneration(seenByOldScreen)
+        assertEquals("for the next screen", pending.prompt.value)
+        // The screen that saw it drops it when it closes unsent.
+        pending.dropIfGeneration(pending.generation)
+        assertEquals(null, pending.prompt.value)
+        assertFalse(pending.fromApp)
+    }
+
+    @Test
+    fun `the same text queued again is a new prompt`() {
+        val pending = PendingChatPrompt()
+        pending.set("again", fromApp = true)
+        val first = pending.generation
+        pending.set("again", fromApp = true)
+        assertTrue(pending.generation != first)
+    }
+
+    @Test
+    fun `takeSendable consumes only when the prompt can go out`() {
+        val pending = PendingChatPrompt()
+        pending.set("hi", fromApp = false)
+        assertEquals(null, pending.takeSendable(chatOpen = true, providerId = null, loading = false))
+        assertEquals(null, pending.takeSendable(chatOpen = true, providerId = "chatgpt", loading = true))
+        assertEquals(null, pending.takeSendable(chatOpen = false, providerId = "chatgpt", loading = false))
+        assertEquals(null, pending.takeSendable(chatOpen = true, providerId = "chatgpt", loading = false, inAppOnly = true))
+        assertEquals("hi", pending.prompt.value)
+        assertEquals("hi", pending.takeSendable(chatOpen = true, providerId = "chatgpt", loading = false))
+        assertEquals(null, pending.prompt.value)
+        pending.set("from home", fromApp = true)
+        assertEquals("from home", pending.takeSendable(chatOpen = true, providerId = "chatgpt", loading = false, inAppOnly = true))
+    }
 }

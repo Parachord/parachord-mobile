@@ -7,7 +7,6 @@ import kotlinx.serialization.Serializable
 // `src/renderer/lib/getting-started.js` (#1493): which plug-ins step 1 offers,
 // which of the three steps are done, and whether the layout shows at all.
 //
-// Not ported: `scrobblerPlugins` is a one-line `capabilities["scrobbling"]` filter.
 
 const val LOCAL_FILES_ID = "localfiles"
 
@@ -103,8 +102,8 @@ fun serviceConnected(
     serviceState(it, accounts, setupNeeded, playbackResolvers, playbackLimits).state == "connected"
 }
 
-/** Scrobbling counts as connected once any scrobbling plug-in has an account name saved. */
-fun scrobblerConnected(usernames: Collection<String?>): Boolean = usernames.any { !it.isNullOrEmpty() }
+/** The scrobbling plug-ins (`capabilities.scrobbling`), desktop's `scrobblerPlugins`. */
+fun scrobblerPlugins(plugins: List<PluginInfo>): List<PluginInfo> = plugins.filter { it.capabilities["scrobbling"] == true }
 
 data class GettingStartedStep(val id: String, val done: Boolean)
 

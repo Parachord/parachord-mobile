@@ -44,4 +44,14 @@ class HomeBannersTest {
         assertEquals("a1", bannerViewId(items))
         assertNull(bannerViewId(emptyList()))
     }
+
+    @Test
+    fun `a CTA whose link isn't http or https is dropped`() {
+        fun cta(url: String) = homeBannerItems(listOf(Announcement(id = "x", title = "T", cta = Cta("Go", url)))).single().cta
+        assertNull(cta("javascript:alert(1)"))
+        assertNull(cta("parachord://settings"))
+        assertNull(cta(""))
+        assertEquals(Cta("Go", "http://x"), cta("http://x"))
+        assertEquals(Cta("Go", "HTTPS://x"), cta(" HTTPS://x "))
+    }
 }

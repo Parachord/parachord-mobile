@@ -1,5 +1,6 @@
 package com.parachord.shared.repository
 
+import com.parachord.shared.home.HomeRecsLoad
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.model.RecommendedArtist
 import com.parachord.shared.model.Resource
@@ -180,16 +181,25 @@ class RecommendationsRepository(
 
     // ── Public surface ───────────────────────────────────────────────
 
-    /** Loads the page: every provider (cache rules above), the similar users and Shuffleupagus. */
-    suspend fun load(force: Boolean = false) {
+    /**
+     * Loads the page: every provider (cache rules above), the similar users and
+     * Shuffleupagus. Answers what the load did, for Home's throttle: the
+     * providers asked, how many of those failed, and the sections there are to
+     * show (Shuffleupagus's cached picks count as one).
+     */
+    suspend fun load(force: Boolean = false): HomeRecsLoad {
         maybeLoadShuffleupagus(force)
-        try {
-            loadProviders(force)
+        return try {
+            val outcome = loadProviders(force)
+            val sections = mutex.withLock { shown.sumOf { it.sections.size } }
+            val aiHas = safely(null) { aiRecommendations.cached() }?.albums?.isNotEmpty() == true
+            HomeRecsLoad(outcome.fetched, outcome.failed, sections + (if (aiHas) 1 else 0))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Recommendations load failed", e)
             _page.update { it.copy(loading = false, pendingProviders = emptySet(), error = RecommendationsError.Message(PAGE_FAILED_MESSAGE), listenersPending = false) }
+            HomeRecsLoad(fetched = 0, failed = 0, sectionCount = 0)
         }
     }
 
@@ -334,6 +344,9 @@ class RecommendationsRepository(
         val anyFailed: Boolean = false,
         val hasListenBrainz: Boolean = false,
         val hasLastFm: Boolean = false,
+        /** Providers this load asked (cache misses), and how many of those couldn't answer. */
+        val fetched: Int = 0,
+        val failed: Int = 0,
     )
 
     /** One load's providers and answers; [fresh] and [stale] are guarded by [mutex]. */
@@ -451,7 +464,7 @@ class RecommendationsRepository(
 
         save()
         val failed = mutex.withLock { run.failed } + missing
-        val outcome = LoadOutcome(configured = true, legacyConfigured = legacyConfigured, anyFailed = failed > 0, hasListenBrainz = listenBrainz != null, hasLastFm = lastFm != null)
+        val outcome = LoadOutcome(configured = true, legacyConfigured = legacyConfigured, anyFailed = failed > 0, hasListenBrainz = listenBrainz != null, hasLastFm = lastFm != null, fetched = toFetch.size + missing, failed = failed)
         if (!isLatest(run)) return outcome
 
         val anySections = mutex.withLock { shown.any { it.sections.isNotEmpty() } }

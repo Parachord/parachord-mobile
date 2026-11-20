@@ -5,6 +5,7 @@ import com.parachord.shared.home.HOME_MIX_COVER_RETRY_MS
 import com.parachord.shared.home.HistoryMix
 import com.parachord.shared.home.HistoryMixCacheEntry
 import com.parachord.shared.home.HistoryMixEntry
+import com.parachord.shared.home.HomeRecsLoad
 import com.parachord.shared.home.flattenHistoryMixes
 import com.parachord.shared.home.historyMixCacheEntry
 import com.parachord.shared.home.historyMixEntriesFor
@@ -68,6 +69,10 @@ internal data class HistoryMixesDiskCache(
  *   of a load that answered with mixes ([shouldLoadHomeRecommendations]),
  *   unless the provider set or an account changed; `force` always loads and
  *   refetches.
+ * - **What a load did** ([load]'s answer, for Home's own throttle): the
+ *   providers it asked, how many of those failed, and the mixes there are to
+ *   show. A skipped load asked nobody and reports the mixes on screen; one
+ *   that couldn't list the providers reports nothing.
  * - **After each paint:** [onMixIds] gets every mix id (Recommendations leaves
  *   those playlists out), and each mix with no cover gets a mosaic from
  *   [mosaicCovers], one at a time; a lookup that throws is retried
@@ -124,7 +129,7 @@ class HistoryMixesRepository(
         var failed = 0
     }
 
-    suspend fun load(force: Boolean = false) {
+    suspend fun load(force: Boolean = false): HomeRecsLoad {
         ensureDiskLoaded()
         val lastFm = safely(null) { settingsStore.getLastFmUsername() }?.takeIf { it.isNotBlank() }
         val listenBrainz = safely(null) { settingsStore.getListenBrainzUsername() }?.takeIf { it.isNotBlank() }
@@ -135,7 +140,7 @@ class HistoryMixesRepository(
         } catch (e: Exception) {
             // The plugins aren't loaded: an empty list here would wipe the mixes on screen.
             Log.w(TAG, "Couldn't list history-mix providers: ${e.message}")
-            return
+            return HomeRecsLoad(fetched = 0, failed = 0, sectionCount = 0)
         }
         val providers = orderRecommendationProviders(
             all.filter { safely(false) { providerIsOn(it) } },
@@ -149,7 +154,7 @@ class HistoryMixesRepository(
             val keyChanged = key != lastProviderKey
             if (!force && !keyChanged &&
                 !shouldLoadHomeRecommendations(loading = loading, loadStarted = true, lastFullLoadAt = lastFullLoadAt, nowMs = now)
-            ) return
+            ) return HomeRecsLoad(fetched = 0, failed = 0, sectionCount = _mixes.value.flat.size)
             lastProviderKey = key
             loading = true
             val run = LoadRun(++generation, providers)
@@ -181,6 +186,7 @@ class HistoryMixesRepository(
             if (shouldStampHomeRecommendationsLoad(fetched = toFetch.size, failed = failed, sectionCount = count)) {
                 mutex.withLock { lastFullLoadAt = nowMs() }
             }
+            return HomeRecsLoad(fetched = toFetch.size, failed = failed, sectionCount = count)
         } finally {
             withContext(NonCancellable) {
                 val latest = mutex.withLock { (generation == run.generation).also { if (it) loading = false } }
@@ -300,7 +306,8 @@ class HistoryMixesRepository(
                     mutex.withLock { covers[mix.id] = found.take(4) }
                     publish(kickMosaics = false)
                 }
-                // No covers: the mix keeps its placeholder for the session.
+                // No covers from lookups that all answered: the placeholder stays
+                // for the session. A failed lookup throws (historyMixMosaicCovers) and is retried below.
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -77,9 +77,34 @@ class PendingChatPrompt {
     var fromApp: Boolean = false
         private set
 
+    /**
+     * Counts the prompts queued, so a chat screen can drop only the prompt it
+     * saw: a screen cleared late (its exit animation, or one left in the back
+     * stack) must not drop a prompt Home's Ask queued for the next one.
+     */
+    var generation: Long = 0
+        private set
+
     fun set(prompt: String?, fromApp: Boolean) {
+        if (prompt != null) generation++
         this.fromApp = prompt != null && fromApp
         _prompt.value = prompt
+    }
+
+    /** Clears the queued prompt only if it's still the one queued as [generation]. */
+    fun dropIfGeneration(generation: Long) {
+        if (_prompt.value != null && this.generation == generation) set(null, false)
+    }
+
+    /**
+     * The queued prompt, cleared, when it can be sent now
+     * ([ChatPrompt.shouldSend]); null (and kept) otherwise. With [inAppOnly]
+     * only a prompt from the app (Home's Ask) is taken.
+     */
+    fun takeSendable(chatOpen: Boolean, providerId: String?, loading: Boolean, inAppOnly: Boolean = false): String? {
+        if (inAppOnly && !fromApp) return null
+        if (!ChatPrompt.shouldSend(_prompt.value, chatOpen, providerId, loading)) return null
+        return consume()
     }
 
     /** The queued prompt, whatever its origin, cleared. */

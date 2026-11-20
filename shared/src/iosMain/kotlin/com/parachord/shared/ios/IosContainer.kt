@@ -313,7 +313,10 @@ class IosContainer private constructor() {
             userAgent = parachordUserAgent(appVersionString(), "iOS"),
             parachordClient = "ios",
             appVersion = appVersionString(),
-            isDebug = true,
+            // A debug framework (Xcode's Debug configuration) logs HTTP headers,
+            // redacted; a Release build logs nothing. Only the shared client's
+            // logging reads this flag.
+            isDebug = iosDebugBinary(),
             spotifyClientId = "",   // BYO — Parachord ships no Spotify key; user adds theirs in Settings
             lastFmApiKey = plist("LastFmApiKey"),
             lastFmSharedSecret = plist("LastFmSharedSecret"),
@@ -2058,7 +2061,14 @@ class IosContainer private constructor() {
             providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
             cacheRead = { IosFileCache.read("history_mixes_cache.json") },
             cacheWrite = { IosFileCache.write("history_mixes_cache.json", it) },
-            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> providerPlaylistResolver.resolve(url) } },
+            // Desktop's getPlaylistCovers: coverless tracks get their album's cover, else the artist's photo.
+            mosaicCovers = { mix ->
+                com.parachord.shared.home.historyMixMosaicCovers(
+                    mix,
+                    albumArt = { album, artist -> imageEnrichmentService.lookupAlbumArt(album, artist) },
+                    artistImage = { artist -> metadataService.getArtistImage(artist) },
+                ) { url -> providerPlaylistResolver.resolve(url) }
+            },
             onMixIds = { ids -> recommendationsRepository.excludePlaylistIds(ids) },
         )
     }
@@ -2448,6 +2458,49 @@ class IosContainer private constructor() {
             seatGeekClientIdFallback = "",
         )
     }
+
+    /**
+     * Concert cards' artist photos (the shared [com.parachord.shared.home.ConcertArtistImages],
+     * one instance for the app, as on Android): the artist-photo chain, five at a
+     * time, each artist once a session. Swift watches [concertArtistImagesFlow]
+     * (a `[String: String]` keyed by `concertArtistKey`) and draws a card's photo
+     * with [concertPhotoUrl].
+     */
+    val concertArtistImages: com.parachord.shared.home.ConcertArtistImages by lazy {
+        com.parachord.shared.home.ConcertArtistImages { name -> metadataService.getArtistImage(name) }
+    }
+
+    fun concertArtistImagesFlow(): Flow<Any?> = concertArtistImages.images
+
+    /**
+     * Looks up the photos of [events]' artists (the Concerts page: every loaded
+     * show, as desktop's page does). Runs in Kotlin's scope and returns a handle:
+     * cancelling a Swift `Task` doesn't cancel a Kotlin coroutine, so Swift
+     * cancels this when the list changes.
+     */
+    fun loadConcertArtistImages(events: List<ConcertEvent>): Cancellable {
+        val names = com.parachord.shared.home.concertPhotoArtists(events)
+        val job = appScope.launch {
+            try {
+                concertArtistImages.load(names)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("IosContainer", "Concert artist photos failed: ${e.message}")
+            }
+        }
+        return Cancellable { job.cancel() }
+    }
+
+    /** A concert card's photo: the artist's ([images]), else the event's image, else null. */
+    fun concertPhotoUrl(event: ConcertEvent, images: Map<String, String>): String? =
+        com.parachord.shared.home.concertPhotoUrl(event, images)
+
+    /** A concert card's artist name (the shared fallback to the event's name). */
+    fun concertArtistName(event: ConcertEvent): String = com.parachord.shared.home.concertArtist(event)
+
+    /** The artist a concert card opens on its On Tour tab, or null when the event names none (no tap). */
+    fun concertTourArtist(event: ConcertEvent): String? = com.parachord.shared.home.concertTourArtist(event)
 
     /** Upcoming shows from the user's TOP ARTISTS across every time window.
      *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is
@@ -3833,7 +3886,7 @@ class IosContainer private constructor() {
     private val aiChatService: AiChatService by lazy {
         AiChatService(djToolExecutor, chatContextProvider, chatMessageDao, chatJson)
     }
-    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService) }
+    val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService, imageEnrichmentService, com.parachord.shared.metadata.CatalogTrackArtwork(httpClient)) }
 
     // Flat Swift-facing API (mirrors Android's ChatViewModel calls).
     suspend fun chatSend(providerId: String, userMessage: String, onProgress: (String) -> Unit): String {
@@ -3877,6 +3930,56 @@ class IosContainer private constructor() {
 
     /** Takes the queued in-app prompt to send it; null when there is none. */
     fun consumeInAppChatPrompt(): String? = aiChatService.consumeInAppChatPrompt()
+
+    /**
+     * Takes the queued in-app prompt (Home's Ask) when the chat can send it now:
+     * [chatOpen], a provider that can send ([providerId], null when none can),
+     * no reply in flight (shared `takeSendableChatPrompt`, Android's rule).
+     * A link's prompt is left queued; the chat pre-fills that one instead.
+     */
+    fun takeSendableInAppChatPrompt(chatOpen: Boolean, providerId: String?, loading: Boolean): String? =
+        aiChatService.takeSendableChatPrompt(chatOpen, providerId, loading, inAppOnly = true)
+
+    /**
+     * A tap on a `{{playlist|…}}` chat card (shared `ChatPlaylistCards`, desktop's
+     * playlist card): `open` with the saved playlist's id, `offerSave` with the
+     * question to ask, or `unavailable` with the message to show.
+     */
+    suspend fun chatPlaylistCardTap(name: String, id: String, trackCount: String, messageContent: String): IosChatPlaylistTap {
+        // Caught here: a Kotlin exception through a Swift-bridged suspend aborts the app, even under try?.
+        val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
+        val playlists = try {
+            playlistDao.getAllSync()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("IosContainer", "Chat playlist card lookup failed: ${e.message}")
+            return IosChatPlaylistTap("unavailable", null, com.parachord.shared.ai.ChatPlaylistCards.OPEN_FAILED_MESSAGE)
+        }
+        return when (val tap = com.parachord.shared.ai.ChatPlaylistCards.tap(card, messageContent, playlists)) {
+            is com.parachord.shared.ai.ChatPlaylistTap.Open -> IosChatPlaylistTap("open", tap.playlistId, null)
+            is com.parachord.shared.ai.ChatPlaylistTap.OfferSave ->
+                IosChatPlaylistTap("offerSave", null, com.parachord.shared.ai.ChatPlaylistCards.saveOfferMessage(tap.name, tap.trackCount))
+            is com.parachord.shared.ai.ChatPlaylistTap.Unavailable -> IosChatPlaylistTap("unavailable", null, tap.message)
+        }
+    }
+
+    /**
+     * Saves a playlist card the model never saved, from the tracks its message
+     * lists; returns the new id, or null when the save failed (caught here, as
+     * a Kotlin exception through a Swift-bridged suspend aborts the app).
+     */
+    suspend fun saveChatPlaylistCard(name: String, id: String, trackCount: String, messageContent: String): String? = try {
+        val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
+        val (playlist, tracks) = com.parachord.shared.ai.ChatPlaylistCards.draft(card, messageContent)
+        libraryRepository.createPlaylistWithTracks(playlist, tracks)
+        playlist.id
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "Saving a chat playlist failed: ${e.message}")
+        null
+    }
 
     /** The chat screen opened or closed; closing drops a prompt that never went out. */
     fun chatVisibilityChanged(wasOpen: Boolean, chatOpen: Boolean) =
@@ -4274,3 +4377,10 @@ class FlowWatcher(private val scope: CoroutineScope) {
 class Cancellable(private val onCancel: () -> Unit) {
     fun cancel() = onCancel()
 }
+
+/** What a playlist chat card's tap does, flattened for Swift: `kind` is open, offerSave or unavailable. */
+data class IosChatPlaylistTap(val kind: String, val playlistId: String?, val message: String?)
+
+/** Whether this is a debug build of the Shared framework (Xcode's Debug configuration builds one). */
+@OptIn(kotlin.experimental.ExperimentalNativeApi::class)
+internal fun iosDebugBinary(): Boolean = kotlin.native.Platform.isDebugBinary

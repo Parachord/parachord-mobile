@@ -7,8 +7,12 @@ import com.parachord.shared.ai.tools.DjToolDefinitions
 import com.parachord.shared.ai.tools.DjToolExecutor
 import com.parachord.shared.db.dao.ChatMessageDao
 import com.parachord.shared.model.ChatMessageRecord
+import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -37,12 +41,21 @@ import kotlinx.serialization.json.buildJsonObject
  */
 class AiChatService(
     private val toolExecutor: DjToolExecutor,
-    private val contextProvider: ChatContextProvider,
-    private val chatMessageDao: ChatMessageDao,
+    private val systemPrompt: suspend () -> String,
+    private val historyStore: ChatHistoryStore,
     private val json: Json,
 ) {
 
+    /** The app's wiring: the system prompt from [contextProvider], history in [chatMessageDao]. */
+    constructor(
+        toolExecutor: DjToolExecutor,
+        contextProvider: ChatContextProvider,
+        chatMessageDao: ChatMessageDao,
+        json: Json,
+    ) : this(toolExecutor, { contextProvider.buildSystemPrompt() }, chatMessageDao.asChatHistoryStore(), json)
+
     companion object {
+        private const val TAG = "AiChatService"
         private const val MAX_HISTORY_LENGTH = 50
         private const val MAX_TOOL_ITERATIONS = 5
         /** 30 days in milliseconds. */
@@ -52,9 +65,11 @@ class AiChatService(
     /**
      * The prompt the chat screen sends when it opens: from a confirmed
      * `parachord://chat?prompt=` link, or from Home's Ask box (`fromApp`).
-     * ChatViewModel (Android) sends it once a provider is selected; iOS's chat
-     * sends only an in-app one ([consumeInAppChatPrompt]) and pre-fills a
-     * link's into the input instead.
+     * Each chat screen sends it through [takeSendableChatPrompt] once it's
+     * open with a provider whose messages are loaded and no reply is in
+     * flight, re-checking whenever any of those change. iOS's chat takes only
+     * an in-app one (`inAppOnly`) and pre-fills a link's into the input
+     * instead.
      */
     private val pending = PendingChatPrompt()
     val pendingChatPrompt: StateFlow<String?> = pending.prompt
@@ -72,6 +87,23 @@ class AiChatService(
     /** Whether the queued prompt came from the app (Home's Ask), not a link. */
     val pendingChatPromptFromApp: Boolean get() = pending.fromApp
 
+    /** Counts the prompts queued; see [PendingChatPrompt.generation]. */
+    val pendingChatPromptGeneration: Long get() = pending.generation
+
+    /** Drops the queued prompt only if it's still the one queued as [generation]. */
+    fun dropPendingChatPrompt(generation: Long) = pending.dropIfGeneration(generation)
+
+    /**
+     * Takes the queued prompt when the chat can send it now: open, with a
+     * provider whose messages are loaded, and no reply in flight (shared
+     * [ChatPrompt.shouldSend]). Both chat screens call it whenever any of
+     * those change, as desktop's effect over `[pending, aiChatOpen,
+     * selectedChatProvider, aiChatLoading]` does, so a prompt queued while
+     * the chat is already open, or while a reply loads, still goes out.
+     */
+    fun takeSendableChatPrompt(chatOpen: Boolean, providerId: String?, loading: Boolean, inAppOnly: Boolean = false): String? =
+        pending.takeSendable(chatOpen, providerId, loading, inAppOnly)
+
     /** Consume the pending prompt (returns it and clears it). */
     fun consumePendingChatPrompt(): String? = pending.consume()
 
@@ -86,34 +118,66 @@ class AiChatService(
         if (ChatPrompt.shouldDrop(wasOpen, chatOpen)) pending.set(null, false)
     }
 
-    /** In-memory cache of per-provider histories, lazily populated from Room. */
+    /** In-memory cache of per-provider histories, lazily populated from the database. */
     private val histories = mutableMapOf<String, MutableList<ChatMessage>>()
-    private val loadedProviders = mutableSetOf<String>()
 
     /**
-     * Ensure the in-memory history for [providerId] is populated from the database.
-     * Also prunes messages older than 30 days on first load.
+     * Guards [histories] and every list in it. A provider's list is created
+     * once, by the first load, and never replaced while in use: the chat
+     * screen loads the messages while it sends Home's Ask prompt, and two
+     * unguarded first loads each built a list, the second replacing the one
+     * the prompt (and later its reply) had been added to. The chat then
+     * showed the old conversation without the prompt.
      */
-    private suspend fun ensureLoaded(providerId: String) {
-        if (providerId in loadedProviders) return
+    private val historyLock = Mutex()
+
+    /**
+     * The in-memory history for [providerId], loaded from the database the
+     * first time (which also prunes messages older than 30 days).
+     */
+    private suspend fun historyFor(providerId: String): MutableList<ChatMessage> = historyLock.withLock {
+        histories[providerId]?.let { return@withLock it }
 
         // Prune messages older than 30 days
         val cutoff = currentTimeMillis() - RETENTION_MILLIS
-        chatMessageDao.deleteOlderThan(cutoff)
+        historyStore.deleteOlderThan(cutoff)
 
         // Load from DB
-        val entities = chatMessageDao.getByProvider(providerId)
+        val entities = historyStore.getByProvider(providerId)
         val messages = entities.map { it.toChatMessage() }.toMutableList()
         // Remove orphaned TOOL messages that lost their parent ASSISTANT message
         // (e.g. from 30-day pruning or previous trimming bugs)
         sanitizeHistory(messages)
         histories[providerId] = messages
-        loadedProviders.add(providerId)
+        messages
+    }
+
+    /**
+     * Add [message] to [history] (under the lock) and persist it. Nothing is
+     * added or saved once [history] is no longer the provider's list: the
+     * chat was cleared while this send was under way, and a late reply must
+     * not leave a row in the cleared conversation.
+     */
+    private suspend fun append(providerId: String, history: MutableList<ChatMessage>, message: ChatMessage) {
+        // Checked and saved under the lock, so a clear can't land between the
+        // check and the insert.
+        historyLock.withLock {
+            if (histories[providerId] === history) {
+                history.add(message)
+                persistMessage(providerId, message)
+            }
+        }
+    }
+
+    /** The system prompt followed by a copy of [history], for one provider call. */
+    private suspend fun requestMessages(history: List<ChatMessage>): List<ChatMessage> {
+        val systemMessage = ChatMessage(role = ChatRole.SYSTEM, content = systemPrompt())
+        return listOf(systemMessage) + historyLock.withLock { history.toList() }
     }
 
     /** Persist a single message to Room. */
     private suspend fun persistMessage(providerId: String, message: ChatMessage) {
-        chatMessageDao.insert(message.toEntity(providerId))
+        historyStore.insert(message.toEntity(providerId))
     }
 
     /**
@@ -128,41 +192,38 @@ class AiChatService(
         userMessage: String,
         onProgress: (String) -> Unit = {},
     ): String {
-        ensureLoaded(provider.id)
-        val history = histories.getOrPut(provider.id) { mutableListOf() }
+        val history = historyFor(provider.id)
 
         // Add user message
-        val userMsg = ChatMessage(role = ChatRole.USER, content = userMessage)
-        history.add(userMsg)
-        persistMessage(provider.id, userMsg)
+        append(provider.id, history, ChatMessage(role = ChatRole.USER, content = userMessage))
 
         // Trim history: keep first message + last (N-1) if over limit
-        trimHistory(history)
+        historyLock.withLock { trimHistory(history) }
 
         // Build system prompt and prepend for the API call
-        val systemPrompt = contextProvider.buildSystemPrompt()
-        val systemMessage = ChatMessage(role = ChatRole.SYSTEM, content = systemPrompt)
-        val messagesWithSystem = listOf(systemMessage) + history
+        val messagesWithSystem = requestMessages(history)
 
         val tools = DjToolDefinitions.all()
 
         val response = try {
             provider.chat(messagesWithSystem, tools, config)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            val errorMessage = formatProviderError(e)
+            val errorMessage = formatProviderError(provider.id, e)
             // Add error as assistant message so it's visible in the UI
-            val errorMsg = ChatMessage(role = ChatRole.ASSISTANT, content = errorMessage)
-            history.add(errorMsg)
-            persistMessage(provider.id, errorMsg)
+            append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = errorMessage))
             return errorMessage
         }
 
         // If no tool calls, just add the assistant message and return
         if (response.toolCalls.isNullOrEmpty()) {
-            val assistantMsg = ChatMessage(role = ChatRole.ASSISTANT, content = response.content)
-            history.add(assistantMsg)
-            persistMessage(provider.id, assistantMsg)
-            return response.content
+            // Plain-text music references as cards (desktop converts before it
+            // stores the reply, so later turns see the cards too).
+            // A blank reply still shows something (desktop's tool summary for no tools).
+            val content = ChatContent.convertPlainTextToCards(response.content.ifBlank { ToolSummary.DONE })
+            append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = content))
+            return content
         }
 
         // Enter tool loop
@@ -183,6 +244,7 @@ class AiChatService(
     ): String {
         var currentResponse = initialResponse
         var iterations = 0
+        val runs = mutableListOf<ToolRun>()
 
         while (!currentResponse.toolCalls.isNullOrEmpty() && iterations < MAX_TOOL_ITERATIONS) {
             iterations++
@@ -193,14 +255,25 @@ class AiChatService(
                 content = currentResponse.content,
                 toolCalls = currentResponse.toolCalls,
             )
-            history.add(assistantMsg)
-            persistMessage(provider.id, assistantMsg)
+            append(provider.id, history, assistantMsg)
 
             // Execute each tool call and add results to history
             for (toolCall in currentResponse.toolCalls.orEmpty()) {
                 onProgress(toolProgressText(toolCall.name))
 
-                val result = toolExecutor.execute(toolCall.name, toolCall.arguments)
+                // A tool that throws answers with an error result, so the model
+                // can say what went wrong; the exception never reaches the screen.
+                val result = try {
+                    toolExecutor.execute(toolCall.name, toolCall.arguments)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // Redacted before it's logged, sent to the model or saved.
+                    val reason = AiProviderErrors.redactSecrets(e.message ?: "The ${toolCall.name} tool failed.")
+                    Log.w(TAG, "Tool ${toolCall.name} failed: $reason")
+                    mapOf("success" to false, "error" to reason)
+                }
+                runs += ToolRun(toolCall.name, result)
                 val resultJson = json.encodeToString(
                     JsonElement.serializer(),
                     mapToJsonElement(result),
@@ -212,55 +285,77 @@ class AiChatService(
                     toolCallId = toolCall.id,
                     toolName = toolCall.name,
                 )
-                history.add(toolMsg)
-                persistMessage(provider.id, toolMsg)
+                append(provider.id, history, toolMsg)
             }
 
             // Send follow-up with updated history
-            val systemPrompt = contextProvider.buildSystemPrompt()
-            val systemMessage = ChatMessage(role = ChatRole.SYSTEM, content = systemPrompt)
-            val messagesWithSystem = listOf(systemMessage) + history
+            val messagesWithSystem = requestMessages(history)
 
             currentResponse = try {
                 provider.chat(messagesWithSystem, tools, config)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                return "I encountered an error while processing. Please try again."
+                logProviderFailure(provider.id, e)
+                // Shown and kept, as desktop does (`app.js` ~L3020).
+                val failure = "I encountered an error while processing. Please try again."
+                append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = failure))
+                return failure
             }
         }
 
         // Add final assistant message to history
-        val finalContent = currentResponse.content
-        val finalMsg = ChatMessage(role = ChatRole.ASSISTANT, content = finalContent)
-        history.add(finalMsg)
-        persistMessage(provider.id, finalMsg)
+        // A turn that ends without text of its own (a blank reply, or the
+        // iteration cap reached mid-loop) says what its tools did, as desktop
+        // does (`rawFinal = content || summarizeToolResults(toolResults)`).
+        val finalContent = ChatContent.convertPlainTextToCards(
+            currentResponse.content.ifBlank { ToolSummary.summarize(runs) },
+        )
+        append(provider.id, history, ChatMessage(role = ChatRole.ASSISTANT, content = finalContent))
         return finalContent
     }
 
-    /** Returns only USER and ASSISTANT messages for display in the UI. */
+    /**
+     * What the chat shows, on both apps: the user's messages and each turn's
+     * final reply (or its error), as desktop's panel does (`handleAiChatSend`
+     * appends only `response.content`). The tool loop's interim assistant
+     * messages (those that carry tool calls: preamble text, often blank, or the
+     * model commenting on a search it's about to retry) stay in the history the
+     * model sees but aren't shown; while a turn runs, the progress text
+     * ("Searching…") covers the gap.
+     */
     suspend fun getDisplayMessages(providerId: String): List<ChatMessage> {
-        ensureLoaded(providerId)
-        val history = histories[providerId] ?: return emptyList()
-        return history.filter { it.role == ChatRole.USER || it.role == ChatRole.ASSISTANT }
+        val history = historyFor(providerId)
+        return historyLock.withLock { history.filter(::isDisplayed) }
+    }
+
+    /** Whether [message] is shown in the chat (see [getDisplayMessages]). */
+    private fun isDisplayed(message: ChatMessage): Boolean = when (message.role) {
+        ChatRole.USER -> true
+        ChatRole.ASSISTANT -> message.toolCalls.isNullOrEmpty() && message.content.isNotBlank()
+        else -> false
     }
 
     /** Returns the full conversation history including tool messages. */
     suspend fun getFullHistory(providerId: String): List<ChatMessage> {
-        ensureLoaded(providerId)
-        return histories[providerId]?.toList() ?: emptyList()
+        val history = historyFor(providerId)
+        return historyLock.withLock { history.toList() }
     }
 
     /** Clear history for a specific provider. */
     suspend fun clearHistory(providerId: String) {
-        histories.remove(providerId)
-        loadedProviders.remove(providerId)
-        chatMessageDao.clearByProvider(providerId)
+        historyLock.withLock {
+            histories.remove(providerId)
+            historyStore.clearByProvider(providerId)
+        }
     }
 
     /** Clear all provider histories. */
     suspend fun clearAllHistories() {
-        histories.clear()
-        loadedProviders.clear()
-        chatMessageDao.clearAll()
+        historyLock.withLock {
+            histories.clear()
+            historyStore.clearAll()
+        }
     }
 
     /**
@@ -334,33 +429,29 @@ class AiChatService(
         }
     }
 
-    /** Map provider exceptions to user-friendly error messages, matching desktop patterns. */
-    private fun formatProviderError(e: Exception): String {
-        val message = e.message ?: "Unknown error"
+    /**
+     * What the chat says for a failed provider call (shared
+     * [AiProviderErrors.describe], desktop's `describeProviderError`), after
+     * logging the failure.
+     */
+    private fun formatProviderError(providerId: String, e: Exception): String {
+        logProviderFailure(providerId, e)
+        return AiProviderErrors.describe(e.message ?: "Unknown error")
+    }
 
-        return when {
-            message.contains("ECONNREFUSED", ignoreCase = true) ||
-                message.contains("Unable to resolve host", ignoreCase = true) ||
-                message.contains("Failed to connect", ignoreCase = true) ||
-                message.contains("connect timed out", ignoreCase = true) ||
-                message.contains("No address associated", ignoreCase = true) ->
-                "Could not connect to the AI provider. Please check your internet connection and endpoint settings."
-
-            message.contains("401") || message.contains("Unauthorized", ignoreCase = true) ->
-                "Invalid API key. Please check your API key in settings."
-
-            message.contains("429") || message.contains("Too Many Requests", ignoreCase = true) ||
-                message.contains("rate limit", ignoreCase = true) ->
-                "Rate limit exceeded. Please wait a moment and try again."
-
-            message.contains("404") || message.contains("Not Found", ignoreCase = true) ->
-                "Model not found. Please check the model name in settings."
-
-            message.contains("500") || message.contains("Internal Server Error", ignoreCase = true) ->
-                "The AI provider returned a server error. Please try again later."
-
-            else -> "Error communicating with AI provider: $message"
+    /**
+     * The raw failure at warn level: provider, HTTP status and the provider's
+     * own message, so the real cause (a quota, a bad model, a real rate
+     * limit) can be read in the device log. Credentials are redacted: Gemini
+     * puts its key in the URL, and a timeout's message carries the URL.
+     */
+    private fun logProviderFailure(providerId: String, e: Exception) {
+        val detail = if (e is AiProviderHttpException) {
+            "status=${e.status} message=${AiProviderErrors.redactSecrets(e.providerMessage)}"
+        } else {
+            "${e::class.simpleName}: ${AiProviderErrors.redactSecrets(e.message ?: "")}"
         }
+        Log.w(TAG, "AI provider $providerId failed: $detail")
     }
 
     /** Map tool names to user-facing progress text. */
@@ -375,6 +466,26 @@ class AiChatService(
         "block_recommendation" -> "Updating blocklist..."
         else -> "Processing..."
     }
+}
+
+/**
+ * Where [AiChatService] keeps each provider's messages: the app's
+ * [ChatMessageDao] (SQLDelight), or a fake in tests.
+ */
+interface ChatHistoryStore {
+    suspend fun deleteOlderThan(cutoffMillis: Long)
+    suspend fun getByProvider(providerId: String): List<ChatMessageRecord>
+    suspend fun insert(record: ChatMessageRecord)
+    suspend fun clearByProvider(providerId: String)
+    suspend fun clearAll()
+}
+
+private fun ChatMessageDao.asChatHistoryStore(): ChatHistoryStore = object : ChatHistoryStore {
+    override suspend fun deleteOlderThan(cutoffMillis: Long) = this@asChatHistoryStore.deleteOlderThan(cutoffMillis)
+    override suspend fun getByProvider(providerId: String) = this@asChatHistoryStore.getByProvider(providerId)
+    override suspend fun insert(record: ChatMessageRecord) { this@asChatHistoryStore.insert(record) }
+    override suspend fun clearByProvider(providerId: String) = this@asChatHistoryStore.clearByProvider(providerId)
+    override suspend fun clearAll() = this@asChatHistoryStore.clearAll()
 }
 
 // ── Entity ↔ ChatMessage Mapping ────────────────────────────────────
@@ -428,7 +539,7 @@ private fun ChatMessage.toEntity(providerId: String): ChatMessageRecord {
         toolCallId = toolCallId,
         toolName = toolName,
         // MUST stamp the real time — ChatMessageRecord defaults to 0L, and
-        // ensureLoaded() prunes timestamp < now-30d on every load, so a 0
+        // historyFor() prunes timestamp < now-30d on every load, so a 0
         // timestamp means the message is deleted on the next load (history is
         // never remembered across sessions, on either platform).
         timestamp = currentTimeMillis(),

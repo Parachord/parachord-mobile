@@ -697,7 +697,7 @@ struct HomeScreen: View {
                 aiHeader("Suggestions")
                 ProgressView().tint(PC.accent).frame(maxWidth: .infinity).padding(.vertical, 24)
             } else if let error = feed.aiError, feed.aiAlbums.isEmpty && feed.aiArtists.isEmpty {
-                // Android's AiSuggestionsSection error: what went wrong, with
+                // The AI suggestions error: what went wrong, with
                 // the header's refresh to try again.
                 aiHeader("AI suggestions")
                 Text(error).font(.system(size: 13)).foregroundStyle(PC.error)

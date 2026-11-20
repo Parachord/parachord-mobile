@@ -3847,7 +3847,9 @@ enum JsPolyfills {
         let log: @convention(block) (String, String) -> Void = { level, message in
             // NSLog (not print) so .axe / resolver-loader console output is
             // captured by `xcrun simctl log stream` for on-device debugging.
-            NSLog("[plugin:%@] %@", level, message)
+            // Redacted: a plugin's console output can carry the URLs it fetches
+            // (an old gemini.axe's ?key=, Subsonic's t= / s=).
+            NSLog("[plugin:%@] %@", level, SecretRedaction.shared.redactSecrets(text: message))
         }
         let storageGet: @convention(block) (String) -> String? = { key in
             guard isAllowedStorageKey(key) else { return nil }

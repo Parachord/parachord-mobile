@@ -17,10 +17,13 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 
+/** Collection's Songs tab index (LibraryScreen: Artists, Albums, Songs, Friends). */
+private const val COLLECTION_SONGS_TAB = 2
+
 /** Top-level route definitions. */
 object Routes {
     const val HOME = "home"
-    const val COLLECTION = "collection?tab={tab}"
+    const val COLLECTION = "collection?tab={tab}&sort={sort}"
     const val COLLECTION_BASE = "collection"
     const val SEARCH = "search"
     const val PLAYLISTS = "playlists"
@@ -28,11 +31,20 @@ object Routes {
     const val PLAYLIST_EDIT = "playlist/{playlistId}/edit"
     const val NOW_PLAYING = "now_playing"
     const val SETTINGS = "settings"
-    /** [SETTINGS] opening one plugin's sheet (`plugin` is a plugin or resolver id; optional). */
-    const val SETTINGS_WITH_PLUGIN = "settings?plugin={plugin}"
+    /**
+     * [SETTINGS] opening one plugin's sheet (`plugin` is a plugin or resolver
+     * id) or a tab (`tab`, a [com.parachord.shared.settings.SettingsTab] name);
+     * both optional, Plug-Ins without them.
+     */
+    const val SETTINGS_WITH_PLUGIN = "settings?plugin={plugin}&tab={tab}"
 
-    fun settings(pluginId: String?): String =
-        if (pluginId == null) SETTINGS else "settings?plugin=${Uri.encode(pluginId)}"
+    fun settings(pluginId: String?, tab: String? = null): String {
+        val query = buildList {
+            if (pluginId != null) add("plugin=${Uri.encode(pluginId)}")
+            if (tab != null) add("tab=${Uri.encode(tab)}")
+        }
+        return if (query.isEmpty()) SETTINGS else "settings?" + query.joinToString("&")
+    }
     /** `mbid`: the artist's MusicBrainz id when the caller has one (#478). */
     const val ARTIST = "artist/{artistName}?tab={tab}&mbid={mbid}"
     const val ALBUM = "album/{albumTitle}/{artistName}"
@@ -87,8 +99,20 @@ object Routes {
         listOfNotNull(tab?.let { "tab=${Uri.encode(it)}" }, period?.let { "period=${Uri.encode(it)}" })
             .joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
 
-    fun collection(tab: Int = 0): String =
-        if (tab > 0) "collection?tab=$tab" else "collection"
+    /**
+     * Collection, on [tab]. [trackSort] (a `TrackSort` name, a plain
+     * identifier) sets the songs' sort once as the entry opens
+     * (`LibraryViewModel`'s `takeLinkTrackSort`): Home's Recent Loves opens
+     * the songs on Recently Added, as desktop's tile does
+     * (`setCollectionSort({ tracks: 'recent' })`).
+     */
+    fun collection(tab: Int = 0, trackSort: String? = null): String {
+        val args = listOfNotNull(
+            tab.takeIf { it > 0 }?.let { "tab=$it" },
+            trackSort?.let { "sort=$it" },
+        )
+        return if (args.isEmpty()) "collection" else "collection?" + args.joinToString("&")
+    }
 }
 
 @Composable
@@ -96,7 +120,12 @@ fun ParachordNavHost(
     navController: NavHostController,
     onOpenDrawer: () -> Unit,
     onOpenChat: () -> Unit = {},
-    onListenAlong: (com.parachord.android.data.db.entity.FriendEntity) -> Unit = {},
+    /** MainActivity's import-playlist dialog. */
+    onOpenImportPlaylist: () -> Unit = {},
+    /** Ask Shuffleupagus from Home: `DeepLinkViewModel.handleInAppChatPrompt`. */
+    onAsk: (String) -> Unit = {},
+    /** A `parachord://` link tapped in the chat: `DeepLinkViewModel.handleUri`. */
+    onOpenInAppLink: (String) -> Unit = {},
     listenAlongFriend: com.parachord.android.data.db.entity.FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
     listenAlongSuspendedQueue: List<com.parachord.android.data.db.entity.TrackEntity> = emptyList(),
@@ -132,7 +161,6 @@ fun ParachordNavHost(
     ) {
         composable(Routes.HOME) {
             com.parachord.android.ui.screens.home.HomeScreen(
-                onNavigateToNowPlaying = { navController.navigate(Routes.NOW_PLAYING) },
                 onOpenDrawer = onOpenDrawer,
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -143,24 +171,37 @@ fun ParachordNavHost(
                 onNavigateToArtist = { name ->
                     navController.navigate(Routes.artist(name))
                 },
-                onNavigateToFriend = { friendId ->
-                    navController.navigate(Routes.friendDetail(friendId))
-                },
-                onListenAlong = onListenAlong,
                 onNavigateToRecommendations = { navController.navigate(Routes.RECOMMENDATIONS) },
                 onNavigateToCriticalDarlings = { navController.navigate(Routes.CRITICAL_DARLINGS) },
                 onNavigateToPopOfTheTops = { navController.navigate(Routes.POP_OF_THE_TOPS) },
                 onNavigateToFreshDrops = { navController.navigate(Routes.FRESH_DROPS) },
-                onNavigateToCollection = { tab -> navController.navigate(Routes.collection(tab)) },
                 onNavigateToPlaylists = { navController.navigate(Routes.PLAYLISTS) },
-                onNavigateToWeeklyPlaylist = { playlistId, contextType ->
-                    navController.navigate(Routes.weeklyPlaylist(playlistId, contextType))
+                // Collection's Songs tab (LibraryScreen's tabs: Artists, Albums, Songs, Friends).
+                onOpenRecentLoves = {
+                    navController.navigate(
+                        Routes.collection(COLLECTION_SONGS_TAB, com.parachord.shared.library.TrackSort.RECENT.name),
+                    )
                 },
+                onOpenImportPlaylist = onOpenImportPlaylist,
+                onOpenSettings = { pluginId -> navController.navigate(Routes.settings(pluginId)) },
+                onOpenSettingsTab = { tab -> navController.navigate(Routes.settings(null, tab)) },
+                onOpenSearch = { navController.navigate(Routes.SEARCH) },
+                onOpenServicePlaylist = { url, name, source, imageUrl ->
+                    navController.navigate(Routes.servicePlaylist(url, name, source, imageUrl))
+                },
+                onOpenConcerts = { navController.navigate(Routes.CONCERTS) },
+                onOpenArtistTour = { name ->
+                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
+                },
+                onAsk = onAsk,
             )
         }
         composable(
             Routes.COLLECTION,
-            arguments = listOf(navArgument("tab") { type = NavType.IntType; defaultValue = 0 }),
+            arguments = listOf(
+                navArgument("tab") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("sort") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
         ) { backStackEntry ->
             val initialTab = backStackEntry.arguments?.getInt("tab") ?: 0
             com.parachord.android.ui.screens.library.CollectionScreen(
@@ -287,7 +328,7 @@ fun ParachordNavHost(
                 onBack = { navController.popBackStack() },
                 onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
                 onNavigateToArtistOnTour = { name ->
-                    navController.navigate(Routes.artist(name, tab = "On Tour"))
+                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
                 },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -310,10 +351,12 @@ fun ParachordNavHost(
             route = Routes.SETTINGS_WITH_PLUGIN,
             arguments = listOf(
                 navArgument("plugin") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null },
             ),
         ) { backStackEntry ->
             com.parachord.android.ui.screens.settings.SettingsScreen(
                 initialPluginId = backStackEntry.arguments?.getString("plugin"),
+                initialTab = backStackEntry.arguments?.getString("tab"),
             )
         }
         composable(
@@ -380,6 +423,8 @@ fun ParachordNavHost(
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
+                onNavigateToPlaylist = { id -> navController.navigate(Routes.playlistDetail(id)) },
+                onOpenInAppLink = onOpenInAppLink,
             )
         }
 
@@ -457,8 +502,9 @@ fun ParachordNavHost(
         composable(Routes.CONCERTS) {
             com.parachord.android.ui.screens.discover.ConcertsScreen(
                 onBack = { navController.popBackStack() },
+                // A show opens its artist on the On Tour tab (all their dates).
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
                 },
             )
         }

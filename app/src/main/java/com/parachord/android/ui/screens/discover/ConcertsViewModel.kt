@@ -19,12 +19,17 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import com.parachord.shared.home.ConcertArtistImages
+import com.parachord.shared.home.concertPhotoArtists
 class ConcertsViewModel constructor(
     private val concertsRepository: ConcertsRepository,
     private val settingsStore: SettingsStore,
     private val geoLocationClient: GeoLocationClient,
     private val deviceLocationProvider: DeviceLocationProvider,
     private val concertArtistSeed: ConcertArtistSeedSource,
+    /** The app-wide concert artist photos (shared with Home's Concerts near you). */
+    private val concertArtistImages: ConcertArtistImages,
 ) : ViewModel() {
 
     companion object {
@@ -68,10 +73,23 @@ class ConcertsViewModel constructor(
     private val _locationCommitted = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val locationCommitted: SharedFlow<Unit> = _locationCommitted.asSharedFlow()
 
+    /** Artist photos for the rows, by `concertArtistKey`; drawn through the shared `concertPhotoUrl`. */
+    val artistImages: StateFlow<Map<String, String>> = concertArtistImages.images
+
     private var loadJob: Job? = null
     private var searchJob: Job? = null
 
     init {
+        // Desktop's Concerts page: every loaded event's artist photo, in
+        // batches of five. A new list cancels the batches still to run for
+        // the old one (its artists are asked again with the new list).
+        viewModelScope.launch {
+            _events.collectLatest { r ->
+                if (r is Resource.Success && r.data.isNotEmpty()) {
+                    concertArtistImages.load(concertPhotoArtists(r.data))
+                }
+            }
+        }
         viewModelScope.launch {
             val loc = settingsStore.getConcertLocation()
             _locationCity.value = loc.city
@@ -220,24 +238,12 @@ class ConcertsViewModel constructor(
         loadJob = viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                // The shared seed: collection, library and 6-month history (#589)
-                val artists = concertArtistSeed.gather()
-                Log.d(TAG, "Gathered ${artists.size} artists for concert search")
-
-                if (artists.isEmpty()) {
-                    // No artists to search with: no concerts, as on iOS and desktop.
-                    _events.value = Resource.Success(emptyList())
-                } else {
-                    // Personalized: search for user's artists' concerts
-                    val loc = settingsStore.getConcertLocation()
-                    concertsRepository.getPersonalizedEvents(
-                        artists = artists,
-                        lat = loc.latitude,
-                        lon = loc.longitude,
-                        radiusMiles = loc.radiusMiles,
-                        forceRefresh = forceRefresh,
-                    ).collect { _events.value = it }
-                }
+                // The shared load Home uses too: the seed (collection, library and
+                // 6-month history, #589), then the personalized search; no artists,
+                // no concerts, as on iOS and desktop.
+                val loc = settingsStore.getConcertLocation()
+                com.parachord.shared.home.concertEvents(concertArtistSeed, concertsRepository, loc, forceRefresh)
+                    .collect { _events.value = it }
             } catch (e: Exception) {
                 // A newer load cancelled this one (refresh, a location change): not a failure.
                 if (e is kotlinx.coroutines.CancellationException) throw e

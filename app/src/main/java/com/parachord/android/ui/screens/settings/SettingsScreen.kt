@@ -217,12 +217,22 @@ private val builtInPluginsFallback = listOf(
 
 // ── Settings Screen ────────────────────────────────────────────────
 
+/** The page for a [com.parachord.shared.settings.SettingsTab] name; Plug-Ins for none or an unknown one. */
+internal fun settingsTabIndex(tab: String?): Int = when (tab) {
+    com.parachord.shared.settings.SettingsTab.SYNC -> 1
+    com.parachord.shared.settings.SettingsTab.GENERAL -> 2
+    com.parachord.shared.settings.SettingsTab.ABOUT -> 3
+    else -> 0
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
     /** A plugin to open the sheet for on arrival (`settings?plugin=<id>`), once. */
     initialPluginId: String? = null,
+    /** A tab to open on arrival (`settings?tab=<name>`, a [com.parachord.shared.settings.SettingsTab] name). */
+    initialTab: String? = null,
     viewModel: SettingsViewModel = koinViewModel(),
 ) {
     // Cleared once its sheet opens, so swiping back to Plug-Ins doesn't reopen it.
@@ -284,6 +294,7 @@ fun SettingsScreen(
 
         SwipeableTabLayout(
             tabs = listOf("Plug-Ins", "Sync", "General", "About"),
+            initialPage = settingsTabIndex(initialTab),
         ) { page ->
             when (page) {
                 0 -> PlugInsTab(

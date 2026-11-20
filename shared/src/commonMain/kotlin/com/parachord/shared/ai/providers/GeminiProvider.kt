@@ -1,6 +1,7 @@
 package com.parachord.shared.ai.providers
 
 import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiProviderHttpException
 import com.parachord.shared.ai.AiChatResponse
 import com.parachord.shared.ai.AiProviderConfig
 import com.parachord.shared.ai.ChatMessage
@@ -11,6 +12,8 @@ import com.parachord.shared.ai.jsonElementToMap
 import com.parachord.shared.ai.mapToJsonElement
 import com.parachord.shared.platform.currentTimeMillis
 import io.ktor.client.HttpClient
+import io.ktor.client.request.header
+import io.ktor.client.plugins.retry
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -151,8 +154,13 @@ class GeminiProvider(
             if (tools.isNotEmpty()) put("tools", geminiTools)
         }
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=${config.apiKey}"
+        // The key goes in a header, not the URL, so it can't reach a log line
+        // or an error message that carries the URL.
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
         val response = httpClient.post(url) {
+            // A billable request: never re-sent after a connection failure.
+            retry { noRetry() }
+            header("x-goog-api-key", config.apiKey)
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(JsonElement.serializer(), body))
         }
@@ -162,7 +170,12 @@ class GeminiProvider(
             val errorData = try { json.parseToJsonElement(responseBody).jsonObject } catch (_: Exception) { null }
             val errorMsg = errorData?.get("error")?.jsonObject?.get("message")?.jsonPrimitive?.content
                 ?: "Gemini API error: ${response.status.value}"
-            throw Exception(errorMsg)
+            throw AiProviderHttpException(
+                providerId = id,
+                status = response.status.value,
+                providerMessage = errorMsg,
+                message = errorMsg,
+            )
         }
 
         val data = json.parseToJsonElement(responseBody).jsonObject

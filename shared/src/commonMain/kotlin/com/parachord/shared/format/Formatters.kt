@@ -46,6 +46,18 @@ object RelativeTime {
     fun agoSeconds(timestampSeconds: Long, nowMs: Long): String = ago(timestampSeconds * 1000, nowMs)
 }
 
+/**
+ * "1 track", "2 tracks", "1,204 tracks": every count in UI text goes through
+ * this, so one item never reads "1 tracks" (desktop `plural.js` `countOf`).
+ * The number is grouped with commas; [plural] defaults to [singular] + "s".
+ */
+fun countOf(n: Int, singular: String, plural: String? = null): String {
+    val word = if (n == 1) singular else plural ?: "${singular}s"
+    val digits = kotlin.math.abs(n.toLong()).toString()
+    val grouped = digits.reversed().chunked(3).joinToString(",").reversed()
+    return "${if (n < 0) "-" else ""}$grouped $word"
+}
+
 /** "1 play", "1234 plays": the full number, as desktop and iOS show it (#593). */
 fun playCountLabel(count: Int): String = if (count == 1) "1 play" else "$count plays"
 

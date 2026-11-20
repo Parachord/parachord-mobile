@@ -14,7 +14,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.Arrangement
@@ -28,8 +27,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,38 +37,31 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
+import com.parachord.android.ui.navigation.bottomNavSelected
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.parachord.android.auth.OAuthManager
-import com.parachord.android.deeplink.DeepLinkConfirmation
 import com.parachord.android.deeplink.DeepLinkNavEvent
 import com.parachord.android.deeplink.DeepLinkViewModel
 import com.parachord.android.deeplink.LaunchIntentPolicy
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.playback.handlers.MusicKitWebBridge
+import com.parachord.android.ui.components.edgeSwipes
 import com.parachord.android.ui.components.ActionOverlay
 import com.parachord.android.ui.components.NetworkBanner
 import com.parachord.android.ui.components.CreatePlaylistDialog
@@ -503,51 +493,12 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         }
     }
 
-    // NestedScrollConnection: catches HorizontalPager boundary overscroll on tab screens.
-    // Left overscroll (swipe right) → open drawer; right overscroll (swipe left) → open chat.
-    val overscrollConnection = remember(onOpenDrawer, onOpenChat) {
-        object : NestedScrollConnection {
-            private var accumulatedX = 0f
-
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (available.x != 0f && (available.x > 0f) != (accumulatedX > 0f)) {
-                    accumulatedX = 0f
-                }
-                return Offset.Zero
-            }
-
-            override fun onPostScroll(
-                consumed: Offset,
-                available: Offset,
-                source: NestedScrollSource,
-            ): Offset {
-                if (source == NestedScrollSource.UserInput) {
-                    accumulatedX += available.x
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                val accumulated = accumulatedX
-                accumulatedX = 0f
-                if (accumulated > 60f || available.x > 400f) {
-                    onOpenDrawer()
-                } else if (accumulated < -60f || available.x < -400f) {
-                    onOpenChat()
-                }
-                return Velocity.Zero
-            }
-        }
-    }
-
-    // Right-edge swipe threshold for opening chat
-    val density = LocalDensity.current
-    val edgeSwipeThresholdPx = with(density) { 60.dp.toPx() }
-
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
-            gesturesEnabled = showBottomBar, // Disable drawer swipe on full-screen routes
+            // Swiping anywhere only closes an open drawer; opening is the
+            // left-edge zone's job, so a carousel's drag can't open it.
+            gesturesEnabled = showBottomBar && drawerState.isOpen,
             drawerContent = {
                 ModalDrawerSheet {
                     DrawerContent(
@@ -638,8 +589,10 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 BottomNavItem.entries.forEach { item ->
-                                    val selected = item.route != null &&
-                                        currentDestination?.hierarchy?.any { it.route == item.route } == true
+                                    val selected = bottomNavSelected(
+                                        item.route,
+                                        currentDestination?.hierarchy?.map { it.route } ?: emptySequence(),
+                                    )
 
                                     Box(
                                         modifier = Modifier
@@ -687,53 +640,34 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
             ) { innerPadding ->
                 Column(
                     modifier = Modifier
-                        .padding(innerPadding)
-                        .nestedScroll(overscrollConnection),
+                        .padding(innerPadding),
                 ) {
                     // Network connectivity banner — slides in when offline
                     NetworkBanner(isOnline = isOnline)
 
-                    Box(modifier = Modifier.weight(1f)) {
+                    // The drawer and the chat open only from a swipe that starts
+                    // in an edge band (ui/components/EdgeSwipe.kt).
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .then(
+                                if (showBottomBar) Modifier.edgeSwipes(onLeft = onOpenDrawer, onRight = onOpenChat)
+                                else Modifier,
+                            ),
+                    ) {
                     ParachordNavHost(
                         navController = navController,
                         onOpenDrawer = onOpenDrawer,
                         onOpenChat = onOpenChat,
-                        onListenAlong = { friend ->
-                            mainViewModel.startListenAlong(friend)
-                        },
+                        onOpenImportPlaylist = { showImportPlaylistDialog = true },
+                        onAsk = { prompt -> deepLinkViewModel.handleInAppChatPrompt(prompt) },
+                        onOpenInAppLink = { url -> deepLinkViewModel.handleUri(android.net.Uri.parse(url)) },
                         listenAlongFriend = listenAlongFriend,
                         onStopListenAlong = { mainViewModel.stopListenAlong() },
                         listenAlongSuspendedQueue = listenAlongSuspendedQueue,
                         listenAlongCanAdvance = listenAlongCanAdvance,
                         onListenAlongNext = { mainViewModel.advanceToFriend() },
                     )
-
-                    // Right-edge swipe zone — swipe left from the right edge to open chat.
-                    // The ModalNavigationDrawer handles left-edge swipe for the sidebar.
-                    if (showBottomBar) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .width(24.dp)
-                                .fillMaxHeight()
-                                .pointerInput(onOpenChat) {
-                                    var accumulated = 0f
-                                    detectHorizontalDragGestures(
-                                        onDragStart = { accumulated = 0f },
-                                        onDragEnd = {
-                                            if (accumulated < -edgeSwipeThresholdPx) {
-                                                onOpenChat()
-                                            }
-                                            accumulated = 0f
-                                        },
-                                        onDragCancel = { accumulated = 0f },
-                                        onHorizontalDrag = { _, dragAmount ->
-                                            accumulated += dragAmount
-                                        },
-                                    )
-                                },
-                        )
-                    }
                     }
                 }
             }

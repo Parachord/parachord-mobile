@@ -8,6 +8,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.hapticCombinedClickable
@@ -45,6 +47,7 @@ import com.parachord.android.ui.theme.ParachordTheme
 import com.parachord.android.ui.theme.serviceColor
 import com.parachord.shared.recommendations.ListenerItem
 import com.parachord.shared.recommendations.RecommendationCopy
+import com.parachord.android.ui.components.ArtPlayInset
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.WeeklyInfo
@@ -53,8 +56,6 @@ import com.parachord.shared.ui.icons.AppIcon
 /** A card's width in a scrolling row. */
 internal val RecCardWidth = 140.dp
 
-private val PlayButton = 32.dp
-private val PlayTouchTarget = 48.dp
 
 /** The listener hexagon keeps its 120:140 share of the card. */
 private fun listenerAvatar(width: Dp): Dp = width * (120f / 140f)
@@ -62,8 +63,9 @@ private fun listenerAvatar(width: Dp): Dp = width * (120f / 140f)
 /** Text on a [FillAccent] or service-colour fill is always white (design system). */
 private val OnFill = Color.White
 
+/** A card's text line: title 13 / 600, else 12 secondary (or tertiary). Home's cards use it too. */
 @Composable
-private fun CardText(
+internal fun CardText(
     text: String,
     modifier: Modifier = Modifier,
     primary: Boolean = false,
@@ -88,32 +90,6 @@ private fun CardText(
     )
 }
 
-/**
- * The 32 dp play disc, inside a 48 dp touch target (the disc sits 8 dp in from the
- * target's edge, so a target placed at a card's corner shows the disc 8 dp in).
- */
-@Composable
-private fun PlayDisc(onPlay: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(PlayTouchTarget)
-            .clip(CircleShape)
-            .semantics { role = Role.Button }
-            .hapticClickable(onClick = onPlay),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .size(PlayButton)
-                .clip(CircleShape)
-                .background(FillAccent),
-            contentAlignment = Alignment.Center,
-        ) {
-            ParachordIcon(AppIcon.Play, contentDescription = RecommendationCopy.PLAY, size = 16.dp, tint = OnFill)
-        }
-    }
-}
-
 /** A release: cover, title, artist, year and an optional "Coming …" pill (top right, as desktop). */
 @Composable
 fun RecAlbumCard(
@@ -126,6 +102,8 @@ fun RecAlbumCard(
     modifier: Modifier = Modifier,
     /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
     width: Dp = RecCardWidth,
+    /** Drawn over the cover, after the pill and the play disc (Home's reason badge). */
+    coverBadge: (@Composable BoxScope.() -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -157,7 +135,8 @@ fun RecAlbumCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
+            ArtPlayButton(item.name, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
+            coverBadge?.invoke(this)
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true)
@@ -260,25 +239,8 @@ fun RecWeeklyCard(
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
-            when (covers.size) {
-                0 -> ParachordIcon(
-                    AppIcon.Music, contentDescription = null, size = 40.dp,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                1 -> Cover(covers[0], Modifier.fillMaxSize())
-                else -> Column(Modifier.fillMaxSize()) {
-                    // 2 or 3 covers fill the grid by repeating in order.
-                    for (row in 0..1) {
-                        Row(Modifier.weight(1f)) {
-                            for (col in 0..1) {
-                                Cover(covers[(row * 2 + col) % covers.size], Modifier.weight(1f).fillMaxSize())
-                            }
-                        }
-                    }
-                }
-            }
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
+            CoverMosaic(covers, Modifier.fillMaxSize())
+            ArtPlayButton(weekly?.label ?: item.name, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
         }
         Spacer(Modifier.height(8.dp))
         CardText(weekly?.label ?: item.name, primary = true)
@@ -286,8 +248,36 @@ fun RecWeeklyCard(
     }
 }
 
+/**
+ * A 2×2 mosaic of [covers] filling [modifier]'s box: one cover fills it, 2 or 3
+ * fill the grid by repeating in order, none shows the music placeholder.
+ */
 @Composable
-private fun Cover(url: String, modifier: Modifier) {
+internal fun CoverMosaic(covers: List<String>, modifier: Modifier) {
+    Box(modifier) {
+        when (covers.size) {
+            0 -> ParachordIcon(
+                AppIcon.Music, contentDescription = null, size = 40.dp,
+                tint = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.align(Alignment.Center),
+            )
+            1 -> Cover(covers[0], Modifier.fillMaxSize())
+            else -> Column(Modifier.fillMaxSize()) {
+                for (row in 0..1) {
+                    Row(Modifier.weight(1f)) {
+                        for (col in 0..1) {
+                            Cover(covers[(row * 2 + col) % covers.size], Modifier.weight(1f).fillMaxSize())
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** One cover, cropped to [modifier]'s box. */
+@Composable
+internal fun Cover(url: String, modifier: Modifier) {
     AsyncImage(
         model = url,
         contentDescription = null,
@@ -356,7 +346,7 @@ fun ListenerCard(
                 )
             }
             // Desktop's friend card plays the person's top tracks.
-            PlayDisc(onPlay, Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp))
+            ArtPlayButton(item.name, onPlay, Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp))
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true, center = true, modifier = Modifier.fillMaxWidth())

@@ -143,9 +143,7 @@ val androidModule = module {
                     .build()
                 chain.proceed(req)
             }
-            .addInterceptor(HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BASIC
-            })
+            .addInterceptor(redactingLoggingInterceptor())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
@@ -973,8 +971,46 @@ val androidModule = module {
             providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
             cacheRead = { com.parachord.android.data.cache.CacheFiles.read(cacheFile) },
             cacheWrite = { json -> com.parachord.android.data.cache.CacheFiles.write(cacheFile, json) },
-            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> playlists.resolve(url) } },
+            // Desktop's getPlaylistCovers: coverless tracks get their album's cover, else the artist's photo.
+            mosaicCovers = { mix ->
+                val images: com.parachord.shared.metadata.ImageEnrichmentService = get()
+                val metadata: com.parachord.shared.metadata.MetadataService = get()
+                com.parachord.shared.home.historyMixMosaicCovers(
+                    mix,
+                    albumArt = { album, artist -> images.lookupAlbumArt(album, artist) },
+                    artistImage = { artist -> metadata.getArtistImage(artist) },
+                ) { url -> playlists.resolve(url) }
+            },
             onMixIds = { ids -> recommendations.excludePlaylistIds(ids) },
+        )
+    }
+    // Concert cards' artist photos, one app-wide cache for Home and the
+    // Concerts page. getArtistImage keeps its own persistent cache, so this
+    // adds only the session's "asked already" memory.
+    single {
+        val metadata: com.parachord.shared.metadata.MetadataService = get()
+        com.parachord.shared.home.ConcertArtistImages { name -> metadata.getArtistImage(name) }
+    }
+    // Home's inputs for the shared HomeSession. Explicit `single {}` (a lambda
+    // parameter); a single, so the feeds a visit loaded stay for the next one.
+    single<com.parachord.shared.home.HomeSources> {
+        val settings: com.parachord.shared.settings.SettingsStore = get()
+        com.parachord.android.ui.screens.home.AndroidHomeSources(
+            library = get(),
+            playbackStateHolder = get(),
+            settings = settings,
+            pluginManager = get(),
+            announcementsRepository = get(),
+            historyMixesRepository = get(),
+            recommendationsRepository = get(),
+            aiRecommendationService = get(),
+            freshDropsRepository = get(),
+            criticalDarlingsRepository = get(),
+            chartsRepository = get(),
+            concertsRepository = get(),
+            concertArtistSeed = get(),
+            concertArtistImages = get(),
+            pluginIsOn = { id, isMeta, needsAccount -> androidPluginIsOn(settings, id, isMeta, needsAccount) },
         )
     }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`
@@ -1178,7 +1214,13 @@ val androidModule = module {
             libraryRepository = get(),
         )
     }
-    singleOf(::ChatCardEnricher)
+    single {
+        ChatCardEnricher(
+            metadataService = get(),
+            imageEnrichmentService = get(),
+            catalogTrackArtwork = com.parachord.shared.metadata.CatalogTrackArtwork(get()),
+        )
+    }
     singleOf(::ChatGptProvider)
     singleOf(::ClaudeProvider)
     singleOf(::GeminiProvider)
@@ -1417,3 +1459,20 @@ private suspend fun androidPluginIsOn(
         disabledMetaProviders = settings.getDisabledMetaProviders(),
     )
 }
+
+/**
+ * OkHttp's request log, safe to leave on in debug: `.axe` plugin fetches go
+ * through this client (NativeBridge), and their URLs carry keys (an old
+ * `gemini.axe` `?key=`, Last.fm's `api_key=`, Subsonic's `t=` / `s=`). Every
+ * line goes through the shared [com.parachord.shared.api.SecretRedaction],
+ * secret headers are hidden, and release builds log nothing.
+ * (OkHttp 4.12 has no `redactQueryParams`; the redacting logger does that job.)
+ */
+internal fun redactingLoggingInterceptor(
+    debug: Boolean = com.parachord.android.BuildConfig.DEBUG,
+    sink: HttpLoggingInterceptor.Logger = HttpLoggingInterceptor.Logger.DEFAULT,
+): HttpLoggingInterceptor =
+    HttpLoggingInterceptor { line -> sink.log(com.parachord.shared.api.SecretRedaction.redactSecrets(line)) }.apply {
+        level = if (debug) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
+        com.parachord.shared.api.SecretRedaction.SECRET_HEADERS.forEach { redactHeader(it) }
+    }

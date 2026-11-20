@@ -310,4 +310,36 @@ class HomeModelTest {
         )
         assertEquals(emptyList(), lovesMosaicAlbums(emptyList()))
     }
+
+    // ── jumpTileContext ──
+    @Test
+    fun aTilesOwnContextMakesItActive() {
+        val tiles = listOf(
+            JumpTile.Playlist(pl("p1", "Road trip"), "Playlist"),
+            JumpTile.Loves(listOf(love("Creep", "Radiohead"))),
+            JumpTile.Album(LoveAlbum("OK Computer", "Radiohead", "Karma Police", null)),
+            JumpTile.Mix(mix("daily")),
+        )
+        for (tile in tiles) {
+            val context = jumpTileContext(tile)
+            assertTrue(isActiveContext(jumpCandidate(tile), playing(context)), "$tile playing")
+            assertTrue(isActiveContext(jumpCandidate(tile), queued(context)), "$tile queued")
+        }
+    }
+
+    @Test
+    fun tileContextsHaveDesktopsTypes() {
+        assertEquals(PlaybackContext(PLAYLIST_CONTEXT, "Road trip", "p1"), jumpTileContext(JumpTile.Playlist(pl("p1", "Road trip"), "Playlist")))
+        assertEquals(PlaybackContext(LOVES_CONTEXT, HomeCopy.RECENT_LOVES), jumpTileContext(JumpTile.Loves(emptyList())))
+        assertEquals(PlaybackContext("album", "OK Computer", "Radiohead"), jumpTileContext(JumpTile.Album(LoveAlbum("OK Computer", "Radiohead", "x", null))))
+        assertEquals(PlaybackContext(MIX_CONTEXT, "daily", "daily"), jumpTileContext(JumpTile.Mix(mix("daily"))))
+    }
+
+    @Test
+    fun anotherTilesContextDoesNotMakeItActive() {
+        val a = JumpTile.Mix(mix("a"))
+        assertFalse(isActiveContext(jumpCandidate(a), playing(jumpTileContext(JumpTile.Mix(mix("b"))))))
+        assertFalse(isActiveContext(jumpCandidate(JumpTile.Loves(emptyList())), playing(jumpTileContext(a))))
+    }
 }
+

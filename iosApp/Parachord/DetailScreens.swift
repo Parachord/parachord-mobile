@@ -762,6 +762,9 @@ final class ArtistDetailModel {
     var tourDates: [ConcertEvent] = []
     /// The repository's error when the tour dates failed to load with none to show.
     var tourError: String?
+    /// True while the tour dates load: the On Tour tab shows a spinner, not
+    /// "No upcoming tour dates", until they land (a concert card opens the tab at once).
+    var isTourLoading = false
     /// True when the artist has any upcoming dates → the On Tour tab appears (last).
     var isOnTour = false
     var isLoading = false
@@ -831,7 +834,9 @@ final class ArtistDetailModel {
     /// Fetch the unfiltered tour schedule and toggle the On Tour tab on/off.
     /// Non-blocking — runs in its own Task so the rest of the page isn't delayed.
     private func loadTourDates() {
+        isTourLoading = true
         Task {
+            defer { isTourLoading = false }
             do {
                 let ev = try await container.getArtistEvents(artistName: name)
                 tourDates = ev
@@ -967,7 +972,12 @@ struct ArtistScreen: View {
     init(artistName: String, mbid: String? = nil, initialTab: ArtistTab = .discography) {
         _model = State(initialValue: ArtistDetailModel(name: artistName, mbid: mbid))
         _tab = State(initialValue: initialTab)
+        openedOnTour = initialTab == .onTour
     }
+
+    /// Opened on On Tour (a concert card, the on-tour dot): the tab shows at
+    /// once, while the dates load, as on Android.
+    private let openedOnTour: Bool
 
     /// Queue-source context (#209) for top-songs playback → links back here.
     private var artistContext: PlaybackContext {
@@ -1093,10 +1103,11 @@ struct ArtistScreen: View {
     // MARK: Tabs
 
     /// Tab order matches Android: the four base tabs, with On Tour appended LAST
-    /// and only when the artist has upcoming dates (ArtistScreen.kt buildList).
+    /// and only when the artist has upcoming dates (ArtistScreen.kt buildList),
+    /// or the page was opened on it (a concert card) before the dates loaded.
     private var visibleTabs: [ArtistTab] {
         var tabs: [ArtistTab] = [.discography, .topTracks, .biography, .related]
-        if model.isOnTour { tabs.append(.onTour) }
+        if model.isOnTour || openedOnTour { tabs.append(.onTour) }
         return tabs
     }
 
@@ -1408,7 +1419,10 @@ struct ArtistScreen: View {
     // the artist has dates, and is appended last (see `visibleTabs`).
     private var onTourTab: some View {
         Group {
-            if model.tourDates.isEmpty {
+            if model.tourDates.isEmpty && model.isTourLoading {
+                // Android's OnTourTab spinner.
+                ProgressView().tint(PC.accent).frame(maxWidth: .infinity).padding(40)
+            } else if model.tourDates.isEmpty {
                 Text(model.tourError ?? UiMessages.shared.TOUR_DATES_EMPTY).font(.system(size: 14)).foregroundStyle(PC.fg3)
                     .frame(maxWidth: .infinity).padding(40)
             } else {

@@ -92,6 +92,18 @@ class HistoryMixesRepositoryTest {
     private fun Rig.shown(): List<String> = repo.mixes.value.flat.map { it.id }
 
     @Test
+    fun `a load answers what it asked — what failed — and the mixes to show`() = runTest {
+        val source = FakeSource().apply { answer("listenbrainz", { mixes("j1", "j2") }, { throw IllegalStateException("HTTP 503") }) }
+        val r = rig(source)
+        assertEquals(com.parachord.shared.home.HomeRecsLoad(fetched = 1, failed = 0, sectionCount = 2), r.repo.load())
+        // Within the throttle: nobody asked, the mixes on screen reported.
+        r.clock.now += MINUTE
+        assertEquals(com.parachord.shared.home.HomeRecsLoad(fetched = 0, failed = 0, sectionCount = 2), r.repo.load())
+        // A failure keeps the cached mixes and counts as failed.
+        assertEquals(com.parachord.shared.home.HomeRecsLoad(fetched = 1, failed = 1, sectionCount = 2), r.repo.load(force = true))
+    }
+
+    @Test
     fun `a fresh cache for the same account is served without a fetch`() = runTest {
         val disk = Disk()
         val first = rig(FakeSource().apply { answer("listenbrainz", { mixes("j1") }) }, disk = disk)

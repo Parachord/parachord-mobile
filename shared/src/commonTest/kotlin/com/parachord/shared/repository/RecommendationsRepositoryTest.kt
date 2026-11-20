@@ -189,6 +189,18 @@ class RecommendationsRepositoryTest {
     // ── Failures, not-ready, empty ───────────────────────────────────
 
     @Test
+    fun `a load answers the providers asked — the failures — and the sections to show`() = runTest {
+        val source = FakeSource().apply { answer("listenbrainz", { songs(song("One")) }, { throw IllegalStateException("HTTP 503") }) }
+        val r = rig(source)
+        assertEquals(com.parachord.shared.home.HomeRecsLoad(fetched = 1, failed = 0, sectionCount = 1), r.repo.load())
+        r.clock.now += 2 * HOUR
+        assertEquals(com.parachord.shared.home.HomeRecsLoad(fetched = 1, failed = 1, sectionCount = 1), r.repo.load())
+        // Not configured: nobody asked, nothing to show.
+        val none = rig(FakeSource(listOf(LASTFM, LISTENBRAINZ)), listenBrainz = null, isOn = { it.isMetaService })
+        assertEquals(com.parachord.shared.home.HomeRecsLoad(fetched = 0, failed = 0, sectionCount = 0), none.repo.load())
+    }
+
+    @Test
     fun `a provider that fails keeps its last sections`() = runTest {
         val source = FakeSource().apply { answer("listenbrainz", { songs(song("One")) }, { throw IllegalStateException("HTTP 503") }) }
         val r = rig(source)

@@ -164,7 +164,14 @@ struct ContentView: View {
 
             // ── DJ Chat / Shuffleupagus (slides in from the RIGHT, Android parity) ──
             if showChat {
-                ChatScreen(onClose: { closeChat() }, seedPrompt: pendingChatPrompt)
+                ChatScreen(onClose: { closeChat() }, seedPrompt: pendingChatPrompt, onOpenPlaylist: { id in
+                    closeChat()
+                    tab = .home
+                    homePendingRoute = .savedPlaylist(id: id)
+                }, onOpenInAppLink: { url in
+                    if ChatContent.shared.inAppLinkOpensPage(url: url.absoluteString) { closeChat() }
+                    handleDeepLink(url)
+                })
                     .environment(coordinator)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(PC.Player.bg)

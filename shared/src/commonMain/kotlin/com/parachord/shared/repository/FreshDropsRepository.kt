@@ -145,7 +145,9 @@ class FreshDropsRepository(
             val wrapper = diskJson.decodeFromString<FreshDropsDiskCache>(body)
             // Releases that aged out of the window since the last save go now,
             // so the list never grows past it (#687, desktop parachord#1421).
-            cachedReleases = withinFreshDropsWindow(wrapper.releases, today())
+            // One row per release: a cache saved before the release-group
+            // dedupe can hold a collaboration twice (desktop does the same).
+            cachedReleases = uniqueReleases(withinFreshDropsWindow(wrapper.releases, today()))
             lastFetchedAt = wrapper.fetchedAt
             Log.d(TAG, "Loaded ${wrapper.releases.size} cached fresh drops from disk (age: ${(currentTimeMillis() - wrapper.fetchedAt) / 1000}s)")
         } catch (e: Exception) {
@@ -449,7 +451,7 @@ class FreshDropsRepository(
     }
 
     /**
-     * Merge fresh releases with prior cached releases, deduplicate, assign
+     * Merge fresh releases with prior cached releases, deduplicate ([uniqueReleases]), assign
      * Cover Art Archive URLs, and sort by date descending.
      * Fresh results take priority (listed first before dedup).
      */
@@ -457,13 +459,7 @@ class FreshDropsRepository(
         freshReleases: List<FreshDrop>,
         priorReleases: List<FreshDrop>,
     ): List<FreshDrop> {
-        val merged = freshReleases + priorReleases
-        val seen = mutableSetOf<String>()
-        return merged
-            .filter { release ->
-                val key = "${release.artist.lowercase()}|${release.title.lowercase()}"
-                seen.add(key)
-            }
+        return uniqueReleases(freshReleases + priorReleases)
             .map { release ->
                 if (release.albumArt == null && release.mbid != null) {
                     release.copy(albumArt = MusicBrainzProvider.releaseGroupArtUrl(release.mbid))

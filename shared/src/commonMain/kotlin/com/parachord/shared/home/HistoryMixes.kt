@@ -1,7 +1,6 @@
 package com.parachord.shared.home
 
 import com.parachord.shared.deeplink.ResolvedProtocolPlay
-import com.parachord.shared.recommendations.playlistCovers
 import com.parachord.shared.recommendations.servicePlaylistTracks
 import com.parachord.shared.repository.RecommendationProvider
 import kotlinx.serialization.Serializable
@@ -16,7 +15,7 @@ import kotlinx.serialization.json.JsonPrimitive
  * One provider's history mix as a Home card: a playlist with an id, a name and
  * the URL that opens and plays it. [title] is what the card and the Jump back
  * in tile print; [resolverId] and [resolverName] name the service. [mosaic] is
- * the 2x2 of its tracks' covers, for a mix that came without [imageUrl].
+ * the 2x2 of its tracks' covers ([historyMixMosaicCovers]), for a mix that came without [imageUrl].
  */
 @Serializable
 data class HistoryMix(
@@ -150,16 +149,134 @@ fun withMixMosaics(mixes: List<HistoryMix>, covers: Map<String, List<String>>): 
 }
 
 /**
- * A mix's mosaic: the first four distinct covers of the tracks [resolve] (the
- * registry's playlist-link lookup, the one Play uses) finds at its URL. Both
- * apps' `mosaicCovers`. A lookup that finds nothing throws (the link lookup
- * answers null when it couldn't be reached, often in the first seconds after
- * launch), so the repository retries it.
+ * At most this many album-cover lookups per mix ([lookupPlaylistCovers]).
+ * Album art goes through MusicBrainz's 1 req/s queue, so a long mix whose
+ * tracks find no covers could otherwise hold that queue for a minute or more,
+ * ahead of every search. Desktop has no cap.
+ */
+const val HOME_MIX_ALBUM_ART_LOOKUPS = 12
+
+/** One track as [lookupPlaylistCovers] reads it. */
+data class CoverTrack(val artist: String?, val album: String?, val artworkUrl: String?)
+
+/**
+ * Up to four covers for a playlist's 2x2, a port of desktop's
+ * `getPlaylistCovers` (`app.js`), without its cache. Covers are distinct by
+ * album and by URL. A track's own cover is used; one without looks up its
+ * album's cover ([albumArt], once per album), and a track with no album cover
+ * falls back to its artist's photo ([artistImage], once per artist). A second
+ * pass adds artist photos while fewer than four were found. A lookup that
+ * fails counts as none (desktop's `getAlbumArt` answers null).
+ *
+ * Two differences: desktop only reads a track's own cover when the track
+ * names its album; here a cover the track already carries is always used,
+ * which saves an artist lookup. And at most [maxAlbumLookups] album covers
+ * ([HOME_MIX_ALBUM_ART_LOOKUPS]) are looked up; after that a track counts
+ * only its own cover and its artist's photo.
+ */
+suspend fun lookupPlaylistCovers(
+    tracks: List<CoverTrack>,
+    albumArt: suspend (album: String, artist: String) -> String?,
+    artistImage: suspend (artist: String) -> String?,
+    maxAlbumLookups: Int = HOME_MIX_ALBUM_ART_LOOKUPS,
+): List<String> = lookupPlaylistCoversReport(tracks, albumArt, artistImage, maxAlbumLookups).covers
+
+/** [lookupPlaylistCovers]' answer, and whether any lookup threw (it couldn't answer, which isn't "no cover"). */
+data class PlaylistCoversReport(val covers: List<String>, val lookupFailed: Boolean)
+
+/** [lookupPlaylistCovers], reporting whether a lookup failed. */
+suspend fun lookupPlaylistCoversReport(
+    tracks: List<CoverTrack>,
+    albumArt: suspend (album: String, artist: String) -> String?,
+    artistImage: suspend (artist: String) -> String?,
+    maxAlbumLookups: Int = HOME_MIX_ALBUM_ART_LOOKUPS,
+): PlaylistCoversReport {
+    var failed = false
+    var albumLookups = 0
+    val seenAlbums = mutableSetOf<String>()
+    val seenUrls = mutableSetOf<String>()
+    val seenArtists = mutableSetOf<String>()
+    val triedArtists = mutableSetOf<String>()
+    val covers = mutableListOf<String>()
+
+    suspend fun safely(block: suspend () -> String?): String? = try {
+        block()?.takeIf { it.isNotBlank() }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        failed = true
+        null
+    }
+
+    fun add(url: String, artist: String?): Boolean {
+        if (url in seenUrls) return false
+        seenUrls += url
+        covers += url
+        artist?.takeIf { it.isNotBlank() }?.let { seenArtists += it.lowercase() }
+        return true
+    }
+
+    suspend fun tryArtist(artist: String?) {
+        val name = artist?.trim().orEmpty()
+        if (name.isEmpty()) return
+        val key = name.lowercase()
+        if (key in seenArtists || key in triedArtists) return
+        triedArtists += key
+        safely { artistImage(name) }?.let { add(it, name) }
+    }
+
+    for (t in tracks) {
+        if (covers.size >= 4) break
+        val artist = t.artist?.trim().orEmpty()
+        val album = t.album?.trim().orEmpty()
+        val own = t.artworkUrl?.takeIf { it.isNotBlank() }
+        var found = false
+        if (album.isNotEmpty() && artist.isNotEmpty()) {
+            val albumKey = "$artist-$album".lowercase()
+            if (seenAlbums.add(albumKey)) {
+                val url = own ?: if (albumLookups < maxAlbumLookups) {
+                    albumLookups++
+                    safely { albumArt(album, artist) }
+                } else null
+                if (url != null) found = add(url, artist)
+            }
+        } else if (own != null) {
+            found = add(own, artist)
+        }
+        if (!found) tryArtist(artist)
+    }
+    if (covers.size < 4) {
+        for (t in tracks) {
+            if (covers.size >= 4) break
+            tryArtist(t.artist)
+        }
+    }
+    return PlaylistCoversReport(covers.take(4), failed)
+}
+
+/**
+ * A mix's mosaic: up to four covers for the tracks [resolve] (the registry's
+ * playlist-link lookup, the one Play uses) finds at its URL, through
+ * [lookupPlaylistCovers] (desktop's `getPlaylistCovers(mix.id, tracks)`):
+ * ListenBrainz's mixes carry no covers, so [albumArt] and [artistImage] fill
+ * them. Both apps' `mosaicCovers`. It throws, so the repository retries it
+ * ([HOME_MIX_COVER_RETRY_MS], [HOME_MIX_COVER_ATTEMPTS] tries), when the link
+ * lookup finds nothing (it answers null when it couldn't be reached, often in
+ * the first seconds after launch) and when no cover came back because a cover
+ * lookup failed: offline or rate limited isn't "this mix has no covers". An
+ * empty answer from lookups that all answered is final.
  */
 suspend fun historyMixMosaicCovers(
     mix: HistoryMix,
+    albumArt: suspend (album: String, artist: String) -> String? = { _, _ -> null },
+    artistImage: suspend (artist: String) -> String? = { null },
     resolve: suspend (String) -> ResolvedProtocolPlay?,
 ): List<String> {
     val play = resolve(mix.url) ?: throw IllegalStateException("No playlist found for history mix ${mix.id}")
-    return playlistCovers(servicePlaylistTracks(play).map { it.artworkUrl })
+    val tracks = servicePlaylistTracks(play).map { CoverTrack(it.artist, it.album, it.artworkUrl) }
+    val report = lookupPlaylistCoversReport(tracks, albumArt, artistImage)
+    if (report.covers.isEmpty() && report.lookupFailed) {
+        throw IllegalStateException("Cover lookups failed for history mix ${mix.id}")
+    }
+    return report.covers
 }

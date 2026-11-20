@@ -1,6 +1,7 @@
 package com.parachord.shared.ai.providers
 
 import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiProviderHttpException
 import com.parachord.shared.ai.AiChatResponse
 import com.parachord.shared.ai.AiProviderConfig
 import com.parachord.shared.ai.ChatMessage
@@ -11,6 +12,7 @@ import com.parachord.shared.ai.jsonElementToMap
 import com.parachord.shared.ai.mapToJsonElement
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
+import io.ktor.client.plugins.retry
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
@@ -30,6 +32,12 @@ import kotlinx.serialization.json.put
 private const val DEFAULT_MODEL = "claude-sonnet-4-6-20250320"
 private const val DEFAULT_ENDPOINT = "https://api.anthropic.com/v1/messages"
 private const val ANTHROPIC_VERSION = "2023-06-01"
+/**
+ * The reply's token cap. Desktop's `claude.axe` sends 1024; mobile has sent
+ * 4096 since the native provider landed, and it's kept, so a long playlist
+ * answer isn't cut off. A higher cap counts against Anthropic's output-token
+ * rate limit sooner on low tiers.
+ */
 private const val MAX_TOKENS = 4096
 
 /**
@@ -66,6 +74,8 @@ class ClaudeProvider(
         val requestJson = json.encodeToString(JsonObject.serializer(), requestBody)
 
         val response = httpClient.post(endpoint) {
+            // A billable request: never re-sent after a connection failure.
+            retry { noRetry() }
             header("x-api-key", apiKey)
             header("anthropic-version", ANTHROPIC_VERSION)
             contentType(ContentType.Application.Json)
@@ -74,7 +84,12 @@ class ClaudeProvider(
         val responseBody = response.bodyAsText()
 
         if (!response.status.isSuccess()) {
-            throw Exception(parseError(response.status.value, responseBody))
+            throw AiProviderHttpException(
+                providerId = id,
+                status = response.status.value,
+                providerMessage = responseBody.take(500),
+                message = parseError(response.status.value, responseBody),
+            )
         }
 
         return parseResponse(responseBody)

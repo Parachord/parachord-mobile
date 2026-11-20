@@ -7,6 +7,12 @@ import com.parachord.shared.playback.PlaybackContext
 
 /** Port of desktop's `home-model.js`: jump back in, sections, the Ask prompt and the recommendations throttle. */
 
+/** Playback context types Home plays and checks (desktop's `home-model.js`). */
+const val PLAYLIST_CONTEXT = "playlist"
+const val LOVES_CONTEXT = "loves"
+const val MIX_CONTEXT = "mix"
+const val ALBUM_CONTEXT = "album"
+
 /** What is playing and what is queued, by playback context. */
 data class ActiveContexts(val playing: PlaybackContext? = null, val queued: PlaybackContext? = null)
 
@@ -27,14 +33,14 @@ fun isActiveContext(c: JumpCandidate, active: ActiveContexts): Boolean =
     listOfNotNull(active.playing, active.queued).any { ctx ->
         when (c) {
             is JumpCandidate.Playlist -> {
-                if (ctx.type != "playlist") false
+                if (ctx.type != PLAYLIST_CONTEXT) false
                 else if (ctx.id != null) c.id != null && ctx.id == c.id
                 else !c.title.isNullOrEmpty() && ctx.name == c.title
             }
-            is JumpCandidate.Mix -> ctx.type == "mix" && c.id != null && ctx.id == c.id
-            JumpCandidate.Loves -> ctx.type == "loves"
+            is JumpCandidate.Mix -> ctx.type == MIX_CONTEXT && c.id != null && ctx.id == c.id
+            JumpCandidate.Loves -> ctx.type == LOVES_CONTEXT
             is JumpCandidate.Album -> {
-                if (ctx.type != "album") false
+                if (ctx.type != ALBUM_CONTEXT) false
                 else {
                     val album = AlbumCatalog.normalizeAlbumTitle(c.album)
                     val artist = AlbumCatalog.normalizeArtistName(c.artist)
@@ -63,11 +69,31 @@ fun latestLoveAlbum(loves: List<Track>, active: ActiveContexts): LoveAlbum? {
 sealed class JumpTile {
     abstract val subtitle: String
     data class Playlist(val playlist: PlaylistModel, override val subtitle: String) : JumpTile()
-    data class Loves(val tracks: List<Track>, override val subtitle: String = "Your recent loves") : JumpTile()
+    data class Loves(val tracks: List<Track>, override val subtitle: String = HomeCopy.LOVES_TILE_SUBTITLE) : JumpTile()
     data class Album(val album: LoveAlbum) : JumpTile() {
-        override val subtitle: String get() = "${album.trackTitle} · the album behind your latest love"
+        override val subtitle: String get() = HomeCopy.albumBehindLove(album.trackTitle)
     }
-    data class Mix(val mix: HistoryMix, override val subtitle: String = "Made from your listening") : JumpTile()
+    data class Mix(val mix: HistoryMix, override val subtitle: String = HomeCopy.MIXES_TITLE) : JumpTile()
+}
+
+/** The candidate a tile stands for, for [isActiveContext]. */
+fun jumpCandidate(tile: JumpTile): JumpCandidate = when (tile) {
+    is JumpTile.Playlist -> JumpCandidate.Playlist(tile.playlist.id, tile.playlist.name)
+    is JumpTile.Loves -> JumpCandidate.Loves
+    is JumpTile.Album -> JumpCandidate.Album(tile.album.album, tile.album.artist, tile.album.mbid)
+    is JumpTile.Mix -> JumpCandidate.Mix(tile.mix.id)
+}
+
+/**
+ * The playback context a Jump back in tile plays under, so [isActiveContext]
+ * recognises it afterwards: a playlist by id, Recent Loves, an album in
+ * `CatalogQueues.album`'s form (name = title, id = artist), a mix by id.
+ */
+fun jumpTileContext(tile: JumpTile): PlaybackContext = when (tile) {
+    is JumpTile.Playlist -> PlaybackContext(PLAYLIST_CONTEXT, tile.playlist.name, tile.playlist.id)
+    is JumpTile.Loves -> PlaybackContext(LOVES_CONTEXT, HomeCopy.RECENT_LOVES)
+    is JumpTile.Album -> com.parachord.shared.playback.CatalogQueues.albumContext(tile.album.album, tile.album.artist)
+    is JumpTile.Mix -> PlaybackContext(MIX_CONTEXT, tile.mix.title, tile.mix.id)
 }
 
 /** Up to four tiles in the order playlist, loves, album, mix; each kind takes its first candidate that isn't active. */
@@ -288,4 +314,53 @@ fun lovesMosaicAlbums(loves: List<Track>, n: Int = 4): List<LovesMosaicAlbum> {
         if (out.size >= n) break
     }
     return out
+}
+
+// ── Jump back in art ────────────────────────────────────────────────────────
+
+/** A Jump back in tile's art: one cover, or a 2x2 of covers ([mosaic] holds four). */
+data class JumpTileArt(val imageUrl: String? = null, val mosaic: List<String> = emptyList()) {
+    val isEmpty: Boolean get() = imageUrl == null && mosaic.isEmpty()
+}
+
+/** A stable key per tile: the same playlist, album or mix keeps it across rebuilds. */
+fun jumpTileKey(tile: JumpTile): String = when (tile) {
+    is JumpTile.Playlist -> "playlist:${tile.playlist.id}"
+    is JumpTile.Loves -> "loves"
+    is JumpTile.Album -> "album:${tile.album.artist.trim().lowercase()}\u0000${tile.album.album.trim().lowercase()}"
+    is JumpTile.Mix -> "mix:${tile.mix.id}"
+}
+
+/**
+ * The art a tile shows from what Home already holds, with no lookup (desktop's
+ * `JumpTile` art): a playlist's own cover; Recent Loves' 2x2 of the newest
+ * four loved albums when all four have covers ([lovesMosaicAlbums]), else the
+ * newest love's cover; the album behind the latest love from a love on that
+ * album ([loves] are the newest first); a mix's image, else its mosaic. An
+ * empty answer for an album means the platform looks the cover up; otherwise
+ * it draws its placeholder.
+ */
+fun jumpTileArt(tile: JumpTile, loves: List<Track>): JumpTileArt {
+    fun clean(u: String?) = u?.trim()?.takeIf { it.isNotEmpty() }
+    return when (tile) {
+        is JumpTile.Playlist -> JumpTileArt(imageUrl = clean(tile.playlist.artworkUrl))
+        is JumpTile.Loves -> {
+            val covers = lovesMosaicAlbums(tile.tracks).mapNotNull { clean(it.albumArt) }
+            if (covers.size >= 4) JumpTileArt(mosaic = covers.take(4))
+            else JumpTileArt(imageUrl = tile.tracks.firstNotNullOfOrNull { clean(it.artworkUrl) })
+        }
+        is JumpTile.Album -> {
+            val album = tile.album.album.trim().lowercase()
+            val artist = tile.album.artist.trim().lowercase()
+            val cover = loves.firstNotNullOfOrNull { t ->
+                if (t.album?.trim()?.lowercase() == album && t.artist.trim().lowercase() == artist) clean(t.artworkUrl) else null
+            }
+            JumpTileArt(imageUrl = cover)
+        }
+        is JumpTile.Mix -> {
+            val image = clean(tile.mix.imageUrl)
+            if (image != null) JumpTileArt(imageUrl = image)
+            else JumpTileArt(mosaic = tile.mix.mosaic.mapNotNull { clean(it) }.take(4))
+        }
+    }
 }
