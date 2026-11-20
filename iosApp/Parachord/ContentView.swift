@@ -3931,6 +3931,14 @@ enum JsPolyfills {
         bridge.setObject(appleMusicCatalogGet, forKeyedSubscript: "appleMusicCatalogGet" as NSString)
         bridge.setObject(appleMusicPersonalRecommendations, forKeyedSubscript: "appleMusicPersonalRecommendations" as NSString)
         bridge.setObject(setTimeout, forKeyedSubscript: "setTimeout" as NSString)
+        // The plug-in host contract's `openExternal` (desktop parachord#1561):
+        // an https link, opened in the browser. The resolver-loader admits
+        // https only; checked again here.
+        let openExternal: @convention(block) (String) -> Void = { url in
+            guard url.lowercased().hasPrefix("https://"), let link = URL(string: url) else { return }
+            DispatchQueue.main.async { UIApplication.shared.open(link) }
+        }
+        bridge.setObject(openExternal, forKeyedSubscript: "openExternal" as NSString)
         context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
     }
 
