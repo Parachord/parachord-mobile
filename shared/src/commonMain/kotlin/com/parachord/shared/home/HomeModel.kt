@@ -76,6 +76,14 @@ sealed class JumpTile {
     data class Mix(val mix: HistoryMix, override val subtitle: String = HomeCopy.MIXES_TITLE) : JumpTile()
 }
 
+/** The title a tile prints (desktop: "Recent Loves", the album, else the item's title). */
+fun jumpTileTitle(tile: JumpTile): String = when (tile) {
+    is JumpTile.Playlist -> tile.playlist.name
+    is JumpTile.Loves -> HomeCopy.RECENT_LOVES
+    is JumpTile.Album -> tile.album.album
+    is JumpTile.Mix -> tile.mix.title
+}
+
 /** The candidate a tile stands for, for [isActiveContext]. */
 fun jumpCandidate(tile: JumpTile): JumpCandidate = when (tile) {
     is JumpTile.Playlist -> JumpCandidate.Playlist(tile.playlist.id, tile.playlist.name)

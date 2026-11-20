@@ -2110,6 +2110,89 @@ class IosContainer private constructor() {
             disabledMetaProviders = settingsStore.getDisabledMetaProviders(),
         )
 
+    // ── Home (PR 6): the shared HomeSession, flattened for SwiftUI ──
+
+    /** The playing queue's context, pushed by the coordinator's 1 s tick ([updateHomePlayback]). */
+    private val homePlayingContext = MutableStateFlow<com.parachord.shared.playback.PlaybackContext?>(null)
+    private val homeIsPlaying = MutableStateFlow(false)
+
+    /**
+     * What's playing, for Jump back in (the tile for it leaves) and getting
+     * started's step 3. [isPlaying] is playing, not paused or still starting.
+     */
+    fun updateHomePlayback(context: com.parachord.shared.playback.PlaybackContext?, isPlaying: Boolean) {
+        homePlayingContext.value = context
+        homeIsPlaying.value = isPlaying
+    }
+
+    /**
+     * Home's inputs, the same class Android's Koin binding builds. The Spotify,
+     * SoundCloud and Apple Music checks read the SettingsStore keys iOS's sign-ins
+     * write (`getSpotifyAccessTokenFlow`, `getSoundCloudTokenFlow`,
+     * `getAppleMusicUserToken`), so no host-accounts override is needed.
+     */
+    val homeSources: com.parachord.shared.home.RepositoryHomeSources by lazy {
+        com.parachord.shared.home.RepositoryHomeSources(
+            library = libraryRepository,
+            settings = settingsStore,
+            pluginManager = pluginManager,
+            announcementsRepository = announcementsRepository,
+            historyMixesRepository = historyMixesRepository,
+            recommendationsRepository = recommendationsRepository,
+            aiRecommendationService = aiRecommendationService,
+            freshDropsRepository = freshDropsRepository,
+            criticalDarlingsRepository = criticalDarlingsRepository,
+            chartsRepository = chartsRepository,
+            concertsRepository = concertsRepository,
+            concertArtistSeed = concertArtistSeed,
+            concertArtistImages = concertArtistImages,
+            playingContext = homePlayingContext,
+            isPlaying = homeIsPlaying,
+            pluginIsOn = ::iosPluginIsOn,
+            scope = appScope,
+        )
+    }
+
+    /** What each Home tap plays (shared with Android's view model). */
+    private val homeQueues: com.parachord.shared.home.HomeQueues by lazy {
+        com.parachord.shared.home.HomeQueues(
+            lovedTracks = {
+                com.parachord.shared.repository.recentLoves(
+                    libraryRepository.getAllTracks().first(), com.parachord.shared.home.HOME_RECENT_LOVES,
+                )
+            },
+            playlistTracks = { id ->
+                libraryRepository.getPlaylistTracks(id).first().map { libraryRepository.playlistTrackToTrackEntity(it) }
+            },
+            mixTracks = { url ->
+                providerPlaylistResolver.resolve(url)
+                    ?.let { com.parachord.shared.recommendations.servicePlaylistTracks(it) }
+                    .orEmpty()
+            },
+            catalogQueues = catalogQueues,
+            collectionRadio = { carBrowse.playRequest(com.parachord.shared.car.CarIds.COLLECTION_RADIO) },
+        )
+    }
+
+    /**
+     * Home's one session for the whole app, so coming back to Home keeps the
+     * loads' throttles and the Ask example (see [IosHomeSession]).
+     */
+    val homeSession: IosHomeSession by lazy {
+        IosHomeSession(
+            sources = homeSources,
+            settings = settingsStore,
+            queues = homeQueues,
+            parentScope = appScope,
+            lookupAlbumArt = { album, artist -> imageEnrichmentService.lookupAlbumArt(album, artist) },
+            albumCardShown = { recommendationsRepository.cardShown(it) },
+            dismissAnnouncement = { announcementsRepository.dismiss(it) },
+            ctaClicked = { announcementsRepository.trackCtaClick(it) },
+            playlistArt = ::playlistArtworkUrl,
+            today = ::todayLocal,
+        )
+    }
+
     // ── The Recommendations page (PR 3): the shared page, flattened for SwiftUI ──
 
     /**

@@ -47,6 +47,7 @@ import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.JumpTile
 import com.parachord.shared.home.JumpTileArt
 import com.parachord.shared.home.jumpTileKey
+import com.parachord.shared.home.jumpTileTitle
 import com.parachord.shared.ui.ArtPlayButtonSpec
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.icons.AppIcon
@@ -109,14 +110,6 @@ fun HomeJumpBackIn(
     }
 }
 
-/** The title a tile prints (desktop: "Recent Loves", the album, else the item's title). */
-private fun tileTitle(tile: JumpTile): String = when (tile) {
-    is JumpTile.Playlist -> tile.playlist.name
-    is JumpTile.Loves -> HomeCopy.RECENT_LOVES
-    is JumpTile.Album -> tile.album.album
-    is JumpTile.Mix -> tile.mix.title
-}
-
 @Composable
 private fun JumpTileView(
     tile: JumpTile,
@@ -126,7 +119,7 @@ private fun JumpTileView(
     onShown: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val title = tileTitle(tile)
+    val title = jumpTileTitle(tile)
     if (art.isEmpty) LaunchedEffect(jumpTileKey(tile)) { onShown() }
     Row(
         verticalAlignment = Alignment.CenterVertically,

@@ -348,5 +348,12 @@ class HomeModelTest {
         assertFalse(isActiveContext(jumpCandidate(a), playing(jumpTileContext(JumpTile.Mix(mix("b"))))))
         assertFalse(isActiveContext(jumpCandidate(JumpTile.Loves(emptyList())), playing(jumpTileContext(a))))
     }
-}
 
+    @Test
+    fun `a tile's title is the playlist or album or mix and Recent Loves for loves`() {
+        assertEquals("Daily Brew", jumpTileTitle(JumpTile.Playlist(Playlist(id = "p", name = "Daily Brew"), "Playlist")))
+        assertEquals(HomeCopy.RECENT_LOVES, jumpTileTitle(JumpTile.Loves(emptyList())))
+        assertEquals("Hotbox", jumpTileTitle(JumpTile.Album(LoveAlbum("Hotbox", "Hovvdy", "Frog", null))))
+        assertEquals("m", jumpTileTitle(JumpTile.Mix(mix("m"))))
+    }
+}

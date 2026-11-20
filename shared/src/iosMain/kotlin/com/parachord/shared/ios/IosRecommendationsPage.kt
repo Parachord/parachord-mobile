@@ -220,7 +220,10 @@ private fun skeleton(id: String, kind: String, title: String?) = IosRecBlock(
     toggleLabel = null, expanded = false, items = emptyList(), listeners = emptyList(), loadingTail = false, aiTail = 0,
 )
 
-private fun iosRecItem(item: RecommendationItem, row: RecommendationRow, today: LocalDate) = IosRecItem(
+/** A card with no row (Home's albums): its source is the item's own ([itemSourceName]). */
+internal fun iosRecItem(item: RecommendationItem, today: LocalDate): IosRecItem = iosRecItem(item, null, today)
+
+internal fun iosRecItem(item: RecommendationItem, row: RecommendationRow?, today: LocalDate) = IosRecItem(
     id = item.id,
     type = item.type.wire,
     name = item.name,
@@ -229,7 +232,7 @@ private fun iosRecItem(item: RecommendationItem, row: RecommendationRow, today: 
     url = item.url,
     year = releaseYear(item.releaseDate),
     comingLabel = upcomingLabel(item.releaseDate, today),
-    sourceName = itemSourceName(item, row),
+    sourceName = if (row != null) itemSourceName(item, row) else itemSourceName(item),
     weeklyId = item.weekly?.id,
     weeklyContextType = item.weekly?.contextType,
     weeklyLabel = item.weekly?.label,
