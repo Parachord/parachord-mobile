@@ -613,6 +613,13 @@ final class ConcertsModel {
     private var store: SettingsStore { container.settingsStore }
     private let refresh = RevalidatingWatch(minInterval: 5 * 60)
     var events: [ConcertEvent] = []
+    /// The artists' photos (the shared ConcertArtistImages), keyed by
+    /// `concertArtistKey`; a row draws `container.concertPhotoUrl(event:images:)`.
+    var artistImages: [String: String] = [:]
+    @ObservationIgnored private let imageWatcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
+    @ObservationIgnored private var imagesSub: Cancellable?
+    /// The running photo lookup, cancelled when a new list replaces it.
+    @ObservationIgnored private var imagesLoad: Cancellable?
     var isLoading = false
     var loaded = false
     /// The repository's error ("Failed to load concerts: …") when the load
@@ -663,7 +670,24 @@ final class ConcertsModel {
                 autoDetectViaGps()
             }
         }
+        watchArtistImages()
         subscribe(locationChanged: false)
+    }
+
+    /// The shared artist photos (Android parity: one app-wide cache).
+    private func watchArtistImages() {
+        guard imagesSub == nil else { return }
+        imagesSub = imageWatcher.watch(flow: container.concertArtistImagesFlow()) { [weak self] v in
+            let map = (v as? [String: String]) ?? [:]
+            Task { @MainActor in self?.artistImages = map }
+        }
+    }
+
+    /// Every loaded show's artist photo, in the shared batches of five (desktop's
+    /// Concerts page). A new list cancels the lookups still to run for the old one.
+    private func loadArtistImages(_ list: [ConcertEvent]) {
+        imagesLoad?.cancel()
+        imagesLoad = container.loadConcertArtistImages(events: list)
     }
 
     /// Silent cold-launch GPS auto-detect (Android parity). Commits a GPS fix when
@@ -692,7 +716,10 @@ final class ConcertsModel {
             return watcher.watchUntilDone(flow: container.concertsFlow(locationChanged: locationChanged), onEach: { [weak self] v in
                 guard let self else { return }
                 if let list = v as? [ConcertEvent] {
-                    if !list.isEmpty { withAnimation(.easeInOut(duration: 0.4)) { self.events = list } }
+                    if !list.isEmpty {
+                        withAnimation(.easeInOut(duration: 0.4)) { self.events = list }
+                        self.loadArtistImages(list)
+                    }
                     self.error = nil
                 } else if let e = v as? ResourceError {
                     self.error = e.message
@@ -812,6 +839,10 @@ private func concertFmt(_ raw: String?, _ pattern: String) -> String {
 struct ConcertsScreen: View {
     @State private var model = ConcertsModel.shared
     @Environment(\.dismiss) private var dismiss
+    /// A show's artist, opened on the On Tour tab (all their dates). Local
+    /// item-based navigation, so it works from any host stack.
+    @State private var navTourArtist: String?
+    private let container = IosContainer.companion.shared
 
     private var grouped: [(month: String, events: [ConcertEvent])] {
         let sorted = model.events.filter { $0.date != nil }.sorted { ($0.date ?? "") < ($1.date ?? "") }
@@ -878,6 +909,7 @@ struct ConcertsScreen: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await model.load() }
+        .navigationDestination(item: $navTourArtist) { ArtistScreen(artistName: $0, initialTab: .onTour) }
         .sheet(isPresented: $model.showLocationPicker, onDismiss: { model.clearLocationSuggestions() }) {
             ConcertLocationPicker(model: model)
         }
@@ -916,6 +948,17 @@ struct ConcertsScreen: View {
     }
 
     private func eventRow(_ e: ConcertEvent) -> some View {
+        let artist = container.concertArtistName(event: e)
+        return eventRowContent(e, artist: artist)
+            .contentShape(Rectangle())
+            // The row opens the artist's On Tour tab; the ticket link keeps its own tap.
+            .onTapGesture { navTourArtist = artist }
+            .accessibilityElement(children: .contain)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(HomeCopy.shared.concertsOf(artist: artist))
+    }
+
+    private func eventRowContent(_ e: ConcertEvent, artist: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 1) {
                 Text(concertFmt(e.date, "MMM").uppercased()).font(.system(size: 10, weight: .bold)).tracking(0.5)
@@ -924,10 +967,10 @@ struct ConcertsScreen: View {
                 Text(concertFmt(e.date, "EEE")).font(.system(size: 10)).foregroundStyle(PC.fg3)
             }
             .frame(width: 44)
-            concertImage(e.imageUrl, seed: e.artistName ?? e.name)
+            concertImage(container.concertPhotoUrl(event: e, images: model.artistImages), seed: artist)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(e.artistName ?? e.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                    Text(artist).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                     Spacer(minLength: 0)
                     if let url = e.ticketUrl, let u = URL(string: url) {
                         Link(destination: u) {
@@ -951,11 +994,27 @@ struct ConcertsScreen: View {
     @ViewBuilder
     private func concertImage(_ url: String?, seed: String) -> some View {
         if let url, let u = URL(string: url) {
-            PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
-                placeholder: { PCArtwork(name: seed, size: 56, radius: 8) }
+            // Held a quarter of the way down (desktop's `center 25%`) so faces stay in.
+            PCCachedImage(url: u) { img in
+                img.resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: 56, height: 56, alignment: Alignment(horizontal: .center, vertical: .concertPhotoFocus))
+            } placeholder: { PCArtwork(name: seed, size: 56, radius: 8) }
                 .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else { PCArtwork(name: seed, size: 56, radius: 8) }
     }
+}
+
+/// A concert photo's focus: a quarter of the way down (the shared
+/// `CONCERT_PHOTO_FOCUS_Y`, desktop's `object-position: center 25%`). An
+/// aspect-filled image framed with this guide keeps that line of it at the
+/// same line of the frame, so faces aren't cut off.
+extension VerticalAlignment {
+    private enum ConcertPhotoFocus: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat {
+            d.height * CGFloat(HomePageKt.CONCERT_PHOTO_FOCUS_Y)
+        }
+    }
+    static let concertPhotoFocus = VerticalAlignment(ConcertPhotoFocus.self)
 }
 
 // MARK: - Concert location picker (#201)

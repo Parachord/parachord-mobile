@@ -81,6 +81,9 @@ class HomeSessionTest {
         override suspend fun concertLocation(): SettingsStore.ConcertLocation? = location
         var concertLoads = 0
         override suspend fun loadConcerts() { concertLoads++ }
+        val photoLookups = mutableListOf<String>()
+        var photo: (String) -> String? = { null }
+        override val concertArtistImages = ConcertArtistImages { name -> photoLookups += name; photo(name) }
 
         override val chatAvailable = MutableStateFlow<Boolean?>(true)
         override val plugins = MutableStateFlow(listOf(SPOTIFY))
@@ -460,6 +463,30 @@ class HomeSessionTest {
         assertEquals(listOf("e1"), s.state.value.concerts.map { it.id })
         assertTrue(s.state.value.sections.concerts)
         assertEquals(1, src.concertLoads)
+    }
+
+    @Test
+    fun `concert artist photos are looked up for the shown cards only`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.location = SettingsStore.ConcertLocation(latitude = null, longitude = null, city = "Austin, TX", radiusMiles = 50)
+        src.photo = { name -> if (name == "Artist 2") null else "https://img/$name" }
+        src.concerts.value = HomeFeed(
+            items = (1..6).map { i ->
+                ConcertEvent(id = "e$i", name = "Show $i", artistName = "Artist $i", city = "Austin", date = "2030-01-0$i")
+            } + ConcertEvent(id = "far", name = "Far", artistName = "Far Artist", city = "Boston", date = "2030-01-01"),
+        )
+        val s = session(scope, src)
+        advanceUntilIdle()
+        s.onVisible()
+        advanceUntilIdle()
+        assertEquals(HOME_CONCERT_CARDS, s.state.value.concerts.size)
+        assertEquals((1..HOME_CONCERT_CARDS).map { "Artist $it" }, src.photoLookups.sorted())
+        assertEquals("https://img/Artist 1", s.state.value.concertArtistImages["artist 1"])
+        assertNull(s.state.value.concertArtistImages["artist 2"])
+        // A return visit asks nothing again.
+        s.onVisible()
+        advanceUntilIdle()
+        assertEquals(HOME_CONCERT_CARDS, src.photoLookups.size)
     }
 
     @Test

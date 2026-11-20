@@ -75,6 +75,7 @@ class AndroidHomeSourcesTest {
             chartsRepository = mockk(relaxed = true),
             concertsRepository = mockk(relaxed = true),
             concertArtistSeed = mockk(relaxed = true),
+            concertArtistImages = com.parachord.shared.home.ConcertArtistImages { null },
             // androidPluginIsOn with no token anywhere: a plug-in needing an account
             // the host signs in is off; every other id reads as connected.
             pluginIsOn = { id, meta, needs ->

@@ -75,6 +75,8 @@ data class HomeState(
     val concerts: List<ConcertEvent> = emptyList(),
     /** Concerts are loading with a location set (the row's skeleton). */
     val concertsLoading: Boolean = false,
+    /** Artist photos for the concert cards, keyed by [concertArtistKey]; see [concertPhotoUrl]. */
+    val concertArtistImages: Map<String, String> = emptyMap(),
     val askExample: String = "",
     val chatAvailable: Boolean? = null,
     val sections: HomeSections = HomeSections(

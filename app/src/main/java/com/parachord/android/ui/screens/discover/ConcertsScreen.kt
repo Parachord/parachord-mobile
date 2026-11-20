@@ -65,7 +65,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -77,7 +76,12 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
+import com.parachord.android.ui.components.ConcertPhoto
+import com.parachord.shared.home.concertPhotoUrl
+import com.parachord.shared.home.concertArtist
+import com.parachord.shared.home.HomeCopy
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.parachord.android.data.repository.ConcertEvent
 import com.parachord.android.data.repository.displayDate
 import com.parachord.android.data.repository.displayTime
@@ -110,6 +114,7 @@ fun ConcertsScreen(
     viewModel: ConcertsViewModel = koinViewModel(),
 ) {
     val events by viewModel.events.collectAsStateWithLifecycle()
+    val artistImages by viewModel.artistImages.collectAsStateWithLifecycle()
     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val locationCity by viewModel.locationCity.collectAsStateWithLifecycle()
     val radiusMiles by viewModel.radiusMiles.collectAsStateWithLifecycle()
@@ -315,6 +320,7 @@ fun ConcertsScreen(
                         } else {
                             ConcertEventList(
                                 events = state.data,
+                                artistImages = artistImages,
                                 onNavigateToArtist = onNavigateToArtist,
                             )
                         }
@@ -548,6 +554,7 @@ private fun LocationSearchDialog(
 @Composable
 private fun ConcertEventList(
     events: List<ConcertEvent>,
+    artistImages: Map<String, String>,
     onNavigateToArtist: (String) -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
@@ -584,9 +591,9 @@ private fun ConcertEventList(
             items(monthEvents, key = { it.id }) { event ->
                 ConcertEventCard(
                     event = event,
-                    onArtistClick = {
-                        event.artistName?.let { onNavigateToArtist(it) }
-                    },
+                    photoUrl = concertPhotoUrl(event, artistImages),
+                    // The artist's On Tour tab (the screen's caller routes it there).
+                    onArtistClick = { onNavigateToArtist(concertArtist(event)) },
                     onTicketClick = { url ->
                         uriHandler.openUri(url)
                     },
@@ -603,6 +610,8 @@ private fun ConcertEventList(
 @Composable
 private fun ConcertEventCard(
     event: ConcertEvent,
+    /** The shared `concertPhotoUrl`: the artist's photo, else the event's image. */
+    photoUrl: String?,
     onArtistClick: () -> Unit,
     onTicketClick: (String) -> Unit,
 ) {
@@ -623,6 +632,9 @@ private fun ConcertEventCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = HomeCopy.concertsOf(concertArtist(event))
+            }
             .clickable { onArtistClick() }
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
@@ -661,20 +673,14 @@ private fun ConcertEventCard(
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
-            if (event.imageUrl != null) {
-                AsyncImage(
-                    model = event.imageUrl,
-                    contentDescription = event.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Icon(
-                    Icons.Filled.ConfirmationNumber,
-                    contentDescription = null,
-                    modifier = Modifier.align(Alignment.Center).size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                )
+            Icon(
+                Icons.Filled.ConfirmationNumber,
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.Center).size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            )
+            if (photoUrl != null) {
+                ConcertPhoto(photoUrl, Modifier.fillMaxSize())
             }
         }
 

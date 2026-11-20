@@ -88,6 +88,11 @@ interface HomeSources {
     suspend fun concertLocation(): SettingsStore.ConcertLocation?
     /** Loads the personalized concerts unless they're loaded or loading. Only asked with a location. */
     suspend fun loadConcerts()
+    /**
+     * The app-wide concert artist photos (the same instance the Concerts page
+     * uses). The session asks it for the shown cards' artists.
+     */
+    val concertArtistImages: ConcertArtistImages
 
     /** A chat plugin is set up; null while unknown. */
     val chatAvailable: Flow<Boolean?>

@@ -977,6 +977,13 @@ val androidModule = module {
             onMixIds = { ids -> recommendations.excludePlaylistIds(ids) },
         )
     }
+    // Concert cards' artist photos, one app-wide cache for Home and the
+    // Concerts page. getArtistImage keeps its own persistent cache, so this
+    // adds only the session's "asked already" memory.
+    single {
+        val metadata: com.parachord.shared.metadata.MetadataService = get()
+        com.parachord.shared.home.ConcertArtistImages { name -> metadata.getArtistImage(name) }
+    }
     // Home's inputs for the shared HomeSession. Explicit `single {}` (a lambda
     // parameter); a single, so the feeds a visit loaded stay for the next one.
     single<com.parachord.shared.home.HomeSources> {
@@ -995,6 +1002,7 @@ val androidModule = module {
             chartsRepository = get(),
             concertsRepository = get(),
             concertArtistSeed = get(),
+            concertArtistImages = get(),
             pluginIsOn = { id, isMeta, needsAccount -> androidPluginIsOn(settings, id, isMeta, needsAccount) },
         )
     }

@@ -25,7 +25,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -157,6 +159,7 @@ class HomeSession(
         val charts: HomeFeed<ChartAlbum>,
         val concerts: HomeFeed<ConcertEvent>,
         val location: SettingsStore.ConcertLocation?,
+        val concertImages: Map<String, String>,
     )
 
     private data class UiIn(
@@ -177,8 +180,9 @@ class HomeSession(
     ) { m, s, ai, f, at -> RecsIn(m, s, ai, f, at) }
 
     private val feeds = combine(
-        sources.freshDrops, sources.criticalDarlings, sources.charts, sources.concerts, location,
-    ) { f, c, ch, co, l -> FeedsIn(f, c, ch, co, l) }
+        sources.freshDrops, sources.criticalDarlings, sources.charts,
+        combine(sources.concerts, sources.concertArtistImages.images) { co, img -> co to img }, location,
+    ) { f, c, ch, (co, img), l -> FeedsIn(f, c, ch, co, l, img) }
 
     private val ui = combine(gs, dismissed, combine(mixSource, albumSource) { m, a -> m to a }, askSeed, tick) { g, d, (m, a), s, t ->
         UiIn(g, d, m, a, s, t)
@@ -199,6 +203,19 @@ class HomeSession(
             combine(gs, gsInputs) { holder, inputs -> holder to inputs }.collect { (holder, inputs) ->
                 val st = holder.state ?: return@collect
                 if (st.active && inputs.status(st.played).allDone) updateGs { it.copy(active = false) }
+            }
+        }
+        // The shown concert cards' artist photos (each artist once a session,
+        // ConcertArtistImages). Launched, so a slow batch doesn't hold up the next list.
+        this.scope.launch {
+            state.map { it.concerts }.distinctUntilChanged().collect { shown ->
+                if (shown.isNotEmpty()) {
+                    this@HomeSession.scope.launch {
+                        guard("concert artist photos") {
+                            sources.concertArtistImages.load(shown.take(HOME_CONCERT_CARDS).map { concertArtist(it) })
+                        }
+                    }
+                }
             }
         }
         // Playback while the layout is on counts as played (desktop: `isPlaying`;
@@ -513,6 +530,7 @@ class HomeSession(
             charts = charts,
             concerts = concerts,
             concertsLoading = concertsLoading,
+            concertArtistImages = f.concertImages,
             askExample = askExample(loves, u.askSeed),
             chatAvailable = chatAvailable,
             sections = sections,

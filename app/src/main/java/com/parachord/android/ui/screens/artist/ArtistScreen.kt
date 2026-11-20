@@ -294,7 +294,7 @@ fun ArtistScreen(
                         add("Top Tracks")
                         add("Biography")
                         add("Related Artists")
-                        if (isOnTour) add("On Tour")
+                        if (isOnTour) add(com.parachord.shared.home.ARTIST_ON_TOUR_TAB)
                     }
                 }
 
@@ -353,7 +353,7 @@ fun ArtistScreen(
                                 )
                             },
                         )
-                        "On Tour" -> OnTourTab(tourDates = tourDates)
+                        com.parachord.shared.home.ARTIST_ON_TOUR_TAB -> OnTourTab(tourDates = tourDates)
                         "Biography" -> BiographyTab(
                             bio = artistInfo?.bio,
                             bioSource = artistInfo?.bioSource,

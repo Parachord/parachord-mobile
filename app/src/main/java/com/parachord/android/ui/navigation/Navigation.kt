@@ -162,6 +162,9 @@ fun ParachordNavHost(
                     navController.navigate(Routes.servicePlaylist(url, name, source, imageUrl))
                 },
                 onOpenConcerts = { navController.navigate(Routes.CONCERTS) },
+                onOpenArtistTour = { name ->
+                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
+                },
                 onAsk = onAsk,
             )
         }
@@ -294,7 +297,7 @@ fun ParachordNavHost(
                 onBack = { navController.popBackStack() },
                 onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
                 onNavigateToArtistOnTour = { name ->
-                    navController.navigate(Routes.artist(name, tab = "On Tour"))
+                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
                 },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -464,8 +467,9 @@ fun ParachordNavHost(
         composable(Routes.CONCERTS) {
             com.parachord.android.ui.screens.discover.ConcertsScreen(
                 onBack = { navController.popBackStack() },
+                // A show opens its artist on the On Tour tab (all their dates).
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
                 },
             )
         }

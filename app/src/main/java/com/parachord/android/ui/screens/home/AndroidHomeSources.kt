@@ -84,6 +84,8 @@ class AndroidHomeSources(
     private val chartsRepository: ChartsRepository,
     concertsRepository: ConcertsRepository,
     concertArtistSeed: ConcertArtistSeedSource,
+    /** The app-wide concert artist photos, shared with the Concerts page. */
+    override val concertArtistImages: com.parachord.shared.home.ConcertArtistImages,
     /** Android's plug-in gate (`androidPluginIsOn`): whether a plug-in is on, its connection included. */
     private val pluginIsOn: suspend (id: String, isMetaService: Boolean, needsAccount: Boolean) -> Boolean,
     /** Shares the plug-in snapshot between its three flows. */

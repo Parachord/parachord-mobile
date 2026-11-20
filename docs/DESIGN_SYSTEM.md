@@ -220,7 +220,7 @@ Desktop redesigned Home in November 2026 (desktop `docs/superpowers/specs/2026-1
 5. **Your playlists, freshest first**: six cards ordered by when their tracks last changed (`tracksChangedAt`), a "Δ N" badge for the tracks the latest change added (within 7 days), subtitle "Refreshed 2h ago" / "Since 2023"; See all → Playlists.
 6. **Albums you might love**: six albums from the plugins' recommendations and Shuffleupagus, with source chips; See all → Recommendations.
 7. **Fresh Drops** and **Critical Darlings**, three cards each, each opening with a slim band in its page's gradient.
-8. **Concerts near you**: four cards (date, artist, venue, city); Tickets is the only action.
+8. **Concerts near you**: four cards (the artist's photo with the date, artist, venue, city); the card opens the artist's On Tour tab, Tickets opens the seller.
 9. **Ask Shuffleupagus**: a prompt box with an example made locally from recent artists.
 
 Removed on desktop: Recently Added, Continue Listening, the second playlist block, artist suggestions, setup cards in the page.

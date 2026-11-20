@@ -107,6 +107,8 @@ fun HomeScreen(
     onOpenSearch: () -> Unit = {},
     onOpenServicePlaylist: (url: String, name: String, source: String, imageUrl: String?) -> Unit = { _, _, _, _ -> },
     onOpenConcerts: () -> Unit = {},
+    /** An artist's page on its On Tour tab: a concert card's tap. */
+    onOpenArtistTour: (artistName: String) -> Unit = {},
     /** `DeepLinkViewModel.handleInAppChatPrompt`: Ask's prompt, no confirmation. */
     onAsk: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -421,6 +423,7 @@ fun HomeScreen(
                         HomeConcertsSection(
                             state = state,
                             onSeeAll = onOpenConcerts,
+                            onOpenArtistTour = onOpenArtistTour,
                             modifier = Modifier.padding(top = SectionGap),
                         )
                     }

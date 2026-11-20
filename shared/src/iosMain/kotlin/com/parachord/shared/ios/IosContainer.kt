@@ -2449,6 +2449,46 @@ class IosContainer private constructor() {
         )
     }
 
+    /**
+     * Concert cards' artist photos (the shared [com.parachord.shared.home.ConcertArtistImages],
+     * one instance for the app, as on Android): the artist-photo chain, five at a
+     * time, each artist once a session. Swift watches [concertArtistImagesFlow]
+     * (a `[String: String]` keyed by `concertArtistKey`) and draws a card's photo
+     * with [concertPhotoUrl].
+     */
+    val concertArtistImages: com.parachord.shared.home.ConcertArtistImages by lazy {
+        com.parachord.shared.home.ConcertArtistImages { name -> metadataService.getArtistImage(name) }
+    }
+
+    fun concertArtistImagesFlow(): Flow<Any?> = concertArtistImages.images
+
+    /**
+     * Looks up the photos of [events]' artists (the Concerts page: every loaded
+     * show, as desktop's page does). Runs in Kotlin's scope and returns a handle:
+     * cancelling a Swift `Task` doesn't cancel a Kotlin coroutine, so Swift
+     * cancels this when the list changes.
+     */
+    fun loadConcertArtistImages(events: List<ConcertEvent>): Cancellable {
+        val names = events.map { com.parachord.shared.home.concertArtist(it) }
+        val job = appScope.launch {
+            try {
+                concertArtistImages.load(names)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("IosContainer", "Concert artist photos failed: ${e.message}")
+            }
+        }
+        return Cancellable { job.cancel() }
+    }
+
+    /** A concert card's photo: the artist's ([images]), else the event's image, else null. */
+    fun concertPhotoUrl(event: ConcertEvent, images: Map<String, String>): String? =
+        com.parachord.shared.home.concertPhotoUrl(event, images)
+
+    /** A concert card's artist name (the shared fallback to the event's name). */
+    fun concertArtistName(event: ConcertEvent): String = com.parachord.shared.home.concertArtist(event)
+
     /** Upcoming shows from the user's TOP ARTISTS across every time window.
      *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is
      *  safe. */

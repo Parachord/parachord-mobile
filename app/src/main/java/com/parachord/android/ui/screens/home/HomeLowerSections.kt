@@ -56,7 +56,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.ArtPlayButton
-import com.parachord.android.ui.components.FaceAwareImage
+import com.parachord.android.ui.components.ConcertPhoto
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.hapticClickable
@@ -339,6 +339,7 @@ private fun FilledButton(text: String, onClick: () -> Unit, modifier: Modifier =
 fun HomeConcertsSection(
     state: HomeState,
     onSeeAll: () -> Unit,
+    onOpenArtistTour: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     // Nothing until there are shows (desktop's `ConcertsRow` returns null with none).
@@ -355,20 +356,27 @@ fun HomeConcertsSection(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             state.concerts.forEachIndexed { i, event ->
-                key(event.id.ifBlank { "concert-$i" }) { HomeConcertCard(event) }
+                key(event.id.ifBlank { "concert-$i" }) { HomeConcertCard(event, state.concertArtistImages, onOpenArtistTour) }
             }
         }
     }
 }
 
 /**
- * A show (desktop `ConcertCard`): the 72 dp artist photo with the date badge
- * in its bottom-left corner, the artist, the venue ("Venue TBA") and the
- * place line, and Tickets. The card itself isn't clickable: Tickets is its
- * only action.
+ * A show (desktop `ConcertCard`): the 72 dp photo (the artist's, else the
+ * event's: the shared [concertPhotoUrl]) with the date badge in its
+ * bottom-left corner, the artist, the venue ("Venue TBA") and the place line,
+ * and Tickets. A tap on the card opens the artist's On Tour tab (all their
+ * shows; desktop's card isn't clickable); Tickets is its own target and
+ * opens the seller's page.
  */
 @Composable
-fun HomeConcertCard(event: ConcertEvent, modifier: Modifier = Modifier) {
+fun HomeConcertCard(
+    event: ConcertEvent,
+    artistImages: Map<String, String>,
+    onOpenArtistTour: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val artist = concertArtist(event)
     val place = concertPlaceLine(event)
     val tickets = concertTickets(event)
@@ -380,6 +388,12 @@ fun HomeConcertCard(event: ConcertEvent, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .clip(PanelShape)
             .border(1.dp, DesignTokens.borderDefault.current(), PanelShape)
+            // The card opens the artist's On Tour tab; Tickets is its own target.
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                contentDescription = HomeCopy.concertsOf(artist)
+            }
+            .hapticClickable { onOpenArtistTour(artist) }
             .padding(12.dp),
     ) {
         Box(
@@ -389,20 +403,9 @@ fun HomeConcertCard(event: ConcertEvent, modifier: Modifier = Modifier) {
                 .clip(RoundedCornerShape(DesignTokens.RADIUS_CARD.dp))
                 .background(DesignTokens.bgSecondary.current()),
         ) {
-            val photo = concertPhotoUrl(event)
-            val placeholder = @Composable {
-                ParachordIcon(AppIcon.Music, contentDescription = null, size = 24.dp, tint = DesignTokens.textTertiary.current())
-            }
-            if (photo != null) {
-                FaceAwareImage(
-                    imageUrl = photo,
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    error = placeholder,
-                )
-            } else {
-                placeholder()
-            }
+            // The artist's photo, else the event's image (shared rule), over the placeholder.
+            ParachordIcon(AppIcon.Music, contentDescription = null, size = 24.dp, tint = DesignTokens.textTertiary.current())
+            concertPhotoUrl(event, artistImages)?.let { ConcertPhoto(it, Modifier.fillMaxSize()) }
             if (date != null) {
                 Text(
                     text = date.uppercase(),

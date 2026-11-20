@@ -59,8 +59,32 @@ fun concertVenue(e: ConcertEvent): String =
 /** The concert card's artist: the event's artist, else its name. */
 fun concertArtist(e: ConcertEvent): String = e.artistName?.trim()?.takeIf { it.isNotEmpty() } ?: e.name
 
-/** The concert card's photo: the event's image when it's an http(s) URL, else null (the card's placeholder). */
-fun concertPhotoUrl(e: ConcertEvent): String? = e.imageUrl?.trim()?.takeIf { isHttpUrl(it) }
+/**
+ * The artist page's On Tour tab, which lists all of an artist's shows. A
+ * concert card opens the artist there (both apps; iOS's `ArtistTab.onTour`
+ * has this raw value), as does Now Playing's on-tour dot.
+ */
+const val ARTIST_ON_TOUR_TAB = "On Tour"
+
+/** The key [HomeState.concertArtistImages] uses for an artist: trimmed and lower-cased (desktop's `artistImages` key). */
+fun concertArtistKey(artist: String): String = artist.trim().lowercase()
+
+/**
+ * The concert card's photo: the artist's photo from [artistImages] (keyed by
+ * [concertArtistKey] of [concertArtist]) when it's an http(s) URL, else the
+ * event's own image when that is, else null (the card's placeholder).
+ *
+ * Desktop shows only the artist's photo. Falling back to the event's image
+ * is a deliberate mobile difference: Ticketmaster and SeatGeek send one for
+ * some shows, and a card that has it shouldn't lose it while the artist's
+ * photo is missing or still being looked up.
+ */
+fun concertPhotoUrl(e: ConcertEvent, artistImages: Map<String, String> = emptyMap()): String? =
+    artistImages[concertArtistKey(concertArtist(e))]?.trim()?.takeIf { isHttpUrl(it) }
+        ?: e.imageUrl?.trim()?.takeIf { isHttpUrl(it) }
+
+/** Where a concert photo is cropped vertically: a quarter of the way down, desktop's `center 25%`, so faces stay in. */
+const val CONCERT_PHOTO_FOCUS_Y = 0.25f
 
 data class TicketLink(val label: String, val url: String, val source: String)
 
@@ -199,4 +223,6 @@ object HomeCopy {
     fun openLabel(title: String): String = "Open $title"
     fun seeAllIn(title: String): String = "See all in $title"
     fun ticketsFor(artist: String): String = "Tickets for $artist"
+    /** A concert card's accessibility label: it opens the artist's On Tour tab. */
+    fun concertsOf(artist: String): String = "$artist concerts"
 }

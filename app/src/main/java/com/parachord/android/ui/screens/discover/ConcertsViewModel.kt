@@ -19,12 +19,17 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import com.parachord.shared.home.ConcertArtistImages
+import com.parachord.shared.home.concertArtist
 class ConcertsViewModel constructor(
     private val concertsRepository: ConcertsRepository,
     private val settingsStore: SettingsStore,
     private val geoLocationClient: GeoLocationClient,
     private val deviceLocationProvider: DeviceLocationProvider,
     private val concertArtistSeed: ConcertArtistSeedSource,
+    /** The app-wide concert artist photos (shared with Home's Concerts near you). */
+    private val concertArtistImages: ConcertArtistImages,
 ) : ViewModel() {
 
     companion object {
@@ -68,10 +73,23 @@ class ConcertsViewModel constructor(
     private val _locationCommitted = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val locationCommitted: SharedFlow<Unit> = _locationCommitted.asSharedFlow()
 
+    /** Artist photos for the rows, by `concertArtistKey`; drawn through the shared `concertPhotoUrl`. */
+    val artistImages: StateFlow<Map<String, String>> = concertArtistImages.images
+
     private var loadJob: Job? = null
     private var searchJob: Job? = null
 
     init {
+        // Desktop's Concerts page: every loaded event's artist photo, in
+        // batches of five. A new list cancels the batches still to run for
+        // the old one (its artists are asked again with the new list).
+        viewModelScope.launch {
+            _events.collectLatest { r ->
+                if (r is Resource.Success && r.data.isNotEmpty()) {
+                    concertArtistImages.load(r.data.map { concertArtist(it) })
+                }
+            }
+        }
         viewModelScope.launch {
             val loc = settingsStore.getConcertLocation()
             _locationCity.value = loc.city

@@ -76,6 +76,7 @@ class HomeViewModelTest {
         override val concerts: Flow<HomeFeed<ConcertEvent>> = MutableStateFlow(HomeFeed())
         override suspend fun concertLocation(): SettingsStore.ConcertLocation? = null
         override suspend fun loadConcerts() {}
+        override val concertArtistImages = com.parachord.shared.home.ConcertArtistImages { null }
         override val chatAvailable: Flow<Boolean?> = MutableStateFlow(true)
         override val plugins: Flow<List<PluginInfo>> = MutableStateFlow(listOf(PluginInfo("x", "X", "1")))
         override val accounts: Flow<Map<String, Boolean>> = MutableStateFlow(emptyMap())
