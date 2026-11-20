@@ -2045,6 +2045,24 @@ class IosContainer private constructor() {
         )
     }
 
+    /**
+     * Home's history mixes (history_mixes_cache.json), from the plugins with
+     * `capabilities.historyMixes`. Every mix id goes to Recommendations, whose
+     * Playlists row leaves them out.
+     */
+    val historyMixesRepository: com.parachord.shared.repository.HistoryMixesRepository by lazy {
+        com.parachord.shared.repository.HistoryMixesRepository(
+            source = com.parachord.shared.repository.PluginHistoryMixSource(pluginManager),
+            settingsStore = settingsStore,
+            // The same gate RecommendationsRepository gets.
+            providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
+            cacheRead = { IosFileCache.read("history_mixes_cache.json") },
+            cacheWrite = { IosFileCache.write("history_mixes_cache.json", it) },
+            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> providerPlaylistResolver.resolve(url) } },
+            onMixIds = { ids -> recommendationsRepository.excludePlaylistIds(ids) },
+        )
+    }
+
     /** Listeners' people, from the plugins with `similarUsers` and `friends` (similar_users_cache.json). */
     val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore by lazy {
         com.parachord.shared.repository.SimilarUsersStore(

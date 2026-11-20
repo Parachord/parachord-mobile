@@ -957,6 +957,26 @@ val androidModule = module {
             ),
         )
     }
+    // Home's history mixes (history_mixes_cache.json), from the plugins with
+    // `capabilities.historyMixes`. Every mix id goes to Recommendations, whose
+    // Playlists row leaves them out. Explicit `single {}` (lambda + defaulted params).
+    single {
+        val context = androidContext()
+        val cacheFile = java.io.File(context.filesDir, "history_mixes_cache.json")
+        val settings: com.parachord.shared.settings.SettingsStore = get()
+        val recommendations: com.parachord.shared.repository.RecommendationsRepository = get()
+        val playlists: com.parachord.shared.deeplink.ProviderPlaylistResolver = get()
+        com.parachord.shared.repository.HistoryMixesRepository(
+            source = com.parachord.shared.repository.PluginHistoryMixSource(get()),
+            settingsStore = settings,
+            // The same gate RecommendationsRepository gets.
+            providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
+            cacheRead = { com.parachord.android.data.cache.CacheFiles.read(cacheFile) },
+            cacheWrite = { json -> com.parachord.android.data.cache.CacheFiles.write(cacheFile, json) },
+            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> playlists.resolve(url) } },
+            onMixIds = { ids -> recommendations.excludePlaylistIds(ids) },
+        )
+    }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`
     // (lambda + defaulted params, CLAUDE.md Common Mistakes #37).
     single {

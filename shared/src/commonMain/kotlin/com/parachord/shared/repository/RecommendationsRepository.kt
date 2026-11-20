@@ -780,12 +780,8 @@ class RecommendationsRepository(
         else -> ""
     }
 
-    /** Content resolvers in the user's resolver order, then meta-services in their own order. */
-    private fun orderProviders(list: List<RecommendationProvider>, order: List<String>): List<RecommendationProvider> {
-        val rank = order.withIndex().associate { it.value to it.index }
-        val (meta, content) = list.partition { it.isMetaService }
-        return content.sortedBy { rank[it.id] ?: Int.MAX_VALUE } + meta
-    }
+    private fun orderProviders(list: List<RecommendationProvider>, order: List<String>): List<RecommendationProvider> =
+        orderRecommendationProviders(list, order)
 
     private suspend inline fun <T> safely(fallback: T, block: () -> T): T = try {
         block()
@@ -796,13 +792,20 @@ class RecommendationsRepository(
     }
 }
 
+/** Content resolvers in the user's resolver order, then meta-services in their own order (desktop's `orderCatalogResolvers`). */
+internal fun orderRecommendationProviders(list: List<RecommendationProvider>, order: List<String>): List<RecommendationProvider> {
+    val rank = order.withIndex().associate { it.value to it.index }
+    val (meta, content) = list.partition { it.isMetaService }
+    return content.sortedBy { rank[it.id] ?: Int.MAX_VALUE } + meta
+}
+
 /**
  * A handler-less scope would crash Android and abort the process on iOS on an
  * uncaught failure; this one logs it. A top-level function, not a lambda in
  * the default argument: Kotlin/Native 2.1.0 can't compile a local
  * `CoroutineExceptionHandler` class there.
  */
-private fun recommendationsBackgroundScope(): CoroutineScope = CoroutineScope(
+internal fun recommendationsBackgroundScope(tag: String = "RecommendationsRepo"): CoroutineScope = CoroutineScope(
     SupervisorJob() + Dispatchers.Default +
-        CoroutineExceptionHandler { _, e -> Log.e("RecommendationsRepo", "Recommendations background work failed (ignored): ${e.message}", e) },
+        CoroutineExceptionHandler { _, e -> Log.e(tag, "Background work failed (ignored): ${e.message}", e) },
 )
