@@ -295,6 +295,10 @@ fun ParachordNavHost(
                 onNavigateToPlaylist = { playlistId ->
                     navController.navigate(Routes.playlistDetail(playlistId))
                 },
+                // A recommended playlist's queue: its view by link (the source name isn't carried).
+                onNavigateToServicePlaylist = { url, name ->
+                    navController.navigate(Routes.servicePlaylist(url, name, sourceName = "", imageUrl = null))
+                },
                 listenAlongFriend = listenAlongFriend,
                 onStopListenAlong = onStopListenAlong,
                 suspendedQueue = listenAlongSuspendedQueue,

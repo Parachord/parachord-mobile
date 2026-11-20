@@ -9,6 +9,7 @@ import com.parachord.android.playlist.ImportResult
 import com.parachord.android.playlist.PlaylistImportManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.shared.deeplink.ProviderPlaylistResolver
+import com.parachord.shared.recommendations.recommendedPlaylistKey
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -53,14 +54,14 @@ class ServicePlaylistViewModelSaveTest {
 
     @Test
     fun `a second save after success opens the saved playlist without importing again`() = runTest(dispatcher) {
-        coEvery { importer.importFromUrl("https://x/p") } returns ImportResult("pl-1", "Mix", 3)
+        coEvery { importer.importFromUrl("https://x/p", recommendedPlaylistKey("https://x/p")) } returns ImportResult("pl-1", "Mix", 3)
         val vm = vm()
         val events = mutableListOf<ServicePlaylistEvent>()
         val job = launch(dispatcher) { vm.events.collect { events += it } }
         advanceUntilIdle()
         vm.save(); advanceUntilIdle()
         vm.save(); advanceUntilIdle()
-        coVerify(exactly = 1) { importer.importFromUrl(any()) }
+        coVerify(exactly = 1) { importer.importFromUrl(any(), any()) }
         assertEquals(listOf(ServicePlaylistEvent.Saved("pl-1", "Mix")), events.take(1))
         assertEquals(2, events.size)
         assertTrue(vm.saving.value)
@@ -69,7 +70,7 @@ class ServicePlaylistViewModelSaveTest {
 
     @Test
     fun `a failed save re-enables save and says it could not save`() = runTest(dispatcher) {
-        coEvery { importer.importFromUrl(any()) } throws IllegalStateException("x")
+        coEvery { importer.importFromUrl(any(), any()) } throws IllegalStateException("x")
         val vm = vm()
         val events = mutableListOf<ServicePlaylistEvent>()
         val job = launch(dispatcher) { vm.events.collect { events += it } }

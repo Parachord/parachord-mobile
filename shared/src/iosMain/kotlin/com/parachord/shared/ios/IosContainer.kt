@@ -986,6 +986,7 @@ class IosContainer private constructor() {
             ),
             importHostedXspf = { u -> hostedXspfService.importHostedXspf(u) },
             createPlaylist = { playlist, tracks -> libraryRepository.createPlaylistWithTracks(playlist, tracks) },
+            findPlaylist = { id -> playlistDao.getById(id) },
         )
     }
 

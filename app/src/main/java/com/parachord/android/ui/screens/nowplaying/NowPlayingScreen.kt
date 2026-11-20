@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.shared.playback.ContextDestination
+import com.parachord.shared.playback.playbackContextDestination
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import com.parachord.shared.playback.shuffleAllowed
@@ -97,6 +99,8 @@ fun NowPlayingScreen(
     onNavigateToArtistOnTour: (artistName: String) -> Unit = {},
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     onNavigateToPlaylist: (playlistId: String) -> Unit = {},
+    /** An unsaved service playlist's view, by link and name (a recommended playlist's queue). */
+    onNavigateToServicePlaylist: (url: String, name: String) -> Unit = { _, _ -> },
     listenAlongFriend: FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
     /** The user's suspended queue while listening along — shown dimmed as "YOUR
@@ -191,16 +195,16 @@ fun NowPlayingScreen(
                 queueSuspended = playbackState.spinoffMode ||
                     playbackState.playbackContext?.type == LISTEN_ALONG_CONTEXT,
                 onNavigateToContext = { ctx ->
-                    when (ctx.type) {
-                        "album" -> {
-                            val artist = track?.artist ?: return@QueueSheet
-                            onNavigateToAlbum(ctx.name, artist)
+                    // Shared with iOS: where each context opens.
+                    when (val dest = playbackContextDestination(ctx)) {
+                        is ContextDestination.Album -> {
+                            val artist = dest.artist ?: track?.artist ?: return@QueueSheet
+                            onNavigateToAlbum(dest.title, artist)
                         }
-                        "artist" -> onNavigateToArtist(ctx.name)
-                        "playlist" -> {
-                            val id = ctx.id ?: return@QueueSheet
-                            onNavigateToPlaylist(id)
-                        }
+                        is ContextDestination.Artist -> onNavigateToArtist(dest.name)
+                        is ContextDestination.Playlist -> onNavigateToPlaylist(dest.id)
+                        is ContextDestination.ServicePlaylist -> onNavigateToServicePlaylist(dest.url, dest.name)
+                        null -> {}
                     }
                 },
             )

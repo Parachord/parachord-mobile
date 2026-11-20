@@ -7,13 +7,15 @@ import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.playback.PlaybackController
-import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.playlist.PlaylistImportManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.shared.deeplink.ProviderPlaylistResolver
 import com.parachord.shared.model.Resource
 import com.parachord.shared.recommendations.RecommendationCopy
+import com.parachord.shared.recommendations.playlistCovers
+import com.parachord.shared.recommendations.recommendedPlaylistKey
+import com.parachord.shared.recommendations.servicePlaylistContext
 import com.parachord.shared.recommendations.servicePlaylistTracks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -109,8 +111,7 @@ class ServicePlaylistViewModel(
     }
 
     /** The first four distinct track covers, for the header's mosaic when the card had no cover. */
-    fun trackCovers(list: List<TrackEntity>): List<String> =
-        list.mapNotNull { it.artworkUrl?.takeIf { a -> a.isNotBlank() } }.distinct().take(4)
+    fun trackCovers(list: List<TrackEntity>): List<String> = playlistCovers(list.map { it.artworkUrl })
 
     /** Row resolution is visibility-scoped: the row's `ResolveWhileVisible` cancels this job. */
     fun resolveVisible(track: TrackEntity): Job =
@@ -119,7 +120,7 @@ class ServicePlaylistViewModel(
     fun playFrom(index: Int) {
         val list = (tracks.value as? Resource.Success)?.data ?: return
         if (list.isEmpty()) return
-        playbackController.playQueue(list, index.coerceIn(0, list.lastIndex), context = PlaybackContext("playlist", title, url))
+        playbackController.playQueue(list, index.coerceIn(0, list.lastIndex), context = servicePlaylistContext(title, url))
     }
 
     fun playNext(track: TrackEntity) = playbackController.insertNext(listOf(track))
@@ -139,10 +140,10 @@ class ServicePlaylistViewModel(
     private var savedPlaylistId: String? = null
 
     /**
-     * Saves the playlist through the link importer, then asks the screen to open the saved one.
-     * A save that went through stays "saving" and remembers the playlist, so another tap before
-     * the screen navigates opens it instead of importing a duplicate (the importer mints a new id
-     * on every call).
+     * Saves the playlist through the link importer under its stable key ([recommendedPlaylistKey]),
+     * then asks the screen to open the saved one. A playlist already saved from this link (an
+     * earlier visit) is opened instead of imported again. A save that went through stays "saving"
+     * and remembers the playlist, so another tap before the screen navigates opens it at once.
      */
     fun save() {
         savedPlaylistId?.let { _events.tryEmit(ServicePlaylistEvent.Saved(it, title)); return }
@@ -150,7 +151,7 @@ class ServicePlaylistViewModel(
         _saving.value = true
         viewModelScope.launch {
             try {
-                val result = playlistImportManager.importFromUrl(url)
+                val result = playlistImportManager.importFromUrl(url, savedKey = recommendedPlaylistKey(url))
                 savedPlaylistId = result.playlistId
                 _events.tryEmit(ServicePlaylistEvent.Saved(result.playlistId, title))
             } catch (e: CancellationException) {

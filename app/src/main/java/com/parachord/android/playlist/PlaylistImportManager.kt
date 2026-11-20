@@ -26,8 +26,9 @@ class PlaylistImportManager(
     private val urlImporter: PlaylistUrlImporter,
     private val libraryRepository: LibraryRepository,
 ) {
-    suspend fun importFromUrl(url: String): ImportResult = withContext(Dispatchers.IO) {
-        val r = urlImporter.importFromUrl(url)
+    /** [savedKey]: save under a stable id and return the existing playlist when it's already saved ([PlaylistUrlImporter]). */
+    suspend fun importFromUrl(url: String, savedKey: String? = null): ImportResult = withContext(Dispatchers.IO) {
+        val r = urlImporter.importFromUrl(url, savedKey)
         ImportResult(r.playlistId, r.playlistName, r.trackCount)
     }
 
