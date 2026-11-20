@@ -148,6 +148,14 @@ fun withMixMosaics(mixes: List<HistoryMix>, covers: Map<String, List<String>>): 
     }
 }
 
+/**
+ * At most this many album-cover lookups per mix ([lookupPlaylistCovers]).
+ * Album art goes through MusicBrainz's 1 req/s queue, so a long mix whose
+ * tracks find no covers could otherwise hold that queue for a minute or more,
+ * ahead of every search. Desktop has no cap.
+ */
+const val HOME_MIX_ALBUM_ART_LOOKUPS = 12
+
 /** One track as [lookupPlaylistCovers] reads it. */
 data class CoverTrack(val artist: String?, val album: String?, val artworkUrl: String?)
 
@@ -160,15 +168,18 @@ data class CoverTrack(val artist: String?, val album: String?, val artworkUrl: S
  * pass adds artist photos while fewer than four were found. A lookup that
  * fails counts as none (desktop's `getAlbumArt` answers null).
  *
- * One difference: desktop only reads a track's own cover when the track names
- * its album; here a cover the track already carries is always used, which saves
- * an artist lookup.
+ * Two differences: desktop only reads a track's own cover when the track
+ * names its album; here a cover the track already carries is always used,
+ * which saves an artist lookup. And at most [maxAlbumLookups] album covers
+ * ([HOME_MIX_ALBUM_ART_LOOKUPS]) are looked up; after that a track counts
+ * only its own cover and its artist's photo.
  */
 suspend fun lookupPlaylistCovers(
     tracks: List<CoverTrack>,
     albumArt: suspend (album: String, artist: String) -> String?,
     artistImage: suspend (artist: String) -> String?,
-): List<String> = lookupPlaylistCoversReport(tracks, albumArt, artistImage).covers
+    maxAlbumLookups: Int = HOME_MIX_ALBUM_ART_LOOKUPS,
+): List<String> = lookupPlaylistCoversReport(tracks, albumArt, artistImage, maxAlbumLookups).covers
 
 /** [lookupPlaylistCovers]' answer, and whether any lookup threw (it couldn't answer, which isn't "no cover"). */
 data class PlaylistCoversReport(val covers: List<String>, val lookupFailed: Boolean)
@@ -178,8 +189,10 @@ suspend fun lookupPlaylistCoversReport(
     tracks: List<CoverTrack>,
     albumArt: suspend (album: String, artist: String) -> String?,
     artistImage: suspend (artist: String) -> String?,
+    maxAlbumLookups: Int = HOME_MIX_ALBUM_ART_LOOKUPS,
 ): PlaylistCoversReport {
     var failed = false
+    var albumLookups = 0
     val seenAlbums = mutableSetOf<String>()
     val seenUrls = mutableSetOf<String>()
     val seenArtists = mutableSetOf<String>()
@@ -221,7 +234,10 @@ suspend fun lookupPlaylistCoversReport(
         if (album.isNotEmpty() && artist.isNotEmpty()) {
             val albumKey = "$artist-$album".lowercase()
             if (seenAlbums.add(albumKey)) {
-                val url = own ?: safely { albumArt(album, artist) }
+                val url = own ?: if (albumLookups < maxAlbumLookups) {
+                    albumLookups++
+                    safely { albumArt(album, artist) }
+                } else null
                 if (url != null) found = add(url, artist)
             }
         } else if (own != null) {

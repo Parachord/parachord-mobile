@@ -198,6 +198,20 @@ class HistoryMixesTest {
     }
 
     @Test
+    fun `a coverless mix asks for at most twelve album covers`() = runTest {
+        var albumAsks = 0
+        val tracks = (1..40).map { CoverTrack("Artist", "Album $it", null) } + CoverTrack("Other", "Last", "own-last")
+        val covers = lookupPlaylistCovers(
+            tracks,
+            albumArt = { _, _ -> albumAsks++; null },
+            artistImage = { null },
+        )
+        assertEquals(HOME_MIX_ALBUM_ART_LOOKUPS, albumAsks)
+        // A cover a track carries is still used after the cap.
+        assertEquals(listOf("own-last"), covers)
+    }
+
+    @Test
     fun `a track whose album has no cover falls back to its artist's photo once per artist`() = runTest {
         val artistsAsked = mutableListOf<String>()
         val covers = lookupPlaylistCovers(
