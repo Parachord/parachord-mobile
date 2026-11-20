@@ -8,7 +8,6 @@ import android.widget.Toast
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import kotlin.math.floor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -96,6 +95,7 @@ import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageBlock
 import com.parachord.shared.recommendations.recommendationPageLayout
+import com.parachord.shared.recommendations.recommendationGridColumns
 import com.parachord.shared.recommendations.RecommendationRow
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.RowView
@@ -657,14 +657,13 @@ private class CardList {
 private data class GridSpec(val columns: Int, val cardWidth: Dp)
 
 /**
- * An open row's grid, as desktop's `repeat(auto-fill, minmax(160px, 1fr))`:
- * as many columns as fit at [RecCardMinGridWidth] (at least 2), each card
+ * An open row's grid: the shared [recommendationGridColumns] rule, each card
  * stretched so the row fills [available] edge to edge with [gap] between.
  * The width is floored to a whole pixel so rounding can't push a card onto
  * the next line.
  */
 private fun gridCardWidth(available: Dp, gap: Dp, density: androidx.compose.ui.unit.Density): Pair<Int, Dp> {
-    val columns = maxOf(2, floor((available + gap) / (RecCardMinGridWidth + gap)).toInt())
+    val columns = recommendationGridColumns(available.value.toDouble(), gap.value.toDouble())
     val px = with(density) { ((available - gap * (columns - 1)).toPx() / columns).toInt() }
     return columns to with(density) { px.toDp() }
 }

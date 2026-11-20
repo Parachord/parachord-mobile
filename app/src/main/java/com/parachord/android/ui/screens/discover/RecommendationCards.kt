@@ -53,8 +53,6 @@ import com.parachord.shared.ui.icons.AppIcon
 /** A card's width in a scrolling row. */
 internal val RecCardWidth = 140.dp
 
-/** The narrowest a card gets in an open grid before the grid drops a column. */
-internal val RecCardMinGridWidth = 104.dp
 private val PlayButton = 32.dp
 private val PlayTouchTarget = 48.dp
 

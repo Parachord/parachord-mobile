@@ -252,7 +252,7 @@ container's flows kept only `Resource.Success`, so a failed load left a screen
 spinning forever or showing a misleading empty state ("Set your Last.fm
 username" for every History failure).
 
-- **Flows** (`criticsPicksFlow`, `freshDropsFlow`, `recommendedTracksFlow`,
+- **Flows** (`criticsPicksFlow`, `freshDropsFlow`,
   `recommendedArtistsFlow`, `concertsFlow`) go through `forDisplay()`: each list
   as it lands, and the `Resource.Error` itself (Swift: `v as? ResourceError`,
   `.message`) when the load failed with nothing to show.
@@ -275,7 +275,7 @@ username" for every History failure).
   `Theme.swift`. Try Again on a curated screen calls `load(force: true)`, which
   starts over even inside `RevalidatingWatch`'s interval.
 
-Where iOS shows these: Recommendations (per tab), Fresh Drops, Critical
+Where iOS shows these: Fresh Drops, Critical
 Darlings, Concerts (the repository's message, no retry, as Android), History
 and a friend's profile (per tab; a friend's Retry only on Recent, as Android),
 an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
@@ -287,6 +287,19 @@ the same `DeletePlaylistSheet`, which also deletes the copies on the services
 the playlist syncs with, each a toggle, as Android deletes with sync), DJ chat with no AI key ("No AI providers
 configured"), and a track only Apple Music could play while the app may not use
 Apple Music (the sign-in message, an "Open Settings" action, stops on the track).
+
+**The Recommendations page draws the shared page, nothing else.**
+`RecommendationsScreen.swift` watches `IosContainer.watchRecommendationsPage()`
+(`IosRecPage`, the blocks already in `recommendationPageLayout`'s order, the
+same Android draws) and shows its states (loading, not configured, failed,
+empty) from `status`, with `RecommendationCopy`'s words. Taps go to the
+container (`recommendationsSongQueue`, `recommendationsWeeklyQueue`,
+`recommendationsServicePlaylist`, `recommendationsListenerPlay`,
+`followListener`, the shared `albumQueue`), messages show as the coordinator's
+`notice`, and the Connect buttons open Settings on the plugin's sheet through
+the `pcOpenPluginSettings` environment action (`SettingsView(initialService:)`).
+An open row's grid uses the shared `recommendationGridColumns`. Don't add a
+rule here; add it to `RecommendationPageView.kt` and draw it.
 
 **Keychain items must be readable after first unlock.** A CarPlay launch can
 happen with the phone locked, and iOS's default accessibility

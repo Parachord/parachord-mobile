@@ -2330,9 +2330,6 @@ class IosContainer private constructor() {
     fun freshDropsFlow(): Flow<Any> =
         freshDropsRepository.getFreshDrops(false).forDisplay()
 
-    fun recommendedTracksFlow(): Flow<Any> =
-        recommendationsRepository.getRecommendedTracks().forDisplay()
-
     fun recommendedArtistsFlow(): Flow<Any> =
         recommendationsRepository.getRecommendedArtists().forDisplay()
 

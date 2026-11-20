@@ -40,10 +40,27 @@ enum PCRoute: Hashable {
 /// (set in AlbumScreen.albumContext). Returns nil for types with no iOS page
 /// (listen-along / spinoff / unknown).
 func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
+    // Album, artist, playlist and service-playlist contexts open where the
+    // shared `playbackContextDestination` says (Android's Now Playing asks it too).
+    if let dest = PlaybackContextKt.playbackContextDestination(ctx: ctx) {
+        switch dest {
+        case let album as ContextDestination.Album:
+            return .album(title: album.title, artist: album.artist ?? "")
+        case let artist as ContextDestination.Artist:
+            return .artist(artist.name)
+        case let playlist as ContextDestination.Playlist:
+            return .playlist(id: playlist.id, title: ctx.name)
+        case is ContextDestination.ServicePlaylist:
+            // Task 5: map to `.servicePlaylist(url:name:)` once that route exists.
+            return nil
+        default:
+            return nil
+        }
+    }
     switch ctx.type {
-    case "album":           return .album(title: ctx.name, artist: ctx.id ?? "")
-    case "playlist":        return .playlist(id: ctx.id ?? "", title: ctx.name)
-    case "artist":          return .artist(ctx.name)
+    case "album", "artist", "playlist", PlaybackContextKt.SERVICE_PLAYLIST_CONTEXT:
+        // The shared rule found nothing to open (a playlist or service playlist with no id).
+        return nil
     case "charts":          return .pop
     case "recommendations": return .recommendations
     case "history":         return .history()

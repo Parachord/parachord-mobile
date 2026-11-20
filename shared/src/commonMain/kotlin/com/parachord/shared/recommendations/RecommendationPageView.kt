@@ -19,6 +19,18 @@ const val LISTENER_PREVIEW = 12
 const val AI_TAIL = 3
 val AI_TAIL_ROWS: Set<String> = setOf("type:album", "type:artist", "albums:personal")
 
+/** The narrowest a card gets in an open row's grid before the grid drops a column (dp / pt). */
+const val CARD_MIN_GRID_WIDTH = 104.0
+
+/**
+ * How many cards an open row's grid puts on a line, as desktop's
+ * `repeat(auto-fill, minmax(160px, 1fr))` scaled to a phone: as many as fit at
+ * [CARD_MIN_GRID_WIDTH] with [gap] between, at least 2. Each card then
+ * stretches so the line fills [available] edge to edge.
+ */
+fun recommendationGridColumns(available: Double, gap: Double): Int =
+    maxOf(2, kotlin.math.floor((available + gap) / (CARD_MIN_GRID_WIDTH + gap)).toInt())
+
 /** The source pill in force: [selected] while it's still on the page, else null (All). */
 fun activeSourceFilter(selected: String?, sources: List<PageSource>): String? =
     selected?.takeIf { id -> sources.any { it.id == id } }
