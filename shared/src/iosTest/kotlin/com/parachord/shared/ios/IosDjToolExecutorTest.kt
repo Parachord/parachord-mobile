@@ -1,9 +1,5 @@
 package com.parachord.shared.ios
 
-import com.parachord.shared.metadata.AlbumSearchResult
-import com.parachord.shared.metadata.ArtistInfo
-import com.parachord.shared.metadata.MetadataProvider
-import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.Track
 import com.parachord.shared.settings.SettingsStore
@@ -19,16 +15,6 @@ import kotlin.test.assertEquals
 class IosDjToolExecutorTest {
 
     private val found = mutableMapOf<String, List<TrackSearchResult>>()
-
-    private val provider = object : MetadataProvider {
-        override val name = "fake"
-        override val priority = 0
-        override suspend fun isAvailable() = true
-        override suspend fun searchTracks(query: String, limit: Int) = found[query] ?: listOf(AVETT)
-        override suspend fun searchAlbums(query: String, limit: Int) = emptyList<AlbumSearchResult>()
-        override suspend fun searchArtists(query: String, limit: Int) = emptyList<ArtistInfo>()
-        override suspend fun getArtistInfo(artistName: String): ArtistInfo? = null
-    }
 
     private val secure = object : SecureTokenStore {
         private val m = mutableMapOf<String, String>()
@@ -50,7 +36,7 @@ class IosDjToolExecutorTest {
     }
 
     private val executor = IosDjToolExecutor(
-        MetadataService(listOf(provider), { emptySet() }),
+        { query, _ -> found[query] ?: listOf(AVETT) },
         SettingsStore(secure, KvStore(MapSettings())),
         bridge,
         localFiles = { localFiles },

@@ -3,7 +3,8 @@ package com.parachord.shared.ai.tools
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.model.Track
 import com.parachord.shared.resolver.selectBestMatch
-import com.parachord.shared.search.LibraryTrackSearch
+import com.parachord.shared.resolver.ResolverSearch
+import com.parachord.shared.resolver.localFileSearchResults
 
 /**
  * How the AI tools turn a requested artist + title into a track (#520, desktop
@@ -12,14 +13,23 @@ import com.parachord.shared.search.LibraryTrackSearch
  * [selectBestMatch]'s answer or reports the track as not found, never the first
  * result. Shared so `play` and `queue_add` behave the same in both executors.
  *
- * The catalogs don't know a track that exists only as a local file (a private
- * recording, a demo), and nothing answers with no network, so the local files join
- * the candidates (#529). They go after the catalog's rows: when both have the exact
- * track, the catalog's row wins, since its ids spare the resolver a search. The
+ * Both executors search with the resolver search ([ResolverSearch]), as desktop's
+ * `play` and `queue_add` do: every streaming service the person has on, in their
+ * order, each service's results as it gave them. All of them are candidates
+ * ([DJ_TRACK_SEARCH_LIMIT]), so a track only a lower-ranked service has is still
+ * found, and the match tiers pick an exact match before a looser one wherever it
+ * came from. Desktop stops at the first service with an exact artist + title
+ * match (`earlyReturn`); asking every service at once and taking the
+ * highest-ranked exact match usually picks the same track.
+ *
+ * The local files join the candidates by title alone (#529): asking for "artist
+ * title" would need every word of the artist as written. They go after the
+ * search's rows: when both have the exact track, the earlier row wins. The
  * resolver then finds the file by the row's names, and the person's source order
  * still decides what plays.
  */
-const val DJ_TRACK_SEARCH_LIMIT = 20
+/** Every result the search finds. */
+const val DJ_TRACK_SEARCH_LIMIT = Int.MAX_VALUE
 
 const val DJ_NONE_FOUND_ERROR = "Could not find any of the requested tracks"
 
@@ -52,18 +62,7 @@ private suspend fun pickRequestedTrack(
  * tagged "A & B" for a request for "A and B", which the match itself accepts.
  */
 private fun localCandidates(title: String, localFiles: List<Track>): List<TrackSearchResult> =
-    LibraryTrackSearch.search(localFiles, title).map { track ->
-        TrackSearchResult(
-            title = track.title,
-            artist = track.artist,
-            album = track.album,
-            duration = track.duration,
-            artworkUrl = track.artworkUrl,
-            spotifyId = track.spotifyId,
-            mbid = track.recordingMbid,
-            provider = "localfiles",
-        )
-    }
+    localFileSearchResults(localFiles, title)
 
 /**
  * What became of a tool's list of requested tracks. [notFound] goes back to the AI,

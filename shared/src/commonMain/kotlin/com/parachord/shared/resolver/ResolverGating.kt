@@ -28,9 +28,11 @@ object ResolverGating {
         active: Collection<String>,
         disabled: Set<String>,
         nativeResolverIds: Set<String>,
+        /** The capability the plugin must declare: `resolve`, or `search` for [ResolverSearch]. */
+        capability: String = "resolve",
     ): List<String> =
         plugins.filter {
-            it.capabilities["resolve"] == true &&
+            it.capabilities[capability] == true &&
                 it.id !in nativeResolverIds &&
                 it.id !in disabled &&
                 (active.isEmpty() || it.id in active)

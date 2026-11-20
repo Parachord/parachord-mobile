@@ -349,17 +349,31 @@ class PluginManager constructor(
 
     // ── Resolver Calls ───────────────────────────────────────────────
 
+    /**
+     * A resolver plugin's `search(query, config)`: the raw JSON array of its
+     * tracks, or null when it answered nothing, isn't loaded or has no `search`.
+     * Uses the unique-key poll (the bare async IIFE this used to evaluate came
+     * back as the unresolved Promise once the plugin awaited a real fetch).
+     *
+     * A plugin whose config isn't complete isn't asked (null). Throws when the
+     * plugin threw or didn't answer in time: a search that couldn't answer, not
+     * one with no results.
+     */
     suspend fun search(resolverId: String, query: String): String? {
         ensureInitialized()
-        val escaped = escapeForJs(query)
-        return jsRuntime.evaluate("""
-            (async () => {
-                const r = window.__resolverLoader.getResolver('$resolverId');
-                if (!r || !r.search) return JSON.stringify([]);
-                const results = await r.search('$escaped', r.config || {});
-                return JSON.stringify(results || []);
-            })()
-        """.trimIndent())?.unquote()
+        if (!isPluginConfigured(resolverId)) {
+            Log.d(TAG, "Plugin '$resolverId' isn't configured; skipping search")
+            return null
+        }
+        return pollAsync(
+            "srch",
+            // One expression (see [getStreamUrl]).
+            "await (async () => { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                "if (!r || !r.search) return null; " +
+                "return await r.search('${escapeForJs(query)}', r.config || {}); })()",
+            attempts = LOOKUP_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        )
     }
 
     /**

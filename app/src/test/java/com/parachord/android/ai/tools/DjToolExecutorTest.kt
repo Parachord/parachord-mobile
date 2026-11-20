@@ -1,7 +1,7 @@
 package com.parachord.android.ai.tools
 
 import com.parachord.android.data.db.entity.TrackEntity
-import com.parachord.android.data.metadata.MetadataService
+import com.parachord.shared.resolver.ResolverSearch
 import com.parachord.android.data.metadata.TrackSearchResult
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.playback.PlaybackController
@@ -26,7 +26,7 @@ import org.junit.Test
 class DjToolExecutorTest {
 
     private val playback = mockk<PlaybackController>(relaxed = true)
-    private val metadata = mockk<MetadataService>()
+    private val metadata = mockk<ResolverSearch>()
     private val library = mockk<LibraryRepository>(relaxed = true)
     private val resolverManager = mockk<ResolverManager>()
     private val resolverScoring = mockk<ResolverScoring>()
@@ -37,11 +37,11 @@ class DjToolExecutorTest {
         coEvery { resolverManager.resolveWithHints(any(), any(), any(), any(), any(), any(), any(), any()) } returns emptyList()
         coEvery { resolverScoring.selectBest(any()) } returns null
         // Whatever is asked for, the search answers with the song it answered desktop with.
-        coEvery { metadata.searchTracks(any(), any()) } returns listOf(AVETT)
+        coEvery { metadata.search(any(), any()) } returns listOf(AVETT)
     }
 
     private fun searchFinds(artist: String, title: String) {
-        coEvery { metadata.searchTracks("$artist $title", any()) } returns
+        coEvery { metadata.search("$artist $title", any()) } returns
             listOf(AVETT, TrackSearchResult(title = title, artist = artist))
     }
 
@@ -62,7 +62,7 @@ class DjToolExecutorTest {
         coEvery { library.getLocalFiles() } returns listOf(
             TrackEntity(id = "local-1", title = "Basement Demo", artist = "Zzqart", resolver = "localfiles"),
         )
-        coEvery { metadata.searchTracks(any(), any()) } returns emptyList()
+        coEvery { metadata.search(any(), any()) } returns emptyList()
 
         val result = executor.execute("play", track("Zzqart", "Basement Demo"))
 
