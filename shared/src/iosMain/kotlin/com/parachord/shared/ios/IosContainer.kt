@@ -2107,20 +2107,20 @@ class IosContainer private constructor() {
         return com.parachord.shared.recommendations.songQueue(items, index, row)
     }
 
-    /** A weekly playlist card's play: its tracks, "Playing …", or "Couldn't load …". */
-    suspend fun recommendationsWeeklyQueue(weeklyId: String): IosRecQueueResult {
-        val item = recommendationItem { it.weekly?.id == weeklyId }
-            ?: return IosRecQueueResult(null, com.parachord.shared.recommendations.RecommendationCopy.couldntLoad("this playlist"))
-        return weeklyQueueResult(item) { id -> weeklyPlaylistsRepository.loadPlaylistTracks(id) }
-    }
+    /** A weekly playlist card's play: its tracks, "Playing [name]", or "Couldn't load [name]" ([name] is the card's title). */
+    suspend fun recommendationsWeeklyQueue(weeklyId: String, name: String): IosRecQueueResult =
+        weeklyQueueResult(recommendationItem { it.weekly?.id == weeklyId }, name) { id ->
+            weeklyPlaylistsRepository.loadPlaylistTracks(id)
+        }
 
-    /** A recommended service playlist's tracks through the registry's link lookup ([servicePlaylistQueue]). */
-    suspend fun recommendationsServicePlaylist(url: String): IosRecQueueResult {
-        val item = recommendationItem { it.weekly == null && it.url == url }
+    /** A recommended service playlist's tracks through the registry's link lookup ([servicePlaylistQueue]); [name] is the card's or view's title. */
+    suspend fun recommendationsServicePlaylist(url: String, name: String): IosRecQueueResult {
+        // The card the page holds, else one built from the link (a view opened from a queue's context).
+        val item = (recommendationItem { it.weekly == null && it.url == url }
             ?: com.parachord.shared.recommendations.RecommendationItem(
                 type = com.parachord.shared.recommendations.RecommendationType.PLAYLIST,
-                id = url, name = "this playlist", url = url,
-            )
+                id = url, name = name, url = url,
+            )).copy(name = name)
         val queue = try {
             com.parachord.shared.recommendations.servicePlaylistQueue(item) { u -> providerPlaylistResolver.resolve(u) }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -2130,7 +2130,7 @@ class IosContainer private constructor() {
         }
         return IosRecQueueResult(
             queue,
-            if (queue == null) com.parachord.shared.recommendations.RecommendationCopy.couldntLoad(item.name) else null,
+            if (queue == null) com.parachord.shared.recommendations.RecommendationCopy.couldntLoad(name) else null,
         )
     }
 

@@ -204,17 +204,22 @@ class IosRecommendationsPageTest {
     fun `a weekly queue says Playing and an empty one says Couldn't load`() = runTest {
         val weekly = WeeklyInfo("mbid-1", "weekly-jam", "Weekly Jams", "This week")
         val jams = item("Jams", RecommendationType.PLAYLIST, weekly = weekly)
-        val empty = weeklyQueueResult(jams) { emptyList() }
+        val empty = weeklyQueueResult(jams, "Jams") { emptyList() }
         assertNull(empty.queue)
         assertEquals(RecommendationCopy.couldntLoad("Jams"), empty.message)
 
-        val failed = weeklyQueueResult(jams) { throw IllegalStateException("offline") }
+        val failed = weeklyQueueResult(jams, "Jams") { throw IllegalStateException("offline") }
         assertEquals(RecommendationCopy.couldntLoad("Jams"), failed.message)
 
-        val ok = weeklyQueueResult(jams) {
+        val ok = weeklyQueueResult(jams, "Jams") {
             listOf(com.parachord.shared.api.LbPlaylistTrack(id = "1", title = "T", artist = "A"))
         }
         assertEquals(RecommendationCopy.playing("Jams"), ok.message)
         assertEquals("weekly-jam", ok.queue?.context?.type)
+
+        // The card left the page: the message names what Swift drew.
+        val gone = weeklyQueueResult(null, "Weekly Jams") { error("not asked") }
+        assertNull(gone.queue)
+        assertEquals(RecommendationCopy.couldntLoad("Weekly Jams"), gone.message)
     }
 }

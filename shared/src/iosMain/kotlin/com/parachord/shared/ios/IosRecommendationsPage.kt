@@ -9,22 +9,18 @@ import com.parachord.shared.recommendations.ListenerPlay
 import com.parachord.shared.recommendations.PageStatus
 import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.RecommendationPageBlock
 import com.parachord.shared.recommendations.RecommendationRow
 import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
-import com.parachord.shared.recommendations.SectionView
 import com.parachord.shared.recommendations.achordionUserUrl
 import com.parachord.shared.recommendations.activeSourceFilter
-import com.parachord.shared.recommendations.albumsSlotIndex
 import com.parachord.shared.recommendations.itemSourceName
 import com.parachord.shared.recommendations.listenerPlay
-import com.parachord.shared.recommendations.listenersSkeleton
 import com.parachord.shared.recommendations.pageStatus
-import com.parachord.shared.recommendations.pendingSkeleton
 import com.parachord.shared.recommendations.playlistTapOpensView
+import com.parachord.shared.recommendations.recommendationPageLayout
 import com.parachord.shared.recommendations.recommendedSongTrack
 import com.parachord.shared.recommendations.releaseYear
-import com.parachord.shared.recommendations.rowView
-import com.parachord.shared.recommendations.sectionViews
 import com.parachord.shared.recommendations.showsAchordionLink
 import com.parachord.shared.recommendations.upcomingLabel
 import com.parachord.shared.recommendations.weeklyContext
@@ -164,70 +160,38 @@ fun iosRecommendationsPage(
     )
 }
 
-/** Android's `PageContent` order: content sections (the Albums slot among them), pending, then Listeners. */
-private fun pageBlocks(state: RecommendationPageState, filter: String?, expanded: Set<String>, today: LocalDate): List<IosRecBlock> {
-    val out = mutableListOf<IosRecBlock>()
-    val views = sectionViews(state, filter)
-    val content = views.filter { it.section.type != null }
-    val listenersView = views.firstOrNull { it.section.type == null }
-    val slot = albumsSlotIndex(state, filter, views)
-    content.forEachIndexed { i, view ->
-        if (i == slot) out += skeleton("skeleton:albums-slot", "albumsSkeleton", RecommendationCopy.ALBUMS)
-        out += sectionBlocks(view, state, filter, expanded, today)
+/** The shared [recommendationPageLayout], block for block, as DTOs. */
+private fun pageBlocks(state: RecommendationPageState, filter: String?, expanded: Set<String>, today: LocalDate): List<IosRecBlock> =
+    recommendationPageLayout(state, filter, expanded).map { block ->
+        when (block) {
+            is RecommendationPageBlock.SectionTitle -> IosRecBlock(
+                id = "section:${block.section.type?.wire ?: "listeners"}", kind = "sectionTitle", rowKey = null,
+                title = block.section.title, subtitle = false, type = "", toggleLabel = null, expanded = false,
+                items = emptyList(), listeners = emptyList(), loadingTail = false, aiTail = 0,
+            )
+            is RecommendationPageBlock.Row -> rowBlock(block, today)
+            RecommendationPageBlock.PersonalSkeleton ->
+                skeleton("skeleton:personal", "personalSkeleton", RecommendationCopy.BASED_ON_LISTENING)
+            RecommendationPageBlock.AlbumsSkeleton ->
+                skeleton("skeleton:albums-slot", "albumsSkeleton", RecommendationCopy.ALBUMS)
+            RecommendationPageBlock.PendingSkeleton -> skeleton("skeleton:pending", "pendingSkeleton", null)
+            RecommendationPageBlock.ListenersSkeleton ->
+                skeleton("skeleton:listeners", "listenersSkeleton", RecommendationCopy.LISTENERS)
+        }
     }
-    if (slot == content.size) out += skeleton("skeleton:albums-slot", "albumsSkeleton", RecommendationCopy.ALBUMS)
-    if (pendingSkeleton(state, filter)) out += skeleton("skeleton:pending", "pendingSkeleton", null)
-    if (listenersView != null) {
-        out += sectionBlocks(listenersView, state, filter, expanded, today)
-    } else if (listenersSkeleton(state, filter)) {
-        out += skeleton("skeleton:listeners", "listenersSkeleton", RecommendationCopy.LISTENERS)
-    }
-    return out
-}
 
-/** A section: its title when its rows are categories, then each row, with Shuffleupagus's pending row where it goes. */
-private fun sectionBlocks(
-    view: SectionView,
-    state: RecommendationPageState,
-    filter: String?,
-    expanded: Set<String>,
-    today: LocalDate,
-): List<IosRecBlock> {
-    val out = mutableListOf<IosRecBlock>()
-    if (view.rows.any { it.category != null }) {
-        out += IosRecBlock(
-            id = "section:${view.section.type?.wire ?: "listeners"}", kind = "sectionTitle", rowKey = null,
-            title = view.section.title, subtitle = false, type = "", toggleLabel = null, expanded = false,
-            items = emptyList(), listeners = emptyList(), loadingTail = false, aiTail = 0,
-        )
-    }
-    val personal = skeleton("skeleton:personal", "personalSkeleton", RecommendationCopy.BASED_ON_LISTENING)
-    view.rows.forEachIndexed { index, row ->
-        if (index == view.personalPendingAt) out += personal
-        out += rowBlock(row, view, state, filter, row.key in expanded, today)
-    }
-    if (view.personalPendingAt == view.rows.size) out += personal
-    return out
-}
-
-private fun rowBlock(
-    row: RecommendationRow,
-    view: SectionView,
-    state: RecommendationPageState,
-    filter: String?,
-    expanded: Boolean,
-    today: LocalDate,
-): IosRecBlock {
-    val rv = rowView(row, state, filter, expanded)
+private fun rowBlock(block: RecommendationPageBlock.Row, today: LocalDate): IosRecBlock {
+    val row = block.row
+    val rv = block.view
     return IosRecBlock(
         id = "row:${row.key}",
         kind = "row",
         rowKey = row.key,
-        title = row.title ?: view.section.title,
-        subtitle = row.category != null,
+        title = block.title,
+        subtitle = block.subtitle,
         type = row.type?.wire ?: "listener",
         toggleLabel = if (rv.showToggle) rv.toggleLabel else null,
-        expanded = expanded,
+        expanded = block.expanded,
         items = rv.items.map { iosRecItem(it, row, today) },
         listeners = rv.listeners.map { iosRecListener(it) },
         loadingTail = rv.loadingTail,
@@ -293,12 +257,17 @@ suspend fun listenerQueueResult(
     IosRecQueueResult(null, RecommendationCopy.listenerTracksFailed(name))
 }
 
-/** A weekly playlist's tracks as a queue with "Playing …", or "Couldn't load …" (Android's `playWeekly`). */
+/**
+ * A weekly playlist's tracks as a queue with "Playing [name]", or "Couldn't load [name]"
+ * (Android's `playWeekly`). [item] is the card found on the page, null when it's gone;
+ * [name] is the card's title as Swift drew it.
+ */
 suspend fun weeklyQueueResult(
-    item: RecommendationItem,
+    item: RecommendationItem?,
+    name: String,
     loadTracks: suspend (playlistId: String) -> List<LbPlaylistTrack>,
 ): IosRecQueueResult {
-    val weekly = item.weekly ?: return IosRecQueueResult(null, RecommendationCopy.couldntLoad(item.name))
+    val weekly = item?.weekly ?: return IosRecQueueResult(null, RecommendationCopy.couldntLoad(name))
     val tracks = try {
         weeklyTracks(weekly, loadTracks(weekly.id))
     } catch (e: CancellationException) {
@@ -306,6 +275,6 @@ suspend fun weeklyQueueResult(
     } catch (e: Exception) {
         emptyList()
     }
-    if (tracks.isEmpty()) return IosRecQueueResult(null, RecommendationCopy.couldntLoad(item.name))
-    return IosRecQueueResult(CatalogQueue(tracks, weeklyContext(weekly)), RecommendationCopy.playing(item.name))
+    if (tracks.isEmpty()) return IosRecQueueResult(null, RecommendationCopy.couldntLoad(name))
+    return IosRecQueueResult(CatalogQueue(tracks, weeklyContext(weekly)), RecommendationCopy.playing(name))
 }
