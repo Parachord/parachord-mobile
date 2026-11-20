@@ -59,20 +59,18 @@ final class ServicePlaylistViewModel {
             ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: index)
     }
 
-    /// Saves (or opens the earlier copy); returns the saved id, or nil after a failure
-    /// (the caller shows `couldntSave`). A success keeps Save disabled and remembers the id.
-    func save() async -> String? {
-        if let id = savedId { return id }
-        guard !saving else { return nil }
+    enum SaveOutcome { case saved(String), alreadySaving, failed }
+
+    /// Saves (or returns the earlier copy). Disabled only while an import is in flight.
+    func save() async -> SaveOutcome {
+        if let id = savedId { return .saved(id) }
+        guard !saving else { return .alreadySaving }
         saving = true
-        do {
-            let r = try await container.importPlaylistFromUrl(url: url, savedKey: container.recommendedPlaylistKey(url: url))
-            savedId = r.playlistId
-            return r.playlistId
-        } catch {
-            saving = false
-            return nil
-        }
+        defer { saving = false }
+        let r = try? await container.saveRecommendedPlaylist(url: url)
+        guard let id = r?.playlistId else { return .failed }
+        savedId = id
+        return .saved(id)
     }
 }
 
@@ -151,10 +149,13 @@ struct ServicePlaylistView: View {
     private func save() {
         let copy = RecommendationCopy.shared
         Task {
-            if let id = await model.save() {
+            switch await model.save() {
+            case .saved(let id):
                 coordinator.notice = QueuePlaybackCoordinator.Notice(message: copy.saved(name: model.name), showInCar: false)
                 route = .savedPlaylist(id: id)
-            } else {
+            case .alreadySaving:
+                break
+            case .failed:
                 coordinator.notice = QueuePlaybackCoordinator.Notice(message: copy.couldntSave(name: model.name), showInCar: false)
             }
         }

@@ -982,6 +982,16 @@ class IosContainer private constructor() {
     suspend fun importPlaylistFromUrl(url: String, savedKey: String): com.parachord.shared.playlist.XspfImportResult =
         playlistUrlImporter.importFromUrl(url, savedKey)
 
+    /** Saves a recommended service playlist under its key; never throws (a failure is a null id). */
+    suspend fun saveRecommendedPlaylist(url: String): IosSaveResult = try {
+        IosSaveResult(importPlaylistFromUrl(url, recommendedPlaylistKey(url)).playlistId)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "saveRecommendedPlaylist failed: ${e.message}")
+        IosSaveResult(null)
+    }
+
     /** The key a recommended service playlist is saved under (shared `recommendedPlaylistKey`). */
     fun recommendedPlaylistKey(url: String): String =
         com.parachord.shared.recommendations.recommendedPlaylistKey(url)

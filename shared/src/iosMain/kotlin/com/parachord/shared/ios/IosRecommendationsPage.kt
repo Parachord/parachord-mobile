@@ -129,6 +129,9 @@ data class IosRecListener(
     val friendId: String,
 )
 
+/** A recommended playlist's save: its saved playlist id, or null when the import failed. */
+data class IosSaveResult(val playlistId: String?)
+
 /** What a play tap produced: a queue to play, a message to show, or both. */
 data class IosRecQueueResult(val queue: CatalogQueue?, val message: String?)
 
