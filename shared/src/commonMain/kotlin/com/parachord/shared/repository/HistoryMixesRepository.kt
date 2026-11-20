@@ -306,7 +306,8 @@ class HistoryMixesRepository(
                     mutex.withLock { covers[mix.id] = found.take(4) }
                     publish(kickMosaics = false)
                 }
-                // No covers: the mix keeps its placeholder for the session.
+                // No covers from lookups that all answered: the placeholder stays
+                // for the session. A failed lookup throws (historyMixMosaicCovers) and is retried below.
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

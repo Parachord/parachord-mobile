@@ -105,9 +105,8 @@ fun CollectionRadioButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         contentColor = OnFill,
         modifier = modifier.heightIn(min = 40.dp),
     ) {
-        // Desktop's padding (6 16 6 6) and 10 gap (collection-radio-button.js), kept
-        // as desktop has them: 6 is on the shared spacing scale; the mark sits 6
-        // from the pill's edge so it stays concentric with it.
+        // Padding 6 16 6 6, desktop's (collection-radio-button.js), on the
+        // spacing scale: the mark sits 6 from the pill's edge, concentric with it.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(start = 6.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
@@ -118,7 +117,8 @@ fun CollectionRadioButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
             ) {
                 ParachordIcon(AppIcon.Play, contentDescription = null, size = 12.dp, tint = FillAccent)
             }
-            Spacer(Modifier.width(10.dp))
+            // Desktop's gap is 10, off the spacing scale; 8 is the nearest step.
+            Spacer(Modifier.width(8.dp))
             Text(text = HomeCopy.PLAY_COLLECTION_RADIO, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }

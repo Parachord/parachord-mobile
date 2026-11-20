@@ -27,7 +27,11 @@ fun jumpTilesArt(tiles: List<JumpTile>, loves: List<Track>, found: Map<String, S
 
 /**
  * Looks up the cover of an album that came on screen without one, as the
- * Recommendations album cards do (desktop Home's `requestArt`). Each key is
+ * Recommendations album cards do. Jump back in's album tiles follow desktop
+ * Home's `requestArt`; the halves' cards are a mobile addition (desktop leaves
+ * them to their feeds), asked only once a feed has finished without a cover
+ * (`halfCardNeedsArt`), so they don't compete with the feed's own lookups on
+ * the MusicBrainz queue. Each key is
  * asked once per session; a lookup that threw is asked again the next time it
  * shows. [lookup] is the platform's album-art search
  * (`ImageEnrichmentService.lookupAlbumArt`).

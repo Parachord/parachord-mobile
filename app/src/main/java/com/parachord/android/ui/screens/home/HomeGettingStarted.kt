@@ -566,6 +566,7 @@ fun HomeExploreSection(
                     page = DesignTokens.Page.CRITICAL_DARLINGS, icon = PageIcon.CRITICAL_DARLINGS, title = HomeCopy.CRITICAL_DARLINGS,
                     cards = cards, body = homeHalfBody(cards.size, state.critical.loading, failed = false),
                     onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
+                    feedLoading = state.critical.loading,
                 )
             }
             if (halves.charts) {
@@ -575,6 +576,7 @@ fun HomeExploreSection(
                     page = DesignTokens.Page.POP_OF_THE_TOPS, icon = PageIcon.POP_OF_THE_TOPS, title = HomeCopy.POP_OF_THE_TOPS,
                     cards = cards, body = body,
                     onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
+                    feedLoading = state.charts.loading,
                     onRetry = onRetryCharts,
                 )
             }

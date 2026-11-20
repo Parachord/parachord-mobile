@@ -123,6 +123,9 @@ fun HomeScreen(
 
     // ON_RESUME also fires on entering composition, so this is once per visit.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onVisible() }
+    // A new phrasing for the Ask example each time Home enters composition
+    // (desktop picks its askSeed per mount), not on every resume.
+    LaunchedEffect(Unit) { viewModel.reseedAskExample() }
 
     // Playlist-action toasts (Apple Music's unsupported delete, D8).
     LaunchedEffect(viewModel) {

@@ -77,10 +77,12 @@ fun halfCardArtKey(card: HomeHalfCard): String =
 
 /**
  * The half's cards with the covers [found] for the ones that came without one.
- * A half card's feed fills its covers slowly (the Critical Darlings and Fresh
- * Drops feeds look each album up in turn, behind the MusicBrainz queue), so a
- * card on screen with no cover asks for its own ([ShownAlbumArtLookup], as
- * desktop Home's `requestArt` does for its albums). A card's own cover wins.
+ * A card's own cover wins.
+ *
+ * A mobile addition: desktop's Home leaves Fresh Drops' and Critical Darlings'
+ * covers to their feeds (and retries a broken one through `reportBroken`), and
+ * never asks for them itself. On the phone, cards the feed finished without a
+ * cover showed initials for good, so Home looks those up ([halfCardNeedsArt]).
  */
 fun withHalfCardArt(cards: List<HomeHalfCard>, found: Map<String, String>): List<HomeHalfCard> {
     if (found.isEmpty()) return cards
@@ -89,9 +91,16 @@ fun withHalfCardArt(cards: List<HomeHalfCard>, found: Map<String, String>): List
     }
 }
 
-/** Whether a half card on screen should ask for a cover: it has none and names its album and artist. */
-fun halfCardNeedsArt(card: HomeHalfCard): Boolean =
-    card.imageUrl.isNullOrBlank() && card.title.isNotBlank() && card.artist.isNotBlank()
+/**
+ * Whether a half card on screen should ask for a cover: it has none, names its
+ * album and artist, and its feed has finished ([feedLoading] false). The Fresh
+ * Drops and Critical Darlings feeds look covers up one album at a time on the
+ * MusicBrainz 1 req/s queue while they load; asking while they do would put a
+ * second lookup for the same album on that queue. Only cards the feed
+ * delivered without a cover ask.
+ */
+fun halfCardNeedsArt(card: HomeHalfCard, feedLoading: Boolean): Boolean =
+    !feedLoading && card.imageUrl.isNullOrBlank() && card.title.isNotBlank() && card.artist.isNotBlank()
 
 /**
  * What a half's body shows: its cards, a skeleton (shown but no cards yet),

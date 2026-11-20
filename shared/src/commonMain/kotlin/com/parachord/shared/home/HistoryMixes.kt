@@ -168,7 +168,18 @@ suspend fun lookupPlaylistCovers(
     tracks: List<CoverTrack>,
     albumArt: suspend (album: String, artist: String) -> String?,
     artistImage: suspend (artist: String) -> String?,
-): List<String> {
+): List<String> = lookupPlaylistCoversReport(tracks, albumArt, artistImage).covers
+
+/** [lookupPlaylistCovers]' answer, and whether any lookup threw (it couldn't answer, which isn't "no cover"). */
+data class PlaylistCoversReport(val covers: List<String>, val lookupFailed: Boolean)
+
+/** [lookupPlaylistCovers], reporting whether a lookup failed. */
+suspend fun lookupPlaylistCoversReport(
+    tracks: List<CoverTrack>,
+    albumArt: suspend (album: String, artist: String) -> String?,
+    artistImage: suspend (artist: String) -> String?,
+): PlaylistCoversReport {
+    var failed = false
     val seenAlbums = mutableSetOf<String>()
     val seenUrls = mutableSetOf<String>()
     val seenArtists = mutableSetOf<String>()
@@ -180,6 +191,7 @@ suspend fun lookupPlaylistCovers(
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {
+        failed = true
         null
     }
 
@@ -223,7 +235,7 @@ suspend fun lookupPlaylistCovers(
             tryArtist(t.artist)
         }
     }
-    return covers.take(4)
+    return PlaylistCoversReport(covers.take(4), failed)
 }
 
 /**
@@ -231,9 +243,12 @@ suspend fun lookupPlaylistCovers(
  * playlist-link lookup, the one Play uses) finds at its URL, through
  * [lookupPlaylistCovers] (desktop's `getPlaylistCovers(mix.id, tracks)`):
  * ListenBrainz's mixes carry no covers, so [albumArt] and [artistImage] fill
- * them. Both apps' `mosaicCovers`. A lookup that finds nothing throws (the link
- * lookup answers null when it couldn't be reached, often in the first seconds
- * after launch), so the repository retries it.
+ * them. Both apps' `mosaicCovers`. It throws, so the repository retries it
+ * ([HOME_MIX_COVER_RETRY_MS], [HOME_MIX_COVER_ATTEMPTS] tries), when the link
+ * lookup finds nothing (it answers null when it couldn't be reached, often in
+ * the first seconds after launch) and when no cover came back because a cover
+ * lookup failed: offline or rate limited isn't "this mix has no covers". An
+ * empty answer from lookups that all answered is final.
  */
 suspend fun historyMixMosaicCovers(
     mix: HistoryMix,
@@ -243,5 +258,9 @@ suspend fun historyMixMosaicCovers(
 ): List<String> {
     val play = resolve(mix.url) ?: throw IllegalStateException("No playlist found for history mix ${mix.id}")
     val tracks = servicePlaylistTracks(play).map { CoverTrack(it.artist, it.album, it.artworkUrl) }
-    return lookupPlaylistCovers(tracks, albumArt, artistImage)
+    val report = lookupPlaylistCoversReport(tracks, albumArt, artistImage)
+    if (report.covers.isEmpty() && report.lookupFailed) {
+        throw IllegalStateException("Cover lookups failed for history mix ${mix.id}")
+    }
+    return report.covers
 }

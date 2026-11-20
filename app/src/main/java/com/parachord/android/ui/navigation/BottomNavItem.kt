@@ -28,7 +28,7 @@ enum class BottomNavItem(
 /**
  * Whether a bottom-bar tab is selected: some destination in the current
  * hierarchy ([destinationRoutes]) is the tab's route, its arguments ignored.
- * Collection's destination is `collection?tab={tab}` while the tab navigates
+ * Collection's destination is `collection?tab={tab}&sort={sort}` while the tab navigates
  * to `collection`, so comparing whole routes never selected it.
  */
 fun bottomNavSelected(itemRoute: String?, destinationRoutes: Sequence<String?>): Boolean =

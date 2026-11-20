@@ -21,4 +21,13 @@ class BottomNavSelectedTest {
     fun `the Add action is never selected`() {
         assertFalse(bottomNavSelected(BottomNavItem.ADD.route, sequenceOf(Routes.HOME, null)))
     }
+
+    @Test
+    fun `Collection links carry the tab and the songs' sort only when given`() {
+        org.junit.Assert.assertEquals("collection", Routes.collection())
+        org.junit.Assert.assertEquals("collection?tab=2", Routes.collection(2))
+        org.junit.Assert.assertEquals("collection?tab=2&sort=RECENT", Routes.collection(2, "RECENT"))
+        org.junit.Assert.assertEquals("collection?sort=RECENT", Routes.collection(0, "RECENT"))
+        assertTrue(bottomNavSelected(BottomNavItem.COLLECTION.route, sequenceOf(Routes.collection(2, "RECENT"))))
+    }
 }

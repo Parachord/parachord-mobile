@@ -247,4 +247,32 @@ class HistoryMixesTest {
         ) { play }
         assertEquals(listOf("art-One", "photo-B"), covers)
     }
+
+    @Test
+    fun `no covers because a lookup failed throws so the mosaic is retried`() = runTest {
+        val play = ResolvedProtocolPlay(
+            displayName = "Weekly Jams",
+            tracks = listOf(ProtocolTrack("A", "T1", album = "One")),
+            providerId = "listenbrainz",
+        )
+        assertFailsWith<IllegalStateException> {
+            historyMixMosaicCovers(jams, albumArt = { _, _ -> error("offline") }, artistImage = { null }) { play }
+        }
+        // Every lookup answered with nothing: a final empty answer.
+        assertEquals(emptyList(), historyMixMosaicCovers(jams, albumArt = { _, _ -> null }, artistImage = { null }) { play })
+        // Some covers found despite a failure: kept, no retry.
+        val two = play.copy(tracks = listOf(ProtocolTrack("A", "T1", album = "One"), ProtocolTrack("B", "T2", album = "Two")))
+        assertEquals(
+            listOf("art-Two"),
+            historyMixMosaicCovers(jams, albumArt = { album, _ -> if (album == "One") error("offline") else "art-$album" }, artistImage = { null }) { two },
+        )
+    }
+
+    @Test
+    fun `the report says whether a lookup failed`() = runTest {
+        val ok = lookupPlaylistCoversReport(listOf(CoverTrack("A", "One", null)), { _, _ -> null }, { null })
+        assertEquals(PlaylistCoversReport(emptyList(), lookupFailed = false), ok)
+        val bad = lookupPlaylistCoversReport(listOf(CoverTrack("A", "One", null)), { _, _ -> null }, { error("down") })
+        assertEquals(PlaylistCoversReport(emptyList(), lookupFailed = true), bad)
+    }
 }

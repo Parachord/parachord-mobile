@@ -181,7 +181,7 @@ class AndroidProtocolInputResolver constructor(
                 tracks = parsed.tracks,
             )
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "Tracklist parse failed for ${com.parachord.shared.api.SecretRedaction.redactSecrets(url)}: ${e.message}")
+            Log.w(TAG, "Tracklist parse failed for ${com.parachord.shared.api.SecretRedaction.redactSecrets(url)}: ${e.message?.let { com.parachord.shared.api.SecretRedaction.redactSecrets(it) }}")
             null
         }
     }

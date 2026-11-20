@@ -100,14 +100,16 @@ object Routes {
             .joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
 
     /**
-     * Collection, on [tab]. [trackSort] (a `TrackSort` name) sets the songs'
-     * sort as it opens: Home's Recent Loves opens the songs newest first, as
-     * desktop's tile does (`setCollectionSort({ tracks: 'recent' })`).
+     * Collection, on [tab]. [trackSort] (a `TrackSort` name, a plain
+     * identifier) sets the songs' sort once as the entry opens
+     * (`LibraryViewModel`'s `takeLinkTrackSort`): Home's Recent Loves opens
+     * the songs on Recently Added, as desktop's tile does
+     * (`setCollectionSort({ tracks: 'recent' })`).
      */
     fun collection(tab: Int = 0, trackSort: String? = null): String {
         val args = listOfNotNull(
             tab.takeIf { it > 0 }?.let { "tab=$it" },
-            trackSort?.let { "sort=${Uri.encode(it)}" },
+            trackSort?.let { "sort=$it" },
         )
         return if (args.isEmpty()) "collection" else "collection?" + args.joinToString("&")
     }
@@ -200,10 +202,8 @@ fun ParachordNavHost(
             ),
         ) { backStackEntry ->
             val initialTab = backStackEntry.arguments?.getInt("tab") ?: 0
-            val trackSort = backStackEntry.arguments?.getString("sort")
             com.parachord.android.ui.screens.library.CollectionScreen(
                 initialTab = initialTab,
-                initialTrackSort = trackSort,
                 onOpenDrawer = onOpenDrawer,
                 onNavigateToFriend = { friendId ->
                     navController.navigate(Routes.friendDetail(friendId))

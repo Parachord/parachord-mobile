@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.library
 
 import kotlinx.coroutines.Job
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.data.db.entity.AlbumEntity
@@ -25,7 +26,26 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+/**
+ * The songs' sort a Collection link asks for (its `sort` argument, a
+ * `TrackSort` name: Home's Recent Loves asks for RECENT), applied once per
+ * back-stack entry. The handle remembers it was applied, so coming Back to the
+ * entry, restoring the tab or recreating the process never applies it again
+ * over a sort the user picked since. Null when there is nothing to apply.
+ */
+internal fun takeLinkTrackSort(handle: SavedStateHandle): TrackSort? {
+    if (handle.get<Boolean>(LINK_SORT_APPLIED_KEY) == true) return null
+    val name = handle.get<String>(LINK_SORT_ARG) ?: return null
+    handle[LINK_SORT_APPLIED_KEY] = true
+    return TrackSort.entries.firstOrNull { it.name == name }
+}
+
+/** The Collection route's sort argument (`Routes.COLLECTION`). */
+internal const val LINK_SORT_ARG = "sort"
+private const val LINK_SORT_APPLIED_KEY = "collection_link_sort_applied"
+
 class LibraryViewModel constructor(
+    savedStateHandle: SavedStateHandle,
     private val repository: LibraryRepository,
     private val playbackController: PlaybackController,
     private val imageEnrichmentService: ImageEnrichmentService,
@@ -99,6 +119,8 @@ class LibraryViewModel constructor(
     val searchQuery: StateFlow<String> = _searchQuery
 
     init {
+        // A link's sort first, so the saved one loading below can't replace it.
+        takeLinkTrackSort(savedStateHandle)?.let(::setTrackSort)
         viewModelScope.launch {
             settingsStore.getSortArtists()?.let { name ->
                 runCatching { ArtistSort.valueOf(name) }.getOrNull()?.let { _artistSort.value = it }

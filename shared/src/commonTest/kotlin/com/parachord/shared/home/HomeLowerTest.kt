@@ -117,11 +117,13 @@ class HomeLowerTest {
     }
 
     @Test
-    fun `only a coverless card with both names asks for a cover`() {
-        assertTrue(halfCardNeedsArt(card("A", "B")))
-        assertTrue(halfCardNeedsArt(card("A", "B", "")))
-        assertFalse(halfCardNeedsArt(card("A", "B", "x")))
-        assertFalse(halfCardNeedsArt(card(" ", "B")))
-        assertFalse(halfCardNeedsArt(card("A", "")))
+    fun `only a coverless card with both names asks for a cover once its feed has finished`() {
+        assertTrue(halfCardNeedsArt(card("A", "B"), feedLoading = false))
+        assertTrue(halfCardNeedsArt(card("A", "B", ""), feedLoading = false))
+        // Still loading: the feed's own lookups may yet fill it.
+        assertFalse(halfCardNeedsArt(card("A", "B"), feedLoading = true))
+        assertFalse(halfCardNeedsArt(card("A", "B", "x"), feedLoading = false))
+        assertFalse(halfCardNeedsArt(card(" ", "B"), feedLoading = false))
+        assertFalse(halfCardNeedsArt(card("A", ""), feedLoading = false))
     }
 }

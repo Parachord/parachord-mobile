@@ -144,6 +144,7 @@ fun HomeHalvesSection(
                 page = DesignTokens.Page.FRESH_DROPS, icon = PageIcon.FRESH_DROPS, title = HomeCopy.FRESH_DROPS,
                 cards = cards, body = homeHalfBody(cards.size, state.fresh.loading, failed = false),
                 onSeeAll = onSeeAllFresh, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
+                feedLoading = state.fresh.loading,
             )
         }
         if (halves.critical) {
@@ -152,6 +153,7 @@ fun HomeHalvesSection(
                 page = DesignTokens.Page.CRITICAL_DARLINGS, icon = PageIcon.CRITICAL_DARLINGS, title = HomeCopy.CRITICAL_DARLINGS,
                 cards = cards, body = homeHalfBody(cards.size, state.critical.loading, failed = false),
                 onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
+                feedLoading = state.critical.loading,
             )
         }
         if (halves.charts) {
@@ -160,6 +162,7 @@ fun HomeHalvesSection(
                 page = DesignTokens.Page.POP_OF_THE_TOPS, icon = PageIcon.POP_OF_THE_TOPS, title = HomeCopy.POP_OF_THE_TOPS,
                 cards = cards, body = homeHalfBody(cards.size, state.charts.loading, state.charts.failed),
                 onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
+                feedLoading = state.charts.loading,
                 onRetry = onRetryCharts,
             )
         }
@@ -186,6 +189,7 @@ fun HomeHalf(
     modifier: Modifier = Modifier,
     onRetry: (() -> Unit)? = null,
     onCardShown: (HomeHalfCard) -> Unit = {},
+    feedLoading: Boolean = false,
 ) {
     Column(
         modifier = modifier
@@ -250,7 +254,8 @@ fun HomeHalf(
                 } else {
                     items(cards, key = { it.key }) { card ->
                         // A card on screen with no cover asks for one (shared withHalfCardArt).
-                        if (halfCardNeedsArt(card)) LaunchedEffect(card.key) { onCardShown(card) }
+                        // A card the feed finished without a cover asks for one (shared halfCardNeedsArt).
+                        if (halfCardNeedsArt(card, feedLoading)) LaunchedEffect(card.key) { onCardShown(card) }
                         HalfAlbumCard(card, RecCardWidth, { onOpen(card) }, { onPlay(card) }, { onLongPress(card) })
                     }
                 }
