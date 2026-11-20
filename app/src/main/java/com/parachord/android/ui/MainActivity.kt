@@ -14,7 +14,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.Arrangement
@@ -49,9 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -68,6 +65,7 @@ import com.parachord.android.deeplink.LaunchIntentPolicy
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.playback.handlers.MusicKitWebBridge
+import com.parachord.android.ui.components.edgeSwipes
 import com.parachord.android.ui.components.ActionOverlay
 import com.parachord.android.ui.components.NetworkBanner
 import com.parachord.android.ui.components.CreatePlaylistDialog
@@ -499,14 +497,6 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         }
     }
 
-    // The drawer and the chat open only from a swipe that starts at the
-    // screen's edge (the 24dp zones below): left edge → drawer, right edge →
-    // chat. A carousel or tab strip swiped past either end no longer opens
-    // either one (it used to, through an overscroll catcher on the content).
-    // Edge-swipe threshold for opening the drawer or the chat
-    val density = LocalDensity.current
-    val edgeSwipeThresholdPx = with(density) { 60.dp.toPx() }
-
     Box(modifier = Modifier.fillMaxSize()) {
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -659,7 +649,16 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                     // Network connectivity banner — slides in when offline
                     NetworkBanner(isOnline = isOnline)
 
-                    Box(modifier = Modifier.weight(1f)) {
+                    // The drawer and the chat open only from a swipe that starts
+                    // in an edge band (ui/components/EdgeSwipe.kt).
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .then(
+                                if (showBottomBar) Modifier.edgeSwipes(onLeft = onOpenDrawer, onRight = onOpenChat)
+                                else Modifier,
+                            ),
+                    ) {
                     ParachordNavHost(
                         navController = navController,
                         onOpenDrawer = onOpenDrawer,
@@ -673,58 +672,6 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                         listenAlongCanAdvance = listenAlongCanAdvance,
                         onListenAlongNext = { mainViewModel.advanceToFriend() },
                     )
-
-                    // Left-edge swipe zone: swipe right from the left edge to open the drawer.
-                    if (showBottomBar) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.CenterStart)
-                                .width(24.dp)
-                                .fillMaxHeight()
-                                .pointerInput(onOpenDrawer) {
-                                    var accumulated = 0f
-                                    detectHorizontalDragGestures(
-                                        onDragStart = { accumulated = 0f },
-                                        onDragEnd = {
-                                            if (accumulated > edgeSwipeThresholdPx) {
-                                                onOpenDrawer()
-                                            }
-                                            accumulated = 0f
-                                        },
-                                        onDragCancel = { accumulated = 0f },
-                                        onHorizontalDrag = { _, dragAmount ->
-                                            accumulated += dragAmount
-                                        },
-                                    )
-                                },
-                        )
-                    }
-
-                    // Right-edge swipe zone: swipe left from the right edge to open chat.
-                    if (showBottomBar) {
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .width(24.dp)
-                                .fillMaxHeight()
-                                .pointerInput(onOpenChat) {
-                                    var accumulated = 0f
-                                    detectHorizontalDragGestures(
-                                        onDragStart = { accumulated = 0f },
-                                        onDragEnd = {
-                                            if (accumulated < -edgeSwipeThresholdPx) {
-                                                onOpenChat()
-                                            }
-                                            accumulated = 0f
-                                        },
-                                        onDragCancel = { accumulated = 0f },
-                                        onHorizontalDrag = { _, dragAmount ->
-                                            accumulated += dragAmount
-                                        },
-                                    )
-                                },
-                        )
-                    }
                     }
                 }
             }

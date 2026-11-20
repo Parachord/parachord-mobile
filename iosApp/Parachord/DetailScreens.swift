@@ -967,7 +967,12 @@ struct ArtistScreen: View {
     init(artistName: String, mbid: String? = nil, initialTab: ArtistTab = .discography) {
         _model = State(initialValue: ArtistDetailModel(name: artistName, mbid: mbid))
         _tab = State(initialValue: initialTab)
+        openedOnTour = initialTab == .onTour
     }
+
+    /// Opened on On Tour (a concert card, the on-tour dot): the tab shows at
+    /// once, while the dates load, as on Android.
+    private let openedOnTour: Bool
 
     /// Queue-source context (#209) for top-songs playback → links back here.
     private var artistContext: PlaybackContext {
@@ -1093,10 +1098,11 @@ struct ArtistScreen: View {
     // MARK: Tabs
 
     /// Tab order matches Android: the four base tabs, with On Tour appended LAST
-    /// and only when the artist has upcoming dates (ArtistScreen.kt buildList).
+    /// and only when the artist has upcoming dates (ArtistScreen.kt buildList),
+    /// or the page was opened on it (a concert card) before the dates loaded.
     private var visibleTabs: [ArtistTab] {
         var tabs: [ArtistTab] = [.discography, .topTracks, .biography, .related]
-        if model.isOnTour { tabs.append(.onTour) }
+        if model.isOnTour || openedOnTour { tabs.append(.onTour) }
         return tabs
     }
 

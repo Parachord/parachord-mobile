@@ -288,13 +288,18 @@ fun ArtistScreen(
                 // Tabs + pager — show "On Tour" tab when artist has upcoming dates
                 // Desktop puts "On Tour" last: Music | Biography | Related Artists | On Tour
                 // Appending at end avoids shifting existing tab indices when it appears
-                val tabs = remember(isOnTour) {
+                // A link that asks for On Tour (a concert card) gets the tab at
+                // once, before the tour dates have loaded: the pager keeps the
+                // page it opened on, so a tab that appeared later was never
+                // selected and the page opened on Discography.
+                val wantsTour = initialTab == com.parachord.shared.home.ARTIST_ON_TOUR_TAB
+                val tabs = remember(isOnTour, wantsTour) {
                     buildList {
                         add("Discography")
                         add("Top Tracks")
                         add("Biography")
                         add("Related Artists")
-                        if (isOnTour) add(com.parachord.shared.home.ARTIST_ON_TOUR_TAB)
+                        if (isOnTour || wantsTour) add(com.parachord.shared.home.ARTIST_ON_TOUR_TAB)
                     }
                 }
 
