@@ -83,6 +83,7 @@ import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.bind
 import org.koin.dsl.module
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -1001,9 +1002,9 @@ val androidModule = module {
     // parameter); a single, so the feeds a visit loaded stay for the next one.
     single<com.parachord.shared.home.HomeSources> {
         val settings: com.parachord.shared.settings.SettingsStore = get()
-        com.parachord.android.ui.screens.home.AndroidHomeSources(
+        val playbackState: com.parachord.android.playback.PlaybackStateHolder = get()
+        com.parachord.shared.home.RepositoryHomeSources(
             library = get(),
-            playbackStateHolder = get(),
             settings = settings,
             pluginManager = get(),
             announcementsRepository = get(),
@@ -1016,6 +1017,8 @@ val androidModule = module {
             concertsRepository = get(),
             concertArtistSeed = get(),
             concertArtistImages = get(),
+            playingContext = playbackState.state.map { it.playbackContext }.distinctUntilChanged(),
+            isPlaying = playbackState.state.map { it.isPlaying && !it.isBuffering }.distinctUntilChanged(),
             pluginIsOn = { id, isMeta, needsAccount -> androidPluginIsOn(settings, id, isMeta, needsAccount) },
             notPlaying = get<com.parachord.shared.plugin.PluginStatusStore>().notPlaying,
             limits = get<com.parachord.shared.plugin.PluginStatusStore>().limits,

@@ -3,6 +3,7 @@ package com.parachord.android.ui.screens.home
 import com.parachord.android.playback.PlaybackState
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.shared.ai.AiRecommendationService
+import com.parachord.shared.home.RepositoryHomeSources
 import com.parachord.shared.home.serviceConnected
 import com.parachord.shared.home.stepOnePlugins
 import com.parachord.shared.plugin.PluginManager
@@ -14,7 +15,9 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -26,7 +29,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /** Android's mapping of its data onto Home's sources. */
-class AndroidHomeSourcesTest {
+class RepositoryHomeSourcesTest {
 
     /** The bundled plug-ins step 1 offers, shaped as their manifests load. */
     private val bundled = listOf(
@@ -43,7 +46,7 @@ class AndroidHomeSourcesTest {
         configured: Boolean,
         ai: AiRecommendationService = mockk(relaxed = true),
         tracks: kotlinx.coroutines.flow.Flow<List<com.parachord.shared.model.Track>> = flowOf(emptyList()),
-    ): AndroidHomeSources {
+    ): RepositoryHomeSources {
         val settings = mockk<SettingsStore>(relaxed = true)
         every { settings.getSpotifyAccessTokenFlow() } returns flowOf(null)
         every { settings.getSoundCloudTokenFlow() } returns flowOf(null)
@@ -62,9 +65,8 @@ class AndroidHomeSourcesTest {
         every { library.getAllAlbums() } returns flowOf(emptyList())
         every { library.getAllArtists() } returns flowOf(emptyList())
         every { library.getAllPlaylists() } returns flowOf(emptyList())
-        return AndroidHomeSources(
+        return RepositoryHomeSources(
             library = library,
-            playbackStateHolder = holder,
             settings = settings,
             pluginManager = plugins,
             announcementsRepository = mockk(relaxed = true),
@@ -77,6 +79,8 @@ class AndroidHomeSourcesTest {
             concertsRepository = mockk(relaxed = true),
             concertArtistSeed = mockk(relaxed = true),
             concertArtistImages = com.parachord.shared.home.ConcertArtistImages { null },
+            playingContext = holder.state.map { it.playbackContext }.distinctUntilChanged(),
+            isPlaying = holder.state.map { it.isPlaying && !it.isBuffering }.distinctUntilChanged(),
             // androidPluginIsOn with no token anywhere: a plug-in needing an account
             // the host signs in is off; every other id reads as connected.
             pluginIsOn = { id, meta, needs ->
