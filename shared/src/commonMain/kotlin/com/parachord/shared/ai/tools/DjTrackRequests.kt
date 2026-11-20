@@ -18,7 +18,9 @@ import com.parachord.shared.resolver.localFileSearchResults
  * order, each service's results as it gave them. All of them are candidates
  * ([DJ_TRACK_SEARCH_LIMIT]), so a track only a lower-ranked service has is still
  * found, and the match tiers pick an exact match before a looser one wherever it
- * came from.
+ * came from. Desktop stops at the first service with an exact artist + title
+ * match (`earlyReturn`); asking every service at once and taking the
+ * highest-ranked exact match usually picks the same track.
  *
  * The local files join the candidates by title alone (#529): asking for "artist
  * title" would need every word of the artist as written. They go after the
@@ -26,7 +28,7 @@ import com.parachord.shared.resolver.localFileSearchResults
  * resolver then finds the file by the row's names, and the person's source order
  * still decides what plays.
  */
-/** Every result the search finds: desktop's `play` looks through all of them. */
+/** Every result the search finds. */
 const val DJ_TRACK_SEARCH_LIMIT = Int.MAX_VALUE
 
 const val DJ_NONE_FOUND_ERROR = "Could not find any of the requested tracks"
