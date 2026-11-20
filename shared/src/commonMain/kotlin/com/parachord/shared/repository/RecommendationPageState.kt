@@ -1,16 +1,11 @@
 package com.parachord.shared.repository
 
-import com.parachord.shared.deeplink.isValidMbid
-import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.recommendations.ExpandedSection
 import com.parachord.shared.recommendations.PageSource
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationSection
 import com.parachord.shared.recommendations.RecommendationType
-import com.parachord.shared.recommendations.durationMs
-import com.parachord.shared.recommendations.validRecordingMbid
-import com.parachord.shared.resolver.validateIsrc
 import kotlinx.serialization.Serializable
 
 /* What [RecommendationsRepository] hands the screens and keeps on disk. */
@@ -64,25 +59,6 @@ internal data class RecommendationsDiskCache(
     val answers: Map<String, ProviderAnswer> = emptyMap(),
     val savedAt: Long = 0,
 )
-
-/**
- * A recommended song as the old screens show it. Plugins send seconds;
- * [RecommendedTrack.duration], like `Track.duration`, is milliseconds (#349).
- * The ids are kept only when well-formed. A song with no artist can't be
- * resolved, so it's left out.
- */
-internal fun RecommendationItem.toRecommendedTrack(): RecommendedTrack? {
-    if (type != RecommendationType.SONG) return null
-    val artistName = artist?.takeIf { it.isNotBlank() } ?: return null
-    return RecommendedTrack(
-        title = name,
-        artist = artistName,
-        duration = durationMs(),
-        source = resolverId.orEmpty(),
-        recordingMbid = validRecordingMbid(),
-        isrc = validateIsrc(isrc),
-    )
-}
 
 /**
  * What the page says when no connected service has anything to recommend.

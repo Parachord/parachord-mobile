@@ -2,7 +2,6 @@ package com.parachord.shared.repository
 
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.model.RecommendedArtist
-import com.parachord.shared.model.RecommendedTrack
 import com.parachord.shared.model.Resource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
@@ -86,8 +85,9 @@ import kotlinx.serialization.json.JsonPrimitive
  * - **Shuffleupagus:** asked when it has no cached answer; a plain load
  *   doesn't ask again within [AI_RETRY_MS] of the last try (a forced one does).
  *
- * [getRecommendedTracks] / [getRecommendedArtists] keep today's screens
- * working from the page's Tracks and Artists rows until they move to [page].
+ * [getRecommendedArtists] keeps Discover's recommended-artists card (both
+ * apps) working from the page's Artists row; the Recommendations screens draw
+ * [page].
  */
 class RecommendationsRepository(
     private val source: RecommendationSource,
@@ -249,36 +249,10 @@ class RecommendationsRepository(
         scope.launch { images.requestLookups(items) }
     }
 
-    // ── Today's screens (removed when they move to [page]) ───────────
+    // ── Discover's recommended-artists card (it reads the Artists row) ──
 
-    val cachedTracksList: List<RecommendedTrack>?
-        get() = currentTracks().takeIf { it.isNotEmpty() }
     val cachedArtistsList: List<RecommendedArtist>?
         get() = currentArtists().takeIf { it.isNotEmpty() }
-
-    /** The page's Tracks row as [RecommendedTrack]s. */
-    fun getRecommendedTracks(): Flow<Resource<List<RecommendedTrack>>> = flow {
-        ensureDiskLoaded()
-        emit(cachedTracksList?.let { Resource.Success(it) } ?: Resource.Loading)
-        try {
-            val outcome = loadProviders(false)
-            if (!outcome.legacyConfigured) {
-                emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
-                return@flow
-            }
-            val tracks = currentTracks()
-            if (tracks.isEmpty()) {
-                emitEmpty(outcome)
-                return@flow
-            }
-            emit(Resource.Success(tracks))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load recommended tracks", e)
-            emit(Resource.Error(FAILED_MESSAGE))
-        }
-    }
 
     /** The page's Artists row as [RecommendedArtist]s, with photos filled in one by one. */
     fun getRecommendedArtists(): Flow<Resource<List<RecommendedArtist>>> = flow {
@@ -332,8 +306,6 @@ class RecommendationsRepository(
     /** The old lists show the providers' picks only, never Shuffleupagus's. */
     private fun legacyRowItems(key: String): List<RecommendationItem> =
         rowItems(key).filter { item -> (item.sourceIds.ifEmpty { listOfNotNull(item.resolverId) }).any { it != SHUFFLEUPAGUS_ID } }
-
-    private fun currentTracks(): List<RecommendedTrack> = legacyRowItems("type:song").mapNotNull { it.toRecommendedTrack() }
 
     private fun currentArtists(): List<RecommendedArtist> {
         val images = artistImages
