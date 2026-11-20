@@ -116,10 +116,17 @@ fun CollectionScreen(
     onNavigateToArtist: (String) -> Unit = {},
     onNavigateToAlbum: (albumTitle: String, artistName: String) -> Unit = { _, _ -> },
     initialTab: Int = 0,
+    /** A `TrackSort` name the songs open in (Home's Recent Loves: newest first); null keeps the saved sort. */
+    initialTrackSort: String? = null,
     modifier: Modifier = Modifier,
     viewModel: LibraryViewModel = koinViewModel(),
     friendsViewModel: FriendsViewModel = koinViewModel(),
 ) {
+    LaunchedEffect(initialTrackSort) {
+        initialTrackSort?.let { name ->
+            com.parachord.shared.library.TrackSort.entries.firstOrNull { it.name == name }?.let(viewModel::setTrackSort)
+        }
+    }
     val shareAlbumLite = com.parachord.android.share.rememberShareAlbumLite()
     val shareArtist = com.parachord.android.share.rememberShareArtist()
     val sortedArtists by viewModel.sortedArtists.collectAsStateWithLifecycle()

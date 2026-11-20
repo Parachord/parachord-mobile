@@ -229,6 +229,16 @@ object HomeCopy {
     const val EXPLORE_SUBTITLE =
         "Albums critics love, and the most played right now. Playing needs a connected service; Bandcamp plays some of these already."
 
+    /** Jump back in's Recent Loves tile. */
+    const val LOVES_TILE_SUBTITLE = "Your recent loves"
+    /** Jump back in's album tile: the loved track, then why the album is there. */
+    fun albumBehindLove(trackTitle: String): String = "$trackTitle · the album behind your latest love"
+
+    /** The header's drawer button. */
+    const val MENU = "Menu"
+    /** A banner's link that no app could open. */
+    const val LINK_FAILED = "Couldn’t open the link"
+
     fun lovesSubtitle(n: Int): String = if (n == 1) "Your latest love" else "Your $n latest loves"
 
     fun setupPill(done: Int, total: Int): String = "Finish setting up · $done of $total"

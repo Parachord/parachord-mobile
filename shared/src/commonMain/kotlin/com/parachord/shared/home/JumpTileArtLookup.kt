@@ -26,44 +26,64 @@ fun jumpTilesArt(tiles: List<JumpTile>, loves: List<Track>, found: Map<String, S
     }
 
 /**
- * Looks up the cover of an album tile that came on screen without one, as the
- * Recommendations album cards do. Each tile is asked once per session; a
- * lookup that threw is asked again the next time the tile shows. [lookup] is
- * the platform's album-art search (`ImageEnrichmentService.lookupAlbumArt`).
+ * Looks up the cover of an album that came on screen without one, as the
+ * Recommendations album cards do (desktop Home's `requestArt`). Each key is
+ * asked once per session; a lookup that threw is asked again the next time it
+ * shows. [lookup] is the platform's album-art search
+ * (`ImageEnrichmentService.lookupAlbumArt`).
  */
-class JumpTileArtLookup(
+class ShownAlbumArtLookup(
     private val scope: CoroutineScope,
     private val lookup: suspend (album: String, artist: String) -> String?,
 ) {
     private val _found = MutableStateFlow<Map<String, String>>(emptyMap())
 
-    /** Covers found so far, by [jumpTileKey]. */
+    /** Covers found so far, by the key each was shown under. */
     val found: StateFlow<Map<String, String>> = _found.asStateFlow()
 
     private val mutex = Mutex()
     private val asked = mutableSetOf<String>()
 
-    /** A tile came on screen showing [art]. Only an album tile with no art asks. */
-    fun shown(tile: JumpTile, art: JumpTileArt) {
-        if (tile !is JumpTile.Album || !art.isEmpty) return
-        val key = jumpTileKey(tile)
+    /** An album with no cover came on screen under [key]. Blank names ask nothing. */
+    fun shown(key: String, album: String, artist: String) {
+        if (album.isBlank() || artist.isBlank()) return
         if (key in _found.value) return
         scope.launch {
             if (!mutex.withLock { asked.add(key) }) return@launch
             try {
-                val url = lookup(tile.album.album, tile.album.artist)?.trim()
+                val url = lookup(album, artist)?.trim()
                 if (!url.isNullOrEmpty()) _found.update { it + (key to url) }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) { mutex.withLock { asked.remove(key) } }
                 throw e
             } catch (e: Exception) {
                 mutex.withLock { asked.remove(key) }
-                Log.w(TAG, "Album art for '${tile.album.album}' failed: ${e.message}")
+                Log.w(TAG, "Album art for '$album' failed: ${e.message}")
             }
         }
     }
 
     private companion object {
-        const val TAG = "JumpTileArtLookup"
+        const val TAG = "ShownAlbumArtLookup"
+    }
+}
+
+/**
+ * Looks up the cover of an album tile that came on screen without one
+ * ([ShownAlbumArtLookup], keyed by [jumpTileKey]).
+ */
+class JumpTileArtLookup(
+    scope: CoroutineScope,
+    lookup: suspend (album: String, artist: String) -> String?,
+) {
+    private val shownArt = ShownAlbumArtLookup(scope, lookup)
+
+    /** Covers found so far, by [jumpTileKey]. */
+    val found: StateFlow<Map<String, String>> = shownArt.found
+
+    /** A tile came on screen showing [art]. Only an album tile with no art asks. */
+    fun shown(tile: JumpTile, art: JumpTileArt) {
+        if (tile !is JumpTile.Album || !art.isEmpty) return
+        shownArt.shown(jumpTileKey(tile), tile.album.album, tile.album.artist)
     }
 }

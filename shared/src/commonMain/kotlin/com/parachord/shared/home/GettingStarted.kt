@@ -105,9 +105,6 @@ fun serviceConnected(
 /** The scrobbling plug-ins (`capabilities.scrobbling`), desktop's `scrobblerPlugins`. */
 fun scrobblerPlugins(plugins: List<PluginInfo>): List<PluginInfo> = plugins.filter { it.capabilities["scrobbling"] == true }
 
-/** Scrobbling counts as connected once any scrobbling plug-in has an account name saved. */
-fun scrobblerConnected(usernames: Collection<String?>): Boolean = usernames.any { !it.isNullOrEmpty() }
-
 data class GettingStartedStep(val id: String, val done: Boolean)
 
 data class GettingStartedStatus(

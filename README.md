@@ -23,7 +23,7 @@ These are from the Android app; the iOS app follows the same layout with native 
   <tr>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/home.png" alt="Home screen" width="240"><br>
-      <sub><b>Home</b> — playlists, recent listens, Discover tiles</sub>
+      <sub><b>Home</b> — jump back in, your mixes and playlists, picks for you</sub>
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/sidebar.png" alt="Sidebar" width="240"><br>
@@ -123,7 +123,8 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 - **Recommendations** (Android and iOS): personalized Tracks, Albums, Artists, Playlists and Listeners (people with a similar taste) from Last.fm, ListenBrainz and Apple Music (any plugin that offers recommendations), blended with Shuffleupagus's AI picks from your own ChatGPT, Claude or Gemini key, with a filter for each source.
 - **Fresh Drops** and **Critical Darlings**: curated new releases.
 - **Pop of the Tops**: chart albums and songs by country, with songs from Apple Music or Last.fm (including a global Last.fm chart).
-- **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz. Recommendations leaves Weekly Jams out of its Playlists row, and it stays on Home.
+- **Home** (Android; iOS next): desktop's Home. Jump back in, mixes made from your listening (ListenBrainz's Daily and Weekly Jams, Apple Music's Heavy Rotation and Replay), your playlists freshest first, albums you might love, Fresh Drops and Critical Darlings, concerts near you and Ask Shuffleupagus. A new profile gets a three-step getting-started layout instead.
+- **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz. Weekly Jams is one of Home's mixes; Weekly Exploration is in Recommendations' Playlists row.
 - **On Tour**: a teal dot next to the artist name when they're playing near you. The radius is configurable.
 - **Friends**: see what your Last.fm and ListenBrainz contacts have been playing, and **Listen Along** with them.
 - **Spinoff**: start a radio of similar tracks from whatever is playing, without touching your queue. When Last.fm has few similar tracks for a song, the radio fills up with the top songs of similar artists.

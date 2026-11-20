@@ -63,11 +63,11 @@ fun latestLoveAlbum(loves: List<Track>, active: ActiveContexts): LoveAlbum? {
 sealed class JumpTile {
     abstract val subtitle: String
     data class Playlist(val playlist: PlaylistModel, override val subtitle: String) : JumpTile()
-    data class Loves(val tracks: List<Track>, override val subtitle: String = "Your recent loves") : JumpTile()
+    data class Loves(val tracks: List<Track>, override val subtitle: String = HomeCopy.LOVES_TILE_SUBTITLE) : JumpTile()
     data class Album(val album: LoveAlbum) : JumpTile() {
-        override val subtitle: String get() = "${album.trackTitle} · the album behind your latest love"
+        override val subtitle: String get() = HomeCopy.albumBehindLove(album.trackTitle)
     }
-    data class Mix(val mix: HistoryMix, override val subtitle: String = "Made from your listening") : JumpTile()
+    data class Mix(val mix: HistoryMix, override val subtitle: String = HomeCopy.MIXES_TITLE) : JumpTile()
 }
 
 /** Up to four tiles in the order playlist, loves, album, mix; each kind takes its first candidate that isn't active. */

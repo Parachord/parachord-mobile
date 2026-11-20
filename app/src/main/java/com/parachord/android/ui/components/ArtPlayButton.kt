@@ -24,6 +24,9 @@ import com.parachord.shared.ui.icons.AppIcon
 private val Disc = tokenColor(DesignTokens.ON_ACCENT)
 private val Ink = tokenColor(DesignTokens.ON_ART_INK)
 
+/** The play button's touch target sits this far in from the cover's corner, so its 40 dp disc is 8 dp in. */
+val ArtPlayInset = 4.dp
+
 /**
  * The play button over art, desktop's (`card-art.js`; spec in the shared
  * [ArtPlayButtonSpec]): a white disc of [size] with a large shadow and the

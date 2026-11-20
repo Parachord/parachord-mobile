@@ -61,7 +61,7 @@ import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
-import com.parachord.android.ui.screens.discover.ArtPlayInset
+import com.parachord.android.ui.components.ArtPlayInset
 import com.parachord.android.ui.screens.discover.CardText
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
 import com.parachord.android.ui.screens.discover.RecCardWidth
@@ -88,6 +88,8 @@ import com.parachord.shared.home.concertTickets
 import com.parachord.shared.home.concertVenue
 import com.parachord.shared.home.criticalHalfCards
 import com.parachord.shared.home.freshHalfCards
+import com.parachord.shared.home.halfCardNeedsArt
+import com.parachord.shared.home.withHalfCardArt
 import com.parachord.shared.home.homeHalfBody
 import com.parachord.shared.repository.ConcertEvent
 import com.parachord.shared.ui.DesignTokens
@@ -127,6 +129,8 @@ fun HomeHalvesSection(
     onLongPress: (HomeHalfCard) -> Unit,
     onRetryCharts: () -> Unit,
     modifier: Modifier = Modifier,
+    halfArt: Map<String, String> = emptyMap(),
+    onCardShown: (HomeHalfCard) -> Unit = {},
 ) {
     val halves = state.halves
     if (!halves.fresh && !halves.critical && !halves.charts) return
@@ -135,27 +139,27 @@ fun HomeHalvesSection(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (halves.fresh) {
-            val cards = freshHalfCards(state.fresh.items)
+            val cards = withHalfCardArt(freshHalfCards(state.fresh.items), halfArt)
             HomeHalf(
                 page = DesignTokens.Page.FRESH_DROPS, icon = PageIcon.FRESH_DROPS, title = HomeCopy.FRESH_DROPS,
                 cards = cards, body = homeHalfBody(cards.size, state.fresh.loading, failed = false),
-                onSeeAll = onSeeAllFresh, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress,
+                onSeeAll = onSeeAllFresh, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
             )
         }
         if (halves.critical) {
-            val cards = criticalHalfCards(state.critical.items)
+            val cards = withHalfCardArt(criticalHalfCards(state.critical.items), halfArt)
             HomeHalf(
                 page = DesignTokens.Page.CRITICAL_DARLINGS, icon = PageIcon.CRITICAL_DARLINGS, title = HomeCopy.CRITICAL_DARLINGS,
                 cards = cards, body = homeHalfBody(cards.size, state.critical.loading, failed = false),
-                onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress,
+                onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
             )
         }
         if (halves.charts) {
-            val cards = chartHalfCards(state.charts.items)
+            val cards = withHalfCardArt(chartHalfCards(state.charts.items), halfArt)
             HomeHalf(
                 page = DesignTokens.Page.POP_OF_THE_TOPS, icon = PageIcon.POP_OF_THE_TOPS, title = HomeCopy.POP_OF_THE_TOPS,
                 cards = cards, body = homeHalfBody(cards.size, state.charts.loading, state.charts.failed),
-                onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress,
+                onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
                 onRetry = onRetryCharts,
             )
         }
@@ -181,6 +185,7 @@ fun HomeHalf(
     onLongPress: (HomeHalfCard) -> Unit,
     modifier: Modifier = Modifier,
     onRetry: (() -> Unit)? = null,
+    onCardShown: (HomeHalfCard) -> Unit = {},
 ) {
     Column(
         modifier = modifier
@@ -244,6 +249,8 @@ fun HomeHalf(
                     items(HOME_HALF_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 1, width = RecCardWidth) }
                 } else {
                     items(cards, key = { it.key }) { card ->
+                        // A card on screen with no cover asks for one (shared withHalfCardArt).
+                        if (halfCardNeedsArt(card)) LaunchedEffect(card.key) { onCardShown(card) }
                         HalfAlbumCard(card, RecCardWidth, { onOpen(card) }, { onPlay(card) }, { onLongPress(card) })
                     }
                 }
@@ -549,7 +556,7 @@ fun HomeAsk(
                 modifier = Modifier.semantics { heading() },
             )
         }
-        Text(HomeCopy.ASK_EXPLANATION, fontSize = 13.sp, lineHeight = 20.sp, color = DesignTokens.textSecondary.current())
+        Text(HomeCopy.ASK_EXPLANATION, fontSize = 13.sp, lineHeight = DesignTokens.LINE_HEIGHT.em, color = DesignTokens.textSecondary.current())
         if (chatAvailable == false) {
             FilledButton(HomeCopy.SET_UP_SHUFFLEUPAGUS, onSetUp)
         } else {
@@ -563,27 +570,25 @@ private fun AskForm(example: String, onAsk: (String) -> Unit) {
     var field by rememberSaveable(stateSaver = AskFieldSaver) { mutableStateOf(AskField.seeded(example)) }
     LaunchedEffect(example) { field = field.withExample(example) }
     val submit = { field.prompt?.let(onAsk); Unit }
+    // The field full width, Ask under it (desktop's form wraps the button
+    // below the field at a phone's width), then the caption.
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        // The field full width and Ask under it: desktop's form wraps the
-        // button below the field at a phone's width.
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-                value = field.text,
-                onValueChange = { field = field.edited(it) },
-                singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    fontSize = 16.sp,
-                    color = if (field.muted) DesignTokens.textTertiary.current() else DesignTokens.textPrimary.current(),
-                ),
-                shape = RoundedCornerShape(DesignTokens.RADIUS_ART.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { submit() }),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = HomeCopy.ASK_FIELD_LABEL },
-            )
-            FilledButton(HomeCopy.ASK_BUTTON, submit, pill = true, enabled = field.prompt != null)
-        }
-        Text(HomeCopy.ASK_CAPTION, fontSize = 12.sp, color = DesignTokens.textSecondary.current())
+        OutlinedTextField(
+            value = field.text,
+            onValueChange = { field = field.edited(it) },
+            singleLine = true,
+            textStyle = androidx.compose.ui.text.TextStyle(
+                fontSize = 16.sp,
+                color = if (field.muted) DesignTokens.textTertiary.current() else DesignTokens.textPrimary.current(),
+            ),
+            shape = RoundedCornerShape(DesignTokens.RADIUS_ART.dp),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(onSend = { submit() }),
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = HomeCopy.ASK_FIELD_LABEL },
+        )
+        FilledButton(HomeCopy.ASK_BUTTON, submit, pill = true, enabled = field.prompt != null)
+        Text(HomeCopy.ASK_CAPTION, fontSize = 12.sp, lineHeight = DesignTokens.LINE_HEIGHT.em, color = DesignTokens.textSecondary.current())
     }
 }

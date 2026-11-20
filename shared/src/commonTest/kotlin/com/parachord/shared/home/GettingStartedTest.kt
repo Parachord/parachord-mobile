@@ -127,13 +127,6 @@ class GettingStartedTest {
     }
 
     @Test
-    fun `scrobbler connected once any account name is saved`() {
-        assertTrue(scrobblerConnected(listOf(null, "jh")))
-        assertFalse(scrobblerConnected(listOf(null, "")))
-        assertFalse(scrobblerConnected(emptyList()))
-    }
-
-    @Test
     fun `each step is done on its own rule and current is the first not done`() {
         assertEquals("connect", gettingStartedSteps().current)
         assertEquals("music", gettingStartedSteps(folderAdded = true).current)

@@ -87,6 +87,9 @@ class LibraryViewModel constructor(
     private val _trackSort = MutableStateFlow(TrackSort.DEFAULT)
     val trackSort: StateFlow<TrackSort> = _trackSort
 
+    /** A sort set before the saved one loaded (a link's, Home's Recent Loves) wins over it. */
+    private var trackSortChosen = false
+
     private val _friendSort = MutableStateFlow(FriendSort.DEFAULT)
     val friendSort: StateFlow<FriendSort> = _friendSort
 
@@ -104,7 +107,7 @@ class LibraryViewModel constructor(
                 runCatching { AlbumSort.valueOf(name) }.getOrNull()?.let { _albumSort.value = it }
             }
             settingsStore.getSortTracks()?.let { name ->
-                runCatching { TrackSort.valueOf(name) }.getOrNull()?.let { _trackSort.value = it }
+                runCatching { TrackSort.valueOf(name) }.getOrNull()?.let { if (!trackSortChosen) _trackSort.value = it }
             }
             settingsStore.getSortFriends()?.let { name ->
                 runCatching { FriendSort.valueOf(name) }.getOrNull()?.let { _friendSort.value = it }
@@ -125,6 +128,7 @@ class LibraryViewModel constructor(
         viewModelScope.launch { settingsStore.setSortAlbums(sort.name) }
     }
     fun setTrackSort(sort: TrackSort) {
+        trackSortChosen = true
         _trackSort.value = sort
         viewModelScope.launch { settingsStore.setSortTracks(sort.name) }
     }

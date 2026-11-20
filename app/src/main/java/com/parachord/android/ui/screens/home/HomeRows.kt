@@ -52,7 +52,7 @@ import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
 import com.parachord.android.ui.screens.discover.CardText
 import com.parachord.android.ui.screens.discover.CoverMosaic
-import com.parachord.android.ui.screens.discover.ArtPlayInset
+import com.parachord.android.ui.components.ArtPlayInset
 import com.parachord.android.ui.screens.discover.RecAlbumCard
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
 import com.parachord.android.ui.screens.discover.RecCardWidth

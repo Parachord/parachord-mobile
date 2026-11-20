@@ -38,3 +38,27 @@ fun withinFreshDropsWindow(releases: List<FreshDrop>, today: LocalDate): List<Fr
     val window = freshDropsWindow(today)
     return releases.filter { window.contains(it.date) }
 }
+
+/**
+ * One row per release (desktop `fresh-drops-releases.js` `uniqueReleases`).
+ * Fresh Drops asks MusicBrainz for each artist in the collection, so a
+ * collaboration comes back once per artist on it, each copy carrying the
+ * credit it was found under ("Mondo Cozmo, Jim …" and "Mondo Cozmo") with
+ * one release-group id. The first copy wins, matched by release-group id
+ * ([FreshDrop.mbid]) or by lowercased artist + title (which also covers a
+ * release with no id). Callers put fresh results first; order is kept.
+ */
+fun uniqueReleases(releases: List<FreshDrop>): List<FreshDrop> {
+    val ids = mutableSetOf<String>()
+    val keys = mutableSetOf<String>()
+    val out = mutableListOf<FreshDrop>()
+    for (r in releases) {
+        val id = r.mbid?.takeIf { it.isNotBlank() }
+        val key = "${r.artist.lowercase()}-${r.title.lowercase()}"
+        if ((id != null && id in ids) || key in keys) continue
+        if (id != null) ids += id
+        keys += key
+        out += r
+    }
+    return out
+}

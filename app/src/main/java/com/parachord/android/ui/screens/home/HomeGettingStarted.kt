@@ -72,6 +72,7 @@ import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.StepMarkerLook
 import com.parachord.shared.home.chartHalfCards
 import com.parachord.shared.home.criticalHalfCards
+import com.parachord.shared.home.withHalfCardArt
 import com.parachord.shared.home.exploreHalves
 import com.parachord.shared.home.folderTileDescription
 import com.parachord.shared.home.folderTileLabel
@@ -543,6 +544,8 @@ fun HomeExploreSection(
     onLongPress: (HomeHalfCard) -> Unit,
     onRetryCharts: () -> Unit,
     modifier: Modifier = Modifier,
+    halfArt: Map<String, String> = emptyMap(),
+    onCardShown: (HomeHalfCard) -> Unit = {},
 ) {
     val halves = exploreHalves(
         criticalCount = state.critical.items.size,
@@ -558,20 +561,20 @@ fun HomeExploreSection(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (halves.critical) {
-                val cards = criticalHalfCards(state.critical.items)
+                val cards = withHalfCardArt(criticalHalfCards(state.critical.items), halfArt)
                 HomeHalf(
                     page = DesignTokens.Page.CRITICAL_DARLINGS, icon = PageIcon.CRITICAL_DARLINGS, title = HomeCopy.CRITICAL_DARLINGS,
                     cards = cards, body = homeHalfBody(cards.size, state.critical.loading, failed = false),
-                    onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress,
+                    onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
                 )
             }
             if (halves.charts) {
-                val cards = chartHalfCards(state.charts.items)
+                val cards = withHalfCardArt(chartHalfCards(state.charts.items), halfArt)
                 val body = homeHalfBody(cards.size, state.charts.loading, state.charts.failed)
                 HomeHalf(
                     page = DesignTokens.Page.POP_OF_THE_TOPS, icon = PageIcon.POP_OF_THE_TOPS, title = HomeCopy.POP_OF_THE_TOPS,
                     cards = cards, body = body,
-                    onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress,
+                    onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
                     onRetry = onRetryCharts,
                 )
             }

@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.theme.composeColor
 import com.parachord.shared.ui.DesignTokens
@@ -76,6 +77,7 @@ fun SectionHeader(
                     Text(
                         text = subtitle,
                         fontSize = SectionHeaderSpec.SUBTITLE_SIZE.sp,
+                        lineHeight = DesignTokens.LINE_HEIGHT.em,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = SectionHeaderSpec.SUBTITLE_GAP.dp),
                     )

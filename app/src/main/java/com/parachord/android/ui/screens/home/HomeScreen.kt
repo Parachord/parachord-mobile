@@ -118,6 +118,7 @@ fun HomeScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val tileArt by viewModel.tileArt.collectAsStateWithLifecycle()
+    val halfArt by viewModel.halfArt.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // ON_RESUME also fires on entering composition, so this is once per visit.
@@ -342,6 +343,8 @@ fun HomeScreen(
                             onLongPress = { albumMenu = AlbumMenuTarget(it.title, it.artist, it.imageUrl) },
                             onRetryCharts = viewModel::retryCharts,
                             modifier = Modifier.padding(top = SectionGap),
+                            halfArt = halfArt,
+                            onCardShown = viewModel::halfCardShown,
                         )
                     }
                 }
@@ -421,6 +424,8 @@ fun HomeScreen(
                             onLongPress = { albumMenu = AlbumMenuTarget(it.title, it.artist, it.imageUrl) },
                             onRetryCharts = viewModel::retryCharts,
                             modifier = Modifier.padding(top = SectionGap + 16.dp),
+                            halfArt = halfArt,
+                            onCardShown = viewModel::halfCardShown,
                         )
                     }
                     item(key = "concerts") {
@@ -466,7 +471,7 @@ private fun HomeHero(onOpenDrawer: () -> Unit) {
             modifier = Modifier.fillMaxSize().padding(start = 4.dp, end = DesignTokens.SCREEN_GUTTER.dp),
         ) {
             IconButton(onClick = onOpenDrawer) {
-                Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = OnFill)
+                Icon(Icons.Filled.Menu, contentDescription = HomeCopy.MENU, tint = OnFill)
             }
             Spacer(Modifier.width(4.dp))
             Text(
@@ -554,6 +559,6 @@ internal fun openHttpLink(context: android.content.Context, url: String) {
     try {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
     } catch (_: Exception) {
-        Toast.makeText(context, "Couldn't open the link", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, HomeCopy.LINK_FAILED, Toast.LENGTH_SHORT).show()
     }
 }

@@ -4,7 +4,6 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.parachord.android.data.db.entity.AlbumEntity
-import com.parachord.android.data.db.entity.ArtistEntity
 import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.MetadataService
@@ -12,7 +11,6 @@ import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
-import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.shared.car.CarBrowse
 import com.parachord.shared.car.CarIds
 import com.parachord.shared.deeplink.ChatPrompt
@@ -25,6 +23,9 @@ import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.JumpTile
 import com.parachord.shared.home.JumpTileArt
 import com.parachord.shared.home.JumpTileArtLookup
+import com.parachord.shared.home.HomeHalfCard
+import com.parachord.shared.home.ShownAlbumArtLookup
+import com.parachord.shared.home.halfCardArtKey
 import com.parachord.shared.home.jumpTilesArt
 import com.parachord.shared.home.jumpTileKey
 import com.parachord.shared.metadata.ImageEnrichmentService
@@ -38,7 +39,6 @@ import com.parachord.shared.repository.RecommendationsRepository
 import com.parachord.shared.repository.recentLoves
 import com.parachord.shared.ui.UiMessages
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -59,7 +59,6 @@ class HomeViewModel(
     settingsStore: SettingsStore,
     private val repository: LibraryRepository,
     private val playbackController: PlaybackController,
-    private val trackResolverCache: TrackResolverCache,
     metadataService: MetadataService,
     private val carBrowse: CarBrowse,
     private val providerPlaylistResolver: ProviderPlaylistResolver,
@@ -102,6 +101,21 @@ class HomeViewModel(
     /** A tile came on screen: an album tile with no cover looks one up ([JumpTileArtLookup]). */
     fun tileShown(tile: JumpTile) {
         artLookup.shown(tile, tileArt.value[jumpTileKey(tile)] ?: JumpTileArt())
+    }
+
+    // ── Half cards' art ──────────────────────────────────────────────
+
+    /** Covers looked up for half cards (Fresh Drops, Critical Darlings, Pop of the Tops) shown without one. */
+    private val halfArtLookup = ShownAlbumArtLookup(viewModelScope) { album, artist ->
+        imageEnrichmentService.lookupAlbumArt(album, artist)
+    }
+
+    /** Found covers by [halfCardArtKey]; the halves apply them with `withHalfCardArt`. */
+    val halfArt: StateFlow<Map<String, String>> = halfArtLookup.found
+
+    /** A half card came on screen with no cover. */
+    fun halfCardShown(card: HomeHalfCard) {
+        halfArtLookup.shown(halfCardArtKey(card), card.title, card.artist)
     }
 
     // ── Album cards ──────────────────────────────────────────────────
@@ -203,13 +217,6 @@ class HomeViewModel(
         }
     }
 
-    fun queueRecentLoves() {
-        viewModelScope.launch {
-            val loves = currentLoves()
-            if (loves.isNotEmpty()) playbackController.addToQueue(loves)
-        }
-    }
-
     private suspend fun currentLoves(): List<TrackEntity> =
         recentLoves(sources.collectionTracks.first(), HOME_RECENT_LOVES)
 
@@ -249,24 +256,6 @@ class HomeViewModel(
         }
     }
 
-    fun playArtistTopSongs(artistName: String) {
-        viewModelScope.launch {
-            guard("top songs for '$artistName'") {
-                val queue = catalogQueues.artistTopSongs(artistName) ?: return@guard
-                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
-            }
-        }
-    }
-
-    fun queueArtistTopSongs(artistName: String) {
-        viewModelScope.launch {
-            guard("top songs for '$artistName'") {
-                val queue = catalogQueues.artistTopSongs(artistName) ?: return@guard
-                playbackController.addToQueue(queue.tracks)
-            }
-        }
-    }
-
     private suspend fun guard(what: String, block: suspend () -> Unit) {
         try {
             block()
@@ -277,32 +266,7 @@ class HomeViewModel(
         }
     }
 
-    // ── Rows and menus ───────────────────────────────────────────────
-
-    /** Resolves one track row while it's on screen (#181); see ResolveWhileVisible. */
-    fun resolveVisible(track: TrackEntity): Job =
-        trackResolverCache.resolveInBackground(listOf(track))
-
-    fun playNext(track: TrackEntity) {
-        playbackController.insertNext(listOf(track))
-    }
-
-    fun addToQueue(track: TrackEntity) {
-        playbackController.addToQueue(listOf(track))
-    }
-
-    fun addToPlaylist(playlist: PlaylistEntity, track: TrackEntity) {
-        viewModelScope.launch {
-            repository.addTracksToPlaylist(playlist.id, listOf(track))
-        }
-    }
-
-    /** Removes a love (multi-provider sync removal included). */
-    fun removeTrackFromCollection(track: TrackEntity) {
-        viewModelScope.launch {
-            repository.removeFromCollection(track)
-        }
-    }
+    // ── Menus ────────────────────────────────────────────────────────
 
     val playlists: StateFlow<List<PlaylistEntity>> =
         repository.getAllPlaylists()
@@ -329,22 +293,6 @@ class HomeViewModel(
             if (unsupported.isNotEmpty()) {
                 _toastEvents.trySend(
                     UiMessages.playlistDeletionUnsupported(unsupported.map { it.providerDisplayName }),
-                )
-            }
-        }
-    }
-
-    fun toggleArtistCollection(artistName: String, imageUrl: String?, isInCollection: Boolean) {
-        viewModelScope.launch {
-            if (isInCollection) {
-                repository.deleteArtistByName(artistName)
-            } else {
-                repository.addArtistToCollection(
-                    ArtistEntity(
-                        id = "manual-${java.util.UUID.randomUUID()}",
-                        name = artistName,
-                        imageUrl = imageUrl,
-                    )
                 )
             }
         }

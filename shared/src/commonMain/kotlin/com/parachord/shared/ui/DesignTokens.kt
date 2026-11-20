@@ -137,6 +137,13 @@ object DesignTokens {
     /** Spacing, 4-point steps. The phone gutter is [SCREEN_GUTTER]. */
     val spacingScale = listOf(2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48)
     const val SCREEN_GUTTER = 16
+    /**
+     * Body text's line height, as a multiple of its size: desktop's 1.5
+     * (Tailwind's preflight on `html`, which every paragraph inherits).
+     * Android sets it on secondary text that wraps; left alone, a Compose
+     * `Text` takes the theme's body style's 24 sp, twice a 12 sp caption.
+     */
+    const val LINE_HEIGHT = 1.5f
 
     const val RADIUS_BADGE = 4
     const val RADIUS_ART = 6

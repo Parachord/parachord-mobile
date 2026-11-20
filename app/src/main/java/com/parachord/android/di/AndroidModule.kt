@@ -971,7 +971,16 @@ val androidModule = module {
             providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
             cacheRead = { com.parachord.android.data.cache.CacheFiles.read(cacheFile) },
             cacheWrite = { json -> com.parachord.android.data.cache.CacheFiles.write(cacheFile, json) },
-            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> playlists.resolve(url) } },
+            // Desktop's getPlaylistCovers: coverless tracks get their album's cover, else the artist's photo.
+            mosaicCovers = { mix ->
+                val images: com.parachord.shared.metadata.ImageEnrichmentService = get()
+                val metadata: com.parachord.shared.metadata.MetadataService = get()
+                com.parachord.shared.home.historyMixMosaicCovers(
+                    mix,
+                    albumArt = { album, artist -> images.lookupAlbumArt(album, artist) },
+                    artistImage = { artist -> metadata.getArtistImage(artist) },
+                ) { url -> playlists.resolve(url) }
+            },
             onMixIds = { ids -> recommendations.excludePlaylistIds(ids) },
         )
     }

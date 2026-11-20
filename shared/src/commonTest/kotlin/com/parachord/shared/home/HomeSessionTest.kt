@@ -442,7 +442,6 @@ class HomeSessionTest {
         advanceUntilIdle()
         assertTrue(s.state.value.concerts.isEmpty())
         assertFalse(s.state.value.sections.concerts)
-        assertFalse(s.state.value.concertsLoading)
         assertEquals(0, src.concertLoads)
     }
 

@@ -2061,7 +2061,14 @@ class IosContainer private constructor() {
             providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
             cacheRead = { IosFileCache.read("history_mixes_cache.json") },
             cacheWrite = { IosFileCache.write("history_mixes_cache.json", it) },
-            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> providerPlaylistResolver.resolve(url) } },
+            // Desktop's getPlaylistCovers: coverless tracks get their album's cover, else the artist's photo.
+            mosaicCovers = { mix ->
+                com.parachord.shared.home.historyMixMosaicCovers(
+                    mix,
+                    albumArt = { album, artist -> imageEnrichmentService.lookupAlbumArt(album, artist) },
+                    artistImage = { artist -> metadataService.getArtistImage(artist) },
+                ) { url -> providerPlaylistResolver.resolve(url) }
+            },
             onMixIds = { ids -> recommendationsRepository.excludePlaylistIds(ids) },
         )
     }

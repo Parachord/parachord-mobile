@@ -71,6 +71,28 @@ fun chartHalfCards(items: List<ChartAlbum>): List<HomeHalfCard> =
         HomeHalfCard(key = halfKey(i, a.id, a.artist, a.title), title = a.title, artist = a.artist, imageUrl = a.artworkUrl)
     }
 
+/** The key a half card's looked-up cover is kept under ([ShownAlbumArtLookup]): its artist and title, case-folded. */
+fun halfCardArtKey(card: HomeHalfCard): String =
+    "half:" + card.artist.trim().lowercase() + "\u0000" + card.title.trim().lowercase()
+
+/**
+ * The half's cards with the covers [found] for the ones that came without one.
+ * A half card's feed fills its covers slowly (the Critical Darlings and Fresh
+ * Drops feeds look each album up in turn, behind the MusicBrainz queue), so a
+ * card on screen with no cover asks for its own ([ShownAlbumArtLookup], as
+ * desktop Home's `requestArt` does for its albums). A card's own cover wins.
+ */
+fun withHalfCardArt(cards: List<HomeHalfCard>, found: Map<String, String>): List<HomeHalfCard> {
+    if (found.isEmpty()) return cards
+    return cards.map { c ->
+        if (!c.imageUrl.isNullOrBlank()) c else found[halfCardArtKey(c)]?.let { c.copy(imageUrl = it) } ?: c
+    }
+}
+
+/** Whether a half card on screen should ask for a cover: it has none and names its album and artist. */
+fun halfCardNeedsArt(card: HomeHalfCard): Boolean =
+    card.imageUrl.isNullOrBlank() && card.title.isNotBlank() && card.artist.isNotBlank()
+
 /**
  * What a half's body shows: its cards, a skeleton (shown but no cards yet),
  * or Pop of the Tops' error (no cards, not loading, the load failed).

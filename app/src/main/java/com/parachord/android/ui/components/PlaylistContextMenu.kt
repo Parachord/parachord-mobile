@@ -33,11 +33,10 @@ import androidx.compose.ui.unit.sp
 
 /**
  * Shared playlist long-press context menu. Used by every screen that
- * surfaces playlist cards (PlaylistsScreen, HomeScreen → Your Playlists,
- * HomeScreen → Weekly Jams/Exploration). Originally lived as a private
- * helper inside `PlaylistsScreen`; lifted here so the Home carousels
- * could share the exact same menu without duplicating ~90 lines per
- * call site.
+ * surfaces playlist cards (PlaylistsScreen, HomeScreen → Your playlists,
+ * freshest first). Originally lived as a private helper inside
+ * `PlaylistsScreen`; lifted here so Home could share the exact same menu
+ * without duplicating ~90 lines per call site.
  *
  * All action callbacks except [onPlayPlaylist] are nullable — pass null
  * to hide the corresponding row. This lets us reuse the menu for

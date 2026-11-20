@@ -3,7 +3,6 @@ package com.parachord.android.ui.screens.home
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.playback.PlaybackController
-import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.shared.ai.AiAlbumSuggestion
 import com.parachord.shared.api.Announcement
 import com.parachord.shared.car.CarBrowse
@@ -102,14 +101,11 @@ class HomeViewModelTest {
         val library = mockk<LibraryRepository>(relaxed = true)
         every { library.getAllTracks() } returns flowOf(emptyList())
         every { library.getAllPlaylists() } returns flowOf(emptyList())
-        val cache = mockk<TrackResolverCache>(relaxed = true)
-        every { cache.trackResolvers } returns MutableStateFlow(emptyMap())
         return HomeViewModel(
             sources = sources,
             settingsStore = settings,
             repository = library,
             playbackController = controller,
-            trackResolverCache = cache,
             metadataService = mockk<MetadataService>(relaxed = true),
             carBrowse = carBrowse,
             providerPlaylistResolver = mockk<ProviderPlaylistResolver>(relaxed = true),

@@ -77,8 +77,6 @@ data class HomeState(
     val critical: HomeFeed<CriticsPickAlbum> = HomeFeed(),
     val charts: HomeFeed<ChartAlbum> = HomeFeed(),
     val concerts: List<ConcertEvent> = emptyList(),
-    /** Concerts are loading with a location set (the row's skeleton). */
-    val concertsLoading: Boolean = false,
     /** Artist photos for the concert cards, keyed by [concertArtistKey]; see [concertPhotoUrl]. */
     val concertArtistImages: Map<String, String> = emptyMap(),
     val askExample: String = "",

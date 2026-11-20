@@ -131,7 +131,7 @@ class ConcertArtistImagesTest {
         gate.complete(Unit)
         home.join()
         assertEquals(setOf("a", "b", "c", "d"), images.images.value.keys)
-        // E and F were never reached and stay unasked for a later load.
+        // E and F were abandoned in flight and stay unasked for a later load.
         images.load(listOf("E", "F"))
         assertEquals(setOf("a", "b", "c", "d", "e", "f"), images.images.value.keys)
     }

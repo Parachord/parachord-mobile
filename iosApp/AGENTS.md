@@ -1563,8 +1563,11 @@ Two pieces are live: `DriverFactory`'s `addColumnIfMissing` adds
 `playlists.tracksChangedAt` and `lastChangeAdded` (stamped by the shared
 `PlaylistTrackDao`), and `IosContainer.askShuffleupagus` queues an in-app Ask
 prompt with `fromApp = true`, so `ChatScreen` sends it on open without the
-pre-fill a `parachord://chat` link gets. Root `CLAUDE.md` → "Home — the shared
-model".
+pre-fill a `parachord://chat` link gets. `IosContainer.historyMixesRepository`
+already builds coverless mixes' mosaics with the album-art and artist-photo
+lookups (`historyMixMosaicCovers`), as Android's does. Android draws Home through
+the shared `HomeSession`; iOS's Home will wrap the same session. Root `CLAUDE.md`
+→ "Home — the shared model, drawn on Android".
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 

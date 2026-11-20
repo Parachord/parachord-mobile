@@ -495,7 +495,6 @@ class HomeSession(
         val located = hasLocation(f.location)
         val today = Instant.fromEpochMilliseconds(now).toLocalDateTime(TimeZone.currentSystemDefault()).date
         val concerts = if (located) concertsNearYou(f.concerts.items, f.location, today, HOME_CONCERT_CARDS) else emptyList()
-        val concertsLoading = located && concerts.isEmpty() && f.concerts.loading && !f.concerts.failed
 
         val sections = homeSections(
             bannerItems = bannerItems,
@@ -534,7 +533,6 @@ class HomeSession(
             critical = critical,
             charts = charts,
             concerts = concerts,
-            concertsLoading = concertsLoading,
             concertArtistImages = f.concertImages,
             askExample = askExample(loves, u.askSeed),
             chatAvailable = chatAvailable,

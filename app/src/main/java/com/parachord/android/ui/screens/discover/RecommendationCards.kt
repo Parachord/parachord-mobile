@@ -47,6 +47,7 @@ import com.parachord.android.ui.theme.ParachordTheme
 import com.parachord.android.ui.theme.serviceColor
 import com.parachord.shared.recommendations.ListenerItem
 import com.parachord.shared.recommendations.RecommendationCopy
+import com.parachord.android.ui.components.ArtPlayInset
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.WeeklyInfo
@@ -54,9 +55,6 @@ import com.parachord.shared.ui.icons.AppIcon
 
 /** A card's width in a scrolling row. */
 internal val RecCardWidth = 140.dp
-
-/** The play button's touch target sits this far in from the cover's corner, so its 40 dp disc is 8 dp in. */
-internal val ArtPlayInset = 4.dp
 
 
 /** The listener hexagon keeps its 120:140 share of the card. */

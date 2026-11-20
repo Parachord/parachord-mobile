@@ -23,7 +23,7 @@ private const val COLLECTION_SONGS_TAB = 2
 /** Top-level route definitions. */
 object Routes {
     const val HOME = "home"
-    const val COLLECTION = "collection?tab={tab}"
+    const val COLLECTION = "collection?tab={tab}&sort={sort}"
     const val COLLECTION_BASE = "collection"
     const val SEARCH = "search"
     const val PLAYLISTS = "playlists"
@@ -99,8 +99,18 @@ object Routes {
         listOfNotNull(tab?.let { "tab=${Uri.encode(it)}" }, period?.let { "period=${Uri.encode(it)}" })
             .joinToString("&").let { if (it.isEmpty()) "" else "?$it" }
 
-    fun collection(tab: Int = 0): String =
-        if (tab > 0) "collection?tab=$tab" else "collection"
+    /**
+     * Collection, on [tab]. [trackSort] (a `TrackSort` name) sets the songs'
+     * sort as it opens: Home's Recent Loves opens the songs newest first, as
+     * desktop's tile does (`setCollectionSort({ tracks: 'recent' })`).
+     */
+    fun collection(tab: Int = 0, trackSort: String? = null): String {
+        val args = listOfNotNull(
+            tab.takeIf { it > 0 }?.let { "tab=$it" },
+            trackSort?.let { "sort=${Uri.encode(it)}" },
+        )
+        return if (args.isEmpty()) "collection" else "collection?" + args.joinToString("&")
+    }
 }
 
 @Composable
@@ -163,7 +173,11 @@ fun ParachordNavHost(
                 onNavigateToFreshDrops = { navController.navigate(Routes.FRESH_DROPS) },
                 onNavigateToPlaylists = { navController.navigate(Routes.PLAYLISTS) },
                 // Collection's Songs tab (LibraryScreen's tabs: Artists, Albums, Songs, Friends).
-                onOpenRecentLoves = { navController.navigate(Routes.collection(COLLECTION_SONGS_TAB)) },
+                onOpenRecentLoves = {
+                    navController.navigate(
+                        Routes.collection(COLLECTION_SONGS_TAB, com.parachord.shared.library.TrackSort.RECENT.name),
+                    )
+                },
                 onOpenImportPlaylist = onOpenImportPlaylist,
                 onOpenSettings = { pluginId -> navController.navigate(Routes.settings(pluginId)) },
                 onOpenSettingsTab = { tab -> navController.navigate(Routes.settings(null, tab)) },
@@ -180,11 +194,16 @@ fun ParachordNavHost(
         }
         composable(
             Routes.COLLECTION,
-            arguments = listOf(navArgument("tab") { type = NavType.IntType; defaultValue = 0 }),
+            arguments = listOf(
+                navArgument("tab") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("sort") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
         ) { backStackEntry ->
             val initialTab = backStackEntry.arguments?.getInt("tab") ?: 0
+            val trackSort = backStackEntry.arguments?.getString("sort")
             com.parachord.android.ui.screens.library.CollectionScreen(
                 initialTab = initialTab,
+                initialTrackSort = trackSort,
                 onOpenDrawer = onOpenDrawer,
                 onNavigateToFriend = { friendId ->
                     navController.navigate(Routes.friendDetail(friendId))

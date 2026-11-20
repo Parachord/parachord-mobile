@@ -112,6 +112,7 @@ One map for every screen (Fresh Drops, an artist's discography, an album page, H
 ## 2. Scales
 
 - **Type (sp / pt):** 11 · 12 · 13 · 14 · 16 · 20 · 24 · 28 · 48. Weights 400 / 500 / 600 / 700. Small uppercase labels: 11, 600, tracking 0.08em.
+  - Line height: 1.5 for text that can wrap (desktop's, from Tailwind's preflight; `DesignTokens.LINE_HEIGHT`). On Android set it on secondary text such as a section subtitle or a caption: a bare `Text` takes the theme's body style, 24 sp, twice a 12 sp line.
   - iOS: text should scale with Dynamic Type: prefer `.font(.system(size:…, relativeTo:))` or `@ScaledMetric` over a fixed size.
 - **Spacing:** 4-point steps: 2 4 6 8 12 16 20 24 32 40 48. The screen gutter is **16** on phones (desktop's 24 is for its wide content area). 16 between a section header and its content, 24 between cards in a row, 32–40 between sections.
 - **Radius:** 4 badge · 6 art inside a card, inputs · 8 buttons, rows, menus · 10 cards · 12 panels · 16 sheets and dialogs · full (pills, circles).

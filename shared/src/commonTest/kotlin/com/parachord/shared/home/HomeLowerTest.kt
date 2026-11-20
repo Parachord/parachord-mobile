@@ -99,4 +99,29 @@ class HomeLowerTest {
         val f = AskField.seeded("abc").edited("abc")
         assertFalse(f.muted)
     }
+
+    // ── half cards' looked-up covers ─────────────────────────────────
+
+    private fun card(title: String, artist: String, image: String? = null) =
+        HomeHalfCard(key = "0:$title", title = title, artist = artist, imageUrl = image)
+
+    @Test
+    fun `a coverless half card takes the cover found for its album`() {
+        val bare = card("Mount Zero", "Swapmeet")
+        val own = card("OK Computer", "Radiohead", "own")
+        val found = mapOf(halfCardArtKey(card(" mount zero", "SWAPMEET ")) to "found", halfCardArtKey(own) to "other")
+        val out = withHalfCardArt(listOf(bare, own), found)
+        assertEquals(listOf("found", "own"), out.map { it.imageUrl })
+        val nothing = listOf(bare)
+        assertTrue(withHalfCardArt(nothing, emptyMap()) === nothing)
+    }
+
+    @Test
+    fun `only a coverless card with both names asks for a cover`() {
+        assertTrue(halfCardNeedsArt(card("A", "B")))
+        assertTrue(halfCardNeedsArt(card("A", "B", "")))
+        assertFalse(halfCardNeedsArt(card("A", "B", "x")))
+        assertFalse(halfCardNeedsArt(card(" ", "B")))
+        assertFalse(halfCardNeedsArt(card("A", "")))
+    }
 }
