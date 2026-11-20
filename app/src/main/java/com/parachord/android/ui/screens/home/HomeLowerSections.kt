@@ -4,7 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -44,6 +46,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,10 +61,10 @@ import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
-import com.parachord.android.ui.components.shimmerBrush
 import com.parachord.android.ui.screens.discover.ArtPlayInset
 import com.parachord.android.ui.screens.discover.CardText
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
+import com.parachord.android.ui.screens.discover.RecCardWidth
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.theme.composeFill
 import com.parachord.android.ui.theme.composeGradient
@@ -76,6 +79,8 @@ import com.parachord.shared.home.HomeHalfBody
 import com.parachord.shared.home.HomeHalfCard
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.chartHalfCards
+import com.parachord.shared.home.concertArtist
+import com.parachord.shared.home.concertPhotoUrl
 import com.parachord.shared.home.concertDateBadge
 import com.parachord.shared.home.concertPlaceLine
 import com.parachord.shared.home.concertTickets
@@ -84,7 +89,6 @@ import com.parachord.shared.home.criticalHalfCards
 import com.parachord.shared.home.freshHalfCards
 import com.parachord.shared.home.homeHalfBody
 import com.parachord.shared.repository.ConcertEvent
-import com.parachord.shared.ui.ArtPlayButtonSpec
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.icons.AppIcon
 import com.parachord.shared.ui.icons.PageIcon
@@ -97,8 +101,8 @@ import com.parachord.shared.ui.icons.PageIcon
 private val Gutter = DesignTokens.SCREEN_GUTTER.dp
 private val OnFill = tokenColor(DesignTokens.ON_ACCENT)
 private val PanelShape = RoundedCornerShape(DesignTokens.RADIUS_SHEET.dp)
-/** Space between a half's cards (desktop's 16 px row gap, on a phone's narrower panel). */
-private val HalfCardGap = 12.dp
+/** Space between a half's cards (desktop's `HOME_ROW_GAP`). */
+private val HalfCardGap = 16.dp
 private val HalfBodyPadding = 16.dp
 /** Desktop's `CONCERT_ART`. */
 private val ConcertArt = 72.dp
@@ -222,18 +226,24 @@ fun HomeHalf(
                     .hapticClickable(onClick = onSeeAll),
             )
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(HalfBodyPadding)) {
-            val cardWidth = (maxWidth - HalfCardGap * (HOME_HALF_ROW_CARDS - 1)) / HOME_HALF_ROW_CARDS
-            when (body) {
-                HomeHalfBody.ERROR -> HalfError(title = HomeCopy.CHARTS_ERROR_TITLE, onRetry = onRetry)
-                HomeHalfBody.LOADING -> Row(horizontalArrangement = Arrangement.spacedBy(HalfCardGap)) {
-                    repeat(HOME_HALF_ROW_CARDS) { RecCardSkeleton(lines = 1, width = cardWidth) }
-                }
-                HomeHalfBody.CARDS -> Row(horizontalArrangement = Arrangement.spacedBy(HalfCardGap)) {
-                    cards.forEach { card ->
-                        key(card.key) {
-                            HalfAlbumCard(card, cardWidth, { onOpen(card) }, { onPlay(card) }, { onLongPress(card) })
-                        }
+        // The body: the three cards in a scrolling row at the Home rows'
+        // card width (a phone can't fit three of desktop's grid columns),
+        // their skeletons at the same width, or the error.
+        if (body == HomeHalfBody.ERROR) {
+            Box(Modifier.fillMaxWidth().padding(HalfBodyPadding)) {
+                HalfError(title = HomeCopy.CHARTS_ERROR_TITLE, onRetry = onRetry)
+            }
+        } else {
+            LazyRow(
+                contentPadding = PaddingValues(HalfBodyPadding),
+                horizontalArrangement = Arrangement.spacedBy(HalfCardGap),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (body == HomeHalfBody.LOADING) {
+                    items(HOME_HALF_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 1, width = RecCardWidth) }
+                } else {
+                    items(cards, key = { it.key }) { card ->
+                        HalfAlbumCard(card, RecCardWidth, { onOpen(card) }, { onPlay(card) }, { onLongPress(card) })
                     }
                 }
             }
@@ -282,11 +292,7 @@ private fun HalfAlbumCard(card: HomeHalfCard, width: Dp, onOpen: () -> Unit, onP
             card.review?.let { review ->
                 ReasonBadge(review, Modifier.align(Alignment.BottomStart), label = HomeCopy.WHAT_THE_CRITICS_SAID)
             }
-            ArtPlayButton(
-                card.title, onPlay,
-                Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset),
-                size = ArtPlayButtonSpec.TILE_SIZE.dp,
-            )
+            ArtPlayButton(card.title, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
         }
         Spacer(Modifier.height(8.dp))
         CardText(card.title, primary = true)
@@ -328,7 +334,6 @@ private fun FilledButton(text: String, onClick: () -> Unit, modifier: Modifier =
 /**
  * "Concerts near you" (desktop `ConcertsRow`): up to four shows from the
  * collection's artists near the saved location, one card a line on a phone.
- * A skeleton while they load with a location set.
  */
 @Composable
 fun HomeConcertsSection(
@@ -336,8 +341,8 @@ fun HomeConcertsSection(
     onSeeAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val loading = state.concerts.isEmpty() && state.concertsLoading
-    if (!loading && (!state.sections.concerts || state.concerts.isEmpty())) return
+    // Nothing until there are shows (desktop's `ConcertsRow` returns null with none).
+    if (!state.sections.concerts || state.concerts.isEmpty()) return
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.CONCERTS_TITLE,
@@ -349,12 +354,8 @@ fun HomeConcertsSection(
             modifier = Modifier.fillMaxWidth().padding(horizontal = Gutter),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (loading) {
-                repeat(2) { ConcertCardSkeleton() }
-            } else {
-                state.concerts.forEachIndexed { i, event ->
-                    key(event.id.ifBlank { "concert-$i" }) { HomeConcertCard(event) }
-                }
+            state.concerts.forEachIndexed { i, event ->
+                key(event.id.ifBlank { "concert-$i" }) { HomeConcertCard(event) }
             }
         }
     }
@@ -368,7 +369,7 @@ fun HomeConcertsSection(
  */
 @Composable
 fun HomeConcertCard(event: ConcertEvent, modifier: Modifier = Modifier) {
-    val artist = event.artistName?.takeIf { it.isNotBlank() } ?: event.name
+    val artist = concertArtist(event)
     val place = concertPlaceLine(event)
     val tickets = concertTickets(event)
     val date = concertDateBadge(event.date)
@@ -388,9 +389,7 @@ fun HomeConcertCard(event: ConcertEvent, modifier: Modifier = Modifier) {
                 .clip(RoundedCornerShape(DesignTokens.RADIUS_CARD.dp))
                 .background(DesignTokens.bgSecondary.current()),
         ) {
-            val photo = event.imageUrl?.trim()?.takeIf {
-                it.startsWith("https://", ignoreCase = true) || it.startsWith("http://", ignoreCase = true)
-            }
+            val photo = concertPhotoUrl(event)
             val placeholder = @Composable {
                 ParachordIcon(AppIcon.Music, contentDescription = null, size = 24.dp, tint = DesignTokens.textTertiary.current())
             }
@@ -466,6 +465,7 @@ private fun TicketsButton(artist: String, tickets: List<com.parachord.shared.hom
                 .semantics {
                     role = Role.Button
                     contentDescription = HomeCopy.ticketsFor(artist)
+                    if (several) stateDescription = if (expanded) "Expanded" else "Collapsed"
                 }
                 .hapticClickable {
                     if (several) expanded = true else openHttpLink(context, tickets.first().url)
@@ -476,7 +476,11 @@ private fun TicketsButton(artist: String, tickets: List<com.parachord.shared.hom
             if (several) ParachordIcon(AppIcon.ChevronDown, contentDescription = null, size = 16.dp, tint = OnFill)
         }
         if (several) {
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                containerColor = DesignTokens.bgElevated.current(),
+            ) {
                 tickets.forEach { t ->
                     val dot = serviceColorOrNull(t.source) ?: DesignTokens.textTertiary.current()
                     DropdownMenuItem(
@@ -489,26 +493,6 @@ private fun TicketsButton(artist: String, tickets: List<com.parachord.shared.hom
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun ConcertCardSkeleton() {
-    val brush = shimmerBrush()
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(PanelShape)
-            .border(1.dp, DesignTokens.borderDefault.current(), PanelShape)
-            .padding(12.dp),
-    ) {
-        Box(Modifier.size(ConcertArt).clip(RoundedCornerShape(DesignTokens.RADIUS_CARD.dp)).background(brush))
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(Modifier.width(140.dp).height(14.dp).clip(RoundedCornerShape(DesignTokens.RADIUS_BADGE.dp)).background(brush))
-            Box(Modifier.width(100.dp).height(12.dp).clip(RoundedCornerShape(DesignTokens.RADIUS_BADGE.dp)).background(brush))
         }
     }
 }
@@ -570,7 +554,9 @@ private fun AskForm(example: String, onAsk: (String) -> Unit) {
     LaunchedEffect(example) { field = field.withExample(example) }
     val submit = { field.prompt?.let(onAsk); Unit }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // The field full width and Ask under it: desktop's form wraps the
+        // button below the field at a phone's width.
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedTextField(
                 value = field.text,
                 onValueChange = { field = field.edited(it) },
@@ -583,7 +569,7 @@ private fun AskForm(example: String, onAsk: (String) -> Unit) {
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { submit() }),
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
                     .semantics { contentDescription = HomeCopy.ASK_FIELD_LABEL },
             )
             FilledButton(HomeCopy.ASK_BUTTON, submit, pill = true, enabled = field.prompt != null)

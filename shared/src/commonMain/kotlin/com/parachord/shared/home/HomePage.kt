@@ -56,6 +56,12 @@ fun concertPlaceLine(e: ConcertEvent): String =
 fun concertVenue(e: ConcertEvent): String =
     e.venueName?.trim()?.takeIf { it.isNotEmpty() } ?: HomeCopy.VENUE_TBA
 
+/** The concert card's artist: the event's artist, else its name. */
+fun concertArtist(e: ConcertEvent): String = e.artistName?.trim()?.takeIf { it.isNotEmpty() } ?: e.name
+
+/** The concert card's photo: the event's image when it's an http(s) URL, else null (the card's placeholder). */
+fun concertPhotoUrl(e: ConcertEvent): String? = e.imageUrl?.trim()?.takeIf { isHttpUrl(it) }
+
 data class TicketLink(val label: String, val url: String, val source: String)
 
 internal fun isHttpUrl(u: String): Boolean =

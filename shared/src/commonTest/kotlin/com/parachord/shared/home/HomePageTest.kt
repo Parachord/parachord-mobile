@@ -95,4 +95,20 @@ class HomePageTest {
         assertEquals("Your 3 latest loves", HomeCopy.lovesSubtitle(3))
         assertEquals("Finish setting up · 1 of 2", HomeCopy.setupPill(1, 2))
     }
+
+    @Test
+    fun `concert artist falls back to the event name`() {
+        assertEquals("Wilco", concertArtist(ConcertEvent(id = "1", name = "Wilco Live", artistName = " Wilco ")))
+        assertEquals("Wilco Live", concertArtist(ConcertEvent(id = "1", name = "Wilco Live", artistName = " ")))
+        assertEquals("Wilco Live", concertArtist(ConcertEvent(id = "1", name = "Wilco Live")))
+    }
+
+    @Test
+    fun `concert photo is an http url only`() {
+        assertEquals("https://x/a.jpg", concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = " https://x/a.jpg ")))
+        assertEquals("http://x/a.jpg", concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "http://x/a.jpg")))
+        assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "content://x")))
+        assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n", imageUrl = "")))
+        assertNull(concertPhotoUrl(ConcertEvent(id = "1", name = "n")))
+    }
 }
