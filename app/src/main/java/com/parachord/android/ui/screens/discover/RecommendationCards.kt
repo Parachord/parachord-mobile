@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -44,9 +45,15 @@ import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.WeeklyInfo
 import com.parachord.shared.ui.icons.AppIcon
 
-private val CardWidth = 140.dp
-private val ListenerAvatar = 120.dp
+/** A card's width in a scrolling row. */
+internal val RecCardWidth = 140.dp
+
+/** The narrowest a card gets in an open grid before the grid drops a column. */
+internal val RecCardMinGridWidth = 104.dp
 private val PlayButton = 32.dp
+
+/** The listener hexagon keeps its 120:140 share of the card. */
+private fun listenerAvatar(width: Dp): Dp = width * (120f / 140f)
 
 /** Text on a [FillAccent] or service-colour fill is always white (design system). */
 private val OnFill = Color.White
@@ -91,27 +98,28 @@ private fun PlayDisc(onPlay: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-/** A release: cover, title, artist, year, optional "Coming …" pill (top right, as desktop) and reason. */
+/** A release: cover, title, artist, year and an optional "Coming …" pill (top right, as desktop). */
 @Composable
 fun RecAlbumCard(
     item: RecommendationItem,
     year: String,
     comingLabel: String?,
-    reason: String?,
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    width: Dp = RecCardWidth,
 ) {
     Column(
         modifier = modifier
-            .width(CardWidth)
+            .width(width)
             .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
     ) {
         Box {
             AlbumArtCard(
                 artworkUrl = item.imageUrl,
-                size = CardWidth,
+                size = width,
                 cornerRadius = 6.dp,
                 placeholderName = item.name,
                 contentDescription = item.name,
@@ -139,17 +147,6 @@ fun RecAlbumCard(
         CardText(item.name, primary = true)
         CardText(item.artist.orEmpty().ifBlank { " " })
         CardText(year.ifBlank { " " }, tertiary = true)
-        if (reason != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = reason,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
     }
 }
 
@@ -158,19 +155,20 @@ fun RecAlbumCard(
 fun RecArtistCard(
     item: RecommendationItem,
     imageUrl: String?,
-    reason: String?,
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    width: Dp = RecCardWidth,
 ) {
     Column(
         modifier = modifier
-            .width(CardWidth)
+            .width(width)
             .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
     ) {
         Box(
             modifier = Modifier
-                .size(CardWidth)
+                .size(width)
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
@@ -191,17 +189,6 @@ fun RecArtistCard(
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true)
-        if (reason != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = reason,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
     }
 }
 
@@ -213,15 +200,17 @@ fun RecPlaylistCard(
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    width: Dp = RecCardWidth,
 ) {
     Column(
         modifier = modifier
-            .width(CardWidth)
+            .width(width)
             .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
     ) {
         AlbumArtCard(
             artworkUrl = item.imageUrl,
-            size = CardWidth,
+            size = width,
             cornerRadius = 6.dp,
             placeholderName = item.name,
             contentDescription = item.name,
@@ -240,16 +229,18 @@ fun RecWeeklyCard(
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    width: Dp = RecCardWidth,
 ) {
     val weekly = item.weekly
     Column(
         modifier = modifier
-            .width(CardWidth)
+            .width(width)
             .hapticCombinedClickable(onClick = onOpen),
     ) {
         Box(
             modifier = Modifier
-                .size(CardWidth)
+                .size(width)
                 .clip(RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
@@ -298,19 +289,22 @@ fun ListenerCard(
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    width: Dp = RecCardWidth,
 ) {
+    val avatar = listenerAvatar(width)
     val badge = RecommendationCopy.similarityBadge(item.similarity)
     val color = serviceColor(item.service)
     Column(
         modifier = modifier
-            .width(CardWidth)
+            .width(width)
             .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(modifier = Modifier.size(ListenerAvatar), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.size(avatar), contentAlignment = Alignment.Center) {
             Box(
                 modifier = Modifier
-                    .size(ListenerAvatar)
+                    .size(avatar)
                     .clip(HexagonShape)
                     .background(color),
                 contentAlignment = Alignment.Center,
@@ -375,11 +369,11 @@ private fun SkeletonBar(widthFraction: Float, height: androidx.compose.ui.unit.D
 
 /** Placeholder while a row loads: [lines] text lines under the cover (album 3, playlist 2, artist 1). */
 @Composable
-fun RecCardSkeleton(lines: Int, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.width(CardWidth)) {
+fun RecCardSkeleton(lines: Int, modifier: Modifier = Modifier, width: Dp = RecCardWidth) {
+    Column(modifier = modifier.width(width)) {
         Box(
             Modifier
-                .size(CardWidth)
+                .size(width)
                 .clip(RoundedCornerShape(6.dp))
                 .background(shimmerBrush()),
         )
@@ -394,11 +388,12 @@ fun RecCardSkeleton(lines: Int, modifier: Modifier = Modifier) {
 
 /** Placeholder for a listener while the Listeners row loads. */
 @Composable
-fun ListenerCardSkeleton(modifier: Modifier = Modifier) {
-    Column(modifier = modifier.width(CardWidth), horizontalAlignment = Alignment.CenterHorizontally) {
+fun ListenerCardSkeleton(modifier: Modifier = Modifier, width: Dp = RecCardWidth) {
+    val avatar = listenerAvatar(width)
+    Column(modifier = modifier.width(width), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
-                .size(ListenerAvatar)
+                .size(avatar)
                 .clip(HexagonShape)
                 .background(shimmerBrush()),
         )
@@ -411,6 +406,8 @@ fun ListenerCardSkeleton(modifier: Modifier = Modifier) {
 }
 
 // ── Previews ─────────────────────────────────────────────────────────
+
+internal val sampleRecAlbum get() = sampleAlbum
 
 private val sampleAlbum = RecommendationItem(
     type = RecommendationType.ALBUM, id = "a1", name = "A Long Album Title Here",
@@ -433,8 +430,8 @@ private fun CardsPreview(dark: Boolean) {
             Modifier.background(MaterialTheme.colorScheme.background).padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            RecAlbumCard(sampleAlbum, "2026", "Coming Dec 5", "Because you play Radiohead", {}, {}, {})
-            RecArtistCard(sampleAlbum.copy(type = RecommendationType.ARTIST, name = "Some Artist"), null, "Similar to X", {}, {})
+            RecAlbumCard(sampleAlbum, "2026", "Coming Dec 5", {}, {}, {})
+            RecArtistCard(sampleAlbum.copy(type = RecommendationType.ARTIST, name = "Some Artist"), null, {}, {})
             RecPlaylistCard(sampleAlbum.copy(type = RecommendationType.PLAYLIST, name = "Chill Mix"), "Spotify", {}, {})
         }
     }

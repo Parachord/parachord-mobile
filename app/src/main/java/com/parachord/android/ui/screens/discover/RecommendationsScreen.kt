@@ -5,6 +5,10 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import kotlin.math.floor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -111,7 +115,6 @@ import com.parachord.shared.recommendations.recommendedSongTrack
 import com.parachord.shared.recommendations.releaseYear
 import com.parachord.shared.recommendations.rowView
 import com.parachord.shared.recommendations.sectionViews
-import com.parachord.shared.recommendations.shuffleupagusReason
 import com.parachord.shared.recommendations.upcomingLabel
 import com.parachord.shared.repository.RecommendationPageState
 import com.parachord.shared.repository.unsavedFriendId
@@ -635,13 +638,13 @@ private fun LazyListScope.row(
         }
         row.type == null -> item(key = "${row.key}:listeners") {
             CardsBody(expanded, tail = 0, lines = 1) {
-                rv.listeners.forEach { listener -> card { ListenerCardFor(listener, cards) } }
+                rv.listeners.forEach { listener -> card { w -> ListenerCardFor(listener, cards, w) } }
             }
         }
         else -> item(key = "${row.key}:cards") {
             val tail = (if (rv.loadingTail) CARD_PREVIEW else 0) + rv.aiTail
             CardsBody(expanded, tail = tail, lines = cardLines(row.type)) {
-                rv.items.forEach { item -> card { CardFor(item, row, cards) } }
+                rv.items.forEach { item -> card { w -> CardFor(item, row, cards, w) } }
             }
         }
     }
@@ -649,49 +652,68 @@ private fun LazyListScope.row(
 
 /** Cards collected for [CardsBody]. */
 private class CardList {
-    val cards = mutableListOf<@Composable () -> Unit>()
-    fun card(content: @Composable () -> Unit) {
+    val cards = mutableListOf<@Composable (Dp) -> Unit>()
+    /** [content] draws one card at the width it's given. */
+    fun card(content: @Composable (width: Dp) -> Unit) {
         cards += content
     }
 }
 
-/** Collapsed: one scrolling row of cards. Expanded: every card wrapped in a grid. Then [tail] skeletons. */
+/**
+ * An open row's grid, as desktop's `repeat(auto-fill, minmax(160px, 1fr))`:
+ * as many columns as fit at [RecCardMinGridWidth] (at least 2), each card
+ * stretched so the row fills [available] edge to edge with [gap] between.
+ * The width is floored to a whole pixel so rounding can't push a card onto
+ * the next line.
+ */
+private fun gridCardWidth(available: Dp, gap: Dp, density: androidx.compose.ui.unit.Density): Pair<Int, Dp> {
+    val columns = maxOf(2, floor((available + gap) / (RecCardMinGridWidth + gap)).toInt())
+    val px = with(density) { ((available - gap * (columns - 1)).toPx() / columns).toInt() }
+    return columns to with(density) { px.toDp() }
+}
+
+/** Collapsed: one scrolling row of 140 dp cards. Expanded: a grid whose cards fill the width. Then [tail] skeletons. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CardsBody(expanded: Boolean, tail: Int, lines: Int, build: CardList.() -> Unit) {
     val list = CardList().apply(build)
     if (expanded) {
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = Gutter),
-            horizontalArrangement = Arrangement.spacedBy(CardGap),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            list.cards.forEach { it() }
-            repeat(tail) { RecCardSkeleton(lines) }
+        val density = LocalDensity.current
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = Gutter)) {
+            val (columns, width) = gridCardWidth(maxWidth, CardGap, density)
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(CardGap),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                maxItemsInEachRow = columns,
+            ) {
+                list.cards.forEach { it(width) }
+                repeat(tail) { RecCardSkeleton(lines, width = width) }
+            }
         }
     } else {
         LazyRow(
             contentPadding = PaddingValues(horizontal = Gutter),
             horizontalArrangement = Arrangement.spacedBy(CardGap),
         ) {
-            items(list.cards.size) { list.cards[it]() }
+            items(list.cards.size) { list.cards[it](RecCardWidth) }
             items(tail) { RecCardSkeleton(lines) }
         }
     }
 }
 
 @Composable
-private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: CardActions) {
+private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: CardActions, width: Dp = RecCardWidth) {
     val vm = cards.viewModel
     when (item.type) {
         RecommendationType.ALBUM -> {
             LaunchedEffect(item.id) { vm.cardShown(item) }
             val artist = item.artist.orEmpty()
             RecAlbumCard(
+                width = width,
                 item = item,
                 year = releaseYear(item.releaseDate),
                 comingLabel = upcomingLabel(item.releaseDate, cards.today),
-                reason = shuffleupagusReason(item),
                 onOpen = { cards.onNavigateToAlbum(item.name, artist) },
                 onPlay = { vm.playAlbum(item) },
                 onLongPress = { cards.onAlbumMenu(item) },
@@ -700,9 +722,9 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
         RecommendationType.ARTIST -> {
             LaunchedEffect(item.id) { vm.cardShown(item) }
             RecArtistCard(
+                width = width,
                 item = item,
                 imageUrl = item.imageUrl,
-                reason = shuffleupagusReason(item),
                 onOpen = { cards.onNavigateToArtist(item.name) },
                 onLongPress = { cards.onArtistMenu(item) },
             )
@@ -712,6 +734,7 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
             if (weekly != null) {
                 val covers by remember(weekly.id) { vm.weeklyCovers(weekly.id) }.collectAsState()
                 RecWeeklyCard(
+                    width = width,
                     item = item,
                     covers = covers,
                     onOpen = { cards.onNavigateToWeekly(weekly.id, weekly.contextType) },
@@ -719,6 +742,7 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
                 )
             } else {
                 RecPlaylistCard(
+                    width = width,
                     item = item,
                     sourceName = itemSourceName(item, row),
                     onOpen = {
@@ -738,8 +762,9 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
 }
 
 @Composable
-private fun ListenerCardFor(item: ListenerItem, cards: CardActions) {
+private fun ListenerCardFor(item: ListenerItem, cards: CardActions, width: Dp = RecCardWidth) {
     ListenerCard(
+        width = width,
         item = item,
         serviceName = resolverDisplayName(item.service),
         onOpen = { cards.onNavigateToFriend(unsavedFriendId(item.service, item.name)) },
@@ -826,6 +851,25 @@ private fun MenuSheet(title: String, subtitle: String?, onDismiss: () -> Unit, e
                         entry.onClick()
                     },
                 )
+            }
+        }
+    }
+}
+
+// ── Previews ─────────────────────────────────────────────────────────
+
+/** An open Albums row on a 412 dp phone: three cards across, filling the row, then skeletons. */
+@androidx.compose.ui.tooling.preview.Preview(widthDp = 412, heightDp = 640)
+@Composable
+private fun ExpandedGridPreview() {
+    com.parachord.android.ui.theme.ParachordTheme(darkTheme = true) {
+        Column(Modifier.background(MaterialTheme.colorScheme.background)) {
+            CardsBody(expanded = true, tail = 2, lines = 3) {
+                repeat(4) { i ->
+                    card { w ->
+                        RecAlbumCard(sampleRecAlbum.copy(id = "a$i"), "2026", null, {}, {}, {}, width = w)
+                    }
+                }
             }
         }
     }

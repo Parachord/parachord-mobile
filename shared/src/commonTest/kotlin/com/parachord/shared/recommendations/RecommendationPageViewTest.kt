@@ -233,15 +233,6 @@ class RecommendationPageViewTest {
     }
 
     @Test
-    fun `shuffleupagusReason only for Shuffleupagus picks`() {
-        val base = item("a", RecommendationType.ALBUM)
-        assertEquals("peak", shuffleupagusReason(base.copy(resolverId = "shuffleupagus", reason = "peak")))
-        assertNull(shuffleupagusReason(base.copy(resolverId = "lastfm", reason = "x")))
-        assertEquals("y", shuffleupagusReason(base.copy(sourceIds = listOf("lastfm", "shuffleupagus"), reason = "y")))
-        assertNull(shuffleupagusReason(base.copy(resolverId = "shuffleupagus", reason = " ")))
-    }
-
-    @Test
     fun `itemSourceName reads the row's sources`() {
         val r = RecommendationRow("type:song", RecommendationType.SONG, sources = listOf(PageSource("lastfm", "Last.fm", 1)))
         assertEquals("Last.fm", itemSourceName(item("s", sources = arrayOf("lastfm")), r))

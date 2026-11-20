@@ -160,10 +160,6 @@ fun pageStatus(state: RecommendationPageState, filter: String?): PageStatus = wh
 /** An album's year for its card's third line: the date's first four characters, else "". */
 fun releaseYear(date: String?): String = date?.take(4) ?: ""
 
-/** Why Shuffleupagus picked [item], when it sent it and gave a reason. */
-fun shuffleupagusReason(item: RecommendationItem): String? =
-    if ((item.resolverId == SHUFFLEUPAGUS_ID || SHUFFLEUPAGUS_ID in item.sourceIds) && !item.reason.isNullOrBlank()) item.reason else null
-
 /** The name of the source that sent [item], from [row]'s sources; "" when unknown. */
 fun itemSourceName(item: RecommendationItem, row: RecommendationRow): String =
     row.sources.firstOrNull { it.id == item.resolverId }?.name ?: ""
