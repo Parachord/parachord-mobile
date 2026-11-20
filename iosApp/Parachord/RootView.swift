@@ -27,6 +27,8 @@ struct ContentView: View {
     @State private var showSettings = false
     /// The plugin whose settings sheet Settings opens on (`PCOpenPluginSettings`); nil for the plain page.
     @State private var settingsService: String?
+    /// The Settings tab it opens on (`PCOpenSettingsTab`, a shared `SettingsTab` name); nil for the first.
+    @State private var settingsTab: String?
     @State private var showChat = false
     @State private var pendingChat = false
     // Deep-link prefills (#256): seed the Search query / Shuffleupagus prompt.
@@ -211,6 +213,13 @@ struct ContentView: View {
         // `Routes.settings(pluginId)`).
         .environment(\.pcOpenPluginSettings, PCOpenPluginSettings { id in
             settingsService = id
+            settingsTab = nil
+            showSettings = true
+        })
+        // Opens Settings on one tab (Home's "Sync your library", Android's `Routes.settings(pluginId, tab)`).
+        .environment(\.pcOpenSettingsTab, PCOpenSettingsTab { tab in
+            settingsService = nil
+            settingsTab = tab
             showSettings = true
         })
         // Home's Ask Shuffleupagus: an in-app prompt, sent by the chat once it's
@@ -372,8 +381,8 @@ struct ContentView: View {
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.
-        .fullScreenCover(isPresented: $showSettings, onDismiss: { settingsService = nil }) {
-            NavigationStack { SettingsView(initialService: settingsService) }
+        .fullScreenCover(isPresented: $showSettings, onDismiss: { settingsService = nil; settingsTab = nil }) {
+            NavigationStack { SettingsView(initialService: settingsService, initialTab: settingsTab) }
         }
         // Spotify Connect device picker (Phase: Spotify) — hosted at the shell.
         .sheet(item: Binding(
@@ -765,6 +774,16 @@ struct PCOpenPluginSettings {
     func callAsFunction(_ pluginId: String) { open(pluginId) }
 }
 
+/// Opens Settings on one tab (a shared `SettingsTab` name, e.g. `SettingsTab.shared.SYNC`).
+struct PCOpenSettingsTab {
+    let open: (String) -> Void
+    func callAsFunction(_ tab: String) { open(tab) }
+}
+
+private struct PCOpenSettingsTabKey: EnvironmentKey {
+    static let defaultValue = PCOpenSettingsTab { _ in }
+}
+
 private struct PCOpenPluginSettingsKey: EnvironmentKey {
     static let defaultValue = PCOpenPluginSettings { _ in }
 }
@@ -774,6 +793,11 @@ extension EnvironmentValues {
     var pcOpenPluginSettings: PCOpenPluginSettings {
         get { self[PCOpenPluginSettingsKey.self] }
         set { self[PCOpenPluginSettingsKey.self] = newValue }
+    }
+    /// Set by RootView; a no-op outside it.
+    var pcOpenSettingsTab: PCOpenSettingsTab {
+        get { self[PCOpenSettingsTabKey.self] }
+        set { self[PCOpenSettingsTabKey.self] = newValue }
     }
     /// Set by RootView; a no-op outside it.
     var pcAskShuffleupagus: PCAskShuffleupagus {
