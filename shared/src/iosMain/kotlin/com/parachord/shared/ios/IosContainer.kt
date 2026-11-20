@@ -1972,6 +1972,10 @@ class IosContainer private constructor() {
             friendExclusions = { similarUsersStore.exclusions() },
             cachedSimilarUsers = { similarUsersStore.cached() },
             canAskSimilarUsers = { similarUsersStore.canAsk() },
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { name -> enrichMetadataService.getArtistImage(name) },
+                albumArt = { title, artist -> imageEnrichmentService.lookupAlbumArt(title, artist) },
+            ),
         )
     }
 

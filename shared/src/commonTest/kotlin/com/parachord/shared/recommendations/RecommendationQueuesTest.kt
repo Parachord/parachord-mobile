@@ -9,6 +9,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
 
 class RecommendationQueuesTest {
 
@@ -94,5 +96,20 @@ class RecommendationQueuesTest {
     @Test
     fun `achordionUserUrl escapes the name`() {
         assertEquals("https://achordion.xyz/user/a%20b%2Fc", achordionUserUrl("a b/c"))
+    }
+
+    @Test
+    fun `View on Achordion is for ListenBrainz listeners only`() {
+        assertTrue(showsAchordionLink("listenbrainz"))
+        assertFalse(showsAchordionLink("lastfm"))
+    }
+
+    @Test
+    fun `a song queue's context is the Recommendations context keyed by the row`() {
+        val r = RecommendationRow(key = "type:song", type = RecommendationType.SONG, title = "Tracks")
+        val items = listOf(RecommendationItem(type = RecommendationType.SONG, id = "s", name = "Song", artist = "A"))
+        val ctx = songQueue(items, 0, r)!!.context
+        assertEquals(RECOMMENDATIONS_CONTEXT, ctx.type)
+        assertEquals("type:song", ctx.id)
     }
 }

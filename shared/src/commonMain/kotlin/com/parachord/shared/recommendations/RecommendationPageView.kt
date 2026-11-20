@@ -106,6 +106,35 @@ fun albumsSkeletonSlot(state: RecommendationPageState, filter: String?): Boolean
         state.sections.none { it.type == RecommendationType.ALBUM } &&
         state.sections.none { s -> s.rows.any { it.key in AI_TAIL_ROWS } }
 
+/**
+ * Where the [albumsSkeletonSlot] section goes in [views] (as [sectionViews]
+ * returned them): before the first content section that isn't Songs, else
+ * after the last content section (desktop's `llmSlot`). Null when there's no
+ * slot. Insert the skeleton before `views[index]`; an index past the content
+ * is the spot right before Listeners.
+ */
+fun albumsSlotIndex(state: RecommendationPageState, filter: String?, views: List<SectionView>): Int? {
+    if (!albumsSkeletonSlot(state, filter)) return null
+    val content = views.count { it.section.type != null }
+    val firstNonSongs = views.indexOfFirst { it.section.type != null && it.section.type != RecommendationType.SONG }
+    return if (firstNonSongs < 0) content else firstNonSongs
+}
+
+/**
+ * Desktop's unlabeled pending skeleton: providers still answering with
+ * nothing on screen, under All only. It goes after the content and before
+ * Listeners.
+ */
+fun pendingSkeleton(state: RecommendationPageState, filter: String?): Boolean =
+    filter == null && state.pendingProviders.isNotEmpty()
+
+/**
+ * Desktop's `friendsPending` placeholder: the similar-users lookup is out, no
+ * Listeners section is on the page, and no source is picked.
+ */
+fun listenersSkeleton(state: RecommendationPageState, filter: String?): Boolean =
+    filter == null && state.listenersPending && state.sections.none { it.type == null }
+
 /** What the page is in. */
 sealed class PageStatus {
     data object Loading : PageStatus()
@@ -124,7 +153,7 @@ fun pageStatus(state: RecommendationPageState, filter: String?): PageStatus = wh
     // Desktop's contentBlocks also hold the Albums skeleton, and its Listeners
     // placeholder shows only with no source picked (`friendsPending`).
     state.sections.isEmpty() && state.pendingProviders.isEmpty() &&
-        !(state.listenersPending && filter == null) && !albumsSkeletonSlot(state, filter) -> PageStatus.Empty(filter != null)
+        !listenersSkeleton(state, filter) && !albumsSkeletonSlot(state, filter) -> PageStatus.Empty(filter != null)
     else -> PageStatus.Content
 }
 

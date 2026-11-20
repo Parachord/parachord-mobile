@@ -911,10 +911,12 @@ val androidModule = module {
         val settings: com.parachord.shared.settings.SettingsStore = get()
         val musicBrainz: com.parachord.shared.api.MusicBrainzClient = get()
         val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore = get()
+        val metadataService: com.parachord.shared.metadata.MetadataService = get()
+        val imageEnrichment: com.parachord.shared.metadata.ImageEnrichmentService = get()
         com.parachord.shared.repository.RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(get()),
             settingsStore = settings,
-            metadataService = get(),
+            metadataService = metadataService,
             aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(
                 get<com.parachord.shared.ai.AiRecommendationService>(), settings,
             ),
@@ -936,6 +938,10 @@ val androidModule = module {
             friendExclusions = { similarUsersStore.exclusions() },
             cachedSimilarUsers = { similarUsersStore.cached() },
             canAskSimilarUsers = { similarUsersStore.canAsk() },
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { name -> metadataService.getArtistImage(name) },
+                albumArt = { title, artist -> imageEnrichment.lookupAlbumArt(title, artist) },
+            ),
         )
     }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`

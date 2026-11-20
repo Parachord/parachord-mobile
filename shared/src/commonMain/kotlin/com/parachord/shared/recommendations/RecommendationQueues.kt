@@ -20,6 +20,9 @@ internal fun RecommendationItem.durationMs(): Long? =
 internal fun RecommendationItem.validRecordingMbid(): String? =
     mbid?.lowercase()?.takeIf { isValidMbid(it) }
 
+/** The playback context type of a queue started from a Recommendations song row (its id is the row's key). */
+const val RECOMMENDATIONS_CONTEXT = "recommendations"
+
 /** A recommended song as a metadata-only track; null unless it's a song with an artist. */
 fun recommendedSongTrack(item: RecommendationItem): Track? {
     if (item.type != RecommendationType.SONG) return null
@@ -43,7 +46,7 @@ fun songQueue(rowItems: List<RecommendationItem>, index: Int, row: Recommendatio
     check(tracks.getOrNull(start)?.id == tapped.id)
     return CatalogQueue(
         tracks.drop(start),
-        PlaybackContext("recommendations", row.title ?: "Recommendations", row.key),
+        PlaybackContext(RECOMMENDATIONS_CONTEXT, row.title ?: "Recommendations", row.key),
     )
 }
 
@@ -91,6 +94,9 @@ suspend fun listenerPlay(
     if (tracks.isEmpty()) return ListenerPlay.Message(RecommendationCopy.listenerNoTracks(name))
     return ListenerPlay.Play(CatalogQueue(tracks, PlaybackContext("friend", name, "$service:$username")))
 }
+
+/** Achordion has user pages for ListenBrainz accounts only: the Listener menu's "View on Achordion". */
+fun showsAchordionLink(service: String): Boolean = service == "listenbrainz"
 
 /** A listener's page on Achordion; the name is escaped like desktop's `encodeURIComponent`. */
 fun achordionUserUrl(username: String): String =

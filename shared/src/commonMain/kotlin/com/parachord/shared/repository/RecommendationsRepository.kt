@@ -17,6 +17,7 @@ import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
+import com.parachord.shared.recommendations.RecommendationImages
 import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.SimilarUser
 import com.parachord.shared.recommendations.buildRecommendationPage
@@ -112,6 +113,8 @@ class RecommendationsRepository(
      * crash Android and abort the process on iOS.
      */
     private val scope: CoroutineScope = recommendationsBackgroundScope(),
+    /** Album covers and artist photos for cards that came without one; the screens ask for the cards they show ([requestImages]). */
+    val images: RecommendationImages = RecommendationImages({ null }, { _, _ -> null }),
 ) {
     companion object {
         private const val TAG = "RecommendationsRepo"
@@ -162,6 +165,7 @@ class RecommendationsRepository(
 
     init {
         scope.launch { releaseDates.changes.collect { rebuild() } }
+        scope.launch { images.changes.collect { rebuild() } }
     }
 
     // ── Public surface ───────────────────────────────────────────────
@@ -201,6 +205,11 @@ class RecommendationsRepository(
     /** Looks up the release dates of albums on screen; the page re-merges as they land. */
     fun requestReleaseDates(items: List<RecommendationItem>) {
         scope.launch { releaseDates.requestLookups(items) }
+    }
+
+    /** Looks up covers and photos for the album and artist cards on screen that have none ([images]). */
+    fun requestImages(items: List<RecommendationItem>) {
+        scope.launch { images.requestLookups(items) }
     }
 
     // ── Today's screens (removed when they move to [page]) ───────────
@@ -620,7 +629,7 @@ class RecommendationsRepository(
             val blocked = safely(emptySet()) { settingsStore.getBlockedRecommendations() }
             val ai = safely(null) { aiRecommendations.cached() }
             val exclude = safely(FriendExclusions()) { friendExclusions() }
-            val sections = withReleaseDates(
+            val sections = withImages(withReleaseDates(
                 buildRecommendationPage(
                     providers = providers,
                     shuffleupagus = ai?.let { shuffleupagusSection(it.albums, it.artists) },
@@ -631,7 +640,7 @@ class RecommendationsRepository(
                     blocked = blocked,
                     providerNames = names,
                 ),
-            )
+            ))
             _page.update { it.copy(sections = sections, sources = pageSources(sections), loadingMore = busy, paging = pages) }
         } catch (e: CancellationException) {
             throw e
@@ -659,6 +668,21 @@ class RecommendationsRepository(
                         items = row.items.map { item ->
                             if (item.releaseDate != null) item
                             else safely(null) { releaseDates.dateFor(item) }?.let { item.copy(releaseDate = it) } ?: item
+                        },
+                    )
+                },
+            )
+        }
+
+    /** Fills each album's cover and artist's photo from [images] when the provider sent none. */
+    private suspend fun withImages(sections: List<RecommendationPageSection>): List<RecommendationPageSection> =
+        sections.map { section ->
+            section.copy(
+                rows = section.rows.map { row ->
+                    row.copy(
+                        items = row.items.map { item ->
+                            if (!item.imageUrl.isNullOrBlank() || RecommendationImages.imageKey(item) == null) item
+                            else safely(null) { images.imageFor(item) }?.let { item.copy(imageUrl = it) } ?: item
                         },
                     )
                 },

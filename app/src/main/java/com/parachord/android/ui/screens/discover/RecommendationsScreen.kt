@@ -97,7 +97,13 @@ import com.parachord.shared.recommendations.SONG_PREVIEW
 import com.parachord.shared.recommendations.SectionView
 import com.parachord.shared.recommendations.achordionUserUrl
 import com.parachord.shared.recommendations.activeSourceFilter
-import com.parachord.shared.recommendations.albumsSkeletonSlot
+import com.parachord.shared.recommendations.RECOMMENDATIONS_CONTEXT
+import com.parachord.shared.recommendations.albumsSlotIndex
+import com.parachord.shared.recommendations.listenersSkeleton
+import com.parachord.shared.recommendations.pendingSkeleton
+import com.parachord.shared.recommendations.showsAchordionLink
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import com.parachord.shared.recommendations.filterRowBySource
 import com.parachord.shared.recommendations.itemSourceName
 import com.parachord.shared.recommendations.pageStatus
@@ -380,7 +386,9 @@ private fun PageContent(
     val playlists by viewModel.playlists.collectAsState()
     val trackMenu = rememberTrackContextMenuState()
     val context = LocalContext.current
-    val today = remember { Clock.System.todayIn(TimeZone.currentSystemDefault()) }
+    // Read on every composition, so a page left open past midnight updates its "Coming" pills.
+    val today = Clock.System.todayIn(TimeZone.currentSystemDefault())
+    val scope = rememberCoroutineScope()
 
     var albumMenu by remember { mutableStateOf<RecommendationItem?>(null) }
     var artistMenu by remember { mutableStateOf<RecommendationItem?>(null) }
@@ -390,10 +398,7 @@ private fun PageContent(
     val views = sectionViews(page, filter)
     val contentViews = views.filter { it.section.type != null }
     val listenersView = views.firstOrNull { it.section.type == null }
-    val albumsSlot = albumsSkeletonSlot(page, filter)
-    // Desktop's llmSlot goes before the first section that isn't Songs, else last.
-    val albumsSlotAt = if (!albumsSlot) -1 else contentViews.indexOfFirst { it.section.type != RecommendationType.SONG }
-        .let { if (it < 0) contentViews.size else it }
+    val albumsSlotAt = albumsSlotIndex(page, filter, views)
 
     val cards = CardActions(
         viewModel = viewModel,
@@ -422,21 +427,26 @@ private fun PageContent(
                         viewModel = viewModel,
                         isPlaying = { track ->
                             val ctx = playback.playbackContext
-                            ctx?.type == "recommendations" && ctx.id == row.key && playback.currentTrack?.id == track.id
+                            ctx?.type == RECOMMENDATIONS_CONTEXT && ctx.id == row.key && playback.currentTrack?.id == track.id
                         },
                         resolvers = { key -> trackResolvers[key] },
                         confidences = { key -> trackConfidences[key] },
                         artwork = { key -> trackArtwork[key] },
                         onLongPress = { track ->
-                            trackMenu.show(
-                                TrackContextInfo(
-                                    title = track.title,
-                                    artist = track.artist,
-                                    artworkUrl = track.artworkUrl,
-                                    duration = track.duration,
-                                ),
-                                track,
-                            )
+                            scope.launch {
+                                // A loved song's menu offers Remove from Collection.
+                                val loved = viewModel.isTrackInCollection(track.title, track.artist)
+                                trackMenu.show(
+                                    TrackContextInfo(
+                                        title = track.title,
+                                        artist = track.artist,
+                                        artworkUrl = track.artworkUrl,
+                                        duration = track.duration,
+                                        isInCollection = loved,
+                                    ),
+                                    track,
+                                )
+                            }
                         },
                     )
                 },
@@ -447,12 +457,12 @@ private fun PageContent(
         }
         // Providers still answering with nothing on screen: one unlabeled
         // skeleton after the content and before Listeners (desktop).
-        if (filter == null && page.pendingProviders.isNotEmpty()) {
+        if (pendingSkeleton(page, filter)) {
             cardsSkeletonSection("skeleton:pending", null, lines = 3)
         }
         if (listenersView != null) {
             section(listenersView, page, filter, expandedRows, cards, songRow = { _, _, _, _ -> })
-        } else if (page.listenersPending && filter == null) {
+        } else if (listenersSkeleton(page, filter)) {
             item(key = "skeleton:listeners:header") { SectionHeader(title = RecommendationCopy.LISTENERS) }
             item(key = "skeleton:listeners:cards") {
                 LazyRow(
@@ -529,7 +539,7 @@ private fun PageContent(
                     onNavigateToFriend(unsavedFriendId(item.service, item.name))
                 },
                 MenuEntry(AppIcon.Plus, RecommendationCopy.FOLLOW) { viewModel.followListener(item) },
-                if (item.service == "listenbrainz") {
+                if (showsAchordionLink(item.service)) {
                     MenuEntry(AppIcon.ExternalLink, RecommendationCopy.VIEW_ON_ACHORDION) {
                         openUrl(context, achordionUserUrl(item.name))
                     }
@@ -670,7 +680,7 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
     val vm = cards.viewModel
     when (item.type) {
         RecommendationType.ALBUM -> {
-            LaunchedEffect(item.id) { vm.albumShown(item) }
+            LaunchedEffect(item.id) { vm.cardShown(item) }
             val artist = item.artist.orEmpty()
             RecAlbumCard(
                 item = item,
@@ -682,13 +692,16 @@ private fun CardFor(item: RecommendationItem, row: RecommendationRow, cards: Car
                 onLongPress = { cards.onAlbumMenu(item) },
             )
         }
-        RecommendationType.ARTIST -> RecArtistCard(
-            item = item,
-            imageUrl = item.imageUrl,
-            reason = shuffleupagusReason(item),
-            onOpen = { cards.onNavigateToArtist(item.name) },
-            onLongPress = { cards.onArtistMenu(item) },
-        )
+        RecommendationType.ARTIST -> {
+            LaunchedEffect(item.id) { vm.cardShown(item) }
+            RecArtistCard(
+                item = item,
+                imageUrl = item.imageUrl,
+                reason = shuffleupagusReason(item),
+                onOpen = { cards.onNavigateToArtist(item.name) },
+                onLongPress = { cards.onArtistMenu(item) },
+            )
+        }
         RecommendationType.PLAYLIST -> {
             val weekly = item.weekly
             if (weekly != null) {

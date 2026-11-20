@@ -26,6 +26,7 @@ import com.parachord.shared.recommendations.ListenerPlay
 import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationRow
+import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.listenerPlay
 import com.parachord.shared.recommendations.servicePlaylistQueue
 import com.parachord.shared.recommendations.songQueue
@@ -35,6 +36,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -125,19 +127,25 @@ class RecommendationsViewModel(
         viewModelScope.launch { repository.load(true) }
     }
 
-    // ── Release dates ───────────────────────────────────────────────
+    // ── Release dates and images ────────────────────────────────────
 
-    private val albumBatch = mutableListOf<RecommendationItem>()
-    private var albumBatchJob: Job? = null
+    private val shownBatch = mutableListOf<RecommendationItem>()
+    private var shownBatchJob: Job? = null
 
-    /** Collects albums that come on screen for 300 ms, then asks for their release dates once. */
-    fun albumShown(item: RecommendationItem) {
-        synchronized(albumBatch) { albumBatch.add(item) }
-        if (albumBatchJob?.isActive == true) return
-        albumBatchJob = viewModelScope.launch {
+    /**
+     * Collects album and artist cards that come on screen for 300 ms, then asks
+     * once for the albums' release dates and the covers and photos they lack.
+     */
+    fun cardShown(item: RecommendationItem) {
+        synchronized(shownBatch) { shownBatch.add(item) }
+        if (shownBatchJob?.isActive == true) return
+        shownBatchJob = viewModelScope.launch {
             delay(ALBUM_BATCH_MS)
-            val batch = synchronized(albumBatch) { albumBatch.toList().also { albumBatch.clear() } }
-            if (batch.isNotEmpty()) repository.requestReleaseDates(batch)
+            val batch = synchronized(shownBatch) { shownBatch.toList().also { shownBatch.clear() } }
+            if (batch.isEmpty()) return@launch
+            batch.filter { it.type == RecommendationType.ALBUM }.takeIf { it.isNotEmpty() }
+                ?.let { repository.requestReleaseDates(it) }
+            repository.requestImages(batch)
         }
     }
 
@@ -297,6 +305,10 @@ class RecommendationsViewModel(
     fun addToPlaylist(playlist: PlaylistEntity, track: TrackEntity) {
         viewModelScope.launch { libraryRepository.addTracksToPlaylist(playlist.id, listOf(track)) }
     }
+
+    /** Whether a song is loved, read when its menu opens. */
+    suspend fun isTrackInCollection(title: String, artist: String): Boolean =
+        try { libraryRepository.isTrackInCollection(title, artist).first() } catch (e: CancellationException) { throw e } catch (_: Exception) { false }
 
     fun toggleTrackCollection(track: TrackEntity, isInCollection: Boolean) {
         viewModelScope.launch {

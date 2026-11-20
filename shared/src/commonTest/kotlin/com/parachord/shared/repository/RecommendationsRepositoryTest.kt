@@ -689,6 +689,48 @@ class RecommendationsRepositoryTest {
         assertEquals("2026-01-02", album("Record 2").releaseDate)
     }
 
+    @Test
+    fun `found covers and photos are applied to the page's album and artist cards`() = runTest {
+        val clock = Clock()
+        var artistCalls = 0
+        val prefs = SettingsStore(FakeSecureStore(), KvStore(MapSettings(SettingsStore.LISTENBRAINZ_USERNAME to "listener")))
+        val source = FakeSource().apply {
+            answer("listenbrainz", {
+                songs(
+                    """{"type":"album","name":"Dummy","artist":"Portishead"}""",
+                    """{"type":"album","name":"Mezzanine","artist":"Massive Attack","imageUrl":"https://own"}""",
+                    """{"type":"artist","name":"Tricky"}""",
+                )
+            })
+        }
+        val repo = RecommendationsRepository(
+            source = source,
+            settingsStore = prefs,
+            metadataService = MetadataService(emptyList(), getDisabledProviders = { emptySet() }),
+            aiRecommendations = FakePicks(),
+            releaseDates = ReleaseDates(load = { null }, save = {}, lookup = { _, _ -> null }, nowMs = { clock.now }),
+            providerIsOn = { true },
+            cacheRead = { null },
+            cacheWrite = {},
+            nowMs = { clock.now },
+            scope = backgroundScope,
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { artistCalls++; "https://photo/$it" },
+                albumArt = { title, _ -> "https://cover/$title" },
+            ),
+        )
+        repo.load()
+        fun item(name: String) = flattenRecommendationItems(repo.page.value.sections).first { it.name == name }
+        repo.requestImages(listOf(item("Dummy"), item("Mezzanine"), item("Tricky")))
+        runCurrent()
+        assertEquals("https://cover/Dummy", item("Dummy").imageUrl)
+        assertEquals("https://own", item("Mezzanine").imageUrl)
+        assertEquals("https://photo/Tricky", item("Tricky").imageUrl)
+        repo.requestImages(listOf(item("Tricky")))
+        runCurrent()
+        assertEquals(1, artistCalls)
+    }
+
     private companion object {
         const val MINUTE = 60_000L
         const val HOUR = 60 * MINUTE

@@ -192,6 +192,40 @@ class RecommendationPageViewTest {
     }
 
     @Test
+    fun `albums slot index — before the first non-Songs section — else after the content`() {
+        val songs = section(RecommendationType.SONG, row("type:song", RecommendationType.SONG, listOf(item("s"))))
+        val playlists = section(RecommendationType.PLAYLIST, row("type:playlist", RecommendationType.PLAYLIST, listOf(item("p", RecommendationType.PLAYLIST))))
+        val listeners = section(null, row(LISTENERS_ROW_KEY, null, listeners = listOf(listener("bob", "listenbrainz"))))
+        val songsOnly = RecommendationPageState(aiLoading = true, sections = listOf(songs, listeners))
+        assertEquals(1, albumsSlotIndex(songsOnly, null, sectionViews(songsOnly, null)))
+        val withPlaylists = RecommendationPageState(aiLoading = true, sections = listOf(songs, playlists, listeners))
+        assertEquals(1, albumsSlotIndex(withPlaylists, null, sectionViews(withPlaylists, null)))
+        val playlistsFirst = RecommendationPageState(aiLoading = true, sections = listOf(playlists))
+        assertEquals(0, albumsSlotIndex(playlistsFirst, null, sectionViews(playlistsFirst, null)))
+        // No slot: Shuffleupagus not thinking, or a source picked.
+        assertNull(albumsSlotIndex(songsOnly.copy(aiLoading = false), null, sectionViews(songsOnly, null)))
+        assertNull(albumsSlotIndex(songsOnly, "lastfm", sectionViews(songsOnly, "lastfm")))
+    }
+
+    @Test
+    fun `pending skeleton only under All with providers still answering`() {
+        val pending = RecommendationPageState(pendingProviders = setOf("lastfm"))
+        assertTrue(pendingSkeleton(pending, null))
+        assertFalse(pendingSkeleton(pending, "lastfm"))
+        assertFalse(pendingSkeleton(RecommendationPageState(), null))
+    }
+
+    @Test
+    fun `listeners skeleton only under All while pending and with no Listeners section`() {
+        val pending = RecommendationPageState(listenersPending = true)
+        assertTrue(listenersSkeleton(pending, null))
+        assertFalse(listenersSkeleton(pending, "listenbrainz"))
+        assertFalse(listenersSkeleton(RecommendationPageState(), null))
+        val withListeners = pending.copy(sections = listOf(section(null, row(LISTENERS_ROW_KEY, null, listeners = listOf(listener("bob", "listenbrainz"))))))
+        assertFalse(listenersSkeleton(withListeners, null))
+    }
+
+    @Test
     fun `releaseYear`() {
         assertEquals("2026", releaseYear("2026-11-21"))
         assertEquals("", releaseYear(null))
