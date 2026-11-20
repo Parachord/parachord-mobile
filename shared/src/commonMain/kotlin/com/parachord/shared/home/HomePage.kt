@@ -165,6 +165,8 @@ object HomeCopy {
     const val CHARTS_ERROR_TITLE = "Couldn’t load Pop of the Tops"
     const val CHARTS_ERROR_BODY = "Check your connection, then try again."
     const val TRY_AGAIN = "Try again"
+    /** A mix's Play when its tracks couldn't be looked up: desktop's `playServicePlaylist` toast. */
+    fun couldNotLoad(name: String) = "Could not load $name"
     /** A half's link (desktop `homeHalf`); its accessibility label is [seeAllIn]. */
     const val SEE_ALL = "See all"
     /** The critics' reason badge's accessibility label. */

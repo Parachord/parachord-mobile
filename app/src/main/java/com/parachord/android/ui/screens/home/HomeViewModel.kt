@@ -17,6 +17,7 @@ import com.parachord.shared.deeplink.ChatPrompt
 import com.parachord.shared.deeplink.ProviderPlaylistResolver
 import com.parachord.shared.home.HOME_RECENT_LOVES
 import com.parachord.shared.home.HistoryMix
+import com.parachord.shared.home.HomeCopy
 import com.parachord.shared.home.HomeSession
 import com.parachord.shared.home.HomeSources
 import com.parachord.shared.home.HomeState
@@ -197,13 +198,26 @@ class HomeViewModel(
         }
     }
 
-    /** A history mix: its tracks through the registry's link lookup, as a `mix` queue (Jump back in's active check reads it). */
+    /**
+     * A history mix: its tracks through the registry's link lookup, as a `mix`
+     * queue (Jump back in's active check reads it). A lookup that fails or
+     * finds no tracks says so (desktop's `playServicePlaylist` toast).
+     */
     fun playMix(mix: HistoryMix) {
         viewModelScope.launch {
+            val tracks = try {
+                providerPlaylistResolver.resolve(mix.url)?.let { servicePlaylistTracks(it) }.orEmpty()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load mix '${mix.title}'", e)
+                emptyList()
+            }
+            if (tracks.isEmpty()) {
+                _toastEvents.trySend(HomeCopy.couldNotLoad(mix.title))
+                return@launch
+            }
             guard("mix '${mix.title}'") {
-                val play = providerPlaylistResolver.resolve(mix.url) ?: return@guard
-                val tracks = servicePlaylistTracks(play)
-                if (tracks.isEmpty()) return@guard
                 playbackController.playQueue(tracks, 0, context = jumpTileContext(JumpTile.Mix(mix)))
             }
         }
