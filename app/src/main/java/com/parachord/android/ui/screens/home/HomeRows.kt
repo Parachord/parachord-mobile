@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.FilterChipItem
 import com.parachord.android.ui.components.FilterChips
 import com.parachord.android.ui.components.ParachordIcon
@@ -50,7 +51,7 @@ import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.hapticCombinedClickable
 import com.parachord.android.ui.screens.discover.CardText
 import com.parachord.android.ui.screens.discover.CoverMosaic
-import com.parachord.android.ui.screens.discover.PlayDisc
+import com.parachord.android.ui.screens.discover.ArtPlayInset
 import com.parachord.android.ui.screens.discover.RecAlbumCard
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
 import com.parachord.android.ui.screens.discover.RecCardWidth
@@ -289,7 +290,7 @@ private fun HomeCard(
         Box {
             art(width)
             badge?.invoke(this)
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
+            ArtPlayButton(title, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
         }
         Spacer(Modifier.height(8.dp))
         CardText(title, primary = true)

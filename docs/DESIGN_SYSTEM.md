@@ -55,7 +55,7 @@ Status colours, three kinds:
 Always-dark player surfaces (mini player, Now Playing, the queue, the car-style surfaces): bg `#161616`, elevated `#1e1e1e`, text `#f3f4f6` / `#9ca3af`, in both themes.
 
 Rules:
-- **White text never sits on the theme accent.** In dark mode the accent is `#a78bfa`, and white on it is 2.7:1. Filled buttons, selected chips, play buttons, switch tracks and badges with white text use **fill-accent** (`#7c3aed`) in both themes. Android's Material `primary` is the theme accent, so its dark `onPrimary` is `#161616`, not white: a Material component filled with `primary` gets dark content. A fill that carries white uses `FillAccent` explicitly (iOS: `PC.fillAccent`).
+- **White text never sits on the theme accent.** In dark mode the accent is `#a78bfa`, and white on it is 2.7:1. Filled buttons, selected chips, standalone Play buttons, switch tracks and badges with white text use **fill-accent** (`#7c3aed`) in both themes. Android's Material `primary` is the theme accent, so its dark `onPrimary` is `#161616`, not white: a Material component filled with `primary` gets dark content. A fill that carries white uses `FillAccent` explicitly (iOS: `PC.fillAccent`).
 - **Status text uses the status text tokens, status fills the fill tokens.** The plain status colours are for dots and icons; they're too light for text on white and too light under white text.
 - **Secondary and tertiary text both pass 4.5:1** on the page and on cards in both themes. Map Tailwind greys as gray-900/800 → primary, 700/600 → secondary, 500/400 → tertiary.
 - **No colour literals outside the theme files.** Use a token. If none fits, add one to `DesignTokens` (both apps then read it) and to this table. Status colours are always the tokens, never their own hex.
@@ -167,6 +167,7 @@ Android `SectionHeader`, iOS `PCSectionHeader`; sizes in the shared `SectionHead
 - Right side: an optional link, 13 / 600: "See all in <page>" in that page's colour, or an in-place action ("Show less") in the accent.
 - Sub-section title: 16, 600.
 - 16 below it before the content.
+- The title never truncates: when the title and the link don't fit on one line, the link goes on its own line under the title and subtitle (`LINK_GAP_BELOW_TITLE` below), and a title wider than the row wraps.
 - Page heroes, dialog titles, settings headings and small uppercase group labels are other elements. Settings' group labels are Android `SettingsGroupLabel`; the drawer's and the sync config sheets' small labels keep their own styles too.
 
 ### FilterChips (desktop `filter-chips.js`, #1371)
@@ -195,7 +196,8 @@ One rule for every track list, the queue included:
 - Secondary: outline border-default, text-primary.
 - Destructive: error colour, and only for actions that lose data.
 - Text link: accent, no chrome.
-- Play button: a fill-accent circle with a white triangle.
+- Play button over art (a card's cover, a tile): desktop's `card-art.js` button, a white disc with a large shadow and the triangle in on-art ink (`#111827`, `ON_ART_INK`), the icon 46% of the disc and nudged right 4%. Always shown on a phone, and the art isn't dimmed. One component per platform: Android `ArtPlayButton`, iOS `PCArtPlayButton` (spec in the shared `ArtPlayButtonSpec`): 40 on a 140 card, 36 on a 72 tile, in a 48 touch target.
+- A standalone Play control (Now Playing, a page's Play button, Collection Radio): a fill-accent circle or pill with a white triangle.
 
 ### States
 - **Loading:** a skeleton with the same box as the content (grid, card size, row count), so nothing moves when it lands. A layout change updates its skeleton in the same change.

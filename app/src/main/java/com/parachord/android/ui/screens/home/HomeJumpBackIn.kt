@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.SectionHeader
 import com.parachord.android.ui.components.hapticClickable
@@ -46,6 +47,7 @@ import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.JumpTile
 import com.parachord.shared.home.JumpTileArt
 import com.parachord.shared.home.jumpTileKey
+import com.parachord.shared.ui.ArtPlayButtonSpec
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.shared.ui.icons.AppIcon
 
@@ -137,7 +139,7 @@ private fun JumpTileView(
     ) {
         Box(modifier = Modifier.size(TileHeight), contentAlignment = Alignment.Center) {
             TileArt(tile, art, TileHeight)
-            PlayDisc(title = title, onClick = onPlay)
+            ArtPlayButton(title = title, onClick = onPlay, size = ArtPlayButtonSpec.TILE_SIZE.dp)
         }
         Column(
             verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically),
@@ -192,26 +194,6 @@ private fun TileArt(tile: JumpTile, art: JumpTileArt, size: Dp) {
         artist = album?.album?.artist,
         album = album?.album?.album,
     )
-}
-
-/** The round Play over the art (fill accent, white mark); its own 48dp target. */
-@Composable
-private fun PlayDisc(title: String, onClick: () -> Unit) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .hapticClickable(onClick = onClick)
-            .semantics { contentDescription = HomeCopy.playLabel(title) },
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(32.dp).background(FillAccent, CircleShape),
-        ) {
-            ParachordIcon(AppIcon.Play, contentDescription = null, size = 14.dp, tint = OnFill)
-        }
-    }
 }
 
 /** "Build your collection" (a new user: no collection, no playlists). */

@@ -79,6 +79,10 @@ enum PC {
     static let fillAccent    = pcToken(tokens.FILL_ACCENT)
     static let fillAccentHover = pcToken(tokens.FILL_ACCENT_HOVER)
     static let onAccent      = pcToken(tokens.ON_ACCENT)
+    /// Dark ink on a white chip over art (a play button, a reason badge), both themes.
+    static let onArtInk      = pcToken(tokens.ON_ART_INK)
+    /// The white chip over art, both themes (desktop `--on-color-chip`).
+    static let onColorChip   = pcToken(tokens.ON_COLOR_CHIP).opacity(Double(tokens.ON_COLOR_CHIP_ALPHA))
 
     // Backgrounds
     static let bgPrimary   = dyn(tokens.bgPrimary)
@@ -286,23 +290,32 @@ struct PCSectionHeader<Trailing: View>: View {
     private var spec: SectionHeaderSpec { SectionHeaderSpec.shared }
 
     var body: some View {
-        HStack(alignment: .lastTextBaseline, spacing: CGFloat(spec.ROW_GAP)) {
-            VStack(alignment: .leading, spacing: CGFloat(spec.SUBTITLE_GAP)) {
-                Text(title)
-                    .font(.system(size: CGFloat(sub ? spec.SUB_TITLE_SIZE : spec.TITLE_SIZE),
-                                  weight: sub ? .semibold : .bold))
-                    .foregroundStyle(PC.fg1).lineLimit(1)
-                    .accessibilityAddTraits(.isHeader)
+        // The title never truncates: the link sits at the right when it fits
+        // beside the title, else on its own line under the title and subtitle
+        // (`PCSectionHeaderLayout`, the same rule as Android's SectionHeader).
+        PCSectionHeaderLayout(gap: CGFloat(spec.ROW_GAP), linkGap: CGFloat(spec.LINK_GAP_BELOW_TITLE)) {
+            Text(title)
+                .font(.system(size: CGFloat(sub ? spec.SUB_TITLE_SIZE : spec.TITLE_SIZE),
+                              weight: sub ? .semibold : .bold))
+                .foregroundStyle(PC.fg1)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            Group {
                 if let subtitle {
                     Text(subtitle).font(.system(size: CGFloat(spec.SUBTITLE_SIZE))).foregroundStyle(PC.fg2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, CGFloat(spec.SUBTITLE_GAP))
+                } else {
+                    Color.clear.frame(width: 0, height: 0)
                 }
             }
-            Spacer(minLength: 0)
-            trailing()
-            if let page, let onSeeAll {
-                link(spec.seeAllLabel(page: page), color: PC.page(page), run: onSeeAll)
-            } else if let action {
-                link(action.label, color: PC.accent, run: action.run)
+            HStack(spacing: CGFloat(spec.ROW_GAP)) {
+                trailing()
+                if let page, let onSeeAll {
+                    link(spec.seeAllLabel(page: page), color: PC.page(page), run: onSeeAll)
+                } else if let action {
+                    link(action.label, color: PC.accent, run: action.run)
+                }
             }
         }
         .padding(.horizontal, gutter)
@@ -314,6 +327,80 @@ struct PCSectionHeader<Trailing: View>: View {
         Button(label, action: run)
             .font(.system(size: CGFloat(spec.LINK_SIZE), weight: .semibold))
             .foregroundStyle(color).lineLimit(1).buttonStyle(.plain)
+    }
+}
+
+/// The play button over art, desktop's (`card-art.js`; spec in the shared
+/// `ArtPlayButtonSpec`, as Android's `ArtPlayButton`): a white disc with a
+/// large shadow and the triangle in on-art ink, in a tap target of at least
+/// 48. Every play button drawn on a cover or tile uses it; a standalone Play
+/// control stays the fill-accent one.
+struct PCArtPlayButton: View {
+    let title: String
+    let onPlay: () -> Void
+    var size: CGFloat = CGFloat(ArtPlayButtonSpec.shared.SIZE)
+
+    private var spec: ArtPlayButtonSpec { ArtPlayButtonSpec.shared }
+
+    var body: some View {
+        Button(action: onPlay) {
+            ZStack {
+                Circle().fill(PC.onAccent).frame(width: size, height: size)
+                    .shadow(color: .black.opacity(0.18), radius: CGFloat(spec.ELEVATION), y: CGFloat(spec.ELEVATION) / 2)
+                PCIcon(icon: .play, size: size * CGFloat(spec.ICON_FRACTION), tint: PC.onArtInk)
+                    .offset(x: size * CGFloat(spec.ICON_NUDGE))
+            }
+            .frame(width: max(size, CGFloat(spec.MIN_TOUCH)), height: max(size, CGFloat(spec.MIN_TOUCH)))
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spec.label(title: title))
+    }
+}
+
+/// The section header's layout: title, subtitle, then the trailing views and
+/// link. Only the title decides whether the link fits beside it; when it
+/// doesn't, the link goes on its own line under the title and subtitle.
+struct PCSectionHeaderLayout: Layout {
+    var gap: CGFloat
+    var linkGap: CGFloat
+
+    private struct Plan { var sameLine: Bool; var blockW: CGFloat; var title: CGSize; var sub: CGSize; var end: CGSize }
+
+    private func plan(_ width: CGFloat, _ subviews: Subviews) -> Plan {
+        let end = subviews[2].sizeThatFits(.unspecified)
+        let hasEnd = end.width > 0
+        let titleIdeal = subviews[0].sizeThatFits(.unspecified).width
+        let sameLine = !hasEnd || titleIdeal + gap + end.width <= width
+        let blockW = sameLine && hasEnd ? max(0, width - gap - end.width) : width
+        let proposal = ProposedViewSize(width: blockW, height: nil)
+        return Plan(sameLine: sameLine, blockW: blockW,
+                    title: subviews[0].sizeThatFits(proposal), sub: subviews[1].sizeThatFits(proposal), end: end)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let p = plan(width, subviews)
+        let block = p.title.height + p.sub.height
+        let height = p.sameLine ? max(block, p.end.height) : block + linkGap + p.end.height
+        let w = proposal.width ?? (max(p.title.width, p.sub.width) + (p.end.width > 0 ? gap + p.end.width : 0))
+        return CGSize(width: w, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let p = plan(bounds.width, subviews)
+        let block = p.title.height + p.sub.height
+        let tp = ProposedViewSize(width: p.blockW, height: nil)
+        if p.sameLine {
+            let top = bounds.minY + bounds.height - block
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: top), proposal: tp)
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: top + p.title.height), proposal: tp)
+            subviews[2].place(at: CGPoint(x: bounds.maxX - p.end.width, y: bounds.maxY - p.end.height), proposal: .unspecified)
+        } else {
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: tp)
+            subviews[1].place(at: CGPoint(x: bounds.minX, y: bounds.minY + p.title.height), proposal: tp)
+            subviews[2].place(at: CGPoint(x: bounds.minX, y: bounds.minY + block + linkGap), proposal: .unspecified)
+        }
     }
 }
 

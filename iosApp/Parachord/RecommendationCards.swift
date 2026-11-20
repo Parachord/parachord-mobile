@@ -10,8 +10,8 @@ import Shared
 /// A card's default width in a scrolling row.
 let pcRecCardWidth: CGFloat = 140
 
-private let recPlayDisc: CGFloat = 32
-private let recPlayTarget: CGFloat = 48
+/// The play button's tap target sits this far in from the cover's corner, so its 40 pt disc is 8 pt in.
+private let recArtPlayInset: CGFloat = 4
 
 private struct RecCardText: View {
     let text: String
@@ -28,24 +28,6 @@ private struct RecCardText: View {
             .truncationMode(.tail)
             .multilineTextAlignment(center ? .center : .leading)
             .frame(maxWidth: .infinity, alignment: center ? .center : .leading)
-    }
-}
-
-/// The 32 pt play disc inside a 48 pt tap target.
-private struct RecPlayDisc: View {
-    let onPlay: () -> Void
-
-    var body: some View {
-        Button(action: onPlay) {
-            ZStack {
-                Circle().fill(PC.fillAccent).frame(width: recPlayDisc, height: recPlayDisc)
-                PCIcon(icon: .play, size: 16, tint: PC.onAccent)
-            }
-            .frame(width: recPlayTarget, height: recPlayTarget)
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(RecommendationCopy.shared.PLAY)
     }
 }
 
@@ -90,7 +72,8 @@ struct RecAlbumCard: View {
                         .padding(8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                 }
-                RecPlayDisc(onPlay: onPlay)
+                PCArtPlayButton(title: item.name, onPlay: onPlay)
+                    .padding(recArtPlayInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
             .frame(width: width, height: width)
@@ -169,7 +152,8 @@ struct RecWeeklyCard: View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
                 mosaic
-                RecPlayDisc(onPlay: onPlay)
+                PCArtPlayButton(title: item.weeklyLabel ?? item.name, onPlay: onPlay)
+                    .padding(recArtPlayInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
             .frame(width: width, height: width)
@@ -251,7 +235,7 @@ struct ListenerCard: View {
                         .frame(width: avatar, height: avatar, alignment: .bottom)
                 }
                 // Desktop's friend card plays the person's top tracks.
-                RecPlayDisc(onPlay: onPlay)
+                PCArtPlayButton(title: listener.name, onPlay: onPlay)
                     .offset(x: 8, y: -8)
                     .frame(width: avatar, height: avatar, alignment: .topTrailing)
             }

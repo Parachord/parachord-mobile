@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.hapticCombinedClickable
@@ -54,8 +55,9 @@ import com.parachord.shared.ui.icons.AppIcon
 /** A card's width in a scrolling row. */
 internal val RecCardWidth = 140.dp
 
-private val PlayButton = 32.dp
-private val PlayTouchTarget = 48.dp
+/** The play button's touch target sits this far in from the cover's corner, so its 40 dp disc is 8 dp in. */
+internal val ArtPlayInset = 4.dp
+
 
 /** The listener hexagon keeps its 120:140 share of the card. */
 private fun listenerAvatar(width: Dp): Dp = width * (120f / 140f)
@@ -88,32 +90,6 @@ internal fun CardText(
         overflow = TextOverflow.Ellipsis,
         textAlign = if (center) TextAlign.Center else null,
     )
-}
-
-/**
- * The 32 dp play disc, inside a 48 dp touch target (the disc sits 8 dp in from the
- * target's edge, so a target placed at a card's corner shows the disc 8 dp in).
- */
-@Composable
-internal fun PlayDisc(onPlay: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .size(PlayTouchTarget)
-            .clip(CircleShape)
-            .semantics { role = Role.Button }
-            .hapticClickable(onClick = onPlay),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier
-                .size(PlayButton)
-                .clip(CircleShape)
-                .background(FillAccent),
-            contentAlignment = Alignment.Center,
-        ) {
-            ParachordIcon(AppIcon.Play, contentDescription = RecommendationCopy.PLAY, size = 16.dp, tint = OnFill)
-        }
-    }
 }
 
 /** A release: cover, title, artist, year and an optional "Coming …" pill (top right, as desktop). */
@@ -161,7 +137,7 @@ fun RecAlbumCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
+            ArtPlayButton(item.name, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
             coverBadge?.invoke(this)
         }
         Spacer(Modifier.height(8.dp))
@@ -266,7 +242,7 @@ fun RecWeeklyCard(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
             CoverMosaic(covers, Modifier.fillMaxSize())
-            PlayDisc(onPlay, Modifier.align(Alignment.BottomEnd))
+            ArtPlayButton(weekly?.label ?: item.name, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
         }
         Spacer(Modifier.height(8.dp))
         CardText(weekly?.label ?: item.name, primary = true)
@@ -372,7 +348,7 @@ fun ListenerCard(
                 )
             }
             // Desktop's friend card plays the person's top tracks.
-            PlayDisc(onPlay, Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp))
+            ArtPlayButton(item.name, onPlay, Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp))
         }
         Spacer(Modifier.height(8.dp))
         CardText(item.name, primary = true, center = true, modifier = Modifier.fillMaxWidth())
