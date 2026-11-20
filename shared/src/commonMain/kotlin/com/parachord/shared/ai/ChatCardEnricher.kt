@@ -8,8 +8,10 @@ import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.resolver.selectBestMatch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * The cover on each chat card, following desktop's `ChatCard` (`app.js`
@@ -41,6 +43,8 @@ class ChatCardEnricher(
     private val trackSearch: suspend (title: String, artist: String) -> List<TrackSearchResult>,
     private val catalogTrackArt: suspend (title: String, artist: String) -> String? = { _, _ -> null },
     private val nowMs: () -> Long = { currentTimeMillis() },
+    /** The lock over the cache; a parameter only so a test can hold it. */
+    private val mutex: Mutex = Mutex(),
 ) {
     /** The app's wiring. */
     constructor(
@@ -62,7 +66,6 @@ class ChatCardEnricher(
     private class Entry(val url: String?, val at: Long)
 
     private val cache = mutableMapOf<String, Entry>()
-    private val mutex = Mutex()
 
     /** The cover for a track card; [album] may be blank. */
     suspend fun getTrackArtwork(title: String, artist: String, album: String): String? {
@@ -107,23 +110,28 @@ class ChatCardEnricher(
             CompletableDeferred<String?>().also { inFlight[key] = it } to true
         }
         if (!mine) return deferred.await()
+        var result: String? = null
+        var answered = false
         try {
-            val result = fetch()
-            mutex.withLock {
-                cache[key] = Entry(result, nowMs())
-                inFlight.remove(key)
-            }
-            deferred.complete(result)
+            result = fetch()
+            answered = true
             return result
         } catch (e: CancellationException) {
-            mutex.withLock { inFlight.remove(key) }
-            deferred.complete(null)
             throw e
         } catch (_: Exception) {
             // Not cached: the next showing asks again.
-            mutex.withLock { inFlight.remove(key) }
-            deferred.complete(null)
             return null
+        } finally {
+            // Under NonCancellable, so a cancelled card still clears its lookup
+            // even when the lock is contended; otherwise later cards for this
+            // key would wait on a deferred that never completes.
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    if (answered) cache[key] = Entry(result, nowMs())
+                    inFlight.remove(key)
+                }
+                deferred.complete(result)
+            }
         }
     }
 }

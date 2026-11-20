@@ -3,6 +3,8 @@ package com.parachord.shared.ai
 import com.parachord.shared.metadata.TrackSearchResult
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -148,5 +150,30 @@ class ChatCardEnricherTest {
         assertEquals("p.jpg", first.await())
         assertEquals("p.jpg", second.await())
         assertEquals(1, calls.artistImage.size)
+    }
+
+    @Test
+    fun `a card cancelled while the lock is held still frees its lookup`() = runTest {
+        val lock = Mutex()
+        val gate = CompletableDeferred<Unit>()
+        var calls = 0
+        val e = ChatCardEnricher(
+            albumArt = { _, _ -> null },
+            artistImage = { calls++; if (calls == 1) gate.await(); "p.jpg" },
+            trackSearch = { _, _ -> emptyList() },
+            nowMs = { now },
+            mutex = lock,
+        )
+        val owner = launch { e.getArtistImage("Radiohead") }
+        val waiter = async { e.getArtistImage("Radiohead") }
+        runCurrent()
+        lock.lock()
+        owner.cancel()
+        runCurrent()
+        lock.unlock()
+        runCurrent()
+        assertNull(waiter.await())
+        assertEquals("p.jpg", e.getArtistImage("Radiohead"))
+        assertEquals(2, calls)
     }
 }
