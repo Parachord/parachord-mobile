@@ -133,6 +133,10 @@ class SettingsStore(
          *  key before moving on, so resume picks up where it left off).
          *  Mirrors desktop's `love_pushed_keys`. */
         const val LOVE_PUSHED_KEYS = "love_pushed_keys"
+        /** Home's getting-started state, JSON `{active, played, skipped}` (desktop `home_getting_started`). */
+        const val HOME_GETTING_STARTED = "home_getting_started"
+        /** Dismissed "Finish setting up" item ids, CSV (desktop `home_setup_dismissed`). */
+        const val HOME_SETUP_DISMISSED = "home_setup_dismissed"
 
         // Sync key family (Phase 9B Stage 2 — already KvStore-resident)
         const val SYNC_ENABLED = "sync_enabled"
@@ -1300,6 +1304,34 @@ class SettingsStore(
             }
         }
         kv.setString(LOVE_PUSHED_KEYS, obj.toString())
+    }
+
+    /** The saved getting-started state, or null when none is saved or it can't be read. */
+    suspend fun getHomeGettingStarted(): com.parachord.shared.home.GettingStartedState? {
+        ensureMigrated()
+        val raw = kv.getStringOrNull(HOME_GETTING_STARTED)?.takeIf { it.isNotBlank() } ?: return null
+        return try {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString(com.parachord.shared.home.GettingStartedState.serializer(), raw)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun setHomeGettingStarted(state: com.parachord.shared.home.GettingStartedState) {
+        ensureMigrated()
+        kv.setString(
+            HOME_GETTING_STARTED,
+            kotlinx.serialization.json.Json.encodeToString(com.parachord.shared.home.GettingStartedState.serializer(), state),
+        )
+    }
+
+    suspend fun getHomeSetupDismissed(): Set<String> {
+        ensureMigrated(); return kv.getStringSetCsv(HOME_SETUP_DISMISSED)
+    }
+
+    suspend fun setHomeSetupDismissed(ids: Set<String>) {
+        ensureMigrated(); kv.setStringSetCsv(HOME_SETUP_DISMISSED, ids)
     }
 }
 
