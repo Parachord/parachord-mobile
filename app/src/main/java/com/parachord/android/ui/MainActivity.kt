@@ -505,8 +505,10 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
     }
 
     // NestedScrollConnection: catches HorizontalPager boundary overscroll on tab screens.
-    // Left overscroll (swipe right) → open drawer; right overscroll (swipe left) → open chat.
-    val overscrollConnection = remember(onOpenDrawer, onOpenChat) {
+    // Left overscroll (swipe right) → open drawer. Chat opens only from the
+    // right-edge swipe zone below, never from overscroll: a carousel swiped
+    // to its end used to open the chat.
+    val overscrollConnection = remember(onOpenDrawer) {
         object : NestedScrollConnection {
             private var accumulatedX = 0f
 
@@ -533,8 +535,6 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                 accumulatedX = 0f
                 if (accumulated > 60f || available.x > 400f) {
                     onOpenDrawer()
-                } else if (accumulated < -60f || available.x < -400f) {
-                    onOpenChat()
                 }
                 return Velocity.Zero
             }
