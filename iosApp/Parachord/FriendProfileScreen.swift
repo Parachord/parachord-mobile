@@ -50,15 +50,34 @@ final class FriendProfileModel {
         // now-playing track is CURRENT — the cached copy may be stale or empty
         // until the periodic 2-min refresh runs, so opening a profile would show
         // no "now playing" (and you couldn't tell what you'd listen along to).
-        let base = (try? await container.getFriend(friendId: friendId)) ?? nil
+        let base = (try? await container.profileFriend(friendId: friendId)) ?? nil
         friend = base
-        guard let cur = base else {
-            // Transient (deeplink) friend isn't in the DB — fetch their now-playing.
-            friend = (try? await container.fetchTransientFriendNowPlaying(service: service, user: username)) ?? nil
+        // Someone not followed has no saved row to refresh; their now-playing is
+        // fetched once so the header still shows what they're on.
+        guard let cur = base, !cur.transient else {
+            if let live = (try? await container.fetchTransientFriendNowPlaying(service: service, user: username)) ?? nil {
+                friend = live
+            }
             return
         }
         if let refreshed = (try? await container.refreshFriendActivity(friend: cur)) ?? nil {
             friend = refreshed
+        }
+    }
+
+    var isFollowed: Bool { friend?.transient == false }
+    private(set) var following = false
+    var followMessage: String?
+
+    /// Follows them; on success the saved friend replaces the unsaved one.
+    func follow() {
+        guard let f = friend, f.transient, !following else { return }
+        following = true
+        Task {
+            let r = try? await container.followProfile(service: f.service, username: f.username)
+            following = false
+            if let saved = r?.saved { friend = saved }
+            else { followMessage = r?.message ?? UiMessages.shared.couldntReach(serviceId: f.service) }
         }
     }
 
@@ -72,11 +91,11 @@ final class FriendProfileModel {
     /// tapping pin on an auto-pinned on-air friend converts it to a real pin that
     /// persists after they go offline.
     func togglePin() {
-        guard let f = friend else { return }
+        guard let f = friend, !f.transient else { return }
         let manual = isManuallyPinned
         Task {
             try? await container.pinFriend(friendId: f.id, pinned: !manual)
-            friend = (try? await container.getFriend(friendId: friendId)) ?? friend
+            friend = (try? await container.profileFriend(friendId: friendId)) ?? friend
         }
     }
 
@@ -101,7 +120,8 @@ final class FriendProfileModel {
                 let a = try await container.getFriendTopArtists(username: username, service: service, period: period)
                 if !a.isEmpty { artistsCache[key] = a; topArtists = a }
             default:
-                let r = try await container.getFriendRecentTracks(username: username, service: service)
+                let result = try await container.getFriendRecentWithHidden(username: username, service: service)
+                let r = result.tracks
                 if !r.isEmpty {
                     let e = r.map { Self.track($0.title, $0.artist, $0.album, $0.artworkUrl) }
                     recentCache = (r, e); recent = r; recentEntities = e
@@ -109,13 +129,16 @@ final class FriendProfileModel {
                 // The fetch records whether the Last.fm profile hides its recent
                 // listening (desktop parachord#1140); re-read so the tab can say so.
                 if friend?.transient != true {
-                    friend = (try? await container.getFriend(friendId: friendId)) ?? friend
+                    friend = (try? await container.profileFriend(friendId: friendId)) ?? friend
+                } else if let hides = result.hidesListening?.boolValue, let f = friend {
+                    // No saved row to record it on: keep it on the profile.
+                    friend = container.friendWithHidesListening(friend: f, hides: hides)
                 }
             }
             errors[key] = nil
         } catch {
             // A failure that isn't a repository's error keeps showing what was there.
-            if let message = pcLoadErrorMessage(error) { errors[key] = message }
+            if pcLoadErrorMessage(error) != nil { errors[key] = UiMessages.shared.couldntReach(serviceId: service) }
         }
         if errors[key] == nil { lastLoad[key] = Date() }; loading = false
     }
@@ -171,9 +194,13 @@ struct FriendProfileScreen: View {
             // Pin/unpin lives in the top bar (Android parity). Listen Along sits in
             // the header below — shown ONLY when the friend is on air (or already
             // being listened-along with, so you can stop).
-            PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
-                     trailingIcon: model.isManuallyPinned ? "pin.fill" : "pin",
-                     onTrailing: { model.togglePin() })
+            if model.isFollowed {
+                PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
+                         trailingIcon: model.isManuallyPinned ? "pin.fill" : "pin",
+                         onTrailing: { model.togglePin() })
+            } else {
+                PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() })
+            }
             header
             PCTabs(tabs: ["Top Songs", "Top Albums", "Top Artists", "Recent"], selection: $tabIndex)
             if tabIndex != 3 { periodChips }
@@ -223,6 +250,21 @@ struct FriendProfileScreen: View {
             }
             Text("@\(model.username)").font(.system(size: 13)).foregroundStyle(PC.fg2)
             Text("Listening activity from \(serviceName)").font(.system(size: 11)).foregroundStyle(PC.fg3)
+            if model.friend != nil, !model.isFollowed {
+                Button { model.follow() } label: {
+                    Text(RecommendationCopy.shared.FOLLOW)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 18).padding(.vertical, 9)
+                        .background(PC.fillAccent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.following)
+                .padding(.top, 6)
+                if let message = model.followMessage {
+                    Text(message).font(.system(size: 12)).foregroundStyle(PC.fg2)
+                }
+            }
             // Listen Along — on air only (or active, to stop). Gating matches the
             // friend rows + sidebar; the controller is already bound to the coordinator.
             if let f = model.friend, f.isOnAir || listenAlong.isActive(f) {
@@ -407,10 +449,10 @@ struct FriendProfileScreen: View {
         }
     }
 
-    /// Android's FriendDetailScreen ErrorState: Retry only on the Recent tab.
+    /// Android's FriendDetailScreen ErrorState: couldntReach(service) with Try again on every tab.
     private func errorState(_ message: String) -> some View {
-        PCErrorState(message: message, retryLabel: UiMessages.shared.RETRY,
-                     onRetry: tabIndex == 3 ? { Task { await model.load(tab: tabIndex, period: period, force: true) } } : nil)
+        PCErrorState(message: message, retryLabel: RecommendationCopy.shared.TRY_AGAIN,
+                     onRetry: { Task { await model.load(tab: tabIndex, period: period, force: true) } })
     }
 
     @ViewBuilder private func emptyIfNeeded(_ empty: Bool, _ message: String) -> some View {

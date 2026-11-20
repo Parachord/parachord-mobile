@@ -1660,6 +1660,42 @@ class IosContainer private constructor() {
     suspend fun getFriendRecentTracks(username: String, service: String): List<RecentTrack> =
         friendsRepository.getFriendRecentTracks(username, service).shownOrThrow(emptyList())
 
+    /** A friend's recent tracks plus whether their Last.fm profile hides its listening (null: not reported). */
+    @Throws(Throwable::class)
+    suspend fun getFriendRecentWithHidden(username: String, service: String): IosFriendRecent {
+        var hides: Boolean? = null
+        val tracks = friendsRepository.getFriendRecentTracks(username, service) { hides = it }
+            .shownOrThrow(emptyList())
+        return IosFriendRecent(tracks, hides)
+    }
+
+    /** [friend] with its hidden-listening flag set (for someone with no saved row to record it on). */
+    fun friendWithHidesListening(friend: Friend, hides: Boolean): Friend = friend.copy(hidesListening = hides)
+
+    /** The profile's person: the saved friend, or an unsaved one (`transient`) for a Listener not followed. Never throws. */
+    suspend fun profileFriend(friendId: String): Friend? = try {
+        friendsRepository.profileFriend(friendId)
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "profileFriend failed: ${e.message}")
+        null
+    }
+
+    /** Follows the profile's person: the saved friend on success, else the shared message to show. Never throws. */
+    suspend fun followProfile(service: String, username: String): IosFollowProfileResult = try {
+        when (val result = friendsRepository.follow(service, username)) {
+            is Resource.Success -> IosFollowProfileResult(result.data, null)
+            is Resource.Error -> IosFollowProfileResult(null, result.message)
+            else -> IosFollowProfileResult(null, com.parachord.shared.ui.UiMessages.couldntReach(service))
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w("IosContainer", "followProfile failed: ${e.message}")
+        IosFollowProfileResult(null, com.parachord.shared.ui.UiMessages.couldntReach(service))
+    }
+
     // Reactive in-collection checks — back the collection-toggle UI on detail/cards.
     fun watchTrackInCollection(title: String, artist: String, onEach: (Boolean) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(trackDao.existsByTitleAndArtist(title, artist)) { onEach((it as? Boolean) ?: false) }
@@ -4045,6 +4081,10 @@ data class IosAiSuggestionsResult(val suggestions: IosAiSuggestions?, val error:
  * (the same text Android shows); Swift reads it with `pcLoadErrorMessage`.
  */
 class IosLoadException(message: String) : Exception(message)
+
+data class IosFriendRecent(val tracks: List<RecentTrack>, val hidesListening: Boolean?)
+
+data class IosFollowProfileResult(val saved: Friend?, val message: String?)
 
 /** A "Sync now": [error] is empty on success; [notices] are what Android lists after a sync (`FullSyncResult.notices`). */
 data class IosSyncOutcome(val error: String, val notices: List<String>)
