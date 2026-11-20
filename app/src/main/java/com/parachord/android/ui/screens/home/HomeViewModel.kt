@@ -1,7 +1,5 @@
 package com.parachord.android.ui.screens.home
 
-import kotlinx.coroutines.Job
-import com.parachord.shared.ui.UiMessages
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -10,38 +8,46 @@ import com.parachord.android.data.db.entity.ArtistEntity
 import com.parachord.android.data.db.entity.FriendEntity
 import com.parachord.android.data.db.entity.PlaylistEntity
 import com.parachord.android.data.db.entity.TrackEntity
-import com.parachord.android.ai.AiRecommendationService
 import com.parachord.android.ai.AiRecommendations
 import com.parachord.android.data.metadata.MetadataService
-import com.parachord.android.data.repository.ChartsRepository
-import com.parachord.android.data.repository.CriticalDarlingsRepository
-import com.parachord.android.data.repository.FreshDropsRepository
-import com.parachord.android.data.repository.FriendsRepository
 import com.parachord.android.data.repository.LibraryRepository
-import com.parachord.android.data.repository.RecommendationsRepository
-import com.parachord.shared.model.Resource
 import com.parachord.android.data.repository.WeeklyPlaylistEntry
-import com.parachord.android.data.repository.WeeklyPlaylistsRepository
-import com.parachord.android.data.scanner.MediaScanner
 import com.parachord.android.data.scanner.ScanProgress
 import com.parachord.android.data.store.SettingsStore
 import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.PlaybackStateHolder
-import com.parachord.android.resolver.ResolverManager
-import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.resolver.TrackResolverCache
+import com.parachord.shared.car.CarBrowse
+import com.parachord.shared.car.CarIds
+import com.parachord.shared.deeplink.ChatPrompt
+import com.parachord.shared.deeplink.ProviderPlaylistResolver
+import com.parachord.shared.home.HOME_RECENT_LOVES
+import com.parachord.shared.home.HistoryMix
+import com.parachord.shared.home.HomeSession
+import com.parachord.shared.home.HomeSources
+import com.parachord.shared.home.HomeState
+import com.parachord.shared.home.JumpTile
+import com.parachord.shared.playback.CatalogQueues
+import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.servicePlaylistTracks
+import com.parachord.shared.repository.AnnouncementsRepository
+import com.parachord.shared.repository.recentLoves
+import com.parachord.shared.ui.UiMessages
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+/** The old Home's collection stats card. Task 4's screen drops it. */
 data class CollectionStats(
     val tracks: Int = 0,
     val albums: Int = 0,
@@ -50,7 +56,7 @@ data class CollectionStats(
     val friends: Int = 0,
 )
 
-/** Preview snippet shown on a Discover card. */
+/** The old Home's Discover card preview. Task 4's screen drops it. */
 data class DiscoverPreview(
     val title: String,
     val subtitle: String,
@@ -58,312 +64,203 @@ data class DiscoverPreview(
     val label: String = "",
 )
 
-class HomeViewModel constructor(
+/**
+ * Home: the shared [HomeSession] ([state]) plus what Home's taps play. Every
+ * rule (what shows, the loads and their throttles, getting started) lives in
+ * the session; this only wires Android's playback and library to it.
+ */
+class HomeViewModel(
+    private val sources: HomeSources,
+    settingsStore: SettingsStore,
     private val repository: LibraryRepository,
-    private val friendsRepository: FriendsRepository,
     private val playbackController: PlaybackController,
-    private val playbackStateHolder: PlaybackStateHolder,
-    private val mediaScanner: MediaScanner,
-    private val recommendationsRepository: RecommendationsRepository,
-    private val criticalDarlingsRepository: CriticalDarlingsRepository,
-    private val freshDropsRepository: FreshDropsRepository,
-    private val chartsRepository: ChartsRepository,
-    private val aiRecommendationService: AiRecommendationService,
-    private val weeklyPlaylistsRepository: WeeklyPlaylistsRepository,
-    private val settingsStore: SettingsStore,
+    playbackStateHolder: PlaybackStateHolder,
     private val trackResolverCache: TrackResolverCache,
-    private val metadataService: MetadataService,
-    private val resolverManager: ResolverManager,
-    private val resolverScoring: ResolverScoring,
+    metadataService: MetadataService,
+    private val carBrowse: CarBrowse,
+    private val providerPlaylistResolver: ProviderPlaylistResolver,
+    private val announcementsRepository: AnnouncementsRepository,
 ) : ViewModel() {
 
-    /** User-configured resolver priority order, used to sort resolver icons on track rows. */
-    val resolverOrder: StateFlow<List<String>> = settingsStore.getResolverOrderFlow()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** Resolver badge names for UI display — shared across all screens via TrackResolverCache. */
-    val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
-    val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
-    /** Art from each track's resolved sources, for Continue Listening's cover. */
-    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
-
-    val recentTracks: StateFlow<List<TrackEntity>> = repository.getAllTracks()
-        .map { tracks -> com.parachord.shared.repository.recentLoves(tracks, 20) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** null = still loading, true/false = resolved. */
-    val hasLibrary: StateFlow<Boolean?> = repository.getAllTracks()
-        .map { it.isNotEmpty() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
-
-    val recentAlbums: StateFlow<List<AlbumEntity>> = repository.getAllAlbums()
-        .map { albums -> albums.sortedByDescending { it.addedAt }.take(8) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val recentPlaylists: StateFlow<List<PlaylistEntity>> = repository.getAllPlaylists()
-        .map { playlists ->
-            playlists.sortedByDescending {
-                if (it.lastModified > 0L) it.lastModified else it.updatedAt
-            }.take(6)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val friendActivity: StateFlow<List<FriendEntity>> = friendsRepository.getAllFriends()
-        .map { friends ->
-            friends
-                .filter { it.cachedTrackName != null }
-                .sortedWith(compareByDescending<FriendEntity> { it.isOnAir }
-                    .thenByDescending { it.cachedTrackTimestamp })
-                .take(5)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val collectionStats: StateFlow<CollectionStats> = combine(
-        repository.getAllTracks().map { it.size },
-        repository.getAllAlbums().map { it.size },
-        repository.getAllArtists().map { it.size },
-        repository.getAllPlaylists().map { it.size },
-        friendsRepository.getAllFriends().map { it.size },
-    ) { tracks, albums, artists, playlists, friends ->
-        CollectionStats(tracks, albums, artists, playlists, friends)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CollectionStats())
-
-    val scanProgress: StateFlow<ScanProgress> = mediaScanner.progress
-
-    /** Current playback state for Continue Listening card. */
-    val playbackState = playbackStateHolder.state
-
-    // ── Discover previews ───────────────────────────────────────────
-
-    private val _forYouPreview = MutableStateFlow<DiscoverPreview?>(null)
-    val forYouPreview: StateFlow<DiscoverPreview?> = _forYouPreview
-
-    private val _criticalDarlingsPreview = MutableStateFlow<DiscoverPreview?>(null)
-    val criticalDarlingsPreview: StateFlow<DiscoverPreview?> = _criticalDarlingsPreview
-
-    private val _freshDropsPreview = MutableStateFlow<DiscoverPreview?>(null)
-    val freshDropsPreview: StateFlow<DiscoverPreview?> = _freshDropsPreview
-
-    private val _popOfTheTopsPreview = MutableStateFlow<DiscoverPreview?>(null)
-    val popOfTheTopsPreview: StateFlow<DiscoverPreview?> = _popOfTheTopsPreview
-
-    // ── AI Shuffleupagus ──────────────────────────────────────────
-
-    private val _hasAiPlugins = MutableStateFlow<Boolean?>(null) // null = checking
-    val hasAiPlugins: StateFlow<Boolean?> = _hasAiPlugins
-
-    private val _aiRecommendations = MutableStateFlow<AiRecommendations?>(null)
-    val aiRecommendations: StateFlow<AiRecommendations?> = _aiRecommendations
-
-    private val _aiLoading = MutableStateFlow(false)
-    val aiLoading: StateFlow<Boolean> = _aiLoading
-
-    private val _aiError = MutableStateFlow<String?>(null)
-    val aiError: StateFlow<String?> = _aiError
-
-    // ── Weekly Playlists (ListenBrainz) ─────────────────────────────
-
-    private val _weeklyJams = MutableStateFlow<List<WeeklyPlaylistEntry>?>(null)
-    val weeklyJams: StateFlow<List<WeeklyPlaylistEntry>?> = _weeklyJams
-
-    private val _weeklyExploration = MutableStateFlow<List<WeeklyPlaylistEntry>?>(null)
-    val weeklyExploration: StateFlow<List<WeeklyPlaylistEntry>?> = _weeklyExploration
-
-    /** Covers for each playlist entry ID → list of up to 4 album art URLs. */
-    private val _weeklyCovers = MutableStateFlow<Map<String, List<String>>>(emptyMap())
-    val weeklyCovers: StateFlow<Map<String, List<String>>> = _weeklyCovers
-
-    /** Track counts per playlist entry ID. */
-    private val _weeklyTrackCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
-    val weeklyTrackCounts: StateFlow<Map<String, Int>> = _weeklyTrackCounts
-
-    init {
-        loadDiscoverPreviews()
-        checkAiPlugins()
-        loadWeeklyPlaylists()
+    private companion object {
+        const val TAG = "HomeViewModel"
+        const val LOVES_CONTEXT = "loves"
+        const val LOVES_NAME = "Recent Loves"
+        const val MIX_CONTEXT = "mix"
     }
 
-    /** Resolves one Recent Loves row while it's on screen (#181); see ResolveWhileVisible. */
-    fun resolveVisible(track: TrackEntity): Job =
-        trackResolverCache.resolveInBackground(listOf(track))
+    private val session = HomeSession(sources, settingsStore, viewModelScope)
 
-    private fun checkAiPlugins() {
-        viewModelScope.launch {
-            val hasPlugins = aiRecommendationService.hasEnabledProvider()
-            _hasAiPlugins.value = hasPlugins
-            if (hasPlugins) {
-                loadAiRecommendations()
-            }
-        }
+    /** Everything Home draws. */
+    val state: StateFlow<HomeState> = session.state
+
+    /** Album and top-songs queues, shared with iOS (#588). */
+    private val catalogQueues = CatalogQueues(metadataService)
+
+    // ── Session actions ──────────────────────────────────────────────
+
+    /** Home came on screen: the loads, under their throttles. */
+    fun onVisible() {
+        (sources as? RefreshableHomeSources)?.refresh()
+        session.onVisible()
     }
 
-    private fun loadAiRecommendations() {
-        viewModelScope.launch {
-            // Stale-while-revalidate, like desktop (which refetches on every Home
-            // visit) and iOS: show the cached suggestions immediately, then always
-            // fetch fresh ones behind them. This used to return as soon as a cache
-            // existed, so the suggestions never changed after the first run unless
-            // the user tapped refresh.
-            aiRecommendationService.getCachedRecommendations()?.let { cached ->
-                _aiRecommendations.value = cached
-                // Look up artwork the saved set is missing while the fresh
-                // answer (30-60s) is on its way, as desktop does.
-                launch {
-                    val filled = aiRecommendationService.fillMissingArtwork() ?: return@launch
-                    if (_aiRecommendations.value === cached) _aiRecommendations.value = filled
-                }
-            }
-            _aiLoading.value = true
-            _aiError.value = null
-            try {
-                val recs = aiRecommendationService.loadRecommendations()
-                _aiRecommendations.value = recs
-                _aiError.value = null
-            } catch (e: Exception) {
-                val msg = e.message ?: "Unknown error"
-                _aiError.value = msg
-                android.util.Log.e("HomeViewModel", "AI recommendations failed", e)
-            }
-            _aiLoading.value = false
-        }
+    /** A new visit: a new phrasing for the Ask example. */
+    fun reseedAskExample() = session.reseedAskExample()
+
+    /** Pop of the Tops' Try again. */
+    fun retryCharts() = session.retryCharts()
+
+    fun setMixSource(id: String) = session.setMixSource(id)
+
+    fun setAlbumSource(id: String) = session.setAlbumSource(id)
+
+    fun skipSetup() = session.skipSetup()
+
+    fun resumeSetup() = session.resumeSetup()
+
+    fun dismissSetupItem(id: String) = session.dismissSetupItem(id)
+
+    /** The banner Home painted; its view is reported once per id. */
+    fun bannerShown(id: String) = session.bannerShown(id)
+
+    fun dismissBanner(id: String) {
+        viewModelScope.launch { announcementsRepository.dismiss(id) }
     }
 
-    fun refreshAiRecommendations() {
-        loadAiRecommendations()
-    }
-
-    private fun loadDiscoverPreviews() {
-        // For You — top recommended artist
-        viewModelScope.launch {
-            recommendationsRepository.getRecommendedArtists().collect { resource ->
-                if (resource is Resource.Success) {
-                    resource.data.firstOrNull()?.let { artist ->
-                        _forYouPreview.value = DiscoverPreview(
-                            title = artist.name,
-                            subtitle = artist.reason ?: "Based on your listening",
-                            artworkUrl = artist.imageUrl,
-                            label = "Top pick",
-                        )
-                    }
-                }
-            }
-        }
-        // Critical Darlings — latest reviewed album
-        viewModelScope.launch {
-            criticalDarlingsRepository.getCriticsPicks().collect { resource ->
-                if (resource is Resource.Success) {
-                    resource.data.firstOrNull()?.let { album ->
-                        _criticalDarlingsPreview.value = DiscoverPreview(
-                            title = album.title,
-                            subtitle = album.artist,
-                            artworkUrl = album.albumArt,
-                            label = "Latest review",
-                        )
-                    }
-                }
-            }
-        }
-        // Fresh Drops — latest new release
-        viewModelScope.launch {
-            freshDropsRepository.getFreshDrops().collect { resource ->
-                if (resource is Resource.Success) {
-                    resource.data.firstOrNull()?.let { release ->
-                        _freshDropsPreview.value = DiscoverPreview(
-                            title = release.title,
-                            subtitle = release.artist,
-                            artworkUrl = release.albumArt,
-                            label = "Latest",
-                        )
-                    }
-                }
-            }
-        }
-        // Pop of the Tops — top charting album
-        viewModelScope.launch {
-            try {
-                val albums = chartsRepository.getAppleMusicAlbums("us")
-                albums.firstOrNull()?.let { album ->
-                    _popOfTheTopsPreview.value = DiscoverPreview(
-                        title = album.title,
-                        subtitle = album.artist,
-                        artworkUrl = album.artworkUrl,
-                        label = "#1 Album",
-                    )
-                }
-            } catch (_: Exception) { /* skip preview */ }
-        }
-    }
-
-    private fun loadWeeklyPlaylists() {
-        viewModelScope.launch {
-            val result = weeklyPlaylistsRepository.loadWeeklyPlaylists(forceRefresh = true) ?: return@launch
-            _weeklyJams.value = result.jams
-            _weeklyExploration.value = result.exploration
-
-            // Load covers and track counts for all entries in parallel
-            val allEntries = (result.jams.orEmpty()) + (result.exploration.orEmpty())
-            if (allEntries.isEmpty()) return@launch
-
-            // Load covers and track counts concurrently per entry
-            allEntries.forEach { entry ->
-                launch {
-                    val tracks = weeklyPlaylistsRepository.loadPlaylistTracks(entry.id)
-                    _weeklyTrackCounts.value = _weeklyTrackCounts.value + (entry.id to tracks.size)
-                    val covers = tracks.mapNotNull { it.albumArt }.distinct().take(4)
-                    if (covers.isNotEmpty()) {
-                        _weeklyCovers.value = _weeklyCovers.value + (entry.id to covers)
-                    }
-                }
-            }
-        }
-    }
+    fun bannerCtaClicked(id: String) = announcementsRepository.trackCtaClick(id)
 
     /**
-     * Play all tracks from a weekly playlist entry.
+     * Ask Shuffleupagus. [send] is `DeepLinkViewModel.handleInAppChatPrompt`
+     * (activity-scoped, so the screen passes it): no confirmation for a prompt
+     * typed in the app. Blank sends nothing; a long one is capped.
      */
-    fun playWeeklyPlaylist(entry: WeeklyPlaylistEntry, contextType: String) {
+    fun ask(prompt: String, send: (String) -> Unit) {
+        val text = ChatPrompt.cap(prompt)
+        if (text.isBlank()) return
+        send(text)
+    }
+
+    // ── Play ─────────────────────────────────────────────────────────
+
+    /** "Play Collection Radio": the car's Collection Radio (every track row, shuffled). */
+    fun playCollectionRadio() {
         viewModelScope.launch {
-            val tracks = weeklyPlaylistsRepository.loadPlaylistTracks(entry.id)
-            if (tracks.isEmpty()) return@launch
-            val trackEntities = tracks.map { lbTrack ->
-                com.parachord.android.data.db.entity.TrackEntity(
-                    id = lbTrack.id,
-                    title = lbTrack.title,
-                    artist = lbTrack.artist,
-                    album = lbTrack.album ?: "",
-                    duration = lbTrack.durationMs ?: 0, // Track.duration is ms (#349)
-                    artworkUrl = lbTrack.albumArt,
-                )
+            guard("Collection Radio") {
+                val request = carBrowse.playRequest(CarIds.COLLECTION_RADIO) ?: return@guard
+                playbackController.playQueue(request.tracks, request.startIndex, shuffle = request.shuffle ?: true)
             }
+        }
+    }
+
+    fun playTile(tile: JumpTile) {
+        when (tile) {
+            is JumpTile.Playlist -> playPlaylist(tile.playlist.id, tile.playlist.name)
+            is JumpTile.Loves -> playRecentLoves()
+            is JumpTile.Album -> playAlbumByName(tile.album.album, tile.album.artist)
+            is JumpTile.Mix -> playMix(tile.mix)
+        }
+    }
+
+    /** A history mix: its tracks through the registry's link lookup, as a `mix` queue (Jump back in's active check reads it). */
+    fun playMix(mix: HistoryMix) {
+        viewModelScope.launch {
+            guard("mix '${mix.title}'") {
+                val play = providerPlaylistResolver.resolve(mix.url) ?: return@guard
+                val tracks = servicePlaylistTracks(play)
+                if (tracks.isEmpty()) return@guard
+                playbackController.playQueue(tracks, 0, context = PlaybackContext(MIX_CONTEXT, mix.title, mix.id))
+            }
+        }
+    }
+
+    fun playRecentLoves() {
+        viewModelScope.launch {
+            val loves = currentLoves()
+            if (loves.isEmpty()) return@launch
+            playbackController.playQueue(loves, 0, context = PlaybackContext(LOVES_CONTEXT, LOVES_NAME))
+        }
+    }
+
+    fun queueRecentLoves() {
+        viewModelScope.launch {
+            val loves = currentLoves()
+            if (loves.isNotEmpty()) playbackController.addToQueue(loves)
+        }
+    }
+
+    private suspend fun currentLoves(): List<TrackEntity> =
+        recentLoves(sources.collectionTracks.first(), HOME_RECENT_LOVES)
+
+    /** A saved playlist, from the top. */
+    fun playPlaylist(playlistId: String, playlistName: String) {
+        viewModelScope.launch {
+            val tracks = repository.getPlaylistTracks(playlistId).first()
+            if (tracks.isEmpty()) return@launch
+            val entities = tracks.map { repository.playlistTrackToTrackEntity(it) }
             playbackController.playQueue(
-                tracks = trackEntities,
-                context = com.parachord.android.playback.PlaybackContext(
-                    type = contextType,
-                    name = "${entry.weekLabel}'s ${if (contextType == "weekly-jam") "Weekly Jams" else "Weekly Exploration"}",
-                ),
+                entities,
+                startIndex = 0,
+                context = PlaybackContext(type = "playlist", name = playlistName, id = playlistId),
             )
         }
     }
 
-    fun togglePlayPause() {
-        playbackController.togglePlayPause()
-    }
+    /** A recommended album card's Play. */
+    fun playAlbum(item: RecommendationItem) = playAlbumByName(item.name, item.artist.orEmpty())
 
-    fun playTrack(track: TrackEntity) {
-        val tracks = recentTracks.value
-        val index = tracks.indexOf(track).coerceAtLeast(0)
-        playbackController.playQueue(tracks, startIndex = index)
-    }
-
-    fun scanLocalMusic() {
+    /** An album that isn't in the library (#588): its tracks from the catalog, as an `album` queue. */
+    fun playAlbumByName(albumTitle: String, artistName: String) {
         viewModelScope.launch {
-            mediaScanner.scan()
+            guard("album '$albumTitle'") {
+                val queue = catalogQueues.album(albumTitle, artistName) ?: return@guard
+                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
+            }
         }
     }
 
-    val playlists: StateFlow<List<PlaylistEntity>> =
-        repository.getAllPlaylists()
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    fun queueAlbumByName(albumTitle: String, artistName: String) {
+        viewModelScope.launch {
+            guard("album '$albumTitle'") {
+                val queue = catalogQueues.album(albumTitle, artistName) ?: return@guard
+                playbackController.addToQueue(queue.tracks)
+            }
+        }
+    }
+
+    fun playArtistTopSongs(artistName: String) {
+        viewModelScope.launch {
+            guard("top songs for '$artistName'") {
+                val queue = catalogQueues.artistTopSongs(artistName) ?: return@guard
+                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
+            }
+        }
+    }
+
+    fun queueArtistTopSongs(artistName: String) {
+        viewModelScope.launch {
+            guard("top songs for '$artistName'") {
+                val queue = catalogQueues.artistTopSongs(artistName) ?: return@guard
+                playbackController.addToQueue(queue.tracks)
+            }
+        }
+    }
+
+    private suspend fun guard(what: String, block: suspend () -> Unit) {
+        try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to play $what", e)
+        }
+    }
+
+    // ── Rows and menus ───────────────────────────────────────────────
+
+    /** Resolves one track row while it's on screen (#181); see ResolveWhileVisible. */
+    fun resolveVisible(track: TrackEntity): Job =
+        trackResolverCache.resolveInBackground(listOf(track))
 
     fun playNext(track: TrackEntity) {
         playbackController.insertNext(listOf(track))
@@ -379,63 +276,29 @@ class HomeViewModel constructor(
         }
     }
 
-    /**
-     * Remove a track from the user's collection. Wired into the Recent
-     * Loves long-press context menu — without this, the toggle item in
-     * the menu rendered ("Remove from collection") and the toast fired
-     * unconditionally, but the action itself was a silent no-op because
-     * `TrackContextMenuHost`'s `onToggleCollection` parameter wasn't
-     * passed at the call site. Same `deleteTrackWithSync` plumbing as
-     * `LibraryViewModel.removeTrackFromCollection` so multi-provider
-     * sync removal still propagates.
-     */
+    /** Removes a love (multi-provider sync removal included). */
     fun removeTrackFromCollection(track: TrackEntity) {
         viewModelScope.launch {
             repository.removeFromCollection(track)
         }
     }
 
+    val playlists: StateFlow<List<PlaylistEntity>> =
+        repository.getAllPlaylists()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     /**
-     * One-shot toast surface for Home — currently fed by
-     * [deletePlaylist] when an Apple Music mirror returns
-     * `DeleteResult.Unsupported` (Decision D8). The screen collects this
-     * as `LaunchedEffect` and forwards to a Toast, mirroring the
-     * `PlaylistsViewModel` pattern.
+     * One-shot toasts for Home: [deletePlaylist] when an Apple Music mirror
+     * answers `DeleteResult.Unsupported` (Decision D8).
      */
     private val _toastEvents = Channel<String>(Channel.BUFFERED)
     val toastEvents: Flow<String> = _toastEvents.receiveAsFlow()
-
-    /**
-     * Play all tracks in a saved playlist. Mirrors
-     * [PlaylistsViewModel.playPlaylist] so the Home → Your Playlists
-     * carousel's long-press menu can fire playback without forcing
-     * the user to first navigate into the playlist detail screen.
-     */
-    fun playPlaylist(playlistId: String, playlistName: String) {
-        viewModelScope.launch {
-            val tracks = repository.getPlaylistTracks(playlistId).first()
-            if (tracks.isEmpty()) return@launch
-            val entities = tracks.map { repository.playlistTrackToTrackEntity(it) }
-            playbackController.playQueue(
-                entities,
-                startIndex = 0,
-                context = PlaybackContext(type = "playlist", name = playlistName),
-            )
-        }
-    }
 
     /** The services this playlist is on, for the delete dialog (#684). */
     suspend fun getDeletableMirrors(playlistId: String): List<String> =
         repository.getPlaylistMirrors(playlistId).keys.toList()
 
-    /**
-     * Sync-aware delete from the Home → Your Playlists long-press menu.
-     * Routes through `deletePlaylistWithSync` so any linked Spotify /
-     * Apple Music mirrors get the deletion attempt too. AM returns 401
-     * for `DELETE /me/library/playlists/{id}` — surface that to the
-     * user via the toast channel rather than swallowing it (Decision
-     * D8 — same pattern as PlaylistsViewModel/PlaylistDetailViewModel).
-     */
+    /** Sync-aware delete from a playlist card's menu; an unsupported remote delete is reported (D8). */
     fun deletePlaylist(playlist: PlaylistEntity, deleteFromProviders: Set<String>) {
         viewModelScope.launch {
             val attempts = repository.deletePlaylistWithSync(playlist, deleteFromProviders)
@@ -446,84 +309,6 @@ class HomeViewModel constructor(
                 _toastEvents.trySend(
                     UiMessages.playlistDeletionUnsupported(unsupported.map { it.providerDisplayName }),
                 )
-            }
-        }
-    }
-
-    /**
-     * Save an ephemeral ListenBrainz weekly playlist to the local
-     * library. Mirrors `WeeklyPlaylistViewModel.saveToLibrary` so the
-     * Home Weekly Jams / Exploration carousel's long-press menu can
-     * save a playlist directly without first opening the detail screen.
-     * Quietly no-ops when the entry has no resolved tracks yet (the
-     * card hasn't finished progressive enrichment) — saving an empty
-     * playlist would create a useless library row.
-     */
-    fun saveWeeklyPlaylist(entry: WeeklyPlaylistEntry, contextType: String) {
-        viewModelScope.launch {
-            val tracks = weeklyPlaylistsRepository.loadPlaylistTracks(entry.id)
-            if (tracks.isEmpty()) {
-                _toastEvents.trySend("Couldn't save — no tracks loaded yet")
-                return@launch
-            }
-            val trackEntities = tracks.map { lbTrack ->
-                TrackEntity(
-                    id = lbTrack.id,
-                    title = lbTrack.title,
-                    artist = lbTrack.artist,
-                    album = lbTrack.album ?: "",
-                    duration = lbTrack.durationMs ?: 0, // Track.duration is ms (#349)
-                    artworkUrl = lbTrack.albumArt,
-                )
-            }
-            val savedPlaylistId = "listenbrainz-${entry.id}"
-            val playlistName = "${entry.weekLabel}'s ${
-                if (contextType == "weekly-jam") "Weekly Jams" else "Weekly Exploration"
-            }"
-            val playlist = PlaylistEntity(
-                id = savedPlaylistId,
-                name = playlistName,
-                description = "",
-                trackCount = trackEntities.size,
-                artworkUrl = trackEntities.firstNotNullOfOrNull { it.artworkUrl },
-                ownerName = "ListenBrainz",
-            )
-            repository.createPlaylistWithTracks(playlist, trackEntities)
-            _toastEvents.trySend("Saved \"$playlistName\" to library")
-        }
-    }
-
-    fun togglePin(friend: FriendEntity) {
-        viewModelScope.launch {
-            friendsRepository.pinFriend(friend.id, !friend.pinnedToSidebar)
-        }
-    }
-
-    // ── Artist actions ─────────────────────────────────────────────
-
-    /** Album and top-songs queues, shared with iOS (#588). */
-    private val catalogQueues = com.parachord.shared.playback.CatalogQueues(metadataService)
-
-    fun playArtistTopSongs(artistName: String) {
-        viewModelScope.launch {
-            try {
-                val queue = catalogQueues.artistTopSongs(artistName) ?: return@launch
-                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e("HomeVM", "Failed to play top songs for '$artistName'", e)
-            }
-        }
-    }
-
-    fun queueArtistTopSongs(artistName: String) {
-        viewModelScope.launch {
-            try {
-                val queue = catalogQueues.artistTopSongs(artistName) ?: return@launch
-                playbackController.addToQueue(queue.tracks)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e("HomeVM", "Failed to queue top songs for '$artistName'", e)
             }
         }
     }
@@ -543,8 +328,6 @@ class HomeViewModel constructor(
             }
         }
     }
-
-    // ── Album actions ────────────────────────────────────────────────
 
     fun addAlbumToCollection(title: String, artist: String, artworkUrl: String?) {
         viewModelScope.launch {
@@ -567,30 +350,54 @@ class HomeViewModel constructor(
         }
     }
 
-    /** Fetch an album's tracklist from metadata providers, resolve each track, and queue. */
-    /** Play an album that isn't in the library (#588 follow-up): its tracks from the catalog, as a new queue. */
-    fun playAlbumByName(albumTitle: String, artistName: String) {
-        viewModelScope.launch {
-            try {
-                val queue = catalogQueues.album(albumTitle, artistName) ?: return@launch
-                playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e("HomeVM", "Failed to play album '$albumTitle'", e)
-            }
-        }
-    }
+    // ── The old screen, until Task 4 rewrites it ─────────────────────
+    // HomeScreen.kt still reads these. The sections they fed are gone from
+    // Home, so each is a fixed value (the old screen hides those sections);
+    // the rest still work. Delete this block with the old screen.
 
-    fun queueAlbumByName(albumTitle: String, artistName: String) {
-        viewModelScope.launch {
-            try {
-                val queue = catalogQueues.album(albumTitle, artistName) ?: return@launch
-                playbackController.addToQueue(queue.tracks)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e("HomeVM", "Failed to queue album '$albumTitle'", e)
-            }
-        }
-    }
+    val resolverOrder: StateFlow<List<String>> = settingsStore.getResolverOrderFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val trackResolvers: StateFlow<Map<String, List<String>>> = trackResolverCache.trackResolvers
+    val trackResolverConfidences: StateFlow<Map<String, Map<String, Float>>> = trackResolverCache.trackResolverConfidences
+    val trackArtwork: StateFlow<Map<String, String>> = trackResolverCache.trackArtwork
+    val playbackState = playbackStateHolder.state
 
+    val recentTracks: StateFlow<List<TrackEntity>> = repository.getAllTracks()
+        .map { recentLoves(it, 20) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val recentPlaylists: StateFlow<List<PlaylistEntity>> = repository.getAllPlaylists()
+        .map { list -> list.sortedByDescending { if (it.lastModified > 0L) it.lastModified else it.updatedAt }.take(6) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Always true: the old welcome/scan card is gone from Home. */
+    val hasLibrary: StateFlow<Boolean?> = MutableStateFlow(true)
+    val scanProgress: StateFlow<ScanProgress> = MutableStateFlow(ScanProgress())
+    val recentAlbums: StateFlow<List<AlbumEntity>> = MutableStateFlow(emptyList())
+    val friendActivity: StateFlow<List<FriendEntity>> = MutableStateFlow(emptyList())
+    val collectionStats: StateFlow<CollectionStats> = MutableStateFlow(CollectionStats())
+    val forYouPreview: StateFlow<DiscoverPreview?> = MutableStateFlow(null)
+    val criticalDarlingsPreview: StateFlow<DiscoverPreview?> = MutableStateFlow(null)
+    val freshDropsPreview: StateFlow<DiscoverPreview?> = MutableStateFlow(null)
+    val popOfTheTopsPreview: StateFlow<DiscoverPreview?> = MutableStateFlow(null)
+    val hasAiPlugins: StateFlow<Boolean?> = state.map { it.chatAvailable }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val aiRecommendations: StateFlow<AiRecommendations?> = MutableStateFlow(null)
+    val aiLoading: StateFlow<Boolean> = MutableStateFlow(false)
+    val aiError: StateFlow<String?> = MutableStateFlow(null)
+    val weeklyJams: StateFlow<List<WeeklyPlaylistEntry>?> = MutableStateFlow(null)
+    val weeklyExploration: StateFlow<List<WeeklyPlaylistEntry>?> = MutableStateFlow(null)
+    val weeklyCovers: StateFlow<Map<String, List<String>>> = MutableStateFlow(emptyMap())
+    val weeklyTrackCounts: StateFlow<Map<String, Int>> = MutableStateFlow(emptyMap())
+
+    fun refreshAiRecommendations() {}
+    fun scanLocalMusic() {}
+    fun togglePin(friend: FriendEntity) {}
+    fun playWeeklyPlaylist(entry: WeeklyPlaylistEntry, contextType: String) {}
+    fun saveWeeklyPlaylist(entry: WeeklyPlaylistEntry, contextType: String) {}
+    fun togglePlayPause() = playbackController.togglePlayPause()
+
+    fun playTrack(track: TrackEntity) {
+        val tracks = recentTracks.value
+        playbackController.playQueue(tracks, startIndex = tracks.indexOf(track).coerceAtLeast(0))
+    }
 }

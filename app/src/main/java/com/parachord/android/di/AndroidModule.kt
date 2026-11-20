@@ -977,6 +977,27 @@ val androidModule = module {
             onMixIds = { ids -> recommendations.excludePlaylistIds(ids) },
         )
     }
+    // Home's inputs for the shared HomeSession. Explicit `single {}` (a lambda
+    // parameter); a single, so the feeds a visit loaded stay for the next one.
+    single<com.parachord.shared.home.HomeSources> {
+        val settings: com.parachord.shared.settings.SettingsStore = get()
+        com.parachord.android.ui.screens.home.AndroidHomeSources(
+            library = get(),
+            playbackStateHolder = get(),
+            settings = settings,
+            pluginManager = get(),
+            announcementsRepository = get(),
+            historyMixesRepository = get(),
+            recommendationsRepository = get(),
+            aiRecommendationService = get(),
+            freshDropsRepository = get(),
+            criticalDarlingsRepository = get(),
+            chartsRepository = get(),
+            concertsRepository = get(),
+            concertArtistSeed = get(),
+            pluginIsOn = { id, isMeta, needsAccount -> androidPluginIsOn(settings, id, isMeta, needsAccount) },
+        )
+    }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`
     // (lambda + defaulted params, CLAUDE.md Common Mistakes #37).
     single {
