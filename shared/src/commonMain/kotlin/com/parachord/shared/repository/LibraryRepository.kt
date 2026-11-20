@@ -495,9 +495,14 @@ internal fun collectionTrack(track: Track, existing: Track?, nowMs: Long): Track
 /** The collection's loves (#705): every track row but local files the user never hearted. */
 fun lovedTracks(tracks: List<Track>): List<Track> = tracks.filter { it.inCollection }
 
-/** Home's Recent Loves: the [limit] most recently loved tracks, newest first. */
-fun recentLoves(tracks: List<Track>, limit: Int): List<Track> =
-    lovedTracks(tracks).sortedByDescending { it.addedAt }.take(limit)
+/**
+ * Home's Recent Loves: the [limit] most recently loved tracks, newest first. A
+ * love with no date (`addedAt <= 0`) goes last, in input order (desktop's `recentLoves`).
+ */
+fun recentLoves(tracks: List<Track>, limit: Int): List<Track> {
+    val (dated, undated) = lovedTracks(tracks).partition { it.addedAt > 0 }
+    return (dated.sortedByDescending { it.addedAt } + undated).take(limit)
+}
 
 /**
  * A row a local-file scan or file import made (#705): Android's `local-<mediaId>`,
