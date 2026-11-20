@@ -1322,7 +1322,8 @@ class SettingsStore(
         ensureMigrated()
         kv.setString(
             HOME_GETTING_STARTED,
-            kotlinx.serialization.json.Json.encodeToString(com.parachord.shared.home.GettingStartedState.serializer(), state),
+            kotlinx.serialization.json.Json { encodeDefaults = true }
+                .encodeToString(com.parachord.shared.home.GettingStartedState.serializer(), state),
         )
     }
 

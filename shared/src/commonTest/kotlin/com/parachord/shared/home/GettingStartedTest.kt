@@ -18,11 +18,11 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalSettingsApi::class)
 class GettingStartedTest {
-    private fun plugin(id: String, resolve: Boolean = true, stream: Boolean = true, embed: Boolean = false, auth: Boolean = false, fields: List<PluginConfigField> = emptyList()) =
+    private fun plugin(id: String, resolve: Boolean = true, stream: Boolean = true, embed: Boolean = false, auth: Boolean = false, fields: List<PluginConfigField> = emptyList(), authType: String? = null) =
         PluginInfo(
             id = id, name = id, version = "1",
             capabilities = mapOf("resolve" to resolve, "stream" to stream, "embedPlayer" to embed),
-            requiresAuth = auth, configFields = fields,
+            requiresAuth = auth, configFields = fields, authType = authType,
         )
 
     private val subsonic = plugin("subsonic", auth = true, fields = listOf(
@@ -35,6 +35,45 @@ class GettingStartedTest {
         plugin("bandcamp", stream = false, embed = true), plugin("localfiles"),
         plugin("youtube", stream = false),
     )
+
+    // The shipped manifests' field flags (app/src/main/assets/plugins).
+    private val spotifyShipped = plugin("spotify", auth = true, fields = listOf(PluginConfigField("clientId", "text", "Client ID", required = true)))
+    private val appleShipped = plugin("applemusic", auth = true, fields = listOf(
+        PluginConfigField("developerToken", "text", "MusicKit developer token", advanced = true, hasDefault = true),
+        PluginConfigField("storefront", "text", "Storefront (Country)", hasDefault = true),
+    ))
+    private val soundcloudShipped = plugin("soundcloud", auth = true, fields = listOf(
+        PluginConfigField("clientId", "text", "Client ID", advanced = true),
+        PluginConfigField("clientSecret", "password", "Client Secret", advanced = true),
+    ))
+
+    @Test
+    fun `shipped manifests - only Spotify and Subsonic need setup`() {
+        assertFalse(settingsMissing(appleShipped, null))
+        assertFalse(settingsMissing(soundcloudShipped, null))
+        val needs = listOf(spotifyShipped, appleShipped, soundcloudShipped, subsonic)
+            .filter { settingsMissing(it, null) || requiredSetting(it) != null }.map { it.id }.sorted()
+        assertEquals(listOf("spotify", "subsonic"), needs)
+        assertEquals(RequiredSetting("clientId", "Client ID"), requiredSetting(spotifyShipped))
+        assertNull(requiredSetting(subsonic))
+    }
+
+    @Test
+    fun `a custom auth type lands in services`() {
+        val custom = plugin("plex", auth = false, authType = "custom")
+        assertTrue(stepOnePlugins(registry + custom).services.any { it.id == "plex" })
+        assertTrue(stepOnePlugins(registry + plugin("free", authType = "none")).free.any { it.id == "free" })
+    }
+
+    @Test
+    fun `a limit without a label reads the default and a setup tile is not connected`() {
+        val amazon = plugin("amazonmusic", auth = true)
+        assertEquals(
+            ServiceState("limited", "Can\u2019t play on this plan"),
+            serviceState(amazon, mapOf("amazonmusic" to true), playbackLimits = mapOf("amazonmusic" to PlaybackLimit(true))),
+        )
+        assertFalse(serviceConnected(listOf(subsonic), setupNeeded = mapOf("subsonic" to true), playbackResolvers = listOf("subsonic")))
+    }
 
     @Test
     fun `step 1 comes from the registry and never offers YouTube`() {
@@ -64,7 +103,7 @@ class GettingStartedTest {
         val spotify = registry[0]
         assertEquals(
             ServiceState("setup", "Add your Client ID"),
-            serviceState(spotify, accounts = mapOf("spotify" to false), setupNeeded = mapOf("spotify" to true), requiredLabels = mapOf("spotify" to "Client ID")),
+            serviceState(spotifyShipped, accounts = mapOf("spotify" to false), setupNeeded = mapOf("spotify" to true)),
         )
         assertEquals(
             "connected",
@@ -146,6 +185,9 @@ class GettingStartedTest {
         s.setHomeSetupDismissed(setOf("getting-started"))
         val again = SettingsStore(FakeSecureStore(), KvStore(backing))
         assertEquals(state, again.getHomeGettingStarted())
+        s.setHomeGettingStarted(GettingStartedState())
+        assertEquals("""{"active":false,"played":false,"skipped":false}""", backing.getStringOrNull(SettingsStore.HOME_GETTING_STARTED))
+        s.setHomeGettingStarted(state)
         assertEquals(setOf("getting-started"), again.getHomeSetupDismissed())
         backing.putString(SettingsStore.HOME_GETTING_STARTED, "not json")
         assertNull(again.getHomeGettingStarted())

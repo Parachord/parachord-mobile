@@ -58,7 +58,7 @@ class PluginManager constructor(
         val configFields: List<PluginConfigField> = emptyList(),
         /** `settings.requiresAuth`: the plugin needs its config set before it can answer. */
         val requiresAuth: Boolean = false,
-        /** `settings.authType` (e.g. `oauth`), informational: [needsAccount] follows [requiresAuth]. */
+        /** `settings.authType` (e.g. `oauth`, `none`). [needsAccount] follows [requiresAuth]; Home's step 1 also reads this. */
         val authType: String? = null,
     )
 
@@ -71,6 +71,12 @@ class PluginManager constructor(
         val label: String,
         val description: String? = null,
         val placeholder: String? = null,
+        /** The manifest marks this field required (Spotify's Client ID). */
+        val required: Boolean = false,
+        /** An advanced field, which a new profile needn't fill in. */
+        val advanced: Boolean = false,
+        /** The manifest gives the field a default (the key is present, even as `''`). */
+        val hasDefault: Boolean = false,
     )
 
     private val _plugins = MutableStateFlow<List<PluginInfo>>(emptyList())
@@ -845,6 +851,9 @@ class PluginManager constructor(
                         label = field.label ?: key,
                         description = field.description,
                         placeholder = field.placeholder,
+                        required = field.required,
+                        advanced = field.advanced,
+                        hasDefault = field.default != null,
                     )
                 } ?: emptyList(),
                 requiresAuth = axe.settings?.requiresAuth ?: false,
@@ -931,5 +940,8 @@ class PluginManager constructor(
         val label: String? = null,
         val description: String? = null,
         val placeholder: String? = null,
+        val required: Boolean = false,
+        val advanced: Boolean = false,
+        val default: JsonElement? = null,
     )
 }

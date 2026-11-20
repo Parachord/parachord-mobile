@@ -1,21 +1,13 @@
 package com.parachord.shared.home
 
 import com.parachord.shared.plugin.PluginManager.PluginInfo
-import com.parachord.shared.plugin.needsAccount
 import kotlinx.serialization.Serializable
 
 // The model behind Home's getting-started layout, a port of desktop's
 // `src/renderer/lib/getting-started.js` (#1493): which plug-ins step 1 offers,
 // which of the three steps are done, and whether the layout shows at all.
 //
-// Not ported, because the manifest parsing doesn't read what they need
-// (`PluginConfigField` has no required / advanced / default):
-//  - `requiredSetting` (Spotify's required Client ID): the call site passes
-//    the field's label to [serviceState] as `requiredLabels` instead;
-//  - `settingsMissing` can't skip advanced fields or fields with a default,
-//    so it counts every configurable field as one the user fills in;
-//  - `scrobblerPlugins` is a one-line `capabilities["scrobbling"]` filter and
-//    `needsAccount` follows `requiresAuth` only (desktop also reads authType).
+// Not ported: `scrobblerPlugins` is a one-line `capabilities["scrobbling"]` filter.
 
 const val LOCAL_FILES_ID = "localfiles"
 
@@ -24,6 +16,14 @@ fun playsHere(p: PluginInfo): Boolean {
     val c = p.capabilities
     return c["resolve"] == true && (c["stream"] == true || c["embedPlayer"] == true)
 }
+
+/**
+ * Desktop's rule: `requiresAuth`, or an `authType` that isn't blank or `none`.
+ * Local on purpose: the shared [com.parachord.shared.plugin.needsAccount] follows
+ * `requiresAuth` only, and widening it would gate other plug-ins.
+ */
+fun needsAccount(p: PluginInfo): Boolean =
+    p.requiresAuth || (p.authType?.let { it.isNotBlank() && it != "none" } == true)
 
 /** Step 1's tiles: services that need signing in, free plug-ins that play here, the music folder. */
 data class StepOnePlugins(
@@ -41,14 +41,21 @@ fun stepOnePlugins(plugins: List<PluginInfo>): StepOnePlugins {
     )
 }
 
+/** The first setting a plug-in's manifest marks required (Spotify's Client ID): its key and label. */
+data class RequiredSetting(val key: String, val label: String)
+
+fun requiredSetting(p: PluginInfo): RequiredSetting? =
+    p.configFields.firstOrNull { it.required }?.let { RequiredSetting(it.key, it.label.ifEmpty { it.key }) }
+
 /**
- * A plug-in whose settings panel needs values and has none saved yet (`saved`,
- * its config entry). Every configurable field counts as required here; see the
- * file note.
+ * A plug-in whose settings panel needs values (fields that are neither
+ * advanced nor given a default) and has none saved yet (`saved`, its config
+ * entry). A field with a default is filled already.
  */
 fun settingsMissing(p: PluginInfo, saved: Map<String, String>?): Boolean {
-    if (p.configFields.isEmpty()) return false
-    return p.configFields.none { f -> saved?.get(f.key)?.trim()?.isNotEmpty() == true }
+    val keys = p.configFields.filter { !it.advanced && !it.hasDefault }.map { it.key }
+    if (keys.isEmpty()) return false
+    return keys.none { saved?.get(it)?.trim()?.isNotEmpty() == true }
 }
 
 /** A plan limit on a service (Amazon Music's Prime). */
@@ -62,7 +69,7 @@ data class ServiceState(val state: String, val label: String?)
  * knows it is signed in; one the host has no state for counts as connected
  * once it is on and playing (`playbackResolvers`). `setupNeeded` is true while
  * a required setting isn't saved: the tile reads `setup` unless the host knows
- * the account is signed in. `requiredLabels` names that setting by plug-in id.
+ * the account is signed in.
  */
 fun serviceState(
     p: PluginInfo,
@@ -70,15 +77,14 @@ fun serviceState(
     setupNeeded: Map<String, Boolean> = emptyMap(),
     playbackResolvers: List<String> = emptyList(),
     playbackLimits: Map<String, PlaybackLimit> = emptyMap(),
-    requiredLabels: Map<String, String> = emptyMap(),
 ): ServiceState {
     val id = p.id
     val limit = playbackLimits[id]
     val known = accounts.containsKey(id)
     val signedIn = if (known) accounts[id] == true else id in playbackResolvers
     if (setupNeeded[id] == true && !(known && accounts[id] == true)) {
-        val field = requiredLabels[id]
-        return ServiceState("setup", if (field != null) "Add your $field" else "Set up")
+        val field = requiredSetting(p)
+        return ServiceState("setup", if (field != null) "Add your ${field.label}" else "Set up")
     }
     if (!signedIn) return ServiceState("connect", null)
     if (limit != null && limit.blocked) return ServiceState("limited", limit.label ?: "Can’t play on this plan")
@@ -93,9 +99,8 @@ fun serviceConnected(
     setupNeeded: Map<String, Boolean> = emptyMap(),
     playbackResolvers: List<String> = emptyList(),
     playbackLimits: Map<String, PlaybackLimit> = emptyMap(),
-    requiredLabels: Map<String, String> = emptyMap(),
 ): Boolean = services.any {
-    serviceState(it, accounts, setupNeeded, playbackResolvers, playbackLimits, requiredLabels).state == "connected"
+    serviceState(it, accounts, setupNeeded, playbackResolvers, playbackLimits).state == "connected"
 }
 
 /** Scrobbling counts as connected once any scrobbling plug-in has an account name saved. */
