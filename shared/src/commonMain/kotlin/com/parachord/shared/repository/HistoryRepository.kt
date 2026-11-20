@@ -11,6 +11,7 @@ import com.parachord.shared.model.RecentTrack
 import com.parachord.shared.model.Resource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.settings.SettingsStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -78,6 +79,8 @@ class HistoryRepository(
             if (tracks.any { it.artworkUrl == null }) {
                 emit(Resource.Success(metadataService.fillTrackArtwork(tracks)))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch top tracks", e)
             emit(Resource.Error("Failed to load top tracks"))
@@ -118,6 +121,8 @@ class HistoryRepository(
             if (albums.any { it.artworkUrl == null }) {
                 emit(Resource.Success(metadataService.fillAlbumArtwork(albums)))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch top albums", e)
             emit(Resource.Error("Failed to load top albums"))
@@ -164,6 +169,8 @@ class HistoryRepository(
                 val enriched = enrichArtistImages(artists)
                 emit(Resource.Success(enriched))
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch top artists", e)
             emit(Resource.Error("Failed to load top artists"))
@@ -192,6 +199,8 @@ class HistoryRepository(
                     if (imageUrl != null) {
                         cacheMutex.withLock { imageCache[artist.name.lowercase()] = imageUrl }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) { /* skip */ }
             }
         }.awaitAll()
@@ -229,6 +238,8 @@ class HistoryRepository(
             val sorted = deduped.sortedByDescending { it.timestamp }
 
             emit(Resource.Success(sorted))
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to fetch recent tracks", e)
             emit(Resource.Error("Failed to load recent tracks"))
@@ -254,6 +265,8 @@ class HistoryRepository(
                     nowPlaying = track.attr?.nowplaying == "true",
                 )
             } ?: emptyList()
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Last.fm recent tracks failed", e)
             emptyList()
@@ -275,6 +288,8 @@ class HistoryRepository(
                     source = "ListenBrainz",
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "ListenBrainz recent listens failed", e)
             emptyList()

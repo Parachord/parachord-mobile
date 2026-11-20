@@ -163,43 +163,6 @@ class AiChatServiceTest {
         assertTrue(history.isEmpty())
     }
 
-    // -- formatProviderError logic --
-
-    @Test
-    fun `formatProviderError maps common error patterns`() {
-        // Testing the error mapping logic directly
-        val errorMappings = mapOf(
-            "Unable to resolve host api.openai.com" to "connect",
-            "401 Unauthorized" to "api key",
-            "429 Too Many Requests" to "rate limit",
-            "404 Not Found" to "model",
-            "500 Internal Server Error" to "server error",
-        )
-
-        for ((errorMsg, expectedKeyword) in errorMappings) {
-            val formatted = formatError(errorMsg)
-            assertTrue(
-                "Expected '$expectedKeyword' in formatted error for '$errorMsg', got: $formatted",
-                formatted.contains(expectedKeyword, ignoreCase = true)
-            )
-        }
-    }
-
-    /** Replicates the error formatting logic from AiChatService. */
-    private fun formatError(message: String): String = when {
-        message.contains("Unable to resolve host", true) ||
-            message.contains("Failed to connect", true) ||
-            message.contains("connect timed out", true) ->
-            "Could not connect to the AI provider. Please check your internet connection and endpoint settings."
-        message.contains("401") || message.contains("Unauthorized", true) ->
-            "Invalid API key. Please check your API key in settings."
-        message.contains("429") || message.contains("Too Many Requests", true) ||
-            message.contains("rate limit", true) ->
-            "Rate limit exceeded. Please wait a moment and try again."
-        message.contains("404") || message.contains("Not Found", true) ->
-            "Model not found. Please check the model name in settings."
-        message.contains("500") || message.contains("Internal Server Error", true) ->
-            "The AI provider returned a server error. Please try again later."
-        else -> "Error communicating with AI provider: $message"
-    }
+    // The provider-error wording is the shared AiProviderErrors, tested in
+    // shared commonTest (AiProviderErrorsTest).
 }

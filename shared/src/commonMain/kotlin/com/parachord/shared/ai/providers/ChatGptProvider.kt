@@ -1,6 +1,7 @@
 package com.parachord.shared.ai.providers
 
 import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiProviderHttpException
 import com.parachord.shared.ai.AiChatResponse
 import com.parachord.shared.ai.AiProviderConfig
 import com.parachord.shared.ai.ChatMessage
@@ -90,7 +91,12 @@ class ChatGptProvider(
             } catch (_: Exception) {
                 responseBody
             }
-            throw Exception("ChatGPT API error (${response.status.value}): $errorMessage")
+            throw AiProviderHttpException(
+                providerId = id,
+                status = response.status.value,
+                providerMessage = errorMessage,
+                message = "ChatGPT API error (${response.status.value}): $errorMessage",
+            )
         }
 
         val responseJson = json.parseToJsonElement(responseBody).jsonObject

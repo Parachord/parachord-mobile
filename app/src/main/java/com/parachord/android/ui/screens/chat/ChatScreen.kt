@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.koin.androidx.compose.koinViewModel
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.ai.ChatCardEnricher
 import com.parachord.android.ai.ChatRole
@@ -207,6 +208,13 @@ fun ChatScreen(
     val progressText by viewModel.progressText.collectAsStateWithLifecycle()
     val availableProviders by viewModel.availableProviders.collectAsStateWithLifecycle()
     val selectedProviderId by viewModel.selectedProviderId.collectAsStateWithLifecycle()
+
+    // Open while this screen is started: a chat screen left in the back stack
+    // (under an artist page it opened) doesn't send a prompt queued for a new one.
+    LifecycleStartEffect(viewModel) {
+        viewModel.setChatOpen(true)
+        onStopOrDispose { viewModel.setChatOpen(false) }
+    }
 
     val hasConfiguredProvider = availableProviders.any { it.isConfigured }
     val displayMessages = messages.filter { it.role == ChatRole.USER || it.role == ChatRole.ASSISTANT }

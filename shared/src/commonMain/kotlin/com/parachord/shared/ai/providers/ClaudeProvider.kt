@@ -1,6 +1,7 @@
 package com.parachord.shared.ai.providers
 
 import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiProviderHttpException
 import com.parachord.shared.ai.AiChatResponse
 import com.parachord.shared.ai.AiProviderConfig
 import com.parachord.shared.ai.ChatMessage
@@ -74,7 +75,12 @@ class ClaudeProvider(
         val responseBody = response.bodyAsText()
 
         if (!response.status.isSuccess()) {
-            throw Exception(parseError(response.status.value, responseBody))
+            throw AiProviderHttpException(
+                providerId = id,
+                status = response.status.value,
+                providerMessage = responseBody.take(500),
+                message = parseError(response.status.value, responseBody),
+            )
         }
 
         return parseResponse(responseBody)

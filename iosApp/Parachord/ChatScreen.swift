@@ -74,7 +74,9 @@ final class ChatViewModel {
     }
 
     /// Home's Ask: puts the queued in-app prompt in the input when it can be sent now
-    /// (shared `ChatPrompt.shouldSend`); true when the caller should send it.
+    /// (shared `ChatPrompt.shouldSend`); true when the caller should send it. Checked
+    /// once the provider's messages are loaded (`start()` awaits `select`), so the
+    /// load can't replace the shown prompt, and again after each reply.
     func takeQueuedInAppPrompt() -> Bool {
         let pending = container.pendingInAppChatPrompt()
         guard ChatPrompt.shared.shouldSend(pending: pending, chatOpen: true,
@@ -110,7 +112,15 @@ struct ChatScreen: View {
             currentTrack: coordinator.currentTrack, isPlaying: coordinator.isPlaying,
             upNext: coordinator.upNext, shuffleEnabled: coordinator.shuffleEnabled)
     }
-    private func doSend() { pushSnapshot(); Task { await model.send() } }
+    /// Sends the input; once the reply lands, sends an Ask prompt queued while it
+    /// was loading (desktop re-checks its pending prompt whenever loading ends).
+    private func doSend() {
+        pushSnapshot()
+        Task {
+            await model.send()
+            if model.takeQueuedInAppPrompt() { doSend() }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {

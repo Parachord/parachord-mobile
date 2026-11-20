@@ -1,6 +1,7 @@
 package com.parachord.shared.ai.providers
 
 import com.parachord.shared.ai.AiChatProvider
+import com.parachord.shared.ai.AiProviderHttpException
 import com.parachord.shared.ai.AiChatResponse
 import com.parachord.shared.ai.AiProviderConfig
 import com.parachord.shared.ai.ChatMessage
@@ -162,7 +163,12 @@ class GeminiProvider(
             val errorData = try { json.parseToJsonElement(responseBody).jsonObject } catch (_: Exception) { null }
             val errorMsg = errorData?.get("error")?.jsonObject?.get("message")?.jsonPrimitive?.content
                 ?: "Gemini API error: ${response.status.value}"
-            throw Exception(errorMsg)
+            throw AiProviderHttpException(
+                providerId = id,
+                status = response.status.value,
+                providerMessage = errorMsg,
+                message = errorMsg,
+            )
         }
 
         val data = json.parseToJsonElement(responseBody).jsonObject
