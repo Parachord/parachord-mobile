@@ -39,13 +39,13 @@ private struct RecPlayDisc: View {
         Button(action: onPlay) {
             ZStack {
                 Circle().fill(PC.fillAccent).frame(width: recPlayDisc, height: recPlayDisc)
-                PCIcon(icon: .play, size: 16, tint: .white)
+                PCIcon(icon: .play, size: 16, tint: PC.onAccent)
             }
             .frame(width: recPlayTarget, height: recPlayTarget)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Play")
+        .accessibilityLabel(RecommendationCopy.shared.PLAY)
     }
 }
 
@@ -83,7 +83,7 @@ struct RecAlbumCard: View {
                 if let coming = item.comingLabel {
                     Text(coming)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(PC.onAccent)
                         .lineLimit(1)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Capsule().fill(PC.fillAccent))
@@ -96,7 +96,7 @@ struct RecAlbumCard: View {
             .frame(width: width, height: width)
             Spacer().frame(height: 8)
             RecCardText(text: item.name, primary: true)
-            RecCardText(text: (item.artist ?? "").isEmpty ? "\u{00A0}" : item.artist!)
+            RecCardText(text: (item.artist ?? "").isEmpty ? "\u{00A0}" : (item.artist ?? ""))
             RecCardText(text: item.year.isEmpty ? "\u{00A0}" : item.year, tertiary: true)
         }
         .frame(width: width)
@@ -106,7 +106,7 @@ struct RecAlbumCard: View {
     }
 }
 
-/// A recommended artist: a square 6-radius photo, else its initial.
+/// A recommended artist: a square 6-radius photo, else the user icon (Android's `AppIcon.User`).
 struct RecArtistCard: View {
     let item: IosRecItem
     var width: CGFloat = pcRecCardWidth
@@ -117,9 +117,9 @@ struct RecArtistCard: View {
             Group {
                 if let url = item.imageUrl, let u = URL(string: url) {
                     PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
-                        placeholder: { initial }
+                        placeholder: { placeholder }
                 } else {
-                    initial
+                    placeholder
                 }
             }
             .frame(width: width, height: width)
@@ -133,10 +133,8 @@ struct RecArtistCard: View {
         .onTapGesture(perform: onOpen)
     }
 
-    private var initial: some View {
-        Text(String(item.name.prefix(1)).uppercased())
-            .font(.system(size: 40, weight: .bold))
-            .foregroundStyle(PC.fg3)
+    private var placeholder: some View {
+        PCIcon(icon: .user, size: 40, tint: PC.fg3)
     }
 }
 
@@ -179,7 +177,7 @@ struct RecWeeklyCard: View {
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             Spacer().frame(height: 8)
             RecCardText(text: item.weeklyLabel ?? item.name, primary: true)
-            RecCardText(text: (item.weeklyWeekLabel ?? "").isEmpty ? "\u{00A0}" : item.weeklyWeekLabel!)
+            RecCardText(text: (item.weeklyWeekLabel ?? "").isEmpty ? "\u{00A0}" : (item.weeklyWeekLabel ?? ""))
         }
         .frame(width: width)
         .contentShape(Rectangle())
@@ -246,7 +244,7 @@ struct ListenerCard: View {
                 if let badge = listener.badge {
                     Text(badge)
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(PC.onAccent)
                         .lineLimit(1)
                         .padding(.horizontal, 8).padding(.vertical, 2)
                         .background(Capsule().fill(ResolverColor.solid(listener.service)))
@@ -273,7 +271,7 @@ struct ListenerCard: View {
     private var initial: some View {
         Text(String(listener.name.prefix(1)).uppercased())
             .font(.system(size: 48, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(PC.onAccent)
     }
 }
 

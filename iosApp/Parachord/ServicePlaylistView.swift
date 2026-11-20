@@ -15,7 +15,8 @@ final class ServicePlaylistViewModel {
     let url: String
     let name: String
     let source: String
-    let image: String?
+    /// The card's cover, else the lookup's own (Android's `coverUrl`); nil shows the track mosaic.
+    var image: String?
 
     var tracks: [Track] = []
     var loading = true
@@ -47,6 +48,7 @@ final class ServicePlaylistViewModel {
             if Task.isCancelled { return }
             if let q = r?.queue, !q.tracks.isEmpty {
                 tracks = q.tracks
+                if image == nil, let c = r?.cover, !c.isEmpty { image = c }
             } else {
                 error = r?.message ?? RecommendationCopy.shared.couldntLoad(name: name)
             }
@@ -127,10 +129,13 @@ struct ServicePlaylistView: View {
                 .font(.system(size: 13)).foregroundStyle(PC.fg2)
             HStack(spacing: 10) {
                 Button { coordinator.setQueue(model.tracks, startIndex: 0, context: model.context) } label: {
-                    Label(RecommendationCopy.shared.PLAY, systemImage: "play.fill")
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 22).frame(height: 40)
-                        .background(PC.fillAccent, in: Capsule())
+                    HStack(spacing: 6) {
+                        PCIcon(icon: .play, size: 16, tint: PC.onAccent)
+                        Text(RecommendationCopy.shared.PLAY)
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.onAccent)
+                    }
+                    .padding(.horizontal, 22).frame(height: 40)
+                    .background(PC.fillAccent, in: Capsule())
                 }
                 .buttonStyle(.plain).disabled(model.tracks.isEmpty)
                 Button { save() } label: {
@@ -190,7 +195,7 @@ struct ServicePlaylistView: View {
                 .foregroundStyle(PC.fg3).frame(width: 24)
             art(track)
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title).font(.system(size: 15, weight: .medium))
+                Text(track.title).font(.system(size: 14, weight: .medium))
                     .foregroundStyle(pcTrackNoMatch(artist: track.artist, title: track.title, album: track.album) ? PC.fg3
                         : (isCurrent ? PC.accent : PC.fg1)).lineLimit(1)
                 Text(track.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -204,12 +209,9 @@ struct ServicePlaylistView: View {
         .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
     }
 
-    @ViewBuilder
+    /// The track's cover, else its resolved sources' (`pcTrackArt`), as the Recommendations song rows draw it.
     private func art(_ track: Track) -> some View {
-        if let url = track.artworkUrl, let u = URL(string: url) {
-            PCCachedImage(url: u) { $0.resizable().aspectRatio(contentMode: .fill) }
-                placeholder: { PCArtwork(name: track.title + track.artist, size: 44, radius: 6) }
-                .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        } else { PCArtwork(name: track.title + track.artist, size: 44, radius: 6) }
+        pcCover(pcTrackArt(track.artworkUrl, artist: track.artist, title: track.title, album: track.album),
+                seed: track.title + track.artist, size: 44, radius: 6, artist: track.artist, album: track.album)
     }
 }

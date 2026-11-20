@@ -73,6 +73,7 @@ final class FriendProfileModel {
     func follow() {
         guard let f = friend, f.transient, !following else { return }
         following = true
+        followMessage = nil
         Task {
             let r = try? await container.followProfile(service: f.service, username: f.username)
             following = false
@@ -254,7 +255,7 @@ struct FriendProfileScreen: View {
                 Button { model.follow() } label: {
                     Text(RecommendationCopy.shared.FOLLOW)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(PC.onAccent)
                         .padding(.horizontal, 18).padding(.vertical, 9)
                         .background(PC.fillAccent, in: Capsule())
                 }
