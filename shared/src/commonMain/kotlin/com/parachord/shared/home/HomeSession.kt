@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Instant
@@ -47,7 +48,8 @@ import kotlinx.datetime.toLocalDateTime
  * - **Getting started:** decided once from the saved state, else
  *   [initialGettingStarted] on the first values of the sources, and saved.
  *   Nothing is decided (and [HomeState.ready] stays false) until the plugins
- *   have loaded. Playback starting while it's on saves `played`; when every
+ *   have loaded, at most [GETTING_STARTED_DECIDE_TIMEOUT_MS]; past that the
+ *   layout is off and nothing is saved. Playback starting while it's on saves `played`; when every
  *   step is done it goes off and is saved.
  * - **Jump back in** leaves out what's playing: [ActiveContexts] with the
  *   playing context only (mobile queue entries carry no context).
@@ -62,8 +64,11 @@ class HomeSession(
     private val settings: SettingsStore,
     scope: CoroutineScope,
 ) {
-    private companion object {
-        const val TAG = "HomeSession"
+    companion object {
+        private const val TAG = "HomeSession"
+
+        /** How long the getting-started decision waits for the plugins and the other inputs. */
+        const val GETTING_STARTED_DECIDE_TIMEOUT_MS = 8_000L
     }
 
     private val scope = CoroutineScope(
@@ -358,17 +363,27 @@ class HomeSession(
             Log.w(TAG, "Couldn't read the getting-started state: ${e.message}")
             null
         }
-        // Desktop decides only once resolvers have loaded: an empty list here
-        // would read a connected user as having nothing to play from.
-        sources.plugins.first { it.isNotEmpty() }
-        val inputs = gsInputs.first { it.pluginsLoaded }
-        val decided = initialGettingStarted(saved, inputs.connectDone, inputs.musicDone)
+        // A saved state wins, with no need to wait. Otherwise desktop decides
+        // only once resolvers have loaded: an empty list here would read a
+        // connected user as having nothing to play from. Plugins that never
+        // load (the JS runtime failed) get the existing-user default, unsaved,
+        // so the page still draws and the next launch decides again.
+        val inputs = if (saved != null) null else withTimeoutOrNull(GETTING_STARTED_DECIDE_TIMEOUT_MS) {
+            sources.plugins.first { it.isNotEmpty() }
+            gsInputs.first { it.pluginsLoaded }
+        }
+        if (saved == null && inputs == null) Log.w(TAG, "Plugins didn't load in time; Home draws without getting started")
+        val decided = when {
+            saved != null -> saved
+            inputs != null -> initialGettingStarted(null, inputs.connectDone, inputs.musicDone)
+            else -> GettingStartedState(active = false)
+        }
         gsMutex.withLock {
             // An action that came first (skip, resume) wins.
             if (gs.value.state == null) gs.value = GsHolder(ready = true, state = decided)
             else gs.value = gs.value.copy(ready = true)
         }
-        if (saved == null) guard("save getting-started state") { settings.setHomeGettingStarted(gs.value.state ?: decided) }
+        if (saved == null && inputs != null) guard("save getting-started state") { settings.setHomeGettingStarted(gs.value.state ?: decided) }
     }
 
     private suspend fun updateGs(change: (GettingStartedState) -> GettingStartedState) {

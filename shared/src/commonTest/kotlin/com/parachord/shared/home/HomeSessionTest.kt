@@ -25,7 +25,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestResult
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -182,12 +184,15 @@ class HomeSessionTest {
         src.playbackResolvers.value = listOf("spotify")
         val store = settings()
         val s = session(scope, src, store)
-        advanceUntilIdle()
+        // Within the timeout: advanceUntilIdle would run the clock past it.
+        advanceTimeBy(1_000)
+        runCurrent()
         assertFalse(s.state.value.ready)
         assertNull(s.state.value.gettingStarted)
         assertNull(store.getHomeGettingStarted())
 
         src.plugins.value = listOf(SPOTIFY)
+        runCurrent()
         advanceUntilIdle()
         assertTrue(s.state.value.ready)
         assertNull(s.state.value.gettingStarted)
@@ -220,6 +225,38 @@ class HomeSessionTest {
         src.playingContext.value = PlaybackContext(type = "loves", name = "Recent Loves")
         advanceUntilIdle()
         assertFalse(s.state.value.tiles.any { it is JumpTile.Loves })
+    }
+
+    @Test
+    fun `plugins that never load give the normal page after the timeout and save nothing`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.plugins.value = emptyList()
+        val store = settings()
+        val s = session(scope, src, store)
+        advanceTimeBy(HomeSession.GETTING_STARTED_DECIDE_TIMEOUT_MS - 1)
+        runCurrent()
+        assertFalse(s.state.value.ready)
+
+        advanceTimeBy(2)
+        runCurrent()
+        advanceUntilIdle()
+        assertTrue(s.state.value.ready)
+        assertNull(s.state.value.gettingStarted)
+        assertNull(store.getHomeGettingStarted())
+    }
+
+    @Test
+    fun `a saved state decides at once without waiting for the plugins`(): TestResult = homeTest { scope ->
+        val src = FakeSources()
+        src.plugins.value = emptyList()
+        val store = settings()
+        store.setHomeGettingStarted(GettingStartedState(active = true))
+        val s = session(scope, src, store)
+        runCurrent()
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(s.state.value.ready)
+        assertNotNull(s.state.value.gettingStarted)
     }
 
     @Test
