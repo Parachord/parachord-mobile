@@ -2469,7 +2469,7 @@ class IosContainer private constructor() {
      * cancels this when the list changes.
      */
     fun loadConcertArtistImages(events: List<ConcertEvent>): Cancellable {
-        val names = events.map { com.parachord.shared.home.concertArtist(it) }
+        val names = com.parachord.shared.home.concertPhotoArtists(events)
         val job = appScope.launch {
             try {
                 concertArtistImages.load(names)
@@ -2488,6 +2488,9 @@ class IosContainer private constructor() {
 
     /** A concert card's artist name (the shared fallback to the event's name). */
     fun concertArtistName(event: ConcertEvent): String = com.parachord.shared.home.concertArtist(event)
+
+    /** The artist a concert card opens on its On Tour tab, or null when the event names none (no tap). */
+    fun concertTourArtist(event: ConcertEvent): String? = com.parachord.shared.home.concertTourArtist(event)
 
     /** Upcoming shows from the user's TOP ARTISTS across every time window.
      *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is

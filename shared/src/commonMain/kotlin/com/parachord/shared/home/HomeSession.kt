@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -212,16 +213,12 @@ class HomeSession(
             }
         }
         // The shown concert cards' artist photos (each artist once a session,
-        // ConcertArtistImages). Launched, so a slow batch doesn't hold up the next list.
+        // ConcertArtistImages). A new list cancels the previous list's load;
+        // its artists in flight are taken over by whichever load still wants them.
         this.scope.launch {
-            state.map { it.concerts }.distinctUntilChanged().collect { shown ->
-                if (shown.isNotEmpty()) {
-                    this@HomeSession.scope.launch {
-                        guard("concert artist photos") {
-                            sources.concertArtistImages.load(shown.take(HOME_CONCERT_CARDS).map { concertArtist(it) })
-                        }
-                    }
-                }
+            state.map { it.concerts }.distinctUntilChanged().collectLatest { shown ->
+                val names = concertPhotoArtists(shown.take(HOME_CONCERT_CARDS))
+                if (names.isNotEmpty()) guard("concert artist photos") { sources.concertArtistImages.load(names) }
             }
         }
         // Playback while the layout is on counts as played (desktop: `isPlaying`;

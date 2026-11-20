@@ -79,6 +79,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.ui.components.ConcertPhoto
 import com.parachord.shared.home.concertPhotoUrl
 import com.parachord.shared.home.concertArtist
+import com.parachord.shared.home.concertTourArtist
 import com.parachord.shared.home.HomeCopy
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -593,7 +594,7 @@ private fun ConcertEventList(
                     event = event,
                     photoUrl = concertPhotoUrl(event, artistImages),
                     // The artist's On Tour tab (the screen's caller routes it there).
-                    onArtistClick = { onNavigateToArtist(concertArtist(event)) },
+                    onArtistClick = concertTourArtist(event)?.let { artist -> { onNavigateToArtist(artist) } },
                     onTicketClick = { url ->
                         uriHandler.openUri(url)
                     },
@@ -612,7 +613,7 @@ private fun ConcertEventCard(
     event: ConcertEvent,
     /** The shared `concertPhotoUrl`: the artist's photo, else the event's image. */
     photoUrl: String?,
-    onArtistClick: () -> Unit,
+    onArtistClick: (() -> Unit)?,
     onTicketClick: (String) -> Unit,
 ) {
     // Parse date for sidebar display
@@ -632,10 +633,15 @@ private fun ConcertEventCard(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) {
-                contentDescription = HomeCopy.concertsOf(concertArtist(event))
-            }
-            .clickable { onArtistClick() }
+            // TalkBack reads the row's text (date, artist, venue, place) and names
+            // the action "<artist> concerts". No artist named: nothing to open.
+            .then(
+                if (onArtistClick != null) {
+                    Modifier.clickable(onClickLabel = HomeCopy.concertsOf(concertArtist(event))) { onArtistClick() }
+                } else {
+                    Modifier.semantics(mergeDescendants = true) {}
+                },
+            )
             .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         // Date sidebar (matching desktop: month + day + weekday)

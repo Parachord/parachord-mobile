@@ -16,10 +16,12 @@ import androidx.compose.ui.platform.LocalView
  */
 fun Modifier.hapticClickable(
     enabled: Boolean = true,
+    /** What a tap does, for TalkBack ("double tap to <label>"); the element keeps its own text. */
+    onClickLabel: String? = null,
     onClick: () -> Unit,
 ): Modifier = composed {
     val haptic = LocalHapticFeedback.current
-    clickable(enabled = enabled) {
+    clickable(enabled = enabled, onClickLabel = onClickLabel) {
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onClick()
     }

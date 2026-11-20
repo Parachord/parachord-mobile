@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import com.parachord.shared.home.ConcertArtistImages
-import com.parachord.shared.home.concertArtist
+import com.parachord.shared.home.concertPhotoArtists
 class ConcertsViewModel constructor(
     private val concertsRepository: ConcertsRepository,
     private val settingsStore: SettingsStore,
@@ -86,7 +86,7 @@ class ConcertsViewModel constructor(
         viewModelScope.launch {
             _events.collectLatest { r ->
                 if (r is Resource.Success && r.data.isNotEmpty()) {
-                    concertArtistImages.load(r.data.map { concertArtist(it) })
+                    concertArtistImages.load(concertPhotoArtists(r.data))
                 }
             }
         }

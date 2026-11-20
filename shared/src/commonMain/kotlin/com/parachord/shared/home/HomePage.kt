@@ -57,7 +57,18 @@ fun concertVenue(e: ConcertEvent): String =
     e.venueName?.trim()?.takeIf { it.isNotEmpty() } ?: HomeCopy.VENUE_TBA
 
 /** The concert card's artist: the event's artist, else its name. */
-fun concertArtist(e: ConcertEvent): String = e.artistName?.trim()?.takeIf { it.isNotEmpty() } ?: e.name
+fun concertArtist(e: ConcertEvent): String = concertTourArtist(e) ?: e.name
+
+/**
+ * The artist a concert card is about, or null when the event names none.
+ * Desktop keys a card's photo and its artist by the event's artist, so with
+ * none the card neither looks up a photo nor opens an artist page (it still
+ * shows the event's name and its own image).
+ */
+fun concertTourArtist(e: ConcertEvent): String? = e.artistName?.trim()?.takeIf { it.isNotEmpty() }
+
+/** The artists whose photos [events]' cards need: each event's [concertTourArtist], none for an event with no artist. */
+fun concertPhotoArtists(events: List<ConcertEvent>): List<String> = events.mapNotNull { concertTourArtist(it) }
 
 /**
  * The artist page's On Tour tab, which lists all of an artist's shows. A
@@ -71,7 +82,7 @@ fun concertArtistKey(artist: String): String = artist.trim().lowercase()
 
 /**
  * The concert card's photo: the artist's photo from [artistImages] (keyed by
- * [concertArtistKey] of [concertArtist]) when it's an http(s) URL, else the
+ * [concertArtistKey] of [concertTourArtist]) when it's an http(s) URL, else the
  * event's own image when that is, else null (the card's placeholder).
  *
  * Desktop shows only the artist's photo. Falling back to the event's image
@@ -80,7 +91,7 @@ fun concertArtistKey(artist: String): String = artist.trim().lowercase()
  * photo is missing or still being looked up.
  */
 fun concertPhotoUrl(e: ConcertEvent, artistImages: Map<String, String> = emptyMap()): String? =
-    artistImages[concertArtistKey(concertArtist(e))]?.trim()?.takeIf { isHttpUrl(it) }
+    concertTourArtist(e)?.let { artistImages[concertArtistKey(it)] }?.trim()?.takeIf { isHttpUrl(it) }
         ?: e.imageUrl?.trim()?.takeIf { isHttpUrl(it) }
 
 /** Where a concert photo is cropped vertically: a quarter of the way down, desktop's `center 25%`, so faces stay in. */

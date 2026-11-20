@@ -13,6 +13,11 @@ struct ParachordApp: App {
         // only installs a closure — it does NOT touch IosContainer (the handler
         // does, but that runs later), so it's safe here without blocking the first frame.
         BackgroundSync.register()
+        // A concert card opens the artist on the tab the shared rules name;
+        // Swift's enum raw value must match it (a Kotlin constant can't be one).
+        // Reads a Kotlin top-level constant only, not IosContainer.
+        assert(ArtistTab.onTour.rawValue == HomePageKt.ARTIST_ON_TOUR_TAB,
+               "ArtistTab.onTour must match the shared ARTIST_ON_TOUR_TAB")
     }
     var body: some Scene {
         WindowGroup {

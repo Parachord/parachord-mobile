@@ -115,6 +115,51 @@ class ConcertArtistImagesTest {
     }
 
     @Test
+    fun `a load overlapping a cancelled load still gets all its artists`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val asked = mutableListOf<String>()
+        val images = ConcertArtistImages { name -> asked += name; gate.await(); "https://img/$name" }
+        // The Concerts page's load owns A..D's lookups.
+        val page = launch { images.load(listOf("A", "B", "C", "D", "E", "F")) }
+        runCurrent()
+        // Home wants A..D too: it waits on the page's lookups.
+        val home = launch { images.load(listOf("A", "B", "C", "D")) }
+        runCurrent()
+        // The page closes: its lookups are abandoned, Home takes them over.
+        page.cancel()
+        runCurrent()
+        gate.complete(Unit)
+        home.join()
+        assertEquals(setOf("a", "b", "c", "d"), images.images.value.keys)
+        // E and F were never reached and stay unasked for a later load.
+        images.load(listOf("E", "F"))
+        assertEquals(setOf("a", "b", "c", "d", "e", "f"), images.images.value.keys)
+    }
+
+    @Test
+    fun `a cancel followed at once by a new load asks again`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val images = ConcertArtistImages { name -> gate.await(); "https://img/$name" }
+        val first = launch { images.load(listOf("A")) }
+        runCurrent()
+        first.cancel()
+        val second = launch { images.load(listOf("A")) }
+        gate.complete(Unit)
+        second.join()
+        assertEquals("https://img/A", images.images.value["a"])
+    }
+
+    @Test
+    fun `an event with no artist looks up nothing and keeps its own image`() {
+        val noArtist = ConcertEvent(id = "1", name = "Festival", artistName = "  ", imageUrl = "https://event/f.jpg")
+        assertNull(concertTourArtist(noArtist))
+        assertEquals("Festival", concertArtist(noArtist))
+        assertEquals(listOf("Wilco"), concertPhotoArtists(listOf(noArtist, ConcertEvent(id = "2", name = "X", artistName = " Wilco "))))
+        // Even if a photo is cached under the event's name it isn't used.
+        assertEquals("https://event/f.jpg", concertPhotoUrl(noArtist, mapOf("festival" to "https://artist/x.jpg")))
+    }
+
+    @Test
     fun `photo is the artist photo then the event image then none`() {
         val e = ConcertEvent(id = "1", name = "Show", artistName = " Wilco ", imageUrl = "https://event/x.jpg")
         assertEquals("https://artist/w.jpg", concertPhotoUrl(e, mapOf("wilco" to "https://artist/w.jpg")))

@@ -949,13 +949,19 @@ struct ConcertsScreen: View {
 
     private func eventRow(_ e: ConcertEvent) -> some View {
         let artist = container.concertArtistName(event: e)
+        // Nil when the event names no artist: then the row opens nothing (shared rule).
+        let tourArtist = container.concertTourArtist(event: e)
         return eventRowContent(e, artist: artist)
             .contentShape(Rectangle())
             // The row opens the artist's On Tour tab; the ticket link keeps its own tap.
-            .onTapGesture { navTourArtist = artist }
-            .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityLabel(HomeCopy.shared.concertsOf(artist: artist))
+            .onTapGesture { if let tourArtist { navTourArtist = tourArtist } }
+            // One VoiceOver element reading the row's text (date, artist, venue,
+            // place), with the open as its default action and Tickets as a named one.
+            .accessibilityElement(children: .combine)
+            .modifier(ConcertRowAccessibility(
+                tourArtist: tourArtist,
+                ticket: e.ticketUrl.flatMap { URL(string: $0) },
+                open: { navTourArtist = $0 }))
     }
 
     private func eventRowContent(_ e: ConcertEvent, artist: String) -> some View {
@@ -1001,6 +1007,28 @@ struct ConcertsScreen: View {
             } placeholder: { PCArtwork(name: seed, size: 56, radius: 8) }
                 .frame(width: 56, height: 56).clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else { PCArtwork(name: seed, size: 56, radius: 8) }
+    }
+}
+
+/// A concert row's VoiceOver actions: the default action opens the artist's
+/// On Tour tab (when the event names one), and "Tickets" opens the ticket link,
+/// so both stay reachable on the combined element.
+private struct ConcertRowAccessibility: ViewModifier {
+    let tourArtist: String?
+    let ticket: URL?
+    let open: (String) -> Void
+    @Environment(\.openURL) private var openURL
+
+    func body(content: Content) -> some View {
+        let base = content
+            .accessibilityAddTraits(tourArtist != nil ? .isButton : [])
+            .accessibilityHint(tourArtist.map { HomeCopy.shared.concertsOf(artist: $0) } ?? "")
+            .accessibilityAction { if let tourArtist { open(tourArtist) } }
+        if let ticket {
+            base.accessibilityAction(named: HomeCopy.shared.TICKETS) { openURL(ticket) }
+        } else {
+            base
+        }
     }
 }
 

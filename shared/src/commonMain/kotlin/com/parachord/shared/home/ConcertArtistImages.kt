@@ -2,6 +2,7 @@ package com.parachord.shared.home
 
 import com.parachord.shared.platform.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
@@ -23,12 +24,18 @@ import kotlin.coroutines.coroutineContext
  * keeps its own persistent cache), [BATCH_SIZE] at a time, each batch's
  * answers merged into [images] as they arrive, keyed by [concertArtistKey].
  *
- * Each artist is asked once a session: one already found, already tried
- * (even if it threw or found nothing), or being looked up is skipped. A
- * failure is left out of [images], so the card keeps its fallback
- * ([concertPhotoUrl]). A cancelled [load] stops before its next batch; the
- * artists it didn't get to (and those cut off mid-lookup) aren't counted as
- * tried, so a later load asks for them.
+ * Each artist is asked once a session: one already found or tried (even if
+ * it threw or found nothing) is skipped, and a failure is left out of
+ * [images], so the card keeps its fallback ([concertPhotoUrl]).
+ *
+ * **Overlapping loads.** Each lookup in flight has a per-artist [CompletableDeferred]
+ * owned by the load that started it. Another load that wants the same artist
+ * awaits it instead of skipping it. If the owning load is cancelled (Home's
+ * list changed, the Concerts page closed), its lookup is abandoned: the
+ * artist goes back to unasked, the deferred completes, and every load
+ * waiting on it takes the lookup over. So a cancelled load never strands
+ * another load's artists. A cancelled load stops before its next batch; the
+ * artists it didn't reach stay unasked.
  */
 class ConcertArtistImages(private val artistImage: suspend (artistName: String) -> String?) {
     companion object {
@@ -43,47 +50,70 @@ class ConcertArtistImages(private val artistImage: suspend (artistName: String) 
 
     private val mutex = Mutex()
     private val tried = mutableSetOf<String>()
-    private val inFlight = mutableSetOf<String>()
+    /** The lookup in flight per artist; completed when it ends, answered or abandoned. */
+    private val pending = mutableMapOf<String, CompletableDeferred<Unit>>()
 
-    /** Looks up the photos of [artistNames] not yet found, tried or in flight. Returns when every batch is done. */
+    /**
+     * Looks up the photos of [artistNames] not yet found or tried, joining any
+     * already in flight. Returns when every batch is done.
+     */
     suspend fun load(artistNames: List<String>) {
         val todo = mutex.withLock {
             val seen = mutableSetOf<String>()
             artistNames.map { it.trim() }.filter { name ->
                 val key = concertArtistKey(name)
-                key.isNotEmpty() && seen.add(key) && key !in _images.value && key !in tried && key !in inFlight
-            }.also { names -> names.forEach { inFlight += concertArtistKey(it) } }
-        }
-        if (todo.isEmpty()) return
-        try {
-            for (batch in todo.chunked(BATCH_SIZE)) {
-                coroutineContext.ensureActive()
-                coroutineScope {
-                    for (name in batch) launch { lookUp(name) }
-                }
+                key.isNotEmpty() && seen.add(key) && key !in _images.value && key !in tried
             }
-        } finally {
-            withContext(NonCancellable) {
-                mutex.withLock { todo.forEach { inFlight -= concertArtistKey(it) } }
+        }
+        for (batch in todo.chunked(BATCH_SIZE)) {
+            coroutineContext.ensureActive()
+            coroutineScope {
+                for (name in batch) launch { ensureLookedUp(name) }
             }
         }
     }
 
-    private suspend fun lookUp(name: String) {
+    /** Runs [name]'s lookup, or waits for the one in flight and takes it over if it's abandoned. */
+    private suspend fun ensureLookedUp(name: String) {
         val key = concertArtistKey(name)
-        val url = try {
-            artistImage(name)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "Artist photo lookup failed: ${e.message}")
-            null
+        while (true) {
+            val (deferred, owner) = mutex.withLock {
+                if (key in tried || key in _images.value) return
+                val running = pending[key]
+                if (running != null) {
+                    running to false
+                } else {
+                    CompletableDeferred<Unit>().also { pending[key] = it } to true
+                }
+            }
+            if (!owner) {
+                // Answered: the check at the top returns. Abandoned: look again, and own it.
+                deferred.await()
+                continue
+            }
+            var answered = false
+            try {
+                val url = try {
+                    artistImage(name)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Artist photo lookup failed: ${e.message}")
+                    null
+                }
+                val usable = url?.trim()?.takeIf { isHttpUrl(it) }
+                if (usable != null) _images.update { it + (key to usable) }
+                answered = true
+            } finally {
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        if (answered) tried += key
+                        pending.remove(key)
+                    }
+                    deferred.complete(Unit)
+                }
+            }
+            return
         }
-        mutex.withLock {
-            tried += key
-            inFlight -= key
-        }
-        val usable = url?.trim()?.takeIf { isHttpUrl(it) }
-        if (usable != null) _images.update { it + (key to usable) }
     }
 }

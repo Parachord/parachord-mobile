@@ -80,6 +80,7 @@ import com.parachord.shared.home.HomeHalfCard
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.chartHalfCards
 import com.parachord.shared.home.concertArtist
+import com.parachord.shared.home.concertTourArtist
 import com.parachord.shared.home.concertPhotoUrl
 import com.parachord.shared.home.concertDateBadge
 import com.parachord.shared.home.concertPlaceLine
@@ -378,6 +379,8 @@ fun HomeConcertCard(
     modifier: Modifier = Modifier,
 ) {
     val artist = concertArtist(event)
+    // With no artist named, the card opens nothing (desktop keys it by artist).
+    val tourArtist = concertTourArtist(event)
     val place = concertPlaceLine(event)
     val tickets = concertTickets(event)
     val date = concertDateBadge(event.date)
@@ -389,11 +392,15 @@ fun HomeConcertCard(
             .clip(PanelShape)
             .border(1.dp, DesignTokens.borderDefault.current(), PanelShape)
             // The card opens the artist's On Tour tab; Tickets is its own target.
-            .semantics(mergeDescendants = true) {
-                role = Role.Button
-                contentDescription = HomeCopy.concertsOf(artist)
-            }
-            .hapticClickable { onOpenArtistTour(artist) }
+            // TalkBack reads the merged text (artist, date, venue, place) and
+            // names the action "<artist> concerts".
+            .then(
+                if (tourArtist != null) {
+                    Modifier.hapticClickable(onClickLabel = HomeCopy.concertsOf(tourArtist)) { onOpenArtistTour(tourArtist) }
+                } else {
+                    Modifier.semantics(mergeDescendants = true) {}
+                },
+            )
             .padding(12.dp),
     ) {
         Box(
