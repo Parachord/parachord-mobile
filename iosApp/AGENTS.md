@@ -1549,9 +1549,22 @@ and imported files (`addImportedFiles`) save through the shared
 `LibraryRepository.addScannedLocalTracks`, so a file is listed in the
 Collection's songs but isn't a love until the user hearts it (`tracks.inCollection`;
 the column and a one-time cleanup run in `DriverFactory`'s `addColumnIfMissing`).
-Home's Recent Loves use the shared `recentLoves`; the love-push Backfill and
+Home's Recent Loves use the shared `recentLoves` (undated loves last); the love-push Backfill and
 CarPlay's Loved Songs leave unloved files out. Removing a heart from a file keeps
 its row. Root `CLAUDE.md` → "Local files are the library, not loves".
+
+## Home's shared model (not drawn on iOS yet)
+
+Home's rules (jump back in, sections, playlist freshness, history mixes,
+getting started, setup, banners, concerts near you, the Ask prompt) are in
+`shared/.../home/`. The iOS Home screen doesn't use them yet; PR 6 of
+`docs/superpowers/specs/2026-11-19-home-and-recommendations-design.md` does.
+Two pieces are live: `DriverFactory`'s `addColumnIfMissing` adds
+`playlists.tracksChangedAt` and `lastChangeAdded` (stamped by the shared
+`PlaylistTrackDao`), and `IosContainer.askShuffleupagus` queues an in-app Ask
+prompt with `fromApp = true`, so `ChatScreen` sends it on open without the
+pre-fill a `parachord://chat` link gets. Root `CLAUDE.md` → "Home — the shared
+model".
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 

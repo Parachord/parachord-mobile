@@ -935,6 +935,8 @@ Spotify rate-limits the whole **account/`client_id`**, and Parachord's Android +
 
 The desktop fetches `GET /1/user/{username}/playlists/createdfor?count=100` (public, no auth token needed), filters by title containing "weekly jams" or "weekly exploration", sorts by date descending, and takes the most recent 4 of each type. Tracks are loaded lazily per playlist via `GET /1/playlist/{playlistId}`.
 
+**Weekly Jams now also arrives as a history mix** (see "History mixes"): the ListenBrainz plugin sends it as one of Home's "Made from your listening" cards, and the Recommendations Playlists row leaves it out with every other mix id. Weekly Exploration is not a mix and stays in that row. `WeeklyPlaylistsRepository` still feeds both carousels until PR 5 draws Home from the shared model.
+
 On Android, `WeeklyPlaylistsRepository` mirrors this pattern. The home screen shows both sections as horizontal carousels (`LazyRow`). Tapping a card navigates to `WeeklyPlaylistScreen` (ephemeral view with a Save button). The play button on each card triggers immediate playback via `HomeViewModel.playWeeklyPlaylist()`.
 
 `WeeklyPlaylistScreen` supports standard track context menus (long-press) via `TrackContextMenuHost` — Play Next, Add to Queue, Add to Playlist, Go to Artist/Album, and collection toggle.
@@ -942,6 +944,32 @@ On Android, `WeeklyPlaylistsRepository` mirrors this pattern. The home screen sh
 Ephemeral playlists use the ID format `listenbrainz-{playlistMbid}` when saved to Room.
 
 The shared page model (`RecommendationPage.kt`, see "Recommendations come from the plugins") puts the newest week of each weekly playlist (Jams, Exploration) in the Playlists row it builds; no screen shows that row yet (the new Recommendations page lands in PRs 2 and 3 of `docs/superpowers/specs/2026-11-19-home-and-recommendations-design.md`). `WeeklyPlaylistsRepository` still feeds Home's carousels.
+
+### Playlist freshness (Home, desktop's `playlist-freshness.js`)
+
+`playlists.tracksChangedAt` (nullable) and `playlists.lastChangeAdded` (how many tracks that change added) say when a playlist's tracks last changed. `lastModified` can't, since a rename or a sync-state stamp bumps it. Both are local only: no sync push sends them.
+
+- **Where they are set:** inside `PlaylistTrackDao`, so every caller gets it: `insertAll`, `replaceAll` and `deleteTrack`. `PlaylistFreshness` compares the track keys before and after: artist + title folded by `slug` (not the id: hosted XSPF tracks have none, and ListenBrainz ids are positions), falling back to the id. Equal keys, in order, stamp nothing; a re-poll or a rename that brings the same tracks changes nothing. `lastChangeAdded` counts copies (`countAdded`).
+- **`deleteByPlaylistId` never stamps.** It is the first half of a playlist delete or a rewrite, and a rewrite that brings the same tracks must not look like a change. So code that rewrote a playlist by deleting and inserting now calls `replaceAll`, which diffs once. Don't go back to delete-then-insert.
+- **`PlaylistDao.insert` keeps the newer stamp** when it replaces a row, so a save that carries an older copy of the playlist can't erase one.
+- **Both apps migrate the two columns at bind time** (Android `AndroidModule`, iOS `DriverFactory`'s `addColumnIfMissing`).
+- **Reading them:** `playlistFreshness(p)` is `tracksChangedAt`, else `lastModified`, else `createdAt`; `freshestPlaylists` takes the newest 6; `changeBadge` gives "Δ N" for a change in the last 7 days that added tracks. These are in `shared/.../home/HomePlaylists.kt`.
+
+### History mixes (Home's "Made from your listening")
+
+Plugins that declare `capabilities.historyMixes` answer `getHistoryMixes(config)` with playlists: Weekly Jams, Heavy Rotation and the like. `HistoryMixesRepository` (`shared/.../repository/`) asks each one through the resolver-loader and caches the answers in `history_mixes_cache.json`, per provider and keyed to the account, with the same fresh/stale/failure rules as the recommendations cache. The pure rules are in `shared/.../home/HistoryMixes.kt`: `normalizeHistoryMixes` keeps only items with an id, a name and a URL; `flattenHistoryMixes` deals the providers round-robin so one service can't fill the row, keeping an id where it first appeared; a mix that came with no cover gets a 2x2 mosaic of its tracks' covers (`mixesNeedingMosaic`, `withMixMosaics`), retried 60 s later, 3 tries.
+
+The Recommendations page loads the mixes with its own load on both apps (`loadRecommendationsPage`), because it needs their ids even when Home hasn't been visited, and passes every id to `excludePlaylistIds` so its Playlists row leaves them out.
+
+### Home — the shared model (PR 4 of the Home redesign)
+
+Home's rules are in `shared/.../home/`, ports of desktop's `home-model.js` and its neighbours, with vectors in the matching `commonTest` files. **No Home screen uses them yet.** PRs 5 and 6 of `docs/superpowers/specs/2026-11-19-home-and-recommendations-design.md` draw the page on Android and iOS; until then the screens keep their old logic, and a rule changed here belongs in desktop first.
+
+- **`HomeModel.kt`:** `jumpBackInTiles` (up to four tiles in the order playlist, loves, album, mix; each takes its first candidate that isn't playing or queued, `isActiveContext`), `latestLoveAlbum`, `homeSections` (which sections show; the import card is for a user with no collection and no playlists), `homeTopArtists`, `lovesMosaicAlbums`, `albumsNeedingArt`, `filterBySource`, and the Ask prompt: `promptName` cleans a name the way desktop does (JavaScript's whitespace set, not Kotlin's; unsafe characters dropped by code point range, since Kotlin/Native rejects some Unicode regex classes) and `exampleShufflePrompt` builds the example. **Recommendations throttle:** a full load that finished less than 10 minutes ago keeps Home from asking again (`HOME_RECOMMENDATIONS_THROTTLE_MS`, `shouldLoadHomeRecommendations`); it counts only if some provider answered and a section resulted (`shouldStampHomeRecommendationsLoad`).
+- **`HomePlaylists.kt`:** the playlist rules above, plus `whenPhrase`, `freshChangeLine` ("X picked up 3 new tracks this morning") and `playlistSubtitle` ("Refreshed 2h ago", "Since 2023"). `recentLoves` now puts loves with no date last instead of first.
+- **`TimeAgo`** (`shared/.../format/TimeAgo.kt`): "just now", "18m ago", "3h ago", "5d ago", "2mo ago", "1y ago", desktop's `time-ago.js`. It is separate from `RelativeTime`, which keeps its own ladder for listens.
+- **Getting started and setup:** `GettingStarted.kt` (`stepOnePlugins`, `gettingStartedStatus`: connect, music, listen; `showGettingStarted`; `gettingStartedLeft` for the "Finish getting started" pill), `HomeSetup.kt` (`homeSetupItems`, the "Finish setting up" checklist, whose only item here is the skipped steps: mobile has no browser extension and no What's New) and `HomeBanners.kt` (`homeBannerItems`, `bannerViewId`, over the filtered announcements). The remembered state is `SettingsStore`'s `home_getting_started` (`GettingStartedState`: `active`, `played`, `skipped`) and `home_setup_dismissed`. With no saved state the layout is on for a profile that has no service connected and no music; desktop uses its tutorial flag there, which mobile lacks. `PluginConfigField` now carries `required`, `advanced` and `hasDefault` from the manifest, which the setup screens read.
+- **Concerts near you and Ask's chat origin:** next section.
 
 ### Album Context Menus
 
@@ -1332,6 +1360,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Theme | `ui/theme/Theme.kt` |
 | Shared UI components | `ui/components/AlbumContextMenu.kt`, `ui/components/ArtistContextMenu.kt`, `ui/components/TrackContextMenu.kt`, `ui/components/TrackRow.kt`, `ui/components/ResolverIconRow.kt` |
 | Weekly playlists | `data/repository/WeeklyPlaylistsRepository.kt`, `ui/screens/playlists/WeeklyPlaylistScreen.kt`, `WeeklyPlaylistViewModel.kt` |
+| Home (shared model) | `shared/.../home/{HomeModel,HomePlaylists,PlaylistFreshness,HistoryMixes,GettingStarted,HomeSetup,HomeBanners,ConcertsNearYou}.kt`, `shared/.../format/TimeAgo.kt`, `shared/.../repository/HistoryMixesRepository.kt`, `shared/.../deeplink/ChatPrompt.kt` |
 | Concerts / On Tour | `data/repository/ConcertsRepository.kt`, `data/api/TicketmasterApi.kt`, `data/api/SeatGeekApi.kt`, `ui/screens/discover/ConcertsScreen.kt` |
 | .axe plugin system | `shared/.../plugin/JsRuntime.kt`, `shared/.../plugin/PluginManager.kt`, `shared/.../plugin/PluginSyncService.kt`, `shared/.../plugin/PluginFileAccess.kt` |
 | JS bridge | `bridge/JsBridge.kt`, `bridge/NativeBridge.kt`, `assets/js/bootstrap.html`, `assets/js/resolver-loader.js` |
