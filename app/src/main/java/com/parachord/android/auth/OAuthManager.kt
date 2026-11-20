@@ -216,7 +216,7 @@ class OAuthManager constructor(
                     }
                     // Transient (429/5xx/network/unparseable) — keep the token,
                     // fail just this attempt, recover on the next refresh.
-                    Log.e(TAG, "Spotify token refresh failed (${response.code}): $responseBody")
+                    Log.e(TAG, "Spotify token refresh failed (${response.code}): ${com.parachord.shared.api.SecretRedaction.redactSecrets(responseBody)}")
                     return@withContext false
                 }
 
@@ -383,7 +383,7 @@ class OAuthManager constructor(
             val responseBody = response.body?.string() ?: return false
 
             if (!response.isSuccessful) {
-                Log.e(TAG, "Spotify token exchange failed: $responseBody")
+                Log.e(TAG, "Spotify token exchange failed: ${com.parachord.shared.api.SecretRedaction.redactSecrets(responseBody)}")
                 return false
             }
 
@@ -477,7 +477,7 @@ class OAuthManager constructor(
             val responseBody = response.body?.string() ?: return false
 
             if (!response.isSuccessful) {
-                Log.e(TAG, "Last.fm session exchange failed: $responseBody")
+                Log.e(TAG, "Last.fm session exchange failed: ${com.parachord.shared.api.SecretRedaction.redactSecrets(responseBody)}")
                 return false
             }
 

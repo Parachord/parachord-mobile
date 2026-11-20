@@ -87,4 +87,28 @@ class SecretRedactionTest {
         }
         assertFalse(SecretRedaction.isSecretHeader("Content-Type"))
     }
+
+    @Test
+    fun `an OAuth redirect's code and state are redacted`() {
+        val out = SecretRedaction.redactSecrets("parachord://auth/callback/spotify?code=AQBsecretcode&state=xyz123")
+        assertEquals("parachord://auth/callback/spotify?code=REDACTED&state=REDACTED", out)
+    }
+
+    @Test
+    fun `token fields in a JSON body are redacted`() {
+        val body = """{"access_token":"BQDabc","token_type":"Bearer","refresh_token": "AQDdef","expires_in":3600,"session":{"name":"jh","key":"lfmkey"}}"""
+        val out = SecretRedaction.redactSecrets(body)
+        assertFalse(out.contains("BQDabc"))
+        assertFalse(out.contains("AQDdef"))
+        assertFalse(out.contains("lfmkey"))
+        assertTrue(out.contains(""""token_type":"Bearer""""))
+        assertTrue(out.contains(""""name":"jh""""))
+        assertTrue(out.contains(""""expires_in":3600"""))
+    }
+
+    @Test
+    fun `a playlist link keeps everything but its credentials`() {
+        val out = SecretRedaction.redactSecrets("https://example.test/list.xspf?id=42&token=abc")
+        assertEquals("https://example.test/list.xspf?id=42&token=REDACTED", out)
+    }
 }

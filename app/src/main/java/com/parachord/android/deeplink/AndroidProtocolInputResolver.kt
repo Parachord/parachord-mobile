@@ -171,7 +171,7 @@ class AndroidProtocolInputResolver constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "URL fetch failed for $url: ${e.message}")
+            Log.w(TAG, "URL fetch failed for ${com.parachord.shared.api.SecretRedaction.redactSecrets(url)}: ${e.message?.let { com.parachord.shared.api.SecretRedaction.redactSecrets(it) }}")
             return null
         }
         return try {
@@ -181,7 +181,7 @@ class AndroidProtocolInputResolver constructor(
                 tracks = parsed.tracks,
             )
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "Tracklist parse failed for $url: ${e.message}")
+            Log.w(TAG, "Tracklist parse failed for ${com.parachord.shared.api.SecretRedaction.redactSecrets(url)}: ${e.message}")
             null
         }
     }

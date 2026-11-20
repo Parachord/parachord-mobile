@@ -44,7 +44,8 @@ class OAuthRedirectActivity : Activity() {
             return
         }
 
-        Log.d(TAG, "Handling OAuth redirect: $uri")
+        // Host and path only: the query carries the auth code and state.
+        Log.d(TAG, "Handling OAuth redirect: ${uri.scheme}://${uri.host}${uri.path.orEmpty()}")
 
         // Handle the token exchange in a fire-and-forget coroutine.
         // We don't wait for it to complete before finishing — the UI refresh

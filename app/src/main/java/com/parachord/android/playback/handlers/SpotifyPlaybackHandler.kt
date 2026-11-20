@@ -469,7 +469,7 @@ class SpotifyPlaybackHandler constructor(
 
                 val code = resp.status.value
                 val body = try { resp.bodyAsText() } catch (_: Exception) { null }
-                Log.w(TAG, "startPlayback failed: $code body=$body (attempt $attempt)")
+                Log.w(TAG, "startPlayback failed: $code body=${body?.let { com.parachord.shared.api.SecretRedaction.redactSecrets(it) }} (attempt $attempt)")
 
                 when {
                     code == 502 && attempt == 1 -> {
