@@ -56,7 +56,6 @@ import com.parachord.android.ui.components.DeletePlaylistDialog
 import com.parachord.android.ui.components.PlaylistContextMenu
 import com.parachord.android.ui.components.PlaylistSyncChannelsSheet
 import com.parachord.shared.model.Playlist
-import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.android.ui.components.AnnouncementBanner
 import com.parachord.android.ui.components.AppleMusicReauthBanner
 import com.parachord.android.ui.components.ShimmerAlbumCard
@@ -142,7 +141,7 @@ fun HomeScreen(
     var playlistMenu by remember { mutableStateOf<Playlist?>(null) }
     var syncTarget by remember { mutableStateOf<Playlist?>(null) }
     var deleteTarget by remember { mutableStateOf<Playlist?>(null) }
-    var albumMenu by remember { mutableStateOf<RecommendationItem?>(null) }
+    var albumMenu by remember { mutableStateOf<AlbumMenuTarget?>(null) }
 
     playlistMenu?.let { pl ->
         PlaylistContextMenu(
@@ -177,26 +176,26 @@ fun HomeScreen(
         )
     }
     albumMenu?.let { item ->
-        val artist = item.artist.orEmpty()
-        val inCollection by remember(item.name, artist) { viewModel.isAlbumInCollection(item.name, artist) }.collectAsState(false)
+        val artist = item.artist
+        val inCollection by remember(item.title, artist) { viewModel.isAlbumInCollection(item.title, artist) }.collectAsState(false)
         AlbumContextMenu(
-            albumTitle = item.name,
+            albumTitle = item.title,
             artistName = artist,
             artworkUrl = item.imageUrl,
             isInCollection = inCollection,
             onDismiss = { albumMenu = null },
-            onPlayAlbum = { albumMenu = null; viewModel.playAlbum(item) },
-            onQueueAlbum = { albumMenu = null; viewModel.queueAlbumByName(item.name, artist) },
-            onGoToAlbum = { albumMenu = null; onNavigateToAlbum(item.name, artist) },
+            onPlayAlbum = { albumMenu = null; viewModel.playAlbumByName(item.title, artist) },
+            onQueueAlbum = { albumMenu = null; viewModel.queueAlbumByName(item.title, artist) },
+            onGoToAlbum = { albumMenu = null; onNavigateToAlbum(item.title, artist) },
             onGoToArtist = if (artist.isNotBlank()) {
                 { albumMenu = null; onNavigateToArtist(artist) }
             } else null,
             onToggleCollection = {
                 albumMenu = null
-                if (inCollection) viewModel.removeAlbumFromCollection(item.name, artist)
-                else viewModel.addAlbumToCollection(item.name, artist, item.imageUrl)
+                if (inCollection) viewModel.removeAlbumFromCollection(item.title, artist)
+                else viewModel.addAlbumToCollection(item.title, artist, item.imageUrl)
             },
-            onShare = { albumMenu = null; shareAlbum(item.name, artist, item.imageUrl) },
+            onShare = { albumMenu = null; shareAlbum(item.title, artist, item.imageUrl) },
         )
     }
 
@@ -382,15 +381,44 @@ fun HomeScreen(
                             onShown = viewModel::albumShown,
                             onOpen = { onNavigateToAlbum(it.name, it.artist.orEmpty()) },
                             onPlay = viewModel::playAlbum,
-                            onLongPress = { albumMenu = it },
+                            onLongPress = { albumMenu = AlbumMenuTarget(it.name, it.artist.orEmpty(), it.imageUrl) },
                             onSeeAll = onNavigateToRecommendations,
                             modifier = Modifier.padding(top = SectionGap),
                         )
                     }
 
-                    // ── Sections from later tasks go here, in desktop's order ──
-                    // Task 6: Fresh Drops + Critical Darlings (or Pop of the
-                    //         Tops), Concerts near you, Ask Shuffleupagus.
+                    // A half's card opens its album by title and artist, as each
+                    // page's own cards do (Android's album route has no
+                    // release-group form).
+                    item(key = "halves") {
+                        HomeHalvesSection(
+                            state = state,
+                            onSeeAllFresh = onNavigateToFreshDrops,
+                            onSeeAllCritical = onNavigateToCriticalDarlings,
+                            onSeeAllCharts = onNavigateToPopOfTheTops,
+                            onOpen = { onNavigateToAlbum(it.title, it.artist) },
+                            onPlay = { viewModel.playAlbumByName(it.title, it.artist) },
+                            onLongPress = { albumMenu = AlbumMenuTarget(it.title, it.artist, it.imageUrl) },
+                            onRetryCharts = viewModel::retryCharts,
+                            modifier = Modifier.padding(top = SectionGap + 16.dp),
+                        )
+                    }
+                    item(key = "concerts") {
+                        HomeConcertsSection(
+                            state = state,
+                            onSeeAll = onOpenConcerts,
+                            modifier = Modifier.padding(top = SectionGap),
+                        )
+                    }
+                    item(key = "ask") {
+                        HomeAsk(
+                            example = state.askExample,
+                            chatAvailable = state.chatAvailable,
+                            onAsk = { prompt -> viewModel.ask(prompt, onAsk) },
+                            onSetUp = { onOpenSettings(null) },
+                            modifier = Modifier.padding(top = SectionGap + 16.dp),
+                        )
+                    }
                 }
             }
         }
@@ -485,6 +513,9 @@ private fun HomeSkeleton() {
     }
 }
 
+/** What an album card's long-press menu acts on: a recommended album or a half's card. */
+private data class AlbumMenuTarget(val title: String, val artist: String, val imageUrl: String?)
+
 /** The banner component draws an [Announcement]; Home's item carries the same fields. */
 private fun HomeBannerItem.toAnnouncement() = Announcement(
     id = id,
@@ -496,7 +527,7 @@ private fun HomeBannerItem.toAnnouncement() = Announcement(
 )
 
 /** A banner's CTA: http(s) only, as desktop's `home-banner.js`. */
-private fun openHttpLink(context: android.content.Context, url: String) {
+internal fun openHttpLink(context: android.content.Context, url: String) {
     val u = url.trim()
     if (!u.startsWith("https://", ignoreCase = true) && !u.startsWith("http://", ignoreCase = true)) return
     try {

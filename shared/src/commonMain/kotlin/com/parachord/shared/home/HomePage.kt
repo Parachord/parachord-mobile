@@ -116,6 +116,10 @@ object HomeCopy {
     const val CHARTS_ERROR_TITLE = "Couldn’t load Pop of the Tops"
     const val CHARTS_ERROR_BODY = "Check your connection, then try again."
     const val TRY_AGAIN = "Try again"
+    /** A half's link (desktop `homeHalf`); its accessibility label is [seeAllIn]. */
+    const val SEE_ALL = "See all"
+    /** The critics' reason badge's accessibility label. */
+    const val WHAT_THE_CRITICS_SAID = "What the critics said"
 
     const val ASK_EXPLANATION =
         "Shuffleupagus is Parachord’s AI DJ. Ask for a playlist, a mood or a question about music, and it answers with songs you can play, using the AI plug-in you choose."
@@ -138,4 +142,6 @@ object HomeCopy {
     fun dismissLabel(item: String): String = "Dismiss $item"
     fun playLabel(title: String): String = "Play $title"
     fun openLabel(title: String): String = "Open $title"
+    fun seeAllIn(title: String): String = "See all in $title"
+    fun ticketsFor(artist: String): String = "Tickets for $artist"
 }
