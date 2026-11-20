@@ -156,4 +156,48 @@ class AiChatServiceHistoryTest {
         assertEquals(emptyList(), store.inserted)
         assertEquals(emptyList(), chat.getDisplayMessages("fake"))
     }
+
+    @Test
+    fun `the chat shows the user's messages and each turn's final reply only`() = runTest {
+        // Shaped like a device's gemini rows 19-28: interim tool-loop replies
+        // (a preamble, an apology about a search, blank ones) with tool calls,
+        // tool results, then the final answer and a failed later round.
+        val calls = """[{"id":"c1","name":"search","arguments":{"query":"indie guitar rock"}}]"""
+        fun row(role: String, content: String, toolCalls: String? = null, toolCallId: String? = null) =
+            ChatMessageRecord(providerId = "fake", role = role, content = content, toolCallsJson = toolCalls,
+                toolCallId = toolCallId, toolName = if (toolCallId != null) "search" else null, timestamp = Long.MAX_VALUE / 2)
+        val saved = listOf(
+            row("USER", "a mix of new indie guitar rock"),
+            row("ASSISTANT", "Gotcha! Here's a mix…", calls),
+            row("TOOL", """{"results":[]}""", toolCallId = "c1"),
+            row("ASSISTANT", "My apologies! It looks like my last search didn't quite hit the mark…", calls),
+            row("TOOL", """{"results":[]}""", toolCallId = "c1"),
+            row("ASSISTANT", "", calls),
+            row("TOOL", """{"results":[]}""", toolCallId = "c1"),
+            row("ASSISTANT", "   ", calls),
+            row("TOOL", """{"results":[]}""", toolCallId = "c1"),
+            row("ASSISTANT", "{{artist|IDLES}}\n{{artist|Fontaines D.C.}}"),
+            row("USER", "more like that"),
+            row("ASSISTANT", "I encountered an error while processing. Please try again."),
+        )
+        val store = object : ChatHistoryStore {
+            override suspend fun deleteOlderThan(cutoffMillis: Long) {}
+            override suspend fun getByProvider(providerId: String) = saved
+            override suspend fun insert(record: ChatMessageRecord) {}
+            override suspend fun clearByProvider(providerId: String) {}
+            override suspend fun clearAll() {}
+        }
+        val chat = service(store)
+        assertEquals(
+            listOf(
+                "a mix of new indie guitar rock",
+                "{{artist|IDLES}}\n{{artist|Fontaines D.C.}}",
+                "more like that",
+                "I encountered an error while processing. Please try again.",
+            ),
+            chat.getDisplayMessages("fake").map { it.content },
+        )
+        // The model still sees the whole loop.
+        assertEquals(saved.size, chat.getFullHistory("fake").size)
+    }
 }

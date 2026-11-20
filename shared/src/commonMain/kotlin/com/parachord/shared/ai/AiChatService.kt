@@ -307,12 +307,25 @@ class AiChatService(
         return finalContent
     }
 
-    /** Returns only USER and ASSISTANT messages for display in the UI. */
+    /**
+     * What the chat shows, on both apps: the user's messages and each turn's
+     * final reply (or its error), as desktop's panel does (`handleAiChatSend`
+     * appends only `response.content`). The tool loop's interim assistant
+     * messages (those that carry tool calls: preamble text, often blank, or the
+     * model commenting on a search it's about to retry) stay in the history the
+     * model sees but aren't shown; while a turn runs, the progress text
+     * ("Searching…") covers the gap.
+     */
     suspend fun getDisplayMessages(providerId: String): List<ChatMessage> {
         val history = historyFor(providerId)
-        return historyLock.withLock {
-            history.filter { it.role == ChatRole.USER || it.role == ChatRole.ASSISTANT }
-        }
+        return historyLock.withLock { history.filter(::isDisplayed) }
+    }
+
+    /** Whether [message] is shown in the chat (see [getDisplayMessages]). */
+    private fun isDisplayed(message: ChatMessage): Boolean = when (message.role) {
+        ChatRole.USER -> true
+        ChatRole.ASSISTANT -> message.toolCalls.isNullOrEmpty() && message.content.isNotBlank()
+        else -> false
     }
 
     /** Returns the full conversation history including tool messages. */
