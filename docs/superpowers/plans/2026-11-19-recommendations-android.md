@@ -294,6 +294,40 @@ Behaviour:
   - README feature list: Recommendations gains Tracks, Albums, Artists, Playlists and Listeners, with a filter per source.
 - [ ] **Step 4: Commit** `feat(recommendations): desktop's Recommendations page on Android`.
 
+### Task 6b: Open a recommended service playlist in a playlist view
+
+Added after the user's device check: tapping a recommended playlist played it, and desktop opens it in its playlist view (`openServicePlaylist`, desktop `app.js` ~L35564). This supersedes Task 6's "Playlist: tap plays". Home's history mixes (PR 5) will open the same view.
+
+**Files:**
+- Modify: `shared/src/commonMain/kotlin/com/parachord/shared/recommendations/RecommendationCopy.kt`
+- Modify: `shared/src/commonMain/kotlin/com/parachord/shared/recommendations/RecommendationQueues.kt`
+- Test: `shared/src/commonTest/kotlin/com/parachord/shared/recommendations/RecommendationQueuesTest.kt`
+- Create: `app/src/main/java/com/parachord/android/ui/screens/playlists/ServicePlaylistScreen.kt`
+- Create: `app/src/main/java/com/parachord/android/ui/screens/playlists/ServicePlaylistViewModel.kt`
+- Modify: `app/src/main/java/com/parachord/android/ui/navigation/Navigation.kt`, `RecommendationsScreen.kt`, `AndroidModule.kt`
+
+**Interfaces:**
+- Consumes: `servicePlaylistQueue(item, resolve)`, `itemSourceName`, `PlaylistImportManager.importFromUrl(url)`, `ResolveWhileVisible`, `TrackRow`, `TrackContextMenuHost`.
+- Produces:
+  - Shared:
+    - `RecommendationCopy.recommendedBy(sourceName: String)` = "Recommended by $sourceName", or "Recommended by the service" when blank (desktop: `sourceName || 'the service'`).
+    - `RecommendationCopy.SAVE` "Save" and `RecommendationCopy.saved(name)` = "Saved $name".
+    - `fun servicePlaylistTracks(play: ResolvedProtocolPlay): List<Track>`, so the view and `servicePlaylistQueue` map tracks one way.
+  - Route: `Routes.SERVICE_PLAYLIST = "service_playlist?url={url}&name={name}&source={source}&image={image}"`, with `fun servicePlaylist(url: String, name: String, sourceName: String, imageUrl: String?)` (each value `Uri.encode`d).
+  - `ServicePlaylistViewModel(savedStateHandle, …)`: `title`, `description` (`recommendedBy(source)`), `coverUrl`, `tracks: StateFlow<Resource<List<Track>>>` (Loading until the lookup lands, `Error(couldntLoad(name))` on null or failure), `playFrom(index)` (context `PlaybackContext("playlist", name, url)`), `save()` (imports through `PlaylistImportManager`, then emits a navigate-to-saved-playlist event with the new id), `resolveVisible(track)`, `retry()`.
+
+Screen, in the same shape as `WeeklyPlaylistScreen`:
+- **Opens at once.** Skeleton rows show until the tracks land.
+- **Header.** The cover the card showed (else a mosaic of the first 4 track covers), the title, the description, a Play button (`FillAccent`) and Save.
+- **Track rows.** Each resolves through `ResolveWhileVisible`, and a tap plays from that row.
+- **Errors.** An error shows `couldntLoad(name)` with Try again.
+
+The Recommendations page's playlist card **tap opens this view**; its long-press menu keeps Play / Add to Queue.
+
+- [ ] **Step 1: Shared test first.** `servicePlaylistTracks keeps order and ids` and `recommendedBy falls back for a blank source`. Run them and see them fail, implement, then pass on JVM and `:shared:iosSimulatorArm64Test`. `servicePlaylistQueue` uses `servicePlaylistTracks`.
+- [ ] **Step 2: The route, VM (Koin) and screen.** Wire the playlist card's tap to `Routes.servicePlaylist(item.url, item.name, itemSourceName(item, row), item.imageUrl or the filled image)`. Verify `./gradlew :app:compileDebugKotlin :app:testDebugUnitTest` (KoinModuleVerifyTest included).
+- [ ] **Step 3: Docs.** In `CLAUDE.md`'s Recommendations paragraph, a recommended playlist opens in its own view with Save. Commit `feat(recommendations): open a recommended playlist in a playlist view`.
+
 ### Task 7: Device check
 
 **Files:** none (fixes found here go back into the owning task's files).
