@@ -5,7 +5,7 @@ import Shared
 //
 // The hero, the source filter, then the shared page's blocks in order. Every
 // rule (which rows show, previews, skeletons, the page's state, what a tap
-// plays) is shared: `watchRecommendationsPage` hands over `IosRecPage`, already
+// plays) is shared: the screen's `IosRecommendationsSession.watch()` hands over `IosRecPage`, already
 // laid out by `recommendationPageLayout`, the same layout Android's
 // RecommendationsScreen draws. This file only draws it.
 
@@ -16,16 +16,19 @@ final class RecommendationsModel {
     @ObservationIgnored private var pageSub: Cancellable?
     @ObservationIgnored private var messageSub: Cancellable?
     @ObservationIgnored private var loading = false
-    /// The session (picked source, open rows) is reset on the screen's first appear
-    /// only; coming back from a pushed page keeps it, as Android's back stack does.
-    @ObservationIgnored private var didResetSession = false
+    /// This screen's session (the picked source, the open rows), made with the
+    /// screen: a new Recommendations screen starts at All with every row closed,
+    /// and coming back from a pushed page finds it as it was, as Android's back
+    /// stack keeps its view model. A second Recommendations screen on the stack
+    /// has its own.
+    @ObservationIgnored let session = IosContainer.companion.shared.makeRecommendationsSession()
 
     var page: IosRecPage?
 
     /// Starts watching the page and the repository's messages (on appear).
     func start(onMessage: @escaping (String) -> Void) {
         if pageSub == nil {
-            pageSub = watcher.watch(flow: container.watchRecommendationsPage()) { [weak self] v in
+            pageSub = watcher.watch(flow: session.watch()) { [weak self] v in
                 guard let p = v as? IosRecPage else { return }
                 Task { @MainActor in self?.page = p }
             }
@@ -44,21 +47,14 @@ final class RecommendationsModel {
         messageSub?.cancel(); messageSub = nil
     }
 
-    /// On appear: the first one starts a new session, later ones (back from a
-    /// pushed page) only refresh what's stale (Android's `refreshIfStale`).
-    func appeared() async {
-        let reset = !didResetSession
-        didResetSession = true
-        await load(force: false, resetSession: reset)
-    }
-
-    /// Loads the page; [force] is Try again or pull to refresh. No load starts
-    /// while one is running.
-    func load(force: Bool, resetSession: Bool) async {
+    /// Loads the page; [force] is Try again or pull to refresh. On appear it's
+    /// not forced, so only what's stale refreshes (Android's `refreshIfStale`).
+    /// No load starts while one is running.
+    func load(force: Bool) async {
         if loading { return }
         loading = true
         defer { loading = false }
-        try? await container.loadRecommendations(force: force, resetSession: resetSession)
+        try? await container.loadRecommendations(force: force)
     }
 }
 
@@ -99,12 +95,12 @@ struct RecommendationsScreen: View {
         .navigationDestination(item: $route) { pcRouteDestination($0) }
         .onAppear {
             model.start(onMessage: { say($0) })
-            Task { await model.appeared() }
+            Task { await model.load(force: false) }
         }
         .onDisappear { model.stop() }
     }
 
-    private var actions: RecActions { RecActions(say: say, open: { route = $0 }) }
+    private var actions: RecActions { RecActions(session: model.session, say: say, open: { route = $0 }) }
 
     private func say(_ text: String) {
         coordinator.notice = QueuePlaybackCoordinator.Notice(message: text, showInCar: false)
@@ -119,7 +115,7 @@ struct RecommendationsScreen: View {
                    color: s.isShuffleupagus ? UInt32(DesignTokens.shared.FILL_ACCENT) : ResolverColor.hex(s.colorId))
         }
         return PCFilterChips(chips: chips, selection: page.selectedSource ?? "all",
-                             onSelect: { id in container.setRecommendationsFilter(id: id == "all" ? nil : id) },
+                             onSelect: { id in model.session.setFilter(id: id == "all" ? nil : id) },
                              pageFill: UInt32(DesignTokens.Page.recommendations.fill))
             .padding(.vertical, 8)
     }
@@ -170,12 +166,12 @@ struct RecommendationsScreen: View {
                     proxy.scrollTo(first, anchor: .top)
                 }
             }
-            .refreshable { await model.load(force: true, resetSession: false) }
+            .refreshable { await model.load(force: true) }
         }
     }
 
     private func retry() {
-        Task { await model.load(force: true, resetSession: false) }
+        Task { await model.load(force: true) }
     }
 }
 
@@ -355,7 +351,7 @@ private struct RecRowView: View {
         let rowKey = block.rowKey ?? ""
         PCSectionHeader(
             title: block.title ?? "",
-            action: block.toggleLabel.map { label in (label: label, run: { container.toggleRecommendationsRow(rowKey: rowKey) }) },
+            action: block.toggleLabel.map { label in (label: label, run: { actions.session.toggleRow(rowKey: rowKey) }) },
             sub: block.subtitle)
         if block.type == "song" {
             ForEach(Array(block.items.enumerated()), id: \.offset) { i, item in
@@ -458,8 +454,10 @@ private struct RecSlotView: View {
 
 // MARK: - Cards and their actions
 
-/// What a card or row can do beyond its own engine calls: show a message, open a page.
+/// What a card or row can do beyond its own engine calls: its screen's session,
+/// show a message, open a page.
 struct RecActions {
+    let session: IosRecommendationsSession
     let say: (String) -> Void
     let open: (PCRoute) -> Void
 }
@@ -656,8 +654,6 @@ private struct RecSongRow: View {
             && coordinator.currentTrack?.id == id
     }
 
-    /// The queue a tap plays: this song and the rest of its row (shared `songQueue`).
-    private var queue: CatalogQueue? { container.recommendationsSongQueue(rowKey: rowKey, index: Int32(index)) }
 
     var body: some View {
         let noMatch = pcTrackNoMatch(artist: artist, title: item.name, album: nil)
@@ -684,12 +680,14 @@ private struct RecSongRow: View {
             IosTrackResolverCache.shared.resolve(ResolveRequest(artist: artist, title: item.name, album: nil), order: index)
         }
         .onDisappear { IosTrackResolverCache.shared.leave(artist: artist, title: item.name) }
-        .modifier(RecSongMenu(track: item.trackId == nil ? nil : queue?.tracks.first, coordinator: coordinator,
+        .modifier(RecSongMenu(track: item.trackId == nil ? nil : actions.session.songTrack(rowKey: rowKey, index: Int32(index)),
+                              coordinator: coordinator,
                               onGoToArtist: { actions.open(.artist(artist)) }))
     }
 
+    /// This song and the rest of its row (shared `songQueue`), built on the tap.
     private func play() {
-        guard let q = queue else { return }
+        guard let q = actions.session.songQueue(rowKey: rowKey, index: Int32(index)) else { return }
         coordinator.setQueue(q.tracks, startIndex: 0, context: q.context)
     }
 }

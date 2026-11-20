@@ -15,6 +15,7 @@ import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.achordionUserUrl
 import com.parachord.shared.recommendations.activeSourceFilter
 import com.parachord.shared.recommendations.itemSourceName
+import com.parachord.shared.recommendations.key
 import com.parachord.shared.recommendations.listenerPlay
 import com.parachord.shared.recommendations.pageStatus
 import com.parachord.shared.recommendations.playlistTapOpensView
@@ -27,7 +28,16 @@ import com.parachord.shared.recommendations.weeklyContext
 import com.parachord.shared.recommendations.weeklyTracks
 import com.parachord.shared.repository.RecommendationPageState
 import com.parachord.shared.repository.unsavedFriendId
+import com.parachord.shared.platform.Log
+import com.parachord.shared.recommendations.filterRowBySource
+import com.parachord.shared.recommendations.songQueue
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import kotlinx.datetime.LocalDate
 
 /*
@@ -132,8 +142,11 @@ data class IosRecListener(
 /** A recommended playlist's save: its saved playlist id, or null when the import failed. */
 data class IosSaveResult(val playlistId: String?)
 
-/** What a play tap produced: a queue to play, a message to show, or both. */
-data class IosRecQueueResult(val queue: CatalogQueue?, val message: String?)
+/**
+ * What a play tap produced: a queue to play, a message to show, or both.
+ * [cover] is a service playlist lookup's own cover (null for other plays).
+ */
+data class IosRecQueueResult(val queue: CatalogQueue?, val message: String?, val cover: String? = null)
 
 /** The page for [state] under the raw [filter] selection and the open [expanded] rows. */
 fun iosRecommendationsPage(
@@ -168,18 +181,18 @@ private fun pageBlocks(state: RecommendationPageState, filter: String?, expanded
     recommendationPageLayout(state, filter, expanded).map { block ->
         when (block) {
             is RecommendationPageBlock.SectionTitle -> IosRecBlock(
-                id = "section:${block.section.type?.wire ?: "listeners"}", kind = "sectionTitle", rowKey = null,
+                id = block.key, kind = "sectionTitle", rowKey = null,
                 title = block.section.title, subtitle = false, type = "", toggleLabel = null, expanded = false,
                 items = emptyList(), listeners = emptyList(), loadingTail = false, aiTail = 0,
             )
             is RecommendationPageBlock.Row -> rowBlock(block, today)
             RecommendationPageBlock.PersonalSkeleton ->
-                skeleton("skeleton:personal", "personalSkeleton", RecommendationCopy.BASED_ON_LISTENING)
+                skeleton(block.key, "personalSkeleton", RecommendationCopy.BASED_ON_LISTENING)
             RecommendationPageBlock.AlbumsSkeleton ->
-                skeleton("skeleton:albums-slot", "albumsSkeleton", RecommendationCopy.ALBUMS)
-            RecommendationPageBlock.PendingSkeleton -> skeleton("skeleton:pending", "pendingSkeleton", null)
+                skeleton(block.key, "albumsSkeleton", RecommendationCopy.ALBUMS)
+            RecommendationPageBlock.PendingSkeleton -> skeleton(block.key, "pendingSkeleton", null)
             RecommendationPageBlock.ListenersSkeleton ->
-                skeleton("skeleton:listeners", "listenersSkeleton", RecommendationCopy.LISTENERS)
+                skeleton(block.key, "listenersSkeleton", RecommendationCopy.LISTENERS)
         }
     }
 
@@ -187,7 +200,7 @@ private fun rowBlock(block: RecommendationPageBlock.Row, today: LocalDate): IosR
     val row = block.row
     val rv = block.view
     return IosRecBlock(
-        id = "row:${row.key}",
+        id = block.key,
         kind = "row",
         rowKey = row.key,
         title = block.title,
@@ -280,4 +293,63 @@ suspend fun weeklyQueueResult(
     }
     if (tracks.isEmpty()) return IosRecQueueResult(null, RecommendationCopy.couldntLoad(name))
     return IosRecQueueResult(CatalogQueue(tracks, weeklyContext(weekly)), RecommendationCopy.playing(name))
+}
+
+/**
+ * One Recommendations screen's session, as Android's `RecommendationsViewModel`
+ * keeps it: the picked source and the open rows. Each screen makes its own
+ * (`IosContainer.makeRecommendationsSession`), so a second Recommendations
+ * screen (opened from Now Playing's "Playing from") starts at All with every
+ * row collapsed and leaves the first one's as it was. The page data is the
+ * repository's, shared by every session.
+ */
+class IosRecommendationsSession internal constructor(
+    private val page: StateFlow<RecommendationPageState>,
+    private val scope: CoroutineScope,
+    private val openRow: suspend (rowKey: String) -> Unit,
+    private val today: () -> LocalDate,
+) {
+    private val filter = MutableStateFlow<String?>(null)
+    private val expanded = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The page as Swift draws it ([iosRecommendationsPage]), rebuilt on every page, filter or row change. */
+    fun watch(): Flow<IosRecPage> =
+        combine(page, filter, expanded) { state, f, open -> iosRecommendationsPage(state, f, open, today()) }
+
+    /** The source chip picked; null is All. */
+    fun setFilter(id: String?) {
+        filter.value = id
+    }
+
+    /** "See all" / "Show less"; opening a row pages it (the repository's `openRow`). */
+    fun toggleRow(rowKey: String) {
+        val open = rowKey in expanded.value
+        expanded.value = if (open) expanded.value - rowKey else expanded.value + rowKey
+        if (!open) scope.launch {
+            try {
+                openRow(rowKey)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("IosRecommendationsSession", "openRow($rowKey) failed: ${e.message}")
+            }
+        }
+    }
+
+    /** The row's songs under this session's filter, as drawn. */
+    private fun filteredSongs(rowKey: String): Pair<RecommendationRow, List<RecommendationItem>>? {
+        val state = page.value
+        val row = state.sections.flatMap { it.rows }.firstOrNull { it.key == rowKey } ?: return null
+        return row to filterRowBySource(row, activeSourceFilter(filter.value, state.sources)).items
+    }
+
+    /** The tapped song and the rest of its row ([songQueue]); null when it can't play. Build it on the tap only. */
+    fun songQueue(rowKey: String, index: Int): CatalogQueue? {
+        val (row, items) = filteredSongs(rowKey) ?: return null
+        return songQueue(items, index, row)
+    }
+
+    /** The tapped song alone, for its track menu ([recommendedSongTrack]); null when it can't play. */
+    fun songTrack(rowKey: String, index: Int): Track? =
+        filteredSongs(rowKey)?.second?.getOrNull(index)?.let { recommendedSongTrack(it) }
 }

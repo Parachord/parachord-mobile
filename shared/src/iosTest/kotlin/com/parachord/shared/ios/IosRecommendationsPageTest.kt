@@ -11,6 +11,8 @@ import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.WeeklyInfo
 import com.parachord.shared.repository.RecommendationPageState
 import com.parachord.shared.repository.RecommendationsError
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDate
 import kotlin.test.Test
@@ -221,5 +223,62 @@ class IosRecommendationsPageTest {
         val gone = weeklyQueueResult(null, "Weekly Jams") { error("not asked") }
         assertNull(gone.queue)
         assertEquals(RecommendationCopy.couldntLoad("Weekly Jams"), gone.message)
+    }
+
+    private fun songsState(): RecommendationPageState {
+        val sources = listOf(PageSource("lastfm", "Last.fm"), PageSource("listenbrainz", "ListenBrainz"))
+        val songs = (1..7).map { item("s$it", source = if (it % 2 == 0) "listenbrainz" else "lastfm") }
+        return page(
+            RecommendationPageSection(RecommendationType.SONG, "Tracks", listOf(row("type:song", RecommendationType.SONG, songs, sources = sources))),
+            sources = sources,
+        )
+    }
+
+    private fun session(state: MutableStateFlow<RecommendationPageState>, opened: MutableList<String> = mutableListOf(), scope: kotlinx.coroutines.CoroutineScope) =
+        IosRecommendationsSession(state, scope, openRow = { opened += it }, today = { today })
+
+    @Test
+    fun `a new session starts at All with every row closed and two sessions don't share`() = runTest {
+        val state = MutableStateFlow(songsState())
+        val opened = mutableListOf<String>()
+        val first = session(state, opened, this)
+        first.setFilter("listenbrainz")
+        first.toggleRow("type:song")
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf("type:song"), opened)
+        val firstPage = first.watch().first()
+        assertEquals("listenbrainz", firstPage.selectedSource)
+        assertTrue(firstPage.blocks.single().expanded)
+
+        // A second screen's session: All, collapsed, and the first one keeps its own.
+        val second = session(state, scope = this)
+        val secondPage = second.watch().first()
+        assertNull(secondPage.selectedSource)
+        assertFalse(secondPage.blocks.single().expanded)
+        assertEquals(5, secondPage.blocks.single().items.size)
+        assertEquals("listenbrainz", first.watch().first().selectedSource)
+
+        // Closing a row doesn't page it again.
+        first.toggleRow("type:song")
+        testScheduler.advanceUntilIdle()
+        assertEquals(listOf("type:song"), opened)
+        assertFalse(first.watch().first().blocks.single().expanded)
+    }
+
+    @Test
+    fun `a song's queue and its menu track follow the session's filter`() = runTest {
+        val state = MutableStateFlow(songsState())
+        val s = session(state, scope = this)
+        assertEquals(listOf("s2", "s3", "s4", "s5", "s6", "s7"), s.songQueue("type:song", 1)?.tracks?.map { it.title })
+        assertEquals("s2", s.songTrack("type:song", 1)?.title)
+
+        s.setFilter("listenbrainz")
+        assertEquals(listOf("s4", "s6"), s.songQueue("type:song", 1)?.tracks?.map { it.title })
+        assertEquals("s4", s.songTrack("type:song", 1)?.title)
+        assertEquals(s.songQueue("type:song", 1)?.tracks?.first(), s.songTrack("type:song", 1))
+
+        assertNull(s.songTrack("type:song", 9))
+        assertNull(s.songQueue("missing", 0))
+        assertNull(s.songTrack("missing", 0))
     }
 }

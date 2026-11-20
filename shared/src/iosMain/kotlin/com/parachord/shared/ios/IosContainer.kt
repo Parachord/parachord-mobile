@@ -2081,16 +2081,18 @@ class IosContainer private constructor() {
         )
 
     // ── The Recommendations page (PR 3): the shared page, flattened for SwiftUI ──
-    // Session state, as Android's RecommendationsViewModel keeps it: the picked
-    // source and the open rows. Both reset on loadRecommendations(resetSession = true).
-    private val recommendationsFilter = MutableStateFlow<String?>(null)
-    private val recommendationsExpanded = MutableStateFlow<Set<String>>(emptySet())
 
-    /** The page as Swift draws it ([iosRecommendationsPage]), rebuilt on every page, filter or row change. */
-    fun watchRecommendationsPage(): Flow<IosRecPage> =
-        combine(recommendationsRepository.page, recommendationsFilter, recommendationsExpanded) { state, filter, expanded ->
-            iosRecommendationsPage(state, filter, expanded, todayLocal())
-        }
+    /**
+     * A new screen's session (the picked source, the open rows), as Android's
+     * `RecommendationsViewModel` holds per screen: each Recommendations screen
+     * makes one and keeps it while it's on the stack.
+     */
+    fun makeRecommendationsSession(): IosRecommendationsSession = IosRecommendationsSession(
+        page = recommendationsRepository.page,
+        scope = appScope,
+        openRow = { recommendationsRepository.openRow(it) },
+        today = ::todayLocal,
+    )
 
     private fun todayLocal(): kotlinx.datetime.LocalDate =
         kotlinx.datetime.Clock.System.todayIn(kotlinx.datetime.TimeZone.currentSystemDefault())
@@ -2098,32 +2100,8 @@ class IosContainer private constructor() {
     /** One-off messages from the repository ("Couldn't load more from …"). */
     fun recommendationsMessages(): Flow<String> = recommendationsRepository.messages
 
-    fun setRecommendationsFilter(id: String?) {
-        recommendationsFilter.value = id
-    }
-
-    /** "See all" / "Show less"; opening a row pages it (the repository's `openRow`). */
-    fun toggleRecommendationsRow(rowKey: String) {
-        val open = rowKey in recommendationsExpanded.value
-        recommendationsExpanded.value =
-            if (open) recommendationsExpanded.value - rowKey else recommendationsExpanded.value + rowKey
-        if (!open) appScope.launch {
-            try {
-                recommendationsRepository.openRow(rowKey)
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w("IosContainer", "openRow($rowKey) failed: ${e.message}")
-            }
-        }
-    }
-
-    /** Loads the page ([force] is Try again); [resetSession] clears the picked source and the open rows. */
-    suspend fun loadRecommendations(force: Boolean, resetSession: Boolean) {
-        if (resetSession) {
-            recommendationsFilter.value = null
-            recommendationsExpanded.value = emptySet()
-        }
+    /** Loads the page ([force] is Try again or pull to refresh). Never throws. */
+    suspend fun loadRecommendations(force: Boolean) {
         try {
             recommendationsRepository.load(force)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -2144,15 +2122,6 @@ class IosContainer private constructor() {
         recommendationItem { it.id == itemId }?.let { recommendationsRepository.cardShown(it) }
     }
 
-    /** The tapped song and the rest of its row's filtered list ([songQueue]); null when it can't play. */
-    fun recommendationsSongQueue(rowKey: String, index: Int): com.parachord.shared.playback.CatalogQueue? {
-        val row = recommendationRows().firstOrNull { it.key == rowKey } ?: return null
-        val page = recommendationsRepository.page.value
-        val filter = com.parachord.shared.recommendations.activeSourceFilter(recommendationsFilter.value, page.sources)
-        val items = com.parachord.shared.recommendations.filterRowBySource(row, filter).items
-        return com.parachord.shared.recommendations.songQueue(items, index, row)
-    }
-
     /** A weekly playlist card's play: its tracks, "Playing [name]", or "Couldn't load [name]" ([name] is the card's title). */
     suspend fun recommendationsWeeklyQueue(weeklyId: String, name: String): IosRecQueueResult =
         weeklyQueueResult(recommendationItem { it.weekly?.id == weeklyId }, name) { id ->
@@ -2167,8 +2136,12 @@ class IosContainer private constructor() {
                 type = com.parachord.shared.recommendations.RecommendationType.PLAYLIST,
                 id = url, name = name, url = url,
             )).copy(name = name)
+        // The lookup's own cover, for the view's header when the card had none (Android's `play.albumArt`).
+        var cover: String? = null
         val queue = try {
-            com.parachord.shared.recommendations.servicePlaylistQueue(item) { u -> providerPlaylistResolver.resolve(u) }
+            com.parachord.shared.recommendations.servicePlaylistQueue(item) { u ->
+                providerPlaylistResolver.resolve(u)?.also { cover = it.albumArt?.takeIf { a -> a.isNotBlank() } }
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -2177,6 +2150,7 @@ class IosContainer private constructor() {
         return IosRecQueueResult(
             queue,
             if (queue == null) com.parachord.shared.recommendations.RecommendationCopy.couldntLoad(name) else null,
+            cover = if (queue == null) null else cover,
         )
     }
 
@@ -2189,7 +2163,7 @@ class IosContainer private constructor() {
         when (val result = friendsRepository.follow(service, username)) {
             is Resource.Error -> result.message
             else -> {
-                appScope.launch { loadRecommendations(force = false, resetSession = false) }
+                appScope.launch { loadRecommendations(force = false) }
                 null
             }
         }
