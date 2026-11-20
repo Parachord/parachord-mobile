@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.parachord.shared.deeplink.ChatPrompt
 class ChatViewModel constructor(
     private val chatService: AiChatService,
     private val settingsStore: SettingsStore,
@@ -88,10 +89,17 @@ class ChatViewModel constructor(
                     val provider = target ?: providersList.firstOrNull { it.isConfigured }
                     provider?.let {
                         selectProvider(it.id)
-                        // Check for a pending prompt from a deep link (parachord://chat?prompt=...)
-                        val pendingPrompt = chatService.consumePendingChatPrompt()
-                        if (pendingPrompt != null) {
-                            sendMessage(pendingPrompt)
+                        // A queued prompt: a confirmed parachord://chat link, or Home's Ask
+                        // (DeepLinkViewModel.handleInAppChatPrompt). Sent once the chat is
+                        // open with a provider and idle (shared ChatPrompt.shouldSend).
+                        if (ChatPrompt.shouldSend(
+                                pending = chatService.pendingChatPrompt.value,
+                                chatOpen = true,
+                                providerId = _selectedProviderId.value,
+                                loading = _isLoading.value,
+                            )
+                        ) {
+                            chatService.consumePendingChatPrompt()?.let { prompt -> sendMessage(prompt) }
                         }
                     }
                 }
@@ -143,5 +151,15 @@ class ChatViewModel constructor(
             chatService.clearHistory(providerId)
             _messages.value = emptyList()
         }
+    }
+
+    /**
+     * The chat screen closed: a prompt still queued (no provider was set up,
+     * so it never went out) is dropped rather than sent the next time chat
+     * opens (shared ChatPrompt.shouldDrop, desktop's shouldDropPendingChatPrompt).
+     */
+    override fun onCleared() {
+        chatService.onChatVisibilityChanged(wasOpen = true, chatOpen = false)
+        super.onCleared()
     }
 }

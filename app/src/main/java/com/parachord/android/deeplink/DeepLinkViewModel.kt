@@ -4,6 +4,7 @@ import android.net.Uri
 import com.parachord.shared.platform.Log
 import com.parachord.shared.deeplink.startsPlayback
 import com.parachord.shared.deeplink.DeepLinkAction
+import com.parachord.shared.deeplink.ChatPrompt
 import com.parachord.shared.deeplink.controlLinkShouldToggle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -129,6 +130,21 @@ class DeepLinkViewModel constructor(
         } else {
             executeAction(action)
         }
+    }
+
+    /**
+     * Home's Ask Shuffleupagus: the user typed (or picked) [prompt] in the app,
+     * so it's queued as an in-app prompt and chat opens without the
+     * "An external link wants to send this message to chat" confirmation.
+     * Only this direct call sets the in-app origin; a `parachord://chat` link
+     * always goes through [handleUri] and confirms (desktop's
+     * `askShuffleupagus` / `origin: 'home'`).
+     */
+    fun handleInAppChatPrompt(prompt: String) {
+        val text = ChatPrompt.cap(prompt)
+        if (text.isBlank()) return
+        chatService.setPendingChatPrompt(text, fromApp = true)
+        viewModelScope.launch { _navEvents.emit(DeepLinkNavEvent.Chat(text)) }
     }
 
     /** User confirmed the pending action. */

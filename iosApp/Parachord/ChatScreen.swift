@@ -73,6 +73,17 @@ final class ChatViewModel {
         progress = nil
     }
 
+    /// Home's Ask: puts the queued in-app prompt in the input when it can be sent now
+    /// (shared `ChatPrompt.shouldSend`); true when the caller should send it.
+    func takeQueuedInAppPrompt() -> Bool {
+        let pending = container.pendingInAppChatPrompt()
+        guard ChatPrompt.shared.shouldSend(pending: pending, chatOpen: true,
+                                           providerId: selectedProviderId, loading: isLoading),
+              let prompt = container.consumeInAppChatPrompt() else { return false }
+        input = prompt
+        return true
+    }
+
     func clear() async {
         guard let id = selectedProviderId else { return }
         try? await container.chatClear(providerId: id)
@@ -112,7 +123,9 @@ struct ChatScreen: View {
         .preferredColorScheme(.dark)
         .task {
             await model.start()
-            if let p = seedPrompt, !p.isEmpty, model.input.isEmpty { model.input = p }
+            // Home's Ask (in-app, sent at once) before a link's prefill (sent by the user).
+            if model.takeQueuedInAppPrompt() { doSend() }
+            else if let p = seedPrompt, !p.isEmpty, model.input.isEmpty { model.input = p }
         }
     }
 

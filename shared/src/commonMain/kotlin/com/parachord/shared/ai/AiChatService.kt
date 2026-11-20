@@ -1,13 +1,14 @@
 package com.parachord.shared.ai
 
+import com.parachord.shared.deeplink.ChatPrompt
+import com.parachord.shared.deeplink.PendingChatPrompt
+
 import com.parachord.shared.ai.tools.DjToolDefinitions
 import com.parachord.shared.ai.tools.DjToolExecutor
 import com.parachord.shared.db.dao.ChatMessageDao
 import com.parachord.shared.model.ChatMessageRecord
 import com.parachord.shared.platform.currentTimeMillis
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -49,22 +50,40 @@ class AiChatService(
     }
 
     /**
-     * Pending chat prompt set by deep links (parachord://chat?prompt=...).
-     * ChatViewModel observes this and auto-sends the prompt when non-null.
+     * The prompt the chat screen sends when it opens: from a confirmed
+     * `parachord://chat?prompt=` link, or from Home's Ask box (`fromApp`).
+     * ChatViewModel (Android) sends it once a provider is selected; iOS's chat
+     * sends only an in-app one ([consumeInAppChatPrompt]) and pre-fills a
+     * link's into the input instead.
      */
-    private val _pendingChatPrompt = MutableStateFlow<String?>(null)
-    val pendingChatPrompt: StateFlow<String?> = _pendingChatPrompt.asStateFlow()
+    private val pending = PendingChatPrompt()
+    val pendingChatPrompt: StateFlow<String?> = pending.prompt
 
-    /** Set a prompt to be auto-sent when the chat screen opens. */
-    fun setPendingChatPrompt(prompt: String?) {
-        _pendingChatPrompt.value = prompt
+    /**
+     * Queue [prompt] to be sent when the chat screen opens. [fromApp] marks a
+     * prompt the user typed in the app (Home's Ask), which is sent without the
+     * external-link confirmation; only the in-app entry points set it, never
+     * anything read from a URL.
+     */
+    fun setPendingChatPrompt(prompt: String?, fromApp: Boolean = false) {
+        pending.set(prompt, fromApp)
     }
 
+    /** Whether the queued prompt came from the app (Home's Ask), not a link. */
+    val pendingChatPromptFromApp: Boolean get() = pending.fromApp
+
     /** Consume the pending prompt (returns it and clears it). */
-    fun consumePendingChatPrompt(): String? {
-        val value = _pendingChatPrompt.value
-        _pendingChatPrompt.value = null
-        return value
+    fun consumePendingChatPrompt(): String? = pending.consume()
+
+    /** Consume the pending prompt only if it came from the app; a link's stays. */
+    fun consumeInAppChatPrompt(): String? = pending.consumeInApp()
+
+    /**
+     * The chat screen went from [wasOpen] to [chatOpen]: a prompt still queued
+     * when it closes is dropped (shared [ChatPrompt.shouldDrop]).
+     */
+    fun onChatVisibilityChanged(wasOpen: Boolean, chatOpen: Boolean) {
+        if (ChatPrompt.shouldDrop(wasOpen, chatOpen)) pending.set(null, false)
     }
 
     /** In-memory cache of per-provider histories, lazily populated from Room. */

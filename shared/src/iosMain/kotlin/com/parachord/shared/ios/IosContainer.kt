@@ -3839,6 +3839,33 @@ class IosContainer private constructor() {
     suspend fun chatMessages(providerId: String): List<IosChatMessage> =
         aiChatService.getDisplayMessages(providerId).map { IosChatMessage(it.role.name.lowercase(), it.content) }
     suspend fun chatClear(providerId: String) = aiChatService.clearHistory(providerId)
+
+    /**
+     * Home's Ask Shuffleupagus: queues [prompt] (capped as a `parachord://chat`
+     * prompt) as an in-app prompt, which the chat sends once it's open with a
+     * provider, without the link's confirmation. Returns false for a blank
+     * prompt (nothing queued). Swift reaches it through RootView's
+     * `pcAskShuffleupagus`, which also opens the chat. Only this direct call
+     * sets the in-app origin; a `parachord://chat` link still pre-fills the
+     * input for the user to send (desktop's `askShuffleupagus`).
+     */
+    fun askShuffleupagus(prompt: String): Boolean {
+        val text = com.parachord.shared.deeplink.ChatPrompt.cap(prompt)
+        if (text.isBlank()) return false
+        aiChatService.setPendingChatPrompt(text, fromApp = true)
+        return true
+    }
+
+    /** The queued in-app prompt (Home's Ask), still queued; null when there is none. */
+    fun pendingInAppChatPrompt(): String? =
+        if (aiChatService.pendingChatPromptFromApp) aiChatService.pendingChatPrompt.value else null
+
+    /** Takes the queued in-app prompt to send it; null when there is none. */
+    fun consumeInAppChatPrompt(): String? = aiChatService.consumeInAppChatPrompt()
+
+    /** The chat screen opened or closed; closing drops a prompt that never went out. */
+    fun chatVisibilityChanged(wasOpen: Boolean, chatOpen: Boolean) =
+        aiChatService.onChatVisibilityChanged(wasOpen, chatOpen)
     suspend fun chatSelectedProvider(): String? = settingsStore.getSelectedChatProvider()
     suspend fun chatSetSelectedProvider(id: String) = settingsStore.setSelectedChatProvider(id)
     suspend fun chatProviderConfigured(providerId: String): Boolean =
