@@ -61,7 +61,8 @@ class ChatContextProvider(
 
         // Ported from desktop's AI_CHAT_SYSTEM_PROMPT (parachord-desktop/app.js
         // ~L5286) — kept verbatim except the AVAILABLE ACTIONS / playlist sections,
-        // which are scoped to the 8 tools the mobile DjToolExecutor exposes.
+        // which are scoped to the 8 tools the mobile DjToolExecutor exposes, and
+        // the HOW MANY TRACKS line (a mix defaults to 10), which desktop lacks.
         return """
             |You are a music DJ assistant for Parachord. You control music playback using tools.
             |
@@ -145,6 +146,7 @@ class ChatContextProvider(
             |- "Add X to queue" / "Queue X" → queue_add tool (adds to end, does NOT interrupt current playback)
             |- "Play me 15 songs" / "Play some jazz" / any multi-track request → use ONE queue_add call with ALL tracks. queue_add auto-plays the first track if nothing is playing.
             |  CRITICAL: Do NOT also call the play tool — that causes the first song to play twice.
+            |- HOW MANY TRACKS: A mix, playlist or "some songs" with no number given gets 10 tracks. If the user names a number, use exactly that number. An album gets all of its tracks.
             |- Always confirm what you did AFTER the tool executes
             |
             |CONTENT TYPE - MATCH EXACTLY WHAT USER ASKS FOR:
