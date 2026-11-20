@@ -472,6 +472,32 @@ class RecommendationsRepositoryTest {
     }
 
     @Test
+    fun `a failed Shuffleupagus load isn't retried for 30 minutes unless forced`() = runTest {
+        val picks = FakePicks(hasProvider = true, next = { throw IllegalStateException("AI down") })
+        val r = rig(picks = picks)
+        r.repo.load()
+        runCurrent()
+        assertEquals(1, picks.loads)
+
+        // Returning to the page soon after: no second paid call.
+        r.clock.now += 29L * 60 * 1000
+        r.repo.load()
+        runCurrent()
+        assertEquals(1, picks.loads)
+
+        // Try again (forced) asks at once.
+        r.repo.load(force = true)
+        runCurrent()
+        assertEquals(2, picks.loads)
+
+        // Past 30 minutes from the last attempt a plain load asks again.
+        r.clock.now += 31L * 60 * 1000
+        r.repo.load()
+        runCurrent()
+        assertEquals(3, picks.loads)
+    }
+
+    @Test
     fun `a blocked artist — album or track is left out everywhere`() = runTest {
         val picks = FakePicks(
             picks = AiRecommendations(
@@ -729,6 +755,50 @@ class RecommendationsRepositoryTest {
         repo.requestImages(listOf(item("Tricky")))
         runCurrent()
         assertEquals(1, artistCalls)
+    }
+
+    @Test
+    fun `cards shown within 300 ms are looked up together — albums get release dates and every card an image`() = runTest {
+        val clock = Clock()
+        val dateAsks = mutableListOf<String>()
+        val imageAsks = mutableListOf<String>()
+        val prefs = SettingsStore(FakeSecureStore(), KvStore(MapSettings(SettingsStore.LISTENBRAINZ_USERNAME to "listener")))
+        val source = FakeSource().apply {
+            answer("listenbrainz", {
+                songs(
+                    """{"type":"album","name":"Dummy","artist":"Portishead"}""",
+                    """{"type":"artist","name":"Tricky"}""",
+                )
+            })
+        }
+        val repo = RecommendationsRepository(
+            source = source,
+            settingsStore = prefs,
+            metadataService = MetadataService(emptyList(), getDisabledProviders = { emptySet() }),
+            aiRecommendations = FakePicks(),
+            releaseDates = ReleaseDates(load = { null }, save = {}, lookup = { t, _ -> dateAsks += t; null }, nowMs = { clock.now }),
+            providerIsOn = { true },
+            cacheRead = { null },
+            cacheWrite = {},
+            nowMs = { clock.now },
+            scope = backgroundScope,
+            images = com.parachord.shared.recommendations.RecommendationImages(
+                artistImage = { imageAsks += it; null },
+                albumArt = { title, _ -> imageAsks += title; null },
+            ),
+        )
+        repo.load()
+        fun item(name: String) = flattenRecommendationItems(repo.page.value.sections).first { it.name == name }
+        repo.cardShown(item("Dummy"))
+        advanceTimeBy(100)
+        repo.cardShown(item("Tricky"))
+        advanceTimeBy(150)
+        runCurrent()
+        assertTrue(dateAsks.isEmpty() && imageAsks.isEmpty())
+        advanceTimeBy(100)
+        runCurrent()
+        assertEquals(listOf("Dummy"), dateAsks)
+        assertEquals(listOf("Dummy", "Tricky"), imageAsks)
     }
 
     private companion object {

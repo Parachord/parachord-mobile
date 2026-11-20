@@ -33,6 +33,8 @@ import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -81,6 +83,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * - **Merge:** [buildRecommendationPage] with Shuffleupagus's picks, the
  *   similar users and the blocklist, re-run on every change so a block takes
  *   effect at once.
+ * - **Shuffleupagus:** asked when it has no cached answer; a plain load
+ *   doesn't ask again within [AI_RETRY_MS] of the last try (a forced one does).
  *
  * [getRecommendedTracks] / [getRecommendedArtists] keep today's screens
  * working from the page's Tracks and Artists rows until they move to [page].
@@ -132,6 +136,10 @@ class RecommendationsRepository(
         fun heroFor(username: String?): String =
             username?.takeIf { it.isNotBlank() }?.let { "Personalized picks for $it" } ?: HERO_FALLBACK
         private const val ARTIST_IMAGE_LOOKUPS = 15
+        /** A Shuffleupagus answer is a 30–60 s paid call: with none cached, a plain load waits this long after the last try. */
+        const val AI_RETRY_MS = 30L * 60 * 1000
+        /** How long [cardShown] gathers cards before asking about them. */
+        const val CARD_BATCH_MS = 300L
     }
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -152,6 +160,8 @@ class RecommendationsRepository(
     private var generation = 0
     private var inFlight: Deferred<LoadOutcome>? = null
     private var aiInFlight = false
+    /** When Shuffleupagus was last asked; a non-forced load doesn't ask again within [AI_RETRY_MS]. */
+    private var lastAiAttemptMs: Long? = null
 
     /** Photos found for the old Artists list, by lowercased name. */
     @Volatile private var artistImages: Map<String, String> = emptyMap()
@@ -199,6 +209,33 @@ class RecommendationsRepository(
         scope.launch {
             mutex.withLock { excludedPlaylists = ids }
             rebuild()
+        }
+    }
+
+    private val shownMutex = Mutex()
+    private val shownBatch = mutableListOf<RecommendationItem>()
+    private var shownBatchJob: Job? = null
+
+    /**
+     * A card came on screen. Cards shown within [CARD_BATCH_MS] of the first are
+     * asked about together: the albums' release dates ([requestReleaseDates]),
+     * then covers and photos for every card that lacks one ([requestImages]).
+     * Both apps call it from each card as it appears.
+     */
+    fun cardShown(item: RecommendationItem) {
+        scope.launch {
+            shownMutex.withLock {
+                shownBatch.add(item)
+                if (shownBatchJob?.isActive == true) return@withLock
+                shownBatchJob = scope.launch {
+                    delay(CARD_BATCH_MS)
+                    val batch = shownMutex.withLock { shownBatch.toList().also { shownBatch.clear() } }
+                    if (batch.isEmpty()) return@launch
+                    val albums = batch.filter { it.type == RecommendationType.ALBUM }
+                    if (albums.isNotEmpty()) requestReleaseDates(albums)
+                    requestImages(batch)
+                }
+            }
         }
     }
 
@@ -541,7 +578,13 @@ class RecommendationsRepository(
     private suspend fun maybeLoadShuffleupagus(force: Boolean) {
         if (!safely(false) { aiRecommendations.hasProvider() }) return
         if (!force && safely(null) { aiRecommendations.cached() } != null) return
-        if (!mutex.withLock { if (aiInFlight) false else { aiInFlight = true; true } }) return
+        val now = nowMs()
+        val go = mutex.withLock {
+            val recent = lastAiAttemptMs?.let { now - it < AI_RETRY_MS } == true
+            if (aiInFlight || (!force && recent)) false
+            else { aiInFlight = true; lastAiAttemptMs = now; true }
+        }
+        if (!go) return
         _page.update { it.copy(aiLoading = true) }
         scope.launch {
             try {
