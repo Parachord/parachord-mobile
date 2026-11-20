@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -48,6 +49,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -94,6 +97,7 @@ import com.parachord.shared.recommendations.PageStatus
 import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageBlock
+import com.parachord.shared.recommendations.key
 import com.parachord.shared.recommendations.recommendationPageLayout
 import com.parachord.shared.recommendations.recommendationGridColumns
 import com.parachord.shared.recommendations.RecommendationRow
@@ -456,7 +460,28 @@ private fun PageContent(
         )
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+    // Blocks arrive one provider at a time, and the shared layout can put a new one
+    // above those on screen (an earlier section, the Albums slot). A keyed LazyColumn
+    // keeps the first visible item where it was, so the page looked scrolled down.
+    // While the user hasn't scrolled away from the top, keep it there as blocks
+    // arrive (iOS's page does the same); once they have, never move them.
+    val listState = rememberLazyListState()
+    var pinnedToTop by rememberSaveable { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        // Only the user's own scrolling decides; an insertion that moves the first
+        // visible item isn't a scroll in progress.
+        snapshotFlow {
+            Triple(listState.isScrollInProgress, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+        }.collect { (scrolling, index, offset) ->
+            if (scrolling) pinnedToTop = index == 0 && offset == 0
+        }
+    }
+    val blockKeys = blocks.map { it.key }
+    LaunchedEffect(blockKeys) {
+        if (pinnedToTop && blockKeys.isNotEmpty()) listState.requestScrollToItem(0)
+    }
+
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
         blocks.forEach { block ->
             when (block) {
                 is RecommendationPageBlock.SectionTitle ->

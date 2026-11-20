@@ -46,6 +46,21 @@ sealed class RecommendationPageBlock {
 }
 
 /**
+ * A block's identity, stable across rebuilds: both apps key their lists by it
+ * (Android's LazyColumn, iOS's `IosRecBlock.id`), and a change in the page's
+ * keys is what tells a screen pinned at its top to stay there.
+ */
+val RecommendationPageBlock.key: String
+    get() = when (this) {
+        is RecommendationPageBlock.SectionTitle -> "section:${section.type?.wire ?: "listeners"}"
+        is RecommendationPageBlock.Row -> "row:${row.key}"
+        RecommendationPageBlock.PersonalSkeleton -> "skeleton:personal"
+        RecommendationPageBlock.AlbumsSkeleton -> "skeleton:albums-slot"
+        RecommendationPageBlock.PendingSkeleton -> "skeleton:pending"
+        RecommendationPageBlock.ListenersSkeleton -> "skeleton:listeners"
+    }
+
+/**
  * The page's blocks for [state] under [filter] (the source in force, already
  * through [activeSourceFilter]), with the rows in [expanded] open.
  */

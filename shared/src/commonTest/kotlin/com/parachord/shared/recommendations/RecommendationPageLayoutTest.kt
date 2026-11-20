@@ -78,4 +78,27 @@ class RecommendationPageLayoutTest {
         assertTrue(open.expanded)
         assertEquals(7, open.view.items.size)
     }
+
+    @Test
+    fun `block keys are stable and unique across the page`() {
+        val albums = RecommendationPageSection(
+            RecommendationType.ALBUM, "Albums",
+            listOf(row("albums:new", RecommendationType.ALBUM, listOf(item("n", RecommendationType.ALBUM)), category = "new", title = "New for you")),
+        )
+        val state = RecommendationPageState(
+            sections = listOf(songs, albums),
+            aiLoading = true,
+            pendingProviders = setOf("listenbrainz"),
+            listenersPending = true,
+        )
+        val keys = recommendationPageLayout(state, null, emptySet()).map { it.key }
+        assertEquals(
+            listOf("row:type:song", "section:album", "row:albums:new", "skeleton:personal", "skeleton:pending", "skeleton:listeners"),
+            keys,
+        )
+        // A rebuild with more data keeps the keys of the blocks already there.
+        val more = state.copy(sections = listOf(songs.copy(rows = listOf(row("type:song", RecommendationType.SONG, listOf(item("a"), item("b"))))), albums))
+        assertEquals(keys, recommendationPageLayout(more, null, emptySet()).map { it.key })
+        assertEquals("skeleton:albums-slot", RecommendationPageBlock.AlbumsSkeleton.key)
+    }
 }
