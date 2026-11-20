@@ -2643,13 +2643,12 @@ class SyncEngine constructor(
                     lastModified = now,
                 ))
                 val tracks = spotifyProvider.fetchPlaylistTracks(remote.spotifyId)
-                playlistTrackDao.deleteByPlaylistId(targetId)
                 val remappedTracks = if (targetId != remote.entity.id) {
                     tracks.map { it.copy(playlistId = targetId) }
                 } else {
                     tracks
                 }
-                playlistTrackDao.insertAll(remappedTracks)
+                playlistTrackDao.replaceAll(targetId, remappedTracks)
                 syncSourceDao.insert(SyncSource(
                     itemId = targetId,
                     itemType = "playlist",
@@ -3086,13 +3085,12 @@ class SyncEngine constructor(
                     lastModified = now,
                     trackCount = tracks.size,
                 ))
-                playlistTrackDao.deleteByPlaylistId(targetId)
                 val remappedTracks = if (targetId != remote.entity.id) {
                     tracks.map { it.copy(playlistId = targetId) }
                 } else {
                     tracks
                 }
-                playlistTrackDao.insertAll(remappedTracks)
+                playlistTrackDao.replaceAll(targetId, remappedTracks)
                 syncSourceDao.insert(SyncSource(
                     itemId = targetId,
                     itemType = "playlist",
@@ -4000,8 +3998,7 @@ class SyncEngine constructor(
             return
         }
 
-        playlistTrackDao.deleteByPlaylistId(localPlaylist.id)
-        playlistTrackDao.insertAll(tracks)
+        playlistTrackDao.replaceAll(localPlaylist.id, tracks)
 
         val now = currentTimeMillis()
         // Fix 1 (multi-provider mirror propagation): a pull replaces the

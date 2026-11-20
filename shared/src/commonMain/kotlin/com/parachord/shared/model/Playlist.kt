@@ -20,4 +20,9 @@ data class Playlist(
      *  collaborative)? Read-only followed playlists are `false` and are never
      *  push/mirror candidates (#269). Defaults true (local/owned). */
     val writable: Boolean = true,
+    /** When the tracks last changed (added, removed or reordered); null until
+     *  they first do. Local only, stamped by the DAO ([com.parachord.shared.home.PlaylistFreshness]). */
+    val tracksChangedAt: Long? = null,
+    /** How many tracks that change added (0 for a removal or a reorder). */
+    val lastChangeAdded: Int = 0,
 )

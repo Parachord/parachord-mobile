@@ -53,4 +53,14 @@ class CollectionTrackTest {
         assertEquals(listOf("b"), recentLoves(listOf(loved, scanned, newer), 1).map { it.id })
         assertEquals(listOf("a"), lovedTracks(listOf(loved, scanned)).map { it.id })
     }
+
+    @Test
+    fun recentLovesNewestFirstAndUndatedLast() {
+        val t = listOf(
+            playing.copy(id = "x"), playing.copy(id = "a", addedAt = 1L),
+            playing.copy(id = "y"), playing.copy(id = "b", addedAt = 5L),
+        )
+        assertEquals(listOf("b", "a", "x", "y"), recentLoves(t, 50).map { it.id })
+        assertEquals(listOf("b", "a"), recentLoves(t, 2).map { it.id })
+    }
 }

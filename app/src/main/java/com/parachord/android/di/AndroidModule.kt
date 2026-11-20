@@ -222,6 +222,18 @@ val androidModule = module {
         } catch (_: Exception) {
             // Column already present (idempotent on repeat launches).
         }
+        // Playlist freshness (PlaylistFreshness): when the tracks last changed
+        // and how many that change added. Existing rows start unstamped.
+        try {
+            driver.execute(null, "ALTER TABLE playlists ADD COLUMN tracksChangedAt INTEGER", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
+        try {
+            driver.execute(null, "ALTER TABLE playlists ADD COLUMN lastChangeAdded INTEGER NOT NULL DEFAULT 0", 0)
+        } catch (_: Exception) {
+            // Column already present (idempotent on repeat launches).
+        }
         // N-way reconciliation redesign: persist ISRC on playlist tracks so the
         // unify isrc-tier can bridge the same recording across services (different
         // recording-MBID / drifted title, same ISRC) — the no-false-drop fix.
@@ -943,6 +955,26 @@ val androidModule = module {
                 artistImage = { name -> metadataService.getArtistImage(name) },
                 albumArt = { title, artist -> imageEnrichment.lookupAlbumArt(title, artist) },
             ),
+        )
+    }
+    // Home's history mixes (history_mixes_cache.json), from the plugins with
+    // `capabilities.historyMixes`. Every mix id goes to Recommendations, whose
+    // Playlists row leaves them out. Explicit `single {}` (lambda + defaulted params).
+    single {
+        val context = androidContext()
+        val cacheFile = java.io.File(context.filesDir, "history_mixes_cache.json")
+        val settings: com.parachord.shared.settings.SettingsStore = get()
+        val recommendations: com.parachord.shared.repository.RecommendationsRepository = get()
+        val playlists: com.parachord.shared.deeplink.ProviderPlaylistResolver = get()
+        com.parachord.shared.repository.HistoryMixesRepository(
+            source = com.parachord.shared.repository.PluginHistoryMixSource(get()),
+            settingsStore = settings,
+            // The same gate RecommendationsRepository gets.
+            providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
+            cacheRead = { com.parachord.android.data.cache.CacheFiles.read(cacheFile) },
+            cacheWrite = { json -> com.parachord.android.data.cache.CacheFiles.write(cacheFile, json) },
+            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> playlists.resolve(url) } },
+            onMixIds = { ids -> recommendations.excludePlaylistIds(ids) },
         )
     }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`

@@ -67,6 +67,43 @@ class PluginRecommendationSource(private val pluginManager: PluginManager) : Rec
         pluginManager.expandRecommendationSection(providerId, sectionId, cursor)
 }
 
+/**
+ * Where Home's history mixes come from: the plugins with
+ * `capabilities.historyMixes`. The real one is [PluginHistoryMixSource];
+ * tests supply their own.
+ */
+interface HistoryMixSource {
+    /** Every plugin that declares `capabilities.historyMixes`, loaded or not on. */
+    suspend fun providers(): List<RecommendationProvider>
+
+    /**
+     * One provider's raw `getHistoryMixes` answer (a JSON array of mixes).
+     * Throws `PluginNotReadyException` when the provider isn't ready (signed
+     * out), any other exception when it couldn't answer.
+     */
+    suspend fun fetch(providerId: String): String
+}
+
+/** The plugins that declare `capabilities.historyMixes` (desktop's `getHistoryMixResolvers`). */
+class PluginHistoryMixSource(private val pluginManager: PluginManager) : HistoryMixSource {
+    override suspend fun providers(): List<RecommendationProvider> {
+        val ids = pluginManager.historyMixResolvers()
+        val infos = pluginManager.plugins.value.associateBy { it.id }
+        return ids.map { (id, name) ->
+            val info = infos[id]
+            RecommendationProvider(
+                id = id,
+                name = name,
+                isMetaService = info?.type == "meta-service",
+                needsAccount = info?.let(::needsAccount) ?: false,
+                canExpand = false,
+            )
+        }
+    }
+
+    override suspend fun fetch(providerId: String): String = pluginManager.getHistoryMixes(providerId)
+}
+
 /** Shuffleupagus (the AI plugin's) album and artist picks, as the page reads them. */
 interface ShuffleupagusPicks {
     /** The last picks, or null. */

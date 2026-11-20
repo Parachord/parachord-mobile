@@ -551,25 +551,13 @@ fun recommendationWhy(item: RecommendationItem): String {
     return if (item.reason != null) "$label · ${item.reason}" else label
 }
 
-/** Home's source chip: the items [sourceId] sent (by `resolverId` or `sourceIds`). `All` or null keeps them all. */
-fun filterBySource(items: List<RecommendationItem>, sourceId: String?): List<RecommendationItem> {
-    if (sourceId == null || sourceId == "All") return items
-    return items.filter { it.resolverId == sourceId || sourceId in it.sourceIds }
-}
+/** Home's source chip: the items [sourceId] sent (by `resolverId` or `sourceIds`). `All` or null keeps them all. Delegates to Home's generic rule. */
+fun filterBySource(items: List<RecommendationItem>, sourceId: String?): List<RecommendationItem> =
+    com.parachord.shared.home.filterBySource(items, sourceId ?: "All", { it.resolverId }, { it.sourceIds })
 
 /**
  * The recommended albums Home asks a cover for: the first [perSource] of the
- * whole list (the All chip) and of each source's own list (its chip), so
- * picking a chip never shows cards without covers. Order kept, no repeats.
+ * whole list and of each source's own list. Delegates to Home's generic rule.
  */
-fun albumsNeedingArt(albums: List<RecommendationItem>?, perSource: Int = 6): List<RecommendationItem> {
-    val all = albums.orEmpty()
-    val ids = mutableListOf<String>()
-    for (a in all) for (id in listOfNotNull(a.resolverId) + a.sourceIds) if (id.isNotEmpty() && id !in ids) ids += id
-    val indexed = all.withIndex().toList()
-    val want = indexed.take(perSource).map { it.index }.toMutableSet()
-    for (id in ids) {
-        indexed.filter { (_, a) -> a.resolverId == id || id in a.sourceIds }.take(perSource).forEach { want += it.index }
-    }
-    return indexed.filter { it.index in want }.map { it.value }
-}
+fun albumsNeedingArt(albums: List<RecommendationItem>?, perSource: Int = 6): List<RecommendationItem> =
+    com.parachord.shared.home.albumsNeedingArt(albums.orEmpty(), perSource, { it.resolverId }, { it.sourceIds })

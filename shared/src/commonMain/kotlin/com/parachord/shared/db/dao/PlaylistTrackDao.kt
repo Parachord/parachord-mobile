@@ -4,7 +4,9 @@ import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import com.parachord.shared.db.ParachordDb
 import com.parachord.shared.db.Playlist_tracks
+import com.parachord.shared.home.PlaylistFreshness
 import com.parachord.shared.model.PlaylistTrack
+import com.parachord.shared.platform.currentTimeMillis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
@@ -17,10 +19,40 @@ import kotlinx.coroutines.withContext
 /**
  * Concrete DAO wrapping SQLDelight [PlaylistTrackQueries].
  * Drop-in replacement for the former Room @Dao interface.
+ *
+ * Stamps playlist freshness ([PlaylistFreshness]): [insertAll], [replaceAll]
+ * and [deleteTrack] compare the playlist's track keys before and after the
+ * write, in the same transaction, and set `playlists.tracksChangedAt` /
+ * `lastChangeAdded` when they differ. Cover and id backfills don't stamp, nor
+ * does [deleteByPlaylistId] (the whole playlist goes). Replace a playlist's
+ * tracks with [replaceAll], not a delete then an insert: the delete alone would
+ * compare against nothing and count every track as added.
  */
-class PlaylistTrackDao(private val db: ParachordDb) {
+class PlaylistTrackDao(
+    private val db: ParachordDb,
+    private val nowMs: () -> Long = ::currentTimeMillis,
+) {
 
     private val queries get() = db.playlistTrackQueries
+    private val playlistQueries get() = db.playlistQueries
+
+    /** The playlist's track keys, in order. Call inside a transaction. */
+    private fun trackKeys(playlistId: String): List<String> =
+        queries.getByPlaylistId(playlistId).executeAsList().map {
+            PlaylistFreshness.trackKey(it.trackArtist, it.trackTitle)
+        }
+
+    /** Run [write] and stamp each of [playlistIds] whose tracks it changed.
+     *  Call inside a transaction. */
+    private fun stamping(playlistIds: Collection<String>, write: () -> Unit) {
+        val before = playlistIds.associateWith { trackKeys(it) }
+        write()
+        val now = nowMs()
+        for ((id, prevKeys) in before) {
+            val stamp = PlaylistFreshness.stamp(prevKeys, trackKeys(id), now) ?: continue
+            playlistQueries.stampTrackChange(stamp.tracksChangedAt, stamp.lastChangeAdded.toLong(), id)
+        }
+    }
 
     private val _changes = MutableSharedFlow<String>(
         extraBufferCapacity = 256,
@@ -80,30 +112,35 @@ class PlaylistTrackDao(private val db: ParachordDb) {
 
     suspend fun insertAll(tracks: List<PlaylistTrack>): Unit = withContext(Dispatchers.Default) {
         queries.transaction {
-            for (track in tracks) {
-                queries.insert(
-                    playlistId = track.playlistId,
-                    position = track.position.toLong(),
-                    trackTitle = track.trackTitle,
-                    trackArtist = track.trackArtist,
-                    trackAlbum = track.trackAlbum,
-                    trackDuration = track.trackDuration,
-                    trackArtworkUrl = track.trackArtworkUrl,
-                    trackSourceUrl = track.trackSourceUrl,
-                    trackResolver = track.trackResolver,
-                    trackSpotifyUri = track.trackSpotifyUri,
-                    trackSoundcloudId = track.trackSoundcloudId,
-                    trackSpotifyId = track.trackSpotifyId,
-                    trackAppleMusicId = track.trackAppleMusicId,
-                    trackRecordingMbid = track.trackRecordingMbid,
-                    trackIsrc = track.trackIsrc,
-                    addedAt = track.addedAt,
-                )
-            }
+            stamping(tracks.map { it.playlistId }.distinct()) { insertRows(tracks) }
         }
         tracks.map { it.playlistId }.distinct().forEach(::changed)
     }
 
+    private fun insertRows(tracks: List<PlaylistTrack>) {
+        for (track in tracks) {
+            queries.insert(
+                playlistId = track.playlistId,
+                position = track.position.toLong(),
+                trackTitle = track.trackTitle,
+                trackArtist = track.trackArtist,
+                trackAlbum = track.trackAlbum,
+                trackDuration = track.trackDuration,
+                trackArtworkUrl = track.trackArtworkUrl,
+                trackSourceUrl = track.trackSourceUrl,
+                trackResolver = track.trackResolver,
+                trackSpotifyUri = track.trackSpotifyUri,
+                trackSoundcloudId = track.trackSoundcloudId,
+                trackSpotifyId = track.trackSpotifyId,
+                trackAppleMusicId = track.trackAppleMusicId,
+                trackRecordingMbid = track.trackRecordingMbid,
+                trackIsrc = track.trackIsrc,
+                addedAt = track.addedAt,
+            )
+        }
+    }
+
+    /** Remove every track of a playlist that is itself going. Doesn't stamp. */
     suspend fun deleteByPlaylistId(playlistId: String): Unit = withContext(Dispatchers.Default) {
         queries.deleteByPlaylistId(playlistId)
         changed(playlistId)
@@ -111,7 +148,11 @@ class PlaylistTrackDao(private val db: ParachordDb) {
 
 
     suspend fun deleteTrack(playlistId: String, position: Int): Unit = withContext(Dispatchers.Default) {
-        queries.deleteTrack(playlistId = playlistId, position = position.toLong())
+        queries.transaction {
+            stamping(listOf(playlistId)) {
+                queries.deleteTrack(playlistId = playlistId, position = position.toLong())
+            }
+        }
         changed(playlistId)
     }
 
@@ -187,29 +228,13 @@ class PlaylistTrackDao(private val db: ParachordDb) {
         )
     }
 
-    /** Delete all tracks for a playlist then reinsert — used for reorder. */
+    /** Delete all tracks for a playlist then reinsert (a reorder, a pull, a
+     *  hosted refresh), in one transaction. Stamps when the tracks changed. */
     suspend fun replaceAll(playlistId: String, tracks: List<PlaylistTrack>): Unit = withContext(Dispatchers.Default) {
         queries.transaction {
-            queries.deleteByPlaylistId(playlistId)
-            for (track in tracks) {
-                queries.insert(
-                    playlistId = track.playlistId,
-                    position = track.position.toLong(),
-                    trackTitle = track.trackTitle,
-                    trackArtist = track.trackArtist,
-                    trackAlbum = track.trackAlbum,
-                    trackDuration = track.trackDuration,
-                    trackArtworkUrl = track.trackArtworkUrl,
-                    trackSourceUrl = track.trackSourceUrl,
-                    trackResolver = track.trackResolver,
-                    trackSpotifyUri = track.trackSpotifyUri,
-                    trackSoundcloudId = track.trackSoundcloudId,
-                    trackSpotifyId = track.trackSpotifyId,
-                    trackAppleMusicId = track.trackAppleMusicId,
-                    trackRecordingMbid = track.trackRecordingMbid,
-                    trackIsrc = track.trackIsrc,
-                    addedAt = track.addedAt,
-                )
+            stamping(listOf(playlistId)) {
+                queries.deleteByPlaylistId(playlistId)
+                insertRows(tracks)
             }
         }
         changed(playlistId)

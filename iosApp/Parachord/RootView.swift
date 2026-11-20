@@ -206,6 +206,14 @@ struct ContentView: View {
             settingsService = id
             showSettings = true
         })
+        // Home's Ask Shuffleupagus: an in-app prompt, sent by the chat once it's
+        // open with a provider, with no link confirmation (Android's
+        // `DeepLinkViewModel.handleInAppChatPrompt`).
+        .environment(\.pcAskShuffleupagus, PCAskShuffleupagus { prompt in
+            guard IosContainer.companion.shared.askShuffleupagus(prompt: prompt) else { return }
+            pendingChatPrompt = nil
+            withAnimation(.easeInOut(duration: 0.3)) { showChat = true }
+        })
         // #234: honor the Settings › General theme override (system/light/dark).
         // Forcing the scheme here also flips the `dyn()` palette (SwiftUI overrides
         // the trait). NowPlaying stays dark regardless — its surfaces use the
@@ -369,7 +377,12 @@ struct ContentView: View {
         }
     }
 
-    private func closeChat() { pendingChatPrompt = nil; withAnimation(.easeInOut(duration: 0.28)) { showChat = false; chatDragX = 0 } }
+    private func closeChat() {
+        pendingChatPrompt = nil
+        // A queued Ask prompt that never went out is dropped (shared ChatPrompt.shouldDrop).
+        IosContainer.companion.shared.chatVisibilityChanged(wasOpen: showChat, chatOpen: false)
+        withAnimation(.easeInOut(duration: 0.28)) { showChat = false; chatDragX = 0 }
+    }
 
     private func closeSidebar() { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
 
@@ -755,4 +768,20 @@ extension EnvironmentValues {
         get { self[PCOpenPluginSettingsKey.self] }
         set { self[PCOpenPluginSettingsKey.self] = newValue }
     }
+    /// Set by RootView; a no-op outside it.
+    var pcAskShuffleupagus: PCAskShuffleupagus {
+        get { self[PCAskShuffleupagusKey.self] }
+        set { self[PCAskShuffleupagusKey.self] = newValue }
+    }
+}
+
+/// Home's Ask Shuffleupagus: queues the prompt as an in-app one and opens the chat,
+/// which sends it with no confirmation (`IosContainer.askShuffleupagus`).
+struct PCAskShuffleupagus {
+    let ask: (String) -> Void
+    func callAsFunction(_ prompt: String) { ask(prompt) }
+}
+
+private struct PCAskShuffleupagusKey: EnvironmentKey {
+    static let defaultValue = PCAskShuffleupagus { _ in }
 }

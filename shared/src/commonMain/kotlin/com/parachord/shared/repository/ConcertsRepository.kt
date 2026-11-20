@@ -55,6 +55,9 @@ data class ConcertEvent(
     val status: String? = null,       // "onsale", "offsale", "cancelled", etc.
     val artistSource: String? = null, // "collection", "library", or "history"
     val ticketSources: List<TicketSource> = emptyList(), // merged ticket links from multiple providers
+    /** The venue's coordinates, for Home's Concerts near you (`concertsNearYou`). */
+    val venueLatitude: Double? = null,
+    val venueLongitude: Double? = null,
 ) {
     /**
      * True if event is in the future. Used by `mergeAndDedupe` to filter
@@ -537,7 +540,7 @@ class ConcertsRepository(
                 }
                 val newSource = TicketSource(event.source, event.ticketUrl ?: "", sourceLabel(event.source))
                 val allSources = (existingSources + newSource).distinctBy { it.source }
-                merged[key] = existing.copy(ticketSources = allSources)
+                merged[key] = withFirstVenueCoordinates(existing, event).copy(ticketSources = allSources)
             } else {
                 // Initialize ticketSources from single source
                 val sources = if (event.ticketUrl != null) {
@@ -600,9 +603,20 @@ class ConcertsRepository(
     }
 }
 
+/**
+ * [kept] with the first venue coordinates of the two: its own when it has a
+ * pair, else [other]'s. A duplicate from another provider can carry the
+ * coordinates the first one lacked (Home's Concerts near you needs them).
+ */
+internal fun withFirstVenueCoordinates(kept: ConcertEvent, other: ConcertEvent): ConcertEvent =
+    if ((kept.venueLatitude != null && kept.venueLongitude != null) ||
+        other.venueLatitude == null || other.venueLongitude == null
+    ) kept
+    else kept.copy(venueLatitude = other.venueLatitude, venueLongitude = other.venueLongitude)
+
 // ── Extension mappers ───────────────────────────────────────────
 
-private fun com.parachord.shared.api.TmEvent.toConcertEvent(): ConcertEvent {
+internal fun com.parachord.shared.api.TmEvent.toConcertEvent(): ConcertEvent {
     val venue = embedded?.venues?.firstOrNull()
     val attraction = embedded?.attractions?.firstOrNull()
     // Pick best image — prefer 16:9 ratio, largest
@@ -631,10 +645,12 @@ private fun com.parachord.shared.api.TmEvent.toConcertEvent(): ConcertEvent {
         lineup = embedded?.attractions?.mapNotNull { it.name } ?: emptyList(),
         source = "ticketmaster",
         status = dates?.status?.code,
+        venueLatitude = venue?.location?.latitude?.trim()?.toDoubleOrNull()?.takeIf { it.isFinite() },
+        venueLongitude = venue?.location?.longitude?.trim()?.toDoubleOrNull()?.takeIf { it.isFinite() },
     )
 }
 
-private fun com.parachord.shared.api.SgEvent.toConcertEvent(): ConcertEvent {
+internal fun com.parachord.shared.api.SgEvent.toConcertEvent(): ConcertEvent {
     val mainPerformer = performers.firstOrNull()
     val dateStr = datetimeLocal?.take(10) // "2026-03-22T20:00:00" → "2026-03-22"
     val timeStr = datetimeLocal?.let {
@@ -657,6 +673,8 @@ private fun com.parachord.shared.api.SgEvent.toConcertEvent(): ConcertEvent {
         ticketUrl = url,
         lineup = performers.mapNotNull { it.name },
         source = "seatgeek",
+        venueLatitude = venue?.location?.lat?.takeIf { it.isFinite() },
+        venueLongitude = venue?.location?.lon?.takeIf { it.isFinite() },
     )
 }
 

@@ -67,6 +67,7 @@ class RecommendationsViewModel(
     private val providerPlaylistResolver: ProviderPlaylistResolver,
     private val friendsRepository: FriendsRepository,
     playbackStateHolder: PlaybackStateHolder,
+    private val historyMixesRepository: com.parachord.shared.repository.HistoryMixesRepository,
 ) : ViewModel() {
 
     companion object {
@@ -106,8 +107,16 @@ class RecommendationsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
-        viewModelScope.launch { repository.load(false) }
+        viewModelScope.launch { loadPage(false) }
     }
+
+    /** The page, plus Home's history mixes alongside it (their ids leave the Playlists row). */
+    private suspend fun loadPage(force: Boolean) = com.parachord.shared.repository.loadRecommendationsPage(
+        force = force,
+        background = viewModelScope,
+        mixes = { historyMixesRepository.load(it) },
+        page = { repository.load(it) },
+    )
 
     fun setSourceFilter(id: String?) {
         _sourceFilter.value = id
@@ -120,11 +129,11 @@ class RecommendationsViewModel(
     }
 
     fun refreshIfStale() {
-        viewModelScope.launch { repository.load(false) }
+        viewModelScope.launch { loadPage(false) }
     }
 
     fun retry() {
-        viewModelScope.launch { repository.load(true) }
+        viewModelScope.launch { loadPage(true) }
     }
 
     // ── Release dates and images ────────────────────────────────────
@@ -234,7 +243,7 @@ class RecommendationsViewModel(
                 when (val result = friendsRepository.follow(item.service, item.name)) {
                     // Shared copy from the repository (UiMessages.couldntReach / USER_NOT_FOUND).
                     is Resource.Error -> say(result.message)
-                    else -> repository.load(false)
+                    else -> loadPage(false)
                 }
             } catch (e: CancellationException) {
                 throw e

@@ -2045,6 +2045,24 @@ class IosContainer private constructor() {
         )
     }
 
+    /**
+     * Home's history mixes (history_mixes_cache.json), from the plugins with
+     * `capabilities.historyMixes`. Every mix id goes to Recommendations, whose
+     * Playlists row leaves them out.
+     */
+    val historyMixesRepository: com.parachord.shared.repository.HistoryMixesRepository by lazy {
+        com.parachord.shared.repository.HistoryMixesRepository(
+            source = com.parachord.shared.repository.PluginHistoryMixSource(pluginManager),
+            settingsStore = settingsStore,
+            // The same gate RecommendationsRepository gets.
+            providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
+            cacheRead = { IosFileCache.read("history_mixes_cache.json") },
+            cacheWrite = { IosFileCache.write("history_mixes_cache.json", it) },
+            mosaicCovers = { mix -> com.parachord.shared.home.historyMixMosaicCovers(mix) { url -> providerPlaylistResolver.resolve(url) } },
+            onMixIds = { ids -> recommendationsRepository.excludePlaylistIds(ids) },
+        )
+    }
+
     /** Listeners' people, from the plugins with `similarUsers` and `friends` (similar_users_cache.json). */
     val similarUsersStore: com.parachord.shared.repository.SimilarUsersStore by lazy {
         com.parachord.shared.repository.SimilarUsersStore(
@@ -2100,10 +2118,16 @@ class IosContainer private constructor() {
     /** One-off messages from the repository ("Couldn't load more from …"). */
     fun recommendationsMessages(): Flow<String> = recommendationsRepository.messages
 
-    /** Loads the page ([force] is Try again or pull to refresh). Never throws. */
+    /** Loads the page and, alongside it, Home's history mixes ([force] is Try again or pull to refresh). Never throws. */
     suspend fun loadRecommendations(force: Boolean) {
         try {
-            recommendationsRepository.load(force)
+            // Home's history mixes load alongside: their ids leave the Playlists row.
+            com.parachord.shared.repository.loadRecommendationsPage(
+                force = force,
+                background = appScope,
+                mixes = { historyMixesRepository.load(it) },
+                page = { recommendationsRepository.load(it) },
+            )
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -3815,6 +3839,33 @@ class IosContainer private constructor() {
     suspend fun chatMessages(providerId: String): List<IosChatMessage> =
         aiChatService.getDisplayMessages(providerId).map { IosChatMessage(it.role.name.lowercase(), it.content) }
     suspend fun chatClear(providerId: String) = aiChatService.clearHistory(providerId)
+
+    /**
+     * Home's Ask Shuffleupagus: queues [prompt] (capped as a `parachord://chat`
+     * prompt) as an in-app prompt, which the chat sends once it's open with a
+     * provider, without the link's confirmation. Returns false for a blank
+     * prompt (nothing queued). Swift reaches it through RootView's
+     * `pcAskShuffleupagus`, which also opens the chat. Only this direct call
+     * sets the in-app origin; a `parachord://chat` link still pre-fills the
+     * input for the user to send (desktop's `askShuffleupagus`).
+     */
+    fun askShuffleupagus(prompt: String): Boolean {
+        val text = com.parachord.shared.deeplink.ChatPrompt.cap(prompt)
+        if (text.isBlank()) return false
+        aiChatService.setPendingChatPrompt(text, fromApp = true)
+        return true
+    }
+
+    /** The queued in-app prompt (Home's Ask), still queued; null when there is none. */
+    fun pendingInAppChatPrompt(): String? =
+        if (aiChatService.pendingChatPromptFromApp) aiChatService.pendingChatPrompt.value else null
+
+    /** Takes the queued in-app prompt to send it; null when there is none. */
+    fun consumeInAppChatPrompt(): String? = aiChatService.consumeInAppChatPrompt()
+
+    /** The chat screen opened or closed; closing drops a prompt that never went out. */
+    fun chatVisibilityChanged(wasOpen: Boolean, chatOpen: Boolean) =
+        aiChatService.onChatVisibilityChanged(wasOpen, chatOpen)
     suspend fun chatSelectedProvider(): String? = settingsStore.getSelectedChatProvider()
     suspend fun chatSetSelectedProvider(id: String) = settingsStore.setSelectedChatProvider(id)
     suspend fun chatProviderConfigured(providerId: String): Boolean =
