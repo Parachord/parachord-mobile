@@ -1239,12 +1239,27 @@ val androidModule = module {
 
     // ── Plugins ──────────────────────────────────────────────────────
 
+    // The webSession host bridge (desktop parachord#1356): one shared
+    // WebSessionHost per session over a hidden WebView, for plugins that
+    // declare `requires.hostBridges: ["webSession"]` (amazonmusic.axe).
+    single {
+        val config = com.parachord.shared.websession.WebSessionConfigs.AMAZON_MUSIC
+        val host = com.parachord.shared.websession.WebSessionHost(
+            config = config,
+            platform = com.parachord.android.websession.AndroidWebSessionPlatform(androidContext(), config),
+            httpClient = com.parachord.shared.websession.createWebSessionHttpClient(),
+            scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate),
+        )
+        com.parachord.shared.websession.WebSessionBridge(mapOf(config.id to host))
+    }
     singleOf(::JsBridge)
     single { PluginFileAccess(androidContext()) }
     single {
         com.parachord.shared.plugin.PluginManager(
             get<PluginFileAccess>(), get<JsBridge>(),
             appVersion = com.parachord.android.BuildConfig.VERSION_NAME, platform = "android",
+            // Each needs its JS object in bootstrap.html (window.__parachordBridge_<name>).
+            hostBridges = setOf("webSession"),
         ).apply {
             // soundcloud.axe's URL / playlist lookups need the sign-in token;
             // lastfm.axe and listenbrainz.axe read the username for

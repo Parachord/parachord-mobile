@@ -151,9 +151,66 @@
             NativeBridge.openExternal(String(url));
             return Promise.resolve(true);
         },
-        bridges: {},
+        // Built from __parachordHostBridges (PluginManager sets it from its
+        // hostBridges before loading plugins): each listed name reads
+        // window.__parachordBridge_<name>, which the app's bootstrap defines.
+        get bridges() {
+            var out = {};
+            (window.__parachordHostBridges || []).forEach(function (name) {
+                out[name] = function () { return window['__parachordBridge_' + name] || null; };
+            });
+            return out;
+        },
     };
     // </plugin-host-supplier>
+
+    // ── webSession host bridge ───────────────────────────────────────
+    // `this.host.webSession` for a plugin that declares it (amazonmusic.axe):
+    // desktop's preload shape, docs/architecture/web-session.md "The IPC
+    // bridge". Each method resolves (never rejects) with the shared
+    // WebSessionBridge's JSON answer, delivered by NativeBridge through
+    // window.__wsCallbacks. signIn keeps the plugin's decide() here: Kotlin
+    // sends each tick to __pcWsSignInTick and waits for the verdict.
+    window.__wsCallbacks = {};
+    window.__wsDecides = {};
+    var __wsIdCounter = 0;
+    function __wsCall(method, args, decide) {
+        return new Promise(function (resolve) {
+            var callId = 'ws_' + (++__wsIdCounter);
+            window.__wsCallbacks[callId] = function (result) {
+                delete window.__wsCallbacks[callId];
+                delete window.__wsDecides[callId];
+                resolve(result);
+            };
+            if (decide) window.__wsDecides[callId] = decide;
+            try {
+                NativeBridge.webSessionCall(callId, method, JSON.stringify(args || {}));
+            } catch (e) {
+                delete window.__wsCallbacks[callId];
+                delete window.__wsDecides[callId];
+                resolve({ success: false, reason: 'not-ready', error: String((e && e.message) || e) });
+            }
+        });
+    }
+    window.__pcWsSignInTick = function (callId, tick) {
+        var decide = window.__wsDecides[callId];
+        var verdict = false;
+        // A throwing decide is the plugin's bug, not a sign-in: false.
+        try { verdict = !!(decide && decide(tick)); } catch (e) { verdict = false; }
+        try { NativeBridge.webSessionDecide(callId, verdict); } catch (e) {}
+    };
+    window.__parachordBridge_webSession = {
+        load: function (id, url, opts) { return __wsCall('load', { id: id, url: url, opts: opts }); },
+        pageFetch: function (id, request) { return __wsCall('pageFetch', { id: id, request: request }); },
+        fetch: function (id, request) { return __wsCall('fetch', { id: id, request: request }); },
+        state: function (id) { return __wsCall('state', { id: id }); },
+        clear: function (id) { return __wsCall('clear', { id: id }); },
+        signIn: function (id, url, opts) {
+            opts = opts || {};
+            var decide = typeof opts.decide === 'function' ? opts.decide : function () { return false; };
+            return __wsCall('signIn', { id: id, url: url, window: opts.window }, decide);
+        },
+    };
 
     // ── ScrobbleManager registry ─────────────────────────────────────
     // Public, stable contract documented in desktop CLAUDE.md

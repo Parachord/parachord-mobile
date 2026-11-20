@@ -646,7 +646,16 @@ class IosJsRuntime : JsRuntime {
                         NativeBridge.openExternal(String(url));
                         return Promise.resolve(true);
                     },
-                    bridges: {},
+                    // Built from __parachordHostBridges (PluginManager sets it from its
+                    // hostBridges before loading plugins): each listed name reads
+                    // window.__parachordBridge_<name>, which the app's bootstrap defines.
+                    get bridges() {
+                        var out = {};
+                        (window.__parachordHostBridges || []).forEach(function (name) {
+                            out[name] = function () { return window['__parachordBridge_' + name] || null; };
+                        });
+                        return out;
+                    },
                 };
                 // </plugin-host-supplier>
             })();
