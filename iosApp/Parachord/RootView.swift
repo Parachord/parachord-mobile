@@ -24,11 +24,8 @@ struct ContentView: View {
     @State private var showSidebar = false
     @State private var showAdd = false
     @State private var showNowPlaying = false
-    @State private var showSettings = false
-    /// The plugin whose settings sheet Settings opens on (`PCOpenPluginSettings`); nil for the plain page.
-    @State private var settingsService: String?
-    /// The Settings tab it opens on (`PCOpenSettingsTab`, a shared `SettingsTab` name); nil for the first.
-    @State private var settingsTab: String?
+    /// Settings, presented with the values it opens on (a nil one is the first page).
+    @State private var settings: SettingsDestination?
     @State private var showChat = false
     @State private var pendingChat = false
     // Deep-link prefills (#256): seed the Search query / Shuffleupagus prompt.
@@ -62,7 +59,7 @@ struct ContentView: View {
             // ── Active tab content ───────────────────────────────────
             Group {
                 switch tab {
-                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { showSettings = true }, onSelectTab: { t, sub in if let sub { collectionPendingTab = sub }; tab = t }, onOpenRecentLoves: {
+                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { settings = SettingsDestination() }, onSelectTab: { t, sub in if let sub { collectionPendingTab = sub }; tab = t }, onOpenRecentLoves: {
                     collectionPendingTab = .songs
                     collectionPendingTrackSort = TrackSort.recent
                     tab = .collection
@@ -219,17 +216,13 @@ struct ContentView: View {
         // Opens Settings on one plugin's sheet (Recommendations' Connect buttons, Android's
         // `Routes.settings(pluginId)`).
         .environment(\.pcOpenPluginSettings, PCOpenPluginSettings { id in
-            settingsService = id
-            settingsTab = nil
-            showSettings = true
+            settings = SettingsDestination(service: id)
         })
         // Opens the playlist import dialog (Home's "Build your collection" card).
         .environment(\.pcOpenImport, PCOpenImport { importer.showOptions = true })
         // Opens Settings on one tab (Home's "Sync your library", Android's `Routes.settings(pluginId, tab)`).
         .environment(\.pcOpenSettingsTab, PCOpenSettingsTab { tab in
-            settingsService = nil
-            settingsTab = tab
-            showSettings = true
+            settings = SettingsDestination(tab: tab)
         })
         // Home's Ask Shuffleupagus: an in-app prompt, sent by the chat once it's
         // open with a provider, with no link confirmation (Android's
@@ -390,13 +383,8 @@ struct ContentView: View {
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.
-        // The cover's content closure runs when it's presented, not in this body, so the tab and plug-in
-        // it opens on must be read here too: else a change to them doesn't refresh the closure and
-        // Settings opened on its first page (found with Home's "Sync your library").
-        .onChange(of: settingsTab) { _, _ in }
-        .onChange(of: settingsService) { _, _ in }
-        .fullScreenCover(isPresented: $showSettings, onDismiss: { settingsService = nil; settingsTab = nil }) {
-            NavigationStack { SettingsView(initialService: settingsService, initialTab: settingsTab) }
+        .fullScreenCover(item: $settings) { dest in
+            NavigationStack { SettingsView(initialService: dest.service, initialTab: dest.tab) }
         }
         // Spotify Connect device picker (Phase: Spotify) — hosted at the shell.
         .sheet(item: Binding(
@@ -579,7 +567,7 @@ struct ContentView: View {
         case "navCritical": tab = .home; homePendingRoute = .critical
         case "navPlaylists": tab = .playlists
         case "navPlaylist": if let id = cmd.id { tab = .home; homePendingRoute = .playlist(id: id, title: "") }
-        case "navSettings": showSettings = true
+        case "navSettings": settings = SettingsDestination()
         case "navSearch": tab = .search; pendingSearchQuery = cmd.query   // #256 prefill
         case "navChat":
             pendingChatPrompt = cmd.prompt   // #256 prompt injection
@@ -662,7 +650,7 @@ struct ContentView: View {
         switch id {
         case "collection": tab = .collection
         case "playlists":  tab = .playlists
-        case "settings":   showSettings = true
+        case "settings":   settings = SettingsDestination()
         default: break // history / concerts land with their screens
         }
     }
@@ -845,4 +833,11 @@ struct PCAskShuffleupagus {
 
 private struct PCAskShuffleupagusKey: EnvironmentKey {
     static let defaultValue = PCAskShuffleupagus { _ in }
+}
+
+/// What a Settings presentation opens on: a plug-in's sheet or a tab (a shared `SettingsTab` name); both nil is the first page.
+struct SettingsDestination: Identifiable {
+    let id = UUID()
+    var service: String? = nil
+    var tab: String? = nil
 }
