@@ -99,7 +99,7 @@ private struct HomeTileArt: View {
             }
             .frame(width: size, height: size)
         } else {
-            let isAlbum = tile.kind == "album"
+            let isAlbum = tile.kind == IosHomePageKt.JUMP_KIND_ALBUM
             pcCover(tile.imageUrl ?? tile.mosaic.first, seed: tile.title, size: size, radius: 0,
                     artist: isAlbum ? tile.targetArtist : nil, album: isAlbum ? tile.targetName : nil)
         }

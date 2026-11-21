@@ -807,22 +807,22 @@ private struct PCOpenPluginSettingsKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    /// Set by RootView; a no-op outside it.
+    /// Opens Settings on a plugin's sheet. Set by RootView; a no-op outside it.
     var pcOpenPluginSettings: PCOpenPluginSettings {
         get { self[PCOpenPluginSettingsKey.self] }
         set { self[PCOpenPluginSettingsKey.self] = newValue }
     }
-    /// Set by RootView; a no-op outside it.
+    /// Opens Settings on one tab. Set by RootView; a no-op outside it.
     var pcOpenSettingsTab: PCOpenSettingsTab {
         get { self[PCOpenSettingsTabKey.self] }
         set { self[PCOpenSettingsTabKey.self] = newValue }
     }
-    /// Set by RootView; a no-op outside it.
+    /// Opens the playlist import dialog. Set by RootView; a no-op outside it.
     var pcOpenImport: PCOpenImport {
         get { self[PCOpenImportKey.self] }
         set { self[PCOpenImportKey.self] = newValue }
     }
-    /// Set by RootView; a no-op outside it.
+    /// Sends an in-app prompt to Shuffleupagus's chat. Set by RootView; a no-op outside it.
     var pcAskShuffleupagus: PCAskShuffleupagus {
         get { self[PCAskShuffleupagusKey.self] }
         set { self[PCAskShuffleupagusKey.self] = newValue }

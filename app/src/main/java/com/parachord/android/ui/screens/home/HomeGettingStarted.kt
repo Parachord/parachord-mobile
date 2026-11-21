@@ -63,6 +63,8 @@ import com.parachord.android.ui.theme.FillSuccess
 import com.parachord.android.ui.theme.composeFill
 import com.parachord.android.ui.theme.current
 import com.parachord.android.ui.theme.tokenColor
+import com.parachord.shared.home.GETTING_STARTED_CONNECT
+import com.parachord.shared.home.GETTING_STARTED_MUSIC
 import com.parachord.shared.home.GETTING_STARTED_STEPS
 import com.parachord.shared.home.GettingStartedStepInfo
 import com.parachord.shared.home.GettingStartedView
@@ -173,8 +175,8 @@ fun HomeGettingStarted(
                         verticalArrangement = Arrangement.spacedBy(20.dp),
                     ) {
                         when (step.id) {
-                            "connect" -> ConnectStep(view, onOpenSettings)
-                            "music" -> MusicStep(
+                            GETTING_STARTED_CONNECT -> ConnectStep(view, onOpenSettings)
+                            GETTING_STARTED_MUSIC -> MusicStep(
                                 view = view,
                                 onImportLink = onOpenImportPlaylist,
                                 onSyncLibrary = { onOpenSettingsTab(SYNC_LIBRARY_SETTINGS_TAB) },

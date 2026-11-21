@@ -60,19 +60,19 @@ import com.parachord.android.ui.components.serviceLogoVector
 import com.parachord.android.ui.theme.current
 import com.parachord.android.ui.theme.tokenColor
 import com.parachord.shared.home.FilterChipSource
-import com.parachord.shared.home.homeSectionVisibility
-import com.parachord.shared.home.HOME_ALL_SOURCES
 import com.parachord.shared.home.HOME_ROW_CARDS
 import com.parachord.shared.home.HomeCopy
 import com.parachord.shared.home.HomeMixCard
 import com.parachord.shared.home.HomePlaylistCard
 import com.parachord.shared.home.HomeState
 import com.parachord.shared.home.albumReasonBadge
-import com.parachord.shared.home.homeSourceChipColor
-import com.parachord.shared.home.showSourceChips
+import com.parachord.shared.home.homeAlbumCardKey
+import com.parachord.shared.home.homeSectionVisibility
+import com.parachord.shared.home.homeSourceChips
 import com.parachord.shared.home.mixCardArt
 import com.parachord.shared.home.mixCardKey
 import com.parachord.shared.home.mixCardSubtitle
+import com.parachord.shared.home.showSourceChips
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
@@ -101,8 +101,7 @@ private val BadgeInk = tokenColor(DesignTokens.ON_ART_INK)
 private fun SourceChips(sources: List<FilterChipSource>, selected: String, onSelect: (String) -> Unit) {
     if (!showSourceChips(sources)) return
     FilterChips(
-        chips = listOf(FilterChipItem(HOME_ALL_SOURCES, HomeCopy.ALL)) +
-            sources.map { FilterChipItem(it.id, it.label, homeSourceChipColor(it.id)) },
+        chips = homeSourceChips(sources).map { FilterChipItem(it.id, it.label, it.colorRgb) },
         selectedId = selected,
         onSelect = onSelect,
         pageFill = DesignTokens.Page.HOME.fill,
@@ -247,7 +246,7 @@ fun HomeAlbumsRow(
                 items(HOME_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 2) }
             } else {
                 // Artist + title is unique in the list (homeRecommendationAlbums dedups by it); an id may be blank.
-                items(state.albums, key = { "${it.artist.orEmpty()}\u0000${it.name}" }) { item ->
+                items(state.albums, key = { homeAlbumCardKey(it) }) { item ->
                     LaunchedEffect(item.id) { onShown(item) }
                     val reason = albumReasonBadge(item)
                     RecAlbumCard(

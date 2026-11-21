@@ -263,6 +263,25 @@ struct HomeAlbumsRow: View {
     }
 }
 
+/// Shuffleupagus's disc on its own (desktop `ReasonMark`, Android's `ReasonMark`): the white chip with its
+/// logo in dark ink. The badges draw it, and the Ask box's heading, so they read as one thing. `outlined`
+/// adds a border so the white disc shows on a light surface (the mark off the art).
+struct HomeReasonMark: View {
+    var outlined: Bool = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(pcToken(DesignTokens.shared.ON_COLOR_CHIP).opacity(Double(DesignTokens.shared.ON_COLOR_CHIP_ALPHA)))
+                .overlay { if outlined { Circle().strokeBorder(PC.border, lineWidth: 1) } }
+                .frame(width: badgeDisc, height: badgeDisc)
+            PCServiceLogo(serviceId: RecommendationPageKt.SHUFFLEUPAGUS_ID, tint: pcToken(DesignTokens.shared.ON_ART_INK))
+                .frame(width: badgeLogo, height: badgeLogo)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 /// The reason badge (desktop `reason-badge.js`) on a Shuffleupagus pick: a white chip disc with its
 /// logo in dark ink, over the cover's bottom-left; a tap shows why in a popover.
 struct HomeReasonBadge: View {
@@ -272,14 +291,8 @@ struct HomeReasonBadge: View {
 
     var body: some View {
         Button { shown = true } label: {
-            ZStack {
-                Circle()
-                    .fill(pcToken(DesignTokens.shared.ON_COLOR_CHIP).opacity(Double(DesignTokens.shared.ON_COLOR_CHIP_ALPHA)))
-                    .frame(width: badgeDisc, height: badgeDisc)
-                PCServiceLogo(serviceId: RecommendationPageKt.SHUFFLEUPAGUS_ID, tint: pcToken(DesignTokens.shared.ON_ART_INK))
-                    .frame(width: badgeLogo, height: badgeLogo)
-            }
-            .frame(width: 48, height: 48)
+            HomeReasonMark()
+                .frame(width: 48, height: 48)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
