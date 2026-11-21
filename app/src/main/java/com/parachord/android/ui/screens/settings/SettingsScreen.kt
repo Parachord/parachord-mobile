@@ -1423,47 +1423,6 @@ private fun PluginConfigSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Status
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Status",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                )
-                Spacer(modifier = Modifier.weight(1f))
-                // The chip must reflect whether the resolver is actually WORKING,
-                // not just connected. A resolver that's connected but toggled OFF
-                // (active_resolvers, #213) doesn't resolve or show badges — showing
-                // "ENABLED" for it is what made a Spotify-only user think Spotify
-                // worked when the toggle was off (#338). "OFF" distinguishes the
-                // toggled-off case from a genuinely not-connected one.
-                val statusEnabled = isConnected && (!isResolver || resolverEnabled)
-                val statusText = when {
-                    statusEnabled -> "ENABLED"
-                    isConnected && isResolver -> "OFF"
-                    else -> "DISABLED"
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            if (statusEnabled) Success.copy(alpha = 0.15f)
-                            else MaterialTheme.colorScheme.surfaceVariant,
-                        )
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (statusEnabled) Success else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
             // "Enable X" (#707, desktop parachord#1505): a music plug-in's one
             // on switch (`active_resolvers`), and under it, while it's on,
             // "Play from X", "Use metadata from X" and "Use recommendations
