@@ -1318,7 +1318,10 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   and the retry is forced to it unless the cache no longer holds that source,
   when it re-selects. A failed deck switch (a forced resolver that isn't a
   slot's retry, `deckSwitch`) still leaves the playback that was going on as it
-  was. **The direct-URL shortcut** (a track's `sourceUrl` with no cache entry)
+  was. While a deck switch starts, the deck shows the pick
+  (`pendingSourcePick`, through the shared `pickerShownResolver`, read only
+  while `isStarting`), never stamped onto the track, so a failed switch goes
+  back to the real source; the play buttons spin on `isStarting`. **The direct-URL shortcut** (a track's `sourceUrl` with no cache entry)
   is only for a track with no resolver (an XSPF location, a direct stream, a
   sample) or one AVPlayer plays itself (`PlaybackRouter.avPlayerResolvers`); a
   track that names a service carries that service's page as its URL and always

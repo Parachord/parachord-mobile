@@ -1503,6 +1503,38 @@ class PlaybackController constructor(
         skipReselect: Boolean = false,
         advancing: Boolean = false,
         userRequested: Boolean = !advancing,
+    ) {
+        // The play buttons spin from here, the wait for the lock included,
+        // until the engine has started it or the play failed
+        // ([PlaybackState.isStartingPlay]).
+        playStartBegan()
+        try {
+            playTrackInternalLocked(track, skipReselect, advancing, userRequested)
+        } finally {
+            playStartEnded()
+        }
+    }
+
+    /** Plays under way in [playTrackInternal], for [PlaybackState.isStartingPlay]. */
+    private var playStartsInFlight = 0
+
+    private fun playStartBegan() {
+        playStartsInFlight++
+        if (!stateHolder.state.value.isStartingPlay) stateHolder.update { copy(isStartingPlay = true) }
+    }
+
+    private fun playStartEnded() {
+        playStartsInFlight = (playStartsInFlight - 1).coerceAtLeast(0)
+        if (playStartsInFlight == 0 && stateHolder.state.value.isStartingPlay) {
+            stateHolder.update { copy(isStartingPlay = false) }
+        }
+    }
+
+    private suspend fun playTrackInternalLocked(
+        track: TrackEntity,
+        skipReselect: Boolean,
+        advancing: Boolean,
+        userRequested: Boolean,
     ) = playMutex.withLock {
         var completed = false
         val queueAtStart = queueGeneration
@@ -3314,9 +3346,21 @@ class PlaybackController constructor(
                 soundcloudId = source.soundcloudId,
                 appleMusicId = source.appleMusicId,
             )
-            // skipReselect=true: the user explicitly chose this source — don't let
-            // reselectBestSource() override it back to the auto-selected best.
-            playTrackInternal(switched, skipReselect = true)
+            // The switcher shows the pick at once, for this track, until the
+            // play from it has started or failed (shared pickerShownResolver);
+            // it's never written onto the track.
+            val pick = com.parachord.shared.resolver.PendingSourcePick(track.id, source.resolver)
+            stateHolder.update { copy(pendingSourcePick = pick) }
+            try {
+                // skipReselect=true: the user explicitly chose this source — don't let
+                // reselectBestSource() override it back to the auto-selected best.
+                playTrackInternal(switched, skipReselect = true)
+            } finally {
+                // A later pick replaced it: that one's play clears its own.
+                if (stateHolder.state.value.pendingSourcePick === pick) {
+                    stateHolder.update { copy(pendingSourcePick = null) }
+                }
+            }
         }
     }
 
