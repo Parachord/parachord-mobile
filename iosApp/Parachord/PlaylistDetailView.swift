@@ -4,10 +4,10 @@ import Shared
 // MARK: - Playlist detail (phase 5.4)
 //
 // Loads + shows the tracks of a single ListenBrainz weekly playlist via
-// the shared WeeklyPlaylistsRepository. Browse-only for now: these are
-// metadata-only LB tracks (no resolver / streaming IDs), so playback
-// waits on the iOS resolver pipeline. Establishes the NavigationStack
-// push pattern (Discover row → detail) the rest of the app reuses.
+// the shared WeeklyPlaylistsRepository. The header (kind, date, blurb) comes
+// from the recommendation sections (`IosContainer.weeklyPlaylistHeader`, the
+// shared rule Android's WeeklyPlaylistScreen uses). The tracks are
+// metadata-only LB tracks that resolve per visible row.
 
 @MainActor
 @Observable
@@ -19,6 +19,9 @@ final class PlaylistDetailViewModel {
     let title: String
 
     var tracks: [IosPlaylistTrack] = []
+    /// The weekly header from the recommendation sections; nil when the page
+    /// doesn't carry this playlist (the passed title shows alone).
+    var header: IosWeeklyHeader?
     /// Metadata-only shared Tracks (no resolver IDs) — what the coordinator
     /// queues + resolves on the fly. Parallel to `tracks` by index.
     var trackEntities: [Track] = []
@@ -44,6 +47,7 @@ final class PlaylistDetailViewModel {
             }
         }
         guard !loaded else { return }
+        header = container.weeklyPlaylistHeader(playlistId: playlistId)
         isLoading = true
         tracks = (try? await container.loadWeeklyPlaylistTracks(playlistId: playlistId)) ?? []
         trackEntities = tracks.map { Self.makeTrack($0) }
@@ -68,7 +72,7 @@ final class PlaylistDetailViewModel {
         let artwork = tracks.compactMap { $0.albumArt }.first { !$0.isEmpty }
         Task {
             _ = try? await container.saveWeeklyPlaylist(
-                playlistId: playlistId, title: title, description: nil,
+                playlistId: playlistId, title: title, description: header?.blurb,
                 artworkUrl: artwork, tracks: trackEntities)
             saving = false
         }
@@ -186,9 +190,13 @@ struct PlaylistDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
 
-            Text(model.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(PC.fg1)
+            Text(model.header?.headline ?? model.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(PC.fg1)
                 .multilineTextAlignment(.center)
             Text("ListenBrainz · \(model.tracks.count) tracks").font(.system(size: 13)).foregroundStyle(PC.fg2)
+            if let blurb = model.header?.blurb, !blurb.isEmpty {
+                Text(blurb).font(.system(size: 13)).foregroundStyle(PC.fg2)
+                    .multilineTextAlignment(.center).lineLimit(2)
+            }
 
             HStack(spacing: 10) {
                 Button { coordinator.setQueue(model.trackEntities, startIndex: 0, context: playlistContext) } label: {

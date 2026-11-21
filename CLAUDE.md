@@ -943,15 +943,17 @@ Spotify rate-limits the whole **account/`client_id`**, and Parachord's Android +
 
 ### ListenBrainz Weekly Playlists
 
-The desktop fetches `GET /1/user/{username}/playlists/createdfor?count=100` (public, no auth token needed), filters by title containing "weekly jams" or "weekly exploration", sorts by date descending, and takes the most recent 4 of each type. Tracks are loaded lazily per playlist via `GET /1/playlist/{playlistId}`.
+Weekly Jams and Weekly Exploration come from the ListenBrainz plugin's recommendation sections: an item with `weekly` (shared `WeeklyInfo`: id, `contextType` `weekly-jam` / `weekly-exploration`, label, week label, date). Mobile sends no `createdfor` request of its own.
 
 **Weekly Jams is a history mix** (see "History mixes"): the ListenBrainz plugin sends it as one, Home shows it in "Made from your listening" and can offer it in Jump back in, and the Recommendations Playlists row leaves it out with every other mix id. Weekly Exploration is not a mix and stays in that row. Home has no Weekly carousels any more.
 
-On Android, `WeeklyPlaylistsRepository` mirrors this pattern and feeds the Recommendations page's weekly cards. Tapping a weekly card navigates to `WeeklyPlaylistScreen` (ephemeral view with a Save button).
+**The header comes from the sections (desktop's `weeklyHomeEntries`).** The shared `weeklyPlaylistHeader(sections, id)` (`shared/.../recommendations/WeeklyPlaylistHeader.kt`) finds the playlist and gives its title (the label), week label, date ("Jun 15, 2026", `weeklyDateLabel`) and blurb: `WEEKLY_DESCRIPTIONS[contextType]`, then ", curated by" and the item's own source name, else its resolver id, else "your service". It reads `RecommendationPageState.weeklySections`, the page built before the history-mix exclusion (desktop's `buildRecommendationViews`), so Weekly Jams keep a header after the page drops them. A playlist the page doesn't carry (a cold "Playing from" before the page loaded) shows the kind label alone (`weeklyKindLabel`: "Weekly Jam" / "Weekly Exploration").
 
-`WeeklyPlaylistScreen` supports standard track context menus (long-press) via `TrackContextMenuHost` — Play Next, Add to Queue, Add to Playlist, Go to Artist/Album, and collection toggle.
+**Tracks** are fetched by playlist MBID through `WeeklyPlaylistsRepository.loadPlaylistTracks` (`GET /1/playlist/{id}`), on both apps, for the Recommendations cards' covers and the weekly views.
 
-Ephemeral playlists use the ID format `listenbrainz-{playlistMbid}` when saved to Room.
+**The views.** Android: a weekly card opens `WeeklyPlaylistScreen` (an ephemeral view with Save; its header from `WeeklyPlaylistViewModel`). It supports standard track context menus (long-press) via `TrackContextMenuHost`: Play Next, Add to Queue, Add to Playlist, Go to Artist/Album, and the collection toggle. iOS: `PlaylistDetailView` (`PCRoute.playlist`), with the same header through `IosContainer.weeklyPlaylistHeader` (`IosWeeklyHeader`: `headline`, `blurb`).
+
+Ephemeral playlists use the ID format `listenbrainz-{playlistMbid}` when saved.
 
 The shared page model (`RecommendationPage.kt`, see "Recommendations come from the plugins") puts Weekly Exploration's newest week in the Playlists row it builds, which the Recommendations page draws on both apps; Weekly Jams goes through the history-mix exclusion and stays out of that row (`docs/superpowers/specs/2026-11-19-home-and-recommendations-design.md`).
 
@@ -1067,11 +1069,11 @@ The sync screen's "Last synced" text is still written per platform (#591).
 
 ### Singleton Repository Caching
 
-`@Singleton` repositories persist across ViewModel lifecycles. If a repository caches API results in memory (like `WeeklyPlaylistsRepository`), the cache outlives individual screens and can become stale.
+`@Singleton` repositories persist across ViewModel lifecycles. If a repository caches API results (like `ChartsRepository`, which keeps each chart for 24 hours), the cache outlives individual screens and can become stale.
 
 **Rules for singleton caches:**
 - Always add a TTL or force-refresh mechanism. A `@Volatile var cacheTimestamp` with a TTL check prevents serving stale data indefinitely.
-- For data that changes frequently (weekly playlists, charts), prefer `forceRefresh = true` from the ViewModel `init` since API calls are cheap.
+- For data that changes frequently (charts), prefer `forceRefresh = true` from the ViewModel `init` since API calls are cheap.
 - For expensive data (AI recommendations), use stale-while-revalidate: show cached data immediately, refresh in background.
 
 ### External Playback Background Survival
@@ -1379,7 +1381,7 @@ static let darkAccentPurple = Color(hex: "#a78bfa")
 | Shared UI components | `ui/components/AlbumContextMenu.kt`, `ui/components/ArtistContextMenu.kt`, `ui/components/TrackContextMenu.kt`, `ui/components/TrackRow.kt`, `ui/components/ResolverIconRow.kt` |
 | Home | `shared/.../home/` (`HomeSession`, `HomeState`, `HomeSources`, `RepositoryHomeSources`, `HomeModel`, `HomePlaylists`, `HistoryMixes`, `HomeLower`, `GettingStarted*`, `ConcertsNearYou`, `ConcertArtistImages`, `JumpTileArtLookup`), `ui/screens/home/` (`HomeViewModel`, `HomeScreen`, `HomeHeader`, `HomeJumpBackIn`, `HomeRows`, `HomeLowerSections`, `HomeGettingStarted`) |
 | Home (queues, iOS bridge) | `shared/.../home/{HomeQueues,HomeRows}.kt` (what a tap plays; `homeSectionVisibility`), `shared/iosMain/.../ios/IosHomePage.kt` (`IosHomeSession`, the DTOs), `IosContainer.{homeSession,homeSources,updateHomePlayback}`, `iosApp/Parachord/{HomeScreen,HomeModel,HomeHeader,HomeJumpBackIn,HomeRows,HomeLowerSections,HomeGettingStarted}.swift` |
-| Weekly playlists | `data/repository/WeeklyPlaylistsRepository.kt`, `ui/screens/playlists/WeeklyPlaylistScreen.kt`, `WeeklyPlaylistViewModel.kt` |
+| Weekly playlists | `shared/.../recommendations/WeeklyPlaylistHeader.kt` (the header), `shared/.../repository/WeeklyPlaylistsRepository.kt` (tracks by id), `ui/screens/playlists/WeeklyPlaylistScreen.kt`, `WeeklyPlaylistViewModel.kt`, iOS `PlaylistDetailView.swift` |
 | Home (shared model) | `shared/.../home/{HomeModel,HomePlaylists,PlaylistFreshness,HistoryMixes,GettingStarted,HomeSetup,HomeBanners,ConcertsNearYou}.kt`, `shared/.../format/TimeAgo.kt`, `shared/.../repository/HistoryMixesRepository.kt`, `shared/.../deeplink/ChatPrompt.kt` |
 | Concerts / On Tour | `data/repository/ConcertsRepository.kt`, `data/api/TicketmasterApi.kt`, `data/api/SeatGeekApi.kt`, `ui/screens/discover/ConcertsScreen.kt` |
 | .axe plugin system | `shared/.../plugin/JsRuntime.kt`, `shared/.../plugin/PluginManager.kt`, `shared/.../plugin/PluginSyncService.kt`, `shared/.../plugin/PluginFileAccess.kt` |

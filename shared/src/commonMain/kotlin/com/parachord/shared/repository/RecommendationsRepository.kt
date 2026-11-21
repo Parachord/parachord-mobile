@@ -669,7 +669,21 @@ class RecommendationsRepository(
                     providerNames = names,
                 ),
             ))
-            _page.update { it.copy(sections = sections, sources = pageSources(sections), loadingMore = busy, paging = pages) }
+            // Only the providers carry weekly playlists, so this build skips
+            // Shuffleupagus and the Listeners row, and runs only when
+            // something is excluded (desktop's buildRecommendationViews).
+            val weeklySections = if (playlists.isEmpty()) sections else buildRecommendationPage(
+                providers = providers,
+                expanded = pages,
+                blocked = blocked,
+                providerNames = names,
+            )
+            _page.update {
+                it.copy(
+                    sections = sections, weeklySections = weeklySections, sources = pageSources(sections),
+                    loadingMore = busy, paging = pages,
+                )
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

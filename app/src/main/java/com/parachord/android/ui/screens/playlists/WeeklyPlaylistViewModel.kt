@@ -13,6 +13,9 @@ import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.resolver.TrackResolverCache
+import com.parachord.shared.recommendations.weeklyKindLabel
+import com.parachord.shared.recommendations.weeklyPlaylistHeader
+import com.parachord.shared.repository.RecommendationsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -23,6 +26,7 @@ import java.util.UUID
 class WeeklyPlaylistViewModel constructor(
     savedStateHandle: SavedStateHandle,
     private val weeklyPlaylistsRepository: WeeklyPlaylistsRepository,
+    private val recommendationsRepository: RecommendationsRepository,
     private val libraryRepository: LibraryRepository,
     private val playlistDao: PlaylistDao,
     private val playbackController: PlaybackController,
@@ -88,18 +92,17 @@ class WeeklyPlaylistViewModel constructor(
             // Check if already saved to library
             _saved.value = playlistDao.getById(savedPlaylistId) != null
 
-            // Find the entry from cached data to get title/weekLabel
-            val result = weeklyPlaylistsRepository.loadWeeklyPlaylists()
-            val allEntries = (result?.jams.orEmpty()) + (result?.exploration.orEmpty())
-            val entry = allEntries.find { it.id == playlistId }
-
-            // "Weekly Jam" (singular) to parallel "Weekly Exploration" in the header.
-            val kindLabel = if (contextType == "weekly-jam") "Weekly Jam" else "Weekly Exploration"
-            _title.value = entry?.title ?: kindLabel
-            _weekLabel.value = entry?.weekLabel ?: ""
+            // The header comes from the recommendation sections (desktop's
+            // weeklyHomeEntries). A playlist the page doesn't carry (opened
+            // from a saved queue's Playing from before the page loaded) shows
+            // the kind label alone.
+            val header = weeklyPlaylistHeader(recommendationsRepository.page.value.weeklySections, playlistId)
+            val kindLabel = weeklyKindLabel(contextType)
+            _title.value = header?.title ?: kindLabel
+            _weekLabel.value = header?.weekLabel ?: ""
             _kind.value = kindLabel
-            _dateLabel.value = entry?.dateLabel ?: ""
-            _description.value = entry?.description ?: ""
+            _dateLabel.value = header?.dateLabel ?: ""
+            _description.value = header?.blurb ?: ""
 
             // Load tracks
             val lbTracks = weeklyPlaylistsRepository.loadPlaylistTracks(playlistId)

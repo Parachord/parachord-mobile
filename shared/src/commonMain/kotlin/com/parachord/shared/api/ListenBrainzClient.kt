@@ -708,7 +708,7 @@ class ListenBrainzClient(
 
     /**
      * GET /1/user/{userName}/playlists — owned playlists, not the system
-     * `createdfor` playlists already exposed via [getCreatedForPlaylists].
+     * `createdfor` playlists (Weekly Jams and the like).
      *
      * Returns the user's playlists as a list of [LbPlaylist] entries. Each
      * entry carries playlist MBID (extracted from the `identifier` URL's
@@ -1021,38 +1021,6 @@ class ListenBrainzClient(
             out[id] = obj["total_listen_count"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()?.toLong()
         }
         return out
-    }
-
-    /** Fetch playlist metadata "createdfor" a user (Weekly Jams, Weekly Exploration). */
-    suspend fun getCreatedForPlaylists(
-        username: String,
-        count: Int = 100,
-    ): List<LbCreatedForPlaylist> {
-        return try {
-            val response = executeWithRetry {
-                httpClient.get("$BASE_URL/1/user/$username/playlists/createdfor") {
-                    parameter("count", count)
-                }
-            }
-            if (!response.status.isSuccess()) return emptyList()
-            val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
-            parsed.playlists.mapNotNull { wrapper ->
-                val pl = wrapper.playlist ?: return@mapNotNull null
-                val mbid = pl.identifier?.substringAfterLast("/")?.ifBlank { null }
-                    ?: return@mapNotNull null
-                LbCreatedForPlaylist(
-                    id = mbid,
-                    title = pl.title.orEmpty(),
-                    date = pl.date.orEmpty(),
-                    annotation = pl.annotation.orEmpty(),
-                )
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to fetch created-for playlists for $username", e)
-            emptyList()
-        }
     }
 
     /** Fetch tracks from a specific playlist with rich info (album art, durations). */
