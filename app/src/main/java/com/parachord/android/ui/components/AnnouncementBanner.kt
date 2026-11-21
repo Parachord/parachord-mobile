@@ -30,6 +30,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.parachord.android.ui.theme.ParachordTheme
 import com.parachord.shared.api.Announcement
+import com.parachord.shared.home.BannerRole
+import com.parachord.shared.home.bannerRole
 
 /**
  * Achordion announcements banner (#127).
@@ -60,12 +62,11 @@ fun AnnouncementBanner(
 ) {
     val haptic = LocalHapticFeedback.current
     val isDark = ParachordTheme.isDark
-    val severity = announcement.severity ?: "info"
-    val bg = when (severity) {
-        "error" -> if (isDark) Color(0xFF4A1212) else Color(0xFFFDECEC)
-        "warn" -> if (isDark) Color(0xFF3F2E10) else Color(0xFFFFF4E0)
-        "success" -> if (isDark) Color(0xFF103D24) else Color(0xFFE8F7EF)
-        else -> if (isDark) Color(0xFF2A1D4A) else Color(0xFFEFE8FD) // info / unknown → brand purple
+    val bg = when (bannerRole(announcement.severity)) {
+        BannerRole.ERROR -> if (isDark) Color(0xFF4A1212) else Color(0xFFFDECEC)
+        BannerRole.WARNING -> if (isDark) Color(0xFF3F2E10) else Color(0xFFFFF4E0)
+        BannerRole.SUCCESS -> if (isDark) Color(0xFF103D24) else Color(0xFFE8F7EF)
+        BannerRole.INFO -> if (isDark) Color(0xFF2A1D4A) else Color(0xFFEFE8FD) // info / unknown → brand purple
     }
     val fg = if (isDark) Color(0xFFF3F4F6) else Color(0xFF111827)
 

@@ -13,6 +13,20 @@ import com.parachord.shared.ui.ServiceColors
 fun homeSourceChipColor(id: String): Int =
     if (id == SHUFFLEUPAGUS_ID) DesignTokens.FILL_ACCENT else ServiceColors.color(id)
 
+/**
+ * A source chip on a row. [colorRgb] is `0xRRGGBB`; null for "All", a neutral
+ * chip that fills with the page's colour when picked.
+ */
+data class HomeSourceChip(val id: String, val label: String, val colorRgb: Int?)
+
+/** A row's chips: "All" first, then one per source in its colour. Both apps draw these. */
+fun homeSourceChips(sources: List<FilterChipSource>): List<HomeSourceChip> =
+    listOf(HomeSourceChip(HOME_ALL_SOURCES, HomeCopy.ALL, null)) +
+        sources.map { HomeSourceChip(it.id, it.label, homeSourceChipColor(it.id)) }
+
+/** An album card's key: artist and title (unique in the row; `homeRecommendationAlbums` dedups by it, while an id may be blank). */
+fun homeAlbumCardKey(item: RecommendationItem): String = "${item.artist.orEmpty()}\u0000${item.name}"
+
 /** A stable key for a "Made from your listening" card. */
 fun mixCardKey(card: HomeMixCard): String = when (card) {
     is HomeMixCard.Loves -> "loves"

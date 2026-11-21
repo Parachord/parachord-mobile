@@ -1,9 +1,9 @@
 package com.parachord.shared.ios
 
+import com.parachord.shared.home.BannerRole
 import com.parachord.shared.home.FilterChipSource
 import com.parachord.shared.home.GETTING_STARTED_STEPS
 import com.parachord.shared.home.GettingStartedView
-import com.parachord.shared.home.HOME_ALL_SOURCES
 import com.parachord.shared.home.HOME_JUMP_TILES
 import com.parachord.shared.home.HOME_RECENT_LOVES
 import com.parachord.shared.home.HomeCopy
@@ -22,6 +22,7 @@ import com.parachord.shared.home.JumpTileArtLookup
 import com.parachord.shared.home.ShownAlbumArtLookup
 import com.parachord.shared.home.StepMarkerLook
 import com.parachord.shared.home.albumReasonBadge
+import com.parachord.shared.home.bannerRole
 import com.parachord.shared.home.chartHalfCards
 import com.parachord.shared.home.concertArtist
 import com.parachord.shared.home.concertDateBadge
@@ -38,9 +39,10 @@ import com.parachord.shared.home.freeTileDescription
 import com.parachord.shared.home.freshHalfCards
 import com.parachord.shared.home.halfCardArtKey
 import com.parachord.shared.home.halfCardNeedsArt
+import com.parachord.shared.home.homeAlbumCardKey
 import com.parachord.shared.home.homeHalfBody
 import com.parachord.shared.home.homeSectionVisibility
-import com.parachord.shared.home.homeSourceChipColor
+import com.parachord.shared.home.homeSourceChips
 import com.parachord.shared.home.jumpTileKey
 import com.parachord.shared.home.jumpTileTitle
 import com.parachord.shared.home.jumpTilesArt
@@ -138,22 +140,38 @@ data class IosHomePage(
     val showAsk: Boolean,
 )
 
+/** [IosJumpTile.kind] values. */
+const val JUMP_KIND_PLAYLIST = "playlist"
+const val JUMP_KIND_LOVES = "loves"
+const val JUMP_KIND_ALBUM = "album"
+const val JUMP_KIND_MIX = "mix"
+
+/** [IosHomeHalf.kind] values. */
+const val HALF_KIND_FRESH = "fresh"
+const val HALF_KIND_CRITICAL = "critical"
+const val HALF_KIND_CHARTS = "charts"
+
+/** [IosHomeHalf.body] values. */
+const val HALF_BODY_CARDS = "cards"
+const val HALF_BODY_LOADING = "loading"
+const val HALF_BODY_FAILED = "failed"
+
 data class IosHomeSetup(val pill: String, val items: List<IosHomeSetupItem>)
 
 data class IosHomeSetupItem(val id: String, val label: String, val dismissLabel: String)
 
-/** [severity] is `info`, `success`, `warn` or `error`; [text] is the body. */
+/** [role] is how to colour it ([bannerRole]); [text] is the body. */
 data class IosHomeBanner(
     val id: String,
     val title: String,
     val text: String?,
-    val severity: String,
+    val role: BannerRole,
     val ctaLabel: String?,
     val ctaUrl: String?,
 )
 
 /**
- * A Jump back in tile. [kind] is "playlist", "loves", "album" or "mix". What a
+ * A Jump back in tile. [kind] is a `JUMP_KIND_*`. What a
  * tap opens: a playlist's [targetId] (its id) and [targetName]; Recent Loves
  * ([targetId] "loves"); an album's [targetName] (title) and [targetArtist]; a
  * mix's [targetUrl], [targetName] (title) and [targetArtist] (its source's name).
@@ -204,8 +222,8 @@ data class IosHomeAlbum(val item: IosRecItem, val reasonBadge: String?, val key:
 
 /**
  * One of the Fresh Drops / Critical Darlings / Pop of the Tops halves. [kind]
- * is "fresh", "critical" or "charts"; [pageColorId] the `DesignTokens.Page`
- * name; [body] "cards", "loading" or "failed" (Pop of the Tops' error, with
+ * is a `HALF_KIND_*`; [pageColorId] the `DesignTokens.Page`
+ * name; [body] a `HALF_BODY_*` (Pop of the Tops' error, with
  * [errorTitle], [errorText] and Try again).
  */
 data class IosHomeHalf(
@@ -326,7 +344,7 @@ fun iosHomePage(
             )
         },
         banner = state.banner?.let {
-            IosHomeBanner(it.id, it.title, it.body, it.severity, it.cta?.label, it.cta?.url)
+            IosHomeBanner(it.id, it.title, it.body, bannerRole(it.severity), it.cta?.label, it.cta?.url)
         },
         gettingStarted = state.gettingStarted?.let { gettingStarted(it, state, halfArt, pickedStep) },
         tiles = tiles.map { tile(it, tileArt[jumpTileKey(it)] ?: JumpTileArt(), playlistArt) },
@@ -347,7 +365,7 @@ fun iosHomePage(
         },
         albums = state.albums.map { item ->
             // Desktop's Home album card has no "Coming" pill.
-            IosHomeAlbum(iosRecItem(item, today).copy(comingLabel = null), albumReasonBadge(item), albumKey(item))
+            IosHomeAlbum(iosRecItem(item, today).copy(comingLabel = null), albumReasonBadge(item), homeAlbumCardKey(item))
         },
         albumChips = chips(state.albumSources),
         albumSource = state.albumSource,
@@ -373,11 +391,7 @@ fun iosHomePage(
 }
 
 private fun chips(sources: List<FilterChipSource>): List<IosHomeChip> =
-    listOf(IosHomeChip(HOME_ALL_SOURCES, HomeCopy.ALL, DesignTokens.Page.HOME.fill)) +
-        sources.map { IosHomeChip(it.id, it.label, homeSourceChipColor(it.id)) }
-
-/** An album card's key: artist and title (unique in the row; `homeRecommendationAlbums` dedups by it). */
-internal fun albumKey(item: RecommendationItem): String = "${item.artist.orEmpty()}\u0000${item.name}"
+    homeSourceChips(sources).map { IosHomeChip(it.id, it.label, it.colorRgb ?: DesignTokens.Page.HOME.fill) }
 
 private fun tile(tile: JumpTile, art: JumpTileArt, playlistArt: (String) -> String): IosJumpTile {
     val key = jumpTileKey(tile)
@@ -388,11 +402,11 @@ private fun tile(tile: JumpTile, art: JumpTileArt, playlistArt: (String) -> Stri
         targetId = key, targetName = title, targetArtist = null, targetUrl = null,
     )
     return when (tile) {
-        is JumpTile.Playlist -> base.copy(kind = "playlist", targetId = tile.playlist.id, targetName = tile.playlist.name)
-        is JumpTile.Loves -> base.copy(kind = "loves", targetId = "loves", targetName = HomeCopy.RECENT_LOVES)
-        is JumpTile.Album -> base.copy(kind = "album", targetName = tile.album.album, targetArtist = tile.album.artist)
+        is JumpTile.Playlist -> base.copy(kind = JUMP_KIND_PLAYLIST, targetId = tile.playlist.id, targetName = tile.playlist.name)
+        is JumpTile.Loves -> base.copy(kind = JUMP_KIND_LOVES, targetId = "loves", targetName = HomeCopy.RECENT_LOVES)
+        is JumpTile.Album -> base.copy(kind = JUMP_KIND_ALBUM, targetName = tile.album.album, targetArtist = tile.album.artist)
         is JumpTile.Mix -> base.copy(
-            kind = "mix", targetId = tile.mix.id, targetName = tile.mix.title,
+            kind = JUMP_KIND_MIX, targetId = tile.mix.id, targetName = tile.mix.title,
             targetArtist = tile.mix.resolverName.orEmpty(), targetUrl = tile.mix.url,
         )
     }
@@ -413,17 +427,17 @@ private fun mixCard(card: HomeMixCard): IosHomeMixCard {
 
 /** A half's kind, its feed's cards (before art) and whether the feed is loading. */
 private class HalfFeed(val kind: String, val page: DesignTokens.Page, val title: String, val feed: HomeFeed<*>, val cards: List<HomeHalfCard>) {
-    val failed: Boolean get() = kind == "charts" && feed.failed
+    val failed: Boolean get() = kind == HALF_KIND_CHARTS && feed.failed
 }
 
 private fun freshFeed(state: HomeState) =
-    HalfFeed("fresh", DesignTokens.Page.FRESH_DROPS, HomeCopy.FRESH_DROPS, state.fresh, freshHalfCards(state.fresh.items))
+    HalfFeed(HALF_KIND_FRESH, DesignTokens.Page.FRESH_DROPS, HomeCopy.FRESH_DROPS, state.fresh, freshHalfCards(state.fresh.items))
 
 private fun criticalFeed(state: HomeState) =
-    HalfFeed("critical", DesignTokens.Page.CRITICAL_DARLINGS, HomeCopy.CRITICAL_DARLINGS, state.critical, criticalHalfCards(state.critical.items))
+    HalfFeed(HALF_KIND_CRITICAL, DesignTokens.Page.CRITICAL_DARLINGS, HomeCopy.CRITICAL_DARLINGS, state.critical, criticalHalfCards(state.critical.items))
 
 private fun chartsFeed(state: HomeState) =
-    HalfFeed("charts", DesignTokens.Page.POP_OF_THE_TOPS, HomeCopy.POP_OF_THE_TOPS, state.charts, chartHalfCards(state.charts.items))
+    HalfFeed(HALF_KIND_CHARTS, DesignTokens.Page.POP_OF_THE_TOPS, HomeCopy.POP_OF_THE_TOPS, state.charts, chartHalfCards(state.charts.items))
 
 /** Every half card's key (see [halfCardKey]) to the card and whether its feed is loading. */
 internal fun halfCardsByKey(state: HomeState): Map<String, Pair<HomeHalfCard, Boolean>> =
@@ -452,9 +466,9 @@ private fun half(f: HalfFeed, halfArt: Map<String, String>): IosHomeHalf {
         title = f.title,
         pageColorId = f.page.name,
         body = when (body) {
-            HomeHalfBody.CARDS -> "cards"
-            HomeHalfBody.LOADING -> "loading"
-            HomeHalfBody.ERROR -> "failed"
+            HomeHalfBody.CARDS -> HALF_BODY_CARDS
+            HomeHalfBody.LOADING -> HALF_BODY_LOADING
+            HomeHalfBody.ERROR -> HALF_BODY_FAILED
         },
         errorTitle = if (body == HomeHalfBody.ERROR) HomeCopy.CHARTS_ERROR_TITLE else null,
         errorText = if (body == HomeHalfBody.ERROR) HomeCopy.CHARTS_ERROR_BODY else null,
@@ -670,7 +684,7 @@ class IosHomeSession internal constructor(
     }
 
     private fun albumFor(key: String): RecommendationItem? =
-        state.albums.firstOrNull { albumKey(it) == key } ?: state.albums.firstOrNull { it.id.isNotEmpty() && it.id == key }
+        state.albums.firstOrNull { homeAlbumCardKey(it) == key } ?: state.albums.firstOrNull { it.id.isNotEmpty() && it.id == key }
 
     // ── Queues (never throw) ─────────────────────────────────────────
 

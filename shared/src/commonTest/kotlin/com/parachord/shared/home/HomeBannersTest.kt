@@ -54,4 +54,14 @@ class HomeBannersTest {
         assertEquals(Cta("Go", "http://x"), cta("http://x"))
         assertEquals(Cta("Go", "HTTPS://x"), cta(" HTTPS://x "))
     }
+
+    @Test
+    fun `severity maps to a role and anything else is info`() {
+        assertEquals(BannerRole.ERROR, bannerRole("error"))
+        assertEquals(BannerRole.WARNING, bannerRole("warn"))
+        assertEquals(BannerRole.SUCCESS, bannerRole("success"))
+        assertEquals(BannerRole.INFO, bannerRole("info"))
+        assertEquals(BannerRole.INFO, bannerRole(null))
+        assertEquals(BannerRole.INFO, bannerRole("critical"))
+    }
 }

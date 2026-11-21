@@ -5,6 +5,9 @@ package com.parachord.shared.home
 // no What's New (spec "What's New (out of scope)"), so the only item is the
 // getting-started steps when they were skipped before they were done.
 
+/** The id (and action) of the item that reopens the getting-started steps. */
+const val SETUP_GETTING_STARTED = "getting-started"
+
 data class HomeSetupItem(val id: String, val label: String, val done: Boolean, val action: String)
 
 /** `mode` is `setup` while an item is open, else `none`. */
@@ -12,7 +15,7 @@ data class HomeSetup(val items: List<HomeSetupItem>, val done: Int, val total: I
 
 fun homeSetupItems(gettingStartedLeft: Boolean = false, dismissed: Set<String> = emptySet()): HomeSetup {
     val all = buildList {
-        if (gettingStartedLeft) add(HomeSetupItem("getting-started", "Finish getting started", false, "getting-started"))
+        if (gettingStartedLeft) add(HomeSetupItem(SETUP_GETTING_STARTED, "Finish getting started", false, SETUP_GETTING_STARTED))
     }
     val items = all.filter { it.id !in dismissed }
     return HomeSetup(

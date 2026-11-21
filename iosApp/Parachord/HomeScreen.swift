@@ -225,7 +225,7 @@ struct HomeScreen: View {
             HomeHeaderView(
                 page: page,
                 onCollectionRadio: { home.play(coordinator: coordinator) { try await $0.collectionRadio() } },
-                onSetupAction: { id in if id == "getting-started" { session.resumeSetup() } },
+                onSetupAction: { id in if id == HomeSetupKt.SETUP_GETTING_STARTED { session.resumeSetup() } },
                 onDismissSetupItem: { session.dismissSetupItem(id: $0) }
             )
             .padding(.top, 24)
@@ -284,7 +284,7 @@ struct HomeScreen: View {
             ForEach(page.halves, id: \.kind) { half in
                 HomeHalfView(
                     half: half,
-                    onSeeAll: { path.append(half.kind == "fresh" ? .fresh : half.kind == "critical" ? .critical : .pop) },
+                    onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_FRESH ? .fresh : half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
                     onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
                     onPlay: { card in
                         let key = card.key
@@ -344,7 +344,7 @@ struct HomeScreen: View {
                     ForEach(gs.explore, id: \.kind) { half in
                         HomeHalfView(
                             half: half,
-                            onSeeAll: { path.append(half.kind == "critical" ? .critical : .pop) },
+                            onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
                             onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
                             onPlay: { card in
                                 let key = card.key
@@ -373,14 +373,14 @@ struct HomeScreen: View {
     /// What a Jump back in tile opens, by kind.
     private func openTile(_ tile: IosJumpTile) {
         switch tile.kind {
-        case "playlist":
+        case IosHomePageKt.JUMP_KIND_PLAYLIST:
             path.append(.savedPlaylist(id: tile.targetId))
-        case "album":
+        case IosHomePageKt.JUMP_KIND_ALBUM:
             path.append(.album(title: tile.targetName, artist: tile.targetArtist ?? ""))
-        case "mix":
+        case IosHomePageKt.JUMP_KIND_MIX:
             guard let url = tile.targetUrl, !url.isEmpty else { return }
             path.append(.servicePlaylist(url: url, name: tile.targetName, source: tile.targetArtist ?? "", image: tile.imageUrl))
-        case "loves":
+        case IosHomePageKt.JUMP_KIND_LOVES:
             onOpenRecentLoves()
         default:
             break

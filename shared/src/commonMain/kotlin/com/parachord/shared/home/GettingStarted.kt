@@ -139,9 +139,9 @@ fun gettingStartedSteps(
     played: Boolean = false,
 ): GettingStartedStatus {
     val steps = listOf(
-        GettingStartedStep("connect", connected || folderAdded),
-        GettingStartedStep("music", hasMusic || scrobbling),
-        GettingStartedStep("listen", played),
+        GettingStartedStep(GETTING_STARTED_CONNECT, connected || folderAdded),
+        GettingStartedStep(GETTING_STARTED_MUSIC, hasMusic || scrobbling),
+        GettingStartedStep(GETTING_STARTED_LISTEN, played),
     )
     val next = steps.firstOrNull { !it.done }
     return GettingStartedStatus(steps, next?.id, next == null, steps.count { it.done })
