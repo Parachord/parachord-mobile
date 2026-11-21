@@ -212,6 +212,121 @@
         },
     };
 
+    // ── The plugin-supplied Widevine path (Android only) ─────────────
+    // desktop docs/architecture/plugins.md "The plugin-supplied Widevine
+    // path": a plugin with capabilities.widevine + getPlaybackManifest +
+    // relayLicense supplies the DASH manifest and the licences, and the host
+    // (ExoPlayer, app/.../playback/drm/) plays them. Kotlin reaches these
+    // through PluginManager's unique-key poll. The plugin's `context` stays
+    // HERE, keyed by session, and goes back to relayLicense with every
+    // challenge; it never crosses into Kotlin. Every method answers (never
+    // throws): { ok: true, ... } or { ok: false, error: { reason, planKey,
+    // licenseDenied, denialReason, message } } (the contract's error fields).
+    window.__pcDrm = (function () {
+        var sessions = {};
+        var counter = 0;
+        function str(v) { return typeof v === 'string' && v ? v : null; }
+        function fail(e) {
+            return { ok: false, error: {
+                reason: (e && str(e.reason)) || 'playback-failed',
+                planKey: e ? str(e.planKey) : null,
+                licenseDenied: !!(e && e.licenseDenied === true),
+                denialReason: e ? str(e.denialReason) : null,
+                message: String((e && e.message) || e || '').slice(0, 300),
+            } };
+        }
+        function resolver(id) {
+            return window.__resolverLoader && window.__resolverLoader.getResolver(id);
+        }
+        // A plugin hung in its own network code must not leave the play
+        // loading forever: past the budget the call fails as playback-failed.
+        function withBudget(promise, ms, what) {
+            var timer = null;
+            return Promise.race([
+                promise,
+                new Promise(function (_resolve, reject) {
+                    timer = setTimeout(function () {
+                        var err = new Error(what + ' timed out');
+                        err.reason = 'playback-failed';
+                        reject(err);
+                    }, ms);
+                }),
+            ]).finally(function () { if (timer) clearTimeout(timer); });
+        }
+        return {
+            open: async function (resolverId, track, budgetMs) {
+                var r = resolver(resolverId);
+                if (!r || typeof r.getPlaybackManifest !== 'function' || typeof r.relayLicense !== 'function') {
+                    return fail({ reason: 'playback-failed', message: 'the plugin has no getPlaybackManifest/relayLicense' });
+                }
+                try {
+                    var reply = await withBudget(
+                        Promise.resolve(r.getPlaybackManifest(track, r.config || {})),
+                        budgetMs || 10000, 'getPlaybackManifest');
+                    if (!reply || typeof reply !== 'object' || typeof reply.manifest !== 'string' || !reply.manifest) {
+                        return fail({ reason: 'playback-failed', message: 'the manifest reply carried no manifest' });
+                    }
+                    if (reply.type !== 'dash' || reply.drm !== 'widevine') {
+                        return fail({ reason: 'playback-failed', message: 'the manifest reply is not dash/widevine' });
+                    }
+                    var sessionId = 'drm_' + (++counter) + '_' + Date.now().toString(36);
+                    sessions[sessionId] = { resolverId: resolverId, context: reply.context || null };
+                    return {
+                        ok: true,
+                        sessionId: sessionId,
+                        manifest: reply.manifest,
+                        extras: {
+                            asin: str(reply.asin),
+                            substituteAsin: str(reply.substituteAsin),
+                            cdnType: str(reply.cdnType),
+                        },
+                    };
+                } catch (e) {
+                    return fail(e);
+                }
+            },
+            license: async function (sessionId, challengeB64, budgetMs) {
+                var s = sessions[sessionId];
+                var r = s && resolver(s.resolverId);
+                if (!r || typeof r.relayLicense !== 'function') {
+                    return fail({ reason: 'playback-failed', message: 'no live plugin license relay for this session' });
+                }
+                try {
+                    var license = await withBudget(
+                        Promise.resolve(r.relayLicense(challengeB64, s.context)),
+                        budgetMs || 15000, 'relayLicense');
+                    if (typeof license !== 'string' || !license) {
+                        return fail({ reason: 'playback-failed', message: 'the plugin’s relayLicense answered empty' });
+                    }
+                    return { ok: true, license: license };
+                } catch (e) {
+                    return fail(e);
+                }
+            },
+            // The plugin's telemetry (handlePlayerEvent): never reaches playback.
+            event: function (sessionId, event) {
+                var s = sessions[sessionId];
+                var r = s && resolver(s.resolverId);
+                if (!r || typeof r.handlePlayerEvent !== 'function') return { ok: true, handled: false };
+                var ev = Object.assign({}, event || {}, { sessionId: sessionId });
+                try { Promise.resolve(r.handlePlayerEvent(ev)).catch(function () {}); } catch (e) {}
+                return { ok: true, handled: true };
+            },
+            close: function (sessionId) {
+                delete sessions[sessionId];
+                return { ok: true };
+            },
+        };
+    })();
+    // `this.host.widevine` (amazonmusic.axe's optionalHostBridges): the plugin
+    // only calls stop() from cleanup(). On Android the host owns the engine's
+    // lifetime (PlaybackController), and a cleanup also runs on every plugin
+    // hot-reload, which must not stop the track playing: so stop() stops
+    // nothing and says so (desktop's own "not-owner" answer).
+    window.__parachordBridge_widevine = {
+        stop: function () { return Promise.resolve({ stopped: false, reason: 'not-owner' }); },
+    };
+
     // ── ScrobbleManager registry ─────────────────────────────────────
     // Public, stable contract documented in desktop CLAUDE.md
     // `## Scrobbling: inline core, plugin contract for the rest`

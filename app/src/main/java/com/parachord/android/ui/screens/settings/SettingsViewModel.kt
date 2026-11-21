@@ -376,6 +376,26 @@ class SettingsViewModel constructor(
     val persistQueue: StateFlow<Boolean> = settingsStore.persistQueue
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** Playback Quality for plugin Widevine streams (desktop's keys and defaults). */
+    val playbackQuality: StateFlow<com.parachord.shared.playback.drm.PlaybackQualityTier> = settingsStore.playbackQuality
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.parachord.shared.playback.drm.PlaybackQualityTier.DEFAULT)
+    val playbackAbr: StateFlow<Boolean> = settingsStore.playbackAbr
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_ABR)
+    val playbackSpatial: StateFlow<Boolean> = settingsStore.playbackSpatial
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_SPATIAL)
+
+    fun setPlaybackQuality(tier: com.parachord.shared.playback.drm.PlaybackQualityTier) {
+        viewModelScope.launch { settingsStore.setPlaybackQuality(tier) }
+    }
+
+    fun setPlaybackAbr(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setPlaybackAbr(enabled) }
+    }
+
+    fun setPlaybackSpatial(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setPlaybackSpatial(enabled) }
+    }
+
     /** Set of disabled metadata provider names (e.g. "discogs", "wikipedia"). */
     val disabledMetaProviders: StateFlow<Set<String>> = settingsStore.getDisabledMetaProvidersFlow()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
