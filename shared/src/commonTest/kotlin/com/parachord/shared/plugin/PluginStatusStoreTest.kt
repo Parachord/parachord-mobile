@@ -17,6 +17,8 @@ class PluginStatusStoreTest {
         val off = MutableStateFlow<Set<String>>(emptySet())
         val sessionCalls = mutableListOf<String>()
         val replies = replies.toMutableMap()
+        val limitStates = mutableMapOf<String, String>()
+        val cleared = mutableListOf<String>()
         val store = PluginStatusStore(
             statusPluginIds = { this.replies.keys.toList() },
             readStatus = { id -> this.replies.getValue(id)() },
@@ -24,6 +26,9 @@ class PluginStatusStoreTest {
             getPlaybackOff = { off.value },
             playbackOffFlow = off,
             scope = scope.backgroundScope,
+            getLimitState = { limitStates[it] },
+            setLimitState = { id, state -> limitStates[id] = state },
+            clearResolver = { id, all -> cleared += "$id:$all" },
         )
     }
 
@@ -85,5 +90,41 @@ class PluginStatusStoreTest {
         assertEquals("Signed in to X", r.message)
         val h2 = Harness(this, mapOf("x" to { """{"signedIn":false}""" }), session = { _, _ -> """{"success":false}""" })
         assertFalse(h2.store.signIn("x", "X").success)
+    }
+
+    private val primeOwned = """{"signedIn":true,"playbackLimit":{"blocked":false,"ownedOnly":true,"planKey":"prime","label":"Prime: purchases only","searchesHeldBack":true}}"""
+    private val unlimited = """{"signedIn":true,"playbackLimit":{"blocked":false,"planKey":"unlimited","searchesHeldBack":true}}"""
+
+    @Test
+    fun `a purchases-only plan stays playing and entering it drops the saved sources once`() = runTest(UnconfinedTestDispatcher()) {
+        val h = Harness(this, mapOf("amazonmusic" to { primeOwned }))
+        h.limitStates["amazonmusic"] = "0"
+        h.store.refresh("amazonmusic")
+        assertEquals(emptyList(), h.store.notPlaying.value)
+        assertEquals(listOf("amazonmusic:true"), h.cleared)
+        assertEquals("owned", h.limitStates["amazonmusic"])
+        // Still on it: nothing more.
+        h.store.refresh("amazonmusic")
+        assertEquals(listOf("amazonmusic:true"), h.cleared)
+    }
+
+    @Test
+    fun `leaving it for Unlimited asks again without a purge`() = runTest(UnconfinedTestDispatcher()) {
+        var reply = primeOwned
+        val h = Harness(this, mapOf("amazonmusic" to { reply }))
+        h.limitStates["amazonmusic"] = "owned"
+        reply = unlimited
+        h.store.refresh("amazonmusic")
+        assertEquals(listOf("amazonmusic:false"), h.cleared)
+        assertEquals("0", h.limitStates["amazonmusic"])
+    }
+
+    @Test
+    fun `a failed read changes no remembered state`() = runTest(UnconfinedTestDispatcher()) {
+        val h = Harness(this, mapOf("amazonmusic" to { """{"failed":true}""" }))
+        h.limitStates["amazonmusic"] = "0"
+        h.store.refresh("amazonmusic")
+        assertEquals(emptyList(), h.cleared)
+        assertEquals("0", h.limitStates["amazonmusic"])
     }
 }

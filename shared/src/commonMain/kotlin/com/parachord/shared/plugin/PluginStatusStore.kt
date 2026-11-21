@@ -37,6 +37,13 @@ import kotlinx.serialization.json.contentOrNull
  * [notPlaying] is the one "not playing" list (shared [notPlayingIds]): the
  * plan-blocked plugins and the ones whose "Play from" is off. Source selection,
  * badges, the priority numbers and Home read it.
+ *
+ * After each successful read, a plan change runs [limitTransition] against the
+ * resolver's remembered state ([getLimitState] / [setLimitState], desktop's
+ * `playback_limit_blocked:<id>`): an upgrade asks the resolver again
+ * ([clearResolver] with `sourcesToo = false`: its misses go), and entering a
+ * purchases-only plan drops every saved source of it (`sourcesToo = true`).
+ * A failed read changes nothing.
  */
 class PluginStatusStore(
     /** The ids of the loaded plugins with `capabilities.status`. */
@@ -48,6 +55,14 @@ class PluginStatusStore(
     private val getPlaybackOff: suspend () -> Set<String>,
     playbackOffFlow: Flow<Set<String>>,
     scope: CoroutineScope,
+    /** The resolver's last remembered plan state ([limitStorageKey]); null = never seen. */
+    private val getLimitState: suspend (id: String) -> String? = { null },
+    private val setLimitState: suspend (id: String, state: String) -> Unit = { _, _ -> },
+    /**
+     * Clear a resolver's saved sources so it's asked again: its misses, and
+     * with `sourcesToo` its found sources as well. The platform's resolver cache.
+     */
+    private val clearResolver: suspend (id: String, sourcesToo: Boolean) -> Unit = { _, _ -> },
 ) {
     private val _statuses = MutableStateFlow<Map<String, PluginStatusEntry>>(emptyMap())
     /** Plugin id to its last reply. A plugin not read yet has no entry ("Checking…"). */
@@ -97,8 +112,28 @@ class PluginStatusStore(
                 PluginStatusEntry.READ_FAILED
             }
             _statuses.update { if (entry == null) it - id else it + (id to entry) }
+            if (entry != null && !entry.readFailed) applyLimitTransition(id, entry.playbackLimit)
         } finally {
             inFlightMutex.withLock { inFlight.remove(id) }
+        }
+    }
+
+    /** [limitTransition] for one fresh reading, and its effects. Never throws. */
+    private suspend fun applyLimitTransition(id: String, limit: PlaybackLimit?) {
+        if (limit == null) return
+        try {
+            val t = limitTransition(getLimitState(id), limit)
+            if (t.purge) {
+                Log.d(TAG, "$id plays only owned tracks (${limit.planKey}); dropping its saved sources and searching again")
+                clearResolver(id, true)
+            } else if (t.reresolve) {
+                Log.d(TAG, "$id can play now (${limit.planKey}); searching it again")
+                clearResolver(id, false)
+            }
+            t.store?.let { setLimitState(id, it) }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "Plan change for $id not applied: ${e.message?.take(120)}")
         }
     }
 
@@ -152,7 +187,12 @@ class PluginStatusStore(
         const val SIGN_OUT_TIMEOUT_MS = 30_000L
 
         /** The store over [pluginManager] and [settingsStore], as both apps wire it. */
-        fun create(pluginManager: PluginManager, settingsStore: SettingsStore, scope: CoroutineScope): PluginStatusStore =
+        fun create(
+            pluginManager: PluginManager,
+            settingsStore: SettingsStore,
+            scope: CoroutineScope,
+            clearResolver: suspend (id: String, sourcesToo: Boolean) -> Unit = { _, _ -> },
+        ): PluginStatusStore =
             PluginStatusStore(
                 statusPluginIds = { pluginManager.ensureInitialized(); pluginManager.statusPlugins().map { it.id } },
                 readStatus = { pluginManager.getStatus(it) },
@@ -160,6 +200,9 @@ class PluginStatusStore(
                 getPlaybackOff = { settingsStore.getPlaybackOffResolvers() },
                 playbackOffFlow = settingsStore.getPlaybackOffResolversFlow(),
                 scope = scope,
+                getLimitState = { settingsStore.getPlaybackLimitState(it) },
+                setLimitState = { id, state -> settingsStore.setPlaybackLimitState(id, state) },
+                clearResolver = clearResolver,
             )
     }
 }

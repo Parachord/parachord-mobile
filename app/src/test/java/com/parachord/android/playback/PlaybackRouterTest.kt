@@ -26,6 +26,7 @@ class PlaybackRouterTest {
     private lateinit var bandcampHandler: BandcampPlaybackHandler
     private lateinit var pluginStreamHandler: com.parachord.android.playback.handlers.PluginStreamHandler
     private lateinit var pluginManager: PluginManager
+    private lateinit var pluginDrmHandler: com.parachord.android.playback.drm.PluginDrmHandler
     private lateinit var router: PlaybackRouter
 
     @Before
@@ -36,6 +37,8 @@ class PlaybackRouterTest {
         bandcampHandler = mockk(relaxed = true)
         pluginStreamHandler = mockk(relaxed = true)
         pluginManager = mockk(relaxed = true)
+        pluginDrmHandler = mockk(relaxed = true)
+        every { pluginDrmHandler.canHandle(any()) } returns false
         // `plugins` is a StateFlow<List<Plugin>>; relaxed mockk can't infer the
         // generic type so the default iteration fails. Give it an empty list.
         every { pluginManager.plugins } returns MutableStateFlow(emptyList())
@@ -48,7 +51,23 @@ class PlaybackRouterTest {
         every { pluginStreamHandler.canHandle(any()) } returns false
         coEvery { soundCloudHandler.createMediaItem(any()) } returns null
 
-        router = PlaybackRouter(spotifyHandler, appleMusicHandler, soundCloudHandler, bandcampHandler, pluginStreamHandler, pluginManager)
+        router = PlaybackRouter(spotifyHandler, appleMusicHandler, soundCloudHandler, bandcampHandler, pluginStreamHandler, pluginManager, pluginDrmHandler)
+    }
+
+    @Test
+    fun `routes a widevine plugin's track to exoplayer with its drm item`() = runTest {
+        val track = TrackEntity(id = "1", title = "Song", artist = "Artist", resolver = "amazonmusic", sourceUrl = "amazonmusic:track:x")
+        val item = androidx.media3.common.MediaItem.Builder().setMediaId("1").build()
+        every { pluginDrmHandler.canHandle(track) } returns true
+        coEvery { pluginDrmHandler.createMediaItem(track) } returns item
+        // Even a plugin that says stream:false: the widevine capability is checked first.
+        every { pluginManager.plugins } returns MutableStateFlow(
+            listOf(com.parachord.shared.plugin.PluginManager.PluginInfo("amazonmusic", "Amazon Music", "1.0", capabilities = mapOf("stream" to false, "resolve" to true))),
+        )
+
+        val action = router.route(track)
+        assertTrue(action is PlaybackAction.ExoPlayerItem)
+        assertEquals(item, (action as PlaybackAction.ExoPlayerItem).mediaItem)
     }
 
     @Test
@@ -80,7 +99,7 @@ class PlaybackRouterTest {
     @Test
     fun `routes soundcloud track to its widget, as external playback`() = runTest {
         val widgetHandler = SoundCloudPlaybackHandler(mockk(relaxed = true))
-        val widgetRouter = PlaybackRouter(spotifyHandler, appleMusicHandler, widgetHandler, bandcampHandler, pluginStreamHandler, pluginManager)
+        val widgetRouter = PlaybackRouter(spotifyHandler, appleMusicHandler, widgetHandler, bandcampHandler, pluginStreamHandler, pluginManager, pluginDrmHandler)
         val track = TrackEntity(
             id = "1", title = "Song", artist = "Artist",
             resolver = "soundcloud", soundcloudId = "293",

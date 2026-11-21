@@ -502,6 +502,19 @@ val androidModule = module {
         onConfigSaved = { pluginId -> get<com.parachord.shared.plugin.PluginManager>().refreshConfiguredCache(pluginId) },
     ) }
     singleOf(::PluginStreamHandler)
+    // The plugin-supplied Widevine path (capabilities.widevine: Amazon Music).
+    single<com.parachord.android.playback.drm.PluginDrmJs> { com.parachord.android.playback.drm.PluginManagerDrmJs(get()) }
+    single { com.parachord.android.playback.drm.PluginDrmSessions(get()) }
+    single {
+        com.parachord.android.playback.drm.PluginDrmHandler(
+            pluginManager = get(),
+            sessions = get(),
+            js = get(),
+            trackResolverCache = get(),
+            settingsStore = get(),
+            statusStore = lazy { get<com.parachord.shared.plugin.PluginStatusStore>() },
+        )
+    }
     singleOf(::BandcampEmbedBridge)
     single { com.parachord.shared.playback.BandcampEmbedResolver(get()) }
     singleOf(::BandcampPlaybackHandler)
@@ -1275,6 +1288,9 @@ val androidModule = module {
                         com.parachord.shared.platform.Log.e("PluginStatusStore", "Status scope failed", e)
                     },
             ),
+            // A plan change clears the resolver's saved sources (#1494).
+            // Looked up when it runs: the cache reads this store's notPlaying.
+            clearResolver = { id, sourcesToo -> getKoin().get<TrackResolverCache>().clearResolver(id, sourcesToo) },
         )
     }
     single {
@@ -1282,7 +1298,9 @@ val androidModule = module {
             get<PluginFileAccess>(), get<JsBridge>(),
             appVersion = com.parachord.android.BuildConfig.VERSION_NAME, platform = "android",
             // Each needs its JS object in bootstrap.html (window.__parachordBridge_<name>).
-            hostBridges = setOf("webSession"),
+            // `widevine` is amazonmusic.axe's optional bridge; it only calls
+            // its stop() from cleanup (see bootstrap.html).
+            hostBridges = setOf("webSession", "widevine"),
         ).apply {
             // soundcloud.axe's URL / playlist lookups need the sign-in token;
             // lastfm.axe and listenbrainz.axe read the username for
