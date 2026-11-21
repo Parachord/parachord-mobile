@@ -779,8 +779,9 @@ struct PCOfflineBanner: View {
 
 /// Opens Settings with one plugin's settings sheet showing (its id, e.g. "listenbrainz").
 struct PCOpenPluginSettings {
-    let open: (String) -> Void
-    func callAsFunction(_ pluginId: String) { open(pluginId) }
+    let open: (String?) -> Void
+    /// With no id, Settings opens on its first page (Android's `onOpenSettings(null)`).
+    func callAsFunction(_ pluginId: String? = nil) { open(pluginId) }
 }
 
 /// Opens Settings on one tab (a shared `SettingsTab` name, e.g. `SettingsTab.shared.SYNC`).

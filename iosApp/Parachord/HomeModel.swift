@@ -15,6 +15,8 @@ final class HomeModel {
     @ObservationIgnored private var pageSub: Cancellable?
 
     var page: IosHomePage?
+    /// Ask's field, kept here so a return from a pushed page keeps what was typed.
+    var ask: AskField?
 
     /// Starts watching the page (the view's creation).
     func start() {

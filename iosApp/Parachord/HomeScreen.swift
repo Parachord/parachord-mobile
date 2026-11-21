@@ -134,6 +134,8 @@ struct HomeScreen: View {
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.pcOpenImport) private var openImport
+    @Environment(\.pcAskShuffleupagus) private var askShuffleupagus
+    @Environment(\.pcOpenPluginSettings) private var openPluginSettings
 
     private var session: IosHomeSession { home.session }
 
@@ -269,6 +271,43 @@ struct HomeScreen: View {
                         home.play(coordinator: coordinator) { try await $0.albumQueue(key: key) }
                     },
                     onSeeAll: { path.append(.recommendations) }
+                )
+                .padding(.top, 24)
+            }
+            ForEach(page.halves, id: \.kind) { half in
+                HomeHalfView(
+                    half: half,
+                    onSeeAll: { path.append(half.kind == "fresh" ? .fresh : half.kind == "critical" ? .critical : .pop) },
+                    onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
+                    onPlay: { card in
+                        let key = card.key
+                        home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
+                    },
+                    onShown: { session.halfCardShown(key: $0.key) },
+                    onRetry: { session.retryCharts() }
+                )
+                .padding(.top, 24)
+            }
+            if page.showConcerts {
+                VStack(alignment: .leading, spacing: 0) {
+                    PCSectionHeader(
+                        title: HomeCopy.shared.CONCERTS_TITLE, subtitle: HomeCopy.shared.CONCERTS_SUBTITLE,
+                        page: DesignTokens.Page.concerts, onSeeAll: { path.append(.concerts) }, gutter: homeGutter)
+                    VStack(spacing: 12) {
+                        ForEach(page.concerts, id: \.id) { c in
+                            HomeConcertCard(concert: c, onOpenTour: { path.append(.artistOnTour($0)) })
+                        }
+                    }
+                }
+                .padding(.top, 24)
+            }
+            if page.showAsk {
+                HomeAsk(
+                    example: page.askExample, chatAvailable: page.chatAvailable,
+                    field: Binding(get: { home.ask }, set: { home.ask = $0 }),
+                    onAsk: { askShuffleupagus($0) },
+                    // Android's `onOpenSettings(null)`: Settings, on no plug-in's sheet.
+                    onSetUp: { openPluginSettings() }
                 )
                 .padding(.top, 24)
             }

@@ -265,8 +265,9 @@ struct HomeAlbumsRow: View {
 
 /// The reason badge (desktop `reason-badge.js`) on a Shuffleupagus pick: a white chip disc with its
 /// logo in dark ink, over the cover's bottom-left; a tap shows why in a popover.
-private struct HomeReasonBadge: View {
+struct HomeReasonBadge: View {
     let text: String
+    var label: String = HomeCopy.shared.WHY_SHUFFLEUPAGUS
     @State private var shown = false
 
     var body: some View {
@@ -289,7 +290,7 @@ private struct HomeReasonBadge: View {
                 .padding(16).frame(maxWidth: 260)
                 .presentationCompactAdaptation(.popover)
         }
-        .accessibilityLabel(HomeCopy.shared.WHY_SHUFFLEUPAGUS)
+        .accessibilityLabel(label)
         .accessibilityValue(text)
     }
 }

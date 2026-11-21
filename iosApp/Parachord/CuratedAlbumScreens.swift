@@ -1013,7 +1013,7 @@ struct ConcertsScreen: View {
 /// A concert row's VoiceOver actions: the default action opens the artist's
 /// On Tour tab (when the event names one), and "Tickets" opens the ticket link,
 /// so both stay reachable on the combined element.
-private struct ConcertRowAccessibility: ViewModifier {
+struct ConcertRowAccessibility: ViewModifier {
     let tourArtist: String?
     let ticket: URL?
     let open: (String) -> Void
