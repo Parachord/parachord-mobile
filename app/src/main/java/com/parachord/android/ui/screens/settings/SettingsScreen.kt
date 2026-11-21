@@ -631,6 +631,7 @@ private fun PlugInsTab(
                         settingsViewModel.reorderResolvers(orderedEnabled.toList())
                     },
                     onPluginClick = { id -> findPlugin(id)?.let { selectedPlugin = it } },
+                    statusLabelFor = { id -> com.parachord.shared.plugin.tileStatus(playbackLimits, id, playbackOff).statusLabel },
                 )
             }
         }
@@ -1059,6 +1060,8 @@ private fun DraggableResolverRow(
     isConnected: (String) -> Boolean,
     onReorder: (from: Int, to: Int) -> Unit,
     onPluginClick: (String) -> Unit,
+    /** A playing tile's plan line (`tileStatus`): "Prime: purchases only" (#1494), else null. */
+    statusLabelFor: (String) -> String? = { null },
 ) {
     val density = LocalDensity.current
     var draggingIndex by remember { mutableIntStateOf(-1) }
@@ -1154,6 +1157,8 @@ private fun DraggableResolverRow(
                     isConnected = isConnected(pluginId),
                     priorityNumber = index + 1,
                     onClick = { onPluginClick(pluginId) },
+                    statusLabel = statusLabelFor(pluginId),
+                    statusLabelColor = SetupRequiredAmber,
                 )
             }
         }

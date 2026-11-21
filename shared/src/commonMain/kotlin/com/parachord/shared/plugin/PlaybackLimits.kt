@@ -39,7 +39,8 @@ private val statusJson = Json { ignoreUnknownKeys = true }
  * a reply's `playbackLimit`, validated field by field. A reply without one, or
  * one not shaped like an entry (`blocked` not a boolean), is no verdict (null),
  * never a guess. Non-string fields degrade to null; `searchesHeldBack` is true
- * only when the plugin says exactly `true`.
+ * only when the plugin says exactly `true`, and `ownedOnly` only when it says
+ * exactly `true` on an unblocked entry (a blocked resolver plays nothing).
  */
 fun pluginStatusLimit(status: JsonElement?): PlaybackLimit? {
     val limit = (status as? JsonObject)?.get("playbackLimit") as? JsonObject ?: return null
@@ -47,12 +48,14 @@ fun pluginStatusLimit(status: JsonElement?): PlaybackLimit? {
     fun str(key: String): String? =
         (limit[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.takeIf { it.isNotEmpty() }
     val held = (limit["searchesHeldBack"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true
+    val owned = (limit["ownedOnly"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true && !blocked
     return PlaybackLimit(
         blocked = blocked,
         label = str("label"),
         planKey = str("planKey"),
         message = str("message"),
         searchesHeldBack = held,
+        ownedOnly = owned,
     )
 }
 
@@ -130,12 +133,14 @@ fun notPlayingIds(blockedIds: List<String>, playbackOffIds: Collection<String>):
 data class TileStatus(val statusLabel: String?, val statusTitle: String?)
 
 /**
- * Port of `tileStatus`: a plan limit's label (it wins), else "Search and links
- * only" when the user switched "Play from" off, else nothing.
+ * Port of `tileStatus`: a plan limit's label (it wins: what a blocked plan
+ * stops, or what an [PlaybackLimit.ownedOnly] one still plays), else "Search
+ * and links only" when the user switched "Play from" off, else nothing.
  */
 fun tileStatus(limits: Map<String, PlaybackLimit?>, id: String, playbackOffIds: Collection<String> = emptyList()): TileStatus {
     val limit = limits[id]
     if (limit != null && limit.blocked) return TileStatus(limit.label ?: "No playback", limit.message)
+    if (limit != null && limit.ownedOnly) return TileStatus(limit.label ?: "Purchases only", limit.message)
     if (id in playbackOffIds) return TileStatus("Search and links only", "Playing from it is off in its settings")
     return TileStatus(null, null)
 }
@@ -143,3 +148,64 @@ fun tileStatus(limits: Map<String, PlaybackLimit?>, id: String, playbackOffIds: 
 /** Port of `limitMessage`: the settings panel's explanation for a blocked resolver, or null. */
 fun limitMessage(limits: Map<String, PlaybackLimit?>, id: String): String? =
     limits[id]?.takeIf { it.blocked }?.message
+
+/**
+ * What [limitTransition] says to do: ask the resolver again ([reresolve]),
+ * drop all its saved sources first ([purge]), and the state to remember
+ * ([store]; null = leave what's remembered).
+ */
+data class LimitTransition(val reresolve: Boolean, val purge: Boolean, val store: String?)
+
+/** The remembered states: blocked, purchases only, playable. */
+const val LIMIT_STATE_BLOCKED = "1"
+const val LIMIT_STATE_OWNED = "owned"
+const val LIMIT_STATE_PLAYABLE = "0"
+
+/**
+ * Port of desktop's `limitTransition` (`playback-limits.js`, #1494). [lastStored]
+ * is what was remembered for the resolver ([LIMIT_STATE_BLOCKED],
+ * [LIMIT_STATE_OWNED], [LIMIT_STATE_PLAYABLE], or null never seen). No reading
+ * ([limit] null) changes nothing.
+ * - into playable from blocked or owned-only (an upgrade): ask again, when the
+ *   searches were held back (`searchesHeldBack`);
+ * - into owned-only from anything else: purge (a source found on another plan
+ *   may be a track the account doesn't own) and so ask again;
+ * - into blocked: nothing; the resolver leaves playback whole.
+ */
+fun limitTransition(lastStored: String?, limit: PlaybackLimit?): LimitTransition {
+    if (limit == null) return LimitTransition(reresolve = false, purge = false, store = null)
+    val now = when {
+        limit.blocked -> LIMIT_STATE_BLOCKED
+        limit.ownedOnly -> LIMIT_STATE_OWNED
+        else -> LIMIT_STATE_PLAYABLE
+    }
+    val purge = now == LIMIT_STATE_OWNED && lastStored != LIMIT_STATE_OWNED
+    val upgraded = now == LIMIT_STATE_PLAYABLE &&
+        (lastStored == LIMIT_STATE_BLOCKED || lastStored == LIMIT_STATE_OWNED) && limit.searchesHeldBack
+    return LimitTransition(reresolve = purge || upgraded, purge = purge, store = now)
+}
+
+/** Port of `limitStorageKey`: where a resolver's last state is remembered (desktop's key). */
+fun limitStorageKey(resolverId: String): String = "playback_limit_blocked:$resolverId"
+
+/**
+ * One track's saved sources with [resolverId]'s cleared for a plan change
+ * (desktop's `clearResolverMisses`): its misses (`noMatch`) always, its found
+ * sources too when [dropFound] (the purge). The same list when nothing goes.
+ */
+fun clearResolverSources(
+    sources: List<com.parachord.shared.resolver.ResolvedSource>,
+    resolverId: String,
+    dropFound: Boolean,
+): List<com.parachord.shared.resolver.ResolvedSource> {
+    if (sources.none { it.resolver == resolverId && (dropFound || it.noMatch) }) return sources
+    return sources.filterNot { it.resolver == resolverId && (dropFound || it.noMatch) }
+}
+
+/**
+ * Whether a track with [sources] should ask [resolverId] again after the
+ * clear: it holds no found source of that resolver (desktop zeroes such a
+ * track's timestamp so it resolves again).
+ */
+fun asksResolverAgain(sources: List<com.parachord.shared.resolver.ResolvedSource>, resolverId: String): Boolean =
+    sources.none { it.resolver == resolverId && !it.noMatch }

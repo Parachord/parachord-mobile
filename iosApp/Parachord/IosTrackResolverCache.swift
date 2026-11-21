@@ -289,6 +289,29 @@ final class IosTrackResolverCache {
         if changed { scheduleSave() }
     }
 
+    /// A plan change for [resolverId] (shared `limitTransition`, run by
+    /// `PluginStatusStore`; desktop's `clearResolverMisses`, #1494): drop its
+    /// misses, and with `sourcesToo` its found sources as well (entering a
+    /// purchases-only plan, where a source found on another plan may not be
+    /// owned). Its miss and failure back-offs go too, so each row asks just
+    /// that resolver again when it next appears (the per-row fill in
+    /// `resolve(_:order:)`, visibility-scoped). The queue keeps its tracks.
+    func clearResolver(_ resolverId: String, sourcesToo: Bool) {
+        var changed = false
+        for (key, sources) in cache {
+            let cleared = PlaybackLimitsKt.clearResolverSources(sources: sources, resolverId: resolverId, dropFound: sourcesToo)
+            if cleared.count != sources.count {
+                cache[key] = cleared
+                changed = true
+            }
+        }
+        // A queued fill for it stays: it asks the resolver again, as wanted.
+        retryAfter = retryAfter.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        failureCount = failureCount.filter { !$0.key.hasSuffix("\u{1}\(resolverId)") }
+        if changed { scheduleSave() }
+        NSLog("[ResolverCache] cleared \(resolverId) (sources too: \(sourcesToo))")
+    }
+
     /// Nothing queued or running. The background sweep asks for its next
     /// batch only then (desktop's scheduler calls back when its queue drains).
     var isIdle: Bool { queue.isEmpty && activeWorkers == 0 }
