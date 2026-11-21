@@ -1120,6 +1120,21 @@ class SettingsStore(
 
     fun getPlaybackOffResolversFlow(): Flow<Set<String>> = csvSetFlow(PLAYBACK_OFF_RESOLVERS)
 
+    /**
+     * A resolver's last plan state (`'1'` blocked, `'owned'` purchases only,
+     * `'0'` playable; null never seen), under desktop's key
+     * ([com.parachord.shared.plugin.limitStorageKey]). Read and written by
+     * [com.parachord.shared.plugin.PluginStatusStore] through
+     * [com.parachord.shared.plugin.limitTransition].
+     */
+    suspend fun getPlaybackLimitState(resolverId: String): String? {
+        ensureMigrated(); return kv.getStringOrNull(com.parachord.shared.plugin.limitStorageKey(resolverId))
+    }
+
+    suspend fun setPlaybackLimitState(resolverId: String, state: String) {
+        ensureMigrated(); kv.setString(com.parachord.shared.plugin.limitStorageKey(resolverId), state)
+    }
+
     /** "Use metadata from X" off: skipped for covers and artist photos; track search still asks it. */
     suspend fun getMetadataOffResolvers(): Set<String> {
         ensureMigrated(); return kv.getStringSetCsv(METADATA_OFF_RESOLVERS)

@@ -1567,7 +1567,13 @@ was ranked (`ResolverOrderMemory.insertRemembered`). Badges, the deck's sources,
 greyed rows and selection (`resolverScoring`'s `getNotPlaying`) leave the list
 out. The account row (status line, Sign in / Sign out) shows for a plugin with
 `capabilities.status`; none loads on iOS today, since Amazon Music needs the
-web-session bridge iOS doesn't supply.
+web-session bridge iOS doesn't supply. A purchases-only plan (`ownedOnly`,
+#1494) keeps the plug-in numbered, with `pluginTileStatus`'s label in place of
+"Connected"; entering it drops the resolver's saved sources
+(`IosTrackResolverCache.clearResolver`, called by the shared
+`PluginStatusStore` through `IosContainer.resolverSourcesClearer`, which
+`AppBootstrap` sets; root `CLAUDE.md` → "A plan that plays only what the
+account owns").
 
 ## Local files are the library, not loves (#705)
 

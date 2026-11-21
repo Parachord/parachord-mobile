@@ -46,6 +46,12 @@ final class AppBootstrap {
         container.pluginJsRuntime.nativeBridgeInstaller = { ctx in
             JsPolyfills.installNativeBridge(to: ctx)
         }
+        // A plan change (a purchases-only plan, an upgrade) clears the
+        // resolver's saved sources (shared limitTransition, #1494). Set before
+        // the plugins load: their status is read once they have.
+        container.resolverSourcesClearer = { id, sourcesToo in
+            Task { @MainActor in IosTrackResolverCache.shared.clearResolver(id, sourcesToo: sourcesToo.boolValue) }
+        }
         _ = try? await container.loadPluginsAndList()
 
         // The resolver order + active set mirror. Besides the badges it drives

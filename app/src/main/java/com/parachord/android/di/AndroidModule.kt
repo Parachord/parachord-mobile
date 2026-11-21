@@ -1275,6 +1275,9 @@ val androidModule = module {
                         com.parachord.shared.platform.Log.e("PluginStatusStore", "Status scope failed", e)
                     },
             ),
+            // A plan change clears the resolver's saved sources (#1494).
+            // Looked up when it runs: the cache reads this store's notPlaying.
+            clearResolver = { id, sourcesToo -> getKoin().get<TrackResolverCache>().clearResolver(id, sourcesToo) },
         )
     }
     single {
