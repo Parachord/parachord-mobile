@@ -12,13 +12,15 @@ const val PLAYLIST_CONTEXT = "playlist"
 const val LOVES_CONTEXT = "loves"
 const val MIX_CONTEXT = "mix"
 const val ALBUM_CONTEXT = "album"
+/** The collection (Collection Radio, the car's Loved Songs, Collection's own Play). */
+const val COLLECTION_CONTEXT = "collection"
 
 /** What is playing and what is queued, by playback context. */
 data class ActiveContexts(val playing: PlaybackContext? = null, val queued: PlaybackContext? = null)
 
 sealed class JumpCandidate {
     data class Playlist(val id: String?, val title: String?) : JumpCandidate()
-    data class Mix(val id: String?) : JumpCandidate()
+    data class Mix(val url: String?) : JumpCandidate()
     object Loves : JumpCandidate()
     data class Album(val album: String?, val artist: String?, val mbid: String? = null) : JumpCandidate()
 }
@@ -37,7 +39,7 @@ fun isActiveContext(c: JumpCandidate, active: ActiveContexts): Boolean =
                 else if (ctx.id != null) c.id != null && ctx.id == c.id
                 else !c.title.isNullOrEmpty() && ctx.name == c.title
             }
-            is JumpCandidate.Mix -> ctx.type == MIX_CONTEXT && c.id != null && ctx.id == c.id
+            is JumpCandidate.Mix -> ctx.type == MIX_CONTEXT && c.url != null && ctx.id == c.url
             JumpCandidate.Loves -> ctx.type == LOVES_CONTEXT
             is JumpCandidate.Album -> {
                 if (ctx.type != ALBUM_CONTEXT) false
@@ -76,24 +78,33 @@ sealed class JumpTile {
     data class Mix(val mix: HistoryMix, override val subtitle: String = HomeCopy.MIXES_TITLE) : JumpTile()
 }
 
+/** The title a tile prints (desktop: "Recent Loves", the album, else the item's title). */
+fun jumpTileTitle(tile: JumpTile): String = when (tile) {
+    is JumpTile.Playlist -> tile.playlist.name
+    is JumpTile.Loves -> HomeCopy.RECENT_LOVES
+    is JumpTile.Album -> tile.album.album
+    is JumpTile.Mix -> tile.mix.title
+}
+
 /** The candidate a tile stands for, for [isActiveContext]. */
 fun jumpCandidate(tile: JumpTile): JumpCandidate = when (tile) {
     is JumpTile.Playlist -> JumpCandidate.Playlist(tile.playlist.id, tile.playlist.name)
     is JumpTile.Loves -> JumpCandidate.Loves
     is JumpTile.Album -> JumpCandidate.Album(tile.album.album, tile.album.artist, tile.album.mbid)
-    is JumpTile.Mix -> JumpCandidate.Mix(tile.mix.id)
+    is JumpTile.Mix -> JumpCandidate.Mix(tile.mix.url)
 }
 
 /**
  * The playback context a Jump back in tile plays under, so [isActiveContext]
  * recognises it afterwards: a playlist by id, Recent Loves, an album in
- * `CatalogQueues.album`'s form (name = title, id = artist), a mix by id.
+ * `CatalogQueues.album`'s form (name = title, id = artist), a mix by its link
+ * (the id "Playing from" opens the mix's service-playlist view with).
  */
 fun jumpTileContext(tile: JumpTile): PlaybackContext = when (tile) {
     is JumpTile.Playlist -> PlaybackContext(PLAYLIST_CONTEXT, tile.playlist.name, tile.playlist.id)
     is JumpTile.Loves -> PlaybackContext(LOVES_CONTEXT, HomeCopy.RECENT_LOVES)
     is JumpTile.Album -> com.parachord.shared.playback.CatalogQueues.albumContext(tile.album.album, tile.album.artist)
-    is JumpTile.Mix -> PlaybackContext(MIX_CONTEXT, tile.mix.title, tile.mix.id)
+    is JumpTile.Mix -> PlaybackContext(MIX_CONTEXT, tile.mix.title, tile.mix.url)
 }
 
 /** Up to four tiles in the order playlist, loves, album, mix; each kind takes its first candidate that isn't active. */
@@ -115,7 +126,7 @@ fun jumpBackInTiles(
     }
     if (loves.isNotEmpty() && !isActiveContext(JumpCandidate.Loves, active)) tiles += JumpTile.Loves(loves)
     latestLoveAlbum(loves, active)?.let { tiles += JumpTile.Album(it) }
-    mixes.firstOrNull { !isActiveContext(JumpCandidate.Mix(it.id), active) }?.let { tiles += JumpTile.Mix(it) }
+    mixes.firstOrNull { !isActiveContext(JumpCandidate.Mix(it.url), active) }?.let { tiles += JumpTile.Mix(it) }
     return tiles.take(4)
 }
 

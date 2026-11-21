@@ -279,8 +279,10 @@ Where iOS shows these: Fresh Drops, Critical
 Darlings, Concerts (the repository's message, no retry, as Android), History
 and a friend's profile (per tab: `couldntReach(service)` with Try again on every tab, as Android),
 an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
-throttle line instead of "No results"), Home's AI suggestions (the provider's
-message), Settings (an invalid ListenBrainz token is refused, not saved), Sync
+throttle line instead of "No results"), Home's Pop of the Tops half
+("Couldn’t load Pop of the Tops" with Try again, rather than the provider's message),
+a Home tap whose tracks couldn't load ("Could not load <name>", from the shared
+`HomeQueues`), Settings (an invalid ListenBrainz token is refused, not saved), Sync
 now (the run's notices after a successful sync), deleting a playlist Apple
 Music can't delete (a banner; the playlists list and the playlist screen use
 the same `DeletePlaylistSheet`, which also deletes the copies on the services
@@ -1578,21 +1580,71 @@ Home's Recent Loves use the shared `recentLoves` (undated loves last); the love-
 CarPlay's Loved Songs leave unloved files out. Removing a heart from a file keeps
 its row. Root `CLAUDE.md` → "Local files are the library, not loves".
 
-## Home's shared model (not drawn on iOS yet)
+## Home: drawn from the shared session
 
 Home's rules (jump back in, sections, playlist freshness, history mixes,
 getting started, setup, banners, concerts near you, the Ask prompt) are in
-`shared/.../home/`. The iOS Home screen doesn't use them yet; PR 6 of
-`docs/superpowers/specs/2026-11-19-home-and-recommendations-design.md` does.
-Two pieces are live: `DriverFactory`'s `addColumnIfMissing` adds
-`playlists.tracksChangedAt` and `lastChangeAdded` (stamped by the shared
-`PlaylistTrackDao`), and `IosContainer.askShuffleupagus` queues an in-app Ask
-prompt with `fromApp = true`, so `ChatScreen` sends it on open without the
-pre-fill a `parachord://chat` link gets. `IosContainer.historyMixesRepository`
-already builds coverless mixes' mosaics with the album-art and artist-photo
-lookups (`historyMixMosaicCovers`), as Android's does. Android draws Home through
-the shared `HomeSession`; iOS's Home will wrap the same session. Root `CLAUDE.md`
-→ "Home — the shared model, drawn on Android".
+`shared/.../home/`. iOS draws the same `HomeSession` Android does. No rule
+lives in Swift: the screens draw what the page says.
+
+- **One session for the whole app.** `IosContainer.homeSession` is an
+  `IosHomeSession` (`shared/iosMain/.../IosHomePage.kt`), built over the shared
+  `RepositoryHomeSources` (the same inputs class Android's Koin binding builds).
+  It flattens the shared `HomeState` into flat DTOs (`IosHomePage`, its tiles,
+  cards, halves, concerts and getting-started steps) that `HomeModel.swift`
+  watches. A return to Home or a tab switch finds the session warm, so its
+  loads run under their own throttles (`onVisible`, `enteredHome`).
+- **The playback push.** Jump back in drops the tile that is playing, and
+  getting started's step 3 needs to know a listen happened. The coordinator's 1 s
+  tick calls `IosContainer.updateHomePlayback(context, isPlaying)` (`isPlaying`
+  is playing, not paused or still starting).
+- **What shows is a flag, not Swift logic.** `homeSectionVisibility` (shared,
+  `HomeRows.kt`) decides which sections show; the DTO carries its flags
+  (`showBanner`, `showJump`, `showMixes`, `showPlaylists`, `showAlbums`,
+  `showConcerts`, `showAsk`) and `HomeScreen` only checks them. Don't add a
+  "is this empty" test in a view.
+- **Taps ask the session for a queue.** `tileQueue`, `mixQueue`,
+  `playlistQueue`, `albumQueue`, `halfAlbumQueue` and `collectionRadio` return an
+  `IosHomeQueue` (shared `HomeQueues`: tracks, context, shuffle, or a message).
+  `HomeModel.play` hands it to `coordinator.setQueue`. **`shuffle == false`
+  means keep the current shuffle setting**, so it is passed as `nil`, never as
+  `false`. A queue with no tracks shows its message as a coordinator notice.
+  A load that throws comes back as that message too ("Could not load <name>",
+  `HomeQueue.Failed` from the shared `HomeQueues`); `IosHomeSession.run`'s own
+  catch is only a last resort.
+- **"Playing from" on a Home queue.** A Recent Loves queue (`loves`) opens the
+  Collection tab on Songs sorted Recently Added for that visit, the path the
+  Recent Loves tile takes (`collectionPendingTrackSort` →
+  `CollectionModel.applyLinkTrackSort`); a Collection Radio queue
+  (`collection`) opens Songs in the person's own sort. Both come from the shared
+  `playbackContextDestination` (`ContextDestination.Collection`), read through
+  `pcCollectionDestination`, as Android's Now Playing reads it.
+- **The Ask example rephrases once per Home entry** (`HomeModel.enterHome`).
+  A tab switch or a re-tap of Home builds a new `HomeScreen` and model, so it
+  counts; Settings presented over Home and dismissed again doesn't.
+- **Ask's field is held in `HomeModel`** (`AskField`), not in the view, so a
+  return from a pushed page keeps what was typed. A sent prompt goes through
+  `pcAskShuffleupagus` (`IosContainer.askShuffleupagus`), which queues it with
+  `fromApp = true`, so `ChatScreen` sends it on open without the pre-fill a
+  `parachord://chat` link gets.
+- **Settings opens through `fullScreenCover(item:)`** in `RootView`, with a
+  `SettingsDestination` (`service`, `tab`, both nil for the first page). Home
+  reaches it through three environment actions: `pcOpenPluginSettings` (a
+  plug-in's sheet), `pcOpenSettingsTab` (a shared `SettingsTab` name, such as
+  Plug-Ins or Sync) and `pcOpenImport` (the import options). Presenting with an
+  item, not a Bool plus separate state, is what makes Settings open on the
+  values it was asked for.
+- **Also live:** `DriverFactory`'s `addColumnIfMissing` adds
+  `playlists.tracksChangedAt` and `lastChangeAdded` (stamped by the shared
+  `PlaylistTrackDao`), and `IosContainer.historyMixesRepository` builds
+  coverless mixes' mosaics with the album-art and artist-photo lookups
+  (`historyMixMosaicCovers`), as Android's does.
+- **Files:** `HomeScreen.swift` (the frame, routes, sections in order),
+  `HomeModel.swift`, `HomeHeader.swift`, `HomeJumpBackIn.swift`,
+  `HomeRows.swift`, `HomeLowerSections.swift`, `HomeGettingStarted.swift`.
+  `DiscoverViewModel` and `WeeklyPlaylistsRepository` stay for other screens.
+
+Root `CLAUDE.md` → "Home — the shared model, drawn on both apps".
 
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 

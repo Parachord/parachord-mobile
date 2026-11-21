@@ -155,6 +155,7 @@ object HomeCopy {
 
     const val PLAY_COLLECTION_RADIO = "Play Collection Radio"
     const val RECENT_LOVES = "Recent Loves"
+    const val COLLECTION_RADIO = "Collection Radio"
     const val TICKETS = "Tickets"
     const val VENUE_TBA = "Venue TBA"
     const val SET_UP_SHUFFLEUPAGUS = "Set up Shuffleupagus"
@@ -260,6 +261,8 @@ object HomeCopy {
     fun openLabel(title: String): String = "Open $title"
     fun seeAllIn(title: String): String = "See all in $title"
     fun ticketsFor(artist: String): String = "Tickets for $artist"
+    /** One seller's Tickets action when a show has several (VoiceOver names each); [seller] is its link's label. */
+    fun ticketsFrom(seller: String): String = "Tickets from $seller"
     /** A concert card's accessibility label: it opens the artist's On Tour tab. */
     fun concertsOf(artist: String): String = "$artist concerts"
 }

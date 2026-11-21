@@ -49,3 +49,42 @@ fun albumReasonBadge(item: RecommendationItem): String? {
     if (!fromShuffleupagus) return null
     return item.reason?.trim()?.takeIf { it.isNotEmpty() } ?: HomeCopy.PICKED_BY_SHUFFLEUPAGUS
 }
+
+/**
+ * Which of Home's sections draw, worked out once for both apps from
+ * [HomeState.sections] and what each section has to show (Android's sections
+ * and iOS's bridge both read it).
+ */
+data class HomeSectionVisibility(
+    /** The announcement banner. */
+    val showBanner: Boolean,
+    /** Jump back in: its tiles, or the import card in their place. */
+    val showJump: Boolean,
+    /** The "Build your collection" card, in Jump back in's place. */
+    val showImport: Boolean,
+    val showMixes: Boolean,
+    val showPlaylists: Boolean,
+    /** With albums, or while they're loading ([albumsLoading]). */
+    val showAlbums: Boolean,
+    /** No albums yet and a load is coming: the row shows skeleton cards. */
+    val albumsLoading: Boolean,
+    val showConcerts: Boolean,
+    val showAsk: Boolean,
+)
+
+fun homeSectionVisibility(state: HomeState): HomeSectionVisibility {
+    val sections = state.sections
+    val hasTiles = state.tiles.take(HOME_JUMP_TILES).isNotEmpty()
+    val albumsLoading = state.albums.isEmpty() && state.albumsLoading
+    return HomeSectionVisibility(
+        showBanner = state.banner != null,
+        showJump = hasTiles || state.showImportCard,
+        showImport = !hasTiles && state.showImportCard,
+        showMixes = sections.mixes && state.mixRow.isNotEmpty(),
+        showPlaylists = sections.playlists && state.playlists.isNotEmpty(),
+        showAlbums = albumsLoading || (sections.albums && state.albums.isNotEmpty()),
+        albumsLoading = albumsLoading,
+        showConcerts = sections.concerts && state.concerts.isNotEmpty(),
+        showAsk = sections.ask,
+    )
+}

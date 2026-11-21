@@ -13,7 +13,7 @@ let pcRecCardWidth: CGFloat = 140
 /// The play button's tap target sits this far in from the cover's corner, so its 40 pt disc is 8 pt in.
 private let recArtPlayInset: CGFloat = 4
 
-private struct RecCardText: View {
+struct RecCardText: View {
     let text: String
     var primary = false
     var tertiary = false
@@ -57,11 +57,14 @@ struct RecAlbumCard: View {
     var width: CGFloat = pcRecCardWidth
     let onOpen: () -> Void
     let onPlay: () -> Void
+    /// Home's reason badge, over the cover's bottom-left.
+    var coverBadge: AnyView? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
                 RecCover(url: item.imageUrl, name: item.name, size: width)
+                if let coverBadge { coverBadge }
                 if let coming = item.comingLabel {
                     Text(coming)
                         .font(.system(size: 11, weight: .semibold))
@@ -151,7 +154,7 @@ struct RecWeeklyCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
-                mosaic
+                PCCoverMosaic(covers: covers)
                 PCArtPlayButton(title: item.weeklyLabel ?? item.name, onPlay: onPlay)
                     .padding(recArtPlayInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -167,8 +170,14 @@ struct RecWeeklyCard: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
     }
+}
 
-    @ViewBuilder private var mosaic: some View {
+/// A 2x2 mosaic of `covers` filling its frame (one cover fills it; 2 or 3 repeat in order), else the
+/// music icon. Weekly cards and Home's mix and playlist rows draw it, as Android's `CoverMosaic`.
+struct PCCoverMosaic: View {
+    let covers: [String]
+
+    var body: some View {
         if covers.isEmpty {
             PCIcon(icon: .music, size: 40, tint: PC.fg3)
         } else if covers.count == 1 {

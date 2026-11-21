@@ -1,24 +1,13 @@
-package com.parachord.android.ui.screens.home
+package com.parachord.shared.home
 
-import android.util.Log
-import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.shared.ai.AiAlbumSuggestion
 import com.parachord.shared.ai.AiRecommendationService
 import com.parachord.shared.api.Announcement
-import com.parachord.shared.home.HomeConcertsLoader
-import com.parachord.shared.home.HomeFeed
-import com.parachord.shared.home.HomeFeedLoader
-import com.parachord.shared.home.HomeRecommendations
-import com.parachord.shared.home.HomeRecsLoad
-import com.parachord.shared.home.HomeSources
-import com.parachord.shared.home.LOCAL_FILES_ID
-import com.parachord.shared.home.homeConcertLocation
-import com.parachord.shared.home.homePlaybackResolvers
-import com.parachord.shared.home.homePluginAccounts
-import com.parachord.shared.home.listOrFailed
 import com.parachord.shared.model.ChartAlbum
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.Track
+import com.parachord.shared.platform.Log
+import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.playback.PlaybackContext
 import com.parachord.shared.plugin.PluginManager
 import com.parachord.shared.plugin.PluginManager.PluginInfo
@@ -56,13 +45,16 @@ import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.Calendar
+import kotlinx.datetime.Clock
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 /**
- * Android's [HomeSources]: the library, playback and settings flows mapped
- * onto the shared session's inputs. The loading rules live in shared code
+ * The [HomeSources] both apps use: the repositories, playback and settings flows
+ * mapped onto the shared session's inputs. The loading rules live in shared code
  * ([HomeFeedLoader], [HomeConcertsLoader], [HomeRecommendations],
- * [homePluginAccounts]); this only wires Android's repositories to them. A
+ * [homePluginAccounts]); this only wires the repositories to them. Each platform
+ * passes what differs: its two playback flows and its plug-in gate. A
  * Koin single, so the feeds a visit loaded stay for the next one.
  *
  * Every flow the getting-started decision reads ([accounts], [hasCollection],
@@ -71,9 +63,8 @@ import java.util.Calendar
  * [plugins], [accounts] and [playbackResolvers] come from one snapshot, so the
  * plug-in list is never ahead of the accounts and resolvers worked out from it.
  */
-class AndroidHomeSources(
+class RepositoryHomeSources(
     private val library: LibraryRepository,
-    private val playbackStateHolder: PlaybackStateHolder,
     private val settings: SettingsStore,
     private val pluginManager: PluginManager,
     private val announcementsRepository: AnnouncementsRepository,
@@ -86,8 +77,12 @@ class AndroidHomeSources(
     concertsRepository: ConcertsRepository,
     concertArtistSeed: ConcertArtistSeedSource,
     /** The app-wide concert artist photos, shared with the Concerts page. */
-    override val concertArtistImages: com.parachord.shared.home.ConcertArtistImages,
-    /** Android's plug-in gate (`androidPluginIsOn`): whether a plug-in is on, its connection included. */
+    override val concertArtistImages: ConcertArtistImages,
+    /** What is playing now: the platform's playback state mapped to its context. */
+    override val playingContext: Flow<PlaybackContext?>,
+    /** Playing, not still starting: a play that starts and then fails doesn't count. */
+    override val isPlaying: Flow<Boolean>,
+    /** The platform's plug-in gate (Android's `androidPluginIsOn`): whether a plug-in is on, its connection included. */
     private val pluginIsOn: suspend (id: String, isMetaService: Boolean, needsAccount: Boolean) -> Boolean,
     /** The "not playing" list (`PluginStatusStore.notPlaying`, #707): a plan limit or "Play from X" off. */
     private val notPlaying: Flow<List<String>> = kotlinx.coroutines.flow.flowOf(emptyList()),
@@ -96,7 +91,7 @@ class AndroidHomeSources(
     /** Shares the plug-in snapshot between its three flows. */
     scope: CoroutineScope = CoroutineScope(
         SupervisorJob() + Dispatchers.Main.immediate +
-            CoroutineExceptionHandler { _, e -> Log.e("AndroidHomeSources", "Home sources failed", e) },
+            CoroutineExceptionHandler { _, e -> Log.e("RepositoryHomeSources", "Home sources failed", e) },
     ),
 ) : HomeSources {
 
@@ -133,13 +128,6 @@ class AndroidHomeSources(
         library.getAllAlbums().map { it.isNotEmpty() }.distinctUntilChanged(),
         library.getAllArtists().map { it.isNotEmpty() }.distinctUntilChanged(),
     ) { tracks, albums, artists -> tracks || albums || artists }.distinctUntilChanged()
-
-    override val playingContext: Flow<PlaybackContext?> =
-        playbackStateHolder.state.map { it.playbackContext }.distinctUntilChanged()
-
-    /** Playing, not still starting: a play that starts and then fails doesn't count. */
-    override val isPlaying: Flow<Boolean> =
-        playbackStateHolder.state.map { it.isPlaying && !it.isBuffering }.distinctUntilChanged()
 
     override val announcements: Flow<List<Announcement>> = announcementsRepository.visibleAnnouncements
 
@@ -261,7 +249,7 @@ class AndroidHomeSources(
 
     // ── Clock ────────────────────────────────────────────────────────
 
-    override fun nowMs(): Long = System.currentTimeMillis()
+    override fun nowMs(): Long = currentTimeMillis()
 
-    override fun hour(): Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+    override fun hour(): Int = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()).hour
 }

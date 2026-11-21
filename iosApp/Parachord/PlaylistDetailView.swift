@@ -652,7 +652,7 @@ struct PlaylistsScreen: View {
 /// toggle (default on) for "also delete from there". Unchecked services keep
 /// their copy. Apple Music can't be deleted via its API (handled server-side as
 /// Unsupported — local removal still happens).
-private struct DeletePlaylistSheet: View {
+struct DeletePlaylistSheet: View {
     let playlist: Playlist
     let onClose: () -> Void
     /// After the delete ran (not on Cancel): the playlist screen closes itself.
@@ -747,7 +747,7 @@ private struct DeletePlaylistSheet: View {
 /// Per-playlist Sync menu: toggle which services this playlist syncs with. The
 /// per-playlist channel override is authoritative — disabling detaches (no dup),
 /// enabling mirrors it to that service on the next sync.
-private struct PlaylistSyncChannelsSheet: View {
+struct PlaylistSyncChannelsSheet: View {
     let playlist: Playlist
     let onClose: () -> Void
     @Environment(\.dismiss) private var dismiss

@@ -251,6 +251,14 @@ class RecommendationPageViewTest {
     }
 
     @Test
+    fun `itemSourceName with no row reads the item's own sources`() {
+        assertEquals("Shuffleupagus", itemSourceName(item("a", sources = arrayOf("x")).copy(resolverName = "Shuffleupagus")))
+        assertEquals("Apple Music", itemSourceName(item("a", sources = arrayOf("applemusic"))))
+        assertEquals("Spotify", itemSourceName(item("a").copy(sourceIds = listOf("", "spotify"))))
+        assertEquals("", itemSourceName(item("a")))
+    }
+
+    @Test
     fun `similarityBadge rounds to a whole percent`() {
         assertEquals("88%", RecommendationCopy.similarityBadge(0.876))
         assertNull(RecommendationCopy.similarityBadge(null))

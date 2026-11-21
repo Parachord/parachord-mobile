@@ -2718,6 +2718,11 @@ final class QueuePlaybackCoordinator {
                     self.nowPlaying?.refresh()
                     // #567: where the track is, for a queue restored after iOS ends the app.
                     self.savePositionIfDue()
+                    // Home's Jump back in leaves out what's playing (shared `isActiveContext`).
+                    scrobbleContainer.updateHomePlayback(
+                        context: self.playbackContext,
+                        isPlaying: self.isPlaying && !self.isStarting
+                    )
                 }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }

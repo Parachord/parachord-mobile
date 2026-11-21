@@ -271,7 +271,7 @@ class HomeSessionTest {
         advanceUntilIdle()
         assertEquals("a", (s.state.value.tiles.single { it is JumpTile.Mix } as JumpTile.Mix).mix.id)
 
-        src.playingContext.value = PlaybackContext(type = "mix", name = "Mix a", id = "a")
+        src.playingContext.value = PlaybackContext(type = "mix", name = "Mix a", id = "https://example.com/a")
         advanceUntilIdle()
         assertEquals("b", (s.state.value.tiles.single { it is JumpTile.Mix } as JumpTile.Mix).mix.id)
     }

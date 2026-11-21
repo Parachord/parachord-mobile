@@ -175,3 +175,14 @@ fun releaseYear(date: String?): String = date?.take(4) ?: ""
 /** The name of the source that sent [item], from [row]'s sources; "" when unknown. */
 fun itemSourceName(item: RecommendationItem, row: RecommendationRow): String =
     row.sources.firstOrNull { it.id == item.resolverId }?.name ?: ""
+
+/**
+ * The name of the source that sent [item] when it has no row (Home's albums):
+ * the name it carries (`homeRecommendationAlbums` sets it), else the first of
+ * its own source ids by its display name; "" when it has none.
+ */
+fun itemSourceName(item: RecommendationItem): String =
+    item.resolverName?.trim()?.takeIf { it.isNotEmpty() }
+        ?: (listOfNotNull(item.resolverId) + item.sourceIds).firstOrNull { it.isNotBlank() }
+            ?.let { com.parachord.shared.playback.resolverDisplayName(it) }
+        ?: ""

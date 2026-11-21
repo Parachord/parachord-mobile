@@ -16,6 +16,20 @@ class PlaybackContextDestinationTest {
     }
 
     @Test
+    fun `a mix opens its service playlist`() {
+        assertEquals(
+            ContextDestination.ServicePlaylist("https://music.apple.com/pl", "Daily"),
+            playbackContextDestination(PlaybackContext("mix", "Daily", "https://music.apple.com/pl")),
+        )
+    }
+
+    @Test
+    fun `a mix with an old id opens nothing`() {
+        assertNull(playbackContextDestination(PlaybackContext("mix", "Daily", "daily-jams")))
+        assertNull(playbackContextDestination(PlaybackContext("mix", "Daily", null)))
+    }
+
+    @Test
     fun `album and artist and saved playlist contexts`() {
         assertEquals(ContextDestination.Album("Dummy", "Portishead"), playbackContextDestination(PlaybackContext("album", "Dummy", "Portishead")))
         assertEquals(ContextDestination.Album("Dummy", null), playbackContextDestination(PlaybackContext("album", "Dummy", " ")))
@@ -28,5 +42,25 @@ class PlaybackContextDestinationTest {
     fun `other contexts open nothing here`() {
         assertNull(playbackContextDestination(PlaybackContext("spinoff", "Spinoff from X")))
         assertNull(playbackContextDestination(PlaybackContext(LISTEN_ALONG_CONTEXT, "Bob", "x")))
+    }
+
+    @Test
+    fun `Recent Loves opens Collection's songs sorted Recently Added`() {
+        assertEquals(
+            ContextDestination.Collection(recentLoves = true),
+            playbackContextDestination(PlaybackContext(com.parachord.shared.home.LOVES_CONTEXT, "Recent Loves")),
+        )
+    }
+
+    @Test
+    fun `Collection Radio opens Collection's songs in the user's sort`() {
+        assertEquals(
+            ContextDestination.Collection(recentLoves = false),
+            playbackContextDestination(PlaybackContext(com.parachord.shared.home.COLLECTION_CONTEXT, "Collection Radio")),
+        )
+        assertEquals(
+            ContextDestination.Collection(recentLoves = false),
+            playbackContextDestination(PlaybackContext("collection", "Loved Songs")),
+        )
     }
 }

@@ -1,5 +1,8 @@
 package com.parachord.shared.playback
 
+import com.parachord.shared.home.COLLECTION_CONTEXT
+import com.parachord.shared.home.LOVES_CONTEXT
+import com.parachord.shared.home.MIX_CONTEXT
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -26,6 +29,11 @@ sealed class ContextDestination {
     data class Playlist(val id: String) : ContextDestination()
     /** An unsaved service playlist's own view, by its link. */
     data class ServicePlaylist(val url: String, val name: String) : ContextDestination()
+    /**
+     * Collection's songs. [recentLoves] opens them sorted Recently Added, once (Home's
+     * Recent Loves, desktop's queue drawer); otherwise in the user's own sort.
+     */
+    data class Collection(val recentLoves: Boolean) : ContextDestination()
 }
 
 /**
@@ -40,6 +48,14 @@ fun playbackContextDestination(ctx: PlaybackContext): ContextDestination? {
         "artist" -> ContextDestination.Artist(ctx.name)
         "playlist" -> id?.let { ContextDestination.Playlist(it) }
         SERVICE_PLAYLIST_CONTEXT -> id?.let { ContextDestination.ServicePlaylist(it, ctx.name) }
+        // A mix queue's id is the mix's link (HomeModel's jumpTileContext). Desktop keeps the
+        // mix id and opens Home today; parachord#1592. A queue saved before this carries the
+        // old id, which isn't a link, so it opens nothing.
+        // Desktop's queue drawer opens Collection's songs newest-loved-first (queue-drawer.js).
+        LOVES_CONTEXT -> ContextDestination.Collection(recentLoves = true)
+        COLLECTION_CONTEXT -> ContextDestination.Collection(recentLoves = false)
+        MIX_CONTEXT -> id?.takeIf { it.startsWith("https://", true) || it.startsWith("http://", true) }
+            ?.let { ContextDestination.ServicePlaylist(it, ctx.name) }
         else -> null
     }
 }

@@ -120,6 +120,7 @@ enum PC {
     static let fillWarning = pcToken(tokens.FILL_WARNING)
     static let fillError   = pcToken(tokens.FILL_ERROR)
     static let fillInfo    = pcToken(tokens.FILL_INFO)
+    static let fillNeutral = pcToken(tokens.FILL_NEUTRAL)
     static let onTour  = pcToken(tokens.ON_TOUR)
 
     // Hosted (XSPF) chip — brand blue, constant

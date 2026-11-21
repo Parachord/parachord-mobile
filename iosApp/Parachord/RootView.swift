@@ -24,9 +24,8 @@ struct ContentView: View {
     @State private var showSidebar = false
     @State private var showAdd = false
     @State private var showNowPlaying = false
-    @State private var showSettings = false
-    /// The plugin whose settings sheet Settings opens on (`PCOpenPluginSettings`); nil for the plain page.
-    @State private var settingsService: String?
+    /// Settings, presented with the values it opens on (a nil one is the first page).
+    @State private var settings: SettingsDestination?
     @State private var showChat = false
     @State private var pendingChat = false
     // Deep-link prefills (#256): seed the Search query / Shuffleupagus prompt.
@@ -43,6 +42,9 @@ struct ContentView: View {
     /// One-shot sub-tab for the Collection tab, set when the queue-source banner
     /// links to "Collection" so it opens on Songs rather than the default. (#209)
     @State private var collectionPendingTab: CollectionTab?
+    /// One-shot songs sort for the Collection tab's next visit, not saved
+    /// (Home's Recent Loves: Recently Added, Android's `takeLinkTrackSort`).
+    @State private var collectionPendingTrackSort: TrackSort?
     /// Deep-link (#228): transient ack banner + the queue-mutating command
     /// awaiting confirmation (queue add / clear).
     @State private var dlToast: String?
@@ -57,9 +59,13 @@ struct ContentView: View {
             // ── Active tab content ───────────────────────────────────
             Group {
                 switch tab {
-                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { showSettings = true }, onSelectTab: { t, sub in if let sub { collectionPendingTab = sub }; tab = t })
+                case .home:       HomeScreen(pendingRoute: $homePendingRoute, onMenu: { showSidebar = true }, onOpenSettings: { settings = SettingsDestination() }, onSelectTab: { t, sub in if let sub { collectionPendingTab = sub }; tab = t }, onOpenRecentLoves: {
+                    collectionPendingTab = .songs
+                    collectionPendingTrackSort = TrackSort.recent
+                    tab = .collection
+                })
                 case .search:     SearchView(onMenu: { showSidebar = true }, pendingQuery: $pendingSearchQuery)
-                case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab)
+                case .collection: CollectionView(onMenu: { showSidebar = true }, pendingTab: $collectionPendingTab, pendingTrackSort: $collectionPendingTrackSort)
                 case .playlists:  PlaylistsScreen(onMenu: { showSidebar = true })
                 }
             }
@@ -120,20 +126,7 @@ struct ContentView: View {
                         tab = .home
                         homePendingRoute = .album(title: title, artist: artist)
                     },
-                    // Queue-source banner (#209) → open the source page. Pushable
-                    // pages go on the Home stack; Collection is a tab, so switch to it.
-                    onNavigateToContext: { ctx in
-                        if ctx.type == "collection" {
-                            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
-                            collectionPendingTab = .songs   // land on Songs, not the default Artists
-                            tab = .collection
-                            return
-                        }
-                        guard let route = pcRouteForContext(ctx) else { return }
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
-                        tab = .home
-                        homePendingRoute = route
-                    }
+                    onNavigateToContext: { ctx in openPlaybackContext(ctx) }
                 )
                 // NOTE: do NOT add .ignoresSafeArea() here — the content must
                 // respect the top safe area (status bar / Dynamic Island). The
@@ -210,8 +203,13 @@ struct ContentView: View {
         // Opens Settings on one plugin's sheet (Recommendations' Connect buttons, Android's
         // `Routes.settings(pluginId)`).
         .environment(\.pcOpenPluginSettings, PCOpenPluginSettings { id in
-            settingsService = id
-            showSettings = true
+            settings = SettingsDestination(service: id)
+        })
+        // Opens the playlist import dialog (Home's "Build your collection" card).
+        .environment(\.pcOpenImport, PCOpenImport { importer.showOptions = true })
+        // Opens Settings on one tab (Home's "Sync your library", Android's `Routes.settings(pluginId, tab)`).
+        .environment(\.pcOpenSettingsTab, PCOpenSettingsTab { tab in
+            settings = SettingsDestination(tab: tab)
         })
         // Home's Ask Shuffleupagus: an in-app prompt, sent by the chat once it's
         // open with a provider, with no link confirmation (Android's
@@ -372,8 +370,8 @@ struct ContentView: View {
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.
-        .fullScreenCover(isPresented: $showSettings, onDismiss: { settingsService = nil }) {
-            NavigationStack { SettingsView(initialService: settingsService) }
+        .fullScreenCover(item: $settings) { dest in
+            NavigationStack { SettingsView(initialService: dest.service, initialTab: dest.tab) }
         }
         // Spotify Connect device picker (Phase: Spotify) — hosted at the shell.
         .sheet(item: Binding(
@@ -556,7 +554,7 @@ struct ContentView: View {
         case "navCritical": tab = .home; homePendingRoute = .critical
         case "navPlaylists": tab = .playlists
         case "navPlaylist": if let id = cmd.id { tab = .home; homePendingRoute = .playlist(id: id, title: "") }
-        case "navSettings": showSettings = true
+        case "navSettings": settings = SettingsDestination()
         case "navSearch": tab = .search; pendingSearchQuery = cmd.query   // #256 prefill
         case "navChat":
             pendingChatPrompt = cmd.prompt   // #256 prompt injection
@@ -619,6 +617,24 @@ struct ContentView: View {
         }
     }
 
+    /// Queue-source banner (#209) → the source page. Pushable pages go on the
+    /// Home stack; Collection is a tab, so switch to it.
+    private func openPlaybackContext(_ ctx: PlaybackContext) {
+        // Collection Radio and Recent Loves open Collection's songs; Recent
+        // Loves sorted Recently Added once, as Home's tile does (shared destination).
+        if let dest = pcCollectionDestination(ctx) {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+            collectionPendingTab = .songs   // land on Songs, not the default Artists
+            if dest.recentLoves { collectionPendingTrackSort = TrackSort.recent }
+            tab = .collection
+            return
+        }
+        guard let route = pcRouteForContext(ctx) else { return }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+        tab = .home
+        homePendingRoute = route
+    }
+
     private func handleSidebar(_ id: String) {
         closeSidebar()
         // Discover items push onto the Home tab's stack.
@@ -639,7 +655,7 @@ struct ContentView: View {
         switch id {
         case "collection": tab = .collection
         case "playlists":  tab = .playlists
-        case "settings":   showSettings = true
+        case "settings":   settings = SettingsDestination()
         default: break // history / concerts land with their screens
         }
     }
@@ -761,8 +777,29 @@ struct PCOfflineBanner: View {
 
 /// Opens Settings with one plugin's settings sheet showing (its id, e.g. "listenbrainz").
 struct PCOpenPluginSettings {
+    let open: (String?) -> Void
+    /// With no id, Settings opens on its first page (Android's `onOpenSettings(null)`).
+    func callAsFunction(_ pluginId: String? = nil) { open(pluginId) }
+}
+
+/// Opens Settings on one tab (a shared `SettingsTab` name, e.g. `SettingsTab.shared.SYNC`).
+struct PCOpenSettingsTab {
     let open: (String) -> Void
-    func callAsFunction(_ pluginId: String) { open(pluginId) }
+    func callAsFunction(_ tab: String) { open(tab) }
+}
+
+/// Opens the playlist import dialog (`PlaylistImporter.showOptions`).
+struct PCOpenImport {
+    let open: () -> Void
+    func callAsFunction() { open() }
+}
+
+private struct PCOpenImportKey: EnvironmentKey {
+    static let defaultValue = PCOpenImport {}
+}
+
+private struct PCOpenSettingsTabKey: EnvironmentKey {
+    static let defaultValue = PCOpenSettingsTab { _ in }
 }
 
 private struct PCOpenPluginSettingsKey: EnvironmentKey {
@@ -774,6 +811,16 @@ extension EnvironmentValues {
     var pcOpenPluginSettings: PCOpenPluginSettings {
         get { self[PCOpenPluginSettingsKey.self] }
         set { self[PCOpenPluginSettingsKey.self] = newValue }
+    }
+    /// Set by RootView; a no-op outside it.
+    var pcOpenSettingsTab: PCOpenSettingsTab {
+        get { self[PCOpenSettingsTabKey.self] }
+        set { self[PCOpenSettingsTabKey.self] = newValue }
+    }
+    /// Set by RootView; a no-op outside it.
+    var pcOpenImport: PCOpenImport {
+        get { self[PCOpenImportKey.self] }
+        set { self[PCOpenImportKey.self] = newValue }
     }
     /// Set by RootView; a no-op outside it.
     var pcAskShuffleupagus: PCAskShuffleupagus {
@@ -791,4 +838,11 @@ struct PCAskShuffleupagus {
 
 private struct PCAskShuffleupagusKey: EnvironmentKey {
     static let defaultValue = PCAskShuffleupagus { _ in }
+}
+
+/// What a Settings presentation opens on: a plug-in's sheet or a tab (a shared `SettingsTab` name); both nil is the first page.
+struct SettingsDestination: Identifiable {
+    let id = UUID()
+    var service: String? = nil
+    var tab: String? = nil
 }

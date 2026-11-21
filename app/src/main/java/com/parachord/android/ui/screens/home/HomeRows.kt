@@ -60,6 +60,7 @@ import com.parachord.android.ui.components.serviceLogoVector
 import com.parachord.android.ui.theme.current
 import com.parachord.android.ui.theme.tokenColor
 import com.parachord.shared.home.FilterChipSource
+import com.parachord.shared.home.homeSectionVisibility
 import com.parachord.shared.home.HOME_ALL_SOURCES
 import com.parachord.shared.home.HOME_ROW_CARDS
 import com.parachord.shared.home.HomeCopy
@@ -123,7 +124,7 @@ fun HomeMixesRow(
     onPlayMix: (HomeMixCard.Mix) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (!state.sections.mixes || state.mixRow.isEmpty()) return
+    if (!homeSectionVisibility(state).showMixes) return
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(title = HomeCopy.MIXES_TITLE, subtitle = HomeCopy.MIXES_SUBTITLE)
         SourceChips(state.mixSources, state.mixSource, onSelectSource)
@@ -167,7 +168,7 @@ fun HomePlaylistsRow(
     onSeeAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (!state.sections.playlists || state.playlists.isEmpty()) return
+    if (!homeSectionVisibility(state).showPlaylists) return
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.PLAYLISTS_TITLE,
@@ -228,8 +229,9 @@ fun HomeAlbumsRow(
     onSeeAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val loading = state.albums.isEmpty() && state.albumsLoading
-    if (!loading && (!state.sections.albums || state.albums.isEmpty())) return
+    val visibility = homeSectionVisibility(state)
+    val loading = visibility.albumsLoading
+    if (!visibility.showAlbums) return
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.ALBUMS_TITLE,

@@ -755,6 +755,9 @@ struct SettingsView: View {
     @State private var configService: PCService?
     /// A plugin whose settings sheet shows on open (`PCOpenPluginSettings`), once.
     var initialService: String? = nil
+    /// A tab Settings opens on (`PCOpenSettingsTab`, a shared `SettingsTab` name), once.
+    var initialTab: String? = nil
+    /// Whether the initial tab and plugin sheet were applied (once, on the first appearance).
     @State private var openedInitial = false
     @Environment(\.dismiss) private var dismiss
 
@@ -777,10 +780,18 @@ struct SettingsView: View {
         }
         .onAppear {
             model.start()
-            if !openedInitial, let id = initialService {
-                openedInitial = true
-                configService = PCServices.find(id)
+            // RootView presents Settings with an item, so the values it was asked
+            // for are here from the start: apply them on the first appearance.
+            guard !openedInitial else { return }
+            openedInitial = true
+            switch initialTab {
+            case SettingsTab.shared.PLUGINS: tab = 0
+            case SettingsTab.shared.SYNC: tab = 1
+            case SettingsTab.shared.GENERAL: tab = 2
+            case SettingsTab.shared.ABOUT: tab = 3
+            default: break
             }
+            if let id = initialService { configService = PCServices.find(id) }
         }
         .onDisappear { model.stop() }
     }

@@ -17,7 +17,7 @@ class HomeModelTest {
     private fun pl(id: String, name: String, changed: Long? = null) = Playlist(id = id, name = name, tracksChangedAt = changed)
     private fun love(title: String, artist: String, album: String? = null, mbid: String? = null, art: String? = null) =
         Track(id = "$artist-$title", title = title, artist = artist, album = album, releaseMbid = mbid, artworkUrl = art)
-    private fun mix(id: String) = HistoryMix(id, id, id, url = "u", resolverId = "r", resolverName = "R")
+    private fun mix(id: String) = HistoryMix(id, id, id, url = "https://x/$id", resolverId = "r", resolverName = "R")
 
     // ── isActiveContext ──
     @Test
@@ -332,7 +332,14 @@ class HomeModelTest {
         assertEquals(PlaybackContext(PLAYLIST_CONTEXT, "Road trip", "p1"), jumpTileContext(JumpTile.Playlist(pl("p1", "Road trip"), "Playlist")))
         assertEquals(PlaybackContext(LOVES_CONTEXT, HomeCopy.RECENT_LOVES), jumpTileContext(JumpTile.Loves(emptyList())))
         assertEquals(PlaybackContext("album", "OK Computer", "Radiohead"), jumpTileContext(JumpTile.Album(LoveAlbum("OK Computer", "Radiohead", "x", null))))
-        assertEquals(PlaybackContext(MIX_CONTEXT, "daily", "daily"), jumpTileContext(JumpTile.Mix(mix("daily"))))
+        assertEquals(PlaybackContext(MIX_CONTEXT, "daily", "https://x/daily"), jumpTileContext(JumpTile.Mix(mix("daily"))))
+    }
+
+    @Test
+    fun `a playing mix is left out by its link`() {
+        val m = mix("daily")
+        val tiles = jumpBackInTiles(emptyList(), emptyList(), listOf(m, mix("weekly")), playing(PlaybackContext(MIX_CONTEXT, m.title, m.url)), now)
+        assertEquals(listOf("weekly"), tiles.filterIsInstance<JumpTile.Mix>().map { it.mix.id })
     }
 
     @Test
@@ -341,5 +348,12 @@ class HomeModelTest {
         assertFalse(isActiveContext(jumpCandidate(a), playing(jumpTileContext(JumpTile.Mix(mix("b"))))))
         assertFalse(isActiveContext(jumpCandidate(JumpTile.Loves(emptyList())), playing(jumpTileContext(a))))
     }
-}
 
+    @Test
+    fun `a tile's title is the playlist or album or mix and Recent Loves for loves`() {
+        assertEquals("Daily Brew", jumpTileTitle(JumpTile.Playlist(Playlist(id = "p", name = "Daily Brew"), "Playlist")))
+        assertEquals(HomeCopy.RECENT_LOVES, jumpTileTitle(JumpTile.Loves(emptyList())))
+        assertEquals("Hotbox", jumpTileTitle(JumpTile.Album(LoveAlbum("Hotbox", "Hovvdy", "Frog", null))))
+        assertEquals("m", jumpTileTitle(JumpTile.Mix(mix("m"))))
+    }
+}
