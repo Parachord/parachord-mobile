@@ -234,6 +234,48 @@ class TrackResolverCache constructor(
         }
     }
 
+    /**
+     * A plan change for [resolverId] (shared [com.parachord.shared.plugin.limitTransition],
+     * run by [com.parachord.shared.plugin.PluginStatusStore]; desktop's
+     * `clearResolverMisses`): drop its misses, and with [sourcesToo] its found
+     * sources as well (entering a purchases-only plan, where a source found on
+     * another plan may not be owned). Every track left with no found source of
+     * it asks just that resolver again the next time its row is on screen
+     * ([dueRetry], visibility-scoped like any resolve), and leaves the saved
+     * file, so a restart before then resolves it from scratch. The queue keeps
+     * its tracks; one the plan refuses plays another source.
+     */
+    suspend fun clearResolver(resolverId: String, sourcesToo: Boolean): Unit = kotlinx.coroutines.withContext(Dispatchers.Default) {
+        awaitLoaded()
+        val snapshot = _trackSources.value
+        val changed = mutableMapOf<String, List<ResolvedSource>>()
+        val again = mutableSetOf<String>()
+        for ((key, sources) in snapshot) {
+            val cleared = com.parachord.shared.plugin.clearResolverSources(sources, resolverId, sourcesToo)
+            if (cleared !== sources) changed[key] = cleared
+            if (com.parachord.shared.plugin.asksResolverAgain(cleared, resolverId)) again += key
+        }
+        if (changed.isNotEmpty()) _trackSources.update { it + changed }
+        val now = nowMs()
+        synchronized(pendingRetries) {
+            for (key in again) {
+                val previous = pendingRetries[key]
+                pendingRetries[key] = PendingRetry(
+                    failed = (previous?.failed.orEmpty()) + resolverId,
+                    failures = previous?.failures ?: 0,
+                    // One the sweeper already retries keeps its time (the
+                    // sweeper isn't visibility-scoped); the rest are due now,
+                    // and only a row on screen asks them (no request).
+                    retryAtMs = if (previous?.request != null) previous.retryAtMs else now,
+                    request = previous?.request,
+                )
+            }
+        }
+        if (again.isNotEmpty()) persisted?.remove(again)
+        Log.d(TAG, "Cleared $resolverId (sources too: $sourcesToo): ${changed.size} changed, ${again.size} to ask again")
+        Unit
+    }
+
     /** The resolvers to ask again for [key] now, or null when none are due. */
     private fun dueRetry(key: String): Set<String>? = synchronized(pendingRetries) {
         pendingRetries[key]?.takeIf { nowMs() >= it.retryAtMs }?.failed

@@ -3167,8 +3167,18 @@ class IosContainer private constructor() {
      * the list is the user's "Play from X" switches alone.
      */
     val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by lazy {
-        com.parachord.shared.plugin.PluginStatusStore.create(pluginManager, settingsStore, appScope)
+        com.parachord.shared.plugin.PluginStatusStore.create(
+            pluginManager, settingsStore, appScope,
+            clearResolver = { id, sourcesToo -> resolverSourcesClearer?.invoke(id, sourcesToo) },
+        )
     }
+
+    /**
+     * Set from Swift at start-up (`AppBootstrap`): `IosTrackResolverCache.clearResolver`.
+     * A plan change (shared `limitTransition`, #1494) calls it to drop a
+     * resolver's misses, or with `sourcesToo` every saved source of it.
+     */
+    var resolverSourcesClearer: ((String, Boolean) -> Unit)? = null
 
     /** Reads every status-capable plugin (app start, Settings) or one ([id], its sheet). */
     fun refreshPluginStatus(id: String?) {
