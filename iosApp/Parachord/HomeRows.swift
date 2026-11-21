@@ -35,36 +35,18 @@ private struct HomeSourceChips: View {
     }
 }
 
-/// One cover, a 2x2 of covers, or the placeholder, clipped to the card art's radius.
+/// A Home card's art: the card's cover, else its mosaic, as Android's `CoverMosaic(imageUrl ?: mosaic)`,
+/// clipped to the card art's radius.
 struct HomeCoverArt: View {
     let imageUrl: String?
     let mosaic: [String]
-    let seed: String
     let size: CGFloat
-    var artist: String? = nil
-    var album: String? = nil
 
     var body: some View {
-        Group {
-            if mosaic.count >= 4 {
-                let urls = Array(mosaic.prefix(4))
-                let half = size / 2
-                VStack(spacing: 0) {
-                    ForEach(0..<2, id: \.self) { row in
-                        HStack(spacing: 0) {
-                            ForEach(0..<2, id: \.self) { col in
-                                pcCover(urls[row * 2 + col], seed: seed, size: half, radius: 0)
-                            }
-                        }
-                    }
-                }
-            } else {
-                pcCover(imageUrl ?? mosaic.first, seed: seed, size: size, radius: 0, artist: artist, album: album)
-            }
-        }
-        .frame(width: size, height: size)
-        .background(PC.bgInset)
-        .clipShape(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.shared.RADIUS_ART), style: .continuous))
+        ZStack { PCCoverMosaic(covers: imageUrl.map { [$0] } ?? mosaic) }
+            .frame(width: size, height: size)
+            .background(PC.bgInset)
+            .clipShape(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.shared.RADIUS_ART), style: .continuous))
     }
 }
 
@@ -143,7 +125,7 @@ struct HomeMixesRow: View {
                             onOpen: { onOpen(card) },
                             onPlay: { onPlay(card) }
                         ) {
-                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: card.mosaic, seed: card.title, size: pcRecCardWidth)
+                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: card.mosaic, size: pcRecCardWidth)
                         }
                     }
                 }
@@ -184,7 +166,7 @@ struct HomePlaylistsRow: View {
                             onOpen: { onOpen(card) },
                             onPlay: { onPlay(card) }
                         ) {
-                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: [], seed: card.name, size: pcRecCardWidth)
+                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: [], size: pcRecCardWidth)
                         }
                         .contextMenu { menu(card) }
                     }

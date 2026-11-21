@@ -154,7 +154,7 @@ struct RecWeeklyCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
-                mosaic
+                PCCoverMosaic(covers: covers)
                 PCArtPlayButton(title: item.weeklyLabel ?? item.name, onPlay: onPlay)
                     .padding(recArtPlayInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -170,8 +170,14 @@ struct RecWeeklyCard: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
     }
+}
 
-    @ViewBuilder private var mosaic: some View {
+/// A 2x2 mosaic of `covers` filling its frame (one cover fills it; 2 or 3 repeat in order), else the
+/// music icon. Weekly cards and Home's mix and playlist rows draw it, as Android's `CoverMosaic`.
+struct PCCoverMosaic: View {
+    let covers: [String]
+
+    var body: some View {
         if covers.isEmpty {
             PCIcon(icon: .music, size: 40, tint: PC.fg3)
         } else if covers.count == 1 {
