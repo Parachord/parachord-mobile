@@ -106,6 +106,12 @@ class SettingsStore(
         const val DELETED_FRIEND_KEYS = "deleted_friend_keys"
         /** Resolver ids the user switched off for Recommendations (CSV). */
         const val RECOMMENDATIONS_OFF_RESOLVERS = "recommendations_off_resolvers"
+        /** Music plug-ins whose "Play from X" is off (CSV, #707, desktop parachord#1505). */
+        const val PLAYBACK_OFF_RESOLVERS = "playback_off_resolvers"
+        /** Music plug-ins whose "Use metadata from X" is off (CSV, #707). */
+        const val METADATA_OFF_RESOLVERS = "metadata_off_resolvers"
+        /** The whole resolver ranking, disabled plug-ins included (CSV, desktop `resolver_order_memory`). */
+        const val RESOLVER_ORDER_MEMORY = "resolver_order_memory"
         const val CONCERT_LATITUDE = "concert_latitude"
         const val CONCERT_LONGITUDE = "concert_longitude"
         const val CONCERT_CITY = "concert_city"
@@ -1094,6 +1100,59 @@ class SettingsStore(
 
     suspend fun setRecommendationsOffResolvers(ids: Set<String>) {
         ensureMigrated(); kv.setStringSetCsv(RECOMMENDATIONS_OFF_RESOLVERS, ids)
+    }
+
+    fun getRecommendationsOffResolversFlow(): Flow<Set<String>> = csvSetFlow(RECOMMENDATIONS_OFF_RESOLVERS)
+
+    // ── Plug-in switches (#707, desktop parachord#1505) ──────────────
+    //
+    // Each list holds a plug-in's id only while that switch is off, so an
+    // empty list (the default) means every switch is on, as on desktop.
+
+    /** "Play from X" off: still searched, still supplies covers and links, never plays. */
+    suspend fun getPlaybackOffResolvers(): Set<String> {
+        ensureMigrated(); return kv.getStringSetCsv(PLAYBACK_OFF_RESOLVERS)
+    }
+
+    suspend fun setPlaybackOffResolvers(ids: Set<String>) {
+        ensureMigrated(); kv.setStringSetCsv(PLAYBACK_OFF_RESOLVERS, ids)
+    }
+
+    fun getPlaybackOffResolversFlow(): Flow<Set<String>> = csvSetFlow(PLAYBACK_OFF_RESOLVERS)
+
+    /** "Use metadata from X" off: skipped for covers and artist photos; track search still asks it. */
+    suspend fun getMetadataOffResolvers(): Set<String> {
+        ensureMigrated(); return kv.getStringSetCsv(METADATA_OFF_RESOLVERS)
+    }
+
+    suspend fun setMetadataOffResolvers(ids: Set<String>) {
+        ensureMigrated(); kv.setStringSetCsv(METADATA_OFF_RESOLVERS, ids)
+    }
+
+    fun getMetadataOffResolversFlow(): Flow<Set<String>> = csvSetFlow(METADATA_OFF_RESOLVERS)
+
+    /** Turns one of the three switches for [id]: [on] removes it from the list at [key]. */
+    suspend fun setPluginSwitchOn(key: String, id: String, on: Boolean) {
+        ensureMigrated()
+        val current = kv.getStringSetCsv(key)
+        val next = if (on) current - id else current + id
+        if (next != current) kv.setStringSetCsv(key, next)
+    }
+
+    /** The whole ranking, disabled plug-ins included ([com.parachord.shared.resolver.ResolverOrderMemory]); empty when never saved. */
+    suspend fun getResolverOrderMemory(): List<String> {
+        ensureMigrated()
+        return kv.getStringOrNull(RESOLVER_ORDER_MEMORY)?.split(",")?.filter { it.isNotBlank() } ?: emptyList()
+    }
+
+    suspend fun setResolverOrderMemory(memory: List<String>) {
+        ensureMigrated(); kv.setString(RESOLVER_ORDER_MEMORY, memory.joinToString(","))
+    }
+
+    private fun csvSetFlow(key: String): Flow<Set<String>> = migratedFlow().flatMapConcat {
+        kv.observeStringOrNull(key).map { raw ->
+            raw?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet() ?: emptySet()
+        }
     }
 
     // ── Deleted Friends (prevent re-sync) ────────────────────────────

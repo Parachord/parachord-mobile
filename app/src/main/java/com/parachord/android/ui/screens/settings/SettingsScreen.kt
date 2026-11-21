@@ -65,6 +65,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -151,7 +153,17 @@ private data class PluginInfo(
     val configFields: List<com.parachord.shared.plugin.PluginManager.PluginConfigField> = emptyList(),
     /** The plugin needs its config set before it can answer. */
     val requiresAuth: Boolean = false,
-)
+    /** The loaded plugin behind this tile (capabilities, `signIn` / `signOut`); null before plugins load. */
+    val shared: com.parachord.shared.plugin.PluginManager.PluginInfo? = null,
+) {
+    /** The shared plugin, or a stand-in from this tile's category before the plugins load. */
+    val sharedInfo: com.parachord.shared.plugin.PluginManager.PluginInfo
+        get() = shared ?: com.parachord.shared.plugin.PluginManager.PluginInfo(
+            id = id, name = name, version = "",
+            type = if (category == PluginCategory.RESOLVER) "" else "meta-service",
+            capabilities = if (category == PluginCategory.RESOLVER) mapOf("resolve" to true) else emptyMap(),
+        )
+}
 
 private enum class PluginCategory(val label: String) {
     RESOLVER("Content Resolvers"),
@@ -187,6 +199,7 @@ private fun buildPluginList(
             description = "v${axe.version}",
             configFields = axe.configFields,
             requiresAuth = axe.requiresAuth,
+            shared = axe,
         )
     }
 }
@@ -476,6 +489,26 @@ private fun PlugInsTab(
     fun isResolverEnabled(id: String): Boolean = activeResolvers.isEmpty() || id in activeResolvers
     val allPlugins = remember(axePlugins) { buildPluginList(axePlugins) }
 
+    // The plug-in switches and the status-capable plugins' replies (#707).
+    val playbackOff by settingsViewModel.playbackOffResolvers.collectAsStateWithLifecycle()
+    val metadataOff by settingsViewModel.metadataOffResolvers.collectAsStateWithLifecycle()
+    val recommendationsOff by settingsViewModel.recommendationsOffResolvers.collectAsStateWithLifecycle()
+    val pluginStatuses by settingsViewModel.pluginStatuses.collectAsStateWithLifecycle()
+    val playbackLimits by settingsViewModel.playbackLimits.collectAsStateWithLifecycle()
+    val notPlaying by settingsViewModel.notPlayingResolvers.collectAsStateWithLifecycle()
+    val pluginSessionBusy by settingsViewModel.pluginSessionBusy.collectAsStateWithLifecycle()
+    val sessionContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        settingsViewModel.refreshPluginStatus()
+        settingsViewModel.pluginSessionMessages.collect { message ->
+            android.widget.Toast.makeText(sessionContext, message, android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    LaunchedEffect(selectedPlugin?.id) {
+        val open = selectedPlugin ?: return@LaunchedEffect
+        if (open.shared?.capabilities?.get("status") == true) settingsViewModel.refreshPluginStatus(open.id)
+    }
+
     val resolverPlugins = allPlugins.filter { it.category == PluginCategory.RESOLVER }
     val metaServices = allPlugins.filter { it.category == PluginCategory.META_SERVICE }
     val concertServices = allPlugins.filter { it.category == PluginCategory.CONCERT_SERVICE }
@@ -544,11 +577,15 @@ private fun PlugInsTab(
     val savedOrderMissing = resolverPlugins
         .filter { it.resolverId !in resolverOrder && isConnected(it.resolverId) && isResolverEnabled(it.resolverId) }
         .map { it.resolverId }
-    val enabledResolverIds = (resolverOrder + savedOrderMissing).filter { id ->
+    val onResolverIds = (resolverOrder + savedOrderMissing).filter { id ->
         val plugin = findPlugin(id)
         plugin != null && plugin.category == PluginCategory.RESOLVER &&
             isConnected(id) && isResolverEnabled(id)
     }
+    // A plug-in that's on but doesn't play (a plan limit, or "Play from" off;
+    // #707) sits with the unnumbered tiles, keeping its saved slot.
+    val enabledResolverIds = onResolverIds.filter { it !in notPlaying }
+    val notPlayingResolverPlugins = onResolverIds.filter { it in notPlaying }.mapNotNull { findPlugin(it) }
     // Connected but turned off by the user — distinct from "not connected".
     val offResolverPlugins = resolverPlugins.filter {
         isConnected(it.resolverId) && !isResolverEnabled(it.resolverId)
@@ -588,13 +625,41 @@ private fun PlugInsTab(
                     onReorder = { from, to ->
                         val item = orderedEnabled.removeAt(from)
                         orderedEnabled.add(to, item)
-                        // Persist: enabled resolvers in new order + disabled resolvers appended
-                        val newOrder = orderedEnabled.toList() +
-                            resolverOrder.filter { it !in orderedEnabled }
-                        onResolverOrderChanged(newOrder)
+                        // Persist: the others keep their places beside the
+                        // ones they followed (desktop's rememberOrder), not
+                        // appended to the end.
+                        settingsViewModel.reorderResolvers(orderedEnabled.toList())
                     },
                     onPluginClick = { id -> findPlugin(id)?.let { selectedPlugin = it } },
                 )
+            }
+        }
+
+        // On but not playing (#707): unnumbered, full colour, with the plan's
+        // label or "Search and links only" (desktop's tileStatus).
+        if (notPlayingResolverPlugins.isNotEmpty()) {
+            item {
+                Spacer(modifier = Modifier.height(12.dp))
+                androidx.compose.foundation.layout.FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    notPlayingResolverPlugins.forEach { plugin ->
+                        val status = com.parachord.shared.plugin.tileStatus(playbackLimits, plugin.id, playbackOff)
+                        PluginTile(
+                            plugin = plugin,
+                            isConnected = true,
+                            priorityNumber = null,
+                            onClick = { selectedPlugin = plugin },
+                            modifier = Modifier.width(100.dp),
+                            statusLabel = status.statusLabel,
+                            statusLabelColor = SetupRequiredAmber,
+                        )
+                    }
+                }
             }
         }
 
@@ -902,6 +967,20 @@ private fun PlugInsTab(
             onResolverEnabledChange = { enabled ->
                 settingsViewModel.setResolverEnabled(plugin.resolverId, enabled)
             },
+            // "Enable X": in the active list, and not killed by the old
+            // second switch (`disabled_plugins`), which turning it on clears.
+            resolverOn = isResolverEnabled(plugin.resolverId) && plugin.id !in disabledPlugins,
+            playbackOff = plugin.id in playbackOff,
+            metadataOff = plugin.id in metadataOff,
+            recommendationsOff = plugin.id in recommendationsOff,
+            playbackLimit = playbackLimits[plugin.id],
+            onPlaybackOn = { settingsViewModel.setPlaybackOn(plugin.id, it) },
+            onMetadataOn = { settingsViewModel.setMetadataOn(plugin.id, it) },
+            onRecommendationsOn = { settingsViewModel.setRecommendationsOn(plugin.id, it) },
+            pluginStatus = pluginStatuses[plugin.id],
+            sessionBusy = pluginSessionBusy == plugin.id,
+            onSignIn = { settingsViewModel.pluginSession(plugin.id, plugin.name, signIn = true) },
+            onSignOut = { settingsViewModel.pluginSession(plugin.id, plugin.name, signIn = false) },
             onToggleConnection = {
                 when (plugin.id) {
                     "spotify" -> onSpotifyToggle()
@@ -1209,6 +1288,19 @@ private fun PluginConfigSheet(
     isResolver: Boolean = false,
     resolverEnabled: Boolean = true,
     onResolverEnabledChange: (Boolean) -> Unit = {},
+    // #707: "Enable X" and its nested switches, and the account row.
+    resolverOn: Boolean = resolverEnabled,
+    playbackOff: Boolean = false,
+    metadataOff: Boolean = false,
+    recommendationsOff: Boolean = false,
+    playbackLimit: com.parachord.shared.home.PlaybackLimit? = null,
+    onPlaybackOn: (Boolean) -> Unit = {},
+    onMetadataOn: (Boolean) -> Unit = {},
+    onRecommendationsOn: (Boolean) -> Unit = {},
+    pluginStatus: com.parachord.shared.plugin.PluginStatusEntry? = null,
+    sessionBusy: Boolean = false,
+    onSignIn: () -> Unit = {},
+    onSignOut: () -> Unit = {},
     scrobbling: Boolean,
     onScrobblingChanged: (Boolean) -> Unit,
     soundCloudCredentialsSaved: Boolean = false,
@@ -1331,71 +1423,73 @@ private fun PluginConfigSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Status
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = "Status",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+            // "Enable X" (#707, desktop parachord#1505): a music plug-in's one
+            // on switch (`active_resolvers`), and under it, while it's on,
+            // "Play from X", "Use metadata from X" and "Use recommendations
+            // from X". A meta-service keeps its own on/off below; it gets the
+            // recommendations switch when it offers them.
+            val info = plugin.sharedInfo
+            if (isResolver) {
+                Spacer(modifier = Modifier.height(16.dp))
+                PluginSwitchRow(
+                    label = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
+                    hint = com.parachord.shared.plugin.enableSwitchHint(info),
+                    checked = resolverOn,
+                    onCheckedChange = onResolverEnabledChange,
                 )
-                Spacer(modifier = Modifier.weight(1f))
-                // The chip must reflect whether the resolver is actually WORKING,
-                // not just connected. A resolver that's connected but toggled OFF
-                // (active_resolvers, #213) doesn't resolve or show badges — showing
-                // "ENABLED" for it is what made a Spotify-only user think Spotify
-                // worked when the toggle was off (#338). "OFF" distinguishes the
-                // toggled-off case from a genuinely not-connected one.
-                val statusEnabled = isConnected && (!isResolver || resolverEnabled)
-                val statusText = when {
-                    statusEnabled -> "ENABLED"
-                    isConnected && isResolver -> "OFF"
-                    else -> "DISABLED"
-                }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            if (statusEnabled) Success.copy(alpha = 0.15f)
-                            else MaterialTheme.colorScheme.surfaceVariant,
-                        )
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Text(
-                        text = statusText,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (statusEnabled) Success else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            }
+            val playState = com.parachord.shared.plugin.playbackSwitchState(info, isResolver && resolverOn, playbackOff, playbackLimit)
+            if (playState.shown) {
+                PluginSwitchRow(
+                    label = com.parachord.shared.plugin.playbackSwitchLabel(plugin.name),
+                    hint = playState.hint,
+                    checked = playState.checked,
+                    enabled = !playState.disabled,
+                    nested = true,
+                    onCheckedChange = onPlaybackOn,
+                )
+            }
+            val metaState = com.parachord.shared.plugin.metadataSwitchState(info, isResolver && resolverOn, metadataOff)
+            if (metaState.shown) {
+                PluginSwitchRow(
+                    label = com.parachord.shared.plugin.metadataSwitchLabel(plugin.name),
+                    hint = metaState.hint,
+                    checked = metaState.checked,
+                    nested = true,
+                    onCheckedChange = onMetadataOn,
+                )
+            }
+            val recState = com.parachord.shared.plugin.recommendationsSwitchState(
+                info, if (isResolver) resolverOn else isConnected, recommendationsOff,
+            )
+            if (recState.shown) {
+                if (!isResolver) Spacer(modifier = Modifier.height(16.dp))
+                PluginSwitchRow(
+                    label = com.parachord.shared.plugin.recommendationsSwitchLabel(plugin.name),
+                    hint = recState.hint,
+                    checked = recState.checked,
+                    nested = isResolver,
+                    onCheckedChange = onRecommendationsOn,
+                )
             }
 
-            // #213: per-resolver Enabled toggle — turn a resolver off WITHOUT
-            // disconnecting it. Shown for connected/usable resolvers only;
-            // gates the resolver via active_resolvers (playback + badges),
-            // leaving credentials + metadata untouched.
-            if (isResolver && isConnected) {
+            // The account row for a status-capable plugin (desktop's AccountRow,
+            // capabilities.status): its own status line, and Sign in / Sign out
+            // when it implements them.
+            if (info.capabilities["status"] == true) {
                 Spacer(modifier = Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Enabled",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Text(
-                            text = "Use this resolver for playback",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(checked = resolverEnabled, onCheckedChange = onResolverEnabledChange)
-                }
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+                PluginAccountRow(
+                    name = plugin.name,
+                    color = plugin.bgColor,
+                    status = pluginStatus,
+                    canSignIn = info.hasSignIn,
+                    canSignOut = info.hasSignOut,
+                    busy = sessionBusy,
+                    onSignIn = onSignIn,
+                    onSignOut = onSignOut,
+                )
             }
 
             // Plugin-specific config. A plugin with `settings.configurable`
@@ -1482,12 +1576,14 @@ private fun PluginConfigSheet(
                 )
                 "discogs" -> ToggleableMetaConfig(
                     isEnabled = isConnected,
+                    title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
                     onToggle = onToggleConnection,
                     enabledText = "Discogs metadata provider is active",
                     disabledText = "Enable Discogs to get artist bios and images from the Discogs community database.",
                 )
                 "wikipedia" -> ToggleableMetaConfig(
                     isEnabled = isConnected,
+                    title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
                     onToggle = onToggleConnection,
                     enabledText = "Wikipedia metadata provider is active",
                     disabledText = "Enable Wikipedia to get encyclopedia-style artist bios and images via Wikidata.",
@@ -1539,12 +1635,15 @@ private fun PluginConfigSheet(
                     onSubmitKey = onSongkickApiKeySubmit,
                     onDisconnect = onSongkickDisconnect,
                 )
-                // Generic .axe plugin toggle — no special config UI
-                else -> ToggleableMetaConfig(
+                // Generic .axe plugin: a music plug-in's "Enable X" is above
+                // (#707: it used to get a second "Enabled" switch here); a
+                // meta-service keeps this one as its "Enable X".
+                else -> if (!isResolver) ToggleableMetaConfig(
                     isEnabled = isConnected,
                     onToggle = onToggleConnection,
-                    enabledText = "${plugin.name} is enabled",
-                    disabledText = "Enable ${plugin.name}",
+                    title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
+                    enabledText = com.parachord.shared.plugin.enableSwitchHint(plugin.sharedInfo).ifEmpty { "${plugin.name} is enabled" },
+                    disabledText = com.parachord.shared.plugin.enableSwitchHint(plugin.sharedInfo).ifEmpty { "Enable ${plugin.name}" },
                 )
             }
         }
@@ -2905,6 +3004,93 @@ private fun LibreFmConfig(
     }
 }
 
+// ── Plug-in switch rows and the account row (#707) ────────────────
+
+/** One of the sheet's switches; [nested] ones sit indented under "Enable X". */
+@Composable
+private fun PluginSwitchRow(
+    label: String,
+    hint: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+    nested: Boolean = false,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = if (nested) 16.dp else 0.dp, top = if (nested) 8.dp else 0.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = if (nested) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            if (hint.isNotEmpty()) {
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            modifier = if (nested) Modifier.scale(0.85f) else Modifier,
+        )
+    }
+}
+
+/**
+ * A status-capable plugin's account (desktop's `account-row.js`): "X account",
+ * the reply's status line (`pluginStatusRow`), and Sign in (filled with the
+ * service's colour) or Sign out.
+ */
+@Composable
+private fun PluginAccountRow(
+    name: String,
+    color: Color,
+    status: com.parachord.shared.plugin.PluginStatusEntry?,
+    canSignIn: Boolean,
+    canSignOut: Boolean,
+    busy: Boolean,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+) {
+    val row = com.parachord.shared.plugin.pluginStatusRow(status)
+    val signedIn = status?.signedIn == true
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "$name account",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = row.line,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        when {
+            busy -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            signedIn && canSignOut -> OutlinedButton(onClick = onSignOut) { Text("Sign out") }
+            !signedIn && canSignIn -> {
+                val textColor = if (color.luminance() > 0.5f) Color(0xFF111827) else Color.White
+                androidx.compose.material3.Button(
+                    onClick = onSignIn,
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = color, contentColor = textColor),
+                ) { Text("Sign in") }
+            }
+        }
+    }
+}
+
 // ── Toggleable Meta Provider Config (Discogs, Wikipedia) ──────────
 
 @Composable
@@ -2913,6 +3099,7 @@ private fun ToggleableMetaConfig(
     onToggle: () -> Unit,
     enabledText: String,
     disabledText: String,
+    title: String = "Enabled",
 ) {
     Spacer(modifier = Modifier.height(16.dp))
     HorizontalDivider()
@@ -2924,7 +3111,7 @@ private fun ToggleableMetaConfig(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = "Enabled",
+                text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
             )

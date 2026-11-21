@@ -229,9 +229,11 @@ fun ResolverSourceDropdown(
     modifier: Modifier = Modifier,
 ) {
     val resolverOrder = LocalResolverOrder.current
-    // Sources that can play, one per resolver, in the user's order (shared, #587).
-    val offered = remember(availableSources, resolverOrder) {
-        com.parachord.shared.resolver.SourceReselection.switchableSources(availableSources, resolverOrder)
+    val notPlaying = com.parachord.android.ui.theme.LocalNotPlaying.current
+    // Sources that can play, one per resolver, in the user's order (shared,
+    // #587), leaving out the plug-ins that don't play (#707).
+    val offered = remember(availableSources, resolverOrder, notPlaying) {
+        com.parachord.shared.resolver.SourceReselection.switchableSources(availableSources, resolverOrder, notPlaying)
     }
     val hasMultipleSources = offered.size > 1
 

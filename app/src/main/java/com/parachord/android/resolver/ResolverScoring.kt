@@ -9,10 +9,13 @@ import com.parachord.shared.resolver.ResolvedSource
  */
 class ResolverScoring constructor(
     private val settingsStore: SettingsStore,
+    /** The one "not playing" list (#707); lazy, so the graph has no cycle through the plugin host. */
+    private val statusStore: Lazy<com.parachord.shared.plugin.PluginStatusStore>? = null,
 ) {
     private val shared = com.parachord.shared.resolver.ResolverScoring(
         getResolverOrder = { settingsStore.getResolverOrder() },
         getActiveResolvers = { settingsStore.getActiveResolvers() },
+        getNotPlaying = { statusStore?.value?.notPlayingNow() ?: emptyList() },
     )
 
     companion object {

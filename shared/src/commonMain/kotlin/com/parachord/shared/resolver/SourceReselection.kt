@@ -67,12 +67,17 @@ object SourceReselection {
     /**
      * The sources the source switcher offers: those that can play, the best
      * one per resolver, in [order] (resolvers not in it last), then by
-     * confidence. With an empty [order], by confidence alone.
+     * confidence. With an empty [order], by confidence alone. A plug-in that
+     * doesn't play ([notPlaying], the shared `notPlayingIds`, #707) isn't offered.
      */
-    fun switchableSources(sources: List<ResolvedSource>, order: List<String>): List<ResolvedSource> {
+    fun switchableSources(sources: List<ResolvedSource>, order: List<String>): List<ResolvedSource> =
+        switchableSources(sources, order, emptyList())
+
+    fun switchableSources(sources: List<ResolvedSource>, order: List<String>, notPlaying: List<String>): List<ResolvedSource> {
         fun rank(id: String) = order.indexOf(id).let { if (it < 0) order.size else it }
         return sources
             .filter(ResolverBadges::isPlayable)
+            .filter { it.resolver !in notPlaying }
             .sortedWith(compareBy<ResolvedSource> { rank(it.resolver) }.thenByDescending { it.confidence ?: 0.0 })
             .distinctBy { it.resolver }
     }

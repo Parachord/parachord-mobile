@@ -116,15 +116,16 @@ class HomeSession(
         val folderAdded: Boolean,
         val scrobblers: List<Pair<PluginInfo, Boolean>>,
         val hasMusic: Boolean,
+        val limits: Map<String, PlaybackLimit> = emptyMap(),
     ) {
         val scrobbling: Boolean get() = scrobblers.any { it.second }
 
         val connectDone: Boolean
-            get() = serviceConnected(stepOne.services, accounts, playbackResolvers = resolvers) || folderAdded
+            get() = serviceConnected(stepOne.services, accounts, playbackResolvers = resolvers, playbackLimits = limits) || folderAdded
         val musicDone: Boolean get() = hasMusic || scrobbling
 
         fun status(played: Boolean): GettingStartedStatus = gettingStartedSteps(
-            connected = serviceConnected(stepOne.services, accounts, playbackResolvers = resolvers),
+            connected = serviceConnected(stepOne.services, accounts, playbackResolvers = resolvers, playbackLimits = limits),
             folderAdded = folderAdded,
             hasMusic = hasMusic,
             scrobbling = scrobbling,
@@ -133,16 +134,25 @@ class HomeSession(
     }
 
     private val gsInputs: Flow<GsInputs> = combine(
-        combine(sources.plugins, sources.accounts, sources.playbackResolvers) { p, a, r -> Triple(p, a, r) },
+        combine(sources.plugins, sources.accounts, sources.playbackResolvers, sources.playbackLimits) { p, a, r, l ->
+            PluginInputs(p, a, r, l)
+        },
         combine(sources.folderAdded, sources.scrobblerAccounts, sources.hasCollection, sources.playlists) { f, sa, c, pl ->
             Triple(f, sa, c || pl.isNotEmpty())
         },
-    ) { (plugins, accounts, resolvers), (folder, scrobblerAccounts, hasMusic) ->
+    ) { (plugins, accounts, resolvers, limits), (folder, scrobblerAccounts, hasMusic) ->
         GsInputs(
             plugins.isNotEmpty(), stepOnePlugins(plugins), accounts, resolvers, folder,
-            scrobblerTiles(plugins, scrobblerAccounts), hasMusic,
+            scrobblerTiles(plugins, scrobblerAccounts), hasMusic, limits,
         )
     }
+
+    private data class PluginInputs(
+        val plugins: List<PluginInfo>,
+        val accounts: Map<String, Boolean>,
+        val resolvers: List<String>,
+        val limits: Map<String, PlaybackLimit>,
+    )
 
     private data class LibraryIn(
         val playlists: List<Playlist>,
@@ -438,7 +448,7 @@ class HomeSession(
         val gettingStarted = if (showGettingStarted(gsState, status)) {
             GettingStartedView(
                 status = status,
-                services = inputs.stepOne.services.map { it to serviceState(it, inputs.accounts, playbackResolvers = inputs.resolvers) },
+                services = inputs.stepOne.services.map { it to serviceState(it, inputs.accounts, playbackResolvers = inputs.resolvers, playbackLimits = inputs.limits) },
                 free = inputs.stepOne.free,
                 folder = inputs.stepOne.folder,
                 hasMusic = inputs.hasMusic,

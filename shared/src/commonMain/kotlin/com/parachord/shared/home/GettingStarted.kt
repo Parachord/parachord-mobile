@@ -57,8 +57,24 @@ fun settingsMissing(p: PluginInfo, saved: Map<String, String>?): Boolean {
     return keys.none { saved?.get(it)?.trim()?.isNotEmpty() == true }
 }
 
-/** A plan limit on a service (Amazon Music's Prime). */
-data class PlaybackLimit(val blocked: Boolean, val label: String? = null)
+/**
+ * A plan limit on a service (Amazon Music's Prime): desktop's limit entry
+ * (`playback-limits.js`). A plugin reports it in its `getStatus` reply
+ * ([com.parachord.shared.plugin.pluginStatusLimit]).
+ *
+ * @param blocked the account's plan can't play here
+ * @param label a short tile label ("Prime: no playback")
+ * @param planKey the plan as the service names it, or null
+ * @param message the full sentence for Settings and the play refusal
+ * @param searchesHeldBack the service's own searches answer not-ready while blocked
+ */
+data class PlaybackLimit(
+    val blocked: Boolean,
+    val label: String? = null,
+    val planKey: String? = null,
+    val message: String? = null,
+    val searchesHeldBack: Boolean = false,
+)
 
 /** `state` is `connected`, `limited`, `connect` or `setup`. */
 data class ServiceState(val state: String, val label: String?)

@@ -75,7 +75,8 @@ struct ResolverBadgeRow: View {
             sources: sources,
             order: userOrder.isEmpty ? Self.canonical : userOrder,
             active: Array(ResolverPrefs.shared.active),
-            disabled: Array(ResolverPrefs.shared.disabled))
+            disabled: Array(ResolverPrefs.shared.disabled),
+            notPlaying: Array(ResolverPrefs.shared.notPlaying))
     }
 
     @State private var shown = false
@@ -109,6 +110,9 @@ final class ResolverPrefs {
     var active: Set<String> = []
     /// Explicitly DISABLED plugin/resolver ids (authoritative off-switch).
     var disabled: Set<String> = []
+    /// On but not playing (shared `notPlayingIds`, #707): a plan that can't
+    /// play, or "Play from X" off. Still searched; never badged, picked or numbered.
+    var notPlaying: Set<String> = []
     /// Suppress additive re-resolution on the FIRST active-flow emit (initial
     /// load isn't a user "enable").
     @ObservationIgnored private var activeInitialized = false
@@ -128,6 +132,9 @@ final class ResolverPrefs {
         subs.append(watcher.watch(flow: container.settingsStore.getDisabledPluginsFlow()) { [weak self] v in
             if let list = v as? [String] { self?.disabled = Set(list) }
             else if let set = v as? Set<String> { self?.disabled = set }
+        })
+        subs.append(watcher.watch(flow: container.pluginStatusStore.notPlaying) { [weak self] v in
+            if let list = v as? [String] { self?.notPlaying = Set(list) }
         })
         subs.append(watcher.watch(flow: container.settingsStore.getActiveResolversFlow()) { [weak self] v in
             guard let self, let list = v as? [String] else { return }
