@@ -155,4 +155,14 @@ object WebSessionRules {
         if (d.isNaN() || d.isInfinite()) return null
         return minOf(d, cap.toDouble()).toLong().coerceAtLeast(0)
     }
+
+    /**
+     * A URL as the debug log may show it: the path only, never the host's
+     * query, fragment or credentials (`https://music.amazon.com/my/purchases?x=1` → `/my/purchases`).
+     */
+    fun logPath(url: String): String {
+        val afterScheme = url.substringAfter("://", url)
+        val path = afterScheme.substringAfter('/', "").substringBefore('?').substringBefore('#')
+        return "/$path"
+    }
 }

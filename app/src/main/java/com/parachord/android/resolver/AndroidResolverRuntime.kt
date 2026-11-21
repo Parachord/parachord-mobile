@@ -266,6 +266,11 @@ class AndroidResolverRuntime constructor(
         } else {
             val result = json.decodeFromString<AxeResolveResult>(resultJson)
             val pluginTrackId = com.parachord.shared.resolver.pluginTrackId(resultJson, resolverId)
+            // A Widevine plugin (Amazon Music) plays from the result's own
+            // fields (`amazonAsin`): keep them, and the result, which carries
+            // no URL, under a non-secret placeholder named by its `id`.
+            val widevine = pluginManager.widevinePlugin(resolverId) != null
+            val pluginFields = if (widevine) com.parachord.shared.resolver.pluginResultFields(resultJson) else null
             // Plugins don't all return a top-level `url`: ID-based resolvers
             // (Apple Music, Spotify) carry a catalog id they route by, and
             // Bandcamp carries only `bandcampUrl` (its `<resolverId>Url`).
@@ -282,6 +287,7 @@ class AndroidResolverRuntime constructor(
                 // parachord-mobile#664). Keep the result under a non-secret
                 // placeholder so it survives this drop check.
                 ?: pluginTrackId?.let { com.parachord.shared.resolver.pluginTrackUrl(resolverId, it) }
+                ?: pluginFields?.get("id")?.let { com.parachord.shared.resolver.pluginTrackUrl(resolverId, it) }
                 ?: return@resolveViaPlugin null
             ResolvedSource(
                 resolver = resolverId,
@@ -305,6 +311,7 @@ class AndroidResolverRuntime constructor(
                 matchedArtist = result.artist,
                 matchedDurationMs = result.duration?.takeIf { it > 0 }?.times(1000),
                 artworkUrl = result.albumArt,
+                pluginFields = pluginFields,
             )
         }
     } catch (e: Exception) {
