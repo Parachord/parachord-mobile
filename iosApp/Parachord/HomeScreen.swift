@@ -284,6 +284,7 @@ struct HomeScreen: View {
                         home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
                     },
                     onShown: { session.halfCardShown(key: $0.key) },
+                    onOpenArtist: { path.append(.artist($0.artist)) },
                     onRetry: { session.retryCharts() }
                 )
                 .padding(.top, 24)

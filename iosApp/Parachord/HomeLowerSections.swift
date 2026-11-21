@@ -19,6 +19,7 @@ struct HomeHalfView: View {
     let onOpen: (IosHalfCard) -> Void
     let onPlay: (IosHalfCard) -> Void
     let onShown: (IosHalfCard) -> Void
+    let onOpenArtist: (IosHalfCard) -> Void
     let onRetry: () -> Void
 
     private var page: DesignTokens.Page {
@@ -62,7 +63,7 @@ struct HomeHalfView: View {
                             ForEach(0..<Int(HomePageKt.HOME_HALF_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 1) }
                         } else {
                             ForEach(half.cards, id: \.key) { card in
-                                HomeHalfCard(card: card, onOpen: { onOpen(card) }, onPlay: { onPlay(card) })
+                                HomeHalfCard(card: card, onOpen: { onOpen(card) }, onPlay: { onPlay(card) }, onOpenArtist: { onOpenArtist(card) })
                                     .onAppear { if card.needsArt { onShown(card) } }
                             }
                         }
@@ -108,6 +109,8 @@ private struct HomeHalfCard: View {
     let card: IosHalfCard
     let onOpen: () -> Void
     let onPlay: () -> Void
+    let onOpenArtist: () -> Void
+    @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     private let width = pcRecCardWidth
 
@@ -144,6 +147,10 @@ private struct HomeHalfCard: View {
         .accessibilityLabel(HomeCopy.shared.openLabel(title: card.title))
         .accessibilityAction(.default, onOpen)
         .accessibilityAction(named: HomeCopy.shared.playLabel(title: card.title), onPlay)
+        .pcAlbumContextMenu(
+            title: card.title, artist: card.artist, artworkUrl: card.imageUrl, coordinator: coordinator,
+            onGoToAlbum: onOpen,
+            onGoToArtist: card.artist.isEmpty ? nil : { onOpenArtist() })
     }
 }
 
@@ -179,7 +186,7 @@ struct HomeConcertCard: View {
         .accessibilityLabel(concert.a11yLabel)
         .modifier(ConcertRowAccessibility(
             tourArtist: concert.tourArtist,
-            ticket: concert.tickets.count == 1 ? URL(string: concert.tickets[0].url) : nil,
+            tickets: concert.tickets.compactMap { t in URL(string: t.url).map { (label: t.label, url: $0) } },
             open: onOpenTour))
         .padding(.horizontal, homeGutter)
     }
@@ -211,7 +218,7 @@ struct HomeConcertCard: View {
     @ViewBuilder private var tickets: some View {
         let label = HStack(spacing: 4) {
             Text(HomeCopy.shared.TICKETS).font(.system(size: 12, weight: .semibold))
-            if concert.tickets.count > 1 { Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)) }
+            if concert.tickets.count > 1 { PCIcon(icon: .chevrondown, size: 16, tint: PC.onAccent) }
         }
         .foregroundStyle(PC.onAccent)
         .padding(.horizontal, 12).frame(minHeight: 44)

@@ -960,7 +960,7 @@ struct ConcertsScreen: View {
             .accessibilityElement(children: .combine)
             .modifier(ConcertRowAccessibility(
                 tourArtist: tourArtist,
-                ticket: e.ticketUrl.flatMap { URL(string: $0) },
+                tickets: (e.ticketUrl.flatMap { URL(string: $0) }).map { [(label: HomeCopy.shared.TICKETS, url: $0)] } ?? [],
                 open: { navTourArtist = $0 }))
     }
 
@@ -1015,20 +1015,21 @@ struct ConcertsScreen: View {
 /// so both stay reachable on the combined element.
 struct ConcertRowAccessibility: ViewModifier {
     let tourArtist: String?
-    let ticket: URL?
+    /// The seller links: one gets "Tickets", several get one action each ("Tickets from <seller>", shared copy).
+    let tickets: [(label: String, url: URL)]
     let open: (String) -> Void
     @Environment(\.openURL) private var openURL
 
     func body(content: Content) -> some View {
-        let base = content
+        var view = AnyView(content
             .accessibilityAddTraits(tourArtist != nil ? .isButton : [])
             .accessibilityHint(tourArtist.map { HomeCopy.shared.concertsOf(artist: $0) } ?? "")
-            .accessibilityAction { if let tourArtist { open(tourArtist) } }
-        if let ticket {
-            base.accessibilityAction(named: HomeCopy.shared.TICKETS) { openURL(ticket) }
-        } else {
-            base
+            .accessibilityAction { if let tourArtist { open(tourArtist) } })
+        for t in tickets {
+            let name = tickets.count == 1 ? HomeCopy.shared.TICKETS : HomeCopy.shared.ticketsFrom(seller: t.label)
+            view = AnyView(view.accessibilityAction(named: name) { openURL(t.url) })
         }
+        return view
     }
 }
 

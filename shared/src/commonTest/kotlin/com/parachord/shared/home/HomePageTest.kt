@@ -91,6 +91,7 @@ class HomePageTest {
 
     @Test
     fun `copy plurals and pill`() {
+        assertEquals("Tickets from Ticketmaster", HomeCopy.ticketsFrom("Ticketmaster"))
         assertEquals("Your latest love", HomeCopy.lovesSubtitle(1))
         assertEquals("Your 3 latest loves", HomeCopy.lovesSubtitle(3))
         assertEquals("Finish setting up · 1 of 2", HomeCopy.setupPill(1, 2))
