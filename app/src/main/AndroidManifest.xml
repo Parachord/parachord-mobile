@@ -75,6 +75,17 @@
             </intent-filter>
         </activity>
 
+        <!--
+            A web session's visible sign-in screen (the webSession host
+            bridge). Not exported: only the app starts it. configChanges keeps
+            a rotation from recreating it mid sign-in.
+        -->
+        <activity
+            android:name=".websession.WebSessionSignInActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|uiMode"
+            android:theme="@style/Theme.Parachord" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"

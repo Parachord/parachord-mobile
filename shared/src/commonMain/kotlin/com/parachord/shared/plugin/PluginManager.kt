@@ -47,9 +47,11 @@ class PluginManager constructor(
     /**
      * The host bridges this app supplies plugins (the plug-in host contract,
      * desktop parachord#1561). A plugin whose `requires.hostBridges` names one
-     * not here is never loaded ([PluginCompat.missingHostBridges]). Each
-     * bridge must also be on the JS supplier's `bridges` map and in
-     * `window.__parachordHostBridges` (the `plugin-host-supplier` block).
+     * not here is never loaded ([PluginCompat.missingHostBridges]). Loading
+     * sets `window.__parachordHostBridges` to this set; the supplier's
+     * `bridges` getter (the `plugin-host-supplier` block) then hands each
+     * plugin `window.__parachordBridge_<name>`, which the platform's bootstrap
+     * must define (Android: `webSession` in bootstrap.html).
      */
     private val hostBridges: Set<String> = emptySet(),
 ) {
@@ -217,6 +219,9 @@ class PluginManager constructor(
 
         // this.host.appVersion() reads it (the plugin-host-supplier block).
         jsRuntime.evaluate("window.__parachordAppVersion = '${escapeForJs(appVersion)}';")
+        // The supplier's `bridges` getter reads this list (the plugin-host-supplier block).
+        val bridgeNames = hostBridges.sorted().joinToString(",") { "'${escapeForJs(it)}'" }
+        jsRuntime.evaluate("window.__parachordHostBridges = [$bridgeNames];")
         val bridgeHidden = mutableListOf<PluginInfo>()
 
         // Load into resolver-loader.js

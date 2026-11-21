@@ -43,6 +43,8 @@ class JsBridge constructor(
     private val mbidEnrichment: MbidEnrichmentService,
     private val appleMusicCatalog: com.parachord.shared.api.AppleMusicCatalog,
     private val settingsStore: com.parachord.shared.settings.SettingsStore,
+    /** The `webSession` host bridge NativeBridge answers plugins' `this.host.webSession` with. */
+    private val webSessionBridge: com.parachord.shared.websession.WebSessionBridge,
 ) : JsRuntime {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -64,7 +66,7 @@ class JsBridge constructor(
         if (System.currentTimeMillis() - initFailedAt < INIT_RETRY_MS) return@withContext
 
         val pageLoaded = CompletableDeferred<Unit>()
-        val nativeBridge = NativeBridge(httpClient, scope, dataStore, mbidEnrichment, appleMusicCatalog, settingsStore)
+        val nativeBridge = NativeBridge(httpClient, scope, dataStore, mbidEnrichment, appleMusicCatalog, settingsStore, webSessionBridge)
 
         val wv = WebView(context).apply {
             settings.javaScriptEnabled = true
