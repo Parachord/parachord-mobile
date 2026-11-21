@@ -1547,6 +1547,26 @@ only draws it.
     Bandcamp covers don't show in CarPlay Now Playing there (see the known gap
     under Bandcamp).
 
+## Plug-in switches and the account row (#707)
+
+The Plug-ins sheet follows desktop's (root `CLAUDE.md` → "Plug-in status, the
+account row and the plug-in switches"). A music plug-in shows **Enable X**
+(`active_resolvers`) and, while it's on, **Play from X**, **Use metadata from X**
+and **Use recommendations from X**; a meta-service's own on/off (`disabled_plugins`)
+is its "Enable X", with "Use recommendations from X" under it when it offers them.
+Labels, hints and visibility come from `IosContainer.pluginSheet` (the shared
+`PluginSwitch` rules, flattened to `IosPluginSheet`); `setPluginSwitch(kind:id:on:)`
+writes the three lists. The priority list numbers only the plug-ins that play
+(`playingOrder`); one on but not playing (`ResolverPrefs.notPlaying`, from
+`PluginStatusStore.notPlaying`) sits under them unnumbered with
+`pluginTileStatus`'s line, keeping its `resolver_order` slot. Saving the order
+also saves `resolver_order_memory`, and a re-enabled plug-in goes back where it
+was ranked (`ResolverOrderMemory.insertRemembered`). Badges, the deck's sources,
+greyed rows and selection (`resolverScoring`'s `getNotPlaying`) leave the list
+out. The account row (status line, Sign in / Sign out) shows for a plugin with
+`capabilities.status`; none loads on iOS today, since Amazon Music needs the
+web-session bridge iOS doesn't supply.
+
 ## Local files are the library, not loves (#705)
 
 The Music-library scan (`MediaLibraryScanner.swift` → `IosContainer.addLocalTracks`)

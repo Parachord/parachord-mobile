@@ -605,11 +605,14 @@ val androidModule = module {
             artistImageResolvers = {
                 get<com.parachord.shared.plugin.PluginManager>().artistImageResolverIds(
                     active = settingsStore.getActiveResolvers(),
-                    disabled = settingsStore.getDisabledPlugins(),
+                    // "Use metadata from X" off skips its photos too (#707).
+                    disabled = settingsStore.getDisabledPlugins() + settingsStore.getMetadataOffResolvers(),
                     order = settingsStore.getResolverOrder(),
                 )
             },
             pluginArtistImage = { id, name -> get<com.parachord.shared.plugin.PluginManager>().searchArtistImage(id, name) },
+            // "Use metadata from X" off (#707): covers, photos and artist info skip it; search doesn't.
+            getMetadataOff = { settingsStore.getMetadataOffResolvers() },
             deezer = com.parachord.shared.metadata.DeezerArtistSearch(get()),
             // #488: ListenBrainz listen counts rank originals above covers in Search.
             searchPopularity = com.parachord.shared.metadata.SearchPopularity(
@@ -742,6 +745,8 @@ val androidModule = module {
         val sharedScoring = com.parachord.shared.resolver.ResolverScoring(
             getResolverOrder = { settingsStore.getResolverOrder() },
             getActiveResolvers = { settingsStore.getActiveResolvers() },
+            // A plan that can't play, or "Play from X" off (#707).
+            getNotPlaying = { get<com.parachord.shared.plugin.PluginStatusStore>().notPlayingNow() },
         )
         com.parachord.shared.resolver.ResolverCoordinator(
             runtime = get<AndroidResolverRuntime>(),
@@ -786,7 +791,7 @@ val androidModule = module {
     }
 
     singleOf(::ResolverManager)
-    singleOf(::ResolverScoring)
+    single { ResolverScoring(get(), lazy { get<com.parachord.shared.plugin.PluginStatusStore>() }) }
     // Explicit binding: singleOf ignores the defaulted `persisted` parameter.
     single {
         val file = java.io.File(androidContext().filesDir, "track_sources_cache.json")
@@ -797,6 +802,7 @@ val androidModule = module {
             settingsStore = get(),
             mbidEnrichment = get(),
             playlistTrackDao = get(),
+            notPlaying = get<com.parachord.shared.plugin.PluginStatusStore>().notPlaying,
             // Desktop keeps track sources 7 days.
             persisted = com.parachord.shared.cache.PersistentJsonCache(
                 kotlinx.serialization.builtins.ListSerializer(com.parachord.shared.resolver.ResolvedSource.serializer()),
@@ -1011,6 +1017,8 @@ val androidModule = module {
             concertArtistSeed = get(),
             concertArtistImages = get(),
             pluginIsOn = { id, isMeta, needsAccount -> androidPluginIsOn(settings, id, isMeta, needsAccount) },
+            notPlaying = get<com.parachord.shared.plugin.PluginStatusStore>().notPlaying,
+            limits = get<com.parachord.shared.plugin.PluginStatusStore>().limits,
         )
     }
     // Listeners' people (similar_users_cache.json). Explicit `single {}`
@@ -1254,6 +1262,19 @@ val androidModule = module {
     }
     singleOf(::JsBridge)
     single { PluginFileAccess(androidContext()) }
+    // The status-capable plugins' replies and the one "not playing" list (#707).
+    single {
+        com.parachord.shared.plugin.PluginStatusStore.create(
+            pluginManager = get(),
+            settingsStore = get(),
+            scope = kotlinx.coroutines.CoroutineScope(
+                kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate +
+                    kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+                        com.parachord.shared.platform.Log.e("PluginStatusStore", "Status scope failed", e)
+                    },
+            ),
+        )
+    }
     single {
         com.parachord.shared.plugin.PluginManager(
             get<PluginFileAccess>(), get<JsBridge>(),

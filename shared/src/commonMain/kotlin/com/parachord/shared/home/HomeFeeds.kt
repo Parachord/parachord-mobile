@@ -226,9 +226,14 @@ suspend fun homePluginAccounts(
     return out
 }
 
-/** The plug-ins that play here, are on ([isOn]) and aren't known to be signed out ([accounts]). */
+/**
+ * The plug-ins that play here, are on ([isOn]), aren't known to be signed out
+ * ([accounts]) and aren't in the "not playing" list ([notPlaying], the shared
+ * `notPlayingIds`: a plan limit or "Play from X" off, #707).
+ */
 suspend fun homePlaybackResolvers(
     plugins: List<PluginInfo>,
     accounts: Map<String, Boolean>,
+    notPlaying: Collection<String> = emptyList(),
     isOn: suspend (PluginInfo) -> Boolean,
-): List<String> = plugins.filter { playsHere(it) && accounts[it.id] != false && isOn(it) }.map { it.id }
+): List<String> = plugins.filter { playsHere(it) && accounts[it.id] != false && it.id !in notPlaying && isOn(it) }.map { it.id }

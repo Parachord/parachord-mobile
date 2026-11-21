@@ -26,6 +26,8 @@ private const val ALBUM_POLL_ATTEMPTS = 85
 /** A recommendation provider gets 20 s, desktop's `CACHE_TTL.recommendationProvider`:
  *  nobody waits on it, and ListenBrainz's own retries can take several seconds. */
 private const val RECOMMENDATION_POLL_ATTEMPTS = 200
+/** The loader's own status budget is 8 s; the poll waits a little longer for its failed marker. */
+private const val STATUS_POLL_ATTEMPTS = 100
 
 /**
  * Central wrapper for .axe plugin loading and execution.
@@ -70,6 +72,10 @@ class PluginManager constructor(
         val requiresAuth: Boolean = false,
         /** `settings.authType` (e.g. `oauth`, `none`). [needsAccount] follows [requiresAuth]; Home's step 1 also reads this. */
         val authType: String? = null,
+        /** The plugin implements `signIn` (the account row's Sign in, desktop's AccountRow). */
+        val hasSignIn: Boolean = false,
+        /** The plugin implements `signOut`. */
+        val hasSignOut: Boolean = false,
     )
 
     /** One `settings.configurable` field of a plugin manifest, rendered by the settings screen. */
@@ -654,6 +660,48 @@ class PluginManager constructor(
         ) ?: "[]"
     }
 
+    // ── Status and the account (capabilities.status, #707) ────────────
+
+    /** Loaded plugins that report their status (`capabilities.status`). */
+    fun statusPlugins(): List<PluginInfo> = plugins.value.filter { it.capabilities["status"] == true }
+
+    /**
+     * One plugin's status through the loader's `getStatus(id)` (desktop's
+     * `resolver-loader.js`, which races the call against its 8 s
+     * `STATUS_BUDGET_MS` and answers `STATUS_READ_FAILED` for a throw or a
+     * timeout): the reply's JSON, `null` when the plugin has no status. A poll
+     * that gets no answer at all reads as the failed marker, never as blocked.
+     */
+    suspend fun getStatus(resolverId: String): String? {
+        ensureInitialized()
+        return pollAsync(
+            "st",
+            loaderCall("await window.__resolverLoader.getStatus('${escapeForJs(resolverId)}')"),
+            attempts = STATUS_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        )
+    }
+
+    /**
+     * Calls a plugin's `signIn()` (it waits for the person, so [timeoutMs] is
+     * long) or `signOut()`. Answers the plugin's `{ success, error? }` JSON;
+     * throws when the plugin threw or didn't answer in time.
+     */
+    suspend fun callSessionMethod(resolverId: String, method: String, timeoutMs: Long): String? {
+        require(method == "signIn" || method == "signOut") { "not a session method: $method" }
+        ensureInitialized()
+        val id = escapeForJs(resolverId)
+        return pollAsync(
+            "ss",
+            loaderCall(
+                "(function(){var r=window.__resolverLoader.getResolver&&window.__resolverLoader.getResolver('$id');" +
+                    "if(!r||typeof r.$method!=='function')throw new Error('$method not available');return r;})().$method()",
+            ),
+            attempts = (timeoutMs / LOOKUP_POLL_INTERVAL_MS).toInt().coerceAtLeast(1),
+            throwOnFailure = true,
+        )
+    }
+
     /**
      * Wraps a loader [call] as one async-IIFE expression (pollAsync splices it into
      * `var result = <expression>`) that tags a `notReady` plugin error so the poll can
@@ -919,6 +967,8 @@ class PluginManager constructor(
                 } ?: emptyList(),
                 requiresAuth = axe.settings?.requiresAuth ?: false,
                 authType = axe.settings?.authType,
+                hasSignIn = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signIn") == true,
+                hasSignOut = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signOut") == true,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse .axe manifest: ${e.message}", e)
@@ -977,6 +1027,8 @@ class PluginManager constructor(
         val settings: AxeSettings? = null,
         /** `requires.hostBridges` / `optionalHostBridges` (desktop parachord#1355, #1561). */
         val requires: JsonElement? = null,
+        /** The plugin's methods; only their names are read here. */
+        val implementation: JsonElement? = null,
     )
 
     @Serializable

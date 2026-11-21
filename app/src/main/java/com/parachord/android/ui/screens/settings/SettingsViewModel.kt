@@ -44,6 +44,7 @@ class SettingsViewModel constructor(
     private val libraryRepository: LibraryRepository,
     private val syncEngine: com.parachord.android.sync.SyncEngine,
     private val pluginUserConfig: com.parachord.shared.plugin.PluginUserConfig,
+    private val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore,
 ) : ViewModel() {
 
     // ── N-way multimaster (dev) ──────────────────────────────────────
@@ -486,8 +487,93 @@ class SettingsViewModel constructor(
             val base = (if (current.isEmpty()) resolverCatalogIds() else current).toMutableSet()
             if (enabled) base.add(id) else base.remove(id)
             settingsStore.setActiveResolvers(base.toList())
+            if (enabled) {
+                // "Enable X" is the one on switch now (#707): a hidden old kill
+                // switch (the sheet's second "Enabled", `disabled_plugins` /
+                // `disabled_meta_providers`) mustn't keep it off.
+                if (id in settingsStore.getDisabledPlugins()) settingsStore.setPluginEnabled(id, true)
+                if (id in settingsStore.getDisabledMetaProviders()) settingsStore.setMetaProviderEnabled(id, true)
+                // Back where the user ranked it (desktop's insertRemembered).
+                val order = settingsStore.getResolverOrder()
+                if (id !in order) {
+                    settingsStore.setResolverOrder(
+                        com.parachord.shared.resolver.ResolverOrderMemory.insertRemembered(order, id, settingsStore.getResolverOrderMemory()),
+                    )
+                }
+            }
         }
     }
+
+    // ── Plug-in switches and status (#707, desktop parachord#1505) ────
+
+    /** "Play from X" off (`playback_off_resolvers`). */
+    val playbackOffResolvers: StateFlow<Set<String>> = settingsStore.getPlaybackOffResolversFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    /** "Use metadata from X" off (`metadata_off_resolvers`). */
+    val metadataOffResolvers: StateFlow<Set<String>> = settingsStore.getMetadataOffResolversFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    /** "Use recommendations from X" off (`recommendations_off_resolvers`). */
+    val recommendationsOffResolvers: StateFlow<Set<String>> = settingsStore.getRecommendationsOffResolversFlow()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    /** The status-capable plugins' replies (the account row). */
+    val pluginStatuses: StateFlow<Map<String, com.parachord.shared.plugin.PluginStatusEntry>> = pluginStatusStore.statuses
+
+    /** The plugins' plan limits. */
+    val playbackLimits: StateFlow<Map<String, com.parachord.shared.home.PlaybackLimit>> = pluginStatusStore.limits
+
+    /** The plug-ins that are on but don't play: unnumbered in the priority list. */
+    val notPlayingResolvers: StateFlow<List<String>> = pluginStatusStore.notPlaying
+
+    fun setPlaybackOn(id: String, on: Boolean) {
+        viewModelScope.launch { settingsStore.setPluginSwitchOn(SettingsStore.PLAYBACK_OFF_RESOLVERS, id, on) }
+    }
+
+    fun setMetadataOn(id: String, on: Boolean) {
+        viewModelScope.launch { settingsStore.setPluginSwitchOn(SettingsStore.METADATA_OFF_RESOLVERS, id, on) }
+    }
+
+    fun setRecommendationsOn(id: String, on: Boolean) {
+        viewModelScope.launch { settingsStore.setPluginSwitchOn(SettingsStore.RECOMMENDATIONS_OFF_RESOLVERS, id, on) }
+    }
+
+    /** Reads the plugins' status again: when Settings or one plugin's sheet opens. */
+    fun refreshPluginStatus(id: String? = null) {
+        viewModelScope.launch {
+            if (id == null) pluginStatusStore.refreshAll() else pluginStatusStore.refresh(id)
+        }
+    }
+
+    private val _pluginSessionBusy = MutableStateFlow<String?>(null)
+    /** The plugin whose Sign in / Sign out is running, or null. */
+    val pluginSessionBusy: StateFlow<String?> = _pluginSessionBusy.asStateFlow()
+
+    private val _pluginSessionMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    /** One message per Sign in / Sign out, for a toast. */
+    val pluginSessionMessages: SharedFlow<String> = _pluginSessionMessages.asSharedFlow()
+
+    /** The account row's Sign in / Sign out: the plugin's own method, then its status again. */
+    fun pluginSession(id: String, name: String, signIn: Boolean) {
+        if (_pluginSessionBusy.value != null) return
+        _pluginSessionBusy.value = id
+        // Not the view model's scope: a sign-in waits for the person, who may
+        // leave Settings meanwhile; the result still lands in the store.
+        sessionScope.launch {
+            try {
+                val result = if (signIn) pluginStatusStore.signIn(id, name) else pluginStatusStore.signOut(id, name)
+                _pluginSessionMessages.tryEmit(result.message)
+            } finally {
+                _pluginSessionBusy.value = null
+            }
+        }
+    }
+
+    private val sessionScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate +
+            kotlinx.coroutines.CoroutineExceptionHandler { _, e -> Log.w("SettingsVM", "Plugin session failed: ${e.message}") },
+    )
 
     /** Re-enable a resolver when it (re)connects, so a prior disable doesn't persist
      *  through a disconnect/reconnect. No-op when `active_resolvers` is the all-on default. */
@@ -502,6 +588,25 @@ class SettingsViewModel constructor(
 
     fun setResolverOrder(order: List<String>) {
         viewModelScope.launch { settingsStore.setResolverOrder(order) }
+    }
+
+    /**
+     * A drag in the priority list: [playing] in its new order. The saved order
+     * keeps every other plug-in (off, not playing, not connected) right after
+     * the one it followed (desktop's `rememberOrder`), not appended to the end,
+     * and the same ranking is remembered in `resolver_order_memory`.
+     */
+    fun reorderResolvers(playing: List<String>) {
+        viewModelScope.launch {
+            val current = settingsStore.getResolverOrder()
+            val memory = settingsStore.getResolverOrderMemory().ifEmpty { current }
+            val ranked = com.parachord.shared.resolver.ResolverOrderMemory.rememberOrder(
+                com.parachord.shared.resolver.ResolverOrderMemory.rememberOrder(memory, current),
+                playing,
+            )
+            settingsStore.setResolverOrderMemory(ranked)
+            settingsStore.setResolverOrder(ranked)
+        }
     }
 
     val chatGptConnected: StateFlow<Boolean> = settingsStore.getAiProviderApiKeyFlow("chatgpt")

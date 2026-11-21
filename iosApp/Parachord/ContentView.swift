@@ -2469,7 +2469,7 @@ final class QueuePlaybackCoordinator {
               let srcs = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
         else { return [] }
         // Sources that can play, one per resolver, in the user's order (shared, #587).
-        return SourceReselection.shared.switchableSources(sources: srcs, order: ResolverPrefs.shared.order)
+        return SourceReselection.shared.switchableSources(sources: srcs, order: ResolverPrefs.shared.order, notPlaying: Array(ResolverPrefs.shared.notPlaying))
             .map { $0.resolver }
     }
 

@@ -42,6 +42,8 @@ class TrackResolverCache constructor(
     private val settingsStore: SettingsStore,
     private val mbidEnrichment: MbidEnrichmentService,
     private val playlistTrackDao: com.parachord.android.data.db.dao.PlaylistTrackDao,
+    /** The "not playing" list (`PluginStatusStore.notPlaying`, #707): never badged. */
+    private val notPlaying: kotlinx.coroutines.flow.Flow<List<String>> = kotlinx.coroutines.flow.flowOf(emptyList()),
     /**
      * Every resolved source, kept across restarts (desktop keeps its track
      * sources 7 days). Without it the cache started empty on every cold start:
@@ -346,8 +348,9 @@ class TrackResolverCache constructor(
             settingsStore.getResolverOrderFlow(),
             settingsStore.getActiveResolversFlow(),
             settingsStore.getDisabledPluginsFlow(),
-        ) { sources, resolverOrder, active, disabled ->
-            sources.mapValues { (_, v) -> ResolverBadges.badges(v, resolverOrder, active, disabled.toList()) }
+            notPlaying,
+        ) { sources, resolverOrder, active, disabled, off ->
+            sources.mapValues { (_, v) -> ResolverBadges.badges(v, resolverOrder, active, disabled.toList(), off) }
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     /** Resolver badge names per track key ("title|artist"), leftmost first ([trackBadges]). */

@@ -204,6 +204,59 @@ final class SettingsViewModel {
     func setPluginEnabled(_ id: String, _ enabled: Bool) {
         Task { try? await store.setPluginEnabled(pluginId: id, enabled: enabled) }
     }
+
+    // ── Plug-in switches and status (#707, desktop parachord#1505) ──────
+    /// The three switch lists: an id is listed while its switch is off.
+    var switchLists = IosPluginSwitchLists(playbackOff: [], metadataOff: [], recommendationsOff: [])
+    /// Bumped when a plugin's status reply changes, so the account rows redraw.
+    var statusTick = 0
+    /// The plugin whose Sign in / Sign out is running.
+    var sessionBusy: String?
+    /// The last Sign in / Sign out result, shown under the account row.
+    var sessionMessage: String?
+    /// The whole ranking, disabled plug-ins included (`resolver_order_memory`).
+    private var orderMemory: [String] = []
+
+    /// On but not playing (a plan limit, or "Play from" off): unnumbered.
+    func isNotPlaying(_ id: String) -> Bool { ResolverPrefs.shared.notPlaying.contains(id) }
+    /// The priority list's numbered part: the plug-ins that play.
+    var playingOrder: [String] { resolverOrder.filter { !isNotPlaying($0) } }
+    /// On but not playing, in their saved slots.
+    var notPlayingOrder: [String] { resolverOrder.filter { isNotPlaying($0) } }
+
+    /// The sheet's switches for [svc]; [active] is its "Enable X".
+    func pluginSheet(_ svc: PCService, active: Bool) -> IosPluginSheet {
+        _ = statusTick
+        return container.pluginSheet(id: svc.id, name: svc.name, isResolver: svc.kind == .resolver, active: active, lists: switchLists)
+    }
+    func tileStatus(_ id: String) -> String? {
+        _ = statusTick
+        return container.pluginTileStatus(id: id, playbackOff: switchLists.playbackOff)
+    }
+    func statusLine(_ id: String) -> String { _ = statusTick; return container.pluginStatusLine(id: id) }
+    func pluginSignedIn(_ id: String) -> Bool { _ = statusTick; return container.pluginSignedIn(id: id) }
+
+    /// `playback`, `metadata` or `recommendations`.
+    func setPluginSwitch(_ kind: String, _ id: String, _ on: Bool) {
+        Task { @MainActor in
+            try? await container.setPluginSwitch(kind: kind, id: id, on: on)
+            await reloadSwitchLists()
+        }
+    }
+    func reloadSwitchLists() async {
+        if let lists = try? await container.pluginSwitchLists() { switchLists = lists }
+    }
+    func refreshPluginStatus(_ id: String?) { container.refreshPluginStatus(id: id) }
+    func pluginSession(_ svc: PCService, signIn: Bool) {
+        guard sessionBusy == nil else { return }
+        sessionBusy = svc.id
+        sessionMessage = nil
+        Task { @MainActor in
+            let message = try? await container.pluginSession(id: svc.id, name: svc.name, signIn: signIn)
+            sessionMessage = message
+            sessionBusy = nil
+        }
+    }
     /// Plugin ids declaring `capabilities.mobile == false` — hidden everywhere
     /// (youtube, ollama). Seeded with the known defaults so filtering holds even
     /// if the .axe layer hasn't loaded yet; augmented from plugin metadata.
@@ -253,6 +306,8 @@ final class SettingsViewModel {
         subs.append(watcher.watch(flow: store.scrobblingEnabled) { [weak self] v in if let b = v as? Bool { self?.scrobblingEnabled = b } })
         subs.append(watcher.watch(flow: store.persistQueue) { [weak self] v in if let b = v as? Bool { self?.persistQueue = b } })
         subs.append(watcher.watch(flow: store.getDisabledPluginsFlow()) { [weak self] v in self?.disabledPlugins = (v as? Set<String>) ?? [] })
+        subs.append(watcher.watch(flow: container.pluginStatusStore.statuses) { [weak self] _ in self?.statusTick += 1 })
+        refreshPluginStatus(nil)
         subs.append(watcher.watch(flow: container.getSpotifyConnectedFlow()) { [weak self] v in
             self?.spotifyConnected = (v as? Bool) ?? ((v as? KotlinBoolean)?.boolValue ?? false)
             self?.recomputeResolvers()   // connect/disconnect moves Spotify in/out of the list
@@ -330,6 +385,8 @@ final class SettingsViewModel {
             let defaultActive = Set(catalogIds.filter { isUsable($0) })
             activeResolvers = storedActive.isEmpty ? defaultActive : Set(storedActive).intersection(catalogIds)
             resolverOrder = ((try? await store.getResolverOrder())?.filter { resolverService($0) != nil }) ?? []
+            orderMemory = (try? await store.getResolverOrderMemory()) ?? []
+            await reloadSwitchLists()
             resolversReady = true
             recomputeResolvers()
         }
@@ -438,6 +495,9 @@ final class SettingsViewModel {
     /// (#213).
     func setResolverEnabled(_ id: String, _ enabled: Bool) {
         if enabled { activeResolvers.insert(id) } else { activeResolvers.remove(id) }
+        // "Enable X" is the one on switch (#707): a hidden old kill switch
+        // (`disabled_plugins`) mustn't keep it off.
+        if enabled && disabledPlugins.contains(id) { setPluginEnabled(id, true) }
         recomputeResolvers()
     }
 
@@ -451,8 +511,10 @@ final class SettingsViewModel {
             activeResolvers.remove(id)
         }
         var order = resolverOrder.filter { isEnabledUsable($0) && resolverService($0) != nil }
+        // A re-enabled plug-in goes back where the user ranked it (desktop's
+        // insertRemembered), else to its canonical place.
         for id in resolverCatalog.map({ $0.id }) where isEnabledUsable(id) && !order.contains(id) {
-            order = container.resolverScoring.insertInCanonicalOrder(order: order, newId: id)
+            order = ResolverOrderMemory.shared.insertRemembered(order: order, id: id, memory: orderMemory)
         }
         resolverOrder = order
         if resolversReady { persistResolvers() }
@@ -460,7 +522,11 @@ final class SettingsViewModel {
 
     private func persistResolvers() {
         let active = Array(activeResolvers); let order = resolverOrder
+        // The whole ranking, disabled plug-ins kept beside the ones they followed.
+        orderMemory = ResolverOrderMemory.shared.rememberOrder(memory: orderMemory, order: order)
+        let memory = orderMemory
         Task {
+            try? await store.setResolverOrderMemory(memory: memory)
             try? await store.setActiveResolvers(resolvers: active)
             try? await store.setResolverOrder(order: order)
         }
@@ -733,7 +799,7 @@ private struct PlugInsTab: View {
             Text("Drag priority sets which source plays first.")
                 .font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.horizontal, 20).padding(.bottom, 6)
             VStack(spacing: 0) {
-                ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
+                ForEach(Array(model.playingOrder.enumerated()), id: \.element) { i, id in
                     if let svc = model.resolverService(id) {
                         resolverRow(svc, index: i)
                             .opacity(draggingResolver == id ? 0.4 : 1)
@@ -751,7 +817,15 @@ private struct PlugInsTab: View {
                                 withAnimation { model.moveResolver(from, to) }
                                 return true
                             } isTargeted: { _ in }
-                        if i < model.resolverOrder.count - 1 { Divider().padding(.leading, 64) }
+                        if i < model.playingOrder.count - 1 { Divider().padding(.leading, 64) }
+                    }
+                }
+                // On but not playing (#707): unnumbered, in their saved slots,
+                // with the plan's label or "Search and links only".
+                ForEach(model.notPlayingOrder, id: \.self) { id in
+                    if let svc = model.resolverService(id) {
+                        Divider().padding(.leading, 64)
+                        notPlayingRow(svc)
                     }
                 }
             }
@@ -837,6 +911,23 @@ private struct PlugInsTab: View {
             Button { onConfig(svc) } label: { Image(systemName: "gearshape").foregroundStyle(PC.fg2) }.buttonStyle(.plain)
             // Drag handle — long-press a row and drag to reorder priority.
             Image(systemName: "line.3.horizontal").font(.system(size: 16)).foregroundStyle(PC.fg3)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 9)
+        .contentShape(Rectangle())
+    }
+
+    private func notPlayingRow(_ svc: PCService) -> some View {
+        HStack(spacing: 12) {
+            Text("").frame(width: 18)
+            tileIcon(svc, size: 34)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
+                Text(model.tileStatus(svc.id) ?? "Search and links only")
+                    .font(.system(size: 12)).foregroundStyle(Color(uiColor: UIColor(hex: 0xD97706)))
+            }
+            Spacer(minLength: 0)
+            Button { onConfig(svc) } label: { Image(systemName: "gearshape").foregroundStyle(PC.fg2) }.buttonStyle(.plain)
+            Image(systemName: "line.3.horizontal").font(.system(size: 16)).foregroundStyle(.clear)
         }
         .padding(.horizontal, 20).padding(.vertical, 9)
         .contentShape(Rectangle())
@@ -937,6 +1028,41 @@ private struct PluginConfigSheet: View {
 
     private var isAi: Bool { ["chatgpt", "claude", "gemini"].contains(service.id) }
 
+    /// One of the sheet's switches; nested ones sit indented under "Enable X" (#707).
+    private func switchRow(_ label: String, _ hint: String, on: Bool, nested: Bool = false, locked: Bool = false,
+                           set: @escaping (Bool) -> Void) -> some View {
+        Toggle(isOn: Binding(get: { on }, set: set)) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.system(size: nested ? 14 : 16))
+                if !hint.isEmpty { Text(hint).font(.system(size: 12)).foregroundStyle(.secondary) }
+            }
+        }
+        .tint(PC.accent)
+        .disabled(locked)
+        .padding(.leading, nested ? 16 : 0)
+    }
+
+    /// "X account", the status line, and Sign in / Sign out (desktop's AccountRow).
+    private func accountRow(_ sheet: IosPluginSheet) -> some View {
+        let signedIn = model.pluginSignedIn(service.id)
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(service.name) account").font(.system(size: 16))
+                Text(model.statusLine(service.id)).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if model.sessionBusy == service.id {
+                ProgressView().controlSize(.small)
+            } else if signedIn && sheet.canSignOut {
+                Button("Sign out") { model.pluginSession(service, signIn: false) }.buttonStyle(.bordered)
+            } else if !signedIn && sheet.canSignIn {
+                Button("Sign in") { model.pluginSession(service, signIn: true) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(uiColor: UIColor(hex: service.color)))
+            }
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -958,27 +1084,55 @@ private struct PluginConfigSheet: View {
                 // (no-auth, or connected). A not-connected Spotify/SoundCloud
                 // shows just its Connect/credentials section — connecting is what
                 // enables it.
+                // "Enable X" (#707, desktop parachord#1505): a music plug-in's
+                // `active_resolvers`, with "Play from X", "Use metadata from X"
+                // and "Use recommendations from X" under it while it's on. A
+                // meta-service's "Enable X" is its own on/off (`disabled_plugins`).
+                let active = service.kind == .resolver
+                    ? model.isResolverEnabled(service.id)
+                    : !model.disabledPlugins.contains(service.id)
+                let sheet = model.pluginSheet(service, active: active)
                 if service.kind == .resolver && model.isUsable(service.id) {
                     Section {
-                        Toggle("Enable resolver", isOn: Binding(
-                            get: { model.isResolverEnabled(service.id) },
-                            set: { model.setResolverEnabled(service.id, $0) }))
-                    } footer: {
-                        Text("Include in search and playback. Disabling removes it from the priority order.")
+                        switchRow(sheet.enableLabel, sheet.enableHint, on: active) { model.setResolverEnabled(service.id, $0) }
+                        if sheet.playback.shown {
+                            switchRow(sheet.playbackLabel, sheet.playback.hint, on: sheet.playback.checked, nested: true,
+                                      locked: sheet.playback.disabled) { model.setPluginSwitch("playback", service.id, $0) }
+                        }
+                        if sheet.metadata.shown {
+                            switchRow(sheet.metadataLabel, sheet.metadata.hint, on: sheet.metadata.checked, nested: true) {
+                                model.setPluginSwitch("metadata", service.id, $0)
+                            }
+                        }
+                        if sheet.recommendations.shown {
+                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
+                                model.setPluginSwitch("recommendations", service.id, $0)
+                            }
+                        }
                     }
                 }
 
-                // Enable/disable for non-resolver plugins (meta + concert + any
-                // marketplace plugin). Resolvers use the priority-list toggle above.
                 if service.kind != .resolver {
                     Section {
-                        Toggle("Enabled", isOn: Binding(
-                            get: { !model.disabledPlugins.contains(service.id) },
-                            set: { model.setPluginEnabled(service.id, $0) }))
+                        switchRow(sheet.enableLabel,
+                                  sheet.enableHint.isEmpty ? "Turn off to stop using this plugin." : sheet.enableHint,
+                                  on: active) { model.setPluginEnabled(service.id, $0) }
+                        if sheet.recommendations.shown {
+                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
+                                model.setPluginSwitch("recommendations", service.id, $0)
+                            }
+                        }
+                    }
+                }
+
+                // The account row for a status-capable plugin (desktop's
+                // AccountRow). No such plugin loads on iOS yet: Amazon Music
+                // needs the web-session bridge.
+                if sheet.hasStatus {
+                    Section {
+                        accountRow(sheet)
                     } footer: {
-                        Text(service.kind == .meta
-                            ? "Turn off to stop using this plugin for metadata, bios, scrobbling, or AI."
-                            : "Turn off to stop using this plugin.")
+                        if let message = model.sessionMessage { Text(message) }
                     }
                 }
 
@@ -1025,6 +1179,8 @@ private struct PluginConfigSheet: View {
             .onAppear {
                 draft = model.values[service.id] ?? ""
                 spotifyIdDraft = model.spotifyClientId
+                model.sessionMessage = nil
+                model.refreshPluginStatus(service.id)
             }
         }
     }

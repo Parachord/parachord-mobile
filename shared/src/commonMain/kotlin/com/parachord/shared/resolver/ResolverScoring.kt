@@ -17,6 +17,12 @@ package com.parachord.shared.resolver
 class ResolverScoring constructor(
     private val getResolverOrder: suspend () -> List<String>,
     private val getActiveResolvers: suspend () -> List<String>,
+    /**
+     * The plug-ins that are on but don't play (shared `notPlayingIds`: a plan
+     * that can't play, or "Play from X" off, #707). Left out of selection on
+     * top of the active list, so Android's empty active list stays "all".
+     */
+    private val getNotPlaying: suspend () -> Collection<String> = { emptySet() },
 ) {
     companion object {
         /**
@@ -25,7 +31,7 @@ class ResolverScoring constructor(
          * and as the basis for insertInCanonicalOrder().
          */
         val CANONICAL_RESOLVER_ORDER = listOf(
-            "spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "subsonic", "youtube"
+            "spotify", "applemusic", "amazonmusic", "bandcamp", "soundcloud", "localfiles", "subsonic", "plex", "youtube"
         )
 
         /**
@@ -66,9 +72,11 @@ class ResolverScoring constructor(
 
         val resolverOrder = getResolverOrder()
         val activeResolvers = getActiveResolvers()
+        val notPlaying = getNotPlaying()
 
         return sources
             .filter { activeResolvers.isEmpty() || it.resolver in activeResolvers }
+            .filter { it.resolver !in notPlaying }
             .filter { (it.confidence ?: 0.0) >= MIN_CONFIDENCE_THRESHOLD }
             .map { source ->
                 ScoredSource(

@@ -1925,6 +1925,8 @@ class IosContainer private constructor() {
             artistImageResolvers = ::artistImageResolverIds,
             pluginArtistImage = { id, name -> pluginManager.searchArtistImage(id, name) },
             deezer = deezerArtistSearch,
+            // "Use metadata from X" off (#707): covers, photos and artist info skip it; search doesn't.
+            getMetadataOff = { settingsStore.getMetadataOffResolvers() },
             // #488: ListenBrainz listen counts rank originals above covers in Search.
             searchPopularity = SearchPopularity(fetchListens = { kind, mbids -> listenBrainzClient.getPopularity(kind, mbids) }),
         )
@@ -2261,6 +2263,7 @@ class IosContainer private constructor() {
             artistImageResolvers = ::artistImageResolverIds,
             pluginArtistImage = { id, name -> pluginManager.searchArtistImage(id, name) },
             deezer = deezerArtistSearch,
+            getMetadataOff = { settingsStore.getMetadataOffResolvers() },
         )
     }
 
@@ -2269,7 +2272,8 @@ class IosContainer private constructor() {
     private val deezerArtistSearch by lazy { com.parachord.shared.metadata.DeezerArtistSearch(httpClient) }
     private suspend fun artistImageResolverIds(): List<String> = pluginManager.artistImageResolverIds(
         active = settingsStore.getActiveResolvers(),
-        disabled = settingsStore.getDisabledPlugins(),
+        // "Use metadata from X" off skips its photos too (#707).
+        disabled = settingsStore.getDisabledPlugins() + settingsStore.getMetadataOffResolvers(),
         order = settingsStore.getResolverOrder(),
     )
 
@@ -2964,6 +2968,8 @@ class IosContainer private constructor() {
      */
     suspend fun loadPluginsAndList(): List<String> {
         pluginManager.ensureInitialized()
+        // The status-capable plugins' plan limits decide what plays (#707).
+        refreshPluginStatus(null)
         return pluginManager.plugins.value.map { it.id }
     }
 
@@ -3072,8 +3078,96 @@ class IosContainer private constructor() {
         ResolverScoring(
             getResolverOrder = { settingsStore.getResolverOrder() },
             getActiveResolvers = { settingsStore.getActiveResolvers() },
+            // A plan that can't play, or "Play from X" off (#707).
+            getNotPlaying = { pluginStatusStore.notPlayingNow() },
         )
     }
+
+    /**
+     * The status-capable plugins' replies and the one "not playing" list
+     * (#707), shared with Android. No status-capable plugin loads on iOS
+     * today (Amazon Music needs the web-session bridge iOS doesn't have), so
+     * the list is the user's "Play from X" switches alone.
+     */
+    val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by lazy {
+        com.parachord.shared.plugin.PluginStatusStore.create(pluginManager, settingsStore, appScope)
+    }
+
+    /** Reads every status-capable plugin (app start, Settings) or one ([id], its sheet). */
+    fun refreshPluginStatus(id: String?) {
+        appScope.launch {
+            if (id == null) pluginStatusStore.refreshAll() else pluginStatusStore.refresh(id)
+        }
+    }
+
+    /** The account row's line for [id] (`pluginStatusRow`): `label · message`. */
+    fun pluginStatusLine(id: String): String =
+        com.parachord.shared.plugin.pluginStatusRow(pluginStatusStore.statuses.value[id]).line
+
+    /** The plugin's reply says it's signed in. */
+    fun pluginSignedIn(id: String): Boolean = pluginStatusStore.statuses.value[id]?.signedIn == true
+
+    /** Sign in / Sign out through the plugin; the message to show. */
+    @Throws(Exception::class)
+    suspend fun pluginSession(id: String, name: String, signIn: Boolean): String =
+        (if (signIn) pluginStatusStore.signIn(id, name) else pluginStatusStore.signOut(id, name)).message
+
+    /**
+     * Turns one plug-in switch (#707): `playback`, `metadata` or
+     * `recommendations` ("Play from X", "Use metadata from X", "Use
+     * recommendations from X").
+     */
+    @Throws(Exception::class)
+    suspend fun setPluginSwitch(kind: String, id: String, on: Boolean) {
+        val key = when (kind) {
+            "playback" -> com.parachord.shared.settings.SettingsStore.PLAYBACK_OFF_RESOLVERS
+            "metadata" -> com.parachord.shared.settings.SettingsStore.METADATA_OFF_RESOLVERS
+            "recommendations" -> com.parachord.shared.settings.SettingsStore.RECOMMENDATIONS_OFF_RESOLVERS
+            else -> return
+        }
+        settingsStore.setPluginSwitchOn(key, id, on)
+    }
+
+    /** The three switch lists, for the Settings sheet. */
+    @Throws(Exception::class)
+    suspend fun pluginSwitchLists(): IosPluginSwitchLists = IosPluginSwitchLists(
+        playbackOff = settingsStore.getPlaybackOffResolvers().toList(),
+        metadataOff = settingsStore.getMetadataOffResolvers().toList(),
+        recommendationsOff = settingsStore.getRecommendationsOffResolvers().toList(),
+    )
+
+    /**
+     * What a plugin's sheet shows (#707): "Enable X" and its hint, the three
+     * nested switches (shared `PluginSwitch` rules) and the account row's
+     * buttons. [active] is whether it's on ("Enable X"). A plugin that hasn't
+     * loaded stands in as a music plug-in ([isResolver]) or a meta-service.
+     */
+    fun pluginSheet(id: String, name: String, isResolver: Boolean, active: Boolean, lists: IosPluginSwitchLists): IosPluginSheet {
+        val info = pluginManager.plugins.value.firstOrNull { it.id == id } ?: PluginManager.PluginInfo(
+            id = id, name = name, version = "",
+            type = if (isResolver) "" else "meta-service",
+            capabilities = if (isResolver) mapOf("resolve" to true) else emptyMap(),
+        )
+        val limit = pluginStatusStore.limits.value[id]
+        return IosPluginSheet(
+            enableLabel = com.parachord.shared.plugin.enableSwitchLabel(name),
+            enableHint = com.parachord.shared.plugin.enableSwitchHint(info),
+            playbackLabel = com.parachord.shared.plugin.playbackSwitchLabel(name),
+            playback = com.parachord.shared.plugin.playbackSwitchState(info, active, id in lists.playbackOff, limit),
+            metadataLabel = com.parachord.shared.plugin.metadataSwitchLabel(name),
+            metadata = com.parachord.shared.plugin.metadataSwitchState(info, active, id in lists.metadataOff),
+            recommendationsLabel = com.parachord.shared.plugin.recommendationsSwitchLabel(name),
+            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, active, id in lists.recommendationsOff),
+            hasStatus = info.capabilities["status"] == true,
+            canSignIn = info.hasSignIn,
+            canSignOut = info.hasSignOut,
+        )
+    }
+
+    /** A resolver tile's status line (`tileStatus`): the plan's label, or "Search and links only"; null for none. */
+    fun pluginTileStatus(id: String, playbackOff: List<String>): String? =
+        com.parachord.shared.plugin.tileStatus(pluginStatusStore.limits.value, id, playbackOff).statusLabel
+
 
     /**
      * Platform-specific resolver execution (#210, D2): native Apple Music
@@ -4384,3 +4478,25 @@ data class IosChatPlaylistTap(val kind: String, val playlistId: String?, val mes
 /** Whether this is a debug build of the Shared framework (Xcode's Debug configuration builds one). */
 @OptIn(kotlin.experimental.ExperimentalNativeApi::class)
 internal fun iosDebugBinary(): Boolean = kotlin.native.Platform.isDebugBinary
+
+/** The three plug-in switch lists (#707): an id is listed while its switch is off. */
+data class IosPluginSwitchLists(
+    val playbackOff: List<String>,
+    val metadataOff: List<String>,
+    val recommendationsOff: List<String>,
+)
+
+/** A plugin sheet's switches and account buttons ([IosContainer.pluginSheet], #707). */
+data class IosPluginSheet(
+    val enableLabel: String,
+    val enableHint: String,
+    val playbackLabel: String,
+    val playback: com.parachord.shared.plugin.PluginSwitchState,
+    val metadataLabel: String,
+    val metadata: com.parachord.shared.plugin.PluginSwitchState,
+    val recommendationsLabel: String,
+    val recommendations: com.parachord.shared.plugin.PluginSwitchState,
+    val hasStatus: Boolean,
+    val canSignIn: Boolean,
+    val canSignOut: Boolean,
+)

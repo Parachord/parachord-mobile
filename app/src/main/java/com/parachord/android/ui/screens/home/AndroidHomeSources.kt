@@ -89,6 +89,10 @@ class AndroidHomeSources(
     override val concertArtistImages: com.parachord.shared.home.ConcertArtistImages,
     /** Android's plug-in gate (`androidPluginIsOn`): whether a plug-in is on, its connection included. */
     private val pluginIsOn: suspend (id: String, isMetaService: Boolean, needsAccount: Boolean) -> Boolean,
+    /** The "not playing" list (`PluginStatusStore.notPlaying`, #707): a plan limit or "Play from X" off. */
+    private val notPlaying: Flow<List<String>> = kotlinx.coroutines.flow.flowOf(emptyList()),
+    /** The plug-ins' plan limits (`PluginStatusStore.limits`), for the service tiles. */
+    private val limits: Flow<Map<String, com.parachord.shared.home.PlaybackLimit>> = kotlinx.coroutines.flow.flowOf(emptyMap()),
     /** Shares the plug-in snapshot between its three flows. */
     scope: CoroutineScope = CoroutineScope(
         SupervisorJob() + Dispatchers.Main.immediate +
@@ -214,16 +218,17 @@ class AndroidHomeSources(
         combine(pluginManager.plugins, settings.getSpotifyAccessTokenFlow(), settings.getSoundCloudTokenFlow(), refreshTick) { p, sp, sc, _ ->
             Triple(p, sp, sc)
         },
-        combine(settings.getDisabledPluginsFlow(), settings.getDisabledMetaProvidersFlow(), settings.getActiveResolversFlow()) { _, _, _ -> Unit },
-    ) { t, _ -> t }
-        .map { (plugins, spotify, soundCloud) ->
+        combine(settings.getDisabledPluginsFlow(), settings.getDisabledMetaProvidersFlow(), settings.getActiveResolversFlow(), notPlaying) { _, _, _, off -> off },
+    ) { t, notPlaying -> t to notPlaying }
+        .map { (t, notPlaying) ->
+            val (plugins, spotify, soundCloud) = t
             val host = mapOf(
                 "spotify" to (spotify != null),
                 "applemusic" to (settings.getAppleMusicUserToken() != null),
                 "soundcloud" to (soundCloud != null),
             )
             val accounts = homePluginAccounts(plugins, host) { id -> pluginManager.isPluginConfiguredOrNull(id) }
-            val resolvers = homePlaybackResolvers(plugins, accounts) { p ->
+            val resolvers = homePlaybackResolvers(plugins, accounts, notPlaying) { p ->
                 pluginIsOn(p.id, p.type == "meta-service", needsAccount(p))
             }
             PluginSnapshot(plugins, accounts, resolvers)
@@ -234,6 +239,7 @@ class AndroidHomeSources(
     override val plugins: Flow<List<PluginInfo>> = snapshot.filterNotNull().map { it.plugins }.distinctUntilChanged()
     override val accounts: Flow<Map<String, Boolean>> = snapshot.filterNotNull().map { it.accounts }.distinctUntilChanged()
     override val playbackResolvers: Flow<List<String>> = snapshot.filterNotNull().map { it.resolvers }.distinctUntilChanged()
+    override val playbackLimits: Flow<Map<String, com.parachord.shared.home.PlaybackLimit>> = limits
 
     /** Local-file tracks are in the library. */
     override val folderAdded: Flow<Boolean> =

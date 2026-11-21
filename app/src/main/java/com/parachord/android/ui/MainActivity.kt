@@ -272,9 +272,14 @@ fun ParachordApp() {
     }
 
     val resolverOrder by mainViewModel.resolverOrder.collectAsStateWithLifecycle()
+    val notPlaying by org.koin.compose.koinInject<com.parachord.shared.plugin.PluginStatusStore>()
+        .notPlaying.collectAsStateWithLifecycle()
 
     ParachordTheme(darkTheme = darkTheme) {
-        CompositionLocalProvider(LocalResolverOrder provides resolverOrder) {
+        CompositionLocalProvider(
+            LocalResolverOrder provides resolverOrder,
+            com.parachord.android.ui.theme.LocalNotPlaying provides notPlaying,
+        ) {
             ParachordAppContent(mainViewModel)
         }
     }

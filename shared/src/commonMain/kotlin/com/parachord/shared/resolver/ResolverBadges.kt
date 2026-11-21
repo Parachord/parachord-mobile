@@ -14,7 +14,8 @@ data class ResolverBadge(val resolver: String, val confidence: Double) {
  *   [ResolverScoring.MIN_CONFIDENCE_THRESHOLD] (a wrong-song match would show a
  *   badge for a service that won't play it), and from a resolver the user has
  *   on: in the active list when there is one (an empty list means all), and
- *   not disabled. Desktop badges only `playbackResolvers`.
+ *   not disabled, and not a plug-in that doesn't play (`notPlayingIds`: a plan
+ *   limit or "Play from X" off, #707). Desktop badges only `playbackResolvers`.
  * - **One badge per resolver**, its best source (desktop keys sources by resolver).
  * - **Ordered by the user's resolver order**, then confidence; resolvers not in
  *   it go last. The leftmost badge is the source that plays.
@@ -37,15 +38,25 @@ object ResolverBadges {
     fun hasPlayableSource(sources: List<ResolvedSource>): Boolean = sources.any(::isPlayable)
 
     /**
+     * [hasPlayableSource], leaving out the plug-ins that don't play
+     * ([notPlaying], the shared `notPlayingIds`: a plan limit or "Play from X"
+     * off, #707).
+     */
+    fun hasPlayableSource(sources: List<ResolvedSource>, notPlaying: List<String>): Boolean =
+        sources.any { isPlayable(it) && it.resolver !in notPlaying }
+
+    /**
      * The badges for [sources]. [order] is the user's resolver order (empty: no
      * order), [active] the active resolvers (empty: all), [disabled] the ones
-     * turned off.
+     * turned off, [notPlaying] the ones that are on but don't play (the
+     * shared `notPlayingIds`, #707: still searched, never badged).
      */
     fun badges(
         sources: List<ResolvedSource>,
         order: List<String>,
         active: List<String> = emptyList(),
         disabled: List<String> = emptyList(),
+        notPlaying: List<String> = emptyList(),
     ): List<ResolverBadge> {
         val best = LinkedHashMap<String, Double>()
         for (source in sources) {
@@ -53,6 +64,7 @@ object ResolverBadges {
             val id = source.resolver
             if (active.isNotEmpty() && id !in active) continue
             if (id in disabled) continue
+            if (id in notPlaying) continue
             val confidence = source.confidence ?: continue
             val held = best[id]
             if (held == null || confidence > held) best[id] = confidence

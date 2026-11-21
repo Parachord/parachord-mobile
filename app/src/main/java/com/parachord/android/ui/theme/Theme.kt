@@ -113,6 +113,9 @@ val LocalIsDarkTheme = staticCompositionLocalOf { false }
 /** User-configured resolver priority order, provided at the app root. */
 val LocalResolverOrder = staticCompositionLocalOf { emptyList<String>() }
 
+/** The plug-ins that are on but don't play (shared `notPlayingIds`, #707), provided at the app root. */
+val LocalNotPlaying = staticCompositionLocalOf { emptyList<String>() }
+
 // ── Theme Accessor ───────────────────────────────────────────────────
 
 object ParachordTheme {

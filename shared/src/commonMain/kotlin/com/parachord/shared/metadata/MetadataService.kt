@@ -90,6 +90,13 @@ class MetadataService constructor(
      * rank without it.
      */
     private val searchPopularity: SearchPopularity? = null,
+    /**
+     * The music plug-ins whose "Use metadata from X" is off
+     * (`metadata_off_resolvers`, #707, desktop parachord#1505): skipped for
+     * album covers, artist photos, artist info and track lists. Search still
+     * asks them, as on desktop.
+     */
+    private val getMetadataOff: suspend () -> Set<String> = { emptySet() },
 ) {
 
     private val artistImageMutex = Mutex()
@@ -201,7 +208,7 @@ class MetadataService constructor(
         /** Which providers to ask; the rest don't count. */
         asked: (MetadataProvider) -> Boolean = { true },
     ): Flow<ProviderAnswers<T>> = channelFlow {
-        val active = availableProviders().filter(asked)
+        val active = availableProviders(forSearch = true).filter(asked)
         val others = active.filter { it.name != MUSICBRAINZ }
         if (active.isEmpty()) {
             send(ProviderAnswers(emptyList(), complete = true))
@@ -772,9 +779,11 @@ class MetadataService constructor(
         )
     }
 
-    private suspend fun availableProviders(): List<MetadataProvider> {
+    /** The providers to ask: not disabled, and (except for [forSearch]) not a plug-in whose metadata is off. */
+    private suspend fun availableProviders(forSearch: Boolean = false): List<MetadataProvider> {
         val disabled = getDisabledProviders()
-        return providers.filter { it.isAvailable() && it.name !in disabled }
+        val metadataOff = if (forSearch) emptySet() else getMetadataOff()
+        return providers.filter { it.isAvailable() && it.name !in disabled && it.name !in metadataOff }
     }
 
     /** Deduplicate tracks by normalized title+artist, preferring results with more metadata. */

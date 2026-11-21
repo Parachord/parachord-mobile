@@ -103,8 +103,13 @@ interface HomeSources {
     val plugins: Flow<List<PluginInfo>>
     /** Plug-in id to whether the host knows it's signed in. */
     val accounts: Flow<Map<String, Boolean>>
-    /** The resolvers that are on and can play. */
+    /** The resolvers that are on and can play (not in the shared `notPlayingIds`). */
     val playbackResolvers: Flow<List<String>>
+    /**
+     * The plug-ins' plan limits ([com.parachord.shared.plugin.PluginStatusStore.limits]),
+     * for the service tiles' "limited" state. Empty by default.
+     */
+    val playbackLimits: Flow<Map<String, PlaybackLimit>> get() = kotlinx.coroutines.flow.flowOf(emptyMap())
     /** A music folder (local files) is set up. */
     val folderAdded: Flow<Boolean>
     /**

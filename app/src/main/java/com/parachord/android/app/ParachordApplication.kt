@@ -24,6 +24,7 @@ class ParachordApplication : Application() {
     private val settingsStore: com.parachord.android.data.store.SettingsStore by inject()
     private val sqlDriver: app.cash.sqldelight.db.SqlDriver by inject()
     private val kvStore: com.parachord.shared.store.KvStore by inject()
+    private val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by inject()
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -132,6 +133,16 @@ class ParachordApplication : Application() {
                 imageEnrichmentService.regenerateAllPlaylistMosaics()
             } catch (_: Exception) {
                 // Background pass; don't take down the app on a failure.
+            }
+        }
+
+        // The status-capable plugins (capabilities.status, #707): their plan
+        // limits decide what plays, so read them once the plugins load.
+        appScope.launch {
+            try {
+                pluginStatusStore.refreshAll()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
             }
         }
 
