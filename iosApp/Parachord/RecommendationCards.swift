@@ -13,7 +13,7 @@ let pcRecCardWidth: CGFloat = 140
 /// The play button's tap target sits this far in from the cover's corner, so its 40 pt disc is 8 pt in.
 private let recArtPlayInset: CGFloat = 4
 
-private struct RecCardText: View {
+struct RecCardText: View {
     let text: String
     var primary = false
     var tertiary = false
@@ -57,11 +57,14 @@ struct RecAlbumCard: View {
     var width: CGFloat = pcRecCardWidth
     let onOpen: () -> Void
     let onPlay: () -> Void
+    /// Home's reason badge, over the cover's bottom-left.
+    var coverBadge: AnyView? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
                 RecCover(url: item.imageUrl, name: item.name, size: width)
+                if let coverBadge { coverBadge }
                 if let coming = item.comingLabel {
                     Text(coming)
                         .font(.system(size: 11, weight: .semibold))

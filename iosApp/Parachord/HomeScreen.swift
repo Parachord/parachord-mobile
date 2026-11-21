@@ -233,6 +233,54 @@ struct HomeScreen: View {
                 )
                 .padding(.top, 8)
             }
+            if page.showMixes {
+                HomeMixesRow(
+                    page: page,
+                    onSelectSource: { session.setMixSource(id: $0) },
+                    onOpen: openMix,
+                    onPlay: { card in
+                        let key = card.key
+                        home.play(coordinator: coordinator) { try await $0.mixQueue(key: key) }
+                    }
+                )
+                .padding(.top, 24)
+            }
+            if page.showPlaylists {
+                HomePlaylistsRow(
+                    page: page,
+                    onOpen: { path.append(.savedPlaylist(id: $0.id)) },
+                    onPlay: { card in
+                        let id = card.id
+                        home.play(coordinator: coordinator) { try await $0.playlistQueue(id: id) }
+                    },
+                    onSeeAll: { onSelectTab(.playlists, nil) }
+                )
+                .padding(.top, 24)
+            }
+            if page.showAlbums {
+                HomeAlbumsRow(
+                    page: page,
+                    onSelectSource: { session.setAlbumSource(id: $0) },
+                    onShown: { session.albumShown(key: $0.key) },
+                    onOpen: { path.append(.album(title: $0.item.name, artist: $0.item.artist ?? "")) },
+                    onOpenArtist: { path.append(.artist($0.item.artist ?? "")) },
+                    onPlay: { album in
+                        let key = album.key
+                        home.play(coordinator: coordinator) { try await $0.albumQueue(key: key) }
+                    },
+                    onSeeAll: { path.append(.recommendations) }
+                )
+                .padding(.top, 24)
+            }
+        }
+    }
+
+    /// What a "Made from your listening" card opens: Recent Loves in Collection, a mix as a service playlist.
+    private func openMix(_ card: IosHomeMixCard) {
+        if card.isLoves {
+            onOpenRecentLoves()
+        } else if let url = card.url, !url.isEmpty {
+            path.append(.servicePlaylist(url: url, name: card.title, source: card.source ?? "", image: card.imageUrl))
         }
     }
 
