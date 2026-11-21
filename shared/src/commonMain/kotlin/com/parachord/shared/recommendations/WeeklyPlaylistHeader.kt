@@ -85,9 +85,9 @@ fun weeklyHeadline(kind: String, dateLabel: String): String =
  * "Weekly Jams · Nov 17, 2026". Each week's copy gets its own name, since sync
  * matches playlists by name (cross-provider name match, the push's name dedup
  * and the duplicate merge), and a name shared across weeks, or with the
- * user's own "Weekly Jams" on a service, could be merged with it. The date
- * comes before the week label: "This Week" is relative and repeats every
- * week. With no header (the page never carried the playlist) it's
+ * user's own "Weekly Jams" on a service, could be merged with it. A week
+ * with no date takes today's date, never the week label: "This Week" is
+ * relative and repeats every week. With no header (the page never carried the playlist) it's
  * "<kind> · <today>"; a [contextType] that isn't a weekly kind (unknown on a
  * link) gives "Weekly playlist". Never empty, never the bare kind label.
  *
@@ -100,7 +100,7 @@ fun weeklySavedName(header: WeeklyHeader?, contextType: String?, todayIso: Strin
     val today = weeklyDateLabel(todayIso).ifEmpty { todayIso }
     if (header == null) return "$kind · $today"
     val label = header.title.trim().ifEmpty { kind }
-    val stamp = header.dateLabel.ifEmpty { header.weekLabel.trim() }.ifEmpty { today }
+    val stamp = header.dateLabel.ifEmpty { today }
     return "$label · $stamp"
 }
 

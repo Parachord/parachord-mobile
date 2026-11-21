@@ -81,6 +81,13 @@ final class PlaylistDetailViewModel {
         // ID. See `resolveVisible(_:)`.
     }
 
+    /// Stops both watches (saved state, header) when the view goes away; a
+    /// return runs `load()` again, which starts them over.
+    func stop() {
+        savedSub?.cancel(); savedSub = nil
+        headerSub?.cancel(); headerSub = nil
+    }
+
     /// Save this ephemeral weekly playlist to the library (#236). No-op if empty
     /// or already saved/in-flight; `saved` flips reactively via the watcher.
     func save() {
@@ -196,6 +203,7 @@ struct PlaylistDetailView: View {
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { await model.load() }
+        .onDisappear { model.stop() }
     }
 
     // Mosaic cover + title + meta + Play All / Save (Android WeeklyPlaylistScreen).

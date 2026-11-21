@@ -159,12 +159,8 @@ class WeeklyPlaylistHeaderTest {
     }
 
     @Test
-    fun `with no date the week label names it`() {
-        assertEquals("Weekly Jams · This Week", weeklySavedName(header(dateLabel = ""), "weekly-jam", "2026-11-21"))
-    }
-
-    @Test
-    fun `with no date or week label today names it`() {
+    fun `with no date today names it and never the relative week label`() {
+        assertEquals("Weekly Jams · Nov 21, 2026", weeklySavedName(header(dateLabel = ""), "weekly-jam", "2026-11-21"))
         assertEquals("Weekly Jams · Nov 21, 2026", weeklySavedName(header(weekLabel = " ", dateLabel = ""), "weekly-jam", "2026-11-21"))
     }
 
