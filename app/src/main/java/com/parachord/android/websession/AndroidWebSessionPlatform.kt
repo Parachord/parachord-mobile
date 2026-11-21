@@ -83,6 +83,10 @@ class AndroidWebSessionPlatform(
         view?.let { return it }
         val v = WebView(appContext)
         v.setLayerType(View.LAYER_TYPE_NONE, null)
+        // Desktop's hidden view runs with backgroundThrottling off; a WebView
+        // never attached to a window is otherwise an invisible renderer that
+        // Android deprioritizes, and Amazon's single-page app loads slowly in it.
+        v.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false)
         v.settings.javaScriptEnabled = true
         v.settings.domStorageEnabled = true
         v.settings.mediaPlaybackRequiresUserGesture = false

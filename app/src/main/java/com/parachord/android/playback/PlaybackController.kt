@@ -383,6 +383,16 @@ class PlaybackController constructor(
 
     private var playLaunchesPending = 0
 
+    /**
+     * Every play's generation, taken the moment it's asked for, before it
+     * waits for the one before it (desktop's play token): a plugin DRM start
+     * still under way is cut at its next wait ([com.parachord.android.playback.drm.PlaySupersession]).
+     */
+    private val supersession = com.parachord.android.playback.drm.PlaySupersession()
+
+    /** The generation of the play holding [playMutex]. */
+    private var activePlayGeneration = 0
+
     /** How a plugin DRM play's start ended ([awaitDrmStart]). */
     private sealed class DrmStart {
         object Started : DrmStart()
@@ -1592,7 +1602,11 @@ class PlaybackController constructor(
         userRequested: Boolean = !advancing,
         /** Run in the play's place (its failure rules still apply): a DRM refusal handled after the start. */
         instead: (suspend () -> Unit)? = null,
-    ) = playMutex.withLock {
+    ) {
+      // Asked for now: a plugin DRM start still under way gives way to it at once.
+      val generation = supersession.next()
+      playMutex.withLock {
+        activePlayGeneration = generation
         var completed = false
         val queueAtStart = queueGeneration
         // Someone picked this (a tap, a car browse tap, Play on a stopped
@@ -1603,6 +1617,10 @@ class PlaybackController constructor(
             completed = true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // Don't swallow cancellation
+        } catch (e: com.parachord.android.playback.drm.PlaySupersededException) {
+            // A newer play was asked for while this plugin DRM start was under
+            // way: it never reaches the player and isn't a failure.
+            Log.d(TAG, "Play of '${track.title}' superseded by a newer play")
         } catch (e: Exception) {
             Log.e(TAG, "playTrackInternal failed for '${track.title}': ${e.message}", e)
             // Leave the app in a usable state — show the track in the mini player
@@ -1656,6 +1674,7 @@ class PlaybackController constructor(
                 releaseForegroundHeldForPlay("play of '${track.title}' didn't start")
             }
         }
+      }
     }
 
     private suspend fun playTrackInternalUnsafe(
@@ -1735,7 +1754,12 @@ class PlaybackController constructor(
         }
 
         val action = try {
-            router.route(routedTrack)
+            // A plugin DRM source's manifest wait gives way to a newer play at once.
+            if (router.getPluginDrmHandler().canHandle(routedTrack)) {
+                supersession.untilSuperseded(activePlayGeneration) { router.route(routedTrack) }
+            } else {
+                router.route(routedTrack)
+            }
         } catch (e: com.parachord.android.playback.drm.PluginDrmPlaybackException) {
             // The plugin refused the manifest (its plan, sign-in, a budget).
             stateHolder.update { copy(currentTrack = routedTrack, isPlaying = false, isBuffering = false) }
@@ -1816,10 +1840,10 @@ class PlaybackController constructor(
                 // The user moved on while the plugin fetched the manifest (a
                 // newer play waits for this one): never a failure, desktop's
                 // superseded rule. The session never reaches the player.
-                if (drmSessionId != null && playLaunchesPending > 1) {
+                if (drmSessionId != null && supersession.isSuperseded(activePlayGeneration)) {
                     Log.d(TAG, "'${routedTrack.title}': superseded during its manifest fetch")
                     router.getPluginDrmHandler().closeSession(drmSessionId)
-                    return
+                    throw com.parachord.android.playback.drm.PlaySupersededException()
                 }
                 if (isExternalPlayback || foregroundHeldForPlay) {
                     if (localPlayKeepsHeldForeground(isAppVisible())) {
@@ -3592,7 +3616,20 @@ class PlaybackController constructor(
         track: TrackEntity,
         advancing: Boolean,
     ) {
-        val result = kotlinx.coroutines.withTimeoutOrNull(DRM_START_TIMEOUT_MS) { waiter.await() }
+        val result = try {
+            kotlinx.coroutines.withTimeoutOrNull(DRM_START_TIMEOUT_MS) {
+                supersession.untilSuperseded(activePlayGeneration) { waiter.await() }
+            }
+        } catch (e: com.parachord.android.playback.drm.PlaySupersededException) {
+            // A newer play: this one stops here (its clear lead included) and never counts.
+            if (drmStartWaiter === waiter) {
+                drmStartWaiter = null
+                drmStartSessionId = null
+            }
+            ctrl.stop()
+            router.getPluginDrmHandler().closeSession(sessionId)
+            throw e
+        }
         if (drmStartWaiter === waiter) {
             drmStartWaiter = null
             drmStartSessionId = null
@@ -3648,6 +3685,8 @@ class PlaybackController constructor(
             com.parachord.shared.playback.drm.PluginDrmOutcome.FAMILY_REFUSED -> {
                 if (sessionId != null && handler.latchRefusedFamily(sessionId)) {
                     Log.w(TAG, "'${track.title}': $resolverId refused one codec family (${error.denialReason}); trying the next best")
+                    // Not if a newer play was asked for meanwhile.
+                    supersession.check(activePlayGeneration)
                     // Same source, where it was (the clear lead may have played).
                     if (positionMs > 0) pendingStartAt = track.id to positionMs
                     playTrackInternalUnsafe(track, skipReselect = true, advancing = advancing, userRequested = false)
