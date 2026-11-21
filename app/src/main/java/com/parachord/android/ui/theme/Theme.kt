@@ -116,6 +116,29 @@ val LocalResolverOrder = staticCompositionLocalOf { emptyList<String>() }
 /** The plug-ins that are on but don't play (shared `notPlayingIds`, #707), provided at the app root. */
 val LocalNotPlaying = staticCompositionLocalOf { emptyList<String>() }
 
+/**
+ * The width of every track row's source icon column (#760): one icon per
+ * service the user can play from (the shared `TrackRowRules.sourceColumnWidth`,
+ * desktop's `--source-col`), provided at the app root, so every row's durations
+ * line up.
+ */
+/**
+ * What every track row reads from the resolver cache (#760), by
+ * `trackKey(title, artist)`: the badges a resolved track has (an empty list
+ * means it resolved and nothing can play: the row is dimmed) and the length a
+ * source knows. Held as `State`s so a cache change recomposes only the rows.
+ */
+class TrackRowCache(
+    val resolvers: androidx.compose.runtime.State<Map<String, List<String>>>,
+    val sourceDurations: androidx.compose.runtime.State<Map<String, Long>>,
+)
+
+val LocalTrackRowCache = staticCompositionLocalOf<TrackRowCache?> { null }
+
+val LocalSourceColumnWidth = staticCompositionLocalOf {
+    androidx.compose.ui.unit.Dp(com.parachord.shared.ui.TrackRowRules.SOURCE_COLUMN_MAX.toFloat())
+}
+
 // ── Theme Accessor ───────────────────────────────────────────────────
 
 object ParachordTheme {

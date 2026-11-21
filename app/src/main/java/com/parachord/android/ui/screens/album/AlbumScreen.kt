@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.album
 
 import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.background
@@ -342,6 +343,7 @@ fun AlbumScreen(
                             resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]?.ifEmpty { null },
                             resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
                             onClick = { viewModel.playTrack(index) },
+                            onPlaySource = rememberPlayFromSource()(track.title, track.artist) { viewModel.playTrack(index) },
                             onLongClick = {
                                 val entity = viewModel.resolvedTrackEntity(index)
                                 if (entity != null) {

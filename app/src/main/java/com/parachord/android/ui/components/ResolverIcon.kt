@@ -176,6 +176,8 @@ fun ResolverIconRow(
     size: Dp = 20.dp,
     confidences: Map<String, Float>? = null,
     modifier: Modifier = Modifier,
+    /** Plays that source (desktop's `SourceIconButton`); null draws plain icons. */
+    onIconClick: ((String) -> Unit)? = null,
 ) {
     if (resolvers.isEmpty()) return
     val resolverOrder = LocalResolverOrder.current
@@ -194,11 +196,16 @@ fun ResolverIconRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         sorted.forEachIndexed { index, resolver ->
-            if (index > 0) Spacer(modifier = Modifier.width(3.dp))
+            if (index > 0) Spacer(modifier = Modifier.width(com.parachord.shared.ui.TrackRowRules.SOURCE_ICON_GAP.dp))
             ResolverIconSquare(
                 resolver = resolver,
                 size = size,
                 confidence = confidences?.get(resolver) ?: 1f,
+                modifier = if (onIconClick != null) {
+                    Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable(onClickLabel = "Play from ${resolverDisplayName(resolver)}") { onIconClick(resolver) }
+                } else Modifier,
             )
         }
     }

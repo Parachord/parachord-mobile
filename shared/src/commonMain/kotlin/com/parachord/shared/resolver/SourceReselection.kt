@@ -86,4 +86,21 @@ object SourceReselection {
     fun sourceForSwitch(sources: List<ResolvedSource>, resolver: String): ResolvedSource? =
         sources.filter { it.resolver == resolver && ResolverBadges.isPlayable(it) }
             .maxByOrNull { it.confidence ?: 0.0 }
+
+    /**
+     * [track] set to play from [source] only: every resolver-specific field
+     * cleared, then the chosen one's set. Used by the Now Playing switcher and
+     * by a track row's source icon (#760). Without the clearing, a leftover
+     * Spotify URI from another resolver sent the router to Spotify even when
+     * the user picked a local file.
+     */
+    fun trackPlayingFrom(track: Track, source: ResolvedSource): Track = track.copy(
+        resolver = source.resolver,
+        sourceType = source.sourceType,
+        sourceUrl = source.url,
+        spotifyUri = source.spotifyUri,
+        spotifyId = source.spotifyId,
+        soundcloudId = source.soundcloudId,
+        appleMusicId = source.appleMusicId,
+    )
 }

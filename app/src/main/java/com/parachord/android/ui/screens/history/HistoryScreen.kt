@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.history
 
 import com.parachord.android.ui.components.ResolveWhileVisible
+import com.parachord.android.ui.components.rememberPlayFromSource
 import kotlinx.coroutines.Job
 import com.parachord.shared.format.playCountLabel
 import com.parachord.shared.format.RelativeTime
@@ -242,6 +243,7 @@ private fun TopSongsTab(
                                 resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]?.ifEmpty { null },
                                 resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
                                 onClick = { onPlayTrack(index) },
+                                onPlaySource = rememberPlayFromSource()(track.title, "${track.artist}  •  ${playCountLabel(track.playCount)}") { onPlayTrack(index) },
                             )
                         }
                     }
@@ -589,67 +591,21 @@ private fun RecentTrackRow(
     artworkUrl: String? = track.artworkUrl,
     onClick: () -> Unit = {},
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .hapticClickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AlbumArtCard(
-            artworkUrl = artworkUrl,
-            size = 44.dp,
-            cornerRadius = 4.dp,
-            elevation = 1.dp,
-            placeholderName = track.title,
-            artist = track.artist,
-            album = track.album,
-        )
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = if (track.nowPlaying) "▶ ${track.title}" else track.title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = if (track.nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-            )
-            Row {
-                Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                if (track.source.isNotBlank()) {
-                    Text(
-                        text = "  •  ${track.source}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-            }
-        }
-
-        // Time ago
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = if (track.nowPlaying) "Now" else RelativeTime.agoSeconds(track.timestamp),
-            style = MaterialTheme.typography.labelSmall,
-            color = if (track.nowPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        // Resolver badges (to the right of the time)
-        if (!resolvers.isNullOrEmpty()) {
-            Spacer(modifier = Modifier.width(6.dp))
-            ResolverIconRow(resolvers = resolvers, size = 20.dp, confidences = resolverConfidences)
-        }
-    }
+    // The shared row (#760), with History's "2h ago" as its extra column.
+    TrackRow(
+        title = track.title,
+        artist = track.artist,
+        artworkUrl = artworkUrl,
+        album = track.album,
+        resolvers = resolvers,
+        resolverConfidences = resolverConfidences,
+        isPlaying = track.nowPlaying,
+        subtitle = if (track.source.isNotBlank()) "${track.artist}  •  ${track.source}" else null,
+        cell = if (track.nowPlaying) "Now" else RelativeTime.agoSeconds(track.timestamp),
+        cellAccent = track.nowPlaying,
+        onClick = onClick,
+        onPlaySource = rememberPlayFromSource()(track.title, track.artist, onClick),
+    )
 }
 
 // ---------- Shared States ----------

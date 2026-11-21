@@ -274,11 +274,24 @@ fun ParachordApp() {
     val resolverOrder by mainViewModel.resolverOrder.collectAsStateWithLifecycle()
     val notPlaying by org.koin.compose.koinInject<com.parachord.shared.plugin.PluginStatusStore>()
         .notPlaying.collectAsStateWithLifecycle()
+    // The services the user can play from (Home's `playbackResolvers`, desktop's
+    // `playbackResolvers`): their count sizes every track row's icon column.
+    val playbackResolvers by org.koin.compose.koinInject<com.parachord.shared.home.HomeSources>()
+        .playbackResolvers.collectAsStateWithLifecycle(initialValue = emptyList())
+    val sourceColumnWidth = com.parachord.shared.ui.TrackRowRules.sourceColumnWidth(playbackResolvers.size).dp
+    val resolverCache = org.koin.compose.koinInject<com.parachord.android.resolver.TrackResolverCache>()
+    val rowResolvers = resolverCache.trackResolvers.collectAsStateWithLifecycle()
+    val rowDurations = resolverCache.trackSourceDurations.collectAsStateWithLifecycle()
+    val trackRowCache = androidx.compose.runtime.remember(rowResolvers, rowDurations) {
+        com.parachord.android.ui.theme.TrackRowCache(rowResolvers, rowDurations)
+    }
 
     ParachordTheme(darkTheme = darkTheme) {
         CompositionLocalProvider(
             LocalResolverOrder provides resolverOrder,
             com.parachord.android.ui.theme.LocalNotPlaying provides notPlaying,
+            com.parachord.android.ui.theme.LocalSourceColumnWidth provides sourceColumnWidth,
+            com.parachord.android.ui.theme.LocalTrackRowCache provides trackRowCache,
         ) {
             ParachordAppContent(mainViewModel)
         }

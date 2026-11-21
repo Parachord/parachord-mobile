@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.search
 
 import com.parachord.android.ui.components.ResolveWhileVisible
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.shared.search.SearchSession
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
@@ -164,6 +165,15 @@ fun SearchScreen(
                                 )
                                 viewModel.playLocalTrack(track)
                             },
+                            onPlaySource = rememberPlayFromSource()(track.title, track.artist) {
+                                viewModel.saveHistoryEntry(
+                                    resultType = "track",
+                                    resultName = track.title,
+                                    resultArtist = track.artist,
+                                    artworkUrl = track.artworkUrl,
+                                )
+                                viewModel.playLocalTrack(track)
+                            },
                         )
                     }
                 }
@@ -308,6 +318,15 @@ fun SearchScreen(
                             resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]?.ifEmpty { null },
                             resolverConfidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
                             onClick = {
+                                viewModel.saveHistoryEntry(
+                                    resultType = "track",
+                                    resultName = track.title,
+                                    resultArtist = track.artist,
+                                    artworkUrl = art,
+                                )
+                                viewModel.playSearchTrack(track)
+                            },
+                            onPlaySource = rememberPlayFromSource()(track.title, track.artist) {
                                 viewModel.saveHistoryEntry(
                                     resultType = "track",
                                     resultName = track.title,

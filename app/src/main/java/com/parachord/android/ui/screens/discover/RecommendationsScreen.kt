@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
 import com.parachord.shared.recommendations.playlistTapOpensView
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.shared.ui.UiMessages
 import android.content.Intent
 import android.net.Uri
@@ -832,6 +833,7 @@ private fun SongRow(
         duration = track?.duration,
         isPlaying = track != null && isPlaying(track),
         onClick = { if (track != null) viewModel.playSong(items, index, row) },
+        onPlaySource = rememberPlayFromSource()(item.name, item.artist.orEmpty()) { if (track != null) viewModel.playSong(items, index, row) },
         onLongClick = track?.let { t -> { onLongPress(t) } },
     )
 }

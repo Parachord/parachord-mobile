@@ -755,9 +755,13 @@ struct PCQueuePanel: View {
                     Text(t.artist).font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
-                    ResolverBadgeRow(sources: s, size: 16)
-                }
+                // The source icons, then the duration last, as desktop's queue
+                // drawer and every track row (#760).
+                let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album)
+                PCTrackRowSources(sources: sources)
+                PCTrackRowDuration(label: TrackRowRules.shared.durationLabel(
+                    trackDurationMs: t.duration, sources: sources, order: ResolverPrefs.shared.order),
+                    color: .white.opacity(0.4))
             }
             .padding(.horizontal, 20).padding(.vertical, 8)
             .contentShape(Rectangle())

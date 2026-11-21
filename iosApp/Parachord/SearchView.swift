@@ -330,27 +330,18 @@ struct SearchView: View {
 
     private func trackRow(_ track: Track, index: Int, queue: [Track],
                           resultType: String, resultName: String, resultArtist: String?, artwork: String?) -> some View {
-        Button {
+        // The shared track row (#760).
+        let play = {
             model.saveHistory(type: resultType, name: resultName, artist: resultArtist, artwork: artwork)
             coordinator.setQueue(queue, startIndex: index, context: ctx)
-        } label: {
-            HStack(spacing: 12) {
-                pcCover(pcTrackArt(track.artworkUrl, artist: track.artist, title: track.title, album: track.album),
-                        seed: track.title + track.artist, size: 44, radius: 6, artist: track.artist, album: track.album)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
-                    Text(track.album.map { "\(track.artist) · \($0)" } ?? track.artist)
-                        .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
-                   !ranked.isEmpty {
-                    ResolverBadgeRow(sources: ranked)
-                }
-            }
-            .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        return PCTrackRow(title: track.title, artist: track.artist, album: track.album, artworkUrl: track.artworkUrl,
+                   subtitle: track.album.map { "\(track.artist) · \($0)" } ?? track.artist,
+                   isPlaying: coordinator.currentTrack?.id == track.id,
+                   durationMs: track.duration?.int64Value,
+                   onPlaySource: pcPlayFromSource(coordinator, title: track.title, artist: track.artist, play: play),
+                   onTap: play)
+            .padding(.horizontal, 20).padding(.vertical, 8)
         .onAppear { resolverCache.resolve(ResolveRequest(artist: track.artist, title: track.title, album: track.album), order: index) }
         .onDisappear { IosTrackResolverCache.shared.leave(artist: track.artist, title: track.title) }
         .pcTrackContextMenu(
