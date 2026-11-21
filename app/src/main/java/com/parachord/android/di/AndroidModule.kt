@@ -934,7 +934,6 @@ val androidModule = module {
         com.parachord.shared.repository.RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(get()),
             settingsStore = settings,
-            metadataService = metadataService,
             aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(
                 get<com.parachord.shared.ai.AiRecommendationService>(), settings,
             ),

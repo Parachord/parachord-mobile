@@ -20,6 +20,14 @@ sealed class RecommendationsError {
 /** What the Recommendations page shows. */
 data class RecommendationPageState(
     val sections: List<RecommendationPageSection> = emptyList(),
+    /**
+     * The page built before the history-mix exclusion (desktop's
+     * `weeklySections`), for the weekly playlist headers
+     * ([com.parachord.shared.recommendations.weeklyPlaylistHeader]): Weekly Jams
+     * are also a history mix, so [sections] leaves them out. The same list as
+     * [sections] when nothing is excluded.
+     */
+    val weeklySections: List<RecommendationPageSection> = emptyList(),
     /** The filter bar's pills. */
     val sources: List<PageSource> = emptyList(),
     /** Nothing on screen yet and providers still answering: the page skeleton. */

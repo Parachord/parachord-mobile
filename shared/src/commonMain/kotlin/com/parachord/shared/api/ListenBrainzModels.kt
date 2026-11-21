@@ -39,18 +39,9 @@ data class LbReleaseStat(
     val artworkUrl: String? = null,
 )
 
-/** A playlist "created for" a user by ListenBrainz. */
-data class LbCreatedForPlaylist(
-    val id: String,
-    val title: String,
-    val date: String,
-    val annotation: String = "",
-)
-
 /**
  * A user-owned playlist as returned by `GET /1/user/{userName}/playlists`.
- * Distinct from [LbCreatedForPlaylist] (the system-generated `createdfor`
- * playlists like Weekly Jams).
+ * Distinct from the system-generated `createdfor` playlists like Weekly Jams.
  */
 data class LbPlaylist(
     val mbid: String,

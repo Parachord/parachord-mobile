@@ -166,8 +166,8 @@ These all compile-fail or mis-render at the Swift boundary.
   collides with ObjC's `NSObject.description` (which returns the
   data-class `toString()`), so `entry.description` renders
   `IosWeeklyEntry(id=…, title=…)` in the UI instead of the field. Use
-  `summary` / `blurb` / `text`. (Shipped this bug once on the Discover
-  screen — caught only because real data exposed it.) Same applies to
+  `summary` / `blurb` / `text`. (Shipped this bug once on the old Discover
+  screen, since removed — caught only because real data exposed it.) Same applies to
   `hash`, `debugDescription` — avoid NSObject member names.
 - **Primitive `Double` / `Int` / `Bool` bridge DIRECTLY.** No
   `.doubleValue` / `.intValue` / `.boolValue`. Calling `.doubleValue` on
@@ -252,8 +252,8 @@ container's flows kept only `Resource.Success`, so a failed load left a screen
 spinning forever or showing a misleading empty state ("Set your Last.fm
 username" for every History failure).
 
-- **Flows** (`criticsPicksFlow`, `freshDropsFlow`,
-  `recommendedArtistsFlow`, `concertsFlow`) go through `forDisplay()`: each list
+- **Flows** (`criticsPicksFlow`, `freshDropsFlow`, `concertsFlow`) go
+  through `forDisplay()`: each list
   as it lands, and the `Resource.Error` itself (Swift: `v as? ResourceError`,
   `.message`) when the load failed with nothing to show.
 - **Suspend loaders** (`loadTop*`, `loadRecentTracks`, `getFriendTop*`,
@@ -1642,7 +1642,12 @@ lives in Swift: the screens draw what the page says.
 - **Files:** `HomeScreen.swift` (the frame, routes, sections in order),
   `HomeModel.swift`, `HomeHeader.swift`, `HomeJumpBackIn.swift`,
   `HomeRows.swift`, `HomeLowerSections.swift`, `HomeGettingStarted.swift`.
-  `DiscoverViewModel` and `WeeklyPlaylistsRepository` stay for other screens.
+  A weekly playlist (`PCRoute.playlist`) opens `PlaylistDetailView`. Its
+  header comes from the recommendation sections
+  (`IosContainer.watchWeeklyPlaylistHeader`, the shared `weeklyPlaylistHeader`)
+  and fills in once the page carries the playlist; its tracks come from
+  `WeeklyPlaylistsRepository.loadPlaylistTracks`; Save names the copy per
+  week (`IosContainer.weeklySavedName`, the shared `weeklySavedName`).
 
 Root `CLAUDE.md` → "Home — the shared model, drawn on both apps".
 

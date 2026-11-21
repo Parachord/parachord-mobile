@@ -544,8 +544,8 @@ final class SettingsViewModel {
             case "lastfm": try? await store.setLastFmUsername(username: value)
             case "listenbrainz":
                 // Validate first and save only a token ListenBrainz accepts,
-                // with the username the public `createdfor` weekly endpoint
-                // needs (desktop/Android validateToken). An invalid token is
+                // with the username the ListenBrainz plugin and sync need
+                // (desktop/Android validateToken). An invalid token is
                 // refused with Android's message, not saved.
                 if value.isEmpty {
                     try? await store.setListenBrainzToken(token: value)
