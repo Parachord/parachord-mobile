@@ -390,6 +390,11 @@ struct ContentView: View {
         }
         // Settings is a FULL-SCREEN cover (not a card sheet). SettingsView's
         // PCTopBar back button calls dismiss(), which closes the cover.
+        // The cover's content closure runs when it's presented, not in this body, so the tab and plug-in
+        // it opens on must be read here too: else a change to them doesn't refresh the closure and
+        // Settings opened on its first page (found with Home's "Sync your library").
+        .onChange(of: settingsTab) { _, _ in }
+        .onChange(of: settingsService) { _, _ in }
         .fullScreenCover(isPresented: $showSettings, onDismiss: { settingsService = nil; settingsTab = nil }) {
             NavigationStack { SettingsView(initialService: settingsService, initialTab: settingsTab) }
         }

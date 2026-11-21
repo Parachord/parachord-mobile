@@ -60,6 +60,7 @@
 		AA000000000000000000011F /* HomeJumpBackIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011E /* HomeJumpBackIn.swift */; };
 		AA0000000000000000000121 /* HomeRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000120 /* HomeRows.swift */; };
 		AA0000000000000000000123 /* HomeLowerSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000122 /* HomeLowerSections.swift */; };
+		AA00000000000000000009A2 /* HomeGettingStarted.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000009A1 /* HomeGettingStarted.swift */; };
 		AA000000000000000000011D /* HomeHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011C /* HomeHeader.swift */; };
 		AA000000000000000000011B /* HomeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011A /* HomeModel.swift */; };
 		AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FC /* SoundCloudWidget.swift */; };
@@ -152,6 +153,7 @@
 		AA000000000000000000011E /* HomeJumpBackIn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeJumpBackIn.swift; sourceTree = "<group>"; };
 		AA0000000000000000000120 /* HomeRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeRows.swift; sourceTree = "<group>"; };
 		AA0000000000000000000122 /* HomeLowerSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeLowerSections.swift; sourceTree = "<group>"; };
+		AA00000000000000000009A1 /* HomeGettingStarted.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeGettingStarted.swift; sourceTree = "<group>"; };
 		AA000000000000000000011C /* HomeHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeHeader.swift; sourceTree = "<group>"; };
 		AA000000000000000000011A /* HomeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeModel.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FC /* SoundCloudWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundCloudWidget.swift; sourceTree = "<group>"; };
@@ -271,6 +273,7 @@
 				AA000000000000000000011E /* HomeJumpBackIn.swift */,
 				AA0000000000000000000120 /* HomeRows.swift */,
 				AA0000000000000000000122 /* HomeLowerSections.swift */,
+				AA00000000000000000009A1 /* HomeGettingStarted.swift */,
 				AA000000000000000000011C /* HomeHeader.swift */,
 				AA000000000000000000011A /* HomeModel.swift */,
 				AA00000000000000000000E2 /* ListenAlongController.swift */,
@@ -485,6 +488,7 @@
 				AA000000000000000000011F /* HomeJumpBackIn.swift in Sources */,
 				AA0000000000000000000121 /* HomeRows.swift in Sources */,
 				AA0000000000000000000123 /* HomeLowerSections.swift in Sources */,
+				AA00000000000000000009A2 /* HomeGettingStarted.swift in Sources */,
 				AA000000000000000000011D /* HomeHeader.swift in Sources */,
 				AA000000000000000000011B /* HomeModel.swift in Sources */,
 				AA00000000000000000000E3 /* ListenAlongController.swift in Sources */,

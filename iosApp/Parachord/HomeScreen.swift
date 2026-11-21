@@ -136,6 +136,7 @@ struct HomeScreen: View {
     @Environment(\.pcOpenImport) private var openImport
     @Environment(\.pcAskShuffleupagus) private var askShuffleupagus
     @Environment(\.pcOpenPluginSettings) private var openPluginSettings
+    @Environment(\.pcOpenSettingsTab) private var openSettingsTab
 
     private var session: IosHomeSession { home.session }
 
@@ -214,7 +215,9 @@ struct HomeScreen: View {
     /// The page once it's ready. The getting-started layout and the sections
     /// after Jump back in arrive with later tasks.
     @ViewBuilder private func sections(_ page: IosHomePage) -> some View {
-        if page.gettingStarted == nil {
+        if let gs = page.gettingStarted {
+            gettingStartedSections(gs)
+        } else {
             HomeHeaderView(
                 page: page,
                 onCollectionRadio: { home.play(coordinator: coordinator) { try await $0.collectionRadio() } },
@@ -312,6 +315,45 @@ struct HomeScreen: View {
                 )
                 .padding(.top, 24)
             }
+        }
+    }
+
+    /// The getting-started layout, then "Explore while you set up" (the hero and banners are the frame's).
+    @ViewBuilder private func gettingStartedSections(_ gs: IosGettingStarted) -> some View {
+        HomeGettingStartedView(
+            gs: gs,
+            onSkip: { session.skipSetup() },
+            onOpenStep: { session.openStep(id: $0) },
+            onOpenPlugin: { openPluginSettings($0) },
+            onOpenPluginsTab: { openSettingsTab(SettingsTab.shared.PLUGINS) },
+            onSyncLibrary: { openSettingsTab(GettingStartedLayoutKt.SYNC_LIBRARY_SETTINGS_TAB) },
+            onImport: { openImport() },
+            onOpenPlaylist: { path.append(.savedPlaylist(id: $0)) },
+            onCollectionRadio: { home.play(coordinator: coordinator) { try await $0.collectionRadio() } },
+            onSearch: { onSelectTab(.search, nil) }
+        )
+        .padding(.top, 24)
+        if !gs.explore.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                PCSectionHeader(title: HomeCopy.shared.EXPLORE_TITLE, subtitle: HomeCopy.shared.EXPLORE_SUBTITLE, gutter: homeGutter)
+                VStack(spacing: 16) {
+                    ForEach(gs.explore, id: \.kind) { half in
+                        HomeHalfView(
+                            half: half,
+                            onSeeAll: { path.append(half.kind == "critical" ? .critical : .pop) },
+                            onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
+                            onPlay: { card in
+                                let key = card.key
+                                home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
+                            },
+                            onShown: { session.halfCardShown(key: $0.key) },
+                            onOpenArtist: { path.append(.artist($0.artist)) },
+                            onRetry: { session.retryCharts() }
+                        )
+                    }
+                }
+            }
+            .padding(.top, 24)
         }
     }
 
