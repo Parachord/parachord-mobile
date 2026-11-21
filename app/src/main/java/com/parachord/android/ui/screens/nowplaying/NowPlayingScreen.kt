@@ -76,6 +76,7 @@ import com.parachord.android.playback.effectiveArtwork
 import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.rememberHapticClick
 import com.parachord.android.resolver.trackKey
+import com.parachord.android.playback.showsLoading
 import com.parachord.android.ui.components.ResolverSourceDropdown
 import com.parachord.android.ui.components.TrackContextInfo
 import com.parachord.android.ui.components.TrackContextMenuHost
@@ -523,7 +524,10 @@ fun NowPlayingScreen(
                         val key = trackKey(track.title, track.artist)
                         val sources = trackSources[key] ?: emptyList()
                         ResolverSourceDropdown(
-                            currentResolver = track.resolver!!,
+                            // The pick shows at once while its play starts (shared rule).
+                            currentResolver = com.parachord.shared.resolver.SourceReselection.pickerShownResolver(
+                                track.resolver, playbackState.pendingSourcePick, track.id,
+                            ) ?: track.resolver!!,
                             availableSources = sources,
                             onSwitchSource = { resolver -> viewModel.switchSource(resolver) },
                         )
@@ -650,7 +654,7 @@ fun NowPlayingScreen(
                             contentColor = Color.White,
                         ),
                     ) {
-                        if (playbackState.isBuffering) {
+                        if (playbackState.showsLoading) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(32.dp),
                                 color = Color.White,

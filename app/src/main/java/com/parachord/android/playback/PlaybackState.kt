@@ -40,7 +40,28 @@ data class PlaybackState(
      * idle; cleared when the next track starts.
      */
     val playbackError: String? = null,
+    /**
+     * True while a play is under way, from the request (a tap, a Next, a
+     * source pick) until its engine has started it or it failed: the lookup,
+     * the route and any wait before a player holds the item. [isBuffering]
+     * comes from the engine that's playing, so it can't cover that gap (the
+     * old engine's polls keep writing it). The play buttons show their
+     * spinner for either ([showsLoading]), as desktop's playbar does while
+     * its `trackLoading` is set.
+     */
+    val isStartingPlay: Boolean = false,
+    /**
+     * A source picked in Now Playing's switcher whose play hasn't started
+     * yet. Display only: the switcher shows it at once
+     * (`SourceReselection.pickerShownResolver`); it's never written onto the
+     * track, and it's dropped when the play from it ends, started or not.
+     */
+    val pendingSourcePick: com.parachord.shared.resolver.PendingSourcePick? = null,
 )
+
+/** The play buttons' spinner: the engine is buffering, or a play is still starting. */
+val PlaybackState.showsLoading: Boolean
+    get() = isBuffering || isStartingPlay
 
 /**
  * Actual metadata reported by the streaming source (Spotify Connect / Apple Music MusicKit).
