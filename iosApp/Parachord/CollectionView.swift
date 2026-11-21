@@ -286,7 +286,7 @@ struct CollectionView: View {
         return LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { i, t in
                 Button { coordinator.setQueue(items, startIndex: i,
-                                              context: PlaybackContext(type: "collection", name: "Collection", id: nil)) } label: {
+                                              context: PlaybackContext(type: HomeModelKt.COLLECTION_CONTEXT, name: "Collection", id: nil)) } label: {
                     HStack(spacing: 12) {
                         pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
                                 seed: t.title + t.artist, size: 44, radius: 6,
