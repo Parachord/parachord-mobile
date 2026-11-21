@@ -69,6 +69,7 @@ class PluginDrmLicenseCallback(
                     fail(PluginDrmError(message = "the licence wasn't base64"), family)
                 }
                 Log.d(DRM_TAG, "Licence ok for $sessionId (family ${family ?: "?"})")
+                sessions.recordLicenseSuccess(sessionId)
                 bytes
             }
             is PluginDrmLicenseReply.Failed -> fail(reply.error, family)

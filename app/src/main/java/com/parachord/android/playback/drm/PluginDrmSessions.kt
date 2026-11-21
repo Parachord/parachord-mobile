@@ -94,10 +94,39 @@ class PluginDrmSessions(
         /** The last licence refusal, for the controller's error handling. */
         @Volatile var lastLicenseError: PluginDrmError? = null
 
+        /**
+         * A licence for this session came back. Until then the session hasn't
+         * started, whatever the player says: ExoPlayer plays a stream's clear
+         * lead before it needs a key (30 s of an Amazon FLAC rung on a Pixel,
+         * with the licence already refused).
+         */
+        @Volatile var licensed: Boolean = false
+
         internal val tracker = PluginPlayerEventTracker()
     }
 
     private val sessions = ConcurrentHashMap<String, Session>()
+
+    /** A licence answer for one session, as it happens (emitted from ExoPlayer's DRM thread). */
+    sealed class LicenceEvent {
+        abstract val sessionId: String
+        data class Licensed(override val sessionId: String) : LicenceEvent()
+        data class Refused(override val sessionId: String, val error: PluginDrmError) : LicenceEvent()
+    }
+
+    private val _licenceEvents = kotlinx.coroutines.flow.MutableSharedFlow<LicenceEvent>(extraBufferCapacity = 64)
+
+    /** Each licence that came back or was refused, so the controller and telemetry act at once. */
+    val licenceEvents: kotlinx.coroutines.flow.SharedFlow<LicenceEvent> = _licenceEvents
+
+    /** A licence for [id] came back: the session can start. */
+    fun recordLicenseSuccess(id: String) {
+        get(id)?.licensed = true
+        _licenceEvents.tryEmit(LicenceEvent.Licensed(id))
+    }
+
+    /** Whether a licence for [id] came back. */
+    fun isLicensed(id: String?): Boolean = get(id)?.licensed == true
 
     /** The session the player is on now (set by the telemetry listener). */
     @Volatile var activeOnPlayer: String? = null
@@ -151,6 +180,7 @@ class PluginDrmSessions(
     /** Records a licence refusal for [id], for the controller to read when the play fails. */
     fun recordLicenseFailure(id: String, error: PluginDrmError) {
         get(id)?.lastLicenseError = error
+        _licenceEvents.tryEmit(LicenceEvent.Refused(id, error))
     }
 
     /**

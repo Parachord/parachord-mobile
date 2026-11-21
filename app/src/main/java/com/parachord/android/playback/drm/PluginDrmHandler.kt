@@ -84,6 +84,21 @@ class PluginDrmHandler(
         return PluginDrmError(message = cause?.javaClass?.simpleName)
     }
 
+    /** Licence answers as they land ([PluginDrmSessions.licenceEvents]). */
+    val licenceEvents get() = sessions.licenceEvents
+
+    /** A licence for [sessionId] came back. */
+    fun isLicensed(sessionId: String?): Boolean = sessions.isLicensed(sessionId)
+
+    /** [sessionId] is the one the player is on. */
+    fun isOnPlayer(sessionId: String): Boolean = sessions.activeOnPlayer == sessionId
+
+    /** [sessionId] was opened for the track [trackId]. */
+    fun sessionIsFor(sessionId: String, trackId: String): Boolean = sessions.get(sessionId)?.trackId == trackId
+
+    /** The licence refusal recorded for [sessionId], if one came. */
+    fun recordedRefusal(sessionId: String): PluginDrmError? = sessions.get(sessionId)?.lastLicenseError
+
     /** Drops a refused family for [sessionId]'s retry ([PluginDrmSessions.latchRefusedFamily]). */
     fun latchRefusedFamily(sessionId: String): Boolean = sessions.latchRefusedFamily(sessionId)
 

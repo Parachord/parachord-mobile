@@ -36,4 +36,22 @@ class PlaybackMessagesTest {
         // A plugin resolver the apps don't list: its id, capitalized.
         assertEquals("Tidal", resolverDisplayName("tidal"))
     }
+
+    @Test
+    fun `amazon music and plex have their names`() {
+        kotlin.test.assertEquals("Amazon Music", resolverDisplayName("amazonmusic"))
+        kotlin.test.assertEquals("Plex", resolverDisplayName("plex"))
+    }
+
+    @Test
+    fun `a plugin the table doesn't know shows its manifest name`() {
+        PluginDisplayNames.update(mapOf("tidalx" to "Tidal X"))
+        try {
+            kotlin.test.assertEquals("Tidal X", resolverDisplayName("tidalx"))
+            kotlin.test.assertEquals("Spotify", resolverDisplayName("spotify"))
+            kotlin.test.assertEquals("Unknownsvc", resolverDisplayName("unknownsvc"))
+        } finally {
+            PluginDisplayNames.update(emptyMap())
+        }
+    }
 }

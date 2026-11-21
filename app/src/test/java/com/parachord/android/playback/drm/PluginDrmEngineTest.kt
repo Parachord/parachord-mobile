@@ -18,6 +18,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -260,6 +261,106 @@ class PluginDrmEngineTest {
         assertEquals("B01", (record["amazonAsin"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals("Song", (json["title"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals(210L, (json["duration"] as kotlinx.serialization.json.JsonPrimitive).content.toLong())
+    }
+
+    // ── The start rule and refusals (Pixel test of #762) ─────────────
+
+    @Test
+    fun `playing without a licence is the clear lead not a start`() {
+        assertTrue(!PluginDrmStartRules.started(isPlaying = true, licensed = false))
+        assertTrue(!PluginDrmStartRules.started(isPlaying = false, licensed = true))
+        assertTrue(PluginDrmStartRules.started(isPlaying = true, licensed = true))
+    }
+
+    private val notEligible = com.parachord.shared.playback.drm.PluginDrmError(
+        reason = "playback-failed", denialReason = "CUSTOMER_NOT_ELIGIBLE",
+    )
+
+    @Test
+    fun `a refusal while starting ends the start wait at once`() {
+        assertEquals(
+            PluginDrmStartRules.RefusalAction.END_START_WAIT,
+            PluginDrmStartRules.onRefusal(inStartWait = true, onPlayerForTrack = true, error = notEligible),
+        )
+    }
+
+    @Test
+    fun `a per-content refusal after the start replays without the family`() {
+        assertEquals(
+            PluginDrmStartRules.RefusalAction.REPLAY_WITHOUT_FAMILY,
+            PluginDrmStartRules.onRefusal(inStartWait = false, onPlayerForTrack = true, error = notEligible),
+        )
+        assertEquals(
+            PluginDrmStartRules.RefusalAction.LEAVE_TO_PLAYER_ERROR,
+            PluginDrmStartRules.onRefusal(false, true, com.parachord.shared.playback.drm.PluginDrmError(licenseDenied = true)),
+        )
+        assertEquals(PluginDrmStartRules.RefusalAction.IGNORE, PluginDrmStartRules.onRefusal(false, false, notEligible))
+    }
+
+    @Test
+    fun `a drm player error is classified from the recorded refusal`() {
+        assertEquals(com.parachord.shared.playback.drm.PluginDrmOutcome.FAMILY_REFUSED, PluginDrmStartRules.playerErrorOutcome(notEligible))
+        assertEquals(
+            com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED,
+            PluginDrmStartRules.playerErrorOutcome(com.parachord.shared.playback.drm.PluginDrmError(licenseDenied = true)),
+        )
+        assertNull(PluginDrmStartRules.playerErrorOutcome(null))
+        assertNull(PluginDrmStartRules.playerErrorOutcome(com.parachord.shared.playback.drm.PluginDrmError(reason = "load-failed")))
+    }
+
+    @Test
+    fun `licence answers are announced as they land`() {
+        val js = FakeJs(licenseReply = """{"ok":true,"license":"AQI="}""")
+        val s = sessions(js)
+        s.register(session("drm_1_a"))
+        val seen = mutableListOf<PluginDrmSessions.LicenceEvent>()
+        CoroutineScope(Dispatchers.Unconfined).launch { s.licenceEvents.collect { seen += it } }
+        PluginDrmLicenseCallback("drm_1_a", s, js, provisioning = null).licenseFor(byteArrayOf(1))
+        assertTrue(s.isLicensed("drm_1_a"))
+        js.licenseReply = """{"ok":false,"error":{"reason":"playback-failed","denialReason":"CUSTOMER_NOT_ELIGIBLE"}}"""
+        try { PluginDrmLicenseCallback("drm_1_a", s, js, provisioning = null).licenseFor(byteArrayOf(1)) } catch (_: PluginDrmLicenseException) {}
+        assertEquals(PluginDrmSessions.LicenceEvent.Licensed("drm_1_a"), seen[0])
+        assertEquals("CUSTOMER_NOT_ELIGIBLE", (seen[1] as PluginDrmSessions.LicenceEvent.Refused).error.denialReason)
+    }
+
+    @Test
+    fun `play-started waits for the licence`() {
+        val js = FakeJs()
+        val s = sessions(js)
+        s.register(session("drm_1_a"))
+        val item = MediaItem.fromUri(PluginDrmUris.uriFor("drm_1_a"))
+        val player = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        io.mockk.every { player.currentMediaItem } returns item
+        io.mockk.every { player.isPlaying } returns true
+        io.mockk.every { player.currentPosition } returns 600L
+        io.mockk.every { player.audioFormat } returns null
+        io.mockk.every { player.duration } returns androidx.media3.common.C.TIME_UNSET
+        val telemetry = PluginDrmTelemetry(player, s, CoroutineScope(Dispatchers.Unconfined))
+        telemetry.onMediaItemTransition(item, 0)
+        // The clear lead plays: no play-started.
+        telemetry.onIsPlayingChanged(true)
+        assertTrue(js.events.isEmpty())
+        // The licence lands while it plays: now it started.
+        s.recordLicenseSuccess("drm_1_a")
+        assertEquals(1, js.events.size)
+        assertTrue(js.events.single().second.contains("\"type\":\"play-started\""))
+    }
+
+    @Test
+    fun `a refused session never sends play-started`() {
+        val js = FakeJs()
+        val s = sessions(js)
+        s.register(session("drm_1_a"))
+        val item = MediaItem.fromUri(PluginDrmUris.uriFor("drm_1_a"))
+        val player = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        io.mockk.every { player.currentMediaItem } returns item
+        io.mockk.every { player.isPlaying } returns true
+        val telemetry = PluginDrmTelemetry(player, s, CoroutineScope(Dispatchers.Unconfined))
+        telemetry.onMediaItemTransition(item, 0)
+        telemetry.onIsPlayingChanged(true)
+        s.recordLicenseFailure("drm_1_a", notEligible)
+        telemetry.onIsPlayingChanged(true)
+        assertTrue(js.events.isEmpty())
     }
 
     companion object {

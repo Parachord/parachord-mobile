@@ -281,6 +281,8 @@ class PluginManager constructor(
         _allLoadedPlugins.value = (pluginInfos + bridgeHidden).sortedBy { it.name }
         // Service colours come from the manifests, as on desktop.
         ServiceColors.update(pluginInfos.associate { it.id to it.color })
+        // And their names, for resolverDisplayName (a plugin the app doesn't name itself).
+        com.parachord.shared.playback.PluginDisplayNames.update(pluginInfos.associate { it.id to it.name })
 
         // Filter out plugins that declare mobile: false in capabilities for the
         // active runtime set that drives UI and routing.

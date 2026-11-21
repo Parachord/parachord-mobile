@@ -8,6 +8,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.parachord.shared.platform.Log
 import com.parachord.shared.playback.drm.PluginPlayerEvents
+import kotlinx.coroutines.launch
 
 /**
  * The plugin's player events from ExoPlayer, for the session the player is
@@ -21,7 +22,20 @@ import com.parachord.shared.playback.drm.PluginPlayerEvents
 class PluginDrmTelemetry(
     private val player: ExoPlayer,
     private val sessions: PluginDrmSessions,
+    scope: kotlinx.coroutines.CoroutineScope,
 ) : Player.Listener {
+
+    init {
+        // A licence that lands while the player already plays the clear lead:
+        // that's when the session starts.
+        scope.launch {
+            sessions.licenceEvents.collect { event ->
+                if (event is PluginDrmSessions.LicenceEvent.Licensed && event.sessionId == currentSessionId() && player.isPlaying) {
+                    maybeStarted()
+                }
+            }
+        }
+    }
 
     private var lastPositionMs = 0L
 
@@ -34,9 +48,22 @@ class PluginDrmTelemetry(
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
-        val session = sessions.get(currentSessionId()) ?: return
         lastPositionMs = player.currentPosition.coerceAtLeast(0)
-        if (!isPlaying) return
+        if (isPlaying) maybeStarted()
+    }
+
+    /**
+     * The player plays and the session holds a licence: `play-started` the
+     * first time, `resume` after. Playing without a licence (the clear lead)
+     * isn't a start.
+     */
+    private fun maybeStarted() {
+        val session = sessions.get(currentSessionId()) ?: return
+        if (!session.licensed) {
+            Log.d(DRM_TAG, "Session ${session.id} playing its clear lead; no licence yet")
+            return
+        }
+        lastPositionMs = player.currentPosition.coerceAtLeast(0)
         val event = session.tracker.onPlaying(lastPositionMs) {
             val format = player.audioFormat
             PluginPlayerEvents.playStarted(

@@ -324,7 +324,7 @@ class PlaybackService : MediaLibraryService() {
             .build()
         player = exoPlayer
         // Which plugin DRM session the player is on, and the plugin's player events.
-        exoPlayer.addListener(com.parachord.android.playback.drm.PluginDrmTelemetry(exoPlayer, pluginDrmSessions))
+        exoPlayer.addListener(com.parachord.android.playback.drm.PluginDrmTelemetry(exoPlayer, pluginDrmSessions, serviceScope))
         // Registered before the session, so it runs ahead of the session's
         // own listener and PlaybackController's: at a local track's end the
         // service is still in the foreground here.

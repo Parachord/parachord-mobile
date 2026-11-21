@@ -38,7 +38,28 @@ object PlaybackMessages {
     const val PLAYING_FROM_QUEUE: String = "Playing from your queue"
 }
 
-/** A resolver's name as people see it ("applemusic" → "Apple Music"). */
+/**
+ * The loaded plugins' manifest names (`manifest.name`), by id, for
+ * [resolverDisplayName]: a plugin the table below doesn't know is shown by its
+ * own name ("Amazon Music"), not its id. Set by PluginManager as it loads
+ * plugins, as ServiceColors is.
+ */
+object PluginDisplayNames {
+    @kotlin.concurrent.Volatile
+    private var names: Map<String, String> = emptyMap()
+
+    fun update(manifestNames: Map<String, String>) {
+        names = manifestNames.filterValues { it.isNotBlank() }.mapKeys { it.key.lowercase() }
+    }
+
+    fun nameOf(resolver: String): String? = names[resolver.lowercase()]
+}
+
+/**
+ * A resolver's name as people see it ("applemusic" → "Apple Music"): the known
+ * services' names, else the loaded plugin's manifest name, else the id
+ * capitalized.
+ */
 fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) {
     "spotify" -> "Spotify"
     "applemusic" -> "Apple Music"
@@ -52,5 +73,7 @@ fun resolverDisplayName(resolver: String): String = when (resolver.lowercase()) 
     "lastfm" -> "Last.fm"
     "listenbrainz" -> "ListenBrainz"
     "librefm" -> "Libre.fm"
-    else -> resolver.replaceFirstChar { it.uppercase() }
+    "amazonmusic" -> "Amazon Music"
+    "plex" -> "Plex"
+    else -> PluginDisplayNames.nameOf(resolver) ?: resolver.replaceFirstChar { it.uppercase() }
 }
