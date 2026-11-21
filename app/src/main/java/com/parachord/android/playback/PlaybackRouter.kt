@@ -22,6 +22,8 @@ import com.parachord.android.playback.handlers.SpotifyPlaybackHandler
  * 3. SoundCloud tracks → SoundCloud's embeddable widget (hidden WebView)
  * 4. Bandcamp tracks → Bandcamp's embedded player (hidden WebView)
  * 5. Local files → ExoPlayer with content:// URI
+ * (A plugin-supplied Widevine source, Amazon Music, goes first: ExoPlayer with
+ *  the plugin's DASH manifest and licences, PluginDrmHandler.)
  * 6. Direct streams → ExoPlayer with HTTP URL
  */
 class PlaybackRouter constructor(
@@ -31,6 +33,7 @@ class PlaybackRouter constructor(
     private val bandcampHandler: BandcampPlaybackHandler,
     private val pluginStreamHandler: PluginStreamHandler,
     private val pluginManager: com.parachord.android.plugin.PluginManager,
+    private val pluginDrmHandler: com.parachord.android.playback.drm.PluginDrmHandler,
 ) {
     companion object {
         private const val TAG = "PlaybackRouter"
@@ -56,6 +59,18 @@ class PlaybackRouter constructor(
         // stream:false browser check) read the loaded plugin list; a cold start
         // with no screen yet (Android Auto) must not route on an empty list.
         pluginManager.ensureInitialized()
+
+        // A plugin-supplied Widevine source (capabilities.widevine with both
+        // getPlaybackManifest and relayLicense: Amazon Music) plays through
+        // ExoPlayer with the plugin's manifest and licences. Checked by
+        // capability, ahead of the stream:false check below. Throws
+        // PluginDrmPlaybackException when the plugin refuses the manifest.
+        if (pluginDrmHandler.canHandle(track)) {
+            Log.d(TAG, "Routing '${track.title}' to PluginDrmHandler")
+            val mediaItem = pluginDrmHandler.createMediaItem(track)
+            stopExternalPlayback()
+            return PlaybackAction.ExoPlayerItem(mediaItem)
+        }
 
         // Bandcamp plays in its embed (#513). Ahead of the check below, because
         // bandcamp.axe keeps `stream: false` so older app versions still open the
@@ -112,6 +127,9 @@ class PlaybackRouter constructor(
 
     /** Whether [resolverId]'s plugin declares `capabilities.html5Stream` (the [PluginStreamHandler]'s resolvers). */
     fun isHtml5StreamResolver(resolverId: String?): Boolean = pluginManager.html5StreamPlugin(resolverId) != null
+
+    /** The plugin Widevine engine's handler (messages, refusals). */
+    fun getPluginDrmHandler(): com.parachord.android.playback.drm.PluginDrmHandler = pluginDrmHandler
 
     /** Get the Spotify handler for state observation. */
     fun getSpotifyHandler(): SpotifyPlaybackHandler = spotifyHandler

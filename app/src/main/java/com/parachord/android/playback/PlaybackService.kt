@@ -101,6 +101,8 @@ class PlaybackService : MediaLibraryService() {
     private val metadataService: com.parachord.shared.metadata.MetadataService by inject()
     private val trackResolverCache: com.parachord.android.resolver.TrackResolverCache by inject()
     private val listenAlongManager: ListenAlongManager by inject()
+    private val pluginDrmSessions: com.parachord.android.playback.drm.PluginDrmSessions by inject()
+    private val pluginDrmJs: com.parachord.android.playback.drm.PluginDrmJs by inject()
 
     private var mediaSession: MediaLibrarySession? = null
     private var player: ExoPlayer? = null
@@ -308,8 +310,21 @@ class PlaybackService : MediaLibraryService() {
         val exoPlayer = ExoPlayer.Builder(this)
             .setAudioAttributes(audioAttributes, /* handleAudioFocus= */ true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
+            // Plugin-supplied Widevine streams (capabilities.widevine): a
+            // parachord-drm:// item plays the plugin's DASH manifest with its
+            // licences, and its audio follows Playback Quality. Every other
+            // item takes ExoPlayer's default path and choice, unchanged.
+            .setMediaSourceFactory(
+                com.parachord.android.playback.drm.PluginDrmMediaSourceFactory.create(
+                    this, pluginDrmSessions, pluginDrmJs,
+                    com.parachord.android.net.parachordUserAgent(com.parachord.android.BuildConfig.VERSION_NAME),
+                ),
+            )
+            .setTrackSelector(com.parachord.android.playback.drm.PluginDrmTrackSelector(this, pluginDrmSessions))
             .build()
         player = exoPlayer
+        // Which plugin DRM session the player is on, and the plugin's player events.
+        exoPlayer.addListener(com.parachord.android.playback.drm.PluginDrmTelemetry(exoPlayer, pluginDrmSessions))
         // Registered before the session, so it runs ahead of the session's
         // own listener and PlaybackController's: at a local track's end the
         // service is still in the foreground here.

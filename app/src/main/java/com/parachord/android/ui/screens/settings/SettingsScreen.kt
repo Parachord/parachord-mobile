@@ -278,6 +278,9 @@ fun SettingsScreen(
     val listenBrainzSyncEnabled by viewModel.listenBrainzSyncEnabled.collectAsStateWithLifecycle()
     val appleMusicConnecting by viewModel.appleMusicConnecting.collectAsStateWithLifecycle()
     val persistQueue by viewModel.persistQueue.collectAsStateWithLifecycle()
+    val playbackQuality by viewModel.playbackQuality.collectAsStateWithLifecycle()
+    val playbackAbr by viewModel.playbackAbr.collectAsStateWithLifecycle()
+    val playbackSpatial by viewModel.playbackSpatial.collectAsStateWithLifecycle()
     val libreFmAuthError by viewModel.libreFmAuthError.collectAsStateWithLifecycle()
     val listenBrainzAuthError by viewModel.listenBrainzAuthError.collectAsStateWithLifecycle()
     val disabledMetaProviders by viewModel.disabledMetaProviders.collectAsStateWithLifecycle()
@@ -391,6 +394,12 @@ fun SettingsScreen(
                     onThemeModeChanged = { viewModel.setThemeMode(it) },
                     persistQueue = persistQueue,
                     onPersistQueueChanged = { viewModel.setPersistQueue(it) },
+                    playbackQuality = playbackQuality,
+                    onPlaybackQualityChanged = { viewModel.setPlaybackQuality(it) },
+                    playbackAbr = playbackAbr,
+                    onPlaybackAbrChanged = { viewModel.setPlaybackAbr(it) },
+                    playbackSpatial = playbackSpatial,
+                    onPlaybackSpatialChanged = { viewModel.setPlaybackSpatial(it) },
                 )
                 3 -> AboutTab()
             }
@@ -3355,6 +3364,12 @@ private fun GeneralTab(
     onThemeModeChanged: (String) -> Unit,
     persistQueue: Boolean,
     onPersistQueueChanged: (Boolean) -> Unit,
+    playbackQuality: com.parachord.shared.playback.drm.PlaybackQualityTier,
+    onPlaybackQualityChanged: (com.parachord.shared.playback.drm.PlaybackQualityTier) -> Unit,
+    playbackAbr: Boolean,
+    onPlaybackAbrChanged: (Boolean) -> Unit,
+    playbackSpatial: Boolean,
+    onPlaybackSpatialChanged: (Boolean) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SettingsGroupLabel("Appearance") }
@@ -3391,7 +3406,60 @@ private fun GeneralTab(
                 },
             )
         }
+        // Desktop's Settings → General → Playback Quality (desktop's keys).
+        // Only Amazon Music's stream reads it on Android; Apple Music's
+        // quality isn't Parachord's to set here, so desktop's Apple Music
+        // sentences are left out.
+        item { SettingsGroupLabel("Playback Quality") }
+        item {
+            Text(
+                "Amazon Music uses these settings. Other services choose their own quality.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
+        items(com.parachord.shared.playback.drm.PlaybackQualityTier.ORDERED.size) { i ->
+            val tier = com.parachord.shared.playback.drm.PlaybackQualityTier.ORDERED[i]
+            ListItem(
+                headlineContent = { Text(playbackQualityLabel(tier)) },
+                trailingContent = {
+                    androidx.compose.material3.RadioButton(
+                        selected = playbackQuality == tier,
+                        onClick = { onPlaybackQualityChanged(tier) },
+                    )
+                },
+                modifier = Modifier.clickable { onPlaybackQualityChanged(tier) },
+            )
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("Adjust to your connection") },
+                supportingContent = { Text("Amazon Music only. Lowers quality when your connection is slow, never above the level you chose.") },
+                trailingContent = { Switch(checked = playbackAbr, onCheckedChange = onPlaybackAbrChanged) },
+            )
+        }
+        item {
+            ListItem(
+                headlineContent = { Text("Prefer Dolby Atmos mixes") },
+                supportingContent = {
+                    Text(
+                        "Amazon Music only. Plays the 5.1 core of a track’s Atmos mix when there is one. " +
+                            "This isn’t full Atmos: it’s mixed down on stereo output, and it plays instead of lossless FLAC when quality is Max.",
+                    )
+                },
+                trailingContent = { Switch(checked = playbackSpatial, onCheckedChange = onPlaybackSpatialChanged) },
+            )
+        }
     }
+}
+
+/** Desktop's Playback Quality labels. */
+private fun playbackQualityLabel(tier: com.parachord.shared.playback.drm.PlaybackQualityTier): String = when (tier) {
+    com.parachord.shared.playback.drm.PlaybackQualityTier.MAX -> "Max (best available, lossless where playable)"
+    com.parachord.shared.playback.drm.PlaybackQualityTier.HIGH -> "High (up to 500 kbps)"
+    com.parachord.shared.playback.drm.PlaybackQualityTier.STANDARD -> "Standard (up to 200 kbps)"
+    com.parachord.shared.playback.drm.PlaybackQualityTier.SAVER -> "Data saver (up to 100 kbps)"
 }
 
 // ── Sync Tab ───────────────────────────────────────────────────────

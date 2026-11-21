@@ -111,6 +111,13 @@ class PlaybackController constructor(
 
         /** How long an auto-skip waits before skipping past a track that can't play ([scheduleAutoSkip]). */
         internal const val AUTO_SKIP_DELAY_MS = 600L
+
+        /**
+         * How long a plugin DRM play may take to become audible after its
+         * manifest (licence budget plus the first segments), desktop's
+         * `untilAudible` race. Past it the play hasn't started.
+         */
+        internal const val DRM_START_TIMEOUT_MS = 30_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -375,6 +382,18 @@ class PlaybackController constructor(
         get() = playMutex.isLocked || advanceJob?.isActive == true || playLaunchesPending > 0
 
     private var playLaunchesPending = 0
+
+    /** How a plugin DRM play's start ended ([awaitDrmStart]). */
+    private sealed class DrmStart {
+        object Started : DrmStart()
+        class Failed(val error: androidx.media3.common.PlaybackException) : DrmStart()
+    }
+
+    /** Waiting for a plugin DRM item to play or fail (desktop's untilAudible); null otherwise. Main thread. */
+    private var drmStartWaiter: kotlinx.coroutines.CompletableDeferred<DrmStart>? = null
+
+    /** Plugins whose plan refusal was already explained this session (desktop's `planRefusalExplained`). */
+    private val planRefusalExplained = mutableSetOf<String>()
 
     // ── Spinoff state ──────────────────────────────────────────────────────
     /** Separate pool of resolved similar tracks (NOT in the queue — desktop behavior). */
@@ -1647,6 +1666,11 @@ class PlaybackController constructor(
 
         val action = try {
             router.route(routedTrack)
+        } catch (e: com.parachord.android.playback.drm.PluginDrmPlaybackException) {
+            // The plugin refused the manifest (its plan, sign-in, a budget).
+            stateHolder.update { copy(currentTrack = routedTrack, isPlaying = false, isBuffering = false) }
+            playAfterPluginDrmFailure(routedTrack, e.resolverId, e.error, advancing, sessionId = null)
+            return
         } catch (e: com.parachord.android.playback.handlers.PluginStreamStartException) {
             // An html5Stream plugin's stream couldn't be built for a settings
             // reason (not configured, a wrong password, or an http server on
@@ -1716,6 +1740,17 @@ class PlaybackController constructor(
 
         when (action) {
             is PlaybackAction.ExoPlayerItem -> {
+                val drmSessionId = com.parachord.android.playback.drm.PluginDrmUris.sessionIdOf(
+                    action.mediaItem.localConfiguration?.uri?.toString(),
+                )
+                // The user moved on while the plugin fetched the manifest (a
+                // newer play waits for this one): never a failure, desktop's
+                // superseded rule. The session never reaches the player.
+                if (drmSessionId != null && playLaunchesPending > 1) {
+                    Log.d(TAG, "'${routedTrack.title}': superseded during its manifest fetch")
+                    router.getPluginDrmHandler().closeSession(drmSessionId)
+                    return
+                }
                 if (isExternalPlayback || foregroundHeldForPlay) {
                     if (localPlayKeepsHeldForeground(isAppVisible())) {
                         // No screen showing: dropped here, the foreground
@@ -1750,6 +1785,10 @@ class PlaybackController constructor(
                     /* handleAudioFocus= */ true,
                 )
                 ctrl.stop()
+                // A plugin DRM play waits until it's audible or fails (the
+                // licence comes during load): set before the item goes in.
+                val drmWaiter = if (drmSessionId != null) kotlinx.coroutines.CompletableDeferred<DrmStart>() else null
+                drmStartWaiter = drmWaiter
                 ctrl.setMediaItems(listOf(action.mediaItem), 0, startAtMs)
                 if (startAtMs > 0) {
                     startedAtPositionFor = routedTrack.id
@@ -1768,6 +1807,9 @@ class PlaybackController constructor(
                         shuffleEnabled = snapshot.shuffleEnabled,
                         streamingMetadata = null, // ExoPlayer = no external source mismatch
                     )
+                }
+                if (drmWaiter != null && drmSessionId != null) {
+                    awaitDrmStart(ctrl, drmWaiter, drmSessionId, routedTrack, advancing)
                 }
             }
 
@@ -2046,6 +2088,7 @@ class PlaybackController constructor(
         val ctrl = controller ?: return
         ctrl.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) drmStartWaiter?.complete(DrmStart.Started)
                 if (!isExternalPlayback) {
                     syncState()
                     if (isPlaying) startPositionUpdates() else stopPositionUpdates()
@@ -2056,7 +2099,18 @@ class PlaybackController constructor(
                 if (!isExternalPlayback) syncState()
             }
 
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                // Paused while a plugin DRM play was starting: the person
+                // chose; that's not a play that failed to start.
+                if (!playWhenReady) drmStartWaiter?.complete(DrmStart.Started)
+            }
+
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                // A plugin DRM play still starting: its play handles it
+                // (a licence refusal is a refused source, not a dropped stream).
+                drmStartWaiter?.let { waiter ->
+                    if (waiter.complete(DrmStart.Failed(error))) return
+                }
                 // ExoPlayer's item failed (a local file, a stream; offline, or
                 // the stream dropped). It sits in its error state, where
                 // play() does nothing: Play loads the track again, where it
@@ -3419,6 +3473,145 @@ class PlaybackController constructor(
             advancing = advancing,
         )
         return best.resolver
+    }
+
+    /**
+     * Waits for a plugin DRM item to become audible or fail (desktop's
+     * `untilAudible`), within [DRM_START_TIMEOUT_MS]. A failure goes to
+     * [playAfterPluginDrmFailure]; a start that never comes is a timeout.
+     */
+    private suspend fun awaitDrmStart(
+        ctrl: MediaController,
+        waiter: kotlinx.coroutines.CompletableDeferred<DrmStart>,
+        sessionId: String,
+        track: TrackEntity,
+        advancing: Boolean,
+    ) {
+        val result = kotlinx.coroutines.withTimeoutOrNull(DRM_START_TIMEOUT_MS) { waiter.await() }
+        if (drmStartWaiter === waiter) drmStartWaiter = null
+        when (result) {
+            is DrmStart.Started -> return
+            is DrmStart.Failed -> {
+                val error = router.getPluginDrmHandler().errorFor(sessionId, result.error)
+                Log.w(TAG, "'${track.title}': the DRM stream failed (${result.error.errorCodeName}, ${error.reason})")
+                ctrl.stop()
+                playAfterPluginDrmFailure(track, track.resolver ?: "", error, advancing, sessionId)
+            }
+            null -> {
+                Log.w(TAG, "'${track.title}': the DRM stream didn't start within ${DRM_START_TIMEOUT_MS}ms")
+                ctrl.stop()
+                playFailure = PlayFailure.START_TIMED_OUT
+                stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = PLAY_START_FAILED_MESSAGE) }
+            }
+        }
+    }
+
+    /**
+     * A plugin DRM source failed (desktop's widevine branch catch): a
+     * superseded play is nothing; a per-content refusal for one codec family
+     * drops that family and tries the track once more; a plan or sign-in
+     * refusal notes it (the plugin's status is read again, so a plan limit
+     * lands in "not playing") and, like a build's licence refusal, is a
+     * refused source: another source plays, else the queue moves on when it
+     * was advancing, else the message. Anything else didn't start (Play
+     * loads it again).
+     */
+    private suspend fun playAfterPluginDrmFailure(
+        track: TrackEntity,
+        resolverId: String,
+        error: com.parachord.shared.playback.drm.PluginDrmError,
+        advancing: Boolean,
+        sessionId: String?,
+    ) {
+        val handler = router.getPluginDrmHandler()
+        when (val outcome = com.parachord.shared.playback.drm.pluginDrmOutcome(error)) {
+            com.parachord.shared.playback.drm.PluginDrmOutcome.SUPERSEDED -> {
+                Log.d(TAG, "'${track.title}': the DRM play was superseded")
+                return
+            }
+            com.parachord.shared.playback.drm.PluginDrmOutcome.FAMILY_REFUSED -> {
+                if (sessionId != null && handler.latchRefusedFamily(sessionId)) {
+                    Log.w(TAG, "'${track.title}': $resolverId refused one codec family (${error.denialReason}); trying the next best")
+                    playTrackInternalUnsafe(track, skipReselect = true, advancing = advancing, userRequested = false)
+                    return
+                }
+                startFailedForDrm(track)
+            }
+            com.parachord.shared.playback.drm.PluginDrmOutcome.START_FAILED -> startFailedForDrm(track)
+            com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED,
+            com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN,
+            com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED,
+            -> {
+                if (outcome != com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED) {
+                    handler.noteRefusalLater(resolverId, scope)
+                }
+                val name = handler.serviceName(resolverId)
+                val message = com.parachord.shared.playback.drm.PluginDrmMessages.refused(
+                    outcome, name,
+                    planMessage = if (outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED) error.message else null,
+                )
+                Log.w(TAG, "'${track.title}': $resolverId refused it ($outcome)")
+                val fallback = playFromOtherSource(track, resolverId, advancing)
+                if (fallback != null) {
+                    val toast = if (outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED) {
+                        // Once per plugin per session, as desktop's toast.
+                        if (planRefusalExplained.add(resolverId)) {
+                            com.parachord.shared.playback.drm.PluginDrmMessages.playingVia(
+                                message, com.parachord.shared.playback.resolverDisplayName(fallback),
+                            )
+                        } else {
+                            null
+                        }
+                    } else {
+                        PlaybackMessages.playingViaInstead(name, fallback)
+                    }
+                    toast?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                    return
+                }
+                refusedSourceStopsOrSkips(track, message, advancing)
+            }
+        }
+    }
+
+    /** A plugin DRM play that didn't start: Play loads it again. */
+    private fun startFailedForDrm(track: TrackEntity) {
+        playFailure = PlayFailure.START_FAILED
+        stateHolder.update {
+            copy(
+                currentTrack = currentTrack ?: track,
+                isPlaying = false,
+                isBuffering = false,
+                playbackError = PLAY_START_FAILED_MESSAGE,
+            )
+        }
+    }
+
+    /**
+     * A refused source with nothing else to play it from (the same rule as a
+     * refused embed, [playAfterEmbedRefused]): skipped while the queue moves
+     * on, else it stops with [message] and Play loads it again.
+     */
+    private suspend fun refusedSourceStopsOrSkips(track: TrackEntity, message: String, advancing: Boolean) {
+        playFailure = PlayFailure.EMBED_REFUSED
+        val carConnection = carConnectionForStop()
+        val outcome = unplayableTrackOutcome(
+            PlayFailure.EMBED_REFUSED, advancing, stateHolder.state.value.spinoffMode,
+            refusedMessage = message,
+        ) { carStopsAutoSkip(track, carConnection) }
+        val autoSkip = outcome is UnplayableTrackOutcome.Skip
+        val followed = outcome is UnplayableTrackOutcome.Stop && !outcome.byCar && drivesTrack?.invoke(track) == true
+        if (autoSkip) holdForegroundForAutoSkip(track)
+        stopBeforeFailedTrack(autoSkip, followed)
+        if (followed) holdForListener()
+        if (outcome !is UnplayableTrackOutcome.Stop) {
+            Log.d(TAG, "Auto-skip '${track.title}': its source refused it")
+            stateHolder.update { copy(isPlaying = false, isBuffering = false) }
+            scheduleAutoSkip(track)
+            return
+        }
+        stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = outcome.message) }
+        if (outcome.byCar) return
+        failureNotice = PlaybackNotice(message = outcome.message)
     }
 
     /**

@@ -76,6 +76,12 @@ class PluginManager constructor(
         val hasSignIn: Boolean = false,
         /** The plugin implements `signOut`. */
         val hasSignOut: Boolean = false,
+        /**
+         * The plugin implements BOTH `getPlaybackManifest` and `relayLicense`
+         * (desktop's plugin-supplied Widevine path: checked by presence, both
+         * or neither).
+         */
+        val hasDrmPair: Boolean = false,
     )
 
     /** One `settings.configurable` field of a plugin manifest, rendered by the settings screen. */
@@ -797,6 +803,62 @@ class PluginManager constructor(
         }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    // ── The plugin-supplied Widevine path (capabilities.widevine) ──────
+
+    /**
+     * The loaded plugin behind [resolverId] when it plays through the host's
+     * Widevine engine: `capabilities.widevine` AND both `getPlaybackManifest`
+     * and `relayLicense` (desktop's presence check). Capability-driven, never
+     * by id.
+     */
+    fun widevinePlugin(resolverId: String?): PluginInfo? =
+        resolverId?.let { id ->
+            plugins.value.find { it.id == id && it.capabilities["widevine"] == true && it.hasDrmPair }
+        }
+
+    /**
+     * Opens a DRM session: the bootstrap's `__pcDrm.open` calls the plugin's
+     * `getPlaybackManifest(track, config)` within [budgetMs] and keeps the
+     * plugin's `context` in JS. The raw `{ok, sessionId, manifest, extras}` /
+     * `{ok:false, error}` JSON ([com.parachord.shared.playback.drm.PluginDrmReplies.open]),
+     * or null with no answer. Never log it: the manifest is content.
+     */
+    @OptIn(ExperimentalEncodingApi::class)
+    suspend fun openDrmSession(resolverId: String, trackJson: String, budgetMs: Long): String? {
+        ensureInitialized()
+        val b64 = Base64.encode(trackJson.encodeToByteArray())
+        return pollAsync(
+            "drmo",
+            "await window.__pcDrm.open('${escapeForJs(resolverId)}', JSON.parse(atob('$b64')), $budgetMs)",
+            attempts = ((budgetMs + 3_000) / LOOKUP_POLL_INTERVAL_MS).toInt(),
+        )
+    }
+
+    /** One licence round trip through the plugin's `relayLicense` (`__pcDrm.license`); the raw reply JSON or null. */
+    suspend fun relayDrmLicense(sessionId: String, challengeB64: String, budgetMs: Long): String? {
+        // Base64 only: anything else would be the caller's bug, never sent into JS.
+        if (!Regex("^[A-Za-z0-9+/=]*$").matches(challengeB64)) return null
+        return pollAsync(
+            "drml",
+            "await window.__pcDrm.license('${escapeForJs(sessionId)}', '$challengeB64', $budgetMs)",
+            attempts = ((budgetMs + 3_000) / LOOKUP_POLL_INTERVAL_MS).toInt(),
+        )
+    }
+
+    /** Hands a player event to the session's plugin `handlePlayerEvent` (fire and forget on the JS side). */
+    @OptIn(ExperimentalEncodingApi::class)
+    suspend fun sendDrmPlayerEvent(sessionId: String, eventJson: String) {
+        val b64 = Base64.encode(eventJson.encodeToByteArray())
+        jsRuntime.evaluate(
+            "window.__pcDrm && window.__pcDrm.event('${escapeForJs(sessionId)}', JSON.parse(atob('$b64'))); null",
+        )
+    }
+
+    /** Drops a session's plugin context (`__pcDrm.close`). */
+    suspend fun closeDrmSession(sessionId: String) {
+        jsRuntime.evaluate("window.__pcDrm && window.__pcDrm.close('${escapeForJs(sessionId)}'); null")
+    }
+
     /**
      * One plugin's `isConfigured(config)`: whether its saved config is complete
      * (desktop's rule — an enabled resolver that isn't configured shows as
@@ -969,6 +1031,9 @@ class PluginManager constructor(
                 authType = axe.settings?.authType,
                 hasSignIn = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signIn") == true,
                 hasSignOut = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signOut") == true,
+                hasDrmPair = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.let {
+                    it.containsKey("getPlaybackManifest") && it.containsKey("relayLicense")
+                } == true,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse .axe manifest: ${e.message}", e)
