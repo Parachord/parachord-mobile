@@ -17,6 +17,8 @@ final class PlaylistDetailViewModel {
 
     let playlistId: String
     let title: String
+    /// `weekly-jam` / `weekly-exploration` when the route knew it (the saved name's kind with no header).
+    let contextType: String?
 
     var tracks: [IosPlaylistTrack] = []
     /// The weekly header from the recommendation sections; nil when the page
@@ -32,11 +34,18 @@ final class PlaylistDetailViewModel {
     var saved = false
     var saving = false
     private var savedSub: Cancellable?
+    private var headerSub: Cancellable?
 
-    init(playlistId: String, title: String) {
+    init(playlistId: String, title: String, contextType: String? = nil) {
         self.playlistId = playlistId
         self.title = title
+        self.contextType = contextType
     }
+
+    /// The header line: the shared headline once the header arrives, else the route's title.
+    var headline: String { header?.headline ?? title }
+    /// The playlist's name: the header's label once it arrives (a link passes no title).
+    var displayTitle: String { header?.title ?? title }
 
     func load() async {
         // Start watching saved-state regardless of the early-return below, so a
@@ -46,8 +55,16 @@ final class PlaylistDetailViewModel {
                 self?.saved = yes.boolValue
             }
         }
+        // The header fills in when the recommendation sections first carry
+        // this playlist (at once if they already do), as desktop waits for
+        // its weekly data; a view opened before the page loaded shows the
+        // route's title until then.
+        if headerSub == nil {
+            headerSub = container.watchWeeklyPlaylistHeader(playlistId: playlistId) { [weak self] h in
+                self?.header = h
+            }
+        }
         guard !loaded else { return }
-        header = container.weeklyPlaylistHeader(playlistId: playlistId)
         isLoading = true
         tracks = (try? await container.loadWeeklyPlaylistTracks(playlistId: playlistId)) ?? []
         trackEntities = tracks.map { Self.makeTrack($0) }
@@ -72,7 +89,10 @@ final class PlaylistDetailViewModel {
         let artwork = tracks.compactMap { $0.albumArt }.first { !$0.isEmpty }
         Task {
             _ = try? await container.saveWeeklyPlaylist(
-                playlistId: playlistId, title: title, description: header?.blurb,
+                playlistId: playlistId,
+                // A per-week name: sync merges playlists by name (shared weeklySavedName).
+                title: container.weeklySavedName(playlistId: playlistId, contextType: contextType),
+                description: header?.blurb,
                 artworkUrl: artwork, tracks: trackEntities)
             saving = false
         }
@@ -114,14 +134,14 @@ struct PlaylistDetailView: View {
     /// Observed so badge rows re-render as background resolution lands.
     private var resolverCache = IosTrackResolverCache.shared
 
-    init(playlistId: String, title: String) {
-        _model = State(initialValue: PlaylistDetailViewModel(playlistId: playlistId, title: title))
+    init(playlistId: String, title: String, contextType: String? = nil) {
+        _model = State(initialValue: PlaylistDetailViewModel(playlistId: playlistId, title: title, contextType: contextType))
     }
 
     /// Queue-source context (#209) so the queue panel shows a "Playing from: …"
     /// link back to this playlist.
     private var playlistContext: PlaybackContext {
-        PlaybackContext(type: "playlist", name: model.title, id: model.playlistId)
+        PlaybackContext(type: "playlist", name: model.displayTitle, id: model.playlistId)
     }
 
     /// First 4 distinct track covers for the header mosaic.
@@ -136,7 +156,7 @@ struct PlaylistDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: model.title, leading: .back, onLeading: { dismiss() })
+            PCTopBar(title: model.displayTitle, leading: .back, onLeading: { dismiss() })
             if model.isLoading && !model.loaded {
                 ScrollView { PCSkeletonList(count: 8, art: 44) }
             } else if model.tracks.isEmpty {
@@ -190,7 +210,7 @@ struct PlaylistDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
 
-            Text(model.header?.headline ?? model.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(PC.fg1)
+            Text(model.headline).font(.system(size: 18, weight: .semibold)).foregroundStyle(PC.fg1)
                 .multilineTextAlignment(.center)
             Text("ListenBrainz · \(model.tracks.count) tracks").font(.system(size: 13)).foregroundStyle(PC.fg2)
             if let blurb = model.header?.blurb, !blurb.isEmpty {

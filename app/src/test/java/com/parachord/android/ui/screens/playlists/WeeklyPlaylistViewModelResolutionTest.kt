@@ -19,6 +19,7 @@ import com.parachord.shared.recommendations.WeeklyInfo
 import com.parachord.shared.repository.RecommendationPageState
 import com.parachord.shared.repository.RecommendationsRepository
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -81,6 +82,7 @@ class WeeklyPlaylistViewModelResolutionTest {
 
     private fun buildViewModel(
         page: RecommendationPageState = RecommendationPageState(),
+        pageFlow: MutableStateFlow<RecommendationPageState> = MutableStateFlow(page),
     ): WeeklyPlaylistViewModel {
         weeklyRepo = mockk(relaxed = true)
         libraryRepo = mockk(relaxed = true)
@@ -93,7 +95,7 @@ class WeeklyPlaylistViewModelResolutionTest {
         every { playbackStateHolder.state } returns MutableStateFlow(PlaybackState())
         every { resolverCache.trackResolvers } returns MutableStateFlow(emptyMap())
         recommendationsRepo = mockk(relaxed = true)
-        every { recommendationsRepo.page } returns MutableStateFlow(page)
+        every { recommendationsRepo.page } returns pageFlow
         coEvery { playlistDao.getById(any()) } returns null
         // A non-empty tracklist so the (old) bulk-resolve path would fire.
         coEvery { weeklyRepo.loadPlaylistTracks("pl1") } returns (1..50).map { lbTrack(it) }
@@ -167,5 +169,28 @@ class WeeklyPlaylistViewModelResolutionTest {
         assertEquals("", vm.weekLabel.value)
         assertEquals("", vm.dateLabel.value)
         assertEquals("", vm.description.value)
+    }
+
+    @Test
+    fun `the header fills in once the page carries the playlist`() = runTest(testDispatcher) {
+        val pageFlow = MutableStateFlow(RecommendationPageState())
+        val vm = buildViewModel(pageFlow = pageFlow)
+        advanceUntilIdle()
+        assertEquals("Weekly Jam", vm.title.value)
+
+        pageFlow.value = RecommendationPageState(weeklySections = weeklySections())
+        advanceUntilIdle()
+        assertEquals("Weekly Jams", vm.title.value)
+        assertEquals("Nov 17, 2026", vm.dateLabel.value)
+        assertEquals("Your favorite tracks from the past week, curated by ListenBrainz", vm.description.value)
+    }
+
+    @Test
+    fun `save uses the per-week name`() = runTest(testDispatcher) {
+        val vm = buildViewModel(RecommendationPageState(weeklySections = weeklySections()))
+        advanceUntilIdle()
+        vm.saveToLibrary()
+        advanceUntilIdle()
+        coVerify { libraryRepo.createPlaylistWithTracks(match { it.name == "Weekly Jams · Nov 17, 2026" }, any()) }
     }
 }

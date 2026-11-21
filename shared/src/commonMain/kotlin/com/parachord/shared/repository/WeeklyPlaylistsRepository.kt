@@ -31,10 +31,4 @@ class WeeklyPlaylistsRepository(
             emptyList()
         }
     }
-
-    /** Up to 4 distinct album covers from the playlist's tracks, for the 2x2 mosaic. */
-    suspend fun loadPlaylistCovers(playlistId: String): List<String> {
-        val tracks = loadPlaylistTracks(playlistId)
-        return tracks.mapNotNull { it.albumArt }.distinct().take(4)
-    }
 }

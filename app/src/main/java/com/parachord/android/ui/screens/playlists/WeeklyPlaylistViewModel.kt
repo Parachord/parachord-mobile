@@ -13,8 +13,12 @@ import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.resolver.TrackResolverCache
+import com.parachord.shared.recommendations.WeeklyHeader
 import com.parachord.shared.recommendations.weeklyKindLabel
 import com.parachord.shared.recommendations.weeklyPlaylistHeader
+import com.parachord.shared.recommendations.weeklySavedName
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import com.parachord.shared.repository.RecommendationsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,8 +83,38 @@ class WeeklyPlaylistViewModel constructor(
     val allPlaylists: StateFlow<List<PlaylistEntity>> = libraryRepository.getAllPlaylists()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** The header from the recommendation sections, once the page carries it. */
+    private var header: WeeklyHeader? = null
+
     init {
+        // The header comes from the recommendation sections (desktop's
+        // weeklyHomeEntries). Until the page carries this playlist (opened
+        // from "Playing from" before the page loaded) the kind label shows
+        // alone; the header fills in once it arrives.
+        applyHeader(null)
+        watchHeader()
         loadPlaylist()
+    }
+
+    private fun applyHeader(found: WeeklyHeader?) {
+        header = found
+        val kindLabel = weeklyKindLabel(contextType)
+        _title.value = found?.title ?: kindLabel
+        _weekLabel.value = found?.weekLabel ?: ""
+        _kind.value = kindLabel
+        _dateLabel.value = found?.dateLabel ?: ""
+        _description.value = found?.blurb ?: ""
+    }
+
+    /** Desktop waits for the weekly data: fill the header in when the page first carries it. */
+    private fun watchHeader() {
+        viewModelScope.launch {
+            val found = recommendationsRepository.page
+                .map { weeklyPlaylistHeader(it.weeklySections, playlistId) }
+                .filterNotNull()
+                .first()
+            applyHeader(found)
+        }
     }
 
     private val savedPlaylistId get() = "listenbrainz-$playlistId"
@@ -91,18 +125,6 @@ class WeeklyPlaylistViewModel constructor(
 
             // Check if already saved to library
             _saved.value = playlistDao.getById(savedPlaylistId) != null
-
-            // The header comes from the recommendation sections (desktop's
-            // weeklyHomeEntries). A playlist the page doesn't carry (opened
-            // from a saved queue's Playing from before the page loaded) shows
-            // the kind label alone.
-            val header = weeklyPlaylistHeader(recommendationsRepository.page.value.weeklySections, playlistId)
-            val kindLabel = weeklyKindLabel(contextType)
-            _title.value = header?.title ?: kindLabel
-            _weekLabel.value = header?.weekLabel ?: ""
-            _kind.value = kindLabel
-            _dateLabel.value = header?.dateLabel ?: ""
-            _description.value = header?.blurb ?: ""
 
             // Load tracks
             val lbTracks = weeklyPlaylistsRepository.loadPlaylistTracks(playlistId)
@@ -203,7 +225,8 @@ class WeeklyPlaylistViewModel constructor(
         viewModelScope.launch {
             val playlist = PlaylistEntity(
                 id = savedPlaylistId,
-                name = _title.value,
+                // A per-week name: sync merges playlists by name (weeklySavedName).
+                name = weeklySavedName(header, contextType),
                 description = _description.value,
                 trackCount = trackList.size,
                 artworkUrl = _coverUrls.value.firstOrNull(),

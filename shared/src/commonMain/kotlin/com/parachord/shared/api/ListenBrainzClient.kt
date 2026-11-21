@@ -772,7 +772,7 @@ class ListenBrainzClient(
                 val text = response.bodyAsText().take(200)
                 throw Exception("getUserOwnedPlaylists($userName) failed: HTTP ${response.status.value} $text")
             }
-            val parsed = json.decodeFromString<CreatedForListWire>(response.bodyAsText())
+            val parsed = json.decodeFromString<UserPlaylistListWire>(response.bodyAsText())
             if (expectedTotal < 0) expectedTotal = parsed.playlistCount
             all.addAll(
                 parsed.playlists.mapNotNull { wrapper ->
@@ -1322,13 +1322,13 @@ private fun caaFrontCoverUrl(releaseMbid: String?, caaId: Long?): String? {
 }
 
 @Serializable
-private data class CreatedForListWire(
-    val playlists: List<CreatedForWrapperWire> = emptyList(),
+private data class UserPlaylistListWire(
+    val playlists: List<UserPlaylistWrapperWire> = emptyList(),
     @SerialName("playlist_count") val playlistCount: Int = 0,
 )
 
 @Serializable
-private data class CreatedForWrapperWire(val playlist: PlaylistMetaWire? = null)
+private data class UserPlaylistWrapperWire(val playlist: PlaylistMetaWire? = null)
 
 @Serializable
 private data class PlaylistMetaWire(

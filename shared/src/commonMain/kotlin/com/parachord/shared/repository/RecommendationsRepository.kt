@@ -1,9 +1,6 @@
 package com.parachord.shared.repository
 
 import com.parachord.shared.home.HomeRecsLoad
-import com.parachord.shared.metadata.MetadataService
-import com.parachord.shared.model.RecommendedArtist
-import com.parachord.shared.model.Resource
 import com.parachord.shared.platform.Log
 import com.parachord.shared.platform.currentTimeMillis
 import com.parachord.shared.plugin.PluginNotReadyException
@@ -18,7 +15,6 @@ import com.parachord.shared.recommendations.RecommendationPageSection
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
 import com.parachord.shared.recommendations.RecommendationImages
-import com.parachord.shared.recommendations.SHUFFLEUPAGUS_ID
 import com.parachord.shared.recommendations.SimilarUser
 import com.parachord.shared.recommendations.buildRecommendationPage
 import com.parachord.shared.recommendations.normalizeRecommendationItem
@@ -27,7 +23,6 @@ import com.parachord.shared.recommendations.pageSources
 import com.parachord.shared.recommendations.shuffleupagusSection
 import com.parachord.shared.settings.SettingsStore
 import com.parachord.shared.ui.UiMessages
-import kotlin.concurrent.Volatile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -46,7 +41,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -86,14 +80,11 @@ import kotlinx.serialization.json.JsonPrimitive
  * - **Shuffleupagus:** asked when it has no cached answer; a plain load
  *   doesn't ask again within [AI_RETRY_MS] of the last try (a forced one does).
  *
- * [getRecommendedArtists] keeps Discover's recommended-artists card (both
- * apps) working from the page's Artists row; the Recommendations screens draw
- * [page].
+ * The Recommendations screens draw [page].
  */
 class RecommendationsRepository(
     private val source: RecommendationSource,
     private val settingsStore: SettingsStore,
-    private val metadataService: MetadataService,
     private val aiRecommendations: ShuffleupagusPicks,
     /** Album release dates; the screens ask for the albums they show ([requestReleaseDates]). */
     val releaseDates: ReleaseDates,
@@ -128,15 +119,11 @@ class RecommendationsRepository(
         const val PROVIDER_TIMEOUT_MS = 20_000L
         const val FRESH_MS = 60L * 60 * 1000
         const val STALE_MS = 7L * 24 * 60 * 60 * 1000
-        const val NOT_CONFIGURED_MESSAGE = "Connect Last.fm or ListenBrainz in Settings to get recommendations"
-        /** The old screens' failure text. */
-        const val FAILED_MESSAGE = "Failed to load recommendations"
         /** The page's, desktop's. */
         const val PAGE_FAILED_MESSAGE = "Failed to load recommendations. Please try again."
         const val HERO_FALLBACK = "Personalized picks from your services"
         fun heroFor(username: String?): String =
             username?.takeIf { it.isNotBlank() }?.let { "Personalized picks for $it" } ?: HERO_FALLBACK
-        private const val ARTIST_IMAGE_LOOKUPS = 15
         /** A Shuffleupagus answer is a 30–60 s paid call: with none cached, a plain load waits this long after the last try. */
         const val AI_RETRY_MS = 30L * 60 * 1000
         /** How long [cardShown] gathers cards before asking about them. */
@@ -163,9 +150,6 @@ class RecommendationsRepository(
     private var aiInFlight = false
     /** When Shuffleupagus was last asked; a non-forced load doesn't ask again within [AI_RETRY_MS]. */
     private var lastAiAttemptMs: Long? = null
-
-    /** Photos found for the old Artists list, by lowercased name. */
-    @Volatile private var artistImages: Map<String, String> = emptyMap()
 
     private val _page = MutableStateFlow(RecommendationPageState())
     val page: StateFlow<RecommendationPageState> = _page.asStateFlow()
@@ -259,92 +243,10 @@ class RecommendationsRepository(
         scope.launch { images.requestLookups(items) }
     }
 
-    // ── Discover's recommended-artists card (it reads the Artists row) ──
-
-    val cachedArtistsList: List<RecommendedArtist>?
-        get() = currentArtists().takeIf { it.isNotEmpty() }
-
-    /** The page's Artists row as [RecommendedArtist]s, with photos filled in one by one. */
-    fun getRecommendedArtists(): Flow<Resource<List<RecommendedArtist>>> = flow {
-        ensureDiskLoaded()
-        emit(cachedArtistsList?.let { Resource.Success(it) } ?: Resource.Loading)
-        try {
-            val outcome = loadProviders(false)
-            if (!outcome.legacyConfigured) {
-                emit(Resource.Error(NOT_CONFIGURED_MESSAGE))
-                return@flow
-            }
-            val artists = currentArtists().toMutableList()
-            if (artists.isEmpty()) {
-                emitEmpty(outcome)
-                return@flow
-            }
-            emit(Resource.Success(artists.toList()))
-            for ((index, artist) in artists.withIndex().filter { it.value.imageUrl == null }.take(ARTIST_IMAGE_LOOKUPS)) {
-                val url = try {
-                    metadataService.getArtistInfo(artist.name)?.imageUrl
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                } ?: continue
-                artistImages = artistImages + (artist.name.lowercase().trim() to url)
-                artists[index] = artist.copy(imageUrl = url)
-                emit(Resource.Success(artists.toList()))
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load recommended artists", e)
-            emit(Resource.Error(FAILED_MESSAGE))
-        }
-    }
-
-    private suspend fun <T> kotlinx.coroutines.flow.FlowCollector<Resource<List<T>>>.emitEmpty(outcome: LoadOutcome) {
-        if (outcome.anyFailed) {
-            // A provider couldn't answer: that isn't "nothing to recommend".
-            emit(Resource.Error(FAILED_MESSAGE))
-        } else {
-            emit(Resource.Success(emptyList()))
-            emit(Resource.Error(emptyRecommendationsMessage(outcome.hasListenBrainz, outcome.hasLastFm)))
-        }
-    }
-
-    private fun rowItems(key: String): List<RecommendationItem> =
-        _page.value.sections.flatMap { it.rows }.firstOrNull { it.key == key }?.items.orEmpty()
-
-    /** The old lists show the providers' picks only, never Shuffleupagus's. */
-    private fun legacyRowItems(key: String): List<RecommendationItem> =
-        rowItems(key).filter { item -> (item.sourceIds.ifEmpty { listOfNotNull(item.resolverId) }).any { it != SHUFFLEUPAGUS_ID } }
-
-    private fun currentArtists(): List<RecommendedArtist> {
-        val images = artistImages
-        return legacyRowItems("type:artist").map { item ->
-            RecommendedArtist(
-                name = item.name,
-                imageUrl = item.imageUrl ?: images[item.name.lowercase().trim()],
-                reason = item.reason,
-                source = item.resolverId.orEmpty(),
-            )
-        }
-    }
-
     // ── Loading ──────────────────────────────────────────────────────
 
-    /** What one load found, for the old flows' messages. */
+    /** What one load found: the providers it asked (cache misses), and how many of those couldn't answer. */
     private class LoadOutcome(
-        val configured: Boolean,
-        /**
-         * The old screens' rule: a Last.fm or ListenBrainz username, or a
-         * content provider on. Shuffleupagus doesn't count there: they don't
-         * show its picks, and its "nothing yet" would name a service the user
-         * never connected.
-         */
-        val legacyConfigured: Boolean = configured,
-        val anyFailed: Boolean = false,
-        val hasListenBrainz: Boolean = false,
-        val hasLastFm: Boolean = false,
-        /** Providers this load asked (cache misses), and how many of those couldn't answer. */
         val fetched: Int = 0,
         val failed: Int = 0,
     )
@@ -401,9 +303,8 @@ class RecommendationsRepository(
                 it.copy(loading = false, pendingProviders = emptySet(), listenersPending = false, error = RecommendationsError.NotConfigured, hero = hero)
             }
             rebuild()
-            return LoadOutcome(configured = false)
+            return LoadOutcome()
         }
-        val legacyConfigured = lastFm != null || listenBrainz != null || providers.any { !it.isMetaService }
 
         // A connected service whose plugin isn't loaded (the plugin runtime
         // didn't start) couldn't answer either.
@@ -464,7 +365,7 @@ class RecommendationsRepository(
 
         save()
         val failed = mutex.withLock { run.failed } + missing
-        val outcome = LoadOutcome(configured = true, legacyConfigured = legacyConfigured, anyFailed = failed > 0, hasListenBrainz = listenBrainz != null, hasLastFm = lastFm != null, fetched = toFetch.size + missing, failed = failed)
+        val outcome = LoadOutcome(fetched = toFetch.size + missing, failed = failed)
         if (!isLatest(run)) return outcome
 
         val anySections = mutex.withLock { shown.any { it.sections.isNotEmpty() } }

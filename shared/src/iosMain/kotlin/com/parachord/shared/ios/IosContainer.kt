@@ -149,6 +149,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -2024,12 +2025,6 @@ class IosContainer private constructor() {
         RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(pluginManager),
             settingsStore = settingsStore,
-            // Spotify-free: RecommendationsRepository's only MetadataService use
-            // is getArtistInfo per recommended artist (artist images/bios) — a
-            // ~15-artist Spotify-search burst on the shared key. Tracks come
-            // from ListenBrainz, not metadata, so this costs nothing (artist
-            // images already came from Last.fm/MusicBrainz, not Spotify).
-            metadataService = enrichMetadataService,
             aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(aiRecommendationService, settingsStore),
             releaseDates = com.parachord.shared.recommendations.ReleaseDates(
                 load = { IosFileCache.read("release_dates_cache.json") },
@@ -2472,9 +2467,6 @@ class IosContainer private constructor() {
     // (architecture realignment, plan 2026-06-12).
     fun freshDropsFlow(): Flow<Any> =
         freshDropsRepository.getFreshDrops(false).forDisplay()
-
-    fun recommendedArtistsFlow(): Flow<Any> =
-        recommendationsRepository.getRecommendedArtists().forDisplay()
 
     /**
      * What a screen watching a repository flow shows, for Swift: each list as
@@ -3624,29 +3616,54 @@ class IosContainer private constructor() {
         WeeklyPlaylistsRepository(listenBrainzClient = listenBrainzClient)
     }
 
+    /** The shared header of [playlistId] from the recommendation sections, or null. Never throws. */
+    private fun currentWeeklyHeader(playlistId: String): com.parachord.shared.recommendations.WeeklyHeader? = try {
+        com.parachord.shared.recommendations.weeklyPlaylistHeader(
+            recommendationsRepository.page.value.weeklySections, playlistId,
+        )
+    } catch (e: Exception) {
+        Log.w("IosContainer", "weeklyPlaylistHeader($playlistId) failed: ${e.message}")
+        null
+    }
+
+    private fun com.parachord.shared.recommendations.WeeklyHeader.toIos(): IosWeeklyHeader {
+        val kind = com.parachord.shared.recommendations.weeklyKindLabel(contextType)
+        return IosWeeklyHeader(
+            id = id,
+            title = title,
+            weekLabel = weekLabel,
+            kind = kind,
+            headline = com.parachord.shared.recommendations.weeklyHeadline(kind, dateLabel),
+            blurb = blurb,
+        )
+    }
+
     /**
      * The weekly playlist [playlistId]'s header from the recommendation
      * sections (shared [weeklyPlaylistHeader], desktop's `weeklyHomeEntries`),
      * or null when the page doesn't carry it. Never throws.
      */
-    fun weeklyPlaylistHeader(playlistId: String): IosWeeklyHeader? = try {
-        com.parachord.shared.recommendations.weeklyPlaylistHeader(
-            recommendationsRepository.page.value.weeklySections, playlistId,
-        )?.let {
-            val kind = com.parachord.shared.recommendations.weeklyKindLabel(it.contextType)
-            IosWeeklyHeader(
-                id = it.id,
-                title = it.title,
-                weekLabel = it.weekLabel,
-                kind = kind,
-                headline = com.parachord.shared.recommendations.weeklyHeadline(kind, it.dateLabel),
-                blurb = it.blurb,
-            )
-        }
-    } catch (e: Exception) {
-        Log.w("IosContainer", "weeklyPlaylistHeader($playlistId) failed: ${e.message}")
-        null
-    }
+    fun weeklyPlaylistHeader(playlistId: String): IosWeeklyHeader? = currentWeeklyHeader(playlistId)?.toIos()
+
+    /**
+     * Calls [onHeader] once, when the recommendation sections first carry
+     * [playlistId] (at once if they already do). Desktop waits for the weekly
+     * data the same way; a view opened before the page loaded fills in then.
+     */
+    fun watchWeeklyPlaylistHeader(playlistId: String, onHeader: (IosWeeklyHeader) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(
+            recommendationsRepository.page
+                .mapNotNull { com.parachord.shared.recommendations.weeklyPlaylistHeader(it.weeklySections, playlistId) }
+                .take(1)
+                .map { it.toIos() },
+        ) { (it as? IosWeeklyHeader)?.let(onHeader) }
+
+    /**
+     * The name Save gives this week's copy (shared [weeklySavedName]: label
+     * and date, so weeks never share a name sync could merge by). Never throws.
+     */
+    fun weeklySavedName(playlistId: String, contextType: String?): String =
+        com.parachord.shared.recommendations.weeklySavedName(currentWeeklyHeader(playlistId), contextType)
 
     /**
      * Load the tracks of a single weekly playlist (by MBID), flattened

@@ -1,5 +1,7 @@
 package com.parachord.shared.recommendations
 
+import kotlinx.datetime.todayIn
+
 /*
  * A weekly playlist's header (Weekly Jams / Weekly Exploration), built from the
  * recommendation sections. A port of desktop's `weeklyHomeEntries`
@@ -77,6 +79,37 @@ fun weeklyKindLabel(contextType: String): String =
 /** The header's first line: "Weekly Jam · Jun 15, 2026", or the kind alone with no date. */
 fun weeklyHeadline(kind: String, dateLabel: String): String =
     if (dateLabel.isNotEmpty()) "$kind · $dateLabel" else kind
+
+/**
+ * The name a saved weekly playlist gets: "<label> · <date>", e.g.
+ * "Weekly Jams · Nov 17, 2026". Each week's copy gets its own name, since sync
+ * matches playlists by name (cross-provider name match, the push's name dedup
+ * and the duplicate merge), and a name shared across weeks, or with the
+ * user's own "Weekly Jams" on a service, could be merged with it. The date
+ * comes before the week label: "This Week" is relative and repeats every
+ * week. With no header (the page never carried the playlist) it's
+ * "<kind> · <today>"; a [contextType] that isn't a weekly kind (unknown on a
+ * link) gives "Weekly playlist". Never empty, never the bare kind label.
+ *
+ * Desktop saves under the plain label; mobile differs because its sync
+ * merges by name.
+ */
+fun weeklySavedName(header: WeeklyHeader?, contextType: String?, todayIso: String = todayIsoDate()): String {
+    val type = header?.contextType ?: contextType
+    val kind = if (type != null && type in WEEKLY_DESCRIPTIONS) weeklyKindLabel(type) else WEEKLY_PLAYLIST_LABEL
+    val today = weeklyDateLabel(todayIso).ifEmpty { todayIso }
+    if (header == null) return "$kind · $today"
+    val label = header.title.trim().ifEmpty { kind }
+    val stamp = header.dateLabel.ifEmpty { header.weekLabel.trim() }.ifEmpty { today }
+    return "$label · $stamp"
+}
+
+/** [weeklySavedName]'s kind when the playlist's kind isn't known. */
+const val WEEKLY_PLAYLIST_LABEL = "Weekly playlist"
+
+/** Today's date (device time zone) as `YYYY-MM-DD`. */
+fun todayIsoDate(): String =
+    kotlinx.datetime.Clock.System.todayIn(kotlinx.datetime.TimeZone.currentSystemDefault()).toString()
 
 private val MONTHS = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 

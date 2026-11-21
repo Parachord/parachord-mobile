@@ -3,14 +3,6 @@ package com.parachord.shared.model
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class RecommendedArtist(
-    val name: String,
-    val imageUrl: String? = null,
-    val reason: String? = null,
-    val source: String = "",
-)
-
-@Serializable
 data class RecommendedTrack(
     val title: String,
     val artist: String,

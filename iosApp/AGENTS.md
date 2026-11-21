@@ -252,8 +252,8 @@ container's flows kept only `Resource.Success`, so a failed load left a screen
 spinning forever or showing a misleading empty state ("Set your Last.fm
 username" for every History failure).
 
-- **Flows** (`criticsPicksFlow`, `freshDropsFlow`,
-  `recommendedArtistsFlow`, `concertsFlow`) go through `forDisplay()`: each list
+- **Flows** (`criticsPicksFlow`, `freshDropsFlow`, `concertsFlow`) go
+  through `forDisplay()`: each list
   as it lands, and the `Resource.Error` itself (Swift: `v as? ResourceError`,
   `.message`) when the load failed with nothing to show.
 - **Suspend loaders** (`loadTop*`, `loadRecentTracks`, `getFriendTop*`,
@@ -1642,10 +1642,12 @@ lives in Swift: the screens draw what the page says.
 - **Files:** `HomeScreen.swift` (the frame, routes, sections in order),
   `HomeModel.swift`, `HomeHeader.swift`, `HomeJumpBackIn.swift`,
   `HomeRows.swift`, `HomeLowerSections.swift`, `HomeGettingStarted.swift`.
-  A weekly playlist (`PCRoute.playlist`) opens `PlaylistDetailView`, whose
+  A weekly playlist (`PCRoute.playlist`) opens `PlaylistDetailView`. Its
   header comes from the recommendation sections
-  (`IosContainer.weeklyPlaylistHeader`, the shared `weeklyPlaylistHeader`)
-  and whose tracks come from `WeeklyPlaylistsRepository.loadPlaylistTracks`.
+  (`IosContainer.watchWeeklyPlaylistHeader`, the shared `weeklyPlaylistHeader`)
+  and fills in once the page carries the playlist; its tracks come from
+  `WeeklyPlaylistsRepository.loadPlaylistTracks`; Save names the copy per
+  week (`IosContainer.weeklySavedName`, the shared `weeklySavedName`).
 
 Root `CLAUDE.md` → "Home — the shared model, drawn on both apps".
 

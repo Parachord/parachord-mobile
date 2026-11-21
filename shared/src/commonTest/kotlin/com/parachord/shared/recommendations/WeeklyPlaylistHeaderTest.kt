@@ -3,6 +3,7 @@ package com.parachord.shared.recommendations
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /** Desktop's `weeklyHomeEntries` vectors, as the weekly view's header reads them. */
 class WeeklyPlaylistHeaderTest {
@@ -140,5 +141,62 @@ class WeeklyPlaylistHeaderTest {
     fun `weeklyDateLabel returns empty for blank or unparseable input`() {
         assertEquals("", weeklyDateLabel(""))
         assertEquals("", weeklyDateLabel("not-a-date"))
+    }
+
+    private fun header(title: String = "Weekly Jams", weekLabel: String = "This Week", dateLabel: String = "Nov 17, 2026") =
+        WeeklyHeader("jam1", "weekly-jam", title, weekLabel, "blurb", "2026-11-17", dateLabel)
+
+    @Test
+    fun `a saved weekly playlist is named by its label and date`() {
+        assertEquals("Weekly Jams · Nov 17, 2026", weeklySavedName(header(), "weekly-jam", "2026-11-21"))
+    }
+
+    @Test
+    fun `two weeks of one playlist save under different names`() {
+        val thisWeek = weeklySavedName(header(dateLabel = "Nov 17, 2026"), "weekly-jam", "2026-11-21")
+        val lastWeek = weeklySavedName(header(weekLabel = "Last Week", dateLabel = "Nov 10, 2026"), "weekly-jam", "2026-11-21")
+        assertTrue(thisWeek != lastWeek)
+    }
+
+    @Test
+    fun `with no date the week label names it`() {
+        assertEquals("Weekly Jams · This Week", weeklySavedName(header(dateLabel = ""), "weekly-jam", "2026-11-21"))
+    }
+
+    @Test
+    fun `with no date or week label today names it`() {
+        assertEquals("Weekly Jams · Nov 21, 2026", weeklySavedName(header(weekLabel = " ", dateLabel = ""), "weekly-jam", "2026-11-21"))
+    }
+
+    @Test
+    fun `an empty label falls back to the kind`() {
+        assertEquals("Weekly Jam · Nov 17, 2026", weeklySavedName(header(title = "  "), "weekly-jam", "2026-11-21"))
+    }
+
+    @Test
+    fun `with no header the kind and today name it`() {
+        assertEquals("Weekly Jam · Nov 21, 2026", weeklySavedName(null, "weekly-jam", "2026-11-21"))
+        assertEquals("Weekly Exploration · Nov 21, 2026", weeklySavedName(null, "weekly-exploration", "2026-11-21"))
+    }
+
+    @Test
+    fun `with no header and no known kind the name is generic`() {
+        assertEquals("Weekly playlist · Nov 21, 2026", weeklySavedName(null, null, "2026-11-21"))
+        assertEquals("Weekly playlist · Nov 21, 2026", weeklySavedName(null, "playlist", "2026-11-21"))
+    }
+
+    @Test
+    fun `the saved name is never the bare kind label or empty`() {
+        for (name in listOf(
+            weeklySavedName(null, "weekly-jam", "2026-11-21"),
+            weeklySavedName(header(title = "", weekLabel = "", dateLabel = ""), "weekly-jam", "2026-11-21"),
+        )) {
+            assertTrue(name.isNotBlank() && name != "Weekly Jam" && name != "Weekly Exploration", name)
+        }
+    }
+
+    @Test
+    fun `todayIsoDate is an ISO date`() {
+        assertTrue(Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$").matches(todayIsoDate()), todayIsoDate())
     }
 }
