@@ -166,7 +166,7 @@ struct HomePlaylistsRow: View {
                             onOpen: { onOpen(card) },
                             onPlay: { onPlay(card) }
                         ) {
-                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: [], size: pcRecCardWidth)
+                            pcCover(card.imageUrl, seed: card.name, size: pcRecCardWidth, radius: CGFloat(DesignTokens.shared.RADIUS_ART))
                         }
                         .contextMenu { menu(card) }
                     }
