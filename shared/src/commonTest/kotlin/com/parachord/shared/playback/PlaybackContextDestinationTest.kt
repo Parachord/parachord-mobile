@@ -43,4 +43,24 @@ class PlaybackContextDestinationTest {
         assertNull(playbackContextDestination(PlaybackContext("spinoff", "Spinoff from X")))
         assertNull(playbackContextDestination(PlaybackContext(LISTEN_ALONG_CONTEXT, "Bob", "x")))
     }
+
+    @Test
+    fun `Recent Loves opens Collection's songs sorted Recently Added`() {
+        assertEquals(
+            ContextDestination.Collection(recentLoves = true),
+            playbackContextDestination(PlaybackContext(com.parachord.shared.home.LOVES_CONTEXT, "Recent Loves")),
+        )
+    }
+
+    @Test
+    fun `Collection Radio opens Collection's songs in the user's sort`() {
+        assertEquals(
+            ContextDestination.Collection(recentLoves = false),
+            playbackContextDestination(PlaybackContext(com.parachord.shared.home.COLLECTION_CONTEXT, "Collection Radio")),
+        )
+        assertEquals(
+            ContextDestination.Collection(recentLoves = false),
+            playbackContextDestination(PlaybackContext("collection", "Loved Songs")),
+        )
+    }
 }

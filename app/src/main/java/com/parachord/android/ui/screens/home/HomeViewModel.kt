@@ -9,7 +9,6 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.store.SettingsStore
-import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.shared.car.CarBrowse
 import com.parachord.shared.car.CarIds
@@ -32,7 +31,6 @@ import com.parachord.shared.home.halfCardArtKey
 import com.parachord.shared.home.jumpTilesArt
 import com.parachord.shared.home.jumpTileKey
 import com.parachord.shared.home.jumpTileContext
-import com.parachord.shared.home.PLAYLIST_CONTEXT
 import com.parachord.shared.metadata.ImageEnrichmentService
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -195,9 +193,11 @@ class HomeViewModel(
         viewModelScope.launch {
             guard(what) {
                 when (val q = queue()) {
-                    is HomeQueue.Play ->
-                        if (q.shuffle == null) playbackController.playQueue(q.tracks, 0, q.context)
-                        else playbackController.playQueue(q.tracks, 0, q.context, q.shuffle!!)
+                    is HomeQueue.Play -> {
+                        val shuffle = q.shuffle
+                        if (shuffle == null) playbackController.playQueue(q.tracks, 0, q.context)
+                        else playbackController.playQueue(q.tracks, 0, q.context, shuffle)
+                    }
                     is HomeQueue.Failed -> _toastEvents.trySend(q.message)
                     HomeQueue.Empty -> Unit
                 }
@@ -206,7 +206,7 @@ class HomeViewModel(
     }
 
     /** "Play Collection Radio": the car's Collection Radio (every track row, shuffled). */
-    fun playCollectionRadio() = play("Collection Radio") { queues.collectionRadio() }
+    fun playCollectionRadio() = play(HomeCopy.COLLECTION_RADIO) { queues.collectionRadio() }
 
     /** A Jump back in tile, under its shared context ([jumpTileContext]), so its active check sees it. */
     fun playTile(tile: JumpTile) = play("tile") { queues.tile(tile) }

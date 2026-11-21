@@ -279,8 +279,10 @@ Where iOS shows these: Fresh Drops, Critical
 Darlings, Concerts (the repository's message, no retry, as Android), History
 and a friend's profile (per tab: `couldntReach(service)` with Try again on every tab, as Android),
 an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
-throttle line instead of "No results"), Home's Pop of the Tops ("Couldn’t load" with Try again, not the provider's
-message), Settings (an invalid ListenBrainz token is refused, not saved), Sync
+throttle line instead of "No results"), Home's Pop of the Tops half
+("Couldn’t load Pop of the Tops" with Try again, rather than the provider's message),
+a Home tap whose tracks couldn't load ("Could not load <name>", from the shared
+`HomeQueues`), Settings (an invalid ListenBrainz token is refused, not saved), Sync
 now (the run's notices after a successful sync), deleting a playlist Apple
 Music can't delete (a banner; the playlists list and the playlist screen use
 the same `DeletePlaylistSheet`, which also deletes the copies on the services
@@ -1607,6 +1609,19 @@ lives in Swift: the screens draw what the page says.
   `HomeModel.play` hands it to `coordinator.setQueue`. **`shuffle == false`
   means keep the current shuffle setting**, so it is passed as `nil`, never as
   `false`. A queue with no tracks shows its message as a coordinator notice.
+  A load that throws comes back as that message too ("Could not load <name>",
+  `HomeQueue.Failed` from the shared `HomeQueues`); `IosHomeSession.run`'s own
+  catch is only a last resort.
+- **"Playing from" on a Home queue.** A Recent Loves queue (`loves`) opens the
+  Collection tab on Songs sorted Recently Added for that visit, the path the
+  Recent Loves tile takes (`collectionPendingTrackSort` →
+  `CollectionModel.applyLinkTrackSort`); a Collection Radio queue
+  (`collection`) opens Songs in the person's own sort. Both come from the shared
+  `playbackContextDestination` (`ContextDestination.Collection`), read through
+  `pcCollectionDestination`, as Android's Now Playing reads it.
+- **The Ask example rephrases once per Home entry** (`HomeModel.enterHome`).
+  A tab switch or a re-tap of Home builds a new `HomeScreen` and model, so it
+  counts; Settings presented over Home and dismissed again doesn't.
 - **Ask's field is held in `HomeModel`** (`AskField`), not in the view, so a
   return from a pushed page keeps what was typed. A sent prompt goes through
   `pcAskShuffleupagus` (`IosContainer.askShuffleupagus`), which queues it with

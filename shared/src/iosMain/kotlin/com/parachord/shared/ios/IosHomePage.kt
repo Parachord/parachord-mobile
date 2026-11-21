@@ -710,8 +710,13 @@ class IosHomeSession internal constructor(
     }
 
     /** "Play Collection Radio". */
-    suspend fun collectionRadio(): IosHomeQueue = run("Collection Radio") { queues.collectionRadio() }
+    suspend fun collectionRadio(): IosHomeQueue = run(HomeCopy.COLLECTION_RADIO) { queues.collectionRadio() }
 
+    /**
+     * Flattens a shared [HomeQueue] for Swift. The shared [HomeQueues] already turns a
+     * load that throws into its "Could not load" failure; the catch here is only a last
+     * resort, since a bridged suspend must never throw into Swift.
+     */
     private suspend fun run(name: String, block: suspend () -> HomeQueue): IosHomeQueue = try {
         when (val q = block()) {
             is HomeQueue.Play -> IosHomeQueue(q.tracks, q.context, q.shuffle == true, null)

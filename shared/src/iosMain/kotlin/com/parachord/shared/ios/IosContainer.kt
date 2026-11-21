@@ -1640,10 +1640,12 @@ class IosContainer private constructor() {
         }
         return when (parentId) {
             com.parachord.shared.car.CarIds.LOVED ->
-                com.parachord.shared.playback.PlaybackContext(type = "collection", name = "Loved Songs")
+                com.parachord.shared.playback.PlaybackContext(type = com.parachord.shared.home.COLLECTION_CONTEXT, name = "Loved Songs")
             // Collection Radio is the root's only playable row.
             com.parachord.shared.car.CarIds.ROOT ->
-                com.parachord.shared.playback.PlaybackContext(type = "collection", name = "Collection Radio")
+                com.parachord.shared.playback.PlaybackContext(
+                    type = com.parachord.shared.home.COLLECTION_CONTEXT, name = com.parachord.shared.home.HomeCopy.COLLECTION_RADIO,
+                )
             else -> com.parachord.shared.playback.PlaybackContext(type = "carplay", name = title)
         }
     }
@@ -2157,8 +2159,9 @@ class IosContainer private constructor() {
     private val homeQueues: com.parachord.shared.home.HomeQueues by lazy {
         com.parachord.shared.home.HomeQueues(
             lovedTracks = {
+                // Home's own collection flow (Android's view model reads the same one).
                 com.parachord.shared.repository.recentLoves(
-                    libraryRepository.getAllTracks().first(), com.parachord.shared.home.HOME_RECENT_LOVES,
+                    homeSources.collectionTracks.first(), com.parachord.shared.home.HOME_RECENT_LOVES,
                 )
             },
             playlistTracks = { id ->

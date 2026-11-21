@@ -101,6 +101,8 @@ fun NowPlayingScreen(
     onNavigateToPlaylist: (playlistId: String) -> Unit = {},
     /** An unsaved service playlist's view, by link and name (a recommended playlist's queue). */
     onNavigateToServicePlaylist: (url: String, name: String) -> Unit = { _, _ -> },
+    /** Collection's songs; [recentLoves] sorts them Recently Added (a Recent Loves queue). */
+    onNavigateToCollection: (recentLoves: Boolean) -> Unit = {},
     listenAlongFriend: FriendEntity? = null,
     onStopListenAlong: () -> Unit = {},
     /** The user's suspended queue while listening along — shown dimmed as "YOUR
@@ -204,6 +206,7 @@ fun NowPlayingScreen(
                         is ContextDestination.Artist -> onNavigateToArtist(dest.name)
                         is ContextDestination.Playlist -> onNavigateToPlaylist(dest.id)
                         is ContextDestination.ServicePlaylist -> onNavigateToServicePlaylist(dest.url, dest.name)
+                        is ContextDestination.Collection -> onNavigateToCollection(dest.recentLoves)
                         null -> {}
                     }
                 },

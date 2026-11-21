@@ -155,6 +155,7 @@ object HomeCopy {
 
     const val PLAY_COLLECTION_RADIO = "Play Collection Radio"
     const val RECENT_LOVES = "Recent Loves"
+    const val COLLECTION_RADIO = "Collection Radio"
     const val TICKETS = "Tickets"
     const val VENUE_TBA = "Venue TBA"
     const val SET_UP_SHUFFLEUPAGUS = "Set up Shuffleupagus"

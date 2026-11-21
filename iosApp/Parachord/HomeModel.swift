@@ -13,6 +13,11 @@ final class HomeModel {
     @ObservationIgnored let session = IosContainer.companion.shared.homeSession
     @ObservationIgnored private let watcher = FlowWatcher(scope: IosContainer.companion.shared.appScope)
     @ObservationIgnored private var pageSub: Cancellable?
+    /// Whether this Home entry has been counted. A model belongs to one
+    /// `HomeScreen`, which a tab switch or a re-tap of Home recreates, so a
+    /// new entry gets a new model; presenting Settings over Home (which runs
+    /// the screen's `.task` again on dismiss) is the same entry.
+    @ObservationIgnored private var entered = false
 
     var page: IosHomePage?
     /// Ask's field, kept here so a return from a pushed page keeps what was typed.
@@ -25,6 +30,13 @@ final class HomeModel {
             guard let p = v as? IosHomePage else { return }
             Task { @MainActor in self?.page = p }
         }
+    }
+
+    /// A fresh entry into Home: a new phrasing for the Ask example, once per entry.
+    func enterHome() {
+        guard !entered else { return }
+        entered = true
+        session.enteredHome()
     }
 
     /// Stops the watch (the view went away).

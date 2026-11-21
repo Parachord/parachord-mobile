@@ -126,20 +126,7 @@ struct ContentView: View {
                         tab = .home
                         homePendingRoute = .album(title: title, artist: artist)
                     },
-                    // Queue-source banner (#209) → open the source page. Pushable
-                    // pages go on the Home stack; Collection is a tab, so switch to it.
-                    onNavigateToContext: { ctx in
-                        if ctx.type == "collection" {
-                            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
-                            collectionPendingTab = .songs   // land on Songs, not the default Artists
-                            tab = .collection
-                            return
-                        }
-                        guard let route = pcRouteForContext(ctx) else { return }
-                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
-                        tab = .home
-                        homePendingRoute = route
-                    }
+                    onNavigateToContext: { ctx in openPlaybackContext(ctx) }
                 )
                 // NOTE: do NOT add .ignoresSafeArea() here — the content must
                 // respect the top safe area (status bar / Dynamic Island). The
@@ -628,6 +615,24 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 2_600_000_000)
             if dlToast == shown { withAnimation(.easeInOut(duration: 0.25)) { dlToast = nil } }
         }
+    }
+
+    /// Queue-source banner (#209) → the source page. Pushable pages go on the
+    /// Home stack; Collection is a tab, so switch to it.
+    private func openPlaybackContext(_ ctx: PlaybackContext) {
+        // Collection Radio and Recent Loves open Collection's songs; Recent
+        // Loves sorted Recently Added once, as Home's tile does (shared destination).
+        if let dest = pcCollectionDestination(ctx) {
+            withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+            collectionPendingTab = .songs   // land on Songs, not the default Artists
+            if dest.recentLoves { collectionPendingTrackSort = TrackSort.recent }
+            tab = .collection
+            return
+        }
+        guard let route = pcRouteForContext(ctx) else { return }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
+        tab = .home
+        homePendingRoute = route
     }
 
     private func handleSidebar(_ id: String) {

@@ -42,7 +42,7 @@ enum PCRoute: Hashable {
 /// (set in AlbumScreen.albumContext). Returns nil for types with no iOS page
 /// (listen-along / spinoff / unknown).
 func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
-    // Album, artist, playlist and service-playlist contexts open where the
+    // Album, artist, playlist, service-playlist and collection contexts open where the
     // shared `playbackContextDestination` says (Android's Now Playing asks it too).
     if let dest = PlaybackContextKt.playbackContextDestination(ctx: ctx) {
         switch dest {
@@ -54,6 +54,7 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
             return .playlist(id: playlist.id, title: ctx.name)
         case let sp as ContextDestination.ServicePlaylist:
             return .servicePlaylist(url: sp.url, name: ctx.name, source: "", image: nil)
+        // Collection is a tab, not a pushed page: see pcCollectionDestination.
         default:
             return nil
         }
@@ -75,11 +76,19 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
     }
 }
 
+/// Where a queue-source context opens in the Collection tab, from the shared
+/// `playbackContextDestination`: Collection's songs, sorted Recently Added once
+/// for a Recent Loves queue (`recentLoves`), as Home's Recent Loves tile opens
+/// them. Nil when the context opens a pushed page or nothing.
+func pcCollectionDestination(_ ctx: PlaybackContext) -> ContextDestination.Collection? {
+    PlaybackContextKt.playbackContextDestination(ctx: ctx) as? ContextDestination.Collection
+}
+
 /// Whether a queue-source context links anywhere on iOS — a pushable page
 /// (pcRouteForContext) OR the Collection tab (which is a tab, not a route, so
 /// the shell switches to it rather than pushing). #209.
 func pcContextIsNavigable(_ ctx: PlaybackContext) -> Bool {
-    pcRouteForContext(ctx) != nil || ctx.type == "collection"
+    pcRouteForContext(ctx) != nil || pcCollectionDestination(ctx) != nil
 }
 
 @ViewBuilder
@@ -170,8 +179,9 @@ struct HomeScreen: View {
             if let route { path = [route]; pendingRoute = nil }
         }
         // The view's creation (a tab switch or a re-tap recreates it), not a
-        // return from a pushed page: a new phrasing for the Ask example.
-        .task { home.start(); session.enteredHome() }
+        // return from a pushed page or from Settings presented over Home: a new
+        // phrasing for the Ask example (`enterHome` counts each entry once).
+        .task { home.start(); home.enterHome() }
         .task { reauth.start() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {

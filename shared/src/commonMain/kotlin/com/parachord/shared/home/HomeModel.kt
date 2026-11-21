@@ -12,6 +12,8 @@ const val PLAYLIST_CONTEXT = "playlist"
 const val LOVES_CONTEXT = "loves"
 const val MIX_CONTEXT = "mix"
 const val ALBUM_CONTEXT = "album"
+/** The collection (Collection Radio, the car's Loved Songs, Collection's own Play). */
+const val COLLECTION_CONTEXT = "collection"
 
 /** What is playing and what is queued, by playback context. */
 data class ActiveContexts(val playing: PlaybackContext? = null, val queued: PlaybackContext? = null)

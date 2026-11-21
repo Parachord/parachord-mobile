@@ -340,6 +340,15 @@ fun ParachordNavHost(
                 onNavigateToServicePlaylist = { url, name ->
                     navController.navigate(Routes.servicePlaylist(url, name, sourceName = "", imageUrl = null))
                 },
+                // A Recent Loves queue opens Collection's songs Recently Added, as Home's tile does.
+                onNavigateToCollection = { recentLoves ->
+                    navController.navigate(
+                        Routes.collection(
+                            COLLECTION_SONGS_TAB,
+                            if (recentLoves) com.parachord.shared.library.TrackSort.RECENT.name else null,
+                        ),
+                    )
+                },
                 listenAlongFriend = listenAlongFriend,
                 onStopListenAlong = onStopListenAlong,
                 suspendedQueue = listenAlongSuspendedQueue,

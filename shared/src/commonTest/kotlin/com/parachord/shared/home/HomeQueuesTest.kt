@@ -16,12 +16,12 @@ class HomeQueuesTest {
 
     private fun queues(
         loves: List<Track> = emptyList(),
-        playlist: List<Track> = emptyList(),
+        playlist: suspend (String) -> List<Track> = { emptyList() },
         mixTracks: suspend (String) -> List<Track> = { emptyList() },
         radio: CarPlayRequest? = null,
     ) = HomeQueues(
         lovedTracks = { loves },
-        playlistTracks = { playlist },
+        playlistTracks = playlist,
         mixTracks = mixTracks,
         catalogQueues = CatalogQueues(MetadataService(emptyList(), { emptySet() })),
         collectionRadio = { radio },
@@ -58,7 +58,38 @@ class HomeQueuesTest {
     @Test
     fun `collection radio shuffles by default`() = runTest {
         val r = queues(radio = CarPlayRequest(listOf(track("a")), 0, null)).collectionRadio()
-        assertEquals(HomeQueue.Play(listOf(track("a")), PlaybackContext("collection", "Collection Radio"), shuffle = true), r)
+        assertEquals(HomeQueue.Play(listOf(track("a")), PlaybackContext(COLLECTION_CONTEXT, HomeCopy.COLLECTION_RADIO), shuffle = true), r)
         assertIs<HomeQueue.Empty>(queues().collectionRadio())
+    }
+
+    @Test
+    fun `a playlist read that throws fails with the could not load copy`() = runTest {
+        val r = queues(playlist = { error("db closed") }).playlist("p", "Road Trip")
+        assertEquals(HomeQueue.Failed(HomeCopy.couldNotLoad("Road Trip")), r)
+    }
+
+    @Test
+    fun `loves that throw fail under the Recent Loves name`() = runTest {
+        val q = HomeQueues(
+            lovedTracks = { error("boom") },
+            playlistTracks = { emptyList() },
+            mixTracks = { emptyList() },
+            catalogQueues = CatalogQueues(MetadataService(emptyList(), { emptySet() })),
+            collectionRadio = { null },
+        )
+        assertEquals(HomeQueue.Failed(HomeCopy.couldNotLoad(HomeCopy.RECENT_LOVES)), q.loves())
+        assertEquals(HomeQueue.Failed(HomeCopy.couldNotLoad(HomeCopy.RECENT_LOVES)), q.tile(JumpTile.Loves(emptyList())))
+    }
+
+    @Test
+    fun `collection radio that throws fails with the could not load copy`() = runTest {
+        val q = HomeQueues(
+            lovedTracks = { emptyList() },
+            playlistTracks = { emptyList() },
+            mixTracks = { emptyList() },
+            catalogQueues = CatalogQueues(MetadataService(emptyList(), { emptySet() })),
+            collectionRadio = { error("boom") },
+        )
+        assertEquals(HomeQueue.Failed(HomeCopy.couldNotLoad(HomeCopy.COLLECTION_RADIO)), q.collectionRadio())
     }
 }
