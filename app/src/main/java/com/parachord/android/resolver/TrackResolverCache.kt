@@ -368,6 +368,20 @@ class TrackResolverCache constructor(
         }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
     /**
+     * The length a resolved source knows, per track key, in ms (#760): the
+     * shared `TrackRowRules.durationMs` with no length of the track's own, so a
+     * row whose track came without one (an imported link, a Last.fm or
+     * ListenBrainz track) shows its source's length. A row asks
+     * `TrackRowRules.pickDurationMs(track.duration, this[key])`.
+     */
+    val trackSourceDurations: StateFlow<Map<String, Long>> =
+        combine(_trackSources, settingsStore.getResolverOrderFlow()) { sources, order ->
+            sources.mapNotNull { (key, v) ->
+                com.parachord.shared.ui.TrackRowRules.durationMs(null, v, order)?.let { key to it }
+            }.toMap()
+        }.stateIn(scope, SharingStarted.Eagerly, emptyMap())
+
+    /**
      * Best resolved album-art URL per track key ("title|artist") — the
      * highest-priority above-floor source that actually carries artwork. Lets
      * ephemeral, art-less track lists (artist Top Tracks, the play queue, AI

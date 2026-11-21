@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
 import com.parachord.android.ui.components.ResolveWhileVisible
+import com.parachord.android.ui.components.rememberPlayFromSource
 import kotlinx.coroutines.Job
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -594,6 +595,7 @@ private fun SongsTab(
                         resolvers = trackResolvers[key]?.ifEmpty { null },
                         resolverConfidences = trackResolverConfidences[key],
                         onClick = { onSongClick(song, songs) },
+                        onPlaySource = rememberPlayFromSource()(song.title, song.artist) { onSongClick(song, songs) },
                     )
                 }
             }

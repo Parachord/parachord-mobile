@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.artist
 
 import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
 import kotlinx.coroutines.Job
 import com.parachord.android.resolver.trackKey
@@ -678,6 +679,7 @@ private fun TopTracksTab(
                     resolvers = trackResolvers[trackKey(track.title, track.artist)]?.ifEmpty { null },
                     resolverConfidences = trackResolverConfidences[trackKey(track.title, track.artist)],
                     onClick = { onPlayTopTrack(index) },
+                    onPlaySource = rememberPlayFromSource()(track.title, track.album ?: "") { onPlayTopTrack(index) },
                     onLongClick = { onTrackLongClick(track) },
                 )
             }

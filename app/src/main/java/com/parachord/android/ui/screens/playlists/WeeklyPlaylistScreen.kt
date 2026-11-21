@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.playlists
 
 import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -212,6 +213,7 @@ fun WeeklyPlaylistScreen(
                         trackNumber = index + 1,
                         isPlaying = nowPlayingTitle == track.title,
                         onClick = { viewModel.playTrack(index) },
+                        onPlaySource = rememberPlayFromSource()(track.title, track.artist) { viewModel.playTrack(index) },
                         onLongClick = {
                             contextMenuState.show(
                                 TrackContextInfo(

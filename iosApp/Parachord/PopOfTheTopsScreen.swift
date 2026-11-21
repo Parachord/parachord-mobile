@@ -255,32 +255,16 @@ struct PopOfTheTopsScreen: View {
             let visible = model.visibleSongs
             ForEach(Array(visible.enumerated()), id: \.offset) { index, pair in
                 let (song, entity) = pair
-                Button {
-                    // Android plays from the tapped song through the end of the
-                    // shown (filtered) list.
-                    coordinator.setQueue(visible.map(\.1), startIndex: index,
-                                         context: PlaybackContext(type: "charts", name: "Top Songs", id: nil))
-                } label: {
-                    HStack(spacing: 12) {
-                        Text("\(song.rank > 0 ? Int(song.rank) : index + 1)").font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(PC.fg3).frame(width: 24)
-                        songArt(song.artworkUrl, seed: song.title + song.artist)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(song.title).font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(pcTrackNoMatch(artist: song.artist, title: song.title, album: song.album) ? PC.fg3
-                                    : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1))
-                                .lineLimit(1)
-                            Text(song.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        if let sources = resolverCache.cached(artist: song.artist, title: song.title, album: song.album),
-                           !sources.isEmpty {
-                            ResolverBadgeRow(sources: sources)
-                        }
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // The shared track row (#760). Android plays from the tapped song
+                // through the end of the shown (filtered) list.
+                let play = { coordinator.setQueue(visible.map(\.1), startIndex: index,
+                                                  context: PlaybackContext(type: "charts", name: "Top Songs", id: nil)) }
+                PCTrackRow(title: song.title, artist: song.artist, album: song.album, artworkUrl: song.artworkUrl,
+                           number: song.rank > 0 ? Int(song.rank) : index + 1,
+                           isPlaying: coordinator.currentTrack?.id == entity.id,
+                           onPlaySource: pcPlayFromSource(coordinator, title: song.title, artist: song.artist, play: play),
+                           onTap: play)
+                    .padding(.horizontal, 20).padding(.vertical, 8)
                 .onAppear { model.resolveVisible(song, index: index) }
                 .onDisappear { IosTrackResolverCache.shared.leave(artist: song.artist, title: song.title) }
                 .pcTrackContextMenu(

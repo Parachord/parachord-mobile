@@ -63,25 +63,25 @@ fun shimmerBrush(): Brush {
  * Shimmer placeholder for a track row (album art + two text lines).
  */
 @Composable
-fun ShimmerTrackRow(modifier: Modifier = Modifier) {
+fun ShimmerTrackRow(modifier: Modifier = Modifier, showDuration: Boolean = true) {
+    // TrackRow's placeholder, in its columns (cover, title over artist, the
+    // source icons, the duration), so nothing moves when the rows land (#760).
     val brush = shimmerBrush()
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Album art placeholder
         Box(
             modifier = Modifier
-                .size(48.dp)
+                .size(com.parachord.shared.ui.TrackRowRules.COVER.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(brush),
         )
         Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            // Title placeholder
+        Column(modifier = Modifier.weight(1f)) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.6f)
@@ -90,7 +90,6 @@ fun ShimmerTrackRow(modifier: Modifier = Modifier) {
                     .background(brush),
             )
             Spacer(modifier = Modifier.height(6.dp))
-            // Artist placeholder
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.4f)
@@ -98,6 +97,22 @@ fun ShimmerTrackRow(modifier: Modifier = Modifier) {
                     .clip(RoundedCornerShape(4.dp))
                     .background(brush),
             )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        TrackRowSources(resolvers = emptyList(), confidences = null, resolving = true)
+        if (showDuration) {
+            Box(
+                modifier = Modifier.width(com.parachord.shared.ui.TrackRowRules.DURATION_COLUMN.dp),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(28.dp)
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(brush),
+                )
+            }
         }
     }
 }

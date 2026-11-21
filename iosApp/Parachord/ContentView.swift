@@ -2840,6 +2840,21 @@ final class QueuePlaybackCoordinator {
     /// Establish a new queue and start playing the track at
     /// `startIndex`. Mirrors `PlaybackEngine.setQueue`. [shuffle] overrides
     /// the current shuffle setting (the car's Shuffle rows); nil keeps it.
+    /// A track row's source icon was tapped (#760): the next play of that track
+    /// (by title and artist) starts from `resolver`, as the Now Playing deck's
+    /// pick does. The row then runs its usual play (one track, or the list from
+    /// that row), so the queue and its context are those of a tap on the row,
+    /// as desktop's `onPlay(resolverId)`. Any other track's play drops it.
+    func pickSourceForNextPlay(title: String, artist: String, resolver: String) {
+        nextPlaySourcePick = (Self.sourcePickKey(title, artist), resolver)
+    }
+
+    @ObservationIgnored private var nextPlaySourcePick: (key: String, resolver: String)?
+
+    private static func sourcePickKey(_ title: String, _ artist: String) -> String {
+        "\(title.lowercased().trimmingCharacters(in: .whitespaces))|\(artist.lowercased().trimmingCharacters(in: .whitespaces))"
+    }
+
     func setQueue(_ tracks: [Track], startIndex: Int, context: PlaybackContext? = nil, shuffle: Bool? = nil) {
         // Spinoff (#231): the user starting their own playback ends any active
         // spinoff (it's not the pool driving this setQueue). Exclude the spinoff's
@@ -3150,6 +3165,15 @@ final class QueuePlaybackCoordinator {
     /// switch leaves the playback that was going on as it was).
     private func playTrack(_ track: Track, forcedResolver: String? = nil, advancing: Bool = false,
                            aimedAtSec: Double = 0, fromLoadOnPlay: Bool = false) {
+        // A track row's source icon picked where this track plays from (#760):
+        // play it forced to that resolver, as the Now Playing deck does.
+        let pick = nextPlaySourcePick
+        nextPlaySourcePick = nil
+        if forcedResolver == nil, !advancing, !fromLoadOnPlay, let pick,
+           pick.key == Self.sourcePickKey(track.title, track.artist) {
+            playTrack(track, forcedResolver: pick.resolver, aimedAtSec: aimedAtSec)
+            return
+        }
         currentTrack = track
         loadOnPlay = nil
         heldForListener = false

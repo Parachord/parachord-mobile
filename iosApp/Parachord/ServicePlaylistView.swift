@@ -99,10 +99,9 @@ struct ServicePlaylistView: View {
                     header
                     LazyVStack(spacing: 0) {
                         ForEach(Array(model.tracks.enumerated()), id: \.offset) { index, track in
-                            Button { coordinator.setQueue(model.tracks, startIndex: index, context: model.context) } label: {
-                                row(index: index, track: track)
+                            row(index: index, track: track) {
+                                coordinator.setQueue(model.tracks, startIndex: index, context: model.context)
                             }
-                            .buttonStyle(.plain)
                             .onAppear { model.resolveVisible(track, index: index) }
                             .onDisappear { IosTrackResolverCache.shared.leave(artist: track.artist, title: track.title) }
                             .pcTrackContextMenu(track, coordinator: coordinator)
@@ -187,26 +186,15 @@ struct ServicePlaylistView: View {
         }
     }
 
-    @ViewBuilder
-    private func row(index: Int, track: Track) -> some View {
-        let isCurrent = coordinator.currentTrack?.id == track.id
-        HStack(spacing: 12) {
-            Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(PC.fg3).frame(width: 24)
-            art(track)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title).font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(pcTrackNoMatch(artist: track.artist, title: track.title, album: track.album) ? PC.fg3
-                        : (isCurrent ? PC.accent : PC.fg1)).lineLimit(1)
-                Text(track.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
-               !ranked.isEmpty {
-                ResolverBadgeRow(sources: ranked)
-            }
-        }
-        .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    /// The shared track row (#760).
+    private func row(index: Int, track: Track, onTap: @escaping () -> Void) -> some View {
+        PCTrackRow(title: track.title, artist: track.artist, album: track.album, artworkUrl: track.artworkUrl,
+                   number: index + 1,
+                   isPlaying: coordinator.currentTrack?.id == track.id,
+                   durationMs: track.duration?.int64Value,
+                   onPlaySource: pcPlayFromSource(coordinator, title: track.title, artist: track.artist, play: onTap),
+                   onTap: onTap)
+            .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
     /// The track's cover, else its resolved sources' (`pcTrackArt`), as the Recommendations song rows draw it.

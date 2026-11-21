@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.playlists
 
 import android.widget.Toast
+import com.parachord.android.ui.components.rememberPlayFromSource
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -183,6 +184,7 @@ fun ServicePlaylistScreen(
                         trackNumber = index + 1,
                         isPlaying = nowPlayingTitle == track.title,
                         onClick = { viewModel.playFrom(index) },
+                        onPlaySource = rememberPlayFromSource()(track.title, track.artist) { viewModel.playFrom(index) },
                         onLongClick = {
                             contextMenuState.show(
                                 TrackContextInfo(

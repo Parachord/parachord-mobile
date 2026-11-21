@@ -189,6 +189,16 @@ One rule for every track list, the queue included:
 - A low-confidence source is dimmed (alpha 0.6). **Mobile dims at or below 0.80; desktop dims below 0.95.** Change `ResolverBadges.DIM_AT_OR_BELOW` only together with desktop.
 - Row states: resolving (shimmer where the icons go), unplayable (the whole row dimmed, no icons), playable.
 
+### TrackRow (desktop `track-lists.js`, #760)
+Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are the shared `TrackRowRules`.
+- **Columns:** number (28, an album's or a chart's) · cover (44, radius 4) · title (14 / 500) over the artist or a subtitle (13, text-secondary) · an optional extra column (desktop's `cells`: "2h ago", "Now" in the accent) · the source icons · the duration. Desktop's rows have no cover and put the artist in its own column; phones keep the cover and stack the artist under the title.
+- **The duration is the last column**, 40 wide, right-aligned, tabular figures, 12, text-tertiary, so durations line up down the list. Its length is the track's own, else the length its best resolved source knows (highest confidence, then the user's order), else blank. Never "0:00" (`TrackRowRules.durationMs`, a port of desktop's `track-duration.js`).
+- **The source icons sit right up against it**, right-aligned in a column one 20-point icon per service the user can play from (gap 4, at least two, at most 140: `sourceColumnWidth`, desktop's `--source-col`), so rows with fewer sources still line up and the spare room is to the left of the icons.
+- **Each icon plays that source** ("Play from Spotify"); the row plays the best one. Both run the row's own play, so the queue and its context match a tap on the row (Android `rememberPlayFromSource`, iOS `pcPlayFromSource`).
+- **States:** resolving (two shimmer squares in the icon column), unplayable (the whole row at 0.6, `TrackRowRules.state`), playable; the now-playing row has its title in the accent.
+- **Placeholder:** Android `ShimmerTrackRow`, iOS `PCTrackRowSkeleton`, in the same columns.
+- **The queue** keeps its own dark row, as on desktop, with the same icon column and the duration last (Android `TrackRowSources` / `TrackRowDuration`, iOS `PCTrackRowSources` / `PCTrackRowDuration`).
+
 ### Cards
 - Album and playlist cards are one card per platform: art radius 6 inside a 10-radius card, title 13 / 500 text-primary (one line), subtitle 12 text-secondary.
 - Cards in a horizontal row are a fixed width; grids use the 16 gutter.
