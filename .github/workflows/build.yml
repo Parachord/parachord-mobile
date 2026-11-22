@@ -4,7 +4,10 @@ on:
   push:
     branches: [main]
     tags:
-      - 'v*'
+      # Android releases only: v<major>.<minor>.<patch>, with an optional
+      # suffix (v0.9.13, v0.4.0-beta.1). iOS TestFlight builds are tagged
+      # ios-<version>-<build> and must never start this workflow.
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main]
   workflow_dispatch:
