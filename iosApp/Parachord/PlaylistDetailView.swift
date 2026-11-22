@@ -165,7 +165,7 @@ struct PlaylistDetailView: View {
         VStack(spacing: 0) {
             PCTopBar(title: model.displayTitle, leading: .back, onLeading: { dismiss() })
             if model.isLoading && !model.loaded {
-                ScrollView { PCSkeletonList(count: 8, art: 44) }
+                ScrollView { VStack(spacing: 0) { ForEach(0..<8, id: \.self) { _ in PCTrackRowSkeleton() } } }
             } else if model.tracks.isEmpty {
                 ContentUnavailableView("No tracks", systemImage: "music.note.list",
                     description: Text("This playlist came back empty."))
@@ -181,10 +181,9 @@ struct PlaylistDetailView: View {
                         // changes currentTrack). #322.
                         ForEach(Array(zip(model.tracks, model.trackEntities).enumerated()), id: \.offset) { index, pair in
                             let (track, entity) = pair
-                            Button { coordinator.setQueue(model.trackEntities, startIndex: index, context: playlistContext) } label: {
-                                row(index: index, track: track)
+                            row(index: index, track: track) {
+                                coordinator.setQueue(model.trackEntities, startIndex: index, context: playlistContext)
                             }
-                            .buttonStyle(.plain)
                             .onAppear { model.resolveVisible(track, index: index) }
                             .onDisappear { IosTrackResolverCache.shared.leave(artist: track.artist, title: track.title) }
                             .pcTrackContextMenu(
@@ -259,27 +258,16 @@ struct PlaylistDetailView: View {
         } else { PCArtwork(name: seed, size: 80, radius: 0) }
     }
 
-    @ViewBuilder
-    private func row(index: Int, track: IosPlaylistTrack) -> some View {
+    /// The shared track row (#760).
+    private func row(index: Int, track: IosPlaylistTrack, onTap: @escaping () -> Void) -> some View {
         let isCurrent = index < model.trackEntities.count
             && coordinator.currentTrack?.id == model.trackEntities[index].id
-        HStack(spacing: 12) {
-            Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
-                .foregroundStyle(PC.fg3).frame(width: 24)
-            trackArt(track)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title).font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(pcTrackNoMatch(artist: track.artist, title: track.title, album: track.album) ? PC.fg3
-                        : (isCurrent ? PC.accent : PC.fg1)).lineLimit(1)
-                Text(albumLine(track)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            if let ranked = resolverCache.cached(artist: track.artist, title: track.title, album: track.album),
-               !ranked.isEmpty {
-                ResolverBadgeRow(sources: ranked)
-            }
-        }
-        .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+        return PCTrackRow(title: track.title, artist: track.artist, album: track.album,
+                          artworkUrl: track.albumArt, subtitle: albumLine(track), number: index + 1,
+                          isPlaying: isCurrent, durationMs: track.durationMs?.int64Value,
+                          onPlaySource: pcPlayFromSource(coordinator, title: track.title, artist: track.artist, play: onTap),
+                          onTap: onTap)
+            .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -1123,10 +1111,7 @@ struct SavedPlaylistDetailView: View {
                     // crash on render after a background auto-advance). #322.
                     ForEach(Array(zip(model.tracks, model.entities).enumerated()), id: \.offset) { i, pair in
                         let (t, entity) = pair
-                        Button { coordinator.setQueue(model.entities, startIndex: i, context: ctx) } label: {
-                            trackRow(t, index: i)
-                        }
-                        .buttonStyle(.plain)
+                        trackRow(t, index: i) { coordinator.setQueue(model.entities, startIndex: i, context: ctx) }
                         .onAppear { resolverCache.resolve(ResolveRequest(artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum), order: i) }
                         .onDisappear { IosTrackResolverCache.shared.leave(artist: t.trackArtist, title: t.trackTitle) }
                         .pcTrackContextMenu(
@@ -1141,23 +1126,17 @@ struct SavedPlaylistDetailView: View {
         }
     }
 
-    private func trackRow(_ t: PlaylistTrack, index: Int) -> some View {
-        HStack(spacing: 12) {
-            Text("\(index + 1)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
-            pcCover(pcTrackArt(t.trackArtworkUrl, artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum),
-                    seed: t.trackTitle + t.trackArtist, size: 44, radius: 6, artist: t.trackArtist, album: t.trackAlbum)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(t.trackTitle).font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(coordinator.currentTrack?.id == model.entities[safe: index]?.id ? PC.accent : PC.fg1).lineLimit(1)
-                Text(t.trackAlbum.map { "\(t.trackArtist) · \($0)" } ?? t.trackArtist)
-                    .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            if let ranked = resolverCache.cached(artist: t.trackArtist, title: t.trackTitle, album: t.trackAlbum), !ranked.isEmpty {
-                ResolverBadgeRow(sources: ranked)
-            }
-        }
-        .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    /// The shared track row (#760).
+    private func trackRow(_ t: PlaylistTrack, index: Int, onTap: @escaping () -> Void) -> some View {
+        PCTrackRow(title: t.trackTitle, artist: t.trackArtist, album: t.trackAlbum,
+                   artworkUrl: t.trackArtworkUrl,
+                   subtitle: t.trackAlbum.map { "\(t.trackArtist) · \($0)" } ?? t.trackArtist,
+                   number: index + 1,
+                   isPlaying: coordinator.currentTrack?.id == model.entities[safe: index]?.id,
+                   durationMs: t.trackDuration?.int64Value,
+                   onPlaySource: pcPlayFromSource(coordinator, title: t.trackTitle, artist: t.trackArtist, play: onTap),
+                   onTap: onTap)
+            .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
     // Edit mode: a styled List so .onMove (drag-reorder) + .onDelete (remove)

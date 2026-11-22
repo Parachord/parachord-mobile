@@ -26,6 +26,10 @@ For every UI/UX or behavior task, in this order:
    translated from desktop's. Icons are desktop's (`PCIcon`, `PCServiceLogo`,
    from the shared `AppIcon` / `ServiceLogos`), not SF Symbols,
    except the system actions the design system lists (back, share, more, close, search).
+   Every track list draws `PCTrackRow` (#760: desktop's columns, the icons then
+   the duration last, the rules in the shared `TrackRowRules`); the row takes its
+   own tap (`onTap`) rather than sitting in a `Button`, so each source icon's
+   button gets its tap. Never build a track row in a screen.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at

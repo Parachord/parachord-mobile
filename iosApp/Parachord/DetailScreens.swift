@@ -617,7 +617,7 @@ struct AlbumScreen: View {
                 }
                 tracklist
                 if model.isLoading && !model.loaded {
-                    PCSkeletonList(count: 8, art: 44)
+                    VStack(spacing: 0) { ForEach(0..<8, id: \.self) { _ in PCTrackRowSkeleton() } }
                 } else if model.loaded && model.detail == nil {
                     // No provider knew the album (Android's AlbumScreen).
                     PCEmptyState(message: UiMessages.shared.ALBUM_NOT_FOUND)
@@ -687,36 +687,16 @@ struct AlbumScreen: View {
     private var tracklist: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array((model.detail?.tracks ?? []).enumerated()), id: \.offset) { index, t in
-                Button { coordinator.setQueue(model.entities, startIndex: index, context: albumContext) } label: {
-                    HStack(spacing: 12) {
-                        Text("\(index + 1)").font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(PC.fg3).frame(width: 22)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(t.title)
-                                .font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
-                                    : (coordinator.currentTrack?.id == model.entities[safe: index]?.id ? PC.accent : PC.fg1))
-                                .lineLimit(1)
-                            // Always show the per-track artist for a consistent
-                            // tracklist look (and correct for compilations).
-                            if !t.artist.isEmpty {
-                                Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                            }
-                        }
-                        Spacer(minLength: 8)
-                        // Android TrackRow order: title → duration → resolver icons (rightmost).
-                        if let d = t.duration, d.int64Value > 0 {
-                            Text(pcDur(d.int64Value)).font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3)
-                        }
-                        if let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
-                           !sources.isEmpty {
-                            ResolverBadgeRow(sources: sources)
-                        }
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 9)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // The shared track row (#760).
+                let play = { coordinator.setQueue(model.entities, startIndex: index, context: albumContext) }
+                PCTrackRow(title: t.title, artist: t.artist, album: t.album,
+                           artworkUrl: t.artworkUrl ?? model.coverUrl ?? model.detail?.artworkUrl,
+                           number: index + 1,
+                           isPlaying: coordinator.currentTrack?.id == model.entities[safe: index]?.id,
+                           durationMs: t.duration?.int64Value,
+                           onPlaySource: pcPlayFromSource(coordinator, title: t.title, artist: t.artist, play: play),
+                           onTap: play)
+                    .padding(.horizontal, 20).padding(.vertical, 8)
                 .onAppear { model.resolveVisible(t, index: index) }
                 .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(model.entities[safe: index] ?? pcTrack(from: t), coordinator: coordinator)
@@ -1287,32 +1267,15 @@ struct ArtistScreen: View {
     private var topTracksTab: some View {
         LazyVStack(spacing: 0) {
             ForEach(Array(model.topTracks.enumerated()), id: \.offset) { index, t in
-                Button { coordinator.setQueue(model.topEntities, startIndex: index, context: artistContext) } label: {
-                    HStack(spacing: 12) {
-                        Text("\(index + 1)").font(.system(size: 15, weight: .bold)).foregroundStyle(PC.accent)
-                            .frame(width: 22)
-                        pcCover(topTrackArt(t), seed: t.title + t.artist, size: 44, radius: 6)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(t.title).font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3 : PC.fg1).lineLimit(1)
-                            // Artist under the title — consistent with album tracklists.
-                            if !t.artist.isEmpty {
-                                Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        if let d = t.duration, d.int64Value > 0 {
-                            Text(pcDur(d.int64Value)).font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3)
-                        }
-                        // Resolver icons (parity with Pop of the Tops > Songs).
-                        if let sources = resolverCache.cached(artist: t.artist, title: t.title, album: t.album),
-                           !sources.isEmpty {
-                            ResolverBadgeRow(sources: sources)
-                        }
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // The shared track row (#760).
+                let play = { coordinator.setQueue(model.topEntities, startIndex: index, context: artistContext) }
+                PCTrackRow(title: t.title, artist: t.artist, album: t.album,
+                           artworkUrl: topTrackArt(t), number: index + 1,
+                           isPlaying: coordinator.currentTrack?.id == model.topEntities[safe: index]?.id,
+                           durationMs: t.duration?.int64Value,
+                           onPlaySource: pcPlayFromSource(coordinator, title: t.title, artist: t.artist, play: play),
+                           onTap: play)
+                    .padding(.horizontal, 20).padding(.vertical, 8)
                 .onAppear { model.resolveVisible(t, index: index) }
                 .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(model.topEntities[safe: index] ?? pcTrack(from: t), coordinator: coordinator)

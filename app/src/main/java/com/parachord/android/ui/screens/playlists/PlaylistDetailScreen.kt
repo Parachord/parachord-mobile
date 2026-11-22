@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.playlists
 
 import com.parachord.android.ui.theme.FillAccent
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import android.content.Intent
@@ -397,6 +398,7 @@ fun PlaylistDetailScreen(
                     trackNumber = index + 1,
                     isPlaying = nowPlayingTitle == track.trackTitle,
                     onClick = { viewModel.playTrack(index) },
+                    onPlaySource = rememberPlayFromSource()(track.trackTitle, track.trackArtist) { viewModel.playTrack(index) },
                     onLongClick = {
                         val entity = viewModel.trackEntityAt(index)
                         if (entity != null) {

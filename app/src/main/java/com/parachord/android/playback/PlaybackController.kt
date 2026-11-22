@@ -661,6 +661,30 @@ class PlaybackController constructor(
         scope.launch { router.stopExternalPlayback() }
     }
 
+    /**
+     * A track row's source icon was tapped (#760): the next play of that track
+     * (by title and artist) starts from [resolver], kept as a manual pick, as
+     * the Now Playing switcher's is. The row then asks its screen for its
+     * usual play (one track, or the list from that row), so the queue and its
+     * context are the same as a tap on the row, as desktop's `onPlay(resolverId)`.
+     * Any other track's play drops the pick.
+     */
+    fun pickSourceForNextPlay(title: String, artist: String, resolver: String) {
+        nextPlaySourcePick = trackKey(title, artist) to resolver
+    }
+
+    @Volatile private var nextPlaySourcePick: Pair<String, String>? = null
+
+    /** [track] set to its picked source, when a row's icon picked one for it. */
+    private fun applySourcePick(track: TrackEntity): TrackEntity? {
+        val pick = nextPlaySourcePick ?: return null
+        nextPlaySourcePick = null
+        if (pick.first != trackKey(track.title, track.artist)) return null
+        val sources = trackResolverCache.trackSources.value[pick.first].orEmpty()
+        val source = com.parachord.shared.resolver.SourceReselection.sourceForSwitch(sources, pick.second) ?: return null
+        return com.parachord.shared.resolver.SourceReselection.trackPlayingFrom(track, source)
+    }
+
     /** Play a single track immediately (clears the queue). */
     fun playTrack(track: TrackEntity, context: PlaybackContext? = null) {
         checkMainThread("playTrack")
@@ -1651,6 +1675,10 @@ class PlaybackController constructor(
       playMutex.withLock {
         activePlayGeneration = generation
         activeSwitch = switchFrom
+        // A row's source icon picked where this track plays from (#760).
+        val picked = applySourcePick(track).takeIf { !advancing }
+        @Suppress("NAME_SHADOWING") val track = picked ?: track
+        @Suppress("NAME_SHADOWING") val skipReselect = skipReselect || picked != null
         var completed = false
         val queueAtStart = queueGeneration
         // Someone picked this (a tap, a car browse tap, Play on a stopped
@@ -3601,15 +3629,7 @@ class PlaybackController constructor(
             // Clear all resolver-specific fields, then set only the chosen resolver's.
             // Without this, leftover spotifyUri/spotifyId from a previous resolver causes
             // the router to match SpotifyPlaybackHandler even when switching to localfiles.
-            val switched = track.copy(
-                resolver = source.resolver,
-                sourceType = source.sourceType,
-                sourceUrl = source.url,
-                spotifyUri = source.spotifyUri,
-                spotifyId = source.spotifyId,
-                soundcloudId = source.soundcloudId,
-                appleMusicId = source.appleMusicId,
-            )
+            val switched = com.parachord.shared.resolver.SourceReselection.trackPlayingFrom(track, source)
             // The switcher shows the pick at once, for this track, until the
             // play from it has started or failed (shared pickerShownResolver);
             // it's never written onto the track.

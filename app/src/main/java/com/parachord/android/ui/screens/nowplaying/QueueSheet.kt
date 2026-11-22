@@ -42,6 +42,8 @@ import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.ResolverIconRow
+import com.parachord.android.ui.components.TrackRowDuration
+import com.parachord.android.ui.components.TrackRowSources
 import com.parachord.android.ui.theme.PlayerSurface
 import com.parachord.android.ui.theme.PlayerTextPrimary
 import com.parachord.android.ui.theme.PlayerTextSecondary
@@ -267,18 +269,28 @@ private fun QueueTrackRow(
                 )
             }
 
-            // Resolver badges
-            val resolvers = trackResolvers["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"]
-                ?: track.availableResolvers(resolverOrder)
-            if (resolvers.isNotEmpty()) {
-                Spacer(modifier = Modifier.width(8.dp))
-                ResolverIconRow(
+            // The source icons, then the duration last, as desktop's queue
+            // drawer and every track row (#760): the icons right-aligned in a
+            // column one icon per playable service wide, against the duration.
+            val key = "${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"
+            val resolvers = trackResolvers[key] ?: track.availableResolvers(resolverOrder)
+            Spacer(modifier = Modifier.width(8.dp))
+            Box(modifier = Modifier.graphicsLayer { alpha = dimAlpha }) {
+                TrackRowSources(
                     resolvers = resolvers,
-                    size = 20.dp,
-                    confidences = trackResolverConfidences["${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"],
-                    modifier = Modifier.graphicsLayer { alpha = dimAlpha },
+                    confidences = trackResolverConfidences[key],
+                    resolving = false,
                 )
             }
+            TrackRowDuration(
+                label = com.parachord.shared.ui.TrackRowRules.formatDuration(
+                    com.parachord.shared.ui.TrackRowRules.pickDurationMs(
+                        track.duration,
+                        com.parachord.android.ui.theme.LocalTrackRowCache.current?.sourceDurations?.value?.get(key),
+                    ),
+                ),
+                color = PlayerTextSecondary.copy(alpha = dimAlpha),
+            )
         }
     }
 }

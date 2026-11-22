@@ -208,7 +208,7 @@ struct FriendProfileScreen: View {
 
             ScrollView {
                 if model.loading {
-                    if tabIndex == 0 || tabIndex == 3 { PCSkeletonList(count: 8, art: 44) }
+                    if tabIndex == 0 || tabIndex == 3 { VStack(spacing: 0) { ForEach(0..<8, id: \.self) { _ in PCTrackRowSkeleton() } } }
                     else { PCSkeletonGrid(count: 6, columns: tabIndex == 2 ? 3 : 2) }
                 } else if tabIsEmpty, let error = model.error(tab: tabIndex, period: period) {
                     errorState(error)
@@ -306,25 +306,16 @@ struct FriendProfileScreen: View {
         LazyVStack(spacing: 0) {
             ForEach(Array(zip(model.topTracks, model.trackEntities).enumerated()), id: \.offset) { i, pair in
                 let (t, entity) = pair
-                Button { coordinator.setQueue(model.trackEntities, startIndex: i,
-                                              context: PlaybackContext(type: "friend", name: "\(model.name) · Top Songs", id: nil)) } label: {
-                    HStack(spacing: 12) {
-                        Text("\(t.rank)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3).frame(width: 24)
-                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6, artist: t.artist, album: t.album)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(t.title).font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) ? PC.fg3
-                                    : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1)).lineLimit(1)
-                            Text("\(t.artist) · \(FormattersKt.playCountLabel(count: t.playCount))").font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
-                            ResolverBadgeRow(sources: s)
-                        }
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // The shared track row (#760).
+                let play = { coordinator.setQueue(model.trackEntities, startIndex: i,
+                                                  context: PlaybackContext(type: "friend", name: "\(model.name) · Top Songs", id: nil)) }
+                PCTrackRow(title: t.title, artist: t.artist, album: t.album, artworkUrl: t.artworkUrl,
+                           subtitle: "\(t.artist) · \(FormattersKt.playCountLabel(count: t.playCount))",
+                           number: Int(t.rank),
+                           isPlaying: coordinator.currentTrack?.id == entity.id,
+                           onPlaySource: pcPlayFromSource(coordinator, title: t.title, artist: t.artist, play: play),
+                           onTap: play)
+                    .padding(.horizontal, 20).padding(.vertical, 8)
                 .onAppear { model.resolveVisible(artist: t.artist, title: t.title, album: t.album, index: i) }
                 .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(entity, coordinator: coordinator,
@@ -389,32 +380,17 @@ struct FriendProfileScreen: View {
         LazyVStack(spacing: 0) {
             ForEach(Array(zip(model.recent, model.recentEntities).enumerated()), id: \.offset) { i, pair in
                 let (t, entity) = pair
-                Button { coordinator.setQueue(model.recentEntities, startIndex: i,
-                                              context: PlaybackContext(type: "friend", name: "\(model.name) · Recent", id: nil)) } label: {
-                    HStack(spacing: 12) {
-                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album), seed: t.title + t.artist, size: 44, radius: 6, artist: t.artist, album: t.album)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text((t.nowPlaying ? "▶ " : "") + t.title).font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(pcTrackNoMatch(artist: t.artist, title: t.title, album: t.album) && !t.nowPlaying ? PC.fg3
-                                    : (t.nowPlaying ? PC.accent : (coordinator.currentTrack?.id == entity.id ? PC.accent : PC.fg1))).lineLimit(1)
-                            HStack(spacing: 6) {
-                                Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                                if !t.source.isEmpty {
-                                    Text(t.source).font(.system(size: 9, weight: .semibold))
-                                        .foregroundStyle(PC.fg3).padding(.horizontal, 5).padding(.vertical, 1)
-                                        .overlay(Capsule().strokeBorder(PC.border))
-                                }
-                            }
-                        }
-                        Spacer(minLength: 8)
-                        Text(t.nowPlaying ? "Now" : RelativeTime.shared.agoSeconds(timestampSeconds: t.timestamp)).font(.system(size: 11)).foregroundStyle(PC.fg3)
-                        if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
-                            ResolverBadgeRow(sources: s)
-                        }
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // The shared track row (#760), with "2h ago" as its extra column.
+                let play = { coordinator.setQueue(model.recentEntities, startIndex: i,
+                                                  context: PlaybackContext(type: "friend", name: "\(model.name) · Recent", id: nil)) }
+                PCTrackRow(title: t.title, artist: t.artist, album: t.album, artworkUrl: t.artworkUrl,
+                           subtitle: t.source.isEmpty ? nil : "\(t.artist)  •  \(t.source)",
+                           isPlaying: t.nowPlaying || coordinator.currentTrack?.id == entity.id,
+                           cell: t.nowPlaying ? "Now" : RelativeTime.shared.agoSeconds(timestampSeconds: t.timestamp),
+                           cellAccent: t.nowPlaying,
+                           onPlaySource: pcPlayFromSource(coordinator, title: t.title, artist: t.artist, play: play),
+                           onTap: play)
+                    .padding(.horizontal, 20).padding(.vertical, 8)
                 .onAppear { model.resolveVisible(artist: t.artist, title: t.title, album: t.album, index: i) }
                 .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(entity, coordinator: coordinator,

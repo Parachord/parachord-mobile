@@ -256,7 +256,7 @@ private struct RecPageSkeleton: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 RecSkeletonTitle()
-                ForEach(0..<Int(RecommendationPageViewKt.SONG_PREVIEW), id: \.self) { _ in PCSkeletonRow(art: 44) }
+                ForEach(0..<Int(RecommendationPageViewKt.SONG_PREVIEW), id: \.self) { _ in PCTrackRowSkeleton() }
                 RecSkeletonTitle()
                 RecSkeletonCards(lines: 3)
                 RecSkeletonTitle()
@@ -358,7 +358,7 @@ private struct RecRowView: View {
                 RecSongRow(rowKey: rowKey, index: i, item: item, actions: actions)
             }
             if block.loadingTail {
-                ForEach(0..<Int(RecommendationPageViewKt.SONG_PREVIEW), id: \.self) { _ in PCSkeletonRow(art: 44) }
+                ForEach(0..<Int(RecommendationPageViewKt.SONG_PREVIEW), id: \.self) { _ in PCTrackRowSkeleton() }
             }
         } else {
             RecCardsBody(block: block, gridWidth: gridWidth, actions: actions)
@@ -656,25 +656,12 @@ private struct RecSongRow: View {
 
 
     var body: some View {
-        let noMatch = pcTrackNoMatch(artist: artist, title: item.name, album: nil)
-        Button(action: play) {
-            HStack(spacing: 12) {
-                pcCover(pcTrackArt(item.imageUrl, artist: artist, title: item.name, album: nil),
-                        seed: item.name + artist, size: 44, radius: 6, artist: artist, album: nil)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name).font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(noMatch ? PC.fg3 : (isCurrent ? PC.accent : PC.fg1)).lineLimit(1)
-                    Text(artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                if let sources = IosTrackResolverCache.shared.cached(artist: artist, title: item.name, album: nil),
-                   !sources.isEmpty {
-                    ResolverBadgeRow(sources: sources)
-                }
-            }
-            .padding(.horizontal, recGutter).padding(.vertical, 8).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        // The shared track row (#760).
+        PCTrackRow(title: item.name, artist: artist, artworkUrl: item.imageUrl,
+                   isPlaying: isCurrent,
+                   onPlaySource: pcPlayFromSource(coordinator, title: item.name, artist: artist, play: play),
+                   onTap: play)
+            .padding(.horizontal, recGutter).padding(.vertical, 8)
         .onAppear {
             guard !artist.isEmpty else { return }
             IosTrackResolverCache.shared.resolve(ResolveRequest(artist: artist, title: item.name, album: nil), order: index)

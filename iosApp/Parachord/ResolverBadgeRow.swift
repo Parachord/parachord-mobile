@@ -9,7 +9,8 @@ import Shared
 // is the shared `ResolverBadges` rule (#592; CLAUDE.md "Resolver Badge
 // Display"); the leftmost square is the source that will actually play.
 //
-// Display-only, like Android (the track ROW handles playback). Each square is
+// In a track row each square plays that source (`ResolverBadgeRow.onTap`,
+// desktop's `SourceIconButton`, #760); elsewhere it's display-only. Each square is
 // the service's colour (its plugin manifest's, shared `ServiceColors`) with
 // desktop's logo on it in white (shared `ServiceLogos`, `PCServiceLogo`); a
 // service with no logo shows its initial.
@@ -59,6 +60,8 @@ struct ResolverIconSquare: View {
 struct ResolverBadgeRow: View {
     let sources: [ResolvedSource]
     var size: CGFloat = 18
+    /// Plays that source (desktop's `SourceIconButton`, #760); nil draws plain icons.
+    var onTap: ((String) -> Void)? = nil
 
     // Fallback when the user has no explicit order yet (matches
     // ResolverScoring.CANONICAL_RESOLVER_ORDER).
@@ -82,14 +85,170 @@ struct ResolverBadgeRow: View {
     @State private var shown = false
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: CGFloat(TrackRowRules.shared.SOURCE_ICON_GAP)) {
             ForEach(Array(visible.enumerated()), id: \.offset) { _, badge in
-                ResolverIconSquare(resolver: badge.resolver, size: size, confidence: badge.confidence)
+                if let onTap {
+                    Button { onTap(badge.resolver) } label: {
+                        ResolverIconSquare(resolver: badge.resolver, size: size, confidence: badge.confidence)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Play from \(PlaybackMessagesKt.resolverDisplayName(resolver: badge.resolver))")
+                } else {
+                    ResolverIconSquare(resolver: badge.resolver, size: size, confidence: badge.confidence)
+                }
             }
         }
         // Fade the badges IN when resolution lands instead of hard-popping in.
         .opacity(shown ? 1 : 0)
         .onAppear { withAnimation(.easeInOut(duration: 0.3)) { shown = true } }
+    }
+}
+
+// MARK: - PCTrackRow (#760): the one track row every list draws
+//
+// Desktop's `TrackRow` (`components/track-lists.js`) and Android's `TrackRow`,
+// in their columns: number · cover · title over artist · [cell] · source icons
+// · duration. The duration is the last column, the same width in every row, so
+// durations line up; the icons sit right up against it, right-aligned in a
+// column one icon per service the user can play from
+// (`ResolverPrefs.sourceColumnWidth`). The length, the row's state and the
+// widths are the shared `TrackRowRules`: the track's own length, else the one
+// its resolved sources know, never "0:00"; a row that resolved with nothing to
+// play is dimmed; while it resolves the icon column shimmers. Each icon plays
+// that source (`onPlaySource`).
+struct PCTrackRow: View {
+    let title: String
+    let artist: String
+    var album: String? = nil
+    var artworkUrl: String? = nil
+    /// The line under the title, when it isn't just the artist.
+    var subtitle: String? = nil
+    var number: Int? = nil
+    var isPlaying = false
+    /// The track's own length, in ms.
+    var durationMs: Int64? = nil
+    /// One extra column before the icons (desktop's `cells`): "2h ago", "Now".
+    var cell: String? = nil
+    var cellAccent = false
+    var showDuration = true
+    /// Plays the track from one source, when its icon is tapped.
+    var onPlaySource: ((String) -> Void)? = nil
+    /// The row's own tap (its usual play). The row takes it rather than being
+    /// wrapped in a `Button`, so each source icon's button gets its own tap.
+    var onTap: (() -> Void)? = nil
+
+    private var cache: IosTrackResolverCache { IosTrackResolverCache.shared }
+
+    var body: some View {
+        let sources = cache.cached(artist: artist, title: title, album: album)
+        let resolving = sources == nil && cache.isResolving(artist: artist, title: title, album: album)
+        let state = TrackRowRules.shared.state(sources: sources, badges: badges(sources))
+        let order = ResolverPrefs.shared.order
+        let length = TrackRowRules.shared.durationLabel(
+            trackDurationMs: durationMs.map { KotlinLong(value: $0) }, sources: sources, order: order)
+        HStack(spacing: 12) {
+            if let number {
+                Text("\(number)").font(.system(size: 13, design: .monospaced)).foregroundStyle(PC.fg3)
+                    .frame(width: CGFloat(TrackRowRules.shared.NUMBER_COLUMN), alignment: .leading)
+            }
+            pcCover(pcTrackArt(artworkUrl, artist: artist, title: title, album: album),
+                    seed: title + artist, size: CGFloat(TrackRowRules.shared.COVER), radius: 4,
+                    resolving: artworkUrl == nil && resolving, artist: artist, album: album)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(isPlaying ? PC.accent : PC.fg1).lineLimit(1)
+                Text(subtitle ?? artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if let cell {
+                Text(cell).font(.system(size: 11)).foregroundStyle(cellAccent ? PC.accent : PC.fg3).lineLimit(1)
+            }
+            PCTrackRowSources(sources: state == .playable ? sources : nil, resolving: resolving,
+                              onPlaySource: onPlaySource)
+            if showDuration { PCTrackRowDuration(label: length) }
+        }
+        .opacity(state.dimmed ? CGFloat(TrackRowRules.shared.UNPLAYABLE_ALPHA) : 1)
+        .contentShape(Rectangle())
+        .onTapGesture { onTap?() }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(onTap != nil ? .isButton : [])
+    }
+
+    private func badges(_ sources: [ResolvedSource]?) -> [ResolverBadge] {
+        guard let sources else { return [] }
+        let userOrder = ResolverPrefs.shared.order
+        return ResolverBadges.shared.badges(
+            sources: sources,
+            order: userOrder.isEmpty ? ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"] : userOrder,
+            active: Array(ResolverPrefs.shared.active),
+            disabled: Array(ResolverPrefs.shared.disabled),
+            notPlaying: Array(ResolverPrefs.shared.notPlaying))
+    }
+}
+
+/// A track row's source icon column (#760): `ResolverPrefs.sourceColumnWidth`
+/// wide, the icons at its right edge (right up against the duration), two
+/// shimmer squares while the row resolves, nothing when nothing can play.
+struct PCTrackRowSources: View {
+    let sources: [ResolvedSource]?
+    var resolving = false
+    var size = CGFloat(TrackRowRules.shared.SOURCE_ICON)
+    var onPlaySource: ((String) -> Void)? = nil
+
+    var body: some View {
+        HStack(spacing: CGFloat(TrackRowRules.shared.SOURCE_ICON_GAP)) {
+            if let sources, !sources.isEmpty {
+                ResolverBadgeRow(sources: sources, size: size, onTap: onPlaySource)
+            } else if resolving {
+                ForEach(0..<2, id: \.self) { _ in PCSkeletonBox(width: size, height: size, radius: 4) }
+            }
+        }
+        .frame(width: ResolverPrefs.shared.sourceColumnWidth, alignment: .trailing)
+        .clipped()
+    }
+}
+
+/// A track row's duration column: right-aligned, the same width in every row.
+struct PCTrackRowDuration: View {
+    let label: String
+    var color: Color = PC.fg3
+    var body: some View {
+        Text(label).font(.system(size: 12).monospacedDigit()).foregroundStyle(color).lineLimit(1)
+            .frame(width: CGFloat(TrackRowRules.shared.DURATION_COLUMN), alignment: .trailing)
+    }
+}
+
+/// A `PCTrackRow`'s placeholder, in its columns (cover, title over artist, the
+/// source icons, the duration), so nothing moves when the rows land.
+struct PCTrackRowSkeleton: View {
+    var showDuration = true
+    var body: some View {
+        HStack(spacing: 12) {
+            PCSkeletonBox(width: CGFloat(TrackRowRules.shared.COVER), height: CGFloat(TrackRowRules.shared.COVER), radius: 4)
+            VStack(alignment: .leading, spacing: 8) {
+                PCSkeletonBox(width: 170, height: 13, radius: 4)
+                PCSkeletonBox(width: 110, height: 11, radius: 4)
+            }
+            Spacer(minLength: 0)
+            PCTrackRowSources(sources: nil, resolving: true)
+            if showDuration {
+                HStack { Spacer(minLength: 0); PCSkeletonBox(width: 28, height: 11, radius: 4) }
+                    .frame(width: CGFloat(TrackRowRules.shared.DURATION_COLUMN))
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 8)
+    }
+}
+
+/// What a `PCTrackRow`'s source icon does (#760): pick that source for the
+/// row's track, then run the row's usual play, so the queue and its context
+/// are those of a tap on the row.
+@MainActor
+func pcPlayFromSource(_ coordinator: QueuePlaybackCoordinator, title: String, artist: String,
+                      play: @escaping () -> Void) -> (String) -> Void {
+    { resolver in
+        coordinator.pickSourceForNextPlay(title: title, artist: artist, resolver: resolver)
+        play()
     }
 }
 
@@ -113,6 +272,14 @@ final class ResolverPrefs {
     /// On but not playing (shared `notPlayingIds`, #707): a plan that can't
     /// play, or "Play from X" off. Still searched; never badged, picked or numbered.
     var notPlaying: Set<String> = []
+    /// How many services the user can play from (Home's `playbackResolvers`,
+    /// desktop's): sizes every track row's source icon column (#760).
+    var playbackServiceCount: Int = 0
+    /// The width of every `PCTrackRow`'s icon column, in points (shared
+    /// `TrackRowRules.sourceColumnWidth`, desktop's `--source-col`).
+    var sourceColumnWidth: CGFloat {
+        CGFloat(TrackRowRules.shared.sourceColumnWidth(playableServices: Int32(playbackServiceCount)))
+    }
     /// Suppress additive re-resolution on the FIRST active-flow emit (initial
     /// load isn't a user "enable").
     @ObservationIgnored private var activeInitialized = false
@@ -132,6 +299,9 @@ final class ResolverPrefs {
         subs.append(watcher.watch(flow: container.settingsStore.getDisabledPluginsFlow()) { [weak self] v in
             if let list = v as? [String] { self?.disabled = Set(list) }
             else if let set = v as? Set<String> { self?.disabled = set }
+        })
+        subs.append(watcher.watch(flow: container.homeSources.playbackResolvers) { [weak self] v in
+            if let list = v as? [String] { self?.playbackServiceCount = list.count }
         })
         subs.append(watcher.watch(flow: container.pluginStatusStore.notPlaying) { [weak self] v in
             if let list = v as? [String] { self?.notPlaying = Set(list) }

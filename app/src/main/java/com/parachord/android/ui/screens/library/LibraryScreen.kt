@@ -1,6 +1,7 @@
 package com.parachord.android.ui.screens.library
 
 import com.parachord.android.ui.components.HexagonShape
+import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -468,6 +469,7 @@ fun CollectionScreen(
                                         resolving = resolvingKeys.contains("${track.title.lowercase().trim()}|${track.artist.lowercase().trim()}"),
                                         duration = track.duration,
                                         onClick = { viewModel.playTrack(track) },
+                                        onPlaySource = rememberPlayFromSource()(track.title, track.artist) { viewModel.playTrack(track) },
                                         onLongClick = {
                                             contextMenuState.show(
                                                 TrackContextInfo(

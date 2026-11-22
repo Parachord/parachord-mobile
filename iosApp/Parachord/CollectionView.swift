@@ -285,25 +285,15 @@ struct CollectionView: View {
         let items = model.sortedTracks
         return LazyVStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { i, t in
-                Button { coordinator.setQueue(items, startIndex: i,
-                                              context: PlaybackContext(type: HomeModelKt.COLLECTION_CONTEXT, name: "Collection", id: nil)) } label: {
-                    HStack(spacing: 12) {
-                        pcCover(pcTrackArt(t.artworkUrl, artist: t.artist, title: t.title, album: t.album),
-                                seed: t.title + t.artist, size: 44, radius: 6,
-                                resolving: pcTrackResolving(artist: t.artist, title: t.title, album: t.album), artist: t.artist, album: t.album)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(t.title).font(.system(size: 15, weight: .medium))
-                                .foregroundStyle(coordinator.currentTrack?.id == t.id ? PC.accent : PC.fg1).lineLimit(1)
-                            Text(t.artist).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        if let s = resolverCache.cached(artist: t.artist, title: t.title, album: t.album), !s.isEmpty {
-                            ResolverBadgeRow(sources: s)
-                        }
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                // The shared track row (#760).
+                let play = { coordinator.setQueue(items, startIndex: i,
+                                                  context: PlaybackContext(type: HomeModelKt.COLLECTION_CONTEXT, name: "Collection", id: nil)) }
+                PCTrackRow(title: t.title, artist: t.artist, album: t.album, artworkUrl: t.artworkUrl,
+                           isPlaying: coordinator.currentTrack?.id == t.id,
+                           durationMs: t.duration?.int64Value,
+                           onPlaySource: pcPlayFromSource(coordinator, title: t.title, artist: t.artist, play: play),
+                           onTap: play)
+                    .padding(.horizontal, 20).padding(.vertical, 8)
                 .onAppear { resolverCache.resolve(ResolveRequest(artist: t.artist, title: t.title, album: t.album), order: i) }
                 .onDisappear { IosTrackResolverCache.shared.leave(artist: t.artist, title: t.title) }
                 .pcTrackContextMenu(t, coordinator: coordinator,
