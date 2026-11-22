@@ -1059,6 +1059,17 @@ private struct PluginConfigSheet: View {
         .padding(.leading, nested ? 16 : 0)
     }
 
+    /// The sheet's "Playback quality" line, nested under the switches.
+    private func qualityLine(_ title: String, _ detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Playback quality").font(.system(size: 14))
+            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+            if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary) }
+        }
+        .padding(.leading, 16)
+        .accessibilityElement(children: .combine)
+    }
+
     /// "X account", the status line, and Sign in / Sign out (desktop's AccountRow).
     private func accountRow(_ sheet: IosPluginSheet) -> some View {
         let signedIn = model.pluginSignedIn(service.id)
@@ -1125,6 +1136,12 @@ private struct PluginConfigSheet: View {
                             switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
                                 model.setPluginSwitch("recommendations", service.id, $0)
                             }
+                        }
+                        // "Playback quality" (shared `PlaybackQualityLine`): on iOS
+                        // something else always sets it (iOS Settings for Apple
+                        // Music, the Spotify app, the service's player, the server).
+                        if active, let title = sheet.qualityTitle {
+                            qualityLine(title, sheet.qualityDetail)
                         }
                     }
                 }

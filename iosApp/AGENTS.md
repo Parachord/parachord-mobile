@@ -1578,6 +1578,17 @@ web-session bridge iOS doesn't supply. A purchases-only plan (`ownedOnly`,
 `AppBootstrap` sets; root `CLAUDE.md` → "A plan that plays only what the
 account owns").
 
+Under the switches, while Enable is on, a music plug-in's sheet shows a
+**Playback quality** line (`IosPluginSheet.qualityTitle` / `qualityDetail`, the
+shared `PlaybackQualityLine` with `PlaybackPlatform.IOS`). On iOS it always says
+who else sets it: Apple Music "Set in iOS Settings" (MusicKit's
+`ApplicationMusicPlayer` follows Settings › Music › Audio Quality, not
+`playback_quality`), Spotify "Set in the Spotify app", SoundCloud and Bandcamp
+"Set by its player", Subsonic "Set by your server", local files "Plays the file
+as it is". iOS has no Settings › Playback Quality section and no plugin DRM
+engine, so nothing follows the tier and Now Playing shows no quality chip; the
+chip's rule (`qualityLabel`) is shared for when one lands.
+
 ## Local files are the library, not loves (#705)
 
 The Music-library scan (`MediaLibraryScanner.swift` → `IosContainer.addLocalTracks`)

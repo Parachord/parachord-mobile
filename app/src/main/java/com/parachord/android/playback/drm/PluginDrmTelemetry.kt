@@ -7,7 +7,10 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import com.parachord.shared.platform.Log
+import com.parachord.shared.playback.drm.CodecFamilies
 import com.parachord.shared.playback.drm.PluginPlayerEvents
+import com.parachord.shared.playback.drm.codecFamilyOf
+import com.parachord.shared.playback.drm.qualityLabel
 import kotlinx.coroutines.launch
 
 /**
@@ -23,7 +26,27 @@ class PluginDrmTelemetry(
     private val player: ExoPlayer,
     private val sessions: PluginDrmSessions,
     scope: kotlinx.coroutines.CoroutineScope,
+    /** Now Playing's quality chip for the selected audio format (null off a DRM session). */
+    private val onQualityLabel: (String?) -> Unit = {},
 ) : Player.Listener {
+
+    private var lastQualityLabel: String? = null
+
+    /** The label for the audio format the player selected, while it's on a DRM session. */
+    private fun publishQualityLabel() {
+        val label = if (currentSessionId() == null) {
+            null
+        } else {
+            player.audioFormat?.let {
+                val family = codecFamilyOf(it.codecs, it.sampleMimeType)
+                qualityLabel(family, family in CodecFamilies.SPATIAL)
+            }
+        }
+        if (label == lastQualityLabel) return
+        lastQualityLabel = label
+        onQualityLabel(label)
+    }
+
 
     init {
         // A licence that lands while the player already plays the clear lead:
@@ -114,5 +137,7 @@ class PluginDrmTelemetry(
 
     override fun onEvents(player: Player, events: Player.Events) {
         if (currentSessionId() != null) lastPositionMs = player.currentPosition.coerceAtLeast(0)
+        // Tracks, the media item, or an adaptive switch to another format.
+        publishQualityLabel()
     }
 }
