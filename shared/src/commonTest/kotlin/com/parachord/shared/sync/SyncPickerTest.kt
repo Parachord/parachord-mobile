@@ -10,8 +10,10 @@ import kotlin.test.assertTrue
 
 /** The sync picker's rows and the Sync screen's status text (#591). */
 class SyncPickerTest {
-    private fun row(id: String, name: String, mirror: Boolean = false, created: Long = 0, updated: Long = 0, modified: Long = 0) =
-        ProviderChannelPlaylist(id, name, 1, null, created, updated, modified, mirror, null, enabled = true)
+    private fun row(
+        id: String, name: String, mirror: Boolean = false, created: Long = 0, updated: Long = 0, modified: Long = 0,
+        tracksChanged: Long? = null,
+    ) = ProviderChannelPlaylist(id, name, 1, null, created, updated, modified, mirror, null, enabled = true, tracksChangedAt = tracksChanged)
 
     private fun remote(id: String, name: String) =
         SyncedPlaylist(entity = Playlist(id = "spotify-$id", name = name), spotifyId = id, snapshotId = null, trackCount = 3, isOwned = true)
@@ -45,6 +47,32 @@ class SyncPickerTest {
     @Test fun `recently modified falls back to the row's last write`() {
         val rows = listOf(row("a", "A", updated = 50), row("b", "B", updated = 10, modified = 40), row("c", "C", updated = 60))
         assertEquals(listOf("c", "a", "b"), PlaylistSorting.channelRows(rows, PlaylistSort.MODIFIED).map { it.localId })
+    }
+
+    @Test fun `recently modified goes by when the tracks last changed`() {
+        // b's lastModified moved with a sync pull that changed no track; a's tracks changed later.
+        val rows = listOf(
+            row("a", "A", modified = 100, tracksChanged = 300),
+            row("b", "B", modified = 900, tracksChanged = 200),
+            row("c", "C", modified = 250),
+        )
+        assertEquals(listOf("a", "c", "b"), PlaylistSorting.channelRows(rows, PlaylistSort.MODIFIED).map { it.localId })
+    }
+
+    @Test fun `the playlists list sorts recently modified by tracks changed`() {
+        val list = listOf(
+            Playlist(id = "x", name = "X", lastModified = 900, tracksChangedAt = 100),
+            Playlist(id = "y", name = "Y", lastModified = 500),
+            Playlist(id = "z", name = "Z", createdAt = 50),
+        )
+        assertEquals(listOf("y", "x", "z"), PlaylistSorting.playlists(list, PlaylistSort.MODIFIED, "").map { it.id })
+    }
+
+    @Test fun `modified time falls through each stamp`() {
+        assertEquals(7L, PlaylistSorting.modifiedTime(7, 5, 3, 1))
+        assertEquals(5L, PlaylistSorting.modifiedTime(null, 5, 3, 1))
+        assertEquals(3L, PlaylistSorting.modifiedTime(0, 0, 3, 1))
+        assertEquals(1L, PlaylistSorting.modifiedTime(null, 0, 0, 1))
     }
 
     @Test fun `the playlists list filters by name and sorts`() {

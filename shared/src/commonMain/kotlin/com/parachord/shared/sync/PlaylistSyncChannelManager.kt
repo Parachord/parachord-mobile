@@ -64,6 +64,8 @@ data class ProviderChannelPlaylist(
     /** True for a live-fetched provider playlist that has no local row yet —
      *  checking it imports it on the next sync. */
     val notImported: Boolean = false,
+    /** When the playlist's tracks last changed (`Playlist.tracksChangedAt`); null when unknown. */
+    val tracksChangedAt: Long? = null,
 )
 
 class PlaylistSyncChannelManager(
@@ -150,6 +152,7 @@ class PlaylistSyncChannelManager(
                     isMirror = !isNative,
                     originLabel = if (isNative) null else originLabelFor(p.id),
                     enabled = providerId in effective,
+                    tracksChangedAt = p.tracksChangedAt,
                 )
             }
     }
