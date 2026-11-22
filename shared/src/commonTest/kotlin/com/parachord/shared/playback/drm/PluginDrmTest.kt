@@ -18,6 +18,49 @@ import kotlin.test.assertTrue
  */
 class PluginDrmTest {
 
+    // ── The manifest's budget retry (desktop parachord#1603) ───────────
+
+    private val budget = PluginDrmError.timedOut("getPlaybackManifest")
+
+    @Test
+    fun `a manifest whose budget ran out is asked for once more`() {
+        assertTrue(budget.budgetExpired)
+        assertTrue(manifestRetryAllowed(budget, retriesSoFar = 0))
+    }
+
+    @Test
+    fun `only once per play`() {
+        assertFalse(manifestRetryAllowed(budget, retriesSoFar = 1))
+    }
+
+    @Test
+    fun `a failure the plugin reported itself is never retried`() {
+        for (reason in listOf("plan-ineligible", "not-signed-in", "load-failed", "playback-failed")) {
+            assertFalse(manifestRetryAllowed(PluginDrmError(reason = reason), retriesSoFar = 0), reason)
+        }
+        assertFalse(manifestRetryAllowed(PluginDrmError(licenseDenied = true), retriesSoFar = 0))
+        assertFalse(manifestRetryAllowed(PluginDrmError(message = "getPlaybackManifest timed out"), retriesSoFar = 0))
+    }
+
+    @Test
+    fun `a superseded play is never retried`() {
+        assertFalse(manifestRetryAllowed(PluginDrmError(reason = "superseded", budgetExpired = true), retriesSoFar = 0))
+    }
+
+    @Test
+    fun `the bootstrap's budget flag is read from its reply`() {
+        val reply = PluginDrmReplies.open(
+            """{"ok":false,"error":{"reason":"playback-failed","message":"getPlaybackManifest timed out","budgetExpired":true}}""",
+        )
+        val error = assertIs<PluginDrmOpenReply.Failed>(reply).error
+        assertTrue(error.budgetExpired)
+        assertTrue(manifestRetryAllowed(error, retriesSoFar = 0))
+        val own = assertIs<PluginDrmOpenReply.Failed>(
+            PluginDrmReplies.open("""{"ok":false,"error":{"reason":"playback-failed","budgetExpired":false}}"""),
+        ).error
+        assertFalse(own.budgetExpired)
+    }
+
     @Test
     fun `a plan refusal is a plan refusal whatever else it carries`() {
         assertEquals(

@@ -52,13 +52,37 @@ data class PluginDrmError(
     val licenseDenied: Boolean = false,
     val denialReason: String? = null,
     val message: String? = null,
+    /**
+     * The host's budget ran out ([PluginDrmContract.MANIFEST_BUDGET_MS], the
+     * bootstrap's `withBudget`), not the plugin reporting a failure. The
+     * plugin's own call keeps running in JS ([manifestRetryAllowed]).
+     */
+    val budgetExpired: Boolean = false,
 ) {
     companion object {
         /** A budget that ran out: the play fails as `playback-failed`, as desktop's budget does. */
         fun timedOut(what: String): PluginDrmError =
-            PluginDrmError(PluginDrmContract.REASON_PLAYBACK_FAILED, message = "$what timed out")
+            PluginDrmError(PluginDrmContract.REASON_PLAYBACK_FAILED, message = "$what timed out", budgetExpired = true)
     }
 }
+
+/** How many times a play asks for its manifest again after the budget ran out ([manifestRetryAllowed]). */
+const val MANIFEST_BUDGET_RETRIES: Int = 1
+
+/**
+ * Whether a play asks the plugin for its manifest again, at once, after
+ * [error] on its [retriesSoFar]-th retry. Only when the host's 10 s budget ran
+ * out ([PluginDrmError.budgetExpired]): the plugin's call keeps running in JS
+ * past the budget (Amazon serializes a purchases read and a session-header
+ * mint, desktop parachord#1603), so the second call joins it and usually
+ * answers well within its own budget. Once per play. Never for a failure the
+ * plugin reported itself (plan-ineligible, not-signed-in, load-failed, a
+ * licence refusal) or a superseded play. The budget itself stays desktop's.
+ */
+fun manifestRetryAllowed(error: PluginDrmError, retriesSoFar: Int): Boolean =
+    retriesSoFar < MANIFEST_BUDGET_RETRIES &&
+        error.budgetExpired &&
+        error.reason == PluginDrmContract.REASON_PLAYBACK_FAILED
 
 /** What the engine does about a [PluginDrmError]. */
 enum class PluginDrmOutcome {
@@ -136,6 +160,7 @@ object PluginDrmReplies {
             licenseDenied = e.bool("licenseDenied"),
             denialReason = e.str("denialReason"),
             message = e.str("message")?.take(300),
+            budgetExpired = e.bool("budgetExpired"),
         )
     }
 

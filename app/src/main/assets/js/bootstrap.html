@@ -233,6 +233,7 @@
                 licenseDenied: !!(e && e.licenseDenied === true),
                 denialReason: e ? str(e.denialReason) : null,
                 message: String((e && e.message) || e || '').slice(0, 300),
+                budgetExpired: !!(e && e.budgetExpired === true),
             } };
         }
         function resolver(id) {
@@ -248,6 +249,9 @@
                     timer = setTimeout(function () {
                         var err = new Error(what + ' timed out');
                         err.reason = 'playback-failed';
+                        // The host's budget, not the plugin: the call keeps
+                        // running, and a manifest retry joins it.
+                        err.budgetExpired = true;
                         reject(err);
                     }, ms);
                 }),
