@@ -1653,8 +1653,15 @@ shared; iOS supplies AVPlayer and the sheet.
   two apps' bundles differ. Its `minAppVersion.ios` is 0.3.0, iOS's
   `MARKETING_VERSION` since this change. Its logo is `ServiceLogoSubsonic`;
   `ResolverBadgeRow`'s fallback order puts it after `localfiles`.
-- **Not checked on a device:** a real Subsonic server, an Amazon purchase
-  playing. Plain-http servers stay refused (`PluginStreamUrl.isPlayable`), so
+- **`IosAVPlayer` is `@Observable`.** Now Playing reads its time, length and
+  play state through the coordinator; #387 had moved the attribute onto
+  `IosVolumeOffsets` (inserted between it and the class), so every AVPlayer
+  play's button, bar and times sat still until something else redrew them.
+- **Checked in the simulator** (iPhone 18 Pro, a Prime account): Pinegrove's
+  "Overthrown" and "Size of the Moon" (purchases) play from Amazon Music on
+  AVPlayer, and with Now Playing open the button, bar and times follow
+  through Next and Previous, and scrubbing forward and back moves both the
+  audio and the bar. **Not checked:** a real Subsonic server. Plain-http servers stay refused (`PluginStreamUrl.isPlayable`), so
   no local-network permission is needed.
 
 ## The webSession host bridge (#779)
@@ -1798,6 +1805,11 @@ NSHTTPURLResponse`.
   clients have it (`createHttpClient`, `IosContainer.authHttpClient`).
 - **`configureSession` and `handleChallenge` are ignored** with a
   preconfigured session; set session options inside `useResponseTypeGuard`.
+- **A GET with Ktor's default empty body goes out with `Content-Length: 0`**
+  on the Darwin engine (OkHttp drops it). Most servers don't care; Amazon's
+  edge answers it with a bare `400 Bad Request` (`config.json`, #784). The
+  web session's `fetch` sends `NoLengthBody` for a request with no body;
+  do the same for any other Darwin request to a host that refuses it.
 - **Remove the guard** once a Ktor release checks the cast. KTOR-9807 is open
   (triaged 2026-10-26); 3.6.1 still has both casts.
 

@@ -1631,6 +1631,11 @@ final class IosVolumeOffsets: @unchecked Sendable {
     }
 }
 
+// Observable, so Now Playing's button, bar and times follow AVPlayer (local
+// files, direct streams, plug-in streams). #387 inserted `IosVolumeOffsets`
+// between this attribute and this class, which moved it onto that class and
+// left every AVPlayer play's screen frozen until something else redrew it.
+@Observable
 final class IosAVPlayer {
     enum Status: String {
         case idle, loading, ready, playing, paused, failed

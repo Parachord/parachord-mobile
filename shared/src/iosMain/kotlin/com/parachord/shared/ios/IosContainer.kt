@@ -3219,7 +3219,11 @@ class IosContainer private constructor() {
                 IosPluginStream(IosPluginStream.REFUSED, null, outcome.message, plugin.name)
             }
             is com.parachord.shared.playback.PluginStreamOutcome.StartFailed -> {
-                Log.w("PluginStream", "'$title': $resolverId's stream couldn't start")
+                // The plugin's reason and its message, redacted (a URL in it loses its credentials).
+                val why = (reply as? com.parachord.shared.playback.PluginStreamReply.Failed)?.error
+                    ?.let { "${it.reason}: ${com.parachord.shared.api.SecretRedaction.redactSecrets(it.message.orEmpty()).take(160)}" }
+                    ?: "an unplayable URL"
+                Log.w("PluginStream", "'$title': $resolverId's stream couldn't start ($why)")
                 IosPluginStream(IosPluginStream.START_FAILED, null, outcome.message, plugin.name)
             }
             com.parachord.shared.playback.PluginStreamOutcome.Superseded ->
