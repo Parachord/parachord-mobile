@@ -927,16 +927,27 @@ final class SavedPlaylistModel {
     private var tSub: Cancellable?
 
     var mirrors: [IosPlaylistMirrorLink] = []
+    /// Later copies of a song the playlist holds, when the duplicates banner
+    /// shows (shared `PlaylistDuplicates`); 0 hides it.
+    var duplicateCount = 0
+    /// What the last Remove duplicates did ("Removed 3 duplicate tracks").
+    var duplicatesNote: String?
 
     init(playlistId: String) { self.playlistId = playlistId }
     var name: String { playlist?.name ?? "Playlist" }
 
     func start() {
-        if pSub == nil { pSub = container.watchPlaylist(id: playlistId) { [weak self] p in self?.playlist = p } }
+        if pSub == nil {
+            pSub = container.watchPlaylist(id: playlistId) { [weak self] p in
+                self?.playlist = p
+                self?.recountDuplicates()
+            }
+        }
         if tSub == nil {
             tSub = container.watchPlaylistTracks(id: playlistId) { [weak self] ts in
                 self?.tracks = ts
                 self?.entities = ts.map { Self.makeTrack($0) }
+                self?.recountDuplicates()
             }
         }
         loadMirrors()
@@ -953,6 +964,18 @@ final class SavedPlaylistModel {
         guard !n.isEmpty else { return }
         Task { try? await container.renamePlaylist(id: playlistId, name: n) }
     }
+    private func recountDuplicates() {
+        duplicateCount = Int(container.playlistDuplicateCount(playlist: playlist, tracks: tracks))
+    }
+
+    func removeDuplicates() {
+        Task {
+            guard let removed = try? await container.removePlaylistDuplicates(id: playlistId) else { return }
+            let n = Int32(truncating: removed)
+            if n > 0 { duplicatesNote = PlaylistDuplicateCopy.shared.done(count: n) }
+        }
+    }
+
     func removeAt(_ i: Int) { Task { try? await container.removePlaylistTrackAt(id: playlistId, index: Int32(i)) } }
     func move(from: Int, to: Int) { Task { try? await container.movePlaylistTrack(id: playlistId, from: Int32(from), to: Int32(to)) } }
 
@@ -971,6 +994,7 @@ struct SavedPlaylistDetailView: View {
     @State private var showMenu = false
     @State private var showSync = false
     @State private var shareFlow = PlaylistShareFlow()
+    @State private var showRemoveDuplicates = false
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
     @Environment(\.dismiss) private var dismiss
     private let container = IosContainer.companion.shared
@@ -988,9 +1012,22 @@ struct SavedPlaylistDetailView: View {
             PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() },
                      trailingIcon: editing ? "checkmark" : "ellipsis",
                      onTrailing: { if editing { editing = false } else { showMenu = true } })
+            if !editing && model.duplicateCount > 0 { duplicatesBanner }
             if editing { editList } else { viewList }
         }
+        .animation(.default, value: model.duplicateCount > 0)
         .toolbar(.hidden, for: .navigationBar)
+        .alert(PlaylistDuplicateCopy.shared.confirmTitle(count: Int32(model.duplicateCount)),
+               isPresented: $showRemoveDuplicates) {
+            Button(PlaylistDuplicateCopy.shared.CANCEL, role: .cancel) {}
+            Button(PlaylistDuplicateCopy.shared.REMOVE, role: .destructive) { model.removeDuplicates() }
+        } message: {
+            Text(PlaylistDuplicateCopy.shared.confirmBody(playlistName: model.name))
+        }
+        .alert(model.duplicatesNote ?? "",
+               isPresented: Binding(get: { model.duplicatesNote != nil }, set: { if !$0 { model.duplicatesNote = nil } })) {
+            Button("OK", role: .cancel) {}
+        }
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { model.start() }
@@ -1027,6 +1064,22 @@ struct SavedPlaylistDetailView: View {
                     .presentationDetents([.medium])
             }
         }
+    }
+
+    /// Shows while the playlist holds later copies of a song (shared
+    /// `PlaylistDuplicates`); Android draws the same banner.
+    private var duplicatesBanner: some View {
+        HStack(spacing: 8) {
+            Text(PlaylistDuplicateCopy.shared.banner(count: Int32(model.duplicateCount)))
+                .font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(PlaylistDuplicateCopy.shared.REMOVE) { showRemoveDuplicates = true }
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(PC.fillAccent)
+                .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(PC.fillAccent.opacity(0.10))
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     private var header: some View {

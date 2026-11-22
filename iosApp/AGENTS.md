@@ -1837,6 +1837,10 @@ lives in Swift: the screens draw what the page says.
 
 Root `CLAUDE.md` → "Home — the shared model, drawn on both apps".
 
+## Playlist duplicates banner
+
+`SavedPlaylistDetailView` shows a banner under the top bar (not while editing) when `SavedPlaylistModel.duplicateCount` > 0; it's recounted whenever the playlist or its tracks change, through `IosContainer.playlistDuplicateCount` (shared `PlaylistDuplicates`), never in Swift. The confirm alert and the "Removed N duplicate tracks" note use `PlaylistDuplicateCopy`; the removal is `IosContainer.removePlaylistDuplicates`. See CLAUDE.md → "Playlist duplicates — the banner".
+
 ## Ktor Darwin response-type guard (#368, KTOR-9807)
 
 Every iOS `HttpClient(Darwin)` must call `engine { useResponseTypeGuard() }`

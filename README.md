@@ -117,6 +117,8 @@ Default order: `spotify > applemusic > bandcamp > soundcloud > localfiles > yout
 - **Three-layer dedup** prevents duplicate remote playlists on re-sync. Track removals are remembered, so a removed track isn't re-imported by the next pull.
 - **New sync engine (preview).** An opt-in sync engine merges edits made on any service. Before you switch, it shows a dry-run preview of exactly what would change.
 
+- **Remove duplicates.** When a playlist holds the same song more than once, its page shows a banner that removes the later copies (keeping the first of each) after you confirm. Synced copies on other services get the cleaned list on the next sync.
+
 Apple Music's API can't delete or rename playlists or remove tracks from them, so those changes have to be made in the Apple Music app.
 
 ### Discovery
