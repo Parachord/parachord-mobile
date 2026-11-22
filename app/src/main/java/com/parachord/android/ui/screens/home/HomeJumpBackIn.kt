@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.android.ui.components.layoutWidthDp
+import com.parachord.shared.ui.LayoutRules
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -87,7 +89,9 @@ fun HomeJumpBackIn(
             if (tiles.isEmpty()) {
                 ImportCard(onImport)
             } else {
-                tiles.chunked(2).forEach { pair ->
+                // Two by two on a phone, one line of four on a wide screen (shared jumpBackInColumns).
+                val columns = LayoutRules.jumpBackInColumns(layoutWidthDp())
+                tiles.chunked(columns).forEach { pair ->
                     Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
                         pair.forEach { tile ->
                             val tileKey = jumpTileKey(tile)
@@ -102,8 +106,8 @@ fun HomeJumpBackIn(
                                 )
                             }
                         }
-                        // An odd last tile keeps its half width.
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        // A short last line keeps its tiles' width.
+                        repeat(columns - pair.size) { Spacer(Modifier.weight(1f)) }
                     }
                 }
             }

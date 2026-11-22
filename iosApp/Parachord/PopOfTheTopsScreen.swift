@@ -94,6 +94,7 @@ final class PopOfTheTopsModel {
 private enum PopTab: String, CaseIterable { case albums = "Albums", songs = "Songs" }
 
 struct PopOfTheTopsScreen: View {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
     @State private var model = PopOfTheTopsModel.shared
     @State private var tabIndex = 0
     @State private var navArtist: String?
@@ -203,7 +204,7 @@ struct PopOfTheTopsScreen: View {
 
     // ── Albums tab: 2-column grid (rank badge on the art) → album page ──
     private var albumsGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+        LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(Array(model.visibleAlbums.enumerated()), id: \.element.id) { index, album in
                 NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
                     VStack(alignment: .leading, spacing: 4) {

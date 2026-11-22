@@ -6,11 +6,17 @@ import Shared
 // "Made from your listening", "Your playlists, freshest first" and "Albums you
 // might love". Which row shows, which cards, every line of text and every
 // colour comes from the shared page (`IosHomePage`) or `HomeCopy`; Swift only
-// draws. Rows are horizontal scrollers of `pcRecCardWidth` cards.
+// draws. Rows are horizontal scrollers of cards sized by `homeRowCardWidth`:
+// 140 on a phone (the row scrolls), wider on an iPad so six cards fill the row.
 
 private let rowGap: CGFloat = 16
 private let badgeDisc: CGFloat = 28
 private let badgeLogo: CGFloat = 20
+
+/// A Home row card's width at `layoutWidth`: `HOME_ROW_CARDS` across the row (shared `LayoutRules`).
+func homeRowCardWidth(_ layoutWidth: CGFloat) -> CGFloat {
+    PCLayout.rowCardWidth(layoutWidth, cards: Int(HomePageKt.HOME_ROW_CARDS), gutter: homeGutter, gap: rowGap)
+}
 
 // MARK: Shared pieces
 
@@ -64,9 +70,8 @@ private struct HomeRowCard<Art: View>: View {
     var badge: String? = nil
     let onOpen: () -> Void
     let onPlay: () -> Void
+    var width: CGFloat = pcRecCardWidth
     @ViewBuilder let art: () -> Art
-
-    private let width = pcRecCardWidth
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -109,8 +114,10 @@ struct HomeMixesRow: View {
     let onSelectSource: (String) -> Void
     let onOpen: (IosHomeMixCard) -> Void
     let onPlay: (IosHomeMixCard) -> Void
+    @Environment(\.pcLayoutWidth) private var layoutWidth
 
     var body: some View {
+        let cardWidth = homeRowCardWidth(layoutWidth)
         VStack(alignment: .leading, spacing: 0) {
             PCSectionHeader(title: HomeCopy.shared.MIXES_TITLE, subtitle: HomeCopy.shared.MIXES_SUBTITLE, gutter: homeGutter)
             if page.showMixChips {
@@ -123,9 +130,10 @@ struct HomeMixesRow: View {
                             title: card.title,
                             lines: [HomeCardLine(text: card.subtitle, maxLines: 2)],
                             onOpen: { onOpen(card) },
-                            onPlay: { onPlay(card) }
+                            onPlay: { onPlay(card) },
+                            width: cardWidth
                         ) {
-                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: card.mosaic, size: pcRecCardWidth)
+                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: card.mosaic, size: cardWidth)
                         }
                     }
                 }
@@ -149,8 +157,10 @@ struct HomePlaylistsRow: View {
     @State private var syncTarget: Playlist?
     @State private var shareFlow = PlaylistShareFlow()
     private let container = IosContainer.companion.shared
+    @Environment(\.pcLayoutWidth) private var layoutWidth
 
     var body: some View {
+        let cardWidth = homeRowCardWidth(layoutWidth)
         VStack(alignment: .leading, spacing: 0) {
             PCSectionHeader(
                 title: HomeCopy.shared.PLAYLISTS_TITLE, subtitle: HomeCopy.shared.PLAYLISTS_SUBTITLE,
@@ -164,9 +174,10 @@ struct HomePlaylistsRow: View {
                             lines: [HomeCardLine(text: card.line1, maxLines: 2), HomeCardLine(text: card.line2 ?? "")],
                             badge: card.badge,
                             onOpen: { onOpen(card) },
-                            onPlay: { onPlay(card) }
+                            onPlay: { onPlay(card) },
+                            width: cardWidth
                         ) {
-                            pcCover(card.imageUrl, seed: card.name, size: pcRecCardWidth, radius: CGFloat(DesignTokens.shared.RADIUS_ART))
+                            pcCover(card.imageUrl, seed: card.name, size: cardWidth, radius: CGFloat(DesignTokens.shared.RADIUS_ART))
                         }
                         .contextMenu { menu(card) }
                     }
@@ -226,8 +237,10 @@ struct HomeAlbumsRow: View {
     let onPlay: (IosHomeAlbum) -> Void
     let onSeeAll: () -> Void
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
+    @Environment(\.pcLayoutWidth) private var layoutWidth
 
     var body: some View {
+        let cardWidth = homeRowCardWidth(layoutWidth)
         VStack(alignment: .leading, spacing: 0) {
             PCSectionHeader(
                 title: HomeCopy.shared.ALBUMS_TITLE, page: DesignTokens.Page.recommendations,
@@ -239,12 +252,13 @@ struct HomeAlbumsRow: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: rowGap) {
                     if page.albumsLoading {
-                        ForEach(0..<Int(HomePageKt.HOME_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 2) }
+                        ForEach(0..<Int(HomePageKt.HOME_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 2, width: cardWidth) }
                     } else {
                         ForEach(page.albums, id: \.key) { album in
                             let item = album.item
                             RecAlbumCard(
                                 item: item,
+                                width: cardWidth,
                                 onOpen: { onOpen(album) },
                                 onPlay: { onPlay(album) },
                                 coverBadge: album.reasonBadge.map { AnyView(HomeReasonBadge(text: $0)) }

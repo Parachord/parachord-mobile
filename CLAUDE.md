@@ -1208,6 +1208,7 @@ The "On Tour" teal dot (`#10C9B4`) appears next to the artist name in the mini p
 - **Section titles and filter chips are one shared component per platform**, styled as desktop's `SectionHeader` (20 / 700, text-primary, "See all" in the destination page's colour) and `FilterChips`. Never rebuild them on a screen.
 - **Every track list draws the one track row** (Android `TrackRow`, iOS `PCTrackRow`, rules in the shared `TrackRowRules`, #760): desktop's columns, the source icons then the duration as the last column, durations lined up; the length falls back to a resolved source's, never "0:00"; each icon plays its source; a row nothing can play is dimmed. Never build a track row on a screen (`docs/DESIGN_SYSTEM.md` → TrackRow).
 - **Stay on the scales**: type 11 · 12 · 13 · 14 · 16 · 20 · 24 · 28 · 48, 4-point spacing, radius 4 · 6 · 8 · 10 · 12 · 16 · full.
+- **Size rows, grids and wide content from the window, never a fixed count** (shared `LayoutRules`; `docs/DESIGN_SYSTEM.md` → Scales → Tablets and landscape). A phone in portrait keeps its sizes; an iPad, a tablet or landscape fills its width: row cards grow (`rowCardWidth`), grids add columns (`gridColumns`), text and bars stop at a readable width. Android: `ui/components/AdaptiveLayout.kt`; iOS: `pcLayoutWidth` + `PCLayout`.
 - **Copy**: plugin / service / source (never "resolver" in UI), track not song, "…" not "...", one plural helper, "Try again", no raw error messages.
 
 ### Brand Colors

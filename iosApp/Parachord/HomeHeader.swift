@@ -275,17 +275,20 @@ struct HomeBannerSlot: View {
     }
 }
 
-/// While the getting-started decision is pending: header bars, a 2x2 of tiles, a row of cards.
+/// While the getting-started decision is pending: header bars, the tiles as Jump back in lays them out, a row of cards.
 struct HomeSkeleton: View {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
+
     var body: some View {
+        let cols = Int(LayoutRules.shared.jumpBackInColumns(available: Double(layoutWidth)))
         VStack(alignment: .leading, spacing: 12) {
             PCSkeletonBox(width: 200, height: 28, radius: CGFloat(DesignTokens.shared.RADIUS_BADGE))
             PCSkeletonBox(width: 160, height: 14, radius: CGFloat(DesignTokens.shared.RADIUS_BADGE))
             Spacer().frame(height: 12)
             PCSkeletonBox(width: 140, height: 20, radius: CGFloat(DesignTokens.shared.RADIUS_BADGE))
-            ForEach(0..<2, id: \.self) { _ in
+            ForEach(0..<(4 / cols), id: \.self) { _ in
                 HStack(spacing: 12) {
-                    ForEach(0..<2, id: \.self) { _ in
+                    ForEach(0..<cols, id: \.self) { _ in
                         PCSkeletonBox(height: 72, radius: CGFloat(DesignTokens.shared.RADIUS_CARD))
                     }
                 }

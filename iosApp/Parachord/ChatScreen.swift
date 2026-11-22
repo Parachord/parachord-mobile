@@ -262,6 +262,8 @@ struct ChatScreen: View {
             Text(text).font(.system(size: 14)).foregroundStyle(.white)
                 .padding(.horizontal, 14).padding(.vertical, 10)
                 .background(PC.fillAccent, in: .rect(topLeadingRadius: 16, bottomLeadingRadius: 16, bottomTrailingRadius: 4, topTrailingRadius: 16))
+                // A readable line on an iPad, not 900 pt of text.
+                .frame(maxWidth: PCLayout.readableMax, alignment: .trailing)
         }
     }
 
@@ -273,6 +275,7 @@ struct ChatScreen: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .background(.white.opacity(0.07), in: .rect(topLeadingRadius: 16, bottomLeadingRadius: 4, bottomTrailingRadius: 16, topTrailingRadius: 16))
+            .frame(maxWidth: PCLayout.readableMax, alignment: .leading)
             Spacer(minLength: 40)
         }
     }

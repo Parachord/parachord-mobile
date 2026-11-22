@@ -3,7 +3,7 @@ import Shared
 
 // MARK: - Jump back in (desktop `home-sections.js` JumpBackIn)
 //
-// Up to four tiles in a 2x2 grid (Android's HomeJumpBackIn.kt), each with its
+// Up to four tiles in a 2x2 grid, one line of four on a wide screen (Android's HomeJumpBackIn.kt), each with its
 // art on the left and a round Play over the art. The tile opens its item; Play
 // plays it. With no tiles, a new user gets the "Build your collection" card.
 
@@ -17,7 +17,13 @@ struct HomeJumpBackIn: View {
     let onShown: (IosJumpTile) -> Void
     let onImport: () -> Void
 
-    private let columns = [GridItem(.flexible(), spacing: tileGap), GridItem(.flexible(), spacing: tileGap)]
+    @Environment(\.pcLayoutWidth) private var layoutWidth
+
+    /// Two by two on a phone, one line of four when wide (shared `jumpBackInColumns`).
+    private var columns: [GridItem] {
+        let n = Int(LayoutRules.shared.jumpBackInColumns(available: Double(layoutWidth)))
+        return Array(repeating: GridItem(.flexible(), spacing: tileGap), count: n)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

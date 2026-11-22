@@ -921,6 +921,7 @@ enum ArtistTab: String, CaseIterable {
 /// hero with the name in it + "Play Top Tracks" CTA + 4 tabs (Discography
 /// grid / Top Tracks / Biography / Related Artists).
 struct ArtistScreen: View {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
     @State private var model: ArtistDetailModel
     @State private var tab: ArtistTab
     @State private var discoFilter = "all"
@@ -1217,7 +1218,7 @@ struct ArtistScreen: View {
                     .padding(.vertical, 8)
                 }
 
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 18) {
+                LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 16), spacing: 18) {
                     // Keyed by album identity (NOT array offset) so switching filters
                     // gives each cell stable identity — the art refreshes with the
                     // title instead of reusing the prior cell's cached image (bug 7).
@@ -1316,7 +1317,7 @@ struct ArtistScreen: View {
             if related.isEmpty {
                 Text("No related artists.").font(.system(size: 14)).foregroundStyle(PC.fg3).padding(40)
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 3), spacing: 16) {
+                LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, minCard: LayoutRules.shared.GRID_CIRCLE_MIN, minColumns: 3, alignment: .top), spacing: 16) {
                     ForEach(Array(related.enumerated()), id: \.offset) { _, a in
                         Button { navArtist = a.name } label: {
                             VStack(spacing: 6) {

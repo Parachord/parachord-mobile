@@ -52,6 +52,9 @@ struct ContentView: View {
     /// "Sign in to X?" after a play a plug-in refused as not signed in (#775).
     @State private var signInPrompt = SignInPromptModel()
     @Environment(\.scenePhase) private var rootScenePhase
+    /// The window's width, handed to every screen as `pcLayoutWidth` so rows and
+    /// grids size to the space they have (iPad, landscape, Split View).
+    @State private var layoutWidth: CGFloat = 390
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -100,6 +103,9 @@ struct ContentView: View {
                          // root, popping every push regardless of how it got there.
                          onReselect: { _ in navResetCount += 1 })
             }
+            // On an iPad or in landscape the bars stop at `BAR_MAX` and sit
+            // centred, rather than spreading four tabs across the screen.
+            .frame(maxWidth: PCLayout.barMax)
             .padding(.bottom, 6)
             .opacity(showNowPlaying ? 0 : 1)
 
@@ -227,6 +233,8 @@ struct ContentView: View {
         // the trait). NowPlaying stays dark regardless — its surfaces use the
         // constant PC.Player.* tokens, not `dyn`.
         .preferredColorScheme(theme.scheme)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { layoutWidth = $0 }
+        .environment(\.pcLayoutWidth, layoutWidth)
         .task { theme.start() }
         // Playback start-up (plugin host, ResolverPrefs, the Listen Along /
         // Spinoff / chat binds, the queue restore and the current track's artwork) lives in

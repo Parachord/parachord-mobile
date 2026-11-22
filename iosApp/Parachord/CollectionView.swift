@@ -125,6 +125,7 @@ final class CollectionModel {
 enum CollectionTab: Int, CaseIterable { case artists = 0, albums = 1, songs = 2, friends = 3 }
 
 struct CollectionView: View {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
     let onMenu: () -> Void
     /// One-shot sub-tab the shell injects when navigating from the queue-source
     /// banner (#209) — e.g. "Playing from: Collection" lands on Songs. Consumed
@@ -308,7 +309,7 @@ struct CollectionView: View {
     // ── Albums (2-col grid) ────────────────────────────────────────────
     private var albumsGrid: some View {
         let items = model.sortedAlbums
-        return LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+        return LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(items, id: \.id) { a in
                 Button { path.append(.album(title: a.title, artist: a.artist)) } label: {
                     VStack(alignment: .leading, spacing: 4) {
@@ -339,7 +340,7 @@ struct CollectionView: View {
     // ── Artists (3-col grid, circular) ─────────────────────────────────
     private var artistsGrid: some View {
         let items = model.sortedArtists
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 18) {
+        return LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, minCard: LayoutRules.shared.GRID_CIRCLE_MIN, minColumns: 3), spacing: 18) {
             ForEach(items, id: \.id) { a in
                 Button { path.append(.artist(a.name)) } label: {
                     VStack(spacing: 6) {

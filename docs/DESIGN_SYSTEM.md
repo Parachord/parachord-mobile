@@ -118,6 +118,12 @@ One map for every screen (Fresh Drops, an artist's discography, an album page, H
 - **Radius:** 4 badge · 6 art inside a card, inputs · 8 buttons, rows, menus · 10 cards · 12 panels · 16 sheets and dialogs · full (pills, circles).
 - **Motion:** 100–400 ms, on opacity and transform only.
 - **Touch targets:** at least 48dp (Android) / 44pt (iOS), even when the icon is smaller.
+- **Tablets and landscape (shared `LayoutRules`, `shared/.../ui/LayoutRules.kt`).** A phone in portrait keeps the sizes above; a wider window fills its width instead of stretching a phone layout:
+  - A card row's cards grow so the row's cards fill the width (`rowCardWidth`: at least 140, at most 240); on a phone they stay 140 and the row scrolls.
+  - Grids get as many columns as fit (`gridColumns`: covers at least 150 wide, artist circles 110), never fewer than the phone's 2 (covers) or 3 (artists). Never a fixed column count.
+  - Two-up things widen from 700 (`isWide`): Jump back in's four tiles go on one line, concert cards go two across. Home's halves sit side by side from 1000 (`halvesSideBySide`), where each still fits three cards.
+  - Text, forms, settings rows, chat bubbles and the queue panel stop at 680 (`READABLE_MAX`); the mini player and tab bar at 640, centred (`BAR_MAX`); Now Playing's controls at 560 (`PLAYER_CONTROLS_MAX`). Held sideways on a tablet, Now Playing puts the art beside the controls, as a phone in landscape does.
+  - Android reads the window width from `LocalConfiguration` (`ui/components/AdaptiveLayout.kt`); iOS measures it once in `RootView` and hands it down as `pcLayoutWidth` (`PCLayout` in `Theme.swift`).
 
 ---
 

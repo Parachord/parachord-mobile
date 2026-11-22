@@ -65,6 +65,9 @@ import com.parachord.android.ui.components.ArtPlayInset
 import com.parachord.android.ui.screens.discover.CardText
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
 import com.parachord.android.ui.screens.discover.RecCardWidth
+import com.parachord.shared.ui.LayoutRules
+import com.parachord.android.ui.components.rowCardWidth
+import com.parachord.android.ui.components.layoutWidthDp
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.theme.composeFill
 import com.parachord.android.ui.theme.composeGradient
@@ -108,13 +111,15 @@ private val PanelShape = RoundedCornerShape(DesignTokens.RADIUS_SHEET.dp)
 /** Space between a half's cards (desktop's `HOME_ROW_GAP`). */
 private val HalfCardGap = 16.dp
 private val HalfBodyPadding = 16.dp
+private val HalvesGap = 16.dp
 /** Desktop's `CONCERT_ART`. */
 private val ConcertArt = 72.dp
 
 // ── Fresh Drops / Critical Darlings / Pop of the Tops ────────────────
 
 /**
- * The halves (desktop `FreshCriticalRow`), stacked full width on a phone:
+ * The halves (desktop `FreshCriticalRow`), stacked full width on a phone and
+ * side by side on a wide screen (shared `LayoutRules.halvesSideBySide`):
  * Fresh Drops, Critical Darlings, and Pop of the Tops while Fresh Drops has
  * nothing ([HomeState.halves]). A half with no cards yet shows its skeleton;
  * Pop of the Tops' failed load shows the error with Try again.
@@ -135,37 +140,59 @@ fun HomeHalvesSection(
 ) {
     val halves = state.halves
     if (!halves.fresh && !halves.critical && !halves.charts) return
-    Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = Gutter),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        if (halves.fresh) {
+    // Each half, drawn at the modifier and card width the layout gives it.
+    val parts = buildList<@Composable (Modifier, Dp) -> Unit> {
+        if (halves.fresh) add { m, w ->
             val cards = withHalfCardArt(freshHalfCards(state.fresh.items), halfArt)
             HomeHalf(
                 page = DesignTokens.Page.FRESH_DROPS, icon = PageIcon.FRESH_DROPS, title = HomeCopy.FRESH_DROPS,
                 cards = cards, body = homeHalfBody(cards.size, state.fresh.loading, failed = false),
                 onSeeAll = onSeeAllFresh, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
-                feedLoading = state.fresh.loading,
+                feedLoading = state.fresh.loading, modifier = m, cardWidth = w,
             )
         }
-        if (halves.critical) {
+        if (halves.critical) add { m, w ->
             val cards = withHalfCardArt(criticalHalfCards(state.critical.items), halfArt)
             HomeHalf(
                 page = DesignTokens.Page.CRITICAL_DARLINGS, icon = PageIcon.CRITICAL_DARLINGS, title = HomeCopy.CRITICAL_DARLINGS,
                 cards = cards, body = homeHalfBody(cards.size, state.critical.loading, failed = false),
                 onSeeAll = onSeeAllCritical, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
-                feedLoading = state.critical.loading,
+                feedLoading = state.critical.loading, modifier = m, cardWidth = w,
             )
         }
-        if (halves.charts) {
+        if (halves.charts) add { m, w ->
             val cards = withHalfCardArt(chartHalfCards(state.charts.items), halfArt)
             HomeHalf(
                 page = DesignTokens.Page.POP_OF_THE_TOPS, icon = PageIcon.POP_OF_THE_TOPS, title = HomeCopy.POP_OF_THE_TOPS,
                 cards = cards, body = homeHalfBody(cards.size, state.charts.loading, state.charts.failed),
                 onSeeAll = onSeeAllCharts, onOpen = onOpen, onPlay = onPlay, onLongPress = onLongPress, onCardShown = onCardShown,
                 feedLoading = state.charts.loading,
-                onRetry = onRetryCharts,
+                onRetry = onRetryCharts, modifier = m, cardWidth = w,
             )
+        }
+    }
+    // Side by side once both halves fit three cards, else stacked full width;
+    // either way the cards grow to fill each half (shared LayoutRules).
+    val width = layoutWidthDp()
+    val sideBySide = parts.size > 1 && LayoutRules.halvesSideBySide(width)
+    val outer = if (sideBySide) (width - 2 * Gutter.value - HalvesGap.value) / 2 else width - 2 * Gutter.value
+    val cardWidth = rowCardWidth(
+        cards = HOME_HALF_ROW_CARDS, gutter = HalfBodyPadding, gap = HalfCardGap,
+        available = outer - 2 * HalfBodyPadding.value,
+    )
+    Column(
+        modifier = modifier.fillMaxWidth().padding(horizontal = Gutter),
+        verticalArrangement = Arrangement.spacedBy(HalvesGap),
+    ) {
+        if (sideBySide) {
+            parts.chunked(2).forEach { pair ->
+                Row(horizontalArrangement = Arrangement.spacedBy(HalvesGap)) {
+                    pair.forEach { it(Modifier.weight(1f), cardWidth) }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        } else {
+            parts.forEach { it(Modifier, cardWidth) }
         }
     }
 }
@@ -191,6 +218,7 @@ fun HomeHalf(
     onRetry: (() -> Unit)? = null,
     onCardShown: (HomeHalfCard) -> Unit = {},
     feedLoading: Boolean = false,
+    cardWidth: Dp = RecCardWidth,
 ) {
     Column(
         modifier = modifier
@@ -251,13 +279,13 @@ fun HomeHalf(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (body == HomeHalfBody.LOADING) {
-                    items(HOME_HALF_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 1, width = RecCardWidth) }
+                    items(HOME_HALF_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 1, width = cardWidth) }
                 } else {
                     items(cards, key = { it.key }) { card ->
                         // A card on screen with no cover asks for one (shared withHalfCardArt).
                         // A card the feed finished without a cover asks for one (shared halfCardNeedsArt).
                         if (halfCardNeedsArt(card, feedLoading)) LaunchedEffect(card.key) { onCardShown(card) }
-                        HalfAlbumCard(card, RecCardWidth, { onOpen(card) }, { onPlay(card) }, { onLongPress(card) })
+                        HalfAlbumCard(card, cardWidth, { onOpen(card) }, { onPlay(card) }, { onLongPress(card) })
                     }
                 }
             }

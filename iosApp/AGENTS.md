@@ -1850,6 +1850,16 @@ NSHTTPURLResponse`.
 
 ---
 
+## iPad and landscape layout (`pcLayoutWidth`, `PCLayout`)
+
+`RootView` measures the window's width (`onGeometryChange`) and hands it to every screen as the `pcLayoutWidth` environment value. Views size from it through `PCLayout` (`Theme.swift`), Swift's side of the shared `LayoutRules` (the rules and numbers are in `docs/DESIGN_SYSTEM.md` → Scales → Tablets and landscape; Android reads the same rules).
+
+- **Rows:** `homeRowCardWidth(layoutWidth)` / `PCLayout.rowCardWidth`, passed to the card and its art. Home's halves go through `HomeHalvesLayout`, which puts them side by side when both fit three cards and sizes their cards.
+- **Grids:** `PCLayout.columns(layoutWidth, …)`, never a fixed `GridItem` count. `PCSkeletonGrid` follows the same rule.
+- **Readable width:** `.pcReadableWidth(gutter:centered:)` for text, forms, Settings and the Ask box; the mini player and tab bar stop at `PCLayout.barMax`; Now Playing's controls at `PCLayout.playerControlsMax`.
+- **Now Playing:** a landscape iPad (regular in both size classes, wider than tall) takes the art-beside-controls layout a landscape phone uses (`sideBySide`, from the view's own measured size). The "Playing from" deck keeps its space while hidden (a new track starts with no resolver; showing and hiding it moved the controls), and its source list is a popover below the pill, not an overlay over the transport.
+- A sheet presented as a form sheet on iPad inherits the window's `pcLayoutWidth`, not its own narrower width; a sheet that lays out a grid should measure itself.
+
 ## What's intentionally deferred (don't "fix")
 
 - Full Koin DI graph — `IosContainer` is hand-rolled on purpose.

@@ -171,6 +171,7 @@ private let friendPeriods: [(key: String, label: String)] = [
 ]
 
 struct FriendProfileScreen: View {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
     @State private var model: FriendProfileModel
     @State private var tabIndex = 0
     @State private var period = FormattersKt.DEFAULT_HISTORY_PERIOD
@@ -329,7 +330,7 @@ struct FriendProfileScreen: View {
 
     // ── Top Albums ─────────────────────────────────────────────────────
     private var topAlbums: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 16) {
+        LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(Array(model.topAlbums.enumerated()), id: \.offset) { _, a in
                 NavigationLink(value: PCRoute.album(title: a.name, artist: a.artist)) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -357,7 +358,7 @@ struct FriendProfileScreen: View {
 
     // ── Top Artists ────────────────────────────────────────────────────
     private var topArtists: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 18) {
+        LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, minCard: LayoutRules.shared.GRID_CIRCLE_MIN, minColumns: 3), spacing: 18) {
             ForEach(Array(model.topArtists.enumerated()), id: \.offset) { _, a in
                 NavigationLink(value: PCRoute.artist(a.name)) {
                     VStack(spacing: 6) {

@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.rememberPlayFromSource
 import kotlinx.coroutines.Job
@@ -23,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -445,7 +445,7 @@ private fun AlbumsTab(
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
+                columns = adaptiveGridCells(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),

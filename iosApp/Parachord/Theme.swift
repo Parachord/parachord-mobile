@@ -544,3 +544,55 @@ func pcLoadErrorMessage(_ error: Error) -> String? {
     guard (error as NSError).userInfo["KotlinException"] is IosLoadException else { return nil }
     return (error as NSError).userInfo["KotlinException"].flatMap { ($0 as? KotlinThrowable)?.message }
 }
+
+// MARK: - Layout width (iPad, landscape, Split View)
+
+private struct PCLayoutWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
+
+extension EnvironmentValues {
+    /// The window's width, measured once at the root (`RootView`). Rows and
+    /// grids size from it through `PCLayout` (the shared `LayoutRules`).
+    var pcLayoutWidth: CGFloat {
+        get { self[PCLayoutWidthKey.self] }
+        set { self[PCLayoutWidthKey.self] = newValue }
+    }
+}
+
+/// Swift's side of the shared `LayoutRules`: the phone keeps its sizes, wider
+/// screens fill their width.
+enum PCLayout {
+    private static var rules: LayoutRules { LayoutRules.shared }
+
+    /// Each card's width in a row of `cards` across `width` (the window),
+    /// inside `gutter` on both sides, `gap` apart.
+    static func rowCardWidth(_ width: CGFloat, cards: Int, gutter: CGFloat, gap: CGFloat) -> CGFloat {
+        CGFloat(rules.rowCardWidth(available: Double(width - 2 * gutter), cards: Int32(cards), gap: Double(gap)))
+    }
+
+    /// Flexible grid columns for `width` (inside `gutter` on both sides): as
+    /// many as fit at `minCard`, at least `minColumns`.
+    static func columns(_ width: CGFloat, gutter: CGFloat, spacing: CGFloat,
+                        minCard: Double = LayoutRules.shared.GRID_CARD_MIN, minColumns: Int = 2,
+                        alignment: Alignment? = nil) -> [GridItem] {
+        let n = Int(rules.gridColumns(available: Double(width - 2 * gutter), gap: Double(spacing),
+                                      minCard: minCard, minColumns: Int32(minColumns)))
+        return Array(repeating: GridItem(.flexible(), spacing: spacing, alignment: alignment), count: n)
+    }
+
+    static func isWide(_ width: CGFloat) -> Bool { rules.isWide(available: Double(width)) }
+
+    static var readableMax: CGFloat { CGFloat(rules.READABLE_MAX) }
+    static var barMax: CGFloat { CGFloat(rules.BAR_MAX) }
+    static var playerControlsMax: CGFloat { CGFloat(rules.PLAYER_CONTROLS_MAX) }
+}
+
+extension View {
+    /// Caps content at the readable width (`LayoutRules.READABLE_MAX`, plus any
+    /// `gutter` the content pads itself with), for text, forms and settings
+    /// rows. `centered` puts the column in the middle; otherwise it stays at the
+    /// leading edge, lined up with the page's other sections.
+    func pcReadableWidth(gutter: CGFloat = 0, centered: Bool = true) -> some View {
+        frame(maxWidth: PCLayout.readableMax + 2 * gutter, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
+    }
+}

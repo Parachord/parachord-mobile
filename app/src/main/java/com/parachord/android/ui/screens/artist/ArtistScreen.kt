@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.artist
 
+import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
@@ -9,7 +10,6 @@ import com.parachord.shared.ui.UiMessages
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
@@ -832,7 +832,7 @@ private fun RelatedArtistsTab(
         }
     } else {
         LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
+            columns = adaptiveGridCells(circles = true),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
