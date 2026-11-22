@@ -1779,11 +1779,52 @@ final class IosAVPlayer {
             onPlaybackFailed?(0, 0, false, tag)
             return
         }
+        begin(item: AVPlayerItem(url: url), url: url, title: title, artist: artist, resolver: resolver,
+              tag: tag, startAtSec: startAtSec)
+    }
+
+    /// The FairPlay key session for the loaded item (#794); dropped with it.
+    private var fairPlayKeys: IosFairPlayKeys?
+
+    /// Loads a plug-in's FairPlay HLS (#794): [cookies] go with the playlist
+    /// and segment requests (on the playlist's host), and [keys] answers the
+    /// stream's `skd://` key requests. False when the URL isn't https.
+    /// The URL and cookies are credentials for this play only: never logged.
+    @discardableResult
+    func load(
+        fairPlayURL urlString: String,
+        cookies: [(String, String)],
+        keys: IosFairPlayKeys,
+        title: String,
+        artist: String,
+        resolver: String,
+        tag: Int,
+        startAtSec: Double = 0
+    ) -> Bool {
+        guard let url = URL(string: urlString), url.scheme == "https", let host = url.host else { return false }
+        let httpCookies: [HTTPCookie] = cookies.compactMap { name, value in
+            HTTPCookie(properties: [.name: name, .value: value, .domain: host, .path: "/", .secure: "TRUE"])
+        }
+        let asset = AVURLAsset(url: url, options: [AVURLAssetHTTPCookiesKey: httpCookies])
+        keys.attach(asset)
+        begin(item: AVPlayerItem(asset: asset), url: url, title: title, artist: artist, resolver: resolver,
+              tag: tag, startAtSec: startAtSec)
+        fairPlayKeys = keys
+        return true
+    }
+
+    /// The play that owns the loaded item now (a FairPlay item is loaded under
+    /// a tag of its own until it has started, `PlaybackRouter.playFairPlay`).
+    func retag(_ tag: Int) {
+        loadedTag = tag
+    }
+
+    private func begin(item: AVPlayerItem, url: URL, title: String, artist: String, resolver: String,
+                       tag: Int, startAtSec: Double) {
         teardown()
         loadedTag = tag
         nowPlayingTitle = title
         nowPlayingArtist = artist
-        let item = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: item)
         // Set BEFORE the item can start: AVPlayer.volume is a real per-player
         // gain independent of system volume, so this is the half of desktop's
@@ -1943,6 +1984,8 @@ final class IosAVPlayer {
         failureReported = false
         failedHttpStatus = 0
         loadedTag = 0
+        fairPlayKeys?.close()
+        fairPlayKeys = nil
         player?.pause()
         player = nil
         isPlaying = false

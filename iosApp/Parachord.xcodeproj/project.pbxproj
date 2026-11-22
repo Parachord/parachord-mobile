@@ -63,6 +63,7 @@
 		AA000000000000000000011B /* HomeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000011A /* HomeModel.swift */; };
 		AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FC /* SoundCloudWidget.swift */; };
 		AA0000000000000000000125 /* WebSessionWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000124 /* WebSessionWebView.swift */; };
+		AA0000000000000000000127 /* FairPlayKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000126 /* FairPlayKeys.swift */; };
 		AA00000000000000000000FF /* soundcloud-widget.html in Resources */ = {isa = PBXBuildFile; fileRef = AA00000000000000000000FE /* soundcloud-widget.html */; };
 		AA0000000000000000000101 /* soundcloud-widget-player.js in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000100 /* soundcloud-widget-player.js */; };
 		AA0000000000000000000103 /* BandcampEmbedPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000102 /* BandcampEmbedPlayer.swift */; };
@@ -155,6 +156,7 @@
 		AA000000000000000000011A /* HomeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeModel.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FC /* SoundCloudWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundCloudWidget.swift; sourceTree = "<group>"; };
 		AA0000000000000000000124 /* WebSessionWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSessionWebView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000126 /* FairPlayKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FairPlayKeys.swift; sourceTree = "<group>"; };
 		AA00000000000000000000FE /* soundcloud-widget.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "Resources/soundcloud-widget.html"; sourceTree = "<group>"; };
 		AA0000000000000000000100 /* soundcloud-widget-player.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "Resources/soundcloud-widget-player.js"; sourceTree = "<group>"; };
 		AA0000000000000000000102 /* BandcampEmbedPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BandcampEmbedPlayer.swift; sourceTree = "<group>"; };
@@ -276,6 +278,7 @@
 				AA00000000000000000000E8 /* SpinoffController.swift */,
 				AA00000000000000000000FC /* SoundCloudWidget.swift */,
 				AA0000000000000000000124 /* WebSessionWebView.swift */,
+				AA0000000000000000000126 /* FairPlayKeys.swift */,
 				AA0000000000000000000102 /* BandcampEmbedPlayer.swift */,
 				AA00000000000000000000EA /* ChatScreen.swift */,
 				AA00000000000000000000E4 /* FriendProfileScreen.swift */,
@@ -490,6 +493,7 @@
 				AA00000000000000000000E9 /* SpinoffController.swift in Sources */,
 				AA00000000000000000000FD /* SoundCloudWidget.swift in Sources */,
 				AA0000000000000000000125 /* WebSessionWebView.swift in Sources */,
+				AA0000000000000000000127 /* FairPlayKeys.swift in Sources */,
 				AA0000000000000000000103 /* BandcampEmbedPlayer.swift in Sources */,
 				AA00000000000000000000EB /* ChatScreen.swift in Sources */,
 				AA00000000000000000000E5 /* FriendProfileScreen.swift in Sources */,

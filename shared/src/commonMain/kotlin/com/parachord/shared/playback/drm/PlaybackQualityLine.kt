@@ -65,6 +65,8 @@ sealed class PlaybackQualityLine {
     companion object {
         const val ADJUST_SUFFIX = " · Adjust to your connection"
         const val ATMOS_SUFFIX = " · Dolby Atmos when available"
+        /** A plug-in's FairPlay HLS on iOS: AAC up to 256 kbps (#794). */
+        const val IOS_FAIRPLAY_TITLE = "Up to 256 kbps AAC"
 
         /**
          * The line for [plugin], or null for a plug-in with no rule. Follows
@@ -83,6 +85,13 @@ sealed class PlaybackQualityLine {
                 if (settings.adaptive) summary += ADJUST_SUFFIX
                 if (settings.spatial && device.canPlayAtmos) summary += ATMOS_SUFFIX
                 return Follows(summary)
+            }
+            if (platform == PlaybackPlatform.IOS && plugin.capabilities["widevine"] == true && plugin.hasDrmPair) {
+                // FairPlay HLS on iOS (#794): AAC only, whatever the plan.
+                return ExternalControl(
+                    IOS_FAIRPLAY_TITLE,
+                    "${plugin.name} streams AAC on iPhone and iPad. Parachord’s Playback Quality doesn’t change it yet.",
+                )
             }
             if (plugin.capabilities["html5Stream"] == true) {
                 return ExternalControl("Set by your server", "Your server’s transcoding settings decide it.")

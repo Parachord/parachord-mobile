@@ -34,6 +34,12 @@ class PluginHostContractTest {
     }
 
     @Test
+    fun `both apps carry the same plugin DRM bridge`() {
+        assertEquals(block(bootstrapHtml, "plugin-drm"), block(iosRuntime, "plugin-drm"))
+        assertTrue(block(iosRuntime, "plugin-drm").contains("accept === 'hls-fairplay'"))
+    }
+
+    @Test
     fun `the loader is desktop's — it builds this_host`() {
         val js = loader.readText()
         assertTrue(js.contains("static buildPluginHost(supplier, axe)"))
