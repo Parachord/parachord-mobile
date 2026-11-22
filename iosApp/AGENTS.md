@@ -34,6 +34,9 @@ For every UI/UX or behavior task, in this order:
    `CardSpec`: the card box, art at radius 8, the pill, rank and badges), and a
    loading card `PCCardSkeleton`; in a grid pass `width: nil`, and leave `onOpen`
    nil when a `NavigationLink` or `Button` takes the tap. Never build a card in a screen.
+   A page with a hero (Home, Collection, Playlists, History, Recommendations,
+   Pop of the Tops, Fresh Drops, Critical Darlings, Concerts, Search) draws `PCPageHero`
+   (the shared `PageHero`: its sizes, line and pattern) in place of `PCTopBar`.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at

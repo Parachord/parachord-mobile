@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
+import androidx.compose.ui.graphics.Color
+import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.recommendations.playlistTapOpensView
 import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.shared.ui.UiMessages
@@ -138,8 +140,6 @@ private const val LISTENER_SKELETONS = 6
 /** White on the page band and on fill-accent buttons (design system: never on the theme accent). */
 private val OnFill = tokenColor(DesignTokens.ON_ACCENT)
 
-private val HeroGradient = Brush.horizontalGradient(DesignTokens.Page.RECOMMENDATIONS.composeGradient)
-
 /**
  * Desktop's Recommendations page (`recommendations-page.js`): the hero, the
  * source filter, then the shared page's sections. Every rule (which rows show,
@@ -176,24 +176,15 @@ fun RecommendationsScreen(
     val status = pageStatus(page, filter)
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = RecommendationCopy.TITLE.uppercase(),
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.RECOMMENDATIONS,
+            line = page.hero,
+            navigation = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = UiMessages.BACK)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = UiMessages.BACK, tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
-        RecommendationsHero(page.hero)
 
         if (status != PageStatus.NotConfigured) {
             FilterChips(
@@ -245,35 +236,6 @@ fun RecommendationsScreen(
 }
 
 private const val ALL_CHIP = "all"
-
-@Composable
-private fun RecommendationsHero(hero: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(HeroGradient)
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ParachordIcon(PageIcon.RECOMMENDATIONS.icon, contentDescription = null, size = 32.dp, tint = OnFill)
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text(
-                text = hero,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = OnFill,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = RecommendationCopy.SUBLINE,
-                fontSize = 12.sp,
-                color = OnFill,
-            )
-        }
-    }
-}
 
 // ── Page states ─────────────────────────────────────────────────────
 

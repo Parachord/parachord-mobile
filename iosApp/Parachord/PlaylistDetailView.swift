@@ -526,9 +526,12 @@ struct PlaylistsScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                PCTopBar(title: "Playlists", leading: .menu, onLeading: onMenu,
-                         trailingIcon: importer.importing ? "arrow.triangle.2.circlepath" : "square.and.arrow.down",
-                         onTrailing: { if !importer.importing { importer.start() } })
+                PCPageHero(page: .playlists,
+                           line: PageHero.shared.line(page: .playlists, count: model.playlists.isEmpty ? nil : KotlinInt(int: Int32(model.playlists.count)), tracks: false),
+                           leading: .menu, onLeading: onMenu,
+                           trailingIcon: importer.importing ? "arrow.triangle.2.circlepath" : "square.and.arrow.down",
+                           trailingLabel: "Import",
+                           onTrailing: { if !importer.importing { importer.start() } })
                 if !model.playlists.isEmpty {
                     HStack {
                         Menu {

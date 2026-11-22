@@ -134,6 +134,14 @@ struct PCSkeletonGrid: View {
 struct PCTabs: View {
     let tabs: [String]
     @Binding var selection: Int
+    /// The page whose colour the underline takes (under a page hero); nil: the accent.
+    var page: DesignTokens.Page? = nil
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var underline: Color {
+        guard let page else { return PC.accent }
+        return pcToken(PageHero.shared.tabColor(page: page, onDark: colorScheme == .dark))
+    }
 
     var body: some View {
         // Horizontally scrollable (mirrors Android's ScrollableTabRow) so 4+
@@ -147,7 +155,7 @@ struct PCTabs: View {
                                 .font(.system(size: 12, weight: .light)).tracking(1.3)
                                 .foregroundStyle(selection == i ? PC.fg1 : PC.fg3)
                                 .padding(.vertical, 14)   // ~48dp tab height (Android parity)
-                            Rectangle().fill(selection == i ? PC.accent : .clear).frame(height: 2)
+                            Rectangle().fill(selection == i ? underline : .clear).frame(height: 2)
                         }
                         .fixedSize()
                     }
@@ -157,35 +165,6 @@ struct PCTabs: View {
             .padding(.horizontal, 18)
         }
         .overlay(Rectangle().fill(PC.border).frame(height: 1), alignment: .bottom)
-    }
-}
-
-/// Gradient metadata banner that sits BELOW the plain PCTopBar on the curated
-/// screens (mirrors Android's CriticsHeader / FreshDropsHeader). Carries the
-/// subtitle + count only — the title lives in the top bar now.
-struct PCCuratedBanner: View {
-    var icon: String? = nil   // SF Symbol, mirrors Android's banner icon (32dp white); Pop has none
-    let subtitle: String
-    let count: String?
-    let gradient: [UInt32]
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            if let icon {
-                Image(systemName: icon).font(.system(size: 26))
-                    .foregroundStyle(.white.opacity(0.9))
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(subtitle).font(.system(size: 14)).foregroundStyle(.white.opacity(0.92))
-                if let count { Text(count).font(.system(size: 13, weight: .medium)).foregroundStyle(.white.opacity(0.78)) }
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20).padding(.vertical, 16)
-        .background(LinearGradient(
-            colors: gradient.map { Color(uiColor: UIColor(hex: $0)) },
-            startPoint: .leading, endPoint: .trailing))
     }
 }
 
@@ -305,14 +284,9 @@ struct CriticalDarlingsScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: "Critical Darlings", leading: .back, onLeading: { dismiss() })
+            PCPageHero(page: .criticalDarlings, line: PageHero.shared.line(page: .criticalDarlings, count: model.albums.isEmpty ? nil : KotlinInt(int: Int32(model.albums.count)), tracks: false), leading: .back, onLeading: { dismiss() })
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    PCCuratedBanner(
-                        icon: "trophy.fill",
-                        subtitle: "Top-rated albums from leading music publications",
-                        count: model.albums.isEmpty ? nil : "\(model.albums.count) albums",
-                        gradient: PC.pageGradient(.criticalDarlings))
                     filterBar
                     if model.isLoading && !model.loaded {
                         PCSkeletonList(count: 6, art: 80)
@@ -479,14 +453,9 @@ struct FreshDropsScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: "Fresh Drops", leading: .back, onLeading: { dismiss() })
+            PCPageHero(page: .freshDrops, line: PageHero.shared.line(page: .freshDrops, count: model.drops.isEmpty ? nil : KotlinInt(int: Int32(model.drops.count)), tracks: false), leading: .back, onLeading: { dismiss() })
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    PCCuratedBanner(
-                        icon: "drop.fill",
-                        subtitle: "New releases from artists you listen to",
-                        count: model.drops.isEmpty ? nil : "\(model.drops.count) releases",
-                        gradient: PC.pageGradient(.freshDrops))
 
                     Section {
                         if model.isLoading && !model.loaded {
@@ -863,7 +832,7 @@ struct ConcertsScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: "Concerts", leading: .back, onLeading: { dismiss() })
+            PCPageHero(page: .concerts, line: PageHero.shared.line(page: .concerts, count: model.events.isEmpty ? nil : KotlinInt(int: Int32(model.events.count)), tracks: false), leading: .back, onLeading: { dismiss() })
 
             // Location bar — tap to open the picker. "Near {city} · {radius}mi"
             // when set, else "Set your location" (parity with Android's bar).
@@ -875,11 +844,6 @@ struct ConcertsScreen: View {
             ScrollView {
                 // Banner renders immediately with the title — never gated behind
                 // the content load.
-                PCCuratedBanner(
-                    icon: "ticket.fill",
-                    subtitle: "Upcoming shows from artists you listen to",
-                    count: model.events.isEmpty ? nil : "\(model.events.count) events",
-                    gradient: PC.pageGradient(.concerts))
                 if model.isLoading && !model.loaded {
                     PCSkeletonList(count: 6, art: 56)
                 } else if model.events.isEmpty, let error = model.error {

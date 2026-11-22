@@ -144,12 +144,8 @@ struct HistoryScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: "History", leading: .back, onLeading: { dismiss() })
-            PCCuratedBanner(
-                icon: "clock.arrow.circlepath",
-                subtitle: "Your top songs, albums, artists & recent plays",
-                count: nil, gradient: PC.pageGradient(.history))
-            PCTabs(tabs: ["Top Songs", "Top Albums", "Top Artists", "Recent"], selection: $tabIndex)
+            PCPageHero(page: .history, line: PageHero.shared.line(page: .history, count: nil, tracks: false), leading: .back, onLeading: { dismiss() })
+            PCTabs(tabs: ["Top Songs", "Top Albums", "Top Artists", "Recent"], selection: $tabIndex, page: .history)
             if tabIndex != 3 { periodChips }
 
             ScrollView {

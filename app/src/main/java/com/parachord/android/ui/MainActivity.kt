@@ -664,7 +664,10 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                                 size = 28.dp,
                                             )
                                         } else {
-                                            val tint = if (selected) Color.White else Color.White.copy(alpha = 0.55f)
+                                            // The selected tab takes its page's colour (the bar is always dark).
+                                            val tint = if (selected) {
+                                                item.page?.let { com.parachord.android.ui.theme.tokenColor(com.parachord.shared.ui.PageHero.tabColor(it, onDark = true)) } ?: Color.White
+                                            } else Color.White.copy(alpha = 0.55f)
                                             val systemIcon = item.systemIcon
                                             if (systemIcon != null) {
                                                 Icon(systemIcon, contentDescription = item.label, tint = tint, modifier = Modifier.size(26.dp))

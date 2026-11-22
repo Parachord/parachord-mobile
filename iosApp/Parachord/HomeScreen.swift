@@ -147,7 +147,7 @@ struct HomeScreen: View {
     var body: some View {
         NavigationStack(path: $path) {
             VStack(spacing: 0) {
-                HomeHero(onMenu: onMenu)
+                PCPageHero(page: .home, leading: .menu, onLeading: onMenu)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         reauthBanners
