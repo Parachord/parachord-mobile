@@ -101,6 +101,7 @@ class BackgroundResolveSweep(
      * playable source for (a set rather than a callback, so iOS's main-actor
      * cache is read on its own thread).
      */
+    @Throws(Throwable::class)
     suspend fun next(
         nowMs: Long,
         lastActivityMs: Long,

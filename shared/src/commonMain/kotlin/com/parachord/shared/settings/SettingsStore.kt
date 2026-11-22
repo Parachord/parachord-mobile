@@ -276,11 +276,13 @@ class SettingsStore(
     val nwayEnabledFlow: Flow<Boolean> =
         syncEngineModeFlow.map { SyncEngineMode.nwayActive(it) }
 
+    @Throws(Throwable::class)
     suspend fun setThemeMode(mode: String) {
         ensureMigrated()
         kv.setString(THEME_MODE, mode)
     }
 
+    @Throws(Throwable::class)
     suspend fun setScrobblingEnabled(enabled: Boolean) {
         ensureMigrated()
         kv.setBoolean(SCROBBLING_ENABLED, enabled)
@@ -300,6 +302,7 @@ class SettingsStore(
     }
 
     /** The three settings as a play reads them at its start. */
+    @Throws(Throwable::class)
     suspend fun getPlaybackQualitySettings(): com.parachord.shared.playback.drm.PlaybackQualitySettings {
         ensureMigrated()
         return com.parachord.shared.playback.drm.PlaybackQualitySettings(
@@ -310,46 +313,60 @@ class SettingsStore(
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun setPlaybackQuality(tier: com.parachord.shared.playback.drm.PlaybackQualityTier) {
         ensureMigrated(); kv.setString(PLAYBACK_QUALITY, tier.key)
     }
 
+    @Throws(Throwable::class)
     suspend fun setPlaybackAbr(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(PLAYBACK_ABR, enabled)
     }
 
+    @Throws(Throwable::class)
     suspend fun setPlaybackSpatial(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(PLAYBACK_SPATIAL, enabled)
     }
 
     // ── Sort preferences ─────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getSortArtists(): String? {
         ensureMigrated(); return kv.getStringOrNull(SORT_ARTISTS)
     }
+    @Throws(Throwable::class)
     suspend fun getSortAlbums(): String? {
         ensureMigrated(); return kv.getStringOrNull(SORT_ALBUMS)
     }
+    @Throws(Throwable::class)
     suspend fun getSortTracks(): String? {
         ensureMigrated(); return kv.getStringOrNull(SORT_TRACKS)
     }
+    @Throws(Throwable::class)
     suspend fun getSortFriends(): String? {
         ensureMigrated(); return kv.getStringOrNull(SORT_FRIENDS)
     }
+    @Throws(Throwable::class)
     suspend fun getSortPlaylists(): String? {
         ensureMigrated(); return kv.getStringOrNull(SORT_PLAYLISTS)
     }
 
+    @Throws(Throwable::class)
     suspend fun setSortArtists(sort: String) { ensureMigrated(); kv.setString(SORT_ARTISTS, sort) }
+    @Throws(Throwable::class)
     suspend fun setSortAlbums(sort: String) { ensureMigrated(); kv.setString(SORT_ALBUMS, sort) }
+    @Throws(Throwable::class)
     suspend fun setSortTracks(sort: String) { ensureMigrated(); kv.setString(SORT_TRACKS, sort) }
+    @Throws(Throwable::class)
     suspend fun setSortFriends(sort: String) { ensureMigrated(); kv.setString(SORT_FRIENDS, sort) }
+    @Throws(Throwable::class)
     suspend fun setSortPlaylists(sort: String) {
         ensureMigrated(); kv.setString(SORT_PLAYLISTS, sort)
     }
 
     // ── Spotify tokens (SecureTokenStore) ────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun setSpotifyTokens(accessToken: String, refreshToken: String) {
         secureStore.set("spotify_access_token", accessToken)
         secureStore.set("spotify_refresh_token", refreshToken)
@@ -358,12 +375,15 @@ class SettingsStore(
     fun getSpotifyAccessTokenFlow(): Flow<String?> =
         secureStore.observe("spotify_access_token")
 
+    @Throws(Throwable::class)
     suspend fun getSpotifyAccessToken(): String? =
         secureStore.get("spotify_access_token")
 
+    @Throws(Throwable::class)
     suspend fun getSpotifyRefreshToken(): String? =
         secureStore.get("spotify_refresh_token")
 
+    @Throws(Throwable::class)
     suspend fun clearSpotifyTokens() {
         secureStore.remove("spotify_access_token")
         secureStore.remove("spotify_refresh_token")
@@ -378,6 +398,7 @@ class SettingsStore(
      * grant). Also clears a dismissed pre-expiry warning, so the new grant's
      * warning shows in full when its time comes.
      */
+    @Throws(Throwable::class)
     suspend fun markSpotifyAuthorized(nowMs: Long) {
         ensureMigrated()
         kv.setLong(SPOTIFY_AUTHORIZED_AT, nowMs)
@@ -385,14 +406,17 @@ class SettingsStore(
     }
 
     /** When the current grant was authorized, or 0 when not recorded. */
+    @Throws(Throwable::class)
     suspend fun getSpotifyAuthorizedAt(): Long {
         ensureMigrated(); return kv.getLong(SPOTIFY_AUTHORIZED_AT, default = 0L)
     }
 
+    @Throws(Throwable::class)
     suspend fun getSpotifyExpiryWarningDismissedAt(): Long {
         ensureMigrated(); return kv.getLong(SPOTIFY_EXPIRY_WARNING_DISMISSED_AT, default = 0L)
     }
 
+    @Throws(Throwable::class)
     suspend fun setSpotifyExpiryWarningDismissedAt(nowMs: Long) {
         ensureMigrated(); kv.setLong(SPOTIFY_EXPIRY_WARNING_DISMISSED_AT, nowMs)
     }
@@ -407,10 +431,12 @@ class SettingsStore(
      *
      * Returns 0 if never set (treat as "expired / refresh now").
      */
+    @Throws(Throwable::class)
     suspend fun getSpotifyAccessTokenExpiresAt(): Long {
         ensureMigrated(); return kv.getLong(SPOTIFY_ACCESS_TOKEN_EXPIRES_AT, default = 0L)
     }
 
+    @Throws(Throwable::class)
     suspend fun setSpotifyAccessTokenExpiresAt(expiresAt: Long) {
         ensureMigrated(); kv.setLong(SPOTIFY_ACCESS_TOKEN_EXPIRES_AT, expiresAt)
     }
@@ -420,19 +446,23 @@ class SettingsStore(
     fun getLastFmSessionKeyFlow(): Flow<String?> =
         secureStore.observe("lastfm_session_key")
 
+    @Throws(Throwable::class)
     suspend fun getLastFmSessionKey(): String? =
         secureStore.get("lastfm_session_key")
 
+    @Throws(Throwable::class)
     suspend fun setLastFmSession(sessionKey: String) {
         secureStore.set("lastfm_session_key", sessionKey)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearLastFmSession() {
         secureStore.remove("lastfm_session_key")
         ensureMigrated()
         kv.remove(LASTFM_USERNAME)
     }
 
+    @Throws(Throwable::class)
     suspend fun getLastFmUsername(): String? {
         ensureMigrated(); return kv.getStringOrNull(LASTFM_USERNAME)
     }
@@ -441,12 +471,14 @@ class SettingsStore(
         kv.observeStringOrNull(LASTFM_USERNAME)
     }
 
+    @Throws(Throwable::class)
     suspend fun setLastFmUsername(username: String) {
         ensureMigrated(); kv.setString(LASTFM_USERNAME, username)
     }
 
     // ── ListenBrainz username + token ────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getListenBrainzUsername(): String? {
         ensureMigrated(); return kv.getStringOrNull(LISTENBRAINZ_USERNAME)?.ifBlank { null }
     }
@@ -455,32 +487,39 @@ class SettingsStore(
         kv.observeStringOrNull(LISTENBRAINZ_USERNAME).map { it?.ifBlank { null } }
     }
 
+    @Throws(Throwable::class)
     suspend fun setListenBrainzUsername(username: String) {
         ensureMigrated(); kv.setString(LISTENBRAINZ_USERNAME, username)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearListenBrainzUsername() {
         ensureMigrated(); kv.remove(LISTENBRAINZ_USERNAME)
     }
 
+    @Throws(Throwable::class)
     suspend fun getListenBrainzToken(): String? = secureStore.get("listenbrainz_token")
 
     fun getListenBrainzTokenFlow(): Flow<String?> = secureStore.observe("listenbrainz_token")
 
+    @Throws(Throwable::class)
     suspend fun setListenBrainzToken(token: String) {
         secureStore.set("listenbrainz_token", token)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearListenBrainzToken() {
         secureStore.remove("listenbrainz_token")
     }
 
     // ── SoundCloud (tokens + BYO credentials) ────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun setSoundCloudToken(token: String) {
         secureStore.set("soundcloud_access_token", token)
     }
 
+    @Throws(Throwable::class)
     suspend fun setSoundCloudTokens(accessToken: String, refreshToken: String) {
         secureStore.set("soundcloud_access_token", accessToken)
         secureStore.set("soundcloud_refresh_token", refreshToken)
@@ -488,23 +527,29 @@ class SettingsStore(
 
     fun getSoundCloudTokenFlow(): Flow<String?> = secureStore.observe("soundcloud_access_token")
 
+    @Throws(Throwable::class)
     suspend fun getSoundCloudToken(): String? = secureStore.get("soundcloud_access_token")
 
+    @Throws(Throwable::class)
     suspend fun getSoundCloudRefreshToken(): String? = secureStore.get("soundcloud_refresh_token")
 
     /** When the access token stops working (epoch ms), or null when unknown. */
+    @Throws(Throwable::class)
     suspend fun getSoundCloudTokenExpiresAt(): Long? =
         secureStore.get("soundcloud_token_expiry")?.toLongOrNull()
 
     /** When the tokens were last minted or refreshed (epoch ms), or null. */
+    @Throws(Throwable::class)
     suspend fun getSoundCloudLastRefreshAt(): Long? =
         secureStore.get("soundcloud_last_refresh")?.toLongOrNull()
 
+    @Throws(Throwable::class)
     suspend fun setSoundCloudTokenTimes(expiresAt: Long, refreshedAt: Long) {
         secureStore.set("soundcloud_token_expiry", expiresAt.toString())
         secureStore.set("soundcloud_last_refresh", refreshedAt.toString())
     }
 
+    @Throws(Throwable::class)
     suspend fun clearSoundCloudToken() {
         secureStore.remove("soundcloud_access_token")
         secureStore.remove("soundcloud_refresh_token")
@@ -514,22 +559,29 @@ class SettingsStore(
 
     // Spotify uses a BYO Developer Client ID (PKCE — no secret). Parachord ships
     // no key; the user creates a free app at developer.spotify.com/dashboard.
+    @Throws(Throwable::class)
     suspend fun getSpotifyClientId(): String? = secureStore.get("spotify_client_id")
     fun getSpotifyClientIdFlow(): Flow<String?> = secureStore.observe("spotify_client_id")
+    @Throws(Throwable::class)
     suspend fun setSpotifyClientId(clientId: String) { secureStore.set("spotify_client_id", clientId) }
+    @Throws(Throwable::class)
     suspend fun clearSpotifyClientId() { secureStore.remove("spotify_client_id") }
 
+    @Throws(Throwable::class)
     suspend fun setSoundCloudCredentials(clientId: String, clientSecret: String) {
         secureStore.set("soundcloud_client_id", clientId)
         secureStore.set("soundcloud_client_secret", clientSecret)
     }
 
+    @Throws(Throwable::class)
     suspend fun getSoundCloudClientId(): String? = secureStore.get("soundcloud_client_id")
 
+    @Throws(Throwable::class)
     suspend fun getSoundCloudClientSecret(): String? = secureStore.get("soundcloud_client_secret")
 
     fun getSoundCloudClientIdFlow(): Flow<String?> = secureStore.observe("soundcloud_client_id")
 
+    @Throws(Throwable::class)
     suspend fun clearSoundCloudCredentials() {
         secureStore.remove("soundcloud_client_id")
         secureStore.remove("soundcloud_client_secret")
@@ -538,6 +590,7 @@ class SettingsStore(
 
     // ── Resolver order / active / volume offsets ─────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getResolverOrder(): List<String> {
         ensureMigrated()
         val raw = kv.getStringOrNull(RESOLVER_ORDER) ?: DEFAULT_RESOLVER_ORDER
@@ -550,10 +603,12 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setResolverOrder(order: List<String>) {
         ensureMigrated(); kv.setString(RESOLVER_ORDER, order.joinToString(","))
     }
 
+    @Throws(Throwable::class)
     suspend fun getActiveResolvers(): List<String> {
         ensureMigrated()
         val raw = kv.getStringOrNull(ACTIVE_RESOLVERS) ?: return emptyList()
@@ -566,10 +621,12 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setActiveResolvers(resolvers: List<String>) {
         ensureMigrated(); kv.setString(ACTIVE_RESOLVERS, resolvers.joinToString(","))
     }
 
+    @Throws(Throwable::class)
     suspend fun getResolverVolumeOffsets(): Map<String, Int> {
         ensureMigrated()
         val raw = kv.getStringOrNull(RESOLVER_VOLUME_OFFSETS) ?: return defaultVolumeOffsets()
@@ -579,6 +636,7 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setResolverVolumeOffsets(offsets: Map<String, Int>) {
         ensureMigrated()
         kv.setString(
@@ -589,10 +647,12 @@ class SettingsStore(
 
     // ── Queue persistence ────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun setPersistQueue(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(PERSIST_QUEUE, enabled)
     }
 
+    @Throws(Throwable::class)
     suspend fun isPersistQueueEnabled(): Boolean {
         ensureMigrated(); return kv.getBoolean(PERSIST_QUEUE, default = true)
     }
@@ -606,57 +666,70 @@ class SettingsStore(
     }
 
     /** One-shot drop of saved track sources a failed resolve left (#566). */
+    @Throws(Throwable::class)
     suspend fun isTrackSourcesStoredIdPurgeDone(): Boolean {
         ensureMigrated(); return kv.getBoolean(TRACK_SOURCES_STORED_ID_PURGE_DONE, default = false)
     }
+    @Throws(Throwable::class)
     suspend fun setTrackSourcesStoredIdPurgeDone() {
         ensureMigrated(); kv.setBoolean(TRACK_SOURCES_STORED_ID_PURGE_DONE, true)
     }
 
+    @Throws(Throwable::class)
     suspend fun getPersistedQueueState(): String? {
         ensureMigrated(); return kv.getStringOrNull(PERSISTED_QUEUE_STATE)
     }
 
+    @Throws(Throwable::class)
     suspend fun setPersistedQueueState(json: String) {
         ensureMigrated(); kv.setString(PERSISTED_QUEUE_STATE, json)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearPersistedQueueState() {
         ensureMigrated(); kv.remove(PERSISTED_QUEUE_STATE); kv.remove(PERSISTED_QUEUE_POSITION)
     }
 
     /** Where the saved queue's current track had got to (`PlaybackResumePosition`, #567). */
+    @Throws(Throwable::class)
     suspend fun getPersistedPlaybackPosition(): String? {
         ensureMigrated(); return kv.getStringOrNull(PERSISTED_QUEUE_POSITION)
     }
 
+    @Throws(Throwable::class)
     suspend fun setPersistedPlaybackPosition(json: String) {
         ensureMigrated(); kv.setString(PERSISTED_QUEUE_POSITION, json)
     }
 
     // ── Libre.fm session ─────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getLibreFmSessionKey(): String? = secureStore.get("librefm_session_key")
 
     fun getLibreFmSessionKeyFlow(): Flow<String?> = secureStore.observe("librefm_session_key")
 
+    @Throws(Throwable::class)
     suspend fun setLibreFmSession(sessionKey: String) {
         secureStore.set("librefm_session_key", sessionKey)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearLibreFmSession() {
         secureStore.remove("librefm_session_key")
     }
 
     // ── Discogs token ────────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getDiscogsToken(): String? =
         secureStore.get("discogs_personal_token")?.ifBlank { null }
 
+    @Throws(Throwable::class)
     suspend fun setDiscogsToken(token: String) {
         secureStore.set("discogs_personal_token", token)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearDiscogsToken() {
         secureStore.remove("discogs_personal_token")
     }
@@ -672,6 +745,7 @@ class SettingsStore(
             pickAppleMusicDeveloperToken(saved, appleMusicDeveloperTokenFallback, onSkip = ::logSkippedDeveloperToken)
         }
 
+    @Throws(Throwable::class)
     suspend fun getAppleMusicDeveloperToken(): String? =
         pickAppleMusicDeveloperToken(
             secureStore.get("apple_music_developer_token"),
@@ -690,10 +764,12 @@ class SettingsStore(
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun setAppleMusicDeveloperToken(token: String) {
         secureStore.set("apple_music_developer_token", token)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearAppleMusicDeveloperToken() {
         secureStore.remove("apple_music_developer_token")
     }
@@ -702,28 +778,34 @@ class SettingsStore(
         kv.observeStringOrNull(APPLE_MUSIC_STOREFRONT).map { it?.ifBlank { null } }
     }
 
+    @Throws(Throwable::class)
     suspend fun getAppleMusicStorefront(): String? {
         ensureMigrated(); return kv.getStringOrNull(APPLE_MUSIC_STOREFRONT)?.ifBlank { null }
     }
 
+    @Throws(Throwable::class)
     suspend fun setAppleMusicStorefront(storefront: String) {
         ensureMigrated(); kv.setString(APPLE_MUSIC_STOREFRONT, storefront)
     }
 
     /** Persisted Apple Music user token (MUT) — allows skipping re-auth on relaunch. */
+    @Throws(Throwable::class)
     suspend fun getAppleMusicUserToken(): String? =
         secureStore.get("apple_music_user_token")?.ifBlank { null }
 
+    @Throws(Throwable::class)
     suspend fun setAppleMusicUserToken(token: String) {
         secureStore.set("apple_music_user_token", token)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearAppleMusicUserToken() {
         secureStore.remove("apple_music_user_token")
     }
 
     // ── Preferred Spotify Device ─────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getPreferredSpotifyDeviceId(): String? {
         ensureMigrated(); return kv.getStringOrNull(PREFERRED_SPOTIFY_DEVICE_ID)
     }
@@ -732,16 +814,19 @@ class SettingsStore(
         kv.observeStringOrNull(PREFERRED_SPOTIFY_DEVICE_ID)
     }
 
+    @Throws(Throwable::class)
     suspend fun setPreferredSpotifyDeviceId(deviceId: String) {
         ensureMigrated(); kv.setString(PREFERRED_SPOTIFY_DEVICE_ID, deviceId)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearPreferredSpotifyDeviceId() {
         ensureMigrated(); kv.remove(PREFERRED_SPOTIFY_DEVICE_ID)
     }
 
     // ── Metadata provider enable/disable ─────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getDisabledMetaProviders(): Set<String> {
         ensureMigrated()
         val raw = kv.getStringOrNull(DISABLED_META_PROVIDERS) ?: return emptySet()
@@ -754,10 +839,12 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setDisabledMetaProviders(disabled: Set<String>) {
         ensureMigrated(); kv.setString(DISABLED_META_PROVIDERS, disabled.joinToString(","))
     }
 
+    @Throws(Throwable::class)
     suspend fun setMetaProviderEnabled(providerName: String, enabled: Boolean) {
         val current = getDisabledMetaProviders().toMutableSet()
         if (enabled) current.remove(providerName) else current.add(providerName)
@@ -766,6 +853,7 @@ class SettingsStore(
 
     // ── Recommendation Blocklist ─────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getBlockedRecommendations(): Set<String> {
         ensureMigrated()
         val raw = kv.getStringOrNull(BLOCKED_RECOMMENDATIONS) ?: return emptySet()
@@ -778,6 +866,7 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun addBlockedRecommendation(entry: String) {
         ensureMigrated()
         val current = getBlockedRecommendations().toMutableSet()
@@ -787,6 +876,7 @@ class SettingsStore(
 
     // ── Listening History for AI ─────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getSendListeningHistory(): Boolean {
         ensureMigrated(); return kv.getBoolean(SEND_LISTENING_HISTORY, default = true)
     }
@@ -795,12 +885,14 @@ class SettingsStore(
         kv.observeBoolean(SEND_LISTENING_HISTORY, default = true)
     }
 
+    @Throws(Throwable::class)
     suspend fun setSendListeningHistory(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(SEND_LISTENING_HISTORY, enabled)
     }
 
     // ── AI Providers ─────────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getAiProviderApiKey(providerId: String): String? {
         val secureKey = aiApiKeyName(providerId) ?: return null
         return secureStore.get(secureKey)?.ifBlank { null }
@@ -811,16 +903,19 @@ class SettingsStore(
         return secureStore.observe(secureKey).map { it?.ifBlank { null } }
     }
 
+    @Throws(Throwable::class)
     suspend fun setAiProviderApiKey(providerId: String, apiKey: String) {
         val secureKey = aiApiKeyName(providerId) ?: return
         secureStore.set(secureKey, apiKey)
     }
 
+    @Throws(Throwable::class)
     suspend fun clearAiProviderApiKey(providerId: String) {
         val secureKey = aiApiKeyName(providerId) ?: return
         secureStore.remove(secureKey)
     }
 
+    @Throws(Throwable::class)
     suspend fun getAiProviderModel(providerId: String): String {
         val key = aiModelKey(providerId) ?: return ""
         ensureMigrated()
@@ -834,6 +929,7 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setAiProviderModel(providerId: String, model: String) {
         val key = aiModelKey(providerId) ?: return
         ensureMigrated()
@@ -854,10 +950,12 @@ class SettingsStore(
 
     // ── Selected Chat Provider ───────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getSelectedChatProvider(): String? {
         ensureMigrated(); return kv.getStringOrNull(SELECTED_CHAT_PROVIDER)?.ifBlank { null }
     }
 
+    @Throws(Throwable::class)
     suspend fun setSelectedChatProvider(providerId: String) {
         ensureMigrated(); kv.setString(SELECTED_CHAT_PROVIDER, providerId)
     }
@@ -912,6 +1010,7 @@ class SettingsStore(
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun saveSyncSettings(settings: SyncSettings) {
         ensureMigrated()
         kv.setBoolean(SYNC_ENABLED, settings.enabled)
@@ -924,6 +1023,7 @@ class SettingsStore(
         kv.setBoolean(SYNC_PUSH_LOCAL_PLAYLISTS, settings.pushLocalPlaylists)
     }
 
+    @Throws(Throwable::class)
     suspend fun setSyncEnabled(enabled: Boolean) {
         ensureMigrated(); kv.setBoolean(SYNC_ENABLED, enabled)
     }
@@ -936,6 +1036,7 @@ class SettingsStore(
         return SyncEngineMode.normalize(kv.getStringOrNull(SYNC_ENGINE_MODE))
     }
 
+    @Throws(Throwable::class)
     suspend fun setSyncEngineMode(mode: String) {
         ensureMigrated()
         val m = SyncEngineMode.normalize(mode)
@@ -958,6 +1059,7 @@ class SettingsStore(
     /** Legacy two-toggle setters, mapped onto [setSyncEngineMode] so the existing
      *  debug UI keeps working against the consolidated mode (and so toggling them
      *  can never produce the incoherent propagate-without-enabled state). */
+    @Throws(Throwable::class)
     suspend fun setNwayEnabled(enabled: Boolean) {
         val cur = getSyncEngineMode()
         setSyncEngineMode(
@@ -969,6 +1071,7 @@ class SettingsStore(
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun setNwayPropagateEnabled(enabled: Boolean) {
         val cur = getSyncEngineMode()
         setSyncEngineMode(
@@ -1011,6 +1114,7 @@ class SettingsStore(
         kv.observeStringOrNull(ENABLED_SYNC_PROVIDERS).map(::parseEnabledSyncProviders)
     }
 
+    @Throws(Throwable::class)
     suspend fun setEnabledSyncProviders(providers: Set<String>) {
         ensureMigrated(); kv.setString(ENABLED_SYNC_PROVIDERS, providers.joinToString(","))
     }
@@ -1033,6 +1137,7 @@ class SettingsStore(
             kv.observeStringOrNull(syncCollectionsKey(providerId)).map(::parseSyncCollections)
         }
 
+    @Throws(Throwable::class)
     suspend fun setSyncCollectionsForProvider(providerId: String, collections: Set<String>) {
         ensureMigrated()
         kv.setString(syncCollectionsKey(providerId), collections.joinToString(","))
@@ -1136,10 +1241,12 @@ class SettingsStore(
 
     // ── Recommendations off-list ─────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getRecommendationsOffResolvers(): Set<String> {
         ensureMigrated(); return kv.getStringSetCsv(RECOMMENDATIONS_OFF_RESOLVERS)
     }
 
+    @Throws(Throwable::class)
     suspend fun setRecommendationsOffResolvers(ids: Set<String>) {
         ensureMigrated(); kv.setStringSetCsv(RECOMMENDATIONS_OFF_RESOLVERS, ids)
     }
@@ -1152,10 +1259,12 @@ class SettingsStore(
     // empty list (the default) means every switch is on, as on desktop.
 
     /** "Play from X" off: still searched, still supplies covers and links, never plays. */
+    @Throws(Throwable::class)
     suspend fun getPlaybackOffResolvers(): Set<String> {
         ensureMigrated(); return kv.getStringSetCsv(PLAYBACK_OFF_RESOLVERS)
     }
 
+    @Throws(Throwable::class)
     suspend fun setPlaybackOffResolvers(ids: Set<String>) {
         ensureMigrated(); kv.setStringSetCsv(PLAYBACK_OFF_RESOLVERS, ids)
     }
@@ -1169,19 +1278,23 @@ class SettingsStore(
      * [com.parachord.shared.plugin.PluginStatusStore] through
      * [com.parachord.shared.plugin.limitTransition].
      */
+    @Throws(Throwable::class)
     suspend fun getPlaybackLimitState(resolverId: String): String? {
         ensureMigrated(); return kv.getStringOrNull(com.parachord.shared.plugin.limitStorageKey(resolverId))
     }
 
+    @Throws(Throwable::class)
     suspend fun setPlaybackLimitState(resolverId: String, state: String) {
         ensureMigrated(); kv.setString(com.parachord.shared.plugin.limitStorageKey(resolverId), state)
     }
 
     /** "Use metadata from X" off: skipped for covers and artist photos; track search still asks it. */
+    @Throws(Throwable::class)
     suspend fun getMetadataOffResolvers(): Set<String> {
         ensureMigrated(); return kv.getStringSetCsv(METADATA_OFF_RESOLVERS)
     }
 
+    @Throws(Throwable::class)
     suspend fun setMetadataOffResolvers(ids: Set<String>) {
         ensureMigrated(); kv.setStringSetCsv(METADATA_OFF_RESOLVERS, ids)
     }
@@ -1189,6 +1302,7 @@ class SettingsStore(
     fun getMetadataOffResolversFlow(): Flow<Set<String>> = csvSetFlow(METADATA_OFF_RESOLVERS)
 
     /** Turns one of the three switches for [id]: [on] removes it from the list at [key]. */
+    @Throws(Throwable::class)
     suspend fun setPluginSwitchOn(key: String, id: String, on: Boolean) {
         ensureMigrated()
         val current = kv.getStringSetCsv(key)
@@ -1197,11 +1311,13 @@ class SettingsStore(
     }
 
     /** The whole ranking, disabled plug-ins included ([com.parachord.shared.resolver.ResolverOrderMemory]); empty when never saved. */
+    @Throws(Throwable::class)
     suspend fun getResolverOrderMemory(): List<String> {
         ensureMigrated()
         return kv.getStringOrNull(RESOLVER_ORDER_MEMORY)?.split(",")?.filter { it.isNotBlank() } ?: emptyList()
     }
 
+    @Throws(Throwable::class)
     suspend fun setResolverOrderMemory(memory: List<String>) {
         ensureMigrated(); kv.setString(RESOLVER_ORDER_MEMORY, memory.joinToString(","))
     }
@@ -1214,10 +1330,12 @@ class SettingsStore(
 
     // ── Deleted Friends (prevent re-sync) ────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getDeletedFriendKeys(): Set<String> {
         ensureMigrated(); return kv.getStringSetCsv(DELETED_FRIEND_KEYS)
     }
 
+    @Throws(Throwable::class)
     suspend fun addDeletedFriendKey(key: String) {
         ensureMigrated()
         val current = kv.getStringSetCsv(DELETED_FRIEND_KEYS).toMutableSet()
@@ -1225,6 +1343,7 @@ class SettingsStore(
         kv.setStringSetCsv(DELETED_FRIEND_KEYS, current)
     }
 
+    @Throws(Throwable::class)
     suspend fun removeDeletedFriendKey(key: String) {
         ensureMigrated()
         val current = kv.getStringSetCsv(DELETED_FRIEND_KEYS).toMutableSet()
@@ -1241,6 +1360,7 @@ class SettingsStore(
         val radiusMiles: Int,
     )
 
+    @Throws(Throwable::class)
     suspend fun getConcertLocation(): ConcertLocation {
         ensureMigrated()
         return ConcertLocation(
@@ -1267,6 +1387,7 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setConcertLocation(lat: Double, lon: Double, city: String, radiusMiles: Int = 50) {
         ensureMigrated()
         kv.setString(CONCERT_LATITUDE, lat.toString())
@@ -1275,6 +1396,7 @@ class SettingsStore(
         kv.setString(CONCERT_RADIUS, radiusMiles.toString())
     }
 
+    @Throws(Throwable::class)
     suspend fun setConcertRadius(radiusMiles: Int) {
         ensureMigrated(); kv.setString(CONCERT_RADIUS, radiusMiles.toString())
     }
@@ -1282,13 +1404,19 @@ class SettingsStore(
     // ── Concert API Keys (BYO) ───────────────────────────────────────
 
     fun getTicketmasterApiKeyFlow(): Flow<String?> = secureStore.observe("ticketmaster_api_key")
+    @Throws(Throwable::class)
     suspend fun getTicketmasterApiKey(): String? = secureStore.get("ticketmaster_api_key")
+    @Throws(Throwable::class)
     suspend fun setTicketmasterApiKey(key: String) { secureStore.set("ticketmaster_api_key", key) }
+    @Throws(Throwable::class)
     suspend fun clearTicketmasterApiKey() { secureStore.remove("ticketmaster_api_key") }
 
     fun getSeatGeekClientIdFlow(): Flow<String?> = secureStore.observe("seatgeek_client_id")
+    @Throws(Throwable::class)
     suspend fun getSeatGeekClientId(): String? = secureStore.get("seatgeek_client_id")
+    @Throws(Throwable::class)
     suspend fun setSeatGeekClientId(id: String) { secureStore.set("seatgeek_client_id", id) }
+    @Throws(Throwable::class)
     suspend fun clearSeatGeekClientId() { secureStore.remove("seatgeek_client_id") }
 
     private fun defaultVolumeOffsets(): Map<String, Int> = mapOf(
@@ -1303,16 +1431,19 @@ class SettingsStore(
 
     // ── Plugin Sync ──────────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getLastPluginSyncTimestamp(): Long {
         ensureMigrated(); return kv.getLong(LAST_PLUGIN_SYNC, default = 0L)
     }
 
+    @Throws(Throwable::class)
     suspend fun setLastPluginSyncTimestamp(timestamp: Long) {
         ensureMigrated(); kv.setLong(LAST_PLUGIN_SYNC, timestamp)
     }
 
     // ── Disabled Plugins ─────────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun getDisabledPlugins(): Set<String> {
         ensureMigrated()
         val raw = kv.getStringOrNull(DISABLED_PLUGINS) ?: return emptySet()
@@ -1325,6 +1456,7 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setPluginEnabled(pluginId: String, enabled: Boolean) {
         ensureMigrated()
         val current = getDisabledPlugins().toMutableSet()
@@ -1340,6 +1472,7 @@ class SettingsStore(
      * meaningful today. Default for any unset service = `false` (defaults
      * OFF per desktop's design doc).
      */
+    @Throws(Throwable::class)
     suspend fun getLovePushEnabled(): Map<String, Boolean> {
         ensureMigrated()
         val raw = kv.getStringOrNull(LOVE_PUSH_ENABLED) ?: return emptyMap()
@@ -1368,6 +1501,7 @@ class SettingsStore(
     }
 
     /** Set the toggle for a single service; preserves other services' state. */
+    @Throws(Throwable::class)
     suspend fun setLovePushEnabled(service: String, enabled: Boolean) {
         ensureMigrated()
         val current = getLovePushEnabled().toMutableMap()
@@ -1391,6 +1525,7 @@ class SettingsStore(
      * shouldn't block the love-push flow). Reads are infrequent — the
      * service caches in-memory after the first read.
      */
+    @Throws(Throwable::class)
     suspend fun getLovePushedKeys(): Map<String, Map<String, Long>> {
         ensureMigrated()
         val raw = kv.getStringOrNull(LOVE_PUSHED_KEYS) ?: return emptyMap()
@@ -1408,6 +1543,7 @@ class SettingsStore(
     }
 
     /** Persist the idempotency map. Called per-track after each successful push. */
+    @Throws(Throwable::class)
     suspend fun setLovePushedKeys(map: Map<String, Map<String, Long>>) {
         ensureMigrated()
         val obj = kotlinx.serialization.json.buildJsonObject {
@@ -1423,6 +1559,7 @@ class SettingsStore(
     }
 
     /** The saved getting-started state, or null when none is saved or it can't be read. */
+    @Throws(Throwable::class)
     suspend fun getHomeGettingStarted(): com.parachord.shared.home.GettingStartedState? {
         ensureMigrated()
         val raw = kv.getStringOrNull(HOME_GETTING_STARTED)?.takeIf { it.isNotBlank() } ?: return null
@@ -1434,6 +1571,7 @@ class SettingsStore(
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun setHomeGettingStarted(state: com.parachord.shared.home.GettingStartedState) {
         ensureMigrated()
         kv.setString(
@@ -1443,10 +1581,12 @@ class SettingsStore(
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun getHomeSetupDismissed(): Set<String> {
         ensureMigrated(); return kv.getStringSetCsv(HOME_SETUP_DISMISSED)
     }
 
+    @Throws(Throwable::class)
     suspend fun setHomeSetupDismissed(ids: Set<String>) {
         ensureMigrated(); kv.setStringSetCsv(HOME_SETUP_DISMISSED, ids)
     }

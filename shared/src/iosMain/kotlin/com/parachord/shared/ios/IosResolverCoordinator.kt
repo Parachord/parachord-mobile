@@ -27,6 +27,7 @@ class IosResolverCoordinator(
      * above the confidence floor. Delegates to the shared coordinator's ranked
      * path — behavior identical to the pre-#210 inline fan-out.
      */
+    @Throws(Throwable::class)
     suspend fun resolveSources(
         artist: String,
         title: String,
@@ -49,6 +50,7 @@ class IosResolverCoordinator(
      * [resolveSources], also saying which resolvers were asked and which
      * couldn't answer (#566), for `IosTrackResolverCache`.
      */
+    @Throws(Throwable::class)
     suspend fun resolveSourcesReport(
         artist: String,
         title: String,
@@ -79,6 +81,7 @@ class IosResolverCoordinator(
      * 0.60-floor-filtered like [resolveSources]; null on miss / below floor;
      * throws when the resolver couldn't answer (#566).
      */
+    @Throws(Throwable::class)
     suspend fun resolveSingle(resolverId: String, artist: String, title: String, album: String?): ResolvedSource? {
         pluginManager.ensureInitialized()
         return coordinator.resolveSingle(

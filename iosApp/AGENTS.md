@@ -187,6 +187,23 @@ These all compile-fail or mis-render at the Swift boundary.
   `IosSearchArtist` / `IosSearchRelease` in `IosContainer` and return
   those to Swift.
 - **suspend funcs** → Swift `async throws`; call from `Task { }`.
+- **Every suspend function Swift calls needs `@Throws(Throwable::class)`.**
+  Without it, Kotlin/Native turns only a `CancellationException` into a
+  Swift error; any other exception aborts the app (SIGABRT in
+  `Kotlin_ObjCExport_ExceptionAsNSError` → `terminateWithUnhandledException`),
+  and Swift's `try` / `try?` never sees it. An Amazon Music playlist import
+  crashed the app this way (#792). The Swift signature is `async throws`
+  either way, so adding it changes no call site. Every public suspend
+  function in `shared/src/iosMain` carries it, as do the commonMain ones
+  Swift calls directly (`SettingsStore`, `QueuePersistenceStore`, some
+  `SpotifyClient` / `ListenBrainzClient` methods, `BackgroundResolveSweep.next`).
+  `SwiftSuspendThrowsTest` (`shared/src/androidUnitTest`, run by
+  `:shared:testDebugUnitTest`) fails on a new iosMain suspend function
+  without it, and on a Swift `try await x.name(` whose name is only a
+  commonMain suspend function without it (matched by name; Swift's own
+  functions with a colliding name go in its `SWIFT_NAMES`). A function
+  that must never fail still gets the annotation and catches inside
+  (rethrowing `CancellationException`), as `saveRecommendedPlaylist` does.
 - **Collecting a `Flow` from Swift**: Swift can't `collect` a suspend
   Flow. Use `FlowWatcher` (in `IosContainer.kt`) — it launches the
   collection on a scope and forwards each emission to a Swift `(Any?) ->

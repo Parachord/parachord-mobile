@@ -305,6 +305,7 @@ class IosResolverRuntime(
 
     /** The plugin's default model id — desktop seeds the picker with this
      *  (`metaServiceConfigs[id].model || modelSetting.default`, app.js:59532). */
+    @Throws(Throwable::class)
     suspend fun aiModelDefault(pluginId: String): String =
         readModelSetting(pluginId)?.get("default")?.jsonPrimitive?.contentOrNull ?: ""
 
@@ -314,6 +315,7 @@ class IosResolverRuntime(
      * falling back to the plugin's curated `fallbackOptions` when that's empty/keyless;
      * a static `select` plugin shows its curated `options`. All marketplace-driven.
      */
+    @Throws(Throwable::class)
     suspend fun aiModels(pluginId: String, apiKey: String): List<String> {
         val setting = readModelSetting(pluginId)
         fun opts(field: String): List<String> =
@@ -382,6 +384,7 @@ class IosResolverRuntime(
      * (caller parses), or null when no resolver claims it / it lacks `lookupPlaylist`
      * / the lookup fails. JSC returns the JS string value raw, so no unquoting.
      */
+    @Throws(Throwable::class)
     suspend fun lookupPlaylist(url: String): String? {
         val key = "lpl_${callCounter++}"
         val u = url.jsEsc()

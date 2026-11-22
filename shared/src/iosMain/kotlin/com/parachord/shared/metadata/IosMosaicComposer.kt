@@ -66,6 +66,7 @@ class IosMosaicComposer(private val httpClient: HttpClient) {
 
     fun fileExists(path: String): Boolean = NSFileManager.defaultManager.fileExistsAtPath(path)
 
+    @Throws(Throwable::class)
     suspend fun compose(playlistId: String, urls: List<String>): String? {
         val tileSize = MOSAIC_SIZE / 2.0
 

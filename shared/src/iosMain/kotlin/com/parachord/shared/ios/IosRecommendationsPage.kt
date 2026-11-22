@@ -260,6 +260,7 @@ private fun iosRecListener(item: ListenerItem): IosRecListener {
 // ── Play taps (the container calls these; none throws) ───────────────
 
 /** A listener's top tracks as a queue, or the shared message ([listenerPlay]). */
+@Throws(Throwable::class)
 suspend fun listenerQueueResult(
     service: String,
     username: String,
@@ -281,6 +282,7 @@ suspend fun listenerQueueResult(
  * (Android's `playWeekly`). [item] is the card found on the page, null when it's gone;
  * [name] is the card's title as Swift drew it.
  */
+@Throws(Throwable::class)
 suspend fun weeklyQueueResult(
     item: RecommendationItem?,
     name: String,

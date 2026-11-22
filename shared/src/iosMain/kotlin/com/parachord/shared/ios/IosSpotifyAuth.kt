@@ -37,6 +37,7 @@ class IosSpotifyAuth(
      * Spotify access + refresh tokens and persist them. Throws on any
      * non-2xx response or a missing client ID.
      */
+    @Throws(Throwable::class)
     suspend fun exchangeCode(code: String, codeVerifier: String, redirectUri: String) {
         val cid = settingsStore.getSpotifyClientId() ?: ""
         require(cid.isNotBlank()) { "Spotify Client ID not set — add yours in Settings → Spotify" }

@@ -688,11 +688,13 @@ class IosHomeSession internal constructor(
 
     // ── Queues (never throw) ─────────────────────────────────────────
 
+    @Throws(Throwable::class)
     suspend fun tileQueue(key: String): IosHomeQueue {
         val tile = state.tiles.firstOrNull { jumpTileKey(it) == key } ?: return STALE
         return run(jumpTileTitle(tile)) { queues.tile(tile) }
     }
 
+    @Throws(Throwable::class)
     suspend fun mixQueue(key: String): IosHomeQueue {
         val card = state.mixRow.firstOrNull { mixCardKey(it) == key } ?: return STALE
         return when (card) {
@@ -702,6 +704,7 @@ class IosHomeSession internal constructor(
     }
 
     /** A playlist card's, a playlist tile's or a getting-started playlist's Play. */
+    @Throws(Throwable::class)
     suspend fun playlistQueue(id: String): IosHomeQueue {
         val s = state
         val playlist = s.playlists.firstOrNull { it.playlist.id == id }?.playlist
@@ -712,18 +715,21 @@ class IosHomeSession internal constructor(
     }
 
     /** An "Albums you might love" card's Play. [key] is its id or [IosHomeAlbum.key]. */
+    @Throws(Throwable::class)
     suspend fun albumQueue(key: String): IosHomeQueue {
         val item = albumFor(key) ?: return STALE
         return run(item.name) { queues.album(item.name, item.artist.orEmpty()) }
     }
 
     /** A half card's Play. */
+    @Throws(Throwable::class)
     suspend fun halfAlbumQueue(key: String): IosHomeQueue {
         val (card, _) = halfCardsByKey(state)[key] ?: return STALE
         return run(card.title) { queues.album(card.title, card.artist) }
     }
 
     /** "Play Collection Radio". */
+    @Throws(Throwable::class)
     suspend fun collectionRadio(): IosHomeQueue = run(HomeCopy.COLLECTION_RADIO) { queues.collectionRadio() }
 
     /**
