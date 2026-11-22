@@ -33,6 +33,7 @@ class MetadataServiceTest {
         coEvery { musicBrainz.priority } returns 0
         coEvery { musicBrainz.name } returns "musicbrainz"
         coEvery { musicBrainz.isAvailable() } returns true
+        coEvery { musicBrainz.knownReleaseType(any(), any()) } returns null
 
         coEvery { wikipedia.priority } returns 5
         coEvery { wikipedia.name } returns "wikipedia"

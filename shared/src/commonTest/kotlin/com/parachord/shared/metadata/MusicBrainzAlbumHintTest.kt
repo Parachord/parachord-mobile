@@ -64,6 +64,17 @@ class MusicBrainzAlbumHintTest {
     }
 
     @Test
+    fun aReleaseGroupFreshDropsKnowsOpensWithOneRequestAndKeepsItsType() = runTest {
+        val mb = provider()
+        mb.rememberReleaseGroups(listOf(KnownReleaseGroup("Dummy", "Portishead", GROUP, "ep")))
+
+        val detail = mb.getAlbumTracks("Dummy", "Portishead")!!
+        assertEquals(listOf("/ws/2/release?release-group"), requests)
+        assertEquals("ep", detail.releaseType)
+        assertEquals("ep", mb.knownReleaseType("Dummy", "Portishead"))
+    }
+
+    @Test
     fun anAlbumFromADiscographyOpensWithOneRequest() = runTest {
         val mb = provider()
         mb.useArtistMbid("Portishead", ARTIST)

@@ -2860,6 +2860,7 @@ class IosContainer private constructor() {
             mbidLookupCached = { artistName -> mbidEnrichmentService.getCachedArtistMbid(artistName) },
             mbidLookupViaMapper = { artist, title -> mbidEnrichmentService.getArtistMbid(artist, title) },
             imageEnrichmentService = imageEnrichmentService,
+            noteReleaseGroups = { groups -> metadataService.rememberReleaseGroups(groups) },
             lastFmApiKey = appConfig.lastFmApiKey,
             artistIdCache = com.parachord.shared.cache.PersistentJsonCache(
                 kotlinx.serialization.serializer<String>(),

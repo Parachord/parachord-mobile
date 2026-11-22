@@ -252,8 +252,10 @@ class MetadataService constructor(
      * [AlbumDetail.catalogSource] for the "Track list from …" label instead.
      */
     fun getAlbumTracksWithCatalogFallback(albumTitle: String, artistName: String): Flow<AlbumDetail> = channelFlow {
+        val knownType = knownReleaseType(albumTitle, artistName)
+        fun typed(d: AlbumDetail): AlbumDetail = if (knownType != null) d.copy(releaseType = knownType) else d
         cachedAlbumTracks(albumTitle, artistName)?.let {
-            send(it)
+            send(typed(it))
             return@channelFlow
         }
         val catalog = albumCatalog
@@ -272,7 +274,7 @@ class MetadataService constructor(
             lock.withLock {
                 if (!providerHasTracks) {
                     catalogShown = true
-                    send(detail)
+                    send(typed(detail))
                 }
             }
         }
@@ -637,10 +639,21 @@ class MetadataService constructor(
      * Picks the result with the most tracks as the base, then enriches
      * each track with metadata from other providers (spotifyId, artworkUrl, etc.)
      */
+    /** Release groups a screen already knows, so their album pages open them ([MusicBrainzProvider.rememberReleaseGroups]). */
+    suspend fun rememberReleaseGroups(groups: List<KnownReleaseGroup>) {
+        if (groups.isEmpty()) return
+        providers.filterIsInstance<MusicBrainzProvider>().forEach { it.rememberReleaseGroups(groups) }
+    }
+
     suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? = coroutineScope {
         val active = availableProviders()
         val cacheKey = cacheKey(active, artistName, albumTitle)
-        albumTracksCache?.get(cacheKey)?.let { return@coroutineScope it }
+        // MusicBrainz's type for an album it knows wins: Spotify's album_type
+        // calls every EP a "single", and filled the badge whenever MusicBrainz
+        // had no type or didn't answer.
+        val knownType = knownReleaseType(albumTitle, artistName)
+        fun typed(d: AlbumDetail): AlbumDetail = if (knownType != null) d.copy(releaseType = knownType) else d
+        albumTracksCache?.get(cacheKey)?.let { return@coroutineScope typed(it) }
         var anyFailed = false
         val results = active
             .map { provider -> async {
@@ -657,7 +670,7 @@ class MetadataService constructor(
             .filterNotNull()
 
         if (results.isEmpty()) return@coroutineScope null
-        mergeAlbumResults(results).also { merged ->
+        mergeAlbumResults(results)?.let(::typed).also { merged ->
             // Cache only a complete answer (every provider answered, with tracks).
             if (!anyFailed && merged != null && merged.tracks.isNotEmpty()) {
                 albumTracksCache?.put(cacheKey, merged)
@@ -695,7 +708,7 @@ class MetadataService constructor(
             tracks = tracksWithArt,
             artworkUrl = mergedArtwork,
             year = base.year ?: others.firstNotNullOfOrNull { it.year },
-            releaseType = base.releaseType ?: others.firstNotNullOfOrNull { it.releaseType },
+            releaseType = musicBrainzReleaseType(results) ?: base.releaseType ?: others.firstNotNullOfOrNull { it.releaseType },
             provider = results.joinToString("+") { it.provider },
         )
     }
@@ -715,9 +728,11 @@ class MetadataService constructor(
         var anyFailed = false
         val active = availableProviders()
         val cacheKey = cacheKey(active, artistName, albumTitle)
+        val knownType = knownReleaseType(albumTitle, artistName)
+        fun typed(d: AlbumDetail): AlbumDetail = if (knownType != null) d.copy(releaseType = knownType) else d
         // A cached tracklist is the whole answer: show it, no provider calls.
         albumTracksCache?.get(cacheKey)?.let {
-            send(it)
+            send(typed(it))
             return@channelFlow
         }
         coroutineScope {
@@ -727,7 +742,7 @@ class MetadataService constructor(
                         val result = provider.getAlbumTracks(albumTitle, artistName) ?: return@launch
                         mutex.withLock {
                             merged = merged?.let { mergeAlbumDetails(it, result) } ?: result
-                            send(merged!!)
+                            send(typed(merged!!))
                         }
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
@@ -772,12 +787,23 @@ class MetadataService constructor(
             tracks = tracksWithArt,
             artworkUrl = mergedArtwork,
             year = base.year ?: other.year,
-            releaseType = base.releaseType ?: other.releaseType,
+            releaseType = musicBrainzReleaseType(listOf(existing, incoming)) ?: base.releaseType ?: other.releaseType,
             provider = listOf(existing.provider, incoming.provider)
                 .filter { it.isNotBlank() }
                 .joinToString("+"),
         )
     }
+
+    /**
+     * The type MusicBrainz gave, from whichever result it's in. It beats a
+     * base with more tracks: Spotify's album_type calls every EP a "single".
+     */
+    private fun musicBrainzReleaseType(results: List<AlbumDetail>): String? =
+        results.firstOrNull { MUSICBRAINZ in it.provider.split("+") && it.releaseType != null }?.releaseType
+
+    /** The type a discography, search or Fresh Drops gave this album ([MusicBrainzProvider.knownReleaseType]). */
+    private suspend fun knownReleaseType(albumTitle: String, artistName: String): String? =
+        providers.filterIsInstance<MusicBrainzProvider>().firstOrNull()?.knownReleaseType(albumTitle, artistName)
 
     /** The providers to ask: not disabled, and (except for [forSearch]) not a plug-in whose metadata is off. */
     private suspend fun availableProviders(forSearch: Boolean = false): List<MetadataProvider> {

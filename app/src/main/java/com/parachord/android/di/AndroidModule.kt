@@ -1103,6 +1103,7 @@ val androidModule = module {
             mbidLookupCached = { artistName -> mbidEnrichment.getCachedArtistMbid(artistName) },
             mbidLookupViaMapper = { artist, title -> mbidEnrichment.getArtistMbid(artist, title) },
             imageEnrichmentService = get(),
+            noteReleaseGroups = { groups -> get<com.parachord.shared.metadata.MetadataService>().rememberReleaseGroups(groups) },
             lastFmApiKey = com.parachord.android.BuildConfig.LASTFM_API_KEY,
             artistIdCache = com.parachord.shared.cache.PersistentJsonCache(
                 kotlinx.serialization.serializer<String>(),
