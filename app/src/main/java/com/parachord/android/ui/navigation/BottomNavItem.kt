@@ -17,11 +17,13 @@ enum class BottomNavItem(
     val icon: AppIcon,
     val isAction: Boolean = false,
     val systemIcon: ImageVector? = null,
+    /** The page whose colour the tab takes when selected (shared `PageHero.tabColor`). */
+    val page: com.parachord.shared.ui.DesignTokens.Page? = null,
 ) {
-    HOME(Routes.HOME, "Home", PageIcon.HOME.icon),
-    SEARCH(Routes.SEARCH, "Search", PageIcon.SEARCH.icon, systemIcon = Icons.Filled.Search),
-    COLLECTION(Routes.COLLECTION_BASE, "Collection", PageIcon.COLLECTION.icon),
-    PLAYLISTS(Routes.PLAYLISTS, "Playlists", PageIcon.PLAYLISTS.icon),
+    HOME(Routes.HOME, "Home", PageIcon.HOME.icon, page = com.parachord.shared.ui.DesignTokens.Page.HOME),
+    SEARCH(Routes.SEARCH, "Search", PageIcon.SEARCH.icon, systemIcon = Icons.Filled.Search, page = com.parachord.shared.ui.DesignTokens.Page.SEARCH),
+    COLLECTION(Routes.COLLECTION_BASE, "Collection", PageIcon.COLLECTION.icon, page = com.parachord.shared.ui.DesignTokens.Page.COLLECTION),
+    PLAYLISTS(Routes.PLAYLISTS, "Playlists", PageIcon.PLAYLISTS.icon, page = com.parachord.shared.ui.DesignTokens.Page.PLAYLISTS),
     ADD(null, "Add", AppIcon.Plus, isAction = true),
 }
 

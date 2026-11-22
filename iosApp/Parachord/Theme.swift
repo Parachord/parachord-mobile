@@ -226,6 +226,120 @@ struct PCIconCanvas: View {
     }
 }
 
+/// The page hero (desktop `page-hero.js`, collapsed; Android `PageHero`): the
+/// page's gradient, top-left to bottom-right, its pattern tiled over it, the
+/// title in light tracked capitals and, when the page has one, a line under it
+/// (the shared `PageHero.line`). The leading button is the menu or back; one
+/// trailing icon is optional. Every page with a hero draws this one.
+struct PCPageHero: View {
+    let page: DesignTokens.Page
+    var title: String? = nil
+    var line: String? = nil
+    var leading: PCTopBar.Leading = .back
+    var onLeading: (() -> Void)? = nil
+    var trailingIcon: String? = nil
+    var trailingLabel: String? = nil
+    var onTrailing: (() -> Void)? = nil
+
+    private var hero: PageHero { PageHero.shared }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if leading != .none {
+                Button { onLeading?() } label: {
+                    Image(systemName: leading == .back ? "chevron.left" : "line.3.horizontal")
+                        .font(.system(size: 18, weight: .regular)).foregroundStyle(PC.onAccent)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(leading == .back ? UiMessages.shared.BACK : HomeCopy.shared.MENU)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text((title ?? page.title).uppercased())
+                    .font(.system(size: CGFloat(hero.TITLE_SIZE), weight: .light))
+                    .tracking(CGFloat(hero.TITLE_SIZE) * CGFloat(hero.TITLE_TRACKING))
+                    .foregroundStyle(PC.onAccent)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                if let line {
+                    Text(line)
+                        .font(.system(size: CGFloat(hero.LINE_SIZE)))
+                        .foregroundStyle(PC.onAccent.opacity(Double(hero.LINE_ALPHA)))
+                        .lineLimit(2)
+                }
+            }
+            .padding(.vertical, 8)
+            Spacer(minLength: 0)
+            if let trailingIcon {
+                Button { onTrailing?() } label: {
+                    Image(systemName: trailingIcon)
+                        .font(.system(size: 17, weight: .regular)).foregroundStyle(PC.onAccent)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(trailingLabel ?? "")
+            }
+        }
+        .padding(.horizontal, 4)
+        .frame(minHeight: CGFloat(line == nil ? hero.HEIGHT : hero.HEIGHT_WITH_LINE))
+        .frame(maxWidth: .infinity)
+        .background {
+            ZStack {
+                LinearGradient(colors: PC.pageGradient(page).map { Color(uiColor: UIColor(hex: $0)) },
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                if let pattern = hero.pattern(page: page) { PCHeroPattern(pattern: pattern) }
+            }
+            .ignoresSafeArea(edges: .top)
+        }
+    }
+}
+
+/// A page's pattern: one tile (the shared `PageHero.pattern`), repeated, in white.
+private struct PCHeroPattern: View {
+    let pattern: PageHero.Pattern
+
+    var body: some View {
+        Canvas { ctx, size in
+            let spec = pattern.tile
+            let tile = CGFloat(spec.width)
+            let color = Color.white.opacity(Double(pattern.opacity))
+            var paths: [(Path, IconPart)] = []
+            for part in spec.parts {
+                var path = Path()
+                for c in part.commands {
+                    if let m = c as? PathCommand.MoveTo { path.move(to: CGPoint(x: CGFloat(m.x), y: CGFloat(m.y))) }
+                    else if let l = c as? PathCommand.LineTo { path.addLine(to: CGPoint(x: CGFloat(l.x), y: CGFloat(l.y))) }
+                    else if let q = c as? PathCommand.CubicTo {
+                        path.addCurve(to: CGPoint(x: CGFloat(q.x), y: CGFloat(q.y)),
+                                      control1: CGPoint(x: CGFloat(q.x1), y: CGFloat(q.y1)),
+                                      control2: CGPoint(x: CGFloat(q.x2), y: CGFloat(q.y2)))
+                    } else { path.closeSubpath() }
+                }
+                paths.append((path, part))
+            }
+            var x: CGFloat = 0
+            while x < size.width {
+                var y: CGFloat = 0
+                while y < size.height {
+                    let move = CGAffineTransform(translationX: x, y: y)
+                    for (path, part) in paths {
+                        let p = path.applying(move)
+                        let tint = color.opacity(Double(part.alpha))
+                        if part.fill { ctx.fill(p, with: .color(tint), style: FillStyle(eoFill: part.evenOdd)) }
+                        if part.stroke {
+                            ctx.stroke(p, with: .color(tint),
+                                       style: StrokeStyle(lineWidth: CGFloat(part.strokeWidth), lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                    y += tile
+                }
+                x += tile
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 /// An icon from desktop's set. Sizes, as desktop: 16 in rows, chips and small
 /// buttons; 20 in buttons and dialog titles; 24 by default. Decorative unless
 /// it has a `label`; an icon-only button carries the label instead.

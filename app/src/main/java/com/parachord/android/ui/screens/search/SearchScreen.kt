@@ -1,5 +1,8 @@
 package com.parachord.android.ui.screens.search
 
+import androidx.compose.ui.graphics.Color
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.shared.search.SearchSession
@@ -86,22 +89,13 @@ fun SearchScreen(
     val resolverOrder by viewModel.resolverOrder.collectAsStateWithLifecycle()
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "SEARCH",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.SEARCH,
+            navigation = {
                 IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
 
         // Outlined search box matching desktop style

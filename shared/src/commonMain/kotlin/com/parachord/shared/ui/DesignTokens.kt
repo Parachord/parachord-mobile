@@ -114,6 +114,8 @@ object DesignTokens {
         POP_OF_THE_TOPS("Pop of the Tops", 0xF97316, 0xC2410C, listOf(0xF97316, 0xEC4899, 0x9333EA)),
         CRITICAL_DARLINGS("Critical Darlings", 0xEF4444, 0xB91C1C, listOf(0xEF4444, 0xDC2626, 0xBE123C)),
         CONCERTS("Concerts", 0x10C9B4, 0x0F766E, listOf(0x14B8A6, 0x14B8A6, 0x0891B2)),
+        /** Desktop's neutral hero (`--hero-neutral-gradient`); Search has no page colour of its own. */
+        SEARCH("Search", 0x6B7280, 0x374151, listOf(0x374151, 0x4B5563, 0x374151)),
     }
 
     // ── Release types ────────────────────────────────────────────────

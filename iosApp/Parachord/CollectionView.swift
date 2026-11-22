@@ -151,12 +151,12 @@ struct CollectionView: View {
                 // Multi-provider library sync is #194 (not wired on iOS yet), so
                 // for now it refreshes the only live/remote collection data —
                 // friend now-playing. Becomes the real sync trigger with #194.
-                PCTopBar(title: "Collection", leading: .menu, onLeading: onMenu,
-                         trailingIcon: "arrow.triangle.2.circlepath",
-                         onTrailing: { refresh() })
+                PCPageHero(page: .collection, leading: .menu, onLeading: onMenu,
+                           trailingIcon: "arrow.triangle.2.circlepath", trailingLabel: "Sync",
+                           onTrailing: { refresh() })
                 PCTabs(tabs: tabLabels, selection: Binding(
                     get: { tab.rawValue },
-                    set: { tab = CollectionTab(rawValue: $0) ?? .artists }))
+                    set: { tab = CollectionTab(rawValue: $0) ?? .artists }), page: .collection)
                 sortBar
 
                 ScrollView {

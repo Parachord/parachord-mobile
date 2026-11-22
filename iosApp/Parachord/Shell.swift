@@ -23,6 +23,15 @@ enum PCTab: String, CaseIterable {
         case .playlists: return PageIcon.playlists.icon
         }
     }
+    /// The page whose colour the tab takes when selected (shared `PageHero.tabColor`).
+    var page: DesignTokens.Page {
+        switch self {
+        case .home: return .home
+        case .search: return .search
+        case .collection: return .collection
+        case .playlists: return .playlists
+        }
+    }
 }
 
 // MARK: - Generative artwork placeholder (ArtPlaceholder parity)
@@ -77,6 +86,13 @@ struct PCTabBar: View {
     /// Fired when the already-active tab is tapped again — the shell uses this
     /// to pop that tab's navigation stack to root (standard iOS behavior).
     var onReselect: (PCTab) -> Void = { _ in }
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// A tab's colour: its page's when selected (the shared rule), else tertiary text.
+    private func tint(_ tab: PCTab) -> Color {
+        guard selected == tab else { return PC.fg3 }
+        return pcToken(PageHero.shared.tabColor(page: tab.page, onDark: colorScheme == .dark))
+    }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -91,12 +107,12 @@ struct PCTabBar: View {
                                 Image(systemName: "magnifyingglass").font(.system(size: 21))
                                     .frame(width: 22, height: 22)
                             } else {
-                                PCIcon(icon: tab.icon, size: 22, tint: selected == tab ? PC.accent : PC.fg3)
+                                PCIcon(icon: tab.icon, size: 22, tint: tint(tab))
                             }
                             Text(tab.title).font(.system(size: 10, weight: .medium))
                         }
                         .frame(maxWidth: .infinity)
-                        .foregroundStyle(selected == tab ? PC.accent : PC.fg3)
+                        .foregroundStyle(tint(tab))
                     }
                     .buttonStyle(.plain)
                 }

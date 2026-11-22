@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.share.rememberShareAlbumLite
 import com.parachord.android.share.rememberSharePlaylistById
+import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.AlbumContextMenu
 import com.parachord.android.ui.components.DeletePlaylistDialog
 import com.parachord.android.ui.components.PlaylistContextMenu
@@ -79,7 +80,6 @@ private val OnFill = tokenColor(DesignTokens.ON_ACCENT)
 private val SectionGap = 16.dp
 
 /** The hero band's height on a phone (desktop's `HOME_HERO_HEIGHT` is 80 px). */
-private val HeroHeight = 64.dp
 
 /**
  * Home, on the shared [com.parachord.shared.home.HomeSession] (desktop
@@ -454,59 +454,17 @@ fun HomeScreen(
     }
 }
 
-/**
- * The collapsed page hero (desktop `home-page.js`): Home's gradient with its
- * circle pattern at 10%, "HOME" uppercase, light, 0.2em tracking, white. The
- * drawer button sits on it in place of the old top bar.
- */
+/** Home's page hero (the shared [PageHero]), with the drawer button on it in place of a top bar. */
 @Composable
 private fun HomeHero(onOpenDrawer: () -> Unit) {
-    val page = DesignTokens.Page.HOME
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(HeroHeight)
-            .background(Brush.linearGradient(page.composeGradient)),
-    ) {
-        HeroPattern(Modifier.fillMaxSize())
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxSize().padding(start = 4.dp, end = DesignTokens.SCREEN_GUTTER.dp),
-        ) {
+    PageHero(
+        page = DesignTokens.Page.HOME,
+        navigation = {
             IconButton(onClick = onOpenDrawer) {
                 Icon(Icons.Filled.Menu, contentDescription = HomeCopy.MENU, tint = OnFill)
             }
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = page.title.uppercase(),
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Light,
-                letterSpacing = 0.2.em,
-                color = OnFill,
-                modifier = Modifier.semantics { heading() },
-            )
-        }
-    }
-}
-
-/** Desktop's hero pattern: a 100 px tile of three rings (r 40 / 25 / 10), white at 10%. */
-@Composable
-private fun HeroPattern(modifier: Modifier) {
-    Canvas(modifier) {
-        val tile = 100.dp.toPx()
-        val rings = listOf(40.dp.toPx() to 2.dp.toPx(), 25.dp.toPx() to 1.5.dp.toPx(), 10.dp.toPx() to 1.dp.toPx())
-        val color = OnFill.copy(alpha = 0.1f)
-        var x = 0f
-        while (x < size.width) {
-            var y = 0f
-            while (y < size.height + tile / 2) {
-                val c = Offset(x + tile / 2, y + tile / 2)
-                rings.forEach { (r, w) -> drawCircle(color, radius = r, center = c, style = Stroke(width = w)) }
-                y += tile
-            }
-            x += tile
-        }
-    }
+        },
+    )
 }
 
 /** While the getting-started decision is pending: header bars, a 2x2 of tiles, a row of cards. */

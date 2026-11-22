@@ -157,7 +157,7 @@ struct SearchView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                PCTopBar(title: "Search", leading: .menu, onLeading: onMenu)
+                PCPageHero(page: .search, leading: .menu, onLeading: onMenu)
                 searchField
                 if model.showResults {
                     resultsList
