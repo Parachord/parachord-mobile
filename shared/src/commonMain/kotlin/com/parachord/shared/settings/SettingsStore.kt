@@ -82,6 +82,12 @@ class SettingsStore(
         const val THEME_MODE = "theme_mode"
         const val SCROBBLING_ENABLED = "scrobbling_enabled"
         const val PERSIST_QUEUE = "persist_queue"
+        /** Plugin Widevine streams' quality tier (`max`/`high`/`standard`/`saver`), desktop's key. */
+        const val PLAYBACK_QUALITY = "playback_quality"
+        /** Adapt the stream's quality to the connection (at or below the tier), desktop's key. */
+        const val PLAYBACK_ABR = "playback_abr"
+        /** Prefer Dolby Atmos (E-AC-3 JOC) mixes, desktop's key. */
+        const val PLAYBACK_SPATIAL = "playback_spatial"
         const val PERSISTED_QUEUE_STATE = "persisted_queue_state"
         const val PERSISTED_QUEUE_POSITION = "persisted_queue_position"
         const val LASTFM_USERNAME = "lastfm_username"
@@ -278,6 +284,42 @@ class SettingsStore(
     suspend fun setScrobblingEnabled(enabled: Boolean) {
         ensureMigrated()
         kv.setBoolean(SCROBBLING_ENABLED, enabled)
+    }
+
+    // ── Playback quality (plugin Widevine streams; desktop's keys) ───
+
+    /** The stored tier, normalized (earlier builds' names map over); `max` by default. */
+    val playbackQuality: Flow<com.parachord.shared.playback.drm.PlaybackQualityTier> = migratedFlow().flatMapConcat {
+        kv.observeString(PLAYBACK_QUALITY, default = com.parachord.shared.playback.drm.PlaybackQualityTier.DEFAULT.key)
+    }.map { com.parachord.shared.playback.drm.PlaybackQualityTier.normalize(it) ?: com.parachord.shared.playback.drm.PlaybackQualityTier.DEFAULT }
+    val playbackAbr: Flow<Boolean> = migratedFlow().flatMapConcat {
+        kv.observeBoolean(PLAYBACK_ABR, default = com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_ABR)
+    }
+    val playbackSpatial: Flow<Boolean> = migratedFlow().flatMapConcat {
+        kv.observeBoolean(PLAYBACK_SPATIAL, default = com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_SPATIAL)
+    }
+
+    /** The three settings as a play reads them at its start. */
+    suspend fun getPlaybackQualitySettings(): com.parachord.shared.playback.drm.PlaybackQualitySettings {
+        ensureMigrated()
+        return com.parachord.shared.playback.drm.PlaybackQualitySettings(
+            tier = com.parachord.shared.playback.drm.PlaybackQualityTier.normalize(kv.getStringOrNull(PLAYBACK_QUALITY))
+                ?: com.parachord.shared.playback.drm.PlaybackQualityTier.DEFAULT,
+            adaptive = kv.getBoolean(PLAYBACK_ABR, default = com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_ABR),
+            spatial = kv.getBoolean(PLAYBACK_SPATIAL, default = com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_SPATIAL),
+        )
+    }
+
+    suspend fun setPlaybackQuality(tier: com.parachord.shared.playback.drm.PlaybackQualityTier) {
+        ensureMigrated(); kv.setString(PLAYBACK_QUALITY, tier.key)
+    }
+
+    suspend fun setPlaybackAbr(enabled: Boolean) {
+        ensureMigrated(); kv.setBoolean(PLAYBACK_ABR, enabled)
+    }
+
+    suspend fun setPlaybackSpatial(enabled: Boolean) {
+        ensureMigrated(); kv.setBoolean(PLAYBACK_SPATIAL, enabled)
     }
 
     // ── Sort preferences ─────────────────────────────────────────────
@@ -1119,6 +1161,21 @@ class SettingsStore(
     }
 
     fun getPlaybackOffResolversFlow(): Flow<Set<String>> = csvSetFlow(PLAYBACK_OFF_RESOLVERS)
+
+    /**
+     * A resolver's last plan state (`'1'` blocked, `'owned'` purchases only,
+     * `'0'` playable; null never seen), under desktop's key
+     * ([com.parachord.shared.plugin.limitStorageKey]). Read and written by
+     * [com.parachord.shared.plugin.PluginStatusStore] through
+     * [com.parachord.shared.plugin.limitTransition].
+     */
+    suspend fun getPlaybackLimitState(resolverId: String): String? {
+        ensureMigrated(); return kv.getStringOrNull(com.parachord.shared.plugin.limitStorageKey(resolverId))
+    }
+
+    suspend fun setPlaybackLimitState(resolverId: String, state: String) {
+        ensureMigrated(); kv.setString(com.parachord.shared.plugin.limitStorageKey(resolverId), state)
+    }
 
     /** "Use metadata from X" off: skipped for covers and artist photos; track search still asks it. */
     suspend fun getMetadataOffResolvers(): Set<String> {

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import org.koin.androidx.compose.koinViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavDestination.Companion.hierarchy
+import com.parachord.android.playback.showsLoading
 import com.parachord.android.ui.navigation.bottomNavSelected
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -568,7 +569,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                     artworkUrl = playbackState.effectiveArtwork(trackArtwork),
                                     albumTitle = streamMeta?.album ?: currentTrack.album,
                                     isPlaying = playbackState.isPlaying,
-                                    isBuffering = playbackState.isBuffering,
+                                    isBuffering = playbackState.showsLoading,
                                     isFavorited = isCurrentTrackFavorited,
                                     isOnTour = isCurrentArtistOnTour,
                                     progress = progress,

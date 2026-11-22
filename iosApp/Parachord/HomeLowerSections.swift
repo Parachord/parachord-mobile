@@ -24,16 +24,16 @@ struct HomeHalfView: View {
 
     private var page: DesignTokens.Page {
         switch half.kind {
-        case "fresh": return .freshDrops
-        case "critical": return .criticalDarlings
+        case IosHomePageKt.HALF_KIND_FRESH: return .freshDrops
+        case IosHomePageKt.HALF_KIND_CRITICAL: return .criticalDarlings
         default: return .popOfTheTops
         }
     }
 
     private var icon: AppIcon {
         switch half.kind {
-        case "fresh": return PageIcon.freshDrops.icon
-        case "critical": return PageIcon.criticalDarlings.icon
+        case IosHomePageKt.HALF_KIND_FRESH: return PageIcon.freshDrops.icon
+        case IosHomePageKt.HALF_KIND_CRITICAL: return PageIcon.criticalDarlings.icon
         default: return PageIcon.popOfTheTops.icon
         }
     }
@@ -43,23 +43,18 @@ struct HomeHalfView: View {
         VStack(alignment: .leading, spacing: 0) {
             band
             switch half.body {
-            case "failed":
+            case IosHomePageKt.HALF_BODY_FAILED:
                 VStack(alignment: .leading, spacing: 8) {
                     Text(half.errorTitle ?? "").font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1)
                     Text(half.errorText ?? "").font(.system(size: 13)).foregroundStyle(PC.fg2)
-                    Button(action: onRetry) {
-                        Text(UiMessages.shared.TRY_AGAIN).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.onAccent)
-                            .padding(.horizontal, 20).frame(height: 44)
-                            .background(Capsule().fill(PC.fillAccent))
-                    }
-                    .buttonStyle(.plain)
+                    homeFilledButton(UiMessages.shared.TRY_AGAIN, action: onRetry)
                 }
                 .padding(16)
             default:
                 ScrollView(.horizontal, showsIndicators: false) {
                     // A plain HStack (3 cards): a lazy one left the skeletons zero height.
                     HStack(alignment: .top, spacing: halfGap) {
-                        if half.body == "loading" {
+                        if half.body == IosHomePageKt.HALF_BODY_LOADING {
                             ForEach(0..<Int(HomePageKt.HOME_HALF_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 1) }
                         } else {
                             ForEach(half.cards, id: \.key) { card in
@@ -173,10 +168,12 @@ struct HomeConcertCard: View {
                 if !concert.place.isEmpty {
                     Text(concert.place).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1)
                 }
+                // Under the text, aligned to the end, as Android draws it.
+                if !concert.tickets.isEmpty {
+                    tickets.frame(maxWidth: .infinity, alignment: .trailing).padding(.top, 4)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-            if !concert.tickets.isEmpty { tickets }
         }
         .padding(12)
         .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(PC.border))
@@ -250,13 +247,13 @@ struct HomeAsk: View {
         let radius = CGFloat(DesignTokens.shared.RADIUS_SHEET)
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                PCServiceLogo(serviceId: RecommendationPageKt.SHUFFLEUPAGUS_ID, tint: PC.fg1).frame(width: 20, height: 20)
+                HomeReasonMark(outlined: true)
                 Text(HomeCopy.shared.ASK_TITLE).font(.system(size: 16, weight: .bold)).foregroundStyle(PC.fg1)
                     .accessibilityAddTraits(.isHeader)
             }
             Text(HomeCopy.shared.ASK_EXPLANATION).font(.system(size: 13)).foregroundStyle(PC.fg2)
             if chatAvailable == "no" {
-                filled(HomeCopy.shared.SET_UP_SHUFFLEUPAGUS, enabled: true, action: onSetUp)
+                homeFilledButton(HomeCopy.shared.SET_UP_SHUFFLEUPAGUS, action: onSetUp)
             } else {
                 form
             }
@@ -288,20 +285,24 @@ struct HomeAsk: View {
                 .padding(.horizontal, 12).frame(minHeight: 48)
                 .overlay(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.shared.RADIUS_ART), style: .continuous).strokeBorder(PC.border))
                 .accessibilityLabel(HomeCopy.shared.ASK_FIELD_LABEL)
-            filled(HomeCopy.shared.ASK_BUTTON, enabled: current.prompt != nil) { if let p = current.prompt { onAsk(p) } }
+            homeFilledButton(HomeCopy.shared.ASK_BUTTON, pill: true, enabled: current.prompt != nil) { if let p = current.prompt { onAsk(p) } }
             Text(HomeCopy.shared.ASK_CAPTION).font(.system(size: 12)).foregroundStyle(PC.fg2)
         }
     }
+}
 
-    private func filled(_ text: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(text).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.onAccent)
-                .padding(.horizontal, 20).frame(minHeight: 48)
-                .frame(maxWidth: .infinity)
-                .background(Capsule().fill(PC.fillAccent))
-                .opacity(enabled ? 1 : 0.5)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
+/// A fill-accent button with white text (design system: never white on the theme accent), Android's
+/// `FilledButton`: a pill when `pill`, else a rounded rect of `RADIUS_BUTTON`; at least 48 high.
+private func homeFilledButton(_ text: String, pill: Bool = false, enabled: Bool = true, action: @escaping () -> Void) -> some View {
+    let shape = RoundedRectangle(cornerRadius: pill ? 1000 : CGFloat(DesignTokens.shared.RADIUS_BUTTON), style: .continuous)
+    return Button(action: action) {
+        Text(text).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.onAccent)
+            .lineLimit(1)
+            .padding(.horizontal, 20).padding(.vertical, 12)
+            .frame(minHeight: 48)
+            .background(shape.fill(PC.fillAccent))
+            .opacity(enabled ? 1 : 0.5)
     }
+    .buttonStyle(.plain)
+    .disabled(!enabled)
 }

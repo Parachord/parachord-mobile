@@ -208,6 +208,8 @@ dependencies {
 
     // Media3 (ExoPlayer)
     implementation(libs.androidx.media3.exoplayer)
+    // DASH + Widevine for plugin-supplied DRM streams (capabilities.widevine).
+    implementation(libs.androidx.media3.exoplayer.dash)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media) // MediaStyle notification for external playback

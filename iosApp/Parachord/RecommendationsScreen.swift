@@ -569,7 +569,7 @@ private struct RecWeeklyCardHost: View {
 
     var body: some View {
         RecWeeklyCard(item: item, covers: covers, width: width,
-                      onOpen: { actions.open(.playlist(id: weeklyId, title: item.name)) },
+                      onOpen: { actions.open(.playlist(id: weeklyId, title: item.name, contextType: item.weeklyContextType)) },
                       onPlay: play)
             .task(id: weeklyId) {
                 if let c = try? await container.weeklyCovers(weeklyId: weeklyId) { covers = c }

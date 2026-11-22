@@ -2340,6 +2340,13 @@ final class QueuePlaybackCoordinator {
     /// feels responsive instead of the play/pause glyph lagging behind.
     var isStarting = false
 
+    /// A source picked in Now Playing's deck whose play is still starting. The
+    /// deck shows it at once (shared `pickerShownResolver`), only while
+    /// `isStarting`, so a switch that ends either way (started: the track's
+    /// resolver is the pick; failed: the deck goes back to what plays, #287)
+    /// drops it. Never written onto the track. Every play resets it.
+    private(set) var pendingSourcePick: PendingSourcePick?
+
     /// Mirror of `spotify.isPlaying`, updated from the @MainActor contexts that
     /// drive Connect (play start + toggle). Lets the nonisolated `isPlaying`
     /// getter below read Spotify state without crossing into the @MainActor
@@ -2434,6 +2441,13 @@ final class QueuePlaybackCoordinator {
 
     /// The resolver currently producing audio, for the Now Playing deck.
     @MainActor var activeResolverName: String {
+        if let shown = SourceReselection.shared.pickerShownResolver(
+            playingResolver: currentTrack?.resolver,
+            pendingPick: isStarting ? pendingSourcePick : nil,
+            currentTrackId: currentTrack?.id
+        ), !shown.isEmpty, shown != currentTrack?.resolver {
+            return shown
+        }
         // Android parity: the deck shows `track.resolver` — the resolver actually
         // playing, stamped onto `currentTrack` by `trackWithResolvedSources` after
         // the (gated) route. Prefer it so the deck reflects the real played source
@@ -2587,7 +2601,9 @@ final class QueuePlaybackCoordinator {
         // "Playing From" label to the picked resolver only on a confirmed `.played`, so
         // a switch to a source that can't actually play leaves the label — and playback
         // — on the current source instead of showing a resolver that isn't playing (the
-        // "selection updates but nothing plays" symptom, #287).
+        // "selection updates but nothing plays" symptom, #287). The deck still shows the
+        // pick at once, as a separate display state (`pendingSourcePick`) dropped when
+        // the start ends, and the play button spins meanwhile (`isStarting`).
         playTrack(t, forcedResolver: resolver)
     }
 
@@ -3182,6 +3198,8 @@ final class QueuePlaybackCoordinator {
         // earlier load's late failure isn't booked against this track.
         let request = playRequestCount
         let deckSwitch = forcedResolver != nil && !fromLoadOnPlay
+        // A deck switch shows its pick while it starts; any other play drops it.
+        pendingSourcePick = deckSwitch ? PendingSourcePick(trackId: track.id, resolver: forcedResolver!) : nil
         // The start a pre-start AVPlayer failure belongs to (`avPlaybackFailed`).
         latestStart = (request: playRequestCount, trackId: track.id,
                        aimedAtMs: Int64(aimedAtSec * 1000), pickedResolver: forcedResolver)

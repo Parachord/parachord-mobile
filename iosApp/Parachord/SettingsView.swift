@@ -544,8 +544,8 @@ final class SettingsViewModel {
             case "lastfm": try? await store.setLastFmUsername(username: value)
             case "listenbrainz":
                 // Validate first and save only a token ListenBrainz accepts,
-                // with the username the public `createdfor` weekly endpoint
-                // needs (desktop/Android validateToken). An invalid token is
+                // with the username the ListenBrainz plugin and sync need
+                // (desktop/Android validateToken). An invalid token is
                 // refused with Android's message, not saved.
                 if value.isEmpty {
                     try? await store.setListenBrainzToken(token: value)
@@ -915,8 +915,14 @@ private struct PlugInsTab: View {
             tileIcon(svc, size: 34)
             VStack(alignment: .leading, spacing: 1) {
                 Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
-                Text(model.isConnected(svc.id) ? "Connected" : "Not connected")
-                    .font(.system(size: 12)).foregroundStyle(model.isConnected(svc.id) ? Color(uiColor: UIColor(hex: 0x10B981)) : PC.fg3)
+                if let plan = model.tileStatus(svc.id) {
+                    // A plan that plays only what the account owns (#1494):
+                    // "Prime: purchases only" (shared tileStatus).
+                    Text(plan).font(.system(size: 12)).foregroundStyle(Color(uiColor: UIColor(hex: 0xD97706)))
+                } else {
+                    Text(model.isConnected(svc.id) ? "Connected" : "Not connected")
+                        .font(.system(size: 12)).foregroundStyle(model.isConnected(svc.id) ? Color(uiColor: UIColor(hex: 0x10B981)) : PC.fg3)
+                }
             }
             Spacer(minLength: 0)
             Button { onConfig(svc) } label: { Image(systemName: "gearshape").foregroundStyle(PC.fg2) }.buttonStyle(.plain)

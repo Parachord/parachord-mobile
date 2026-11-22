@@ -134,4 +134,21 @@ class HomeRowsTest {
         val b = HomeBannerItem("a1", "Title", null, null, null, "info")
         assertTrue(homeSectionVisibility(HomeState(banner = b)).showBanner)
     }
+
+    @Test
+    fun `source chips start with a neutral All chip then one per source in its colour`() {
+        val chips = homeSourceChips(listOf(FilterChipSource("spotify", "Spotify"), FilterChipSource(SHUFFLEUPAGUS_ID, "Shuffleupagus")))
+        assertEquals(listOf(HOME_ALL_SOURCES, "spotify", SHUFFLEUPAGUS_ID), chips.map { it.id })
+        assertEquals(HomeCopy.ALL, chips[0].label)
+        assertNull(chips[0].colorRgb)
+        assertEquals(ServiceColors.color("spotify"), chips[1].colorRgb)
+        assertEquals(DesignTokens.FILL_ACCENT, chips[2].colorRgb)
+        assertEquals(1, homeSourceChips(emptyList()).size)
+    }
+
+    @Test
+    fun `album card key is artist then title and tolerates a missing artist`() {
+        assertEquals("Artist\u0000Album", homeAlbumCardKey(album(null)))
+        assertEquals("\u0000Album", homeAlbumCardKey(album(null).copy(artist = null)))
+    }
 }

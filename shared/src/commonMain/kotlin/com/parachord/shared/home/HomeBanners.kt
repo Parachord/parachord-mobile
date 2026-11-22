@@ -20,6 +20,17 @@ data class HomeBannerItem(
     val severity: String,
 )
 
+/** How a banner is coloured, from its severity. */
+enum class BannerRole { ERROR, WARNING, SUCCESS, INFO }
+
+/** `error`, `warn` and `success` have their own role; `info`, no severity or an unknown one is [BannerRole.INFO]. */
+fun bannerRole(severity: String?): BannerRole = when (severity) {
+    "error" -> BannerRole.ERROR
+    "warn" -> BannerRole.WARNING
+    "success" -> BannerRole.SUCCESS
+    else -> BannerRole.INFO
+}
+
 fun homeBannerItems(announcements: List<Announcement>): List<HomeBannerItem> =
     announcements.map {
         HomeBannerItem(

@@ -108,4 +108,11 @@ class WebSessionRulesTest {
         assertNull(WebSessionRules.capBudget(JsonPrimitive(true), WebSessionRules.LOAD_TIMEOUT_CAP_MS))
         assertEquals(0L, WebSessionRules.capBudget(JsonPrimitive(-5), WebSessionRules.LOAD_TIMEOUT_CAP_MS))
     }
+
+    @Test
+    fun `the load log shows the path only`() {
+        kotlin.test.assertEquals("/my/purchases", WebSessionRules.logPath("https://music.amazon.com/my/purchases?token=secret#x"))
+        kotlin.test.assertEquals("/", WebSessionRules.logPath("https://music.amazon.com"))
+        kotlin.test.assertEquals("/search/the/songs", WebSessionRules.logPath("https://user:pw@music.amazon.com/search/the/songs"))
+    }
 }

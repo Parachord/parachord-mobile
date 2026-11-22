@@ -20,7 +20,8 @@ enum PCRoute: Hashable {
     case artistOnTour(String)
     case album(title: String, artist: String)
     /// Ephemeral/weekly playlist (tracks fetched from ListenBrainz on open).
-    case playlist(id: String, title: String)
+    /// A ListenBrainz weekly playlist; `contextType` (`weekly-jam` / `weekly-exploration`) when known.
+    case playlist(id: String, title: String, contextType: String? = nil)
     /// A SAVED (DB-backed) playlist — opens the same detail as the Playlists tab.
     /// Distinct from `.playlist` (which loads weekly/ephemeral tracks and would
     /// show empty for a saved row).
@@ -51,7 +52,7 @@ func pcRouteForContext(_ ctx: PlaybackContext) -> PCRoute? {
         case let artist as ContextDestination.Artist:
             return .artist(artist.name)
         case let playlist as ContextDestination.Playlist:
-            return .playlist(id: playlist.id, title: ctx.name)
+            return .playlist(id: playlist.id, title: ctx.name, contextType: ctx.type)
         case let sp as ContextDestination.ServicePlaylist:
             return .servicePlaylist(url: sp.url, name: ctx.name, source: "", image: nil)
         // Collection is a tab, not a pushed page: see pcCollectionDestination.
@@ -103,7 +104,7 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     case .artist(let name):            ArtistScreen(artistName: name)
     case .artistOnTour(let name):      ArtistScreen(artistName: name, initialTab: .onTour)
     case .album(let title, let artist): AlbumScreen(title: title, artist: artist)
-    case .playlist(let id, let title): PlaylistDetailView(playlistId: id, title: title)
+    case .playlist(let id, let title, let contextType): PlaylistDetailView(playlistId: id, title: title, contextType: contextType)
     case .savedPlaylist(let id):       SavedPlaylistDetailView(playlistId: id)
     case .servicePlaylist(let url, let name, let source, let image):
         ServicePlaylistView(url: url, name: name, source: source, image: image)
@@ -224,7 +225,7 @@ struct HomeScreen: View {
             HomeHeaderView(
                 page: page,
                 onCollectionRadio: { home.play(coordinator: coordinator) { try await $0.collectionRadio() } },
-                onSetupAction: { id in if id == "getting-started" { session.resumeSetup() } },
+                onSetupAction: { id in if id == HomeSetupKt.SETUP_GETTING_STARTED { session.resumeSetup() } },
                 onDismissSetupItem: { session.dismissSetupItem(id: $0) }
             )
             .padding(.top, 24)
@@ -283,7 +284,7 @@ struct HomeScreen: View {
             ForEach(page.halves, id: \.kind) { half in
                 HomeHalfView(
                     half: half,
-                    onSeeAll: { path.append(half.kind == "fresh" ? .fresh : half.kind == "critical" ? .critical : .pop) },
+                    onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_FRESH ? .fresh : half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
                     onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
                     onPlay: { card in
                         let key = card.key
@@ -343,7 +344,7 @@ struct HomeScreen: View {
                     ForEach(gs.explore, id: \.kind) { half in
                         HomeHalfView(
                             half: half,
-                            onSeeAll: { path.append(half.kind == "critical" ? .critical : .pop) },
+                            onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
                             onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
                             onPlay: { card in
                                 let key = card.key
@@ -372,14 +373,14 @@ struct HomeScreen: View {
     /// What a Jump back in tile opens, by kind.
     private func openTile(_ tile: IosJumpTile) {
         switch tile.kind {
-        case "playlist":
+        case IosHomePageKt.JUMP_KIND_PLAYLIST:
             path.append(.savedPlaylist(id: tile.targetId))
-        case "album":
+        case IosHomePageKt.JUMP_KIND_ALBUM:
             path.append(.album(title: tile.targetName, artist: tile.targetArtist ?? ""))
-        case "mix":
+        case IosHomePageKt.JUMP_KIND_MIX:
             guard let url = tile.targetUrl, !url.isEmpty else { return }
             path.append(.servicePlaylist(url: url, name: tile.targetName, source: tile.targetArtist ?? "", image: tile.imageUrl))
-        case "loves":
+        case IosHomePageKt.JUMP_KIND_LOVES:
             onOpenRecentLoves()
         default:
             break

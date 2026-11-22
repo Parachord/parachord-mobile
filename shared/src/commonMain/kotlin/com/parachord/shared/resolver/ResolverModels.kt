@@ -88,6 +88,15 @@ data class ResolvedSource(
      * additional network traffic.
      */
     val artworkUrl: String? = null,
+    /**
+     * A `capabilities.widevine` plugin's own result fields (string and number
+     * values only, e.g. Amazon's `amazonAsin`), so the Widevine engine can hand
+     * the plugin back the source record it gave, as desktop's `sources[id]` is
+     * the plugin's result: the plugin digs its own identifier out of the track
+     * (`getPlaybackManifest`). Non-secret by contract (a search result).
+     * Null for every other resolver.
+     */
+    val pluginFields: Map<String, String>? = null,
 )
 
 // ── Confidence Scoring ──────────────────────────────────────────────
@@ -501,6 +510,33 @@ fun pluginTrackId(resultJson: String, resolverId: String): String? = try {
 } catch (_: Exception) {
     null
 }
+
+/**
+ * A plugin result's top-level string and number fields, as
+ * [ResolvedSource.pluginFields] keeps them (objects, arrays, booleans and
+ * nulls are dropped; at most [MAX_PLUGIN_FIELDS] fields of up to 512 chars).
+ * Null when the result isn't an object or has none.
+ */
+fun pluginResultFields(resultJson: String): Map<String, String>? = try {
+    val obj = kotlinx.serialization.json.Json.parseToJsonElement(resultJson) as? kotlinx.serialization.json.JsonObject
+    obj?.entries
+        ?.mapNotNull { (k, v) ->
+            val p = v as? kotlinx.serialization.json.JsonPrimitive ?: return@mapNotNull null
+            if (p is kotlinx.serialization.json.JsonNull) return@mapNotNull null
+            // A number or a string; never a boolean.
+            if (!p.isString && p.content.toDoubleOrNull() == null) return@mapNotNull null
+            if (p.content.isEmpty() || p.content.length > 512) return@mapNotNull null
+            k to p.content
+        }
+        ?.take(MAX_PLUGIN_FIELDS)
+        ?.toMap()
+        ?.takeIf { it.isNotEmpty() }
+} catch (_: Exception) {
+    null
+}
+
+/** How many fields [pluginResultFields] keeps. */
+const val MAX_PLUGIN_FIELDS: Int = 32
 
 /** The JSON key a plugin's own track id rides on: `<resolverId>Id` (`subsonicId`). */
 fun pluginTrackIdKey(resolverId: String): String =

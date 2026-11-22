@@ -13,11 +13,16 @@ import com.parachord.shared.settings.SettingsTab
 /** A step of the layout: its id (as [GettingStartedStep.id]) and title. */
 data class GettingStartedStepInfo(val id: String, val title: String)
 
+/** The getting-started step ids. */
+const val GETTING_STARTED_CONNECT = "connect"
+const val GETTING_STARTED_MUSIC = "music"
+const val GETTING_STARTED_LISTEN = "listen"
+
 /** Desktop's `STEPS`, in order. */
 val GETTING_STARTED_STEPS: List<GettingStartedStepInfo> = listOf(
-    GettingStartedStepInfo("connect", HomeCopy.STEP_CONNECT),
-    GettingStartedStepInfo("music", HomeCopy.STEP_MUSIC),
-    GettingStartedStepInfo("listen", HomeCopy.STEP_LISTEN),
+    GettingStartedStepInfo(GETTING_STARTED_CONNECT, HomeCopy.STEP_CONNECT),
+    GettingStartedStepInfo(GETTING_STARTED_MUSIC, HomeCopy.STEP_MUSIC),
+    GettingStartedStepInfo(GETTING_STARTED_LISTEN, HomeCopy.STEP_LISTEN),
 )
 
 /** The open step: the one the person picked, else the current one (the first not done), else the first. */

@@ -103,4 +103,33 @@ object SourceReselection {
         soundcloudId = source.soundcloudId,
         appleMusicId = source.appleMusicId,
     )
+
+    /**
+     * What the source switcher shows as the track's source (its icon and the
+     * checked row): the source the user just picked ([pendingPick]) while its
+     * play is still starting, for that track only, else [playingResolver], the
+     * one really playing. The pick is a display state of its own and never
+     * written onto the track, so a switch that can't play goes back to the
+     * real source once the platform clears it (iOS #287). The platform clears
+     * it when the play from it starts (the track's resolver is then the pick),
+     * fails, or is replaced by another play; a different current track hides
+     * it at once. Desktop changes the icon only once the play starts; the
+     * phones show the pick at once, with the play button's spinner meanwhile.
+     */
+    fun pickerShownResolver(
+        playingResolver: String?,
+        pendingPick: PendingSourcePick?,
+        currentTrackId: String?,
+    ): String? {
+        if (pendingPick != null && currentTrackId != null && pendingPick.trackId == currentTrackId) {
+            return pendingPick.resolver
+        }
+        return playingResolver
+    }
 }
+
+/**
+ * A source picked in the Now Playing switcher whose play hasn't started yet:
+ * [resolver] for the track with id [trackId]. See [SourceReselection.pickerShownResolver].
+ */
+data class PendingSourcePick(val trackId: String, val resolver: String)

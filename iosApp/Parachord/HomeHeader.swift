@@ -224,11 +224,11 @@ struct HomeBannerSlot: View {
     let session: IosHomeSession
 
     private var color: Color {
-        switch banner.severity {
-        case "error":   return PC.error
-        case "warn":    return PC.warning
-        case "success": return PC.success
-        default:        return PC.accent
+        switch banner.role {
+        case .error:   return PC.error
+        case .warning: return PC.warning
+        case .success: return PC.success
+        default:       return PC.accent
         }
     }
 

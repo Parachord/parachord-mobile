@@ -287,7 +287,7 @@ struct CollectionView: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { i, t in
                 // The shared track row (#760).
                 let play = { coordinator.setQueue(items, startIndex: i,
-                                                  context: PlaybackContext(type: "collection", name: "Collection", id: nil)) }
+                                                  context: PlaybackContext(type: HomeModelKt.COLLECTION_CONTEXT, name: "Collection", id: nil)) }
                 PCTrackRow(title: t.title, artist: t.artist, album: t.album, artworkUrl: t.artworkUrl,
                            isPlaying: coordinator.currentTrack?.id == t.id,
                            durationMs: t.duration?.int64Value,

@@ -309,6 +309,16 @@ class WebSessionHost(
     }
 
     private suspend fun runLoad(url: String, options: LoadOptions): LoadResult {
+        val startedAt = nowMs()
+        try {
+            return runLoadTimed(url, options)
+        } finally {
+            // The debug aid for slow page flows: the path only, never a query or a body.
+            com.parachord.shared.platform.Log.d("WebSession", "load ${WebSessionRules.logPath(url)} took ${nowMs() - startedAt}ms")
+        }
+    }
+
+    private suspend fun runLoadTimed(url: String, options: LoadOptions): LoadResult {
         val loadGeneration = generation
         val timeoutMs = options.timeoutMs ?: timings.loadTimeoutMs
         val captureOptions = options.capture

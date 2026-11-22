@@ -47,8 +47,8 @@ struct HomeGettingStartedView: View {
                     if isOpen {
                         VStack(alignment: .leading, spacing: 20) {
                             switch step.id {
-                            case "connect": connectStep
-                            case "music": musicStep
+                            case GettingStartedLayoutKt.GETTING_STARTED_CONNECT: connectStep
+                            case GettingStartedLayoutKt.GETTING_STARTED_MUSIC: musicStep
                             default: listenStep
                             }
                         }

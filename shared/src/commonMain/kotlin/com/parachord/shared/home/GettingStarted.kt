@@ -67,6 +67,11 @@ fun settingsMissing(p: PluginInfo, saved: Map<String, String>?): Boolean {
  * @param planKey the plan as the service names it, or null
  * @param message the full sentence for Settings and the play refusal
  * @param searchesHeldBack the service's own searches answer not-ready while blocked
+ * @param ownedOnly (unblocked entries only) it plays, but only what the
+ *   account owns (Amazon off Music Unlimited plays the tracks bought from
+ *   Amazon, desktop #1494). The plugin enforces it itself, so the resolver
+ *   stays in playback; the host shows the label and, on entering the state,
+ *   drops its saved sources ([com.parachord.shared.plugin.limitTransition]).
  */
 data class PlaybackLimit(
     val blocked: Boolean,
@@ -74,6 +79,7 @@ data class PlaybackLimit(
     val planKey: String? = null,
     val message: String? = null,
     val searchesHeldBack: Boolean = false,
+    val ownedOnly: Boolean = false,
 )
 
 /** `state` is `connected`, `limited`, `connect` or `setup`. */
@@ -139,9 +145,9 @@ fun gettingStartedSteps(
     played: Boolean = false,
 ): GettingStartedStatus {
     val steps = listOf(
-        GettingStartedStep("connect", connected || folderAdded),
-        GettingStartedStep("music", hasMusic || scrobbling),
-        GettingStartedStep("listen", played),
+        GettingStartedStep(GETTING_STARTED_CONNECT, connected || folderAdded),
+        GettingStartedStep(GETTING_STARTED_MUSIC, hasMusic || scrobbling),
+        GettingStartedStep(GETTING_STARTED_LISTEN, played),
     )
     val next = steps.firstOrNull { !it.done }
     return GettingStartedStatus(steps, next?.id, next == null, steps.count { it.done })

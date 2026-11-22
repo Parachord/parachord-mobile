@@ -124,7 +124,6 @@ import com.parachord.shared.resolver.ResolvedSource
 import kotlin.concurrent.Volatile
 import com.parachord.shared.resolver.ResolverCoordinator
 import com.parachord.shared.resolver.ResolverScoring
-import com.parachord.shared.repository.WeeklyPlaylistEntry
 import com.parachord.shared.repository.WeeklyPlaylistsRepository
 import com.parachord.shared.api.SpotifyClient
 import com.parachord.shared.api.bestImageUrl
@@ -150,6 +149,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -2025,12 +2025,6 @@ class IosContainer private constructor() {
         RecommendationsRepository(
             source = com.parachord.shared.repository.PluginRecommendationSource(pluginManager),
             settingsStore = settingsStore,
-            // Spotify-free: RecommendationsRepository's only MetadataService use
-            // is getArtistInfo per recommended artist (artist images/bios) — a
-            // ~15-artist Spotify-search burst on the shared key. Tracks come
-            // from ListenBrainz, not metadata, so this costs nothing (artist
-            // images already came from Last.fm/MusicBrainz, not Spotify).
-            metadataService = enrichMetadataService,
             aiRecommendations = com.parachord.shared.repository.AiShuffleupagusPicks(aiRecommendationService, settingsStore),
             releaseDates = com.parachord.shared.recommendations.ReleaseDates(
                 load = { IosFileCache.read("release_dates_cache.json") },
@@ -2473,9 +2467,6 @@ class IosContainer private constructor() {
     // (architecture realignment, plan 2026-06-12).
     fun freshDropsFlow(): Flow<Any> =
         freshDropsRepository.getFreshDrops(false).forDisplay()
-
-    fun recommendedArtistsFlow(): Flow<Any> =
-        recommendationsRepository.getRecommendedArtists().forDisplay()
 
     /**
      * What a screen watching a repository flow shows, for Swift: each list as
@@ -3176,8 +3167,18 @@ class IosContainer private constructor() {
      * the list is the user's "Play from X" switches alone.
      */
     val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by lazy {
-        com.parachord.shared.plugin.PluginStatusStore.create(pluginManager, settingsStore, appScope)
+        com.parachord.shared.plugin.PluginStatusStore.create(
+            pluginManager, settingsStore, appScope,
+            clearResolver = { id, sourcesToo -> resolverSourcesClearer?.invoke(id, sourcesToo) },
+        )
     }
+
+    /**
+     * Set from Swift at start-up (`AppBootstrap`): `IosTrackResolverCache.clearResolver`.
+     * A plan change (shared `limitTransition`, #1494) calls it to drop a
+     * resolver's misses, or with `sourcesToo` every saved source of it.
+     */
+    var resolverSourcesClearer: ((String, Boolean) -> Unit)? = null
 
     /** Reads every status-capable plugin (app start, Settings) or one ([id], its sheet). */
     fun refreshPluginStatus(id: String?) {
@@ -3620,47 +3621,59 @@ class IosContainer private constructor() {
     // FlowWatcher, so the repos' own disk caches surface cached-first with no
     // parallel iOS cache. Architecture realignment, plan 2026-06-12.)
 
-    /**
-     * Weekly Jams / Weekly Exploration from ListenBrainz. Needs only the
-     * LB client + the SettingsStore (for the username the user set in
-     * Settings). No auth — the createdfor playlists endpoint is public.
-     */
+    /** A ListenBrainz playlist's tracks by MBID (the weekly playlists' tracks and covers). */
     val weeklyPlaylistsRepository: WeeklyPlaylistsRepository by lazy {
-        WeeklyPlaylistsRepository(
-            listenBrainzClient = listenBrainzClient,
-            settingsStore = settingsStore,
+        WeeklyPlaylistsRepository(listenBrainzClient = listenBrainzClient)
+    }
+
+    /** The shared header of [playlistId] from the recommendation sections, or null. Never throws. */
+    private fun currentWeeklyHeader(playlistId: String): com.parachord.shared.recommendations.WeeklyHeader? = try {
+        com.parachord.shared.recommendations.weeklyPlaylistHeader(
+            recommendationsRepository.page.value.weeklySections, playlistId,
+        )
+    } catch (e: Exception) {
+        Log.w("IosContainer", "weeklyPlaylistHeader($playlistId) failed: ${e.message}")
+        null
+    }
+
+    private fun com.parachord.shared.recommendations.WeeklyHeader.toIos(): IosWeeklyHeader {
+        val kind = com.parachord.shared.recommendations.weeklyKindLabel(contextType)
+        return IosWeeklyHeader(
+            id = id,
+            title = title,
+            weekLabel = weekLabel,
+            kind = kind,
+            headline = com.parachord.shared.recommendations.weeklyHeadline(kind, dateLabel),
+            blurb = blurb,
         )
     }
 
     /**
-     * Load the Weekly Jams + Weekly Exploration entries, flattened into
-     * a single Swift-friendly list tagged by kind. Returns empty if no
-     * LB username is set. Powers the iOS Discover screen (phase 5.3).
+     * The weekly playlist [playlistId]'s header from the recommendation
+     * sections (shared [weeklyPlaylistHeader], desktop's `weeklyHomeEntries`),
+     * or null when the page doesn't carry it. Never throws.
      */
-    suspend fun loadWeeklyPlaylists(forceRefresh: Boolean): List<IosWeeklyEntry> {
-        // Self-heal: older iOS builds stored only the LB *token*, not the
-        // *username* the public `createdfor` weekly endpoint needs (Android
-        // derives both at token-save time via validateToken; iOS regressed to
-        // token-only). If the token is present but the username is missing,
-        // derive + persist it so Discover/Home weekly carousels load without
-        // the user re-entering anything.
-        if (settingsStore.getListenBrainzUsername() == null) {
-            val token = settingsStore.getListenBrainzToken()
-            if (!token.isNullOrBlank()) {
-                listenBrainzClient.validateToken(token)?.let {
-                    settingsStore.setListenBrainzUsername(it)
-                }
-            }
-        }
-        val result = weeklyPlaylistsRepository.loadWeeklyPlaylists(forceRefresh)
-            ?: return emptyList()
-        // "Weekly Jam" (singular) to parallel "Weekly Exploration" in the detail
-        // header. NOTE: keep DiscoverViewModel's `kind == "Weekly Jam"` filter in sync.
-        val jams = (result.jams ?: emptyList()).map { it.toIos(kind = "Weekly Jam") }
-        val exploration = (result.exploration ?: emptyList())
-            .map { it.toIos(kind = "Weekly Exploration") }
-        return jams + exploration
-    }
+    fun weeklyPlaylistHeader(playlistId: String): IosWeeklyHeader? = currentWeeklyHeader(playlistId)?.toIos()
+
+    /**
+     * Calls [onHeader] once, when the recommendation sections first carry
+     * [playlistId] (at once if they already do). Desktop waits for the weekly
+     * data the same way; a view opened before the page loaded fills in then.
+     */
+    fun watchWeeklyPlaylistHeader(playlistId: String, onHeader: (IosWeeklyHeader) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(
+            recommendationsRepository.page
+                .mapNotNull { com.parachord.shared.recommendations.weeklyPlaylistHeader(it.weeklySections, playlistId) }
+                .take(1)
+                .map { it.toIos() },
+        ) { (it as? IosWeeklyHeader)?.let(onHeader) }
+
+    /**
+     * The name Save gives this week's copy (shared [weeklySavedName]: label
+     * and date, so weeks never share a name sync could merge by). Never throws.
+     */
+    fun weeklySavedName(playlistId: String, contextType: String?): String =
+        com.parachord.shared.recommendations.weeklySavedName(currentWeeklyHeader(playlistId), contextType)
 
     /**
      * Load the tracks of a single weekly playlist (by MBID), flattened
@@ -3985,19 +3998,6 @@ class IosContainer private constructor() {
             playlistDao.update(it.copy(trackCount = tracks.size, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
         }
     }
-
-    private fun WeeklyPlaylistEntry.toIos(kind: String) = IosWeeklyEntry(
-        id = id,
-        title = title,
-        weekLabel = weekLabel,
-        // #205: show the playlist's creation date ("Jun 15, 2026") rather than a
-        // relative "This Week"/"Last Week" label (matches desktop). The shared
-        // repo formats it; fall back to the relative label if it's blank.
-        dateLabel = this.dateLabel.ifBlank { weekLabel },
-        // Description is already HTML-stripped by the shared repo.
-        summary = description,
-        kind = kind,
-    )
 
     /**
      * Search MusicBrainz for artists + releases, returning flat
@@ -4493,22 +4493,19 @@ data class IosPlaylistTrack(
 )
 
 /**
- * Flat Swift-friendly weekly-playlist entry, tagged by kind.
- *
- * NOTE: the blurb field is `summary`, NOT `description` — a Kotlin
- * property named `description` collides with ObjC's `NSObject.description`
- * on the Swift side, so `entry.description` would return the data-class
- * toString instead of the field value. Avoid `description` on any
- * Swift-facing Kotlin model.
+ * A weekly playlist's header for Swift. The blurb is `blurb`, not
+ * `description`: a Kotlin `description` reads back as ObjC's
+ * `NSObject.description` in Swift.
  */
-data class IosWeeklyEntry(
+data class IosWeeklyHeader(
     val id: String,
     val title: String,
     val weekLabel: String,
-    /** Playlist creation date, formatted "Jun 15, 2026" (#205). */
-    val dateLabel: String,
-    val summary: String,
-    val kind: String,   // "Weekly Jams" | "Weekly Exploration"
+    /** "Weekly Jam" | "Weekly Exploration". */
+    val kind: String,
+    /** "Weekly Jam · Jun 15, 2026", or the kind alone with no date. */
+    val headline: String,
+    val blurb: String,
 )
 
 /**
