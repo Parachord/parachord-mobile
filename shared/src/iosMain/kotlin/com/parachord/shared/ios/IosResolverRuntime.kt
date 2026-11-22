@@ -401,7 +401,8 @@ class IosResolverRuntime(
             })();
             """.trimIndent(),
         )
-        repeat(POLL_ATTEMPTS) {
+        // As long as Android waits (shared PLAYLIST_LOOKUP_TIMEOUT_MS, #778).
+        repeat((com.parachord.shared.plugin.PLAYLIST_LOOKUP_TIMEOUT_MS / POLL_INTERVAL_MS).toInt()) {
             delay(POLL_INTERVAL_MS)
             val raw = jsRuntime.evaluate("window.__resolveResults['$key']")
             if (raw != null && raw != "pending") {

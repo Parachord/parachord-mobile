@@ -353,7 +353,7 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   snapshot with `source = "<providerId>-import"` (`spotify-import`, `applemusic-import`,
   `soundcloud-import`: the provider comes from `ResolvedProtocolPlay.providerId`) and the
   native ids the tracklist carries (`ProtocolTrack.spotifyId` / `appleMusicId`, plus album
-  id, length and cover); anything else is a hosted XSPF (`HostedXspfService.importHostedXspf`).
+  id, length and cover); anything else is a hosted XSPF (`HostedXspfService.importHostedXspf`). A link a plugin claims (`PluginManager.playlistLookupPluginName`) whose lookup fails is an error (`PlaylistLookupFailedException`, "Couldn’t load that playlist from X. Try again."), never an XSPF fetch, as on desktop: Amazon answers a plain fetch of its page with 400 (#778). A plugin's `lookupPlaylist` gets up to 60 s on both apps (`PLAYLIST_LOOKUP_TIMEOUT_MS`; desktop sets no limit): Amazon's waits behind its other page loads, and took 9.6 s in the iOS simulator.
   Its id is `<source>-<uuid>` (`spotify-import-…`), which no provider owns: sync reads a
   playlist's provider from its id only through the shared `impliedPlaylistProvider`
   (`shared/.../sync/PlaylistIdProvider.kt`), which answers null for `<provider>-import-…`

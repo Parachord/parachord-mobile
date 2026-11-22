@@ -44,6 +44,13 @@ class PlaylistUrlImporter(
     private val createPlaylist: suspend (Playlist, List<Track>) -> Unit,
     /** A saved playlist by id (`PlaylistDao.getById`); checked only for a `savedKey` import. */
     private val findPlaylist: suspend (id: String) -> Playlist?,
+    /**
+     * The name of the plugin that claims a playlist link and can look it up
+     * (`PluginManager.playlistLookupPluginName`), else null. Such a link whose
+     * lookup fails is an error, never an XSPF document (desktop's "Could not
+     * load playlist"; #778: Amazon answers a plain fetch of its page with 400).
+     */
+    private val playlistLookupPluginName: suspend (url: String) -> String? = { null },
 ) {
     suspend fun importFromUrl(rawUrl: String, savedKey: String? = null): XspfImportResult {
         val url = normalizePlaylistUrl(rawUrl)
@@ -51,7 +58,14 @@ class PlaylistUrlImporter(
         // An Achordion playlist is an XSPF document at its own endpoint: import
         // that, so it's a hosted playlist that follows Achordion's changes.
         (classifyPlaylistUrl(url) as? PlaylistUrlKind.Achordion)?.let { return importHostedXspf(it.xspfUrl) }
-        val play = providerPlaylists.resolve(url) ?: return importHostedXspf(url)
+        val play = providerPlaylists.resolve(url)
+        if (play == null) {
+            playlistLookupPluginName(url)?.let { name ->
+                Log.w(TAG, "$name claims $url but couldn't load it")
+                throw PlaylistLookupFailedException(name)
+            }
+            return importHostedXspf(url)
+        }
         return save(play, savedKey?.takeIf { it.isNotBlank() })
     }
 
@@ -83,6 +97,10 @@ class PlaylistUrlImporter(
         const val TAG = "PlaylistUrlImporter"
     }
 }
+
+/** A plugin claimed the playlist link and couldn't load it (#778). */
+class PlaylistLookupFailedException(val serviceName: String) :
+    Exception("Couldn’t load that playlist from $serviceName. Try again.")
 
 /** `spotify:playlist:<id>` becomes its web link; anything else is trimmed. */
 fun normalizePlaylistUrl(rawUrl: String): String {

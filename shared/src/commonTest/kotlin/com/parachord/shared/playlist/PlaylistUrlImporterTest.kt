@@ -56,7 +56,10 @@ class PlaylistUrlImporterTest {
     private val hostedImports = mutableListOf<String>()
     private var spotifyConnected = true
 
-    private fun importer(pluginLookup: (suspend (String) -> String?)? = null): PlaylistUrlImporter {
+    private fun importer(
+        pluginLookup: (suspend (String) -> String?)? = null,
+        claimingPlugin: suspend (String) -> String? = { null },
+    ): PlaylistUrlImporter {
         val http = HttpClient(MockEngine { req ->
             val url = req.url.toString()
             val body = when {
@@ -82,7 +85,26 @@ class PlaylistUrlImporterTest {
             },
             createPlaylist = { p, t -> saved.add(p to t) },
             findPlaylist = { id -> saved.firstOrNull { it.first.id == id }?.first },
+            playlistLookupPluginName = claimingPlugin,
         )
+    }
+
+    @Test fun `a link a plugin claims but can't load is an error — never an XSPF fetch`() = runTest {
+        val imp = importer(
+            pluginLookup = { null },
+            claimingPlugin = { u -> if ("music.amazon.com" in u) "Amazon Music" else null },
+        )
+        val e = assertFailsWith<PlaylistLookupFailedException> {
+            imp.importFromUrl("https://music.amazon.com/playlists/B00JFGDTJY")
+        }
+        assertEquals("Couldn’t load that playlist from Amazon Music. Try again.", e.message)
+        assertTrue(hostedImports.isEmpty())
+        assertTrue(saved.isEmpty())
+    }
+
+    @Test fun `a link no plugin claims still imports as hosted XSPF`() = runTest {
+        importer(pluginLookup = { null }, claimingPlugin = { null }).importFromUrl("https://example.com/list.xspf")
+        assertEquals(listOf("https://example.com/list.xspf"), hostedImports)
     }
 
     @Test fun `a saved key imports once — a second save finds the first playlist`() = runTest {

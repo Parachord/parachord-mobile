@@ -20,6 +20,14 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 private const val TAG = "PluginManager"
 private const val LOOKUP_POLL_ATTEMPTS = 60
 private const val LOOKUP_POLL_INTERVAL_MS = 100L
+
+/**
+ * How long a plugin's `lookupPlaylist` may take, on both apps. Desktop awaits it
+ * with no limit; a web-session plugin (Amazon Music) loads pages for it and
+ * queues behind its other page loads, so one took 9.6 s in the iOS simulator,
+ * past the 5–6 s the apps used to wait (#778).
+ */
+const val PLAYLIST_LOOKUP_TIMEOUT_MS = 60_000L
 /** Album search/lookup polls a little past the catalog loader's 8s step cap, so
  *  the loader's timeout (not the poll) decides when a slow catalog gives up. */
 private const val ALBUM_POLL_ATTEMPTS = 85
@@ -503,7 +511,7 @@ class PluginManager constructor(
             })();
             """.trimIndent(),
         )
-        repeat(LOOKUP_POLL_ATTEMPTS) {
+        repeat((PLAYLIST_LOOKUP_TIMEOUT_MS / LOOKUP_POLL_INTERVAL_MS).toInt()) {
             delay(LOOKUP_POLL_INTERVAL_MS)
             val raw = jsRuntime.evaluate("window.__resolveResults['$key']")?.unquote()
             if (raw != null && raw != "pending") {
@@ -513,6 +521,26 @@ class PluginManager constructor(
             }
         }
         return null
+    }
+
+    /**
+     * The name of the plugin whose `urlPatterns` claim [url] and that implements
+     * `lookupPlaylist` (the resolver-loader's `findResolverForUrl`), else null.
+     * A playlist link a plugin claims is never imported as an XSPF document (#778).
+     */
+    suspend fun playlistLookupPluginName(url: String): String? {
+        ensureInitialized()
+        val raw = pollAsync(
+            "cpl",
+            loaderCall(
+                "(function(){var l=window.__resolverLoader;var id=l.findResolverForUrl&&l.findResolverForUrl('${escapeForJs(url)}');" +
+                    "var r=id&&l.getResolver&&l.getResolver(id);" +
+                    "return (r&&typeof r.lookupPlaylist==='function')?String(r.name||id):null;})()",
+            ),
+            attempts = LOOKUP_POLL_ATTEMPTS,
+        ) ?: return null
+        return runCatching { Json.parseToJsonElement(raw).jsonPrimitive.contentOrNull }.getOrNull()
+            ?: raw.trim('"').takeIf { it.isNotBlank() }
     }
 
     // ── Album search (capabilities.albumSearch, #424) ──────────────────
