@@ -109,10 +109,15 @@ struct PCSkeletonList: View {
 /// A grid of square-card skeletons (artwork + a title line) for album/artist grids.
 struct PCSkeletonGrid: View {
     var count = 6
+    /// The phone's columns; 3 means artist circles. Wider screens get more, as the real grid does.
     var columns = 2
+    @Environment(\.pcLayoutWidth) private var layoutWidth
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: columns), spacing: 18) {
-            ForEach(0..<count, id: \.self) { _ in
+        let grid = PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 14,
+                                    minCard: columns >= 3 ? LayoutRules.shared.GRID_CIRCLE_MIN : LayoutRules.shared.GRID_CARD_MIN,
+                                    minColumns: columns)
+        LazyVGrid(columns: grid, spacing: 18) {
+            ForEach(0..<max(count, grid.count * 2), id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 8) {
                     PCSkeletonBox(radius: 10).aspectRatio(1, contentMode: .fit)
                     PCSkeletonBox(width: 90, height: 12, radius: 4)
@@ -403,6 +408,7 @@ struct CriticalDarlingsScreen: View {
                 if !album.blurb.isEmpty {
                     // Android shows the full synopsis — no maxLines/truncation.
                     Text(album.blurb).font(.system(size: 12)).foregroundStyle(PC.fg3).padding(.top, 2)
+                        .frame(maxWidth: PCLayout.readableMax, alignment: .leading)
                 }
             }
             Spacer(minLength: 0)

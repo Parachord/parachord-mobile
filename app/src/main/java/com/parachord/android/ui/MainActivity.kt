@@ -78,6 +78,9 @@ import com.parachord.android.ui.navigation.ParachordNavHost
 import com.parachord.android.ui.navigation.Routes
 import com.parachord.android.ui.theme.LocalResolverOrder
 import com.parachord.android.ui.theme.ParachordTheme
+import com.parachord.shared.ui.LayoutRules
+import com.parachord.android.ui.theme.PlayerSurface
+import androidx.compose.foundation.layout.widthIn
 import org.koin.android.ext.android.inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -566,7 +569,14 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                     playbackState.position.toFloat() / playbackState.duration.toFloat()
                                 } else 0f
                                 val streamMeta = playbackState.streamingMetadata
+                                // On a tablet the bar's colour runs the full width, its
+                                // contents stop at BAR_MAX, centred (shared LayoutRules).
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().background(PlayerSurface),
+                                    contentAlignment = Alignment.Center,
+                                ) {
                                 MiniPlayer(
+                                    modifier = Modifier.widthIn(max = LayoutRules.BAR_MAX.dp),
                                     trackTitle = streamMeta?.title ?: currentTrack.title,
                                     artistName = streamMeta?.artist ?: currentTrack.artist,
                                     artworkUrl = playbackState.effectiveArtwork(trackArtwork),
@@ -585,6 +595,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                         }
                                     },
                                 )
+                                }
                             } else if (playbackState.isPlaybarLoading || playbackState.spinoffLoading) {
                                 // Deeplink radio (Mode C) or seed-spinoff
                                 // (Mode B) is mid-fetch with no first
@@ -601,12 +612,20 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                             )
                             val navBarBg = if (ParachordTheme.isDark) Color(0xFF262626) else Color(0xFF1F2937)
                             val selectedTabBg = Color.White.copy(alpha = 0.12f)
-                            Row(
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .background(navBarBg)
                                     .navigationBarsPadding()
                                     .height(56.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                            Row(
+                                // The tabs stop at BAR_MAX on a tablet rather than spreading across it.
+                                modifier = Modifier
+                                    .widthIn(max = LayoutRules.BAR_MAX.dp)
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(),
                                 horizontalArrangement = Arrangement.SpaceEvenly,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -655,6 +674,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                                         }
                                     }
                                 }
+                            }
                             }
                         }
                     }

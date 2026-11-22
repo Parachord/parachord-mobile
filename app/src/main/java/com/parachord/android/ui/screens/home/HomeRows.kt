@@ -56,6 +56,7 @@ import com.parachord.android.ui.components.ArtPlayInset
 import com.parachord.android.ui.screens.discover.RecAlbumCard
 import com.parachord.android.ui.screens.discover.RecCardSkeleton
 import com.parachord.android.ui.screens.discover.RecCardWidth
+import com.parachord.android.ui.components.rowCardWidth
 import com.parachord.android.ui.components.serviceLogoVector
 import com.parachord.android.ui.theme.current
 import com.parachord.android.ui.theme.tokenColor
@@ -84,6 +85,10 @@ import kotlinx.coroutines.launch
 /** Desktop's `HOME_ROW_GAP`. */
 private val CardGap = 16.dp
 private val Gutter = DesignTokens.SCREEN_GUTTER.dp
+
+/** A Home row card's width: 140 on a phone (the row scrolls), wider on a tablet so six fill the row. */
+@Composable
+private fun homeRowCardWidth(): Dp = rowCardWidth(cards = HOME_ROW_CARDS, gutter = Gutter, gap = CardGap)
 private val ArtShape = RoundedCornerShape(DesignTokens.RADIUS_ART.dp)
 /** The reason badge: desktop's 26 px disc and 18 px logo, on the 4-point and icon scales. */
 private val BadgeDisc = 28.dp
@@ -124,6 +129,7 @@ fun HomeMixesRow(
     modifier: Modifier = Modifier,
 ) {
     if (!homeSectionVisibility(state).showMixes) return
+    val cardWidth = homeRowCardWidth()
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(title = HomeCopy.MIXES_TITLE, subtitle = HomeCopy.MIXES_SUBTITLE)
         SourceChips(state.mixSources, state.mixSource, onSelectSource)
@@ -143,6 +149,7 @@ fun HomeMixesRow(
                     lines = listOf(CardLine(mixCardSubtitle(card), maxLines = 2)),
                     onOpen = { if (card is HomeMixCard.Mix) onOpenMix(card) else onOpenLoves() },
                     onPlay = { if (card is HomeMixCard.Mix) onPlayMix(card) else onPlayLoves() },
+                    width = cardWidth,
                 ) { size ->
                     CoverMosaic(
                         covers = art.imageUrl?.let { listOf(it) } ?: art.mosaic,
@@ -168,6 +175,7 @@ fun HomePlaylistsRow(
     modifier: Modifier = Modifier,
 ) {
     if (!homeSectionVisibility(state).showPlaylists) return
+    val cardWidth = homeRowCardWidth()
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.PLAYLISTS_TITLE,
@@ -180,7 +188,7 @@ fun HomePlaylistsRow(
             horizontalArrangement = Arrangement.spacedBy(CardGap),
         ) {
             items(state.playlists, key = { it.playlist.id }) { card ->
-                PlaylistCard(card, onOpen, onPlay, onLongPress)
+                PlaylistCard(card, onOpen, onPlay, onLongPress, cardWidth)
             }
         }
     }
@@ -192,6 +200,7 @@ private fun PlaylistCard(
     onOpen: (Playlist) -> Unit,
     onPlay: (Playlist) -> Unit,
     onLongPress: (Playlist) -> Unit,
+    width: Dp,
 ) {
     val playlist = card.playlist
     HomeCard(
@@ -201,6 +210,7 @@ private fun PlaylistCard(
         onPlay = { onPlay(playlist) },
         onLongPress = { onLongPress(playlist) },
         badge = card.badge?.let { text -> { ChangeBadge(text, Modifier.align(Alignment.TopStart)) } },
+        width = width,
     ) { size ->
         AlbumArtCard(
             artworkUrl = playlist.artworkUrl,
@@ -231,6 +241,7 @@ fun HomeAlbumsRow(
     val visibility = homeSectionVisibility(state)
     val loading = visibility.albumsLoading
     if (!visibility.showAlbums) return
+    val cardWidth = homeRowCardWidth()
     Column(modifier = modifier.fillMaxWidth()) {
         SectionHeader(
             title = HomeCopy.ALBUMS_TITLE,
@@ -243,7 +254,7 @@ fun HomeAlbumsRow(
             horizontalArrangement = Arrangement.spacedBy(CardGap),
         ) {
             if (loading) {
-                items(HOME_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 2) }
+                items(HOME_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 2, width = cardWidth) }
             } else {
                 // Artist + title is unique in the list (homeRecommendationAlbums dedups by it); an id may be blank.
                 items(state.albums, key = { homeAlbumCardKey(it) }) { item ->
@@ -251,6 +262,7 @@ fun HomeAlbumsRow(
                     val reason = albumReasonBadge(item)
                     RecAlbumCard(
                         item = item,
+                        width = cardWidth,
                         year = releaseYear(item.releaseDate),
                         // Desktop's Home album card has no "Coming" pill.
                         comingLabel = null,

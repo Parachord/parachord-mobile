@@ -11,6 +11,36 @@ private let halfGap: CGFloat = 16
 
 // MARK: Halves
 
+/// Home's halves, laid out for the window: side by side once both fit three
+/// cards (`LayoutRules.halvesSideBySide`), else stacked full width, with cards
+/// that grow to fill each half (`LayoutRules.rowCardWidth`). `half` draws one
+/// half at the card width it's given.
+struct HomeHalvesLayout<Half: View>: View {
+    let halves: [IosHomeHalf]
+    var stackSpacing: CGFloat = 24
+    @ViewBuilder let half: (IosHomeHalf, CGFloat) -> Half
+    @Environment(\.pcLayoutWidth) private var layoutWidth
+
+    var body: some View {
+        let sideBySide = halves.count > 1 && LayoutRules.shared.halvesSideBySide(available: Double(layoutWidth))
+        let outer = sideBySide ? (layoutWidth - 2 * homeGutter - halfGap) / 2 : layoutWidth - 2 * homeGutter
+        // Each half pads its row 16 on both sides.
+        let cardWidth = PCLayout.rowCardWidth(outer, cards: Int(HomePageKt.HOME_HALF_ROW_CARDS), gutter: 16, gap: halfGap)
+        Group {
+            if sideBySide {
+                HStack(alignment: .top, spacing: halfGap) {
+                    ForEach(halves, id: \.kind) { h in half(h, cardWidth).frame(maxWidth: .infinity) }
+                }
+            } else {
+                VStack(spacing: stackSpacing) {
+                    ForEach(halves, id: \.kind) { h in half(h, cardWidth) }
+                }
+            }
+        }
+        .padding(.horizontal, homeGutter)
+    }
+}
+
 /// One half: a hero band in the page's gradient (the icon, the uppercase title, See all), then a row of
 /// album cards, skeletons, or the compact error with Try again.
 struct HomeHalfView: View {
@@ -21,6 +51,8 @@ struct HomeHalfView: View {
     let onShown: (IosHalfCard) -> Void
     let onOpenArtist: (IosHalfCard) -> Void
     let onRetry: () -> Void
+    /// The cards' width (`HomeHalvesLayout` sizes it for the window).
+    var cardWidth: CGFloat = pcRecCardWidth
 
     private var page: DesignTokens.Page {
         switch half.kind {
@@ -55,10 +87,10 @@ struct HomeHalfView: View {
                     // A plain HStack (3 cards): a lazy one left the skeletons zero height.
                     HStack(alignment: .top, spacing: halfGap) {
                         if half.body == IosHomePageKt.HALF_BODY_LOADING {
-                            ForEach(0..<Int(HomePageKt.HOME_HALF_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 1) }
+                            ForEach(0..<Int(HomePageKt.HOME_HALF_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 1, width: cardWidth) }
                         } else {
                             ForEach(half.cards, id: \.key) { card in
-                                HomeHalfCard(card: card, onOpen: { onOpen(card) }, onPlay: { onPlay(card) }, onOpenArtist: { onOpenArtist(card) })
+                                HomeHalfCard(card: card, width: cardWidth, onOpen: { onOpen(card) }, onPlay: { onPlay(card) }, onOpenArtist: { onOpenArtist(card) })
                                     .onAppear { if card.needsArt { onShown(card) } }
                             }
                         }
@@ -70,7 +102,6 @@ struct HomeHalfView: View {
         .background(PC.bgPrimary)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(PC.border))
-        .padding(.horizontal, homeGutter)
     }
 
     private var band: some View {
@@ -102,12 +133,11 @@ struct HomeHalfView: View {
 /// colour), Critical Darlings' review pill bottom-left, then title and artist.
 private struct HomeHalfCard: View {
     let card: IosHalfCard
+    var width: CGFloat = pcRecCardWidth
     let onOpen: () -> Void
     let onPlay: () -> Void
     let onOpenArtist: () -> Void
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
-
-    private let width = pcRecCardWidth
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -185,7 +215,6 @@ struct HomeConcertCard: View {
             tourArtist: concert.tourArtist,
             tickets: concert.tickets.compactMap { t in URL(string: t.url).map { (label: t.label, url: $0) } },
             open: onOpenTour))
-        .padding(.horizontal, homeGutter)
     }
 
     private var photo: some View {

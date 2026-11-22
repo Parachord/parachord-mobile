@@ -845,13 +845,19 @@ struct SettingsView: View {
             PCTopBar(title: "Settings", leading: .back, onLeading: { dismiss() })
             PCTabs(tabs: ["Plug-ins", "Sync", "General", "About"], selection: $tab)
             ScrollView {
-                switch tab {
-                case 0: PlugInsTab(model: model, onConfig: { configService = $0 })
-                case 1: SyncSettingsView(model: model)
-                case 2: GeneralTab(model: model)
-                default: AboutTab()
+                Group {
+                    switch tab {
+                    case 0: PlugInsTab(model: model, onConfig: { configService = $0 })
+                    case 1: SyncSettingsView(model: model)
+                    case 2: GeneralTab(model: model)
+                    default: AboutTab()
+                    }
                 }
+                // On an iPad the rows sit in a readable column (their own 20 gutters
+                // included), not a name at the left and its switch 900 pt away.
+                .pcReadableWidth(gutter: 20)
             }
+
         }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(item: $configService) { svc in
@@ -879,6 +885,7 @@ struct SettingsView: View {
 // MARK: - Plug-ins tab
 
 private struct PlugInsTab: View {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
     @Bindable var model: SettingsViewModel
     let onConfig: (PCService) -> Void
     @State private var draggingResolver: String?
@@ -1012,7 +1019,7 @@ private struct PlugInsTab: View {
     }
 
     private func serviceGrid(_ services: [PCService], columns: Int) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: columns), spacing: 12) {
+        LazyVGrid(columns: PCLayout.columns(min(layoutWidth, PCLayout.readableMax), gutter: 20, spacing: 12, minCard: 96, minColumns: columns), spacing: 12) {
             ForEach(services.filter { !model.mobileBlocked.contains($0.id) }) { svc in
                 Button { onConfig(svc) } label: {
                     VStack(spacing: 6) {

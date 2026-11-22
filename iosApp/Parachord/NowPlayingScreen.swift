@@ -56,6 +56,14 @@ struct PCNowPlaying: View {
     @Environment(\.horizontalSizeClass) private var hSize
     /// Compact on a phone in landscape: lay the art beside the controls.
     @Environment(\.verticalSizeClass) private var vSize
+    /// The screen's size: a landscape iPad (regular in both directions) also
+    /// lays the art beside the controls, as a landscape phone does.
+    @State private var screenSize: CGSize = .zero
+
+    /// Art beside the controls: a phone in landscape, or any wide screen held sideways.
+    private var sideBySide: Bool {
+        vSize == .compact || (hSize == .regular && screenSize.width > screenSize.height)
+    }
 
     private var npBg: Color { Color(uiColor: UIColor(hex: 0x1e1e20)) }
 
@@ -65,9 +73,9 @@ struct PCNowPlaying: View {
             npBg.ignoresSafeArea()
             VStack(spacing: 0) {
                 grabberBar
-                if vSize == .compact {
-                    // Landscape phone: the portrait column is taller than the
-                    // screen, so the art goes beside the controls, sized to the
+                if sideBySide {
+                    // Landscape (phone or iPad): the portrait column is taller than
+                    // the screen, so the art goes beside the controls, sized to the
                     // height, and the controls scroll if they still don't fit.
                     HStack(alignment: .center, spacing: 20) {
                         npArt(track)
@@ -79,6 +87,8 @@ struct PCNowPlaying: View {
                             VStack(spacing: 10) {
                                 npDetails(track)
                             }
+                            .frame(maxWidth: PCLayout.playerControlsMax)
+                            .frame(maxWidth: .infinity)
                             .padding(.vertical, 8)
                         }
                     }
@@ -102,7 +112,11 @@ struct PCNowPlaying: View {
                             .shadow(color: .black.opacity(0.6), radius: 24, y: 20)
                             .padding(.top, 4)
 
-                        npDetails(track)
+                        // The controls stop at `PLAYER_CONTROLS_MAX` so the transport
+                        // and scrubber stay near the art on a wide screen.
+                        VStack(spacing: 16) { npDetails(track) }
+                            .frame(maxWidth: PCLayout.playerControlsMax)
+                            .frame(maxWidth: .infinity)
                         if hSize == .regular { Spacer(minLength: 0) }
                     }
                     .padding(.horizontal, 24)
@@ -114,6 +128,7 @@ struct PCNowPlaying: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { screenSize = $0 }
         // Resolve the current track so its playing-source artwork populates the
         // hero (Android always shows art from the service it's playing from). On
         // a cache hit this is a no-op; pcTrackArt then reads the resolved art.
@@ -161,6 +176,8 @@ struct PCNowPlaying: View {
                                      withAnimation(.spring(duration: 0.32)) { showQueue = false }
                                      onNavigateToContext(ctx)
                                  })
+                        // A readable column on a wide screen, not rows the full width of an iPad.
+                        .frame(maxWidth: PCLayout.readableMax)
                         .padding(.top, 90) // scrim gap at the top
                         .transition(.move(edge: .bottom))
                 }
@@ -200,16 +217,19 @@ struct PCNowPlaying: View {
                         transport
                         // Android parity: the "Playing From" deck only shows once a
                         // resolver is actually playing (NowPlayingScreen gates on
-                        // `track.resolver != null`). Hiding it until then avoids the
-                        // old hardcoded "Local Files" default appearing on launch /
-                        // mid-resolve.
-                        if coordinator.currentTrack?.resolver != nil {
-                            PCResolverDeck(
-                                active: coordinator.activeResolverName,
-                                available: coordinator.availableResolvers(),
-                                onPick: { coordinator.switchResolver($0) }
-                            )
-                        }
+                        // `track.resolver != null`). It keeps its space while hidden:
+                        // every new track starts with no resolver, and adding and
+                        // removing the deck moved the transport and the actions
+                        // below it (on iPad, where the column is centred, everything).
+                        let deckShown = coordinator.currentTrack?.resolver != nil
+                        PCResolverDeck(
+                            active: coordinator.activeResolverName,
+                            available: coordinator.availableResolvers(),
+                            onPick: { coordinator.switchResolver($0) }
+                        )
+                        .opacity(deckShown ? 1 : 0)
+                        .allowsHitTesting(deckShown)
+                        .accessibilityHidden(!deckShown)
                         bottomActions
     }
 
@@ -597,42 +617,44 @@ struct PCResolverDeck: View {
             }
             .buttonStyle(.plain)
         }
-        .overlay(alignment: .bottom) {
-            if open {
-                // ONLY enabled resolvers that actually MATCHED this track. The
-                // resolve pipeline only runs active (enabled) resolvers, and
-                // `available` is the floor-passing matches — so we no longer
-                // append the greyed "Not connected" rows for every known service.
-                let order = available
-                VStack(spacing: 0) {
-                    ForEach(order, id: \.self) { r in
-                        let avail = available.contains(r)
-                        Button {
-                            if avail { onPick(r) }
-                            withAnimation { open = false }
-                        } label: {
-                            HStack(spacing: 10) {
-                                square(r, size: 22)
-                                Text(pcResolverName(r)).font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
-                                Spacer()
-                                if r == active {
-                                    Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(PC.accentSoft)
-                                } else if !avail {
-                                    Text("Not connected").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-                                }
+        // A popover hanging below the pill, over the action row rather than the
+        // transport (the old overlay opened upward over the play button); the
+        // system moves it above when there's no room below. Kept a popover on a
+        // phone too.
+        .popover(isPresented: $open, arrowEdge: .top) {
+            // ONLY enabled resolvers that actually MATCHED this track. The
+            // resolve pipeline only runs active (enabled) resolvers, and
+            // `available` is the floor-passing matches — so we no longer
+            // append the greyed "Not connected" rows for every known service.
+            let order = available
+            VStack(spacing: 0) {
+                ForEach(order, id: \.self) { r in
+                    let avail = available.contains(r)
+                    Button {
+                        if avail { onPick(r) }
+                        withAnimation { open = false }
+                    } label: {
+                        HStack(spacing: 10) {
+                            square(r, size: 22)
+                            Text(pcResolverName(r)).font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
+                            Spacer()
+                            if r == active {
+                                Image(systemName: "checkmark").font(.system(size: 13, weight: .bold)).foregroundStyle(PC.accentSoft)
+                            } else if !avail {
+                                Text("Not connected").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 10)
-                            .opacity(avail ? 1 : 0.45)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.horizontal, 12).padding(.vertical, 10)
+                        .opacity(avail ? 1 : 0.45)
                     }
+                    .buttonStyle(.plain)
                 }
-                .padding(6)
-                .frame(width: 250)
-                .background(Color(uiColor: UIColor(hex: 0x2c2c2e)), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: .black.opacity(0.55), radius: 20, y: 16)
-                .offset(y: -52)
             }
+            .padding(6)
+            .frame(width: 250)
+            .presentationCompactAdaptation(.popover)
+            .presentationBackground(Color(uiColor: UIColor(hex: 0x2c2c2e)))
+            .preferredColorScheme(.dark)
         }
     }
 }

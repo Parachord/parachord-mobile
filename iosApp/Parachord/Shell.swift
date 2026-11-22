@@ -316,6 +316,10 @@ struct PCSidebar: View {
     var onListenAlong: (Friend) -> Void = { _ in }
     /// Open a friend's profile (#235 / #196). Closes the drawer + pushes onto Home.
     var onFriendProfile: (Friend) -> Void = { _ in }
+    /// The screen's safe-area insets: the panel runs under them, its content doesn't.
+    var insets: EdgeInsets = EdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0)
+    /// The panel's width (narrower in a narrow Split View window), not counting the leading inset.
+    var width: CGFloat = 320
 
     @State private var friends = SidebarFriendsModel()
 
@@ -340,10 +344,15 @@ struct PCSidebar: View {
                 .frame(height: 26).foregroundStyle(PC.fg1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 24).padding(.top, 4).padding(.bottom, 22)
-            group("Your Music", yourMusic)
-            group("Discover", discover)
-            if !friends.pinned.isEmpty { friendsSection }
-            Spacer(minLength: 0)
+            // The rows scroll when they don't fit (a phone in landscape is ~390 tall).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    group("Your Music", yourMusic)
+                    group("Discover", discover)
+                    if !friends.pinned.isEmpty { friendsSection }
+                }
+            }
+            .scrollBounceBehavior(.basedOnSize)
             Divider()
             Button { onNav("settings") } label: {
                 HStack(spacing: 16) {
@@ -354,8 +363,9 @@ struct PCSidebar: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 24).padding(.vertical, 14)
         }
-        .padding(.top, 64).padding(.bottom, 24)
-        .frame(width: 320, alignment: .leading)
+        .padding(.top, max(insets.top, 20) + 5).padding(.bottom, max(insets.bottom, 12) + 12)
+        .frame(width: width, alignment: .leading)
+        .padding(.leading, insets.leading)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(PC.bgPrimary)
         .clipShape(.rect(bottomTrailingRadius: 28, topTrailingRadius: 28))

@@ -140,6 +140,7 @@ struct HomeScreen: View {
     @Environment(\.pcAskShuffleupagus) private var askShuffleupagus
     @Environment(\.pcOpenPluginSettings) private var openPluginSettings
     @Environment(\.pcOpenSettingsTab) private var openSettingsTab
+    @Environment(\.pcLayoutWidth) private var layoutWidth
 
     private var session: IosHomeSession { home.session }
 
@@ -281,19 +282,22 @@ struct HomeScreen: View {
                 )
                 .padding(.top, 24)
             }
-            ForEach(page.halves, id: \.kind) { half in
-                HomeHalfView(
-                    half: half,
-                    onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_FRESH ? .fresh : half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
-                    onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
-                    onPlay: { card in
-                        let key = card.key
-                        home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
-                    },
-                    onShown: { session.halfCardShown(key: $0.key) },
-                    onOpenArtist: { path.append(.artist($0.artist)) },
-                    onRetry: { session.retryCharts() }
-                )
+            if !page.halves.isEmpty {
+                HomeHalvesLayout(halves: page.halves) { half, cardWidth in
+                    HomeHalfView(
+                        half: half,
+                        onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_FRESH ? .fresh : half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
+                        onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
+                        onPlay: { card in
+                            let key = card.key
+                            home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
+                        },
+                        onShown: { session.halfCardShown(key: $0.key) },
+                        onOpenArtist: { path.append(.artist($0.artist)) },
+                        onRetry: { session.retryCharts() },
+                        cardWidth: cardWidth
+                    )
+                }
                 .padding(.top, 24)
             }
             if page.showConcerts {
@@ -301,11 +305,15 @@ struct HomeScreen: View {
                     PCSectionHeader(
                         title: HomeCopy.shared.CONCERTS_TITLE, subtitle: HomeCopy.shared.CONCERTS_SUBTITLE,
                         page: DesignTokens.Page.concerts, onSeeAll: { path.append(.concerts) }, gutter: homeGutter)
-                    VStack(spacing: 12) {
+                    // One column on a phone, two when wide, so a card isn't a 1,000-wide strip.
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12),
+                                             count: PCLayout.isWide(layoutWidth) ? 2 : 1),
+                              spacing: 12) {
                         ForEach(page.concerts, id: \.id) { c in
                             HomeConcertCard(concert: c, onOpenTour: { path.append(.artistOnTour($0)) })
                         }
                     }
+                    .padding(.horizontal, homeGutter)
                 }
                 .padding(.top, 24)
             }
@@ -317,6 +325,7 @@ struct HomeScreen: View {
                     // Android's `onOpenSettings(null)`: Settings, on no plug-in's sheet.
                     onSetUp: { openPluginSettings() }
                 )
+                .pcReadableWidth(gutter: homeGutter, centered: false)
                 .padding(.top, 24)
             }
         }
@@ -340,21 +349,20 @@ struct HomeScreen: View {
         if !gs.explore.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 PCSectionHeader(title: HomeCopy.shared.EXPLORE_TITLE, subtitle: HomeCopy.shared.EXPLORE_SUBTITLE, gutter: homeGutter)
-                VStack(spacing: 16) {
-                    ForEach(gs.explore, id: \.kind) { half in
-                        HomeHalfView(
-                            half: half,
-                            onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
-                            onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
-                            onPlay: { card in
-                                let key = card.key
-                                home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
-                            },
-                            onShown: { session.halfCardShown(key: $0.key) },
-                            onOpenArtist: { path.append(.artist($0.artist)) },
-                            onRetry: { session.retryCharts() }
-                        )
-                    }
+                HomeHalvesLayout(halves: gs.explore, stackSpacing: 16) { half, cardWidth in
+                    HomeHalfView(
+                        half: half,
+                        onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
+                        onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
+                        onPlay: { card in
+                            let key = card.key
+                            home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
+                        },
+                        onShown: { session.halfCardShown(key: $0.key) },
+                        onOpenArtist: { path.append(.artist($0.artist)) },
+                        onRetry: { session.retryCharts() },
+                        cardWidth: cardWidth
+                    )
                 }
             }
             .padding(.top, 24)

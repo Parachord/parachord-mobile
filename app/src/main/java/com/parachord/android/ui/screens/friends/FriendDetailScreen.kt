@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.rememberPlayFromSource
 import kotlinx.coroutines.Job
@@ -25,7 +26,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
@@ -418,7 +418,7 @@ private fun FriendTopAlbumsTab(
                     EmptyState(UiMessages.FRIEND_ALBUMS_EMPTY)
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = adaptiveGridCells(),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -565,7 +565,7 @@ private fun FriendTopArtistsTab(
                     EmptyState(UiMessages.FRIEND_ARTISTS_EMPTY)
                 } else {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
+                        columns = adaptiveGridCells(circles = true),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
