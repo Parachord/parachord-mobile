@@ -103,20 +103,11 @@ struct PopOfTheTopsScreen: View {
     @Environment(\.dismiss) private var dismiss
     private var resolverCache = IosTrackResolverCache.shared
 
-    private var bannerCount: String? {
-        guard !model.albums.isEmpty || !model.songs.isEmpty else { return nil }
-        return "\(model.albums.count) albums · \(model.songs.count) songs"
-    }
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: "Pop of the Tops", leading: .back, onLeading: { dismiss() })
-            PCCuratedBanner(
-                icon: "chart.bar.fill",
-                subtitle: "What's trending around the world",
-                count: bannerCount,
-                gradient: PC.pageGradient(.popOfTheTops))
-            PCTabs(tabs: ["Albums", "Songs"], selection: $tabIndex)
+            PCPageHero(page: .popOfTheTops, line: PageHero.shared.chartsLine(albums: Int32(model.albums.count), tracks: Int32(model.songs.count)), leading: .back, onLeading: { dismiss() })
+            PCTabs(tabs: ["Albums", "Songs"], selection: $tabIndex, page: .popOfTheTops)
             filterBar
 
             if model.isLoading && (!model.loaded || model.albums.isEmpty && model.songs.isEmpty) {

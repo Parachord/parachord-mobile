@@ -87,7 +87,7 @@ The source icon is the service's logo (shared `ServiceLogos`, see Icons) on a sq
 
 ### Page colours
 
-Each page has one colour, used by its drawer or tab entry (and its 10% tint), its hero, any "See all" link that leads to it, and the page's own controls; a darker **fill** shade for its buttons with white text (≥ 4.5:1). A port of desktop's `lib/page-colors.js`; no two heroes start in the same colour family. Shared: `DesignTokens.Page` (`color`, `fill`, `gradient`).
+Each page has one colour, used by its drawer or tab entry (and its 10% tint), its hero, any "See all" link that leads to it, and the page's own controls; a darker **fill** shade for its buttons with white text (≥ 4.5:1). A port of desktop's `lib/page-colors.js`; no two heroes start in the same colour family. Shared: `DesignTokens.Page` (`color`, `fill`, `gradient`). A selected tab (both apps' tab bars) and drawer entry take the page's colour, as desktop's sidebar does: `PageHero.tabColor` gives the darker fill on a light surface (the bright colour fails 4.5:1 as text on white) and the bright colour on a dark one; Home and Search keep the theme accent. A selected drawer entry has the page colour at 10% behind it (`PageHero.TAB_TINT_ALPHA`, desktop's `pageTint`). Under a page hero, the page's own sub-tabs (Collection, History, Pop of the Tops) underline the selected one in the same colour.
 
 | Page | Colour | Fill | Hero gradient |
 |---|---|---|---|
@@ -100,6 +100,9 @@ Each page has one colour, used by its drawer or tab entry (and its 10% tint), it
 | Pop of the Tops | `#f97316` | `#c2410c` | orange → pink → purple |
 | Critical Darlings | `#ef4444` | `#b91c1c` | red → red → rose |
 | Concerts | `#10c9b4` | `#0f766e` | teal → teal → cyan |
+| Search | `#6b7280` | `#374151` | grey → slate → grey (desktop's neutral hero, no pattern) |
+
+**The page hero** (desktop's `PageHero`, collapsed) is one component per platform: Android `PageHero`, iOS `PCPageHero`, with the shared `PageHero` (`shared/.../ui/PageHero.kt`) holding its sizes, words and patterns. Home, Collection, Playlists, History, Recommendations, Pop of the Tops, Fresh Drops, Critical Darlings, Concerts and Search draw it at the top of the page, in place of a grey top bar: the page's gradient (top-left to bottom-right) with its pattern tiled over it (desktop's `pattern` / `patternOpacity`; Home's rings; Search is desktop's neutral grey hero, `Page.SEARCH`, with no pattern), the menu or back button, the title, an optional trailing button, and the page's line under the title when it has one (`PageHero.line`: its description, then its count, " · " between; Recommendations' own sentence). 64 tall with the title alone, at least 80 with a line. The artist page's photo hero, the album and playlist pages and a friend's profile keep their own headers, as on desktop.
 
 Hero titles are uppercase, light weight, wide tracking (the collapsed desktop hero), styled with an uppercase modifier, never typed in caps.
 

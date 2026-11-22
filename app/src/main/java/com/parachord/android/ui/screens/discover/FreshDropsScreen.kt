@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.ui.UiMessages
 import com.parachord.android.ui.screens.artist.releaseTypeBadgeColor
 
@@ -70,10 +71,6 @@ import com.parachord.android.ui.components.FilterChipItem
 import com.parachord.shared.ui.DesignTokens
 
 // Desktop gradient: emerald → teal → cyan
-private val HeaderGradient = Brush.horizontalGradient(
-    colors = com.parachord.shared.ui.DesignTokens.Page.FRESH_DROPS.gradient.map { com.parachord.android.ui.theme.tokenColor(it) },
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FreshDropsScreen(
@@ -96,28 +93,16 @@ fun FreshDropsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "FRESH DROPS",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.FRESH_DROPS,
+            line = com.parachord.shared.ui.PageHero.line(DesignTokens.Page.FRESH_DROPS, (releasesResource as? Resource.Success)?.data?.size),
+            navigation = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
 
-        // Gradient header banner
-        FreshDropsHeader(
-            releaseCount = (releasesResource as? Resource.Success)?.data?.size ?: 0,
-        )
 
         // Sticky filter bar: filter chips + search + refresh
         FreshDropsFilterBar(
@@ -241,44 +226,6 @@ fun FreshDropsScreen(
 }
 
 // ---------- Header ----------
-
-@Composable
-private fun FreshDropsHeader(releaseCount: Int) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(HeaderGradient)
-            .padding(horizontal = 20.dp, vertical = 16.dp)
-            .animateContentSize(),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.WaterDrop,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp),
-                tint = Color.White.copy(alpha = 0.9f),
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "New releases from artists you listen to",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.9f),
-                )
-                if (releaseCount > 0) {
-                    Text(
-                        text = "$releaseCount releases",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.7f),
-                    )
-                }
-            }
-        }
-    }
-}
 
 // ---------- Filter Bar ----------
 

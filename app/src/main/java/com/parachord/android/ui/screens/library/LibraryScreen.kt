@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.library
 
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.rememberPlayFromSource
@@ -191,30 +193,22 @@ fun CollectionScreen(
     )
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "COLLECTION",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.COLLECTION,
+            navigation = {
                 IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = Color.White)
                 }
             },
             actions = {
                 IconButton(onClick = { showSyncProviderPicker = true }) {
-                    Icon(Icons.Default.Sync, contentDescription = "Sync")
+                    Icon(Icons.Default.Sync, contentDescription = "Sync", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
         SwipeableTabLayout(
             tabs = listOf("Artists", "Albums", "Songs", "Friends"),
+            page = DesignTokens.Page.COLLECTION,
             counts = listOf(rawArtists.size, rawAlbums.size, rawTracks.size, friends.size),
             initialPage = initialTab,
             modifier = Modifier.fillMaxSize(),

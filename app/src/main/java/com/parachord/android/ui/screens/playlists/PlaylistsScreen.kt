@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.sync.impliedPlaylistProvider
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.hapticCombinedClickable
@@ -103,23 +105,14 @@ fun PlaylistsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                val count = playlists.size
-                Text(
-                    text = if (count > 0) "PLAYLISTS ($count)" else "PLAYLISTS",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.PLAYLISTS,
+            line = com.parachord.shared.ui.PageHero.line(DesignTokens.Page.PLAYLISTS, playlists.size),
+            navigation = {
                 IconButton(onClick = onOpenDrawer) {
-                    Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                    Icon(Icons.Filled.Menu, contentDescription = "Menu", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
 
         if (playlists.isEmpty()) {

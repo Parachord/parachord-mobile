@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.ui.UiMessages
 import android.Manifest
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -167,22 +168,14 @@ fun ConcertsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "CONCERTS",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.CONCERTS,
+            line = com.parachord.shared.ui.PageHero.line(DesignTokens.Page.CONCERTS, (events as? Resource.Success)?.data?.size),
+            navigation = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
 
         // Location bar

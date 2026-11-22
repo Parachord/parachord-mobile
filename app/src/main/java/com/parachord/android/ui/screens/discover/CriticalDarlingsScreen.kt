@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.ui.UiMessages
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -63,10 +65,6 @@ import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.SpinningRefreshIcon
 
 // Desktop gradient: amber → orange → red
-private val HeaderGradient = Brush.horizontalGradient(
-    colors = com.parachord.shared.ui.DesignTokens.Page.CRITICAL_DARLINGS.gradient.map { com.parachord.android.ui.theme.tokenColor(it) },
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CriticalDarlingsScreen(
@@ -90,28 +88,16 @@ fun CriticalDarlingsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "CRITICAL DARLINGS",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.CRITICAL_DARLINGS,
+            line = com.parachord.shared.ui.PageHero.line(DesignTokens.Page.CRITICAL_DARLINGS, (albumsResource as? Resource.Success)?.data?.size),
+            navigation = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
 
-        // Gradient header banner
-        CriticsHeader(
-            albumCount = (albumsResource as? Resource.Success)?.data?.size ?: 0,
-        )
 
         // Sticky filter bar: search + sort + refresh
         CriticsFilterBar(
@@ -237,44 +223,6 @@ fun CriticalDarlingsScreen(
 }
 
 // ---------- Header ----------
-
-@Composable
-private fun CriticsHeader(albumCount: Int) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(HeaderGradient)
-            .padding(horizontal = 20.dp, vertical = 16.dp)
-            .animateContentSize(),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Icon(
-                imageVector = Icons.Filled.EmojiEvents,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp),
-                tint = Color.White.copy(alpha = 0.9f),
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "Top-rated albums from leading music publications",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.9f),
-                )
-                if (albumCount > 0) {
-                    Text(
-                        text = "$albumCount albums",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.7f),
-                    )
-                }
-            }
-        }
-    }
-}
 
 // ---------- Filter Bar ----------
 

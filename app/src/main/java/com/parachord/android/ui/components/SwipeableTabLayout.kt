@@ -32,6 +32,8 @@ fun SwipeableTabLayout(
     /** A page to move to (a link inside one page to another); [onPageRequestHandled] clears it. */
     requestedPage: Int? = null,
     onPageRequestHandled: () -> Unit = {},
+    /** The page whose colour the underline takes (under a page hero); null: the accent. */
+    page: com.parachord.shared.ui.DesignTokens.Page? = null,
     content: @Composable (page: Int) -> Unit,
 ) {
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { tabs.size })
@@ -57,7 +59,11 @@ fun SwipeableTabLayout(
                 if (pagerState.currentPage < tabPositions.size) {
                     TabRowDefaults.PrimaryIndicator(
                         modifier = Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
-                        color = MaterialTheme.colorScheme.primary,
+                        color = page?.let {
+                            com.parachord.android.ui.theme.tokenColor(
+                                com.parachord.shared.ui.PageHero.tabColor(it, onDark = com.parachord.android.ui.theme.ParachordTheme.isDark),
+                            )
+                        } ?: MaterialTheme.colorScheme.primary,
                     )
                 }
             },

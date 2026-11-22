@@ -79,8 +79,7 @@ struct RecommendationsScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PCTopBar(title: RecommendationCopy.shared.TITLE, leading: .back, onLeading: { dismiss() })
-            RecHero(hero: model.page?.hero ?? "")
+            PCPageHero(page: .recommendations, line: (model.page?.hero).flatMap { $0.isEmpty ? nil : $0 }, leading: .back, onLeading: { dismiss() })
             if let page = model.page {
                 if page.status != "notConfigured" { filter(page) }
                 content(page)
@@ -182,30 +181,6 @@ private struct RecScrollTopKey: PreferenceKey {
 }
 
 // MARK: - Hero and page states
-
-/// The page band: the page's icon, the hero line and the subline, white on the gradient.
-private struct RecHero: View {
-    let hero: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            PCIcon(icon: PageIcon.recommendations.icon, size: 32, tint: PC.onAccent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(hero)
-                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(PC.onAccent)
-                    .lineLimit(2)
-                Text(RecommendationCopy.shared.SUBLINE)
-                    .font(.system(size: 12)).foregroundStyle(PC.onAccent)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 20).padding(.vertical, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(LinearGradient(
-            colors: PC.pageGradient(.recommendations).map { Color(uiColor: UIColor(hex: $0)) },
-            startPoint: .leading, endPoint: .trailing))
-    }
-}
 
 /// Not configured, failed and empty: a title, a line, a filled button and an optional outlined one.
 private struct RecPageMessage: View {

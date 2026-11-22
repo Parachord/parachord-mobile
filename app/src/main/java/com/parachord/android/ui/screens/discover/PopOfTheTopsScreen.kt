@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.ui.DesignTokens
+import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.rememberPlayFromSource
@@ -72,10 +74,6 @@ import com.parachord.android.ui.components.TrackRow
 
 private val OrangeAccent = Color(0xFFF97316)
 
-private val HeaderGradient = Brush.horizontalGradient(
-    colors = com.parachord.shared.ui.DesignTokens.Page.POP_OF_THE_TOPS.gradient.map { com.parachord.android.ui.theme.tokenColor(it) },
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PopOfTheTopsScreen(
@@ -102,31 +100,18 @@ fun PopOfTheTopsScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "POP OF THE TOPS",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.POP_OF_THE_TOPS,
+            line = com.parachord.shared.ui.PageHero.chartsLine(albums.size, songs.size),
+            navigation = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
 
-        // Gradient header
-        ChartsHeader(
-            albumCount = albums.size,
-            songCount = songs.size,
-        )
 
-        SwipeableTabLayout(tabs = listOf("Albums", "Songs")) { page ->
+        SwipeableTabLayout(tabs = listOf("Albums", "Songs"), page = DesignTokens.Page.POP_OF_THE_TOPS) { page ->
             when (page) {
                 0 -> AlbumsTab(
                     albums = viewModel.filterAlbums(albums),
@@ -162,36 +147,6 @@ fun PopOfTheTopsScreen(
 }
 
 // ── Header ──────────────────────────────────────────────────────────
-
-@Composable
-private fun ChartsHeader(albumCount: Int, songCount: Int) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(HeaderGradient)
-            .padding(horizontal = 20.dp, vertical = 14.dp)
-            .animateContentSize(),
-    ) {
-        Column {
-            Text(
-                text = "What's trending around the world",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color.White.copy(alpha = 0.9f),
-            )
-            if (albumCount > 0 || songCount > 0) {
-                Text(
-                    text = buildString {
-                        if (albumCount > 0) append("$albumCount albums")
-                        if (albumCount > 0 && songCount > 0) append("  ·  ")
-                        if (songCount > 0) append("$songCount songs")
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.7f),
-                )
-            }
-        }
-    }
-}
 
 // ── Filter Bar ──────────────────────────────────────────────────────
 

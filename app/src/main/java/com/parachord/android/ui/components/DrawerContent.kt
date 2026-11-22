@@ -231,7 +231,7 @@ private fun DrawerNavItem(
     onClick: () -> Unit,
 ) {
     val shape = RoundedCornerShape(6.dp)
-    val backgroundColor = if (selected) item.activeColor.copy(alpha = 0.15f) else Color.Transparent
+    val backgroundColor = if (selected) item.activeColor.copy(alpha = com.parachord.shared.ui.PageHero.TAB_TINT_ALPHA) else Color.Transparent
     val textColor = if (selected) {
         MaterialTheme.colorScheme.onSurface
     } else {

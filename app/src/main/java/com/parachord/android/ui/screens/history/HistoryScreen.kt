@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.history
 
+import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.rememberPlayFromSource
@@ -118,24 +119,16 @@ fun HistoryScreen(
     val trackArtwork by viewModel.trackArtwork.collectAsState()
 
     Column(modifier = modifier.fillMaxSize()) {
-        TopAppBar(
-            title = {
-                Text(
-                    text = "HISTORY",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Light,
-                        letterSpacing = 0.2.em,
-                    ),
-                )
-            },
-            navigationIcon = {
+        PageHero(
+            page = DesignTokens.Page.HISTORY,
+            line = com.parachord.shared.ui.PageHero.line(DesignTokens.Page.HISTORY),
+            navigation = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
                 }
             },
-            windowInsets = WindowInsets(0),
         )
-        SwipeableTabLayout(tabs = historyTabs, initialPage = viewModel.initialPage) { page ->
+        SwipeableTabLayout(tabs = historyTabs, initialPage = viewModel.initialPage, page = DesignTokens.Page.HISTORY) { page ->
             when (page) {
                 0 -> TopSongsTab(
                     tracks = topTracks,
