@@ -19,6 +19,7 @@ class PluginStatusStoreTest {
         val replies = replies.toMutableMap()
         val limitStates = mutableMapOf<String, String>()
         val cleared = mutableListOf<String>()
+        val drmCleared = mutableListOf<String>()
         val store = PluginStatusStore(
             statusPluginIds = { this.replies.keys.toList() },
             readStatus = { id -> this.replies.getValue(id)() },
@@ -29,6 +30,7 @@ class PluginStatusStoreTest {
             getLimitState = { limitStates[it] },
             setLimitState = { id, state -> limitStates[id] = state },
             clearResolver = { id, all -> cleared += "$id:$all" },
+            clearDrmPlanBlocks = { drmCleared += it },
         )
     }
 
@@ -126,5 +128,63 @@ class PluginStatusStoreTest {
         h.store.refresh("amazonmusic")
         assertEquals(emptyList(), h.cleared)
         assertEquals("0", h.limitStates["amazonmusic"])
+    }
+
+
+    @Test
+    fun `sign out clears the refused codec families before the plugin signs out`() = runTest(UnconfinedTestDispatcher()) {
+        val order = mutableListOf<String>()
+        val h = Harness(this, mapOf("amazonmusic" to { """{"signedIn":false}""" }), session = { _, m -> order += m; """{"success":true}""" })
+        h.store.signOut("amazonmusic", "Amazon Music")
+        assertEquals(listOf("amazonmusic"), h.drmCleared.distinct())
+        assertEquals(listOf("signOut"), order)
+    }
+
+    @Test
+    fun `a successful sign in clears them and a failed one does not`() = runTest(UnconfinedTestDispatcher()) {
+        val h = Harness(this, mapOf("amazonmusic" to { unlimited }), session = { _, _ -> """{"success":true}""" })
+        h.store.signIn("amazonmusic", "Amazon Music")
+        assertTrue("amazonmusic" in h.drmCleared)
+        val h2 = Harness(this, mapOf("amazonmusic" to { """{"signedIn":false}""" }), session = { _, _ -> """{"success":false}""" })
+        h2.store.signIn("amazonmusic", "Amazon Music")
+        assertEquals(emptyList(), h2.drmCleared)
+    }
+
+    @Test
+    fun `a read whose plan changed clears them`() = runTest(UnconfinedTestDispatcher()) {
+        var reply = primeOwned
+        val h = Harness(this, mapOf("amazonmusic" to { reply }))
+        h.store.refresh("amazonmusic")
+        assertEquals(emptyList(), h.drmCleared)
+        h.store.refresh("amazonmusic")
+        assertEquals(emptyList(), h.drmCleared)
+        reply = unlimited
+        h.store.refresh("amazonmusic")
+        assertEquals(listOf("amazonmusic"), h.drmCleared)
+    }
+
+    @Test
+    fun `a first read against a different remembered plan clears them`() = runTest(UnconfinedTestDispatcher()) {
+        val h = Harness(this, mapOf("amazonmusic" to { unlimited }))
+        h.limitStates["amazonmusic"] = LIMIT_STATE_OWNED
+        h.store.refresh("amazonmusic")
+        assertEquals(listOf("amazonmusic"), h.drmCleared)
+        val same = Harness(this, mapOf("amazonmusic" to { unlimited }))
+        same.limitStates["amazonmusic"] = LIMIT_STATE_PLAYABLE
+        same.store.refresh("amazonmusic")
+        assertEquals(emptyList(), same.drmCleared)
+    }
+
+    @Test
+    fun `a sign in change on a read clears them and a failed read never does`() = runTest(UnconfinedTestDispatcher()) {
+        var reply: () -> String? = { """{"signedIn":true}""" }
+        val h = Harness(this, mapOf("amazonmusic" to { reply() }))
+        h.store.refresh("amazonmusic")
+        reply = { throw IllegalStateException("timeout") }
+        h.store.refresh("amazonmusic")
+        assertEquals(emptyList(), h.drmCleared)
+        reply = { """{"signedIn":false}""" }
+        h.store.refresh("amazonmusic")
+        assertEquals(listOf("amazonmusic"), h.drmCleared)
     }
 }

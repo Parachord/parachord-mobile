@@ -1300,6 +1300,9 @@ val androidModule = module {
             // A plan change clears the resolver's saved sources (#1494).
             // Looked up when it runs: the cache reads this store's notPlaying.
             clearResolver = { id, sourcesToo -> getKoin().get<TrackResolverCache>().clearResolver(id, sourcesToo) },
+            // Sign-out, sign-in or a plan change: the refused codec families
+            // were this account's (#777). One table for every plugin, as desktop.
+            clearDrmPlanBlocks = { getKoin().get<com.parachord.android.playback.drm.PluginDrmSessions>().clearPlanBlocks() },
         )
     }
     single {

@@ -163,6 +163,83 @@ class RecommendationsRepositoryTest {
         assertEquals("Personalized picks for listener", r.repo.page.value.hero)
     }
 
+    // ── The "Use recommendations from X" switch ─────────────────────
+
+    private val am = RecommendationProvider("applemusic", "Apple Music", isMetaService = false, needsAccount = true, canExpand = true)
+
+    @Test
+    fun `a provider switched off leaves the page at once without a request`() = runTest {
+        val source = FakeSource(listOf(LASTFM, LISTENBRAINZ, am))
+        source.answer("listenbrainz", { songs(song("From LB")) })
+        source.answer("applemusic", { songs(song("From AM")) })
+        val r = rig(source)
+        r.repo.load()
+        runCurrent()
+        assertEquals(listOf("From AM", "From LB"), r.names())
+
+        r.settings.setRecommendationsOffResolvers(setOf("applemusic"))
+        runCurrent()
+
+        assertEquals(listOf("From LB"), r.names())
+        assertEquals(2, source.asked.size)
+        assertEquals(setOf("listenbrainz", "applemusic"), source.asked.toSet())
+    }
+
+    @Test
+    fun `a provider switched on is asked and the fresh ones are not`() = runTest {
+        val source = FakeSource(listOf(LASTFM, LISTENBRAINZ, am))
+        source.answer("listenbrainz", { songs(song("From LB")) })
+        source.answer("applemusic", { songs(song("From AM")) })
+        val r = rig(source)
+        r.settings.setRecommendationsOffResolvers(setOf("applemusic"))
+        r.repo.load()
+        runCurrent()
+        assertEquals(listOf("listenbrainz"), source.asked)
+        assertEquals(listOf("From LB"), r.names())
+
+        r.settings.setRecommendationsOffResolvers(emptySet())
+        runCurrent()
+
+        assertEquals(listOf("listenbrainz", "applemusic"), source.asked)
+        assertEquals(listOf("From AM", "From LB"), r.names())
+    }
+
+    @Test
+    fun `a switch changed before any load asks nobody`() = runTest {
+        val source = FakeSource(listOf(LASTFM, LISTENBRAINZ, am))
+        source.answer("listenbrainz", { songs(song("From LB")) })
+        source.answer("applemusic", { songs(song("From AM")) })
+        val r = rig(source)
+        runCurrent()
+        r.settings.setRecommendationsOffResolvers(setOf("applemusic"))
+        runCurrent()
+        r.settings.setRecommendationsOffResolvers(emptySet())
+        runCurrent()
+
+        assertTrue(source.asked.isEmpty())
+    }
+
+    @Test
+    fun `an answer that lands after its provider was switched off stays off the page`() = runTest {
+        val gate = CompletableDeferred<String>()
+        val source = FakeSource(listOf(LASTFM, LISTENBRAINZ, am))
+        source.answer("listenbrainz", { songs(song("From LB")) })
+        source.answer("applemusic", { songs(song("From AM")) }, { gate.await() })
+        val r = rig(source)
+        r.repo.load()
+        runCurrent()
+        // A forced load is waiting on Apple Music when its switch goes off.
+        val loading = launch { r.repo.load(force = true) }
+        runCurrent()
+        r.settings.setRecommendationsOffResolvers(setOf("applemusic"))
+        runCurrent()
+        gate.complete(songs(song("Late AM")))
+        loading.join()
+        runCurrent()
+
+        assertEquals(listOf("From LB"), r.names())
+    }
+
     @Test
     fun `not configured with no usernames and no providers on`() = runTest {
         val source = FakeSource(
