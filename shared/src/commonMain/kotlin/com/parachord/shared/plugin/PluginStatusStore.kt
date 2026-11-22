@@ -45,6 +45,13 @@ import kotlinx.serialization.json.contentOrNull
  * ([clearResolver] with `sourcesToo = false`: its misses go), and entering a
  * purchases-only plan drops every saved source of it (`sourcesToo = true`).
  * A failed read changes nothing.
+ *
+ * The refused codec families ([clearDrmPlanBlocks], the shared
+ * `DrmFamilyTable` latched on `CUSTOMER_NOT_ELIGIBLE`) are an account fact,
+ * as desktop's `clearPlanBlocks`: they're cleared on Sign out (before the
+ * plugin's `signOut`, as desktop does), after a successful Sign in, and after
+ * a fresh read whose sign-in or plan differs from the last one (the previous
+ * reading, else the remembered plan state). Never on a failed read.
  */
 class PluginStatusStore(
     /** The ids of the loaded plugins with `capabilities.status`. */
@@ -69,6 +76,12 @@ class PluginStatusStore(
      * iOS, Amazon Music (Widevine only). Empty on Android.
      */
     val hostUnplayable: StateFlow<List<String>> = MutableStateFlow(emptyList()),
+    /**
+     * Forget the codec families a licence refused for [id]'s account, so the
+     * next play asks for them again (Android `PluginDrmSessions.clearPlanBlocks`;
+     * a no-op where there's no plugin DRM engine, iOS).
+     */
+    private val clearDrmPlanBlocks: (id: String) -> Unit = {},
 ) {
     private val _statuses = MutableStateFlow<Map<String, PluginStatusEntry>>(emptyMap())
     /** Plugin id to its last reply. A plugin not read yet has no entry ("Checking…"). */
@@ -96,6 +109,8 @@ class PluginStatusStore(
 
     private val inFlightMutex = Mutex()
     private val inFlight = mutableSetOf<String>()
+    /** Each plugin's last successful reading this run, across failed reads ([refresh]'s compare). */
+    private val lastGood = mutableMapOf<String, PluginStatusEntry>()
 
     /** Reads every status-capable plugin, at once. */
     suspend fun refreshAll() {
@@ -120,8 +135,16 @@ class PluginStatusStore(
                 Log.w(TAG, "Status read failed for $id: ${e.message?.take(120)}")
                 PluginStatusEntry.READ_FAILED
             }
+            val previous = inFlightMutex.withLock { lastGood[id] }
             _statuses.update { if (entry == null) it - id else it + (id to entry) }
-            if (entry != null && !entry.readFailed) applyLimitTransition(id, entry.playbackLimit)
+            if (entry != null && !entry.readFailed) {
+                inFlightMutex.withLock { lastGood[id] = entry }
+                val storedBefore = entry.playbackLimit?.let {
+                    try { getLimitState(id) } catch (e: Exception) { if (e is CancellationException) throw e; null }
+                }
+                if (accountChanged(previous, entry, storedBefore)) clearDrmBlocks(id, "the account or plan changed")
+                applyLimitTransition(id, entry.playbackLimit)
+            }
         } finally {
             inFlightMutex.withLock { inFlight.remove(id) }
         }
@@ -146,6 +169,16 @@ class PluginStatusStore(
         }
     }
 
+    private fun clearDrmBlocks(id: String, why: String) {
+        try {
+            clearDrmPlanBlocks(id)
+            Log.d(TAG, "$id: refused codec families cleared ($why)")
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "Couldn't clear $id's refused codec families: ${e.message?.take(120)}")
+        }
+    }
+
     /** What a Sign in / Sign out did, with the words to show. */
     data class SessionResult(val success: Boolean, val message: String)
 
@@ -157,6 +190,7 @@ class PluginStatusStore(
         val reply = runSession(id, "signIn", SIGN_IN_TIMEOUT_MS)
         refresh(id)
         val signedIn = _statuses.value[id]?.signedIn == true
+        if (signedIn || reply.success) clearDrmBlocks(id, "signed in")
         return when {
             signedIn -> SessionResult(true, "Signed in to $name")
             reply.error != null -> SessionResult(false, reply.error)
@@ -166,6 +200,9 @@ class PluginStatusStore(
 
     /** The plugin's `signOut()`, then the status is read again. Desktop's wording. */
     suspend fun signOut(id: String, name: String): SessionResult {
+        // Before the session goes, as desktop does: the next account's plan
+        // may cover the families this one was refused.
+        clearDrmBlocks(id, "signing out")
         val reply = runSession(id, "signOut", SIGN_OUT_TIMEOUT_MS)
         refresh(id)
         return if (reply.success) SessionResult(true, "Signed out of $name")
@@ -195,6 +232,25 @@ class PluginStatusStore(
         const val SIGN_IN_TIMEOUT_MS = 10L * 60 * 1000
         const val SIGN_OUT_TIMEOUT_MS = 30_000L
 
+        /**
+         * Whether a fresh reading [now] says the account or its plan changed
+         * since [previous] (the last successful reading this run), or, with
+         * none, since the remembered plan state [storedBefore]. A first
+         * reading with nothing to compare against changes nothing.
+         */
+        fun accountChanged(previous: PluginStatusEntry?, now: PluginStatusEntry, storedBefore: String?): Boolean {
+            if (previous != null) {
+                if (previous.signedIn != null && now.signedIn != null && previous.signedIn != now.signedIn) return true
+                val a = previous.playbackLimit
+                val b = now.playbackLimit
+                if (a != null && b != null && (a.planKey != b.planKey || a.blocked != b.blocked || a.ownedOnly != b.ownedOnly)) return true
+                return false
+            }
+            val limit = now.playbackLimit ?: return false
+            if (storedBefore == null) return false
+            return limitTransition(storedBefore, limit).store != storedBefore
+        }
+
         /** The store over [pluginManager] and [settingsStore], as both apps wire it. */
         fun create(
             pluginManager: PluginManager,
@@ -203,6 +259,8 @@ class PluginStatusStore(
             clearResolver: suspend (id: String, sourcesToo: Boolean) -> Unit = { _, _ -> },
             /** The plugin-supplied playback paths this host runs ([HostPlayback]). */
             hostPlaybackPaths: Set<String> = HostPlayback.ANDROID,
+            /** Forget a plugin's refused codec families ([PluginStatusStore]'s `clearDrmPlanBlocks`). */
+            clearDrmPlanBlocks: (id: String) -> Unit = {},
         ): PluginStatusStore =
             PluginStatusStore(
                 statusPluginIds = { pluginManager.ensureInitialized(); pluginManager.statusPlugins().map { it.id } },
@@ -218,6 +276,7 @@ class PluginStatusStore(
                     .map { hostUnplayableIds(it, hostPlaybackPaths) }
                     .distinctUntilChanged()
                     .stateIn(scope, SharingStarted.Eagerly, hostUnplayableIds(pluginManager.plugins.value, hostPlaybackPaths)),
+                clearDrmPlanBlocks = clearDrmPlanBlocks,
             )
     }
 }
