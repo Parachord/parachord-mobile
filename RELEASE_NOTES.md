@@ -1,3 +1,47 @@
+# Parachord v0.9.13
+
+**Release date:** 2026-11-22
+
+> Amazon Music arrives as a plug-in: sign in, and Parachord plays your Amazon Music, or on plans that only play what you've bought, your purchases. Desktop's new Home lands on both phones, Shuffleupagus searches your own services, and the apps now fill an iPad or a phone held sideways instead of stretching a phone layout.
+
+---
+
+## Amazon Music
+
+- **Amazon Music plug-in.** Sign in from its plug-in sheet and Parachord plays from Amazon Music through its own player, at the quality you pick in Settings › General › Playback Quality. On a plan that only plays what you've bought, Parachord plays your purchases and finds everything else elsewhere (Android; iOS plays your purchases).
+- **A play that needs you signed in asks you to sign in**, then plays the track.
+- **Each plug-in's sheet** shows your account and its plan, with Sign in / Sign out, and switches for Play from, Use metadata from and Use recommendations from it.
+
+## Home and Recommendations
+
+- **Desktop's new Home**: Jump back in, Made from your listening, your freshest playlists, albums you might love, Fresh Drops, Critical Darlings, concerts near you and Ask Shuffleupagus.
+- **Turning off "Use recommendations from X"** takes that service off the page at once.
+- **"Recently Modified"** sorts playlists by when their tracks last changed, not by every sync.
+
+## Playback
+
+- **Local files find their other sources** when they play, so Now Playing can switch to a streaming copy.
+- **A failed source switch keeps what was playing**, and the switcher shows your pick at once while it starts.
+- **Playback quality**: each plug-in's sheet says who sets its quality, Apple Music follows the Data saver setting, and Now Playing shows "Lossless" or "Dolby Atmos" when a track plays that way.
+
+## Shuffleupagus
+
+- **Searches your own streaming services**, as desktop does, so it finds the tracks you can play.
+- **A mix or playlist defaults to 10 tracks** unless you ask for a number.
+
+## Look and feel
+
+- **One track row on both apps**, in desktop's columns.
+- **Tablets and landscape**: rows, grids, the player and Settings fill the screen's width, the mini player and tabs stay centred, and Now Playing's controls no longer jump when the source appears.
+- **The chat's provider menu** shows each AI plug-in's logo.
+
+## Fixes
+
+- **Importing a playlist link** waits for the lookup and makes one playlist per link; importing the same link again updates it.
+- **An album's type** (album, EP, single) comes from MusicBrainz.
+
+---
+
 # Parachord v0.9.12
 
 **Release date:** 2026-11-20
