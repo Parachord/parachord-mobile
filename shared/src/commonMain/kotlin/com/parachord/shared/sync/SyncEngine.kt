@@ -88,6 +88,12 @@ class SyncEngine constructor(
      *  parallel, so the take-and-decrement must be atomic. */
     private val hydrationBudgetMutex = Mutex()
     private var hydrationBudgetRemaining = 0
+
+    /** `"<playlistId>|<providerId>"` of every push held this sync because tracks
+     *  aren't matched yet (#807). Reset with the budget. The push loop doesn't try
+     *  a held pair again in the same sync, and [clearLocallyModifiedFlags] keeps a
+     *  held playlist flagged, so the next sync pushes it. */
+    private val heldPushes = HashSet<String>()
     companion object {
         private const val TAG = "SyncEngine"
         /** Benign skip result when a sync is already running (tryLock held). Not a failure. */
@@ -2385,7 +2391,10 @@ class SyncEngine constructor(
         // Reset the per-sync hydration-search budget (#300): bounds total track-id
         // lookups this sync so a mass re-hydration (healing many empty LB mirrors)
         // can't flood MusicBrainz. The rest defer to next sync (misses uncached).
-        hydrationBudgetMutex.withLock { hydrationBudgetRemaining = hydrationBudgetPerSync }
+        hydrationBudgetMutex.withLock {
+            hydrationBudgetRemaining = hydrationBudgetPerSync
+            heldPushes.clear()
+        }
 
         // Idempotent startup migration: make sure any playlist that already
         // has a `spotifyId` set has a matching row in `sync_playlist_link`.
@@ -3284,7 +3293,11 @@ class SyncEngine constructor(
      */
     private suspend fun clearLocallyModifiedFlags(enabledProviders: Set<String>) {
         val candidates = playlistDao.getLocallyModified()
+        val held = hydrationBudgetMutex.withLock { heldPushes.map { it.substringBefore('|') }.toSet() }
         for (playlist in candidates) {
+            // A push held for unmatched tracks (#807) hasn't reached its mirror,
+            // however recent the link's sync time is: keep the flag for the next sync.
+            if (playlist.id in held) continue
             val sourceProvider = syncPlaylistSourceDao.selectForLocal(playlist.id)?.providerId
             val mirrors = syncPlaylistLinkDao.selectForLocal(playlist.id)
             val relevantMirrors = mirrors.filter { link ->
@@ -3375,6 +3388,7 @@ class SyncEngine constructor(
 
         for ((pIdx, playlist) in candidates.withIndex()) {
             _syncPhase.value = "playlists · $providerId push ${pIdx + 1}/${candidates.size}"
+            if (hydrationBudgetMutex.withLock { "${playlist.id}|$providerId" in heldPushes }) continue
             try {
                 // Phase 3 — Fix 3 + pendingAction skip. Nothing writes
                 // "remote-deleted" and no screen reads it: a dead mirror is
@@ -3546,6 +3560,15 @@ class SyncEngine constructor(
                 val rawTracks = playlistTrackDao.getByPlaylistIdSync(playlist.id)
                 val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
                 val externalTrackIds = extractExternalTrackIds(tracks, providerId)
+                val unmatched = unconfirmedMissingIds(tracks, provider)
+                if (unmatched > 0) {
+                    // A push replaces the remote's whole list, so pushing now would
+                    // drop every track we just haven't matched yet (#807). Wait for
+                    // the next sync; the playlist stays flagged.
+                    Log.d(TAG, "Hold push '${playlist.name}' to $providerId — $unmatched of ${tracks.size} tracks not matched yet")
+                    hydrationBudgetMutex.withLock { heldPushes += "${playlist.id}|$providerId" }
+                    continue
+                }
                 if (externalTrackIds.isEmpty() && existing == null) {
                     Log.d(TAG, "Skip push '${playlist.name}' to $providerId — 0 pushable tracks, refusing to create an empty mirror")
                     continue
@@ -3720,6 +3743,26 @@ class SyncEngine constructor(
      * [providerId]. Used by [hydrateMissingTrackIds] to identify which
      * tracks need a catalog-search round-trip before push.
      */
+    /**
+     * How many of [tracks] lack [provider]'s id without having been searched and
+     * found missing from its catalog (#807). A legacy push replaces the remote's
+     * whole list with the tracks that have an id, so a track merely waiting to be
+     * matched (past this sync's search budget, its search unanswered during a
+     * rate-limit pause, or never searched) would be removed from the remote.
+     * Both push paths wait while this is above zero. A track searched and not
+     * found (a cached miss: no id, at least one attempt) doesn't hold the push:
+     * the service doesn't have it, so leaving it out is right, as on desktop.
+     */
+    private suspend fun unconfirmedMissingIds(
+        tracks: List<PlaylistTrack>,
+        provider: com.parachord.shared.sync.SyncProvider,
+    ): Int = tracks.count { t ->
+        missingProviderId(t, provider.id) && run {
+            val entry = trackProviderIdCacheDao.select(canonicalTrackKey(t), provider.id)
+            !(entry != null && entry.resolvedId.isNullOrBlank() && entry.attempts > 0)
+        }
+    }
+
     private fun missingProviderId(track: PlaylistTrack, providerId: String): Boolean = when (providerId) {
         SpotifySyncProvider.PROVIDER_ID -> track.trackSpotifyUri.isNullOrBlank()
         AppleMusicSyncProvider.PROVIDER_ID -> track.trackAppleMusicId.isNullOrBlank()
@@ -3916,6 +3959,8 @@ class SyncEngine constructor(
         // two exceptions: CancellationException (KMP cancellation rule) and
         // AppleMusicReauthRequiredException (a 401 reauth must surface to the
         // higher-level handler — a transient 400 must not).
+        // Already held this sync for unmatched tracks (#807): don't search again.
+        if (hydrationBudgetMutex.withLock { "${playlist.id}|${provider.id}" in heldPushes }) return
         try {
             val link = syncPlaylistLinkDao.selectForLink(playlist.id, provider.id)
             // Resolve the external id: link table is authoritative; legacy
@@ -3933,6 +3978,14 @@ class SyncEngine constructor(
             // first-push branch above.
             val tracks = hydrateMissingTrackIds(playlist.id, rawTracks, provider)
             val externalTrackIds = extractExternalTrackIds(tracks, provider.id)
+            val unmatched = unconfirmedMissingIds(tracks, provider)
+            if (unmatched > 0) {
+                // Same rule as the push loop (#807): never replace the remote list
+                // while tracks are only waiting to be matched. Stays flagged.
+                Log.d(TAG, "Hold push '${playlist.name}' to ${provider.id} — $unmatched of ${tracks.size} tracks not matched yet")
+                hydrationBudgetMutex.withLock { heldPushes += "${playlist.id}|${provider.id}" }
+                return
+            }
             val snapshotId = provider.replacePlaylistTracks(externalId, externalTrackIds)
 
             // Spotify-specific scalars stay write-through for backward compat
