@@ -3322,9 +3322,23 @@ class IosContainer private constructor() {
      * capability and method, never by id.
      */
     fun playsThroughStreamUrl(resolverId: String): Boolean =
-        pluginManager.streamUrlPlugin(resolverId, com.parachord.shared.plugin.HostPlayback.IOS) != null
+        pluginManager.streamUrlPlugin(resolverId, iosPlaybackPaths) != null
 
     // ── A plug-in's FairPlay HLS (desktop #1627, #794) ──────────────────
+
+    /**
+     * Whether this device runs FairPlay. Set from Swift at start-up
+     * (`AppBootstrap`): false in the simulator, whose `AVContentKeySession`
+     * throws for `.fairPlayStreaming`. Without it the DRM pair isn't a path
+     * here and a plug-in's plain stream plays first, as before #794.
+     */
+    @kotlin.concurrent.Volatile
+    var fairPlayAvailable: Boolean = true
+
+    /** The plugin-supplied paths this device runs ([com.parachord.shared.plugin.HostPlayback.IOS], less FairPlay without it). */
+    val iosPlaybackPaths: Set<String>
+        get() = if (fairPlayAvailable) com.parachord.shared.plugin.HostPlayback.IOS
+        else com.parachord.shared.plugin.HostPlayback.IOS - com.parachord.shared.plugin.HostPlayback.FAIRPLAY
 
     /**
      * Whether [resolverId]'s plug-in plays here as FairPlay HLS (shared
@@ -3333,7 +3347,7 @@ class IosContainer private constructor() {
      */
     fun playsThroughFairPlay(resolverId: String): Boolean =
         pluginManager.fairPlayPlugin(resolverId)?.let {
-            com.parachord.shared.plugin.playsThroughFairPlay(it, com.parachord.shared.plugin.HostPlayback.IOS)
+            com.parachord.shared.plugin.playsThroughFairPlay(it, iosPlaybackPaths)
         } == true
 
     /** [resolverId]'s plug-in also has a plain stream, for when FairPlay didn't start. */
@@ -3478,7 +3492,7 @@ class IosContainer private constructor() {
     ): IosPluginStream {
         val resolverId = source.resolver
         // An html5Stream plug-in, or a DRM plug-in's plain stream (its fallback when FairPlay didn't start).
-        val plugin = pluginManager.streamUrlPlugin(resolverId, com.parachord.shared.plugin.HostPlayback.IOS)
+        val plugin = pluginManager.streamUrlPlugin(resolverId, iosPlaybackPaths)
             ?: pluginManager.drmPlainStreamPlugin(resolverId)
             ?: return IosPluginStream(IosPluginStream.START_FAILED, null, com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE, resolverId)
         val html5 = plugin.capabilities[com.parachord.shared.plugin.HostPlayback.HTML5_STREAM] == true

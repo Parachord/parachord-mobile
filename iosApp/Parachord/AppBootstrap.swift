@@ -46,6 +46,9 @@ final class AppBootstrap {
         container.pluginJsRuntime.nativeBridgeInstaller = { ctx in
             JsPolyfills.installNativeBridge(to: ctx)
         }
+        // FairPlay runs only on a device (#794): in the simulator the DRM pair
+        // isn't a path, and a plug-in's plain stream plays first.
+        container.fairPlayAvailable = IosFairPlayKeys.isAvailable
         // The webSession host bridge's web view (#779): amazonmusic.axe needs
         // it, and the shared engine is built on first use, so it's set before
         // the plugins load.

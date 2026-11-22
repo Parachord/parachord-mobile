@@ -11,9 +11,10 @@ import Shared
 // it to the service with its own session and headers), and gives the CKC back
 // to AVFoundation. The SPC and the CKC are never logged.
 //
-// FairPlay needs a real device: the simulator's AVContentKeySession can't build
-// an SPC, so the key request fails, the router sees `.failed`, and the
-// plug-in's plain stream (Amazon's purchases) plays instead.
+// FairPlay needs a real device: the simulator's AVContentKeySession throws for
+// `.fairPlayStreaming`, so the app tells the shared side FairPlay isn't there
+// (`IosContainer.fairPlayAvailable`, set by `AppBootstrap`) and a plug-in's
+// plain stream (Amazon's purchases) plays first instead.
 
 final class IosFairPlayKeys: NSObject, AVContentKeySessionDelegate {
     enum State: Equatable {
@@ -53,7 +54,18 @@ final class IosFairPlayKeys: NSObject, AVContentKeySessionDelegate {
         lock.unlock()
     }
 
+    /// The simulator has no FairPlay: its `AVContentKeySession` throws an
+    /// Objective-C exception for `.fairPlayStreaming`, which Swift can't catch.
+    static var isAvailable: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return true
+        #endif
+    }
+
     init?(sessionId: String, certificateB64: String, resolverId: String) {
+        guard Self.isAvailable else { return nil }
         guard let cert = Data(base64Encoded: certificateB64), !cert.isEmpty else { return nil }
         self.sessionId = sessionId
         self.resolverId = resolverId
