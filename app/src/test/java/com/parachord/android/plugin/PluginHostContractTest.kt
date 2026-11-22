@@ -17,12 +17,20 @@ class PluginHostContractTest {
     private val iosRuntime = File("../shared/src/iosMain/kotlin/com/parachord/shared/plugin/IosJsRuntime.kt")
     private val loader = File("src/main/assets/js/resolver-loader.js")
 
-    private fun supplierBlock(file: File): String {
+    private fun block(file: File, name: String): String {
         val text = file.readText()
-        val start = text.indexOf("// <plugin-host-supplier>")
-        val end = text.indexOf("// </plugin-host-supplier>")
-        assertTrue("${file.name} has the plugin-host-supplier block", start >= 0 && end > start)
+        val start = text.indexOf("// <$name>")
+        val end = text.indexOf("// </$name>")
+        assertTrue("${file.name} has the $name block", start >= 0 && end > start)
         return text.substring(start, end).lines().joinToString("\n") { it.trim() }
+    }
+
+    private fun supplierBlock(file: File): String = block(file, "plugin-host-supplier")
+
+    @Test
+    fun `both apps supply the same webSession bridge`() {
+        assertEquals(block(bootstrapHtml, "web-session-bridge"), block(iosRuntime, "web-session-bridge"))
+        assertTrue(block(iosRuntime, "web-session-bridge").contains("window.__parachordBridge_webSession = {"))
     }
 
     @Test

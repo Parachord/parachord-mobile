@@ -136,10 +136,19 @@ data class TileStatus(val statusLabel: String?, val statusTitle: String?)
  * Port of `tileStatus`: a plan limit's label (it wins: what a blocked plan
  * stops, or what an [PlaybackLimit.ownedOnly] one still plays), else "Search
  * and links only" when the user switched "Play from" off, else nothing.
+ * Mobile addition: a plugin this host can't play from at all
+ * ([hostUnplayableIds], shared [hostCannotPlay]) reads "Search and links
+ * only" with its own reason, after a blocked plan's label.
  */
-fun tileStatus(limits: Map<String, PlaybackLimit?>, id: String, playbackOffIds: Collection<String> = emptyList()): TileStatus {
+fun tileStatus(
+    limits: Map<String, PlaybackLimit?>,
+    id: String,
+    playbackOffIds: Collection<String> = emptyList(),
+    hostUnplayableIds: Collection<String> = emptyList(),
+): TileStatus {
     val limit = limits[id]
     if (limit != null && limit.blocked) return TileStatus(limit.label ?: "No playback", limit.message)
+    if (id in hostUnplayableIds) return TileStatus(HOST_CANNOT_PLAY_LABEL, HOST_CANNOT_PLAY_MESSAGE)
     if (limit != null && limit.ownedOnly) return TileStatus(limit.label ?: "Purchases only", limit.message)
     if (id in playbackOffIds) return TileStatus("Search and links only", "Playing from it is off in its settings")
     return TileStatus(null, null)
