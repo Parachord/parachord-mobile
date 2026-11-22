@@ -567,6 +567,29 @@ class SettingsViewModel constructor(
     /** The plug-ins that are on but don't play: unnumbered in the priority list. */
     val notPlayingResolvers: StateFlow<List<String>> = pluginStatusStore.notPlaying
 
+    /**
+     * What the app knows about each plug-in's sign-in (#782, desktop
+     * parachord#1615 `pluginAccounts`): the host's own sign-ins (Spotify,
+     * SoundCloud, Apple Music) with each status plug-in's reply over them
+     * (shared `signedInMap`). A host sign-in is left out (no verdict) until its
+     * check has answered: the stored token read, or MusicKit configured.
+     */
+    val pluginAccounts: StateFlow<Map<String, Boolean>> = kotlinx.coroutines.flow.combine(
+        settingsStore.getSpotifyAccessTokenFlow().map<String?, Boolean?> { it != null },
+        settingsStore.getSoundCloudTokenFlow().map<String?, Boolean?> { !it.isNullOrBlank() },
+        kotlinx.coroutines.flow.combine(musicKitBridge.configured, musicKitBridge.authorized) { configured, authorized ->
+            if (configured) authorized else null
+        },
+        pluginStatusStore.statuses,
+    ) { spotify, soundCloud, appleMusic, statuses ->
+        val host = buildMap {
+            spotify?.let { put("spotify", it) }
+            soundCloud?.let { put("soundcloud", it) }
+            appleMusic?.let { put("applemusic", it) }
+        }
+        com.parachord.shared.plugin.signedInMap(host, statuses)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
     fun setPlaybackOn(id: String, on: Boolean) {
         viewModelScope.launch { settingsStore.setPluginSwitchOn(SettingsStore.PLAYBACK_OFF_RESOLVERS, id, on) }
     }

@@ -19,6 +19,7 @@ import com.parachord.shared.websession.WebSessionConfig
 import com.parachord.shared.websession.WebSessionLoadTimeout
 import com.parachord.shared.websession.WebSessionPlatform
 import com.parachord.shared.websession.WebSessionRules
+import com.parachord.shared.websession.WebSessionScripts
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -315,22 +316,17 @@ class AndroidWebSessionPlatform(
     private fun onCaptureMessage(data: String?) {
         val l = listener ?: return
         if (data == null) return
-        try {
-            val o = Json.parseToJsonElement(data).jsonObject
-            val url = o["url"]?.jsonPrimitive?.content ?: return
-            if (!WebSessionRules.urlOnAllowedHost(url, config.allowedHosts)) return
-            val headers = (o["headers"] as? JsonObject)?.mapValues { it.value.jsonPrimitive.content }.orEmpty()
-            val body = (o["body"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            l(CapturedRequest(url, o["method"]?.jsonPrimitive?.content ?: "GET", headers, body))
+        val request = try {
+            WebSessionScripts.parseCapture(data, config.allowedHosts)
         } catch (e: Exception) {
             Log.w(TAG, "${config.id}: unreadable capture (${data.length} chars)")
-        }
+            null
+        } ?: return
+        l(request)
     }
 
-    private fun captureScript(): String {
-        val hosts = config.allowedHosts.joinToString(",") { js(it.lowercase()) }
-        return CAPTURE_JS.replace("__ALLOWED_HOSTS__", hosts).replace("__CAPTURE_OBJECT__", CAPTURE_OBJECT)
-    }
+    private fun captureScript(): String =
+        WebSessionScripts.captureScript(config, WebSessionScripts.ANDROID_CAPTURE_SINK)
 
     // ── sign-in ─────────────────────────────────────────────────────────────
 
@@ -345,93 +341,6 @@ class AndroidWebSessionPlatform(
         const val VIEW_HEIGHT = 800
         const val POLL_MS = 100L
         const val EVAL_TIMEOUT_MS = 5_000L
-        const val CAPTURE_OBJECT = "PcWebSessionCapture"
-
-        /**
-         * Runs before any page script in every frame on the cookie domains.
-         * Reports each fetch/XHR to an allowed host (https, exact host) with
-         * the headers the page set (names lower-cased, cookie headers never)
-         * and its body as text, to the web message listener.
-         */
-        val CAPTURE_JS = """
-(function () {
-  if (window.__pcWsCapture) return;
-  window.__pcWsCapture = true;
-  var HOSTS = [__ALLOWED_HOSTS__];
-  var sink = window.__CAPTURE_OBJECT__;
-  if (!sink || typeof sink.postMessage !== 'function') return;
-  function absolute(u) {
-    try { return new URL(String(u), document.baseURI).href; } catch (e) { return null; }
-  }
-  function allowed(u) {
-    try {
-      var p = new URL(u);
-      return p.protocol === 'https:' && HOSTS.indexOf(p.hostname.toLowerCase()) >= 0;
-    } catch (e) { return false; }
-  }
-  function headerObject(h, out) {
-    out = out || {};
-    if (!h) return out;
-    try {
-      if (typeof Headers !== 'undefined' && h instanceof Headers) { h.forEach(function (v, k) { out[String(k).toLowerCase()] = String(v); }); return out; }
-      if (Array.isArray(h)) { h.forEach(function (p) { out[String(p[0]).toLowerCase()] = String(p[1]); }); return out; }
-      Object.keys(h).forEach(function (k) { out[k.toLowerCase()] = String(h[k]); });
-    } catch (e) {}
-    return out;
-  }
-  function bodyText(b) {
-    if (b === undefined || b === null) return null;
-    if (typeof b === 'string') return b;
-    try {
-      if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) return b.toString();
-      if (b instanceof ArrayBuffer) return new TextDecoder().decode(b);
-      if (ArrayBuffer.isView(b)) return new TextDecoder().decode(b);
-    } catch (e) {}
-    return null;
-  }
-  function report(url, method, headers, body) {
-    if (!url || !allowed(url)) return;
-    delete headers.cookie; delete headers.cookie2;
-    try {
-      sink.postMessage(JSON.stringify({ url: url, method: String(method || 'GET').toUpperCase(), headers: headers, body: body }));
-    } catch (e) {}
-  }
-  var origFetch = window.fetch;
-  if (typeof origFetch === 'function') {
-    window.fetch = function (input, init) {
-      try {
-        var isRequest = typeof Request !== 'undefined' && input instanceof Request;
-        var url = absolute(isRequest ? input.url : input);
-        if (url && allowed(url)) {
-          var method = (init && init.method) || (isRequest ? input.method : 'GET');
-          var headers = headerObject(isRequest ? input.headers : null);
-          headerObject(init && init.headers, headers);
-          if (init && init.body !== undefined && init.body !== null) {
-            report(url, method, headers, bodyText(init.body));
-          } else if (isRequest && typeof input.clone === 'function') {
-            input.clone().text().then(function (t) { report(url, method, headers, t || null); }, function () { report(url, method, headers, null); });
-          } else {
-            report(url, method, headers, null);
-          }
-        }
-      } catch (e) {}
-      return origFetch.apply(this, arguments);
-    };
-  }
-  var XO = XMLHttpRequest.prototype.open, XS = XMLHttpRequest.prototype.send, XH = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.open = function (m, u) {
-    try { this.__pcWs = { m: m, u: absolute(u), h: {} }; } catch (e) {}
-    return XO.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-    try { if (this.__pcWs) this.__pcWs.h[String(k).toLowerCase()] = String(v); } catch (e) {}
-    return XH.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function (b) {
-    try { if (this.__pcWs) report(this.__pcWs.u, this.__pcWs.m, this.__pcWs.h, bodyText(b)); } catch (e) {}
-    return XS.apply(this, arguments);
-  };
-})();
-""".trimIndent()
+        const val CAPTURE_OBJECT = WebSessionScripts.ANDROID_CAPTURE_OBJECT
     }
 }

@@ -137,6 +137,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -3029,13 +3030,72 @@ class IosContainer private constructor() {
      */
     val pluginJsRuntime: IosJsRuntime by lazy { IosJsRuntime() }
 
+    // ── webSession host bridge (desktop parachord#1356) ─────────────────
+
+    /**
+     * Set from Swift at start-up (`AppBootstrap`, before the plugin host
+     * starts): the hidden `WKWebView` and sign-in screen behind the shared
+     * web-session engine. Unset, every webSession call answers the bridge's
+     * own refusal.
+     */
+    var webSessionView: com.parachord.shared.websession.IosWebSessionView? = null
+
+    /**
+     * The `webSession` host bridge: one shared [com.parachord.shared.websession.WebSessionHost]
+     * per session (Amazon Music's, desktop's `amazon-web-session.js` config)
+     * over [webSessionView], as Android's Koin graph builds it.
+     */
+    val webSessionBridge: com.parachord.shared.websession.WebSessionBridge by lazy {
+        val config = com.parachord.shared.websession.WebSessionConfigs.AMAZON_MUSIC
+        val view = webSessionView
+        if (view == null) {
+            Log.w("WebSession", "no web view installed; webSession calls will be refused")
+            com.parachord.shared.websession.WebSessionBridge(emptyMap())
+        } else {
+            val host = com.parachord.shared.websession.WebSessionHost(
+                config = config,
+                platform = com.parachord.shared.websession.IosWebSessionPlatform(config, view),
+                httpClient = com.parachord.shared.websession.createWebSessionHttpClient(),
+                scope = appScope,
+            )
+            com.parachord.shared.websession.WebSessionBridge(mapOf(config.id to host))
+        }
+    }
+
+    private val webSessionJs: com.parachord.shared.websession.WebSessionJsCalls by lazy {
+        com.parachord.shared.websession.WebSessionJsCalls(
+            bridge = webSessionBridge,
+            scope = appScope,
+            evaluate = { script -> withContext(Dispatchers.Main) { pluginJsRuntime.evaluate(script) } },
+        )
+    }
+
+    /** `NativeBridge.webSessionCall` (the bootstrap's `__wsCall`); false for a malformed callback id. */
+    fun webSessionCall(callbackId: String, method: String, argsJson: String): Boolean =
+        webSessionJs.call(callbackId, method, argsJson)
+
+    /** `NativeBridge.webSessionDecide`: the plugin's verdict for a sign-in tick. */
+    fun webSessionDecide(callbackId: String, verdict: Boolean) = webSessionJs.decide(callbackId, verdict)
+
+    /** The cookie-domain rule the web view's navigation policy and message handler check (shared). */
+    fun webSessionUrlUnderCookieDomains(url: String?): Boolean =
+        com.parachord.shared.websession.WebSessionRules.urlUnderCookieDomains(
+            url, com.parachord.shared.websession.WebSessionConfigs.AMAZON_MUSIC.cookieDomains,
+        )
+
     /**
      * Shared [PluginManager] — common to all platforms. Reads bundled
      * `.axe` files via [PluginFileAccess] (NSBundle on iOS) and drives
      * them through [pluginJsRuntime].
      */
     val pluginManager: PluginManager by lazy {
-        PluginManager(PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios").apply {
+        PluginManager(
+            PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios",
+            // Each needs its JS object in BOOTSTRAP_JS (window.__parachordBridge_<name>).
+            // No `widevine`: iOS has no Widevine, and amazonmusic.axe only
+            // declares it optional.
+            hostBridges = setOf("webSession"),
+        ).apply {
             // soundcloud.axe searches, resolves and looks up URLs only with the
             // sign-in token in its config (desktop's getResolverConfig).
             // lastfm.axe and listenbrainz.axe read the username for
@@ -3171,14 +3231,15 @@ class IosContainer private constructor() {
 
     /**
      * The status-capable plugins' replies and the one "not playing" list
-     * (#707), shared with Android. No status-capable plugin loads on iOS
-     * today (Amazon Music needs the web-session bridge iOS doesn't have), so
-     * the list is the user's "Play from X" switches alone.
+     * (#707), shared with Android. iOS runs no plugin-supplied playback
+     * path ([com.parachord.shared.plugin.HostPlayback.IOS]), so a plugin that
+     * plays only that way (Amazon Music, Widevine) is in the list too.
      */
     val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by lazy {
         com.parachord.shared.plugin.PluginStatusStore.create(
             pluginManager, settingsStore, appScope,
             clearResolver = { id, sourcesToo -> resolverSourcesClearer?.invoke(id, sourcesToo) },
+            hostPlaybackPaths = com.parachord.shared.plugin.HostPlayback.IOS,
         )
     }
 
@@ -3237,17 +3298,31 @@ class IosContainer private constructor() {
      * nested switches (shared `PluginSwitch` rules) and the account row's
      * buttons. [active] is whether it's on ("Enable X"). A plugin that hasn't
      * loaded stands in as a music plug-in ([isResolver]) or a meta-service.
+     * [hostSignedIn] / [hostSignedOut] are the host's own sign-ins the app has
+     * checked (Spotify, SoundCloud, Apple Music; one still being checked is in
+     * neither), for [pluginAccounts].
      */
-    fun pluginSheet(id: String, name: String, isResolver: Boolean, active: Boolean, lists: IosPluginSwitchLists): IosPluginSheet {
+    fun pluginSheet(
+        id: String,
+        name: String,
+        isResolver: Boolean,
+        active: Boolean,
+        lists: IosPluginSwitchLists,
+        hostSignedIn: List<String>,
+        hostSignedOut: List<String>,
+    ): IosPluginSheet {
         val info = pluginManager.plugins.value.firstOrNull { it.id == id } ?: PluginManager.PluginInfo(
             id = id, name = name, version = "",
             type = if (isResolver) "" else "meta-service",
             capabilities = if (isResolver) mapOf("resolve" to true) else emptyMap(),
         )
         val limit = pluginStatusStore.limits.value[id]
-        // Signed out (the last status read said so), the nested switches are
-        // disabled with "Sign in to use this" (#782); unknown changes nothing.
-        val signedIn = pluginStatusStore.statuses.value[id]?.signedIn
+        // Signed out (#782, desktop parachord#1615), Enable and the switches
+        // under it read off and locked; no verdict changes nothing.
+        val signedIn = pluginAccounts(hostSignedIn, hostSignedOut)[id]
+        val enable = com.parachord.shared.plugin.enableSwitchState(info, active, signedIn)
+        // The nested switches show while Enable reads on.
+        val shownActive = if (isResolver) enable.checked else active
         // iOS has no plugin DRM engine and its Apple Music follows iOS's own
         // setting, so no line here follows Playback Quality: the settings
         // passed don't change the answer.
@@ -3260,12 +3335,18 @@ class IosContainer private constructor() {
         return IosPluginSheet(
             enableLabel = com.parachord.shared.plugin.enableSwitchLabel(name),
             enableHint = com.parachord.shared.plugin.enableSwitchHint(info),
+            enable = enable,
+            accountFirst = com.parachord.shared.plugin.accountFirst(info),
             playbackLabel = com.parachord.shared.plugin.playbackSwitchLabel(name),
-            playback = com.parachord.shared.plugin.playbackSwitchState(info, active, id in lists.playbackOff, limit, signedIn),
+            playback = com.parachord.shared.plugin.playbackSwitchState(
+                info, shownActive, id in lists.playbackOff, limit,
+                hostCannotPlay = com.parachord.shared.plugin.hostCannotPlay(info, com.parachord.shared.plugin.HostPlayback.IOS),
+                signedIn = signedIn,
+            ),
             metadataLabel = com.parachord.shared.plugin.metadataSwitchLabel(name),
-            metadata = com.parachord.shared.plugin.metadataSwitchState(info, active, id in lists.metadataOff, signedIn),
+            metadata = com.parachord.shared.plugin.metadataSwitchState(info, shownActive, id in lists.metadataOff, signedIn),
             recommendationsLabel = com.parachord.shared.plugin.recommendationsSwitchLabel(name),
-            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, active, id in lists.recommendationsOff, signedIn),
+            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, shownActive, id in lists.recommendationsOff, signedIn),
             hasStatus = info.capabilities["status"] == true,
             canSignIn = info.hasSignIn,
             canSignOut = info.hasSignOut,
@@ -3278,9 +3359,35 @@ class IosContainer private constructor() {
         )
     }
 
+    /**
+     * What the app knows about each plug-in's sign-in (shared `signedInMap`):
+     * the host's checked sign-ins with each status plug-in's reply over them.
+     */
+    fun pluginAccounts(hostSignedIn: List<String>, hostSignedOut: List<String>): Map<String, Boolean> =
+        com.parachord.shared.plugin.signedInMap(
+            hostSignedOut.associateWith { false } + hostSignedIn.associateWith { true },
+            pluginStatusStore.statuses.value,
+        )
+
+    /** The plug-ins that are on (in [activeIds]) but signed out ([pluginAccounts] false). */
+    fun signedOutPlugins(activeIds: List<String>, hostSignedIn: List<String>, hostSignedOut: List<String>): List<String> {
+        val accounts = pluginAccounts(hostSignedIn, hostSignedOut)
+        return activeIds.filter { com.parachord.shared.plugin.pluginSignedOut(it, true, accounts) }
+    }
+
+    /**
+     * The priority list's two parts (shared `pluginTileOrder`): [onInOrder] split
+     * into the numbered ones that play and the unnumbered ones (not playing, or
+     * in [signedOut]).
+     */
+    fun pluginTileOrder(onInOrder: List<String>, notPlaying: List<String>, signedOut: List<String>): com.parachord.shared.plugin.PluginTileOrder =
+        com.parachord.shared.plugin.pluginTileOrder(onInOrder, notPlaying, signedOut.associateWith { false })
+
     /** A resolver tile's status line (`tileStatus`): the plan's label, or "Search and links only"; null for none. */
     fun pluginTileStatus(id: String, playbackOff: List<String>): String? =
-        com.parachord.shared.plugin.tileStatus(pluginStatusStore.limits.value, id, playbackOff).statusLabel
+        com.parachord.shared.plugin.tileStatus(
+            pluginStatusStore.limits.value, id, playbackOff, pluginStatusStore.hostUnplayable.value,
+        ).statusLabel
 
 
     /**
@@ -4600,6 +4707,10 @@ data class IosPluginSwitchLists(
 data class IosPluginSheet(
     val enableLabel: String,
     val enableHint: String,
+    /** "Enable X" for a music plug-in (shared `enableSwitchState`): signed out, off and locked. */
+    val enable: com.parachord.shared.plugin.PluginSwitchState,
+    /** The account and keys come before Enable (shared `accountFirst`). */
+    val accountFirst: Boolean,
     val playbackLabel: String,
     val playback: com.parachord.shared.plugin.PluginSwitchState,
     val metadataLabel: String,

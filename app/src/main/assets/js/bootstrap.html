@@ -164,13 +164,16 @@
     };
     // </plugin-host-supplier>
 
+    // <web-session-bridge>
     // ── webSession host bridge ───────────────────────────────────────
     // `this.host.webSession` for a plugin that declares it (amazonmusic.axe):
     // desktop's preload shape, docs/architecture/web-session.md "The IPC
     // bridge". Each method resolves (never rejects) with the shared
-    // WebSessionBridge's JSON answer, delivered by NativeBridge through
-    // window.__wsCallbacks. signIn keeps the plugin's decide() here: Kotlin
-    // sends each tick to __pcWsSignInTick and waits for the verdict.
+    // WebSessionBridge's JSON answer, delivered by NativeBridge (the shared
+    // WebSessionJsCalls) through window.__wsCallbacks. signIn keeps the
+    // plugin's decide() here: Kotlin sends each tick to __pcWsSignInTick and
+    // waits for the verdict. Identical in Android's bootstrap.html and iOS's
+    // IosJsRuntime; a unit test keeps the two copies in step.
     window.__wsCallbacks = {};
     window.__wsDecides = {};
     var __wsIdCounter = 0;
@@ -211,6 +214,7 @@
             return __wsCall('signIn', { id: id, url: url, window: opts.window }, decide);
         },
     };
+    // </web-session-bridge>
 
     // ── The plugin-supplied Widevine path (Android only) ─────────────
     // desktop docs/architecture/plugins.md "The plugin-supplied Widevine
