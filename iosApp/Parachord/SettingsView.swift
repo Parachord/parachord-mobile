@@ -399,6 +399,8 @@ final class SettingsViewModel {
             // Refresh the synchronous cache the players read, or the change
             // only takes effect after the next app launch.
             await IosVolumeOffsets.shared.refresh()
+            NotificationCenter.default.post(name: IosVolumeOffsets.changed, object: nil,
+                                            userInfo: ["resolver": resolverId])
         }
     }
 
@@ -841,8 +843,6 @@ private struct PlugInsTab: View {
                 }
             }
 
-            volumeBalanceSection
-
             if !model.disabledResolvers.isEmpty {
                 Text("DISABLED").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(PC.fg3)
                     .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
@@ -862,51 +862,6 @@ private struct PlugInsTab: View {
             pluginUpdates
         }
         .padding(.bottom, 130)
-    }
-
-    /// Per-resolver loudness trim (desktop parity: -12…+6 dB sliders).
-    ///
-    /// Apple Music is listed but DISABLED, exactly as desktop does. iOS has no
-    /// per-app volume and `ApplicationMusicPlayer` follows the system, so a
-    /// working slider is impossible — showing one would be a placebo. Hiding
-    /// the row entirely would be worse: users would wonder why the loudest
-    /// source is missing from the loudness control.
-    @ViewBuilder private var volumeBalanceSection: some View {
-        sectionLabel("Volume Balance")
-        Text("Trim louder sources so switching between them doesn't jump. Negative values reduce volume.")
-            .font(.system(size: 12)).foregroundStyle(PC.fg3)
-            .padding(.horizontal, 20).padding(.bottom, 6)
-        VStack(spacing: 0) {
-            ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
-                if let svc = model.resolverService(id) {
-                    let controllable = IosContainer.companion.shared.isResolverVolumeControllable(resolverId: id)
-                    let reason = IosContainer.companion.shared.resolverVolumeDisabledReason(resolverId: id)
-                    HStack(spacing: 12) {
-                        Text(svc.name)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(controllable ? PC.fg1 : PC.fg3)
-                            .frame(width: 92, alignment: .leading)
-                        Slider(
-                            value: Binding(
-                                get: { Double(model.volumeOffsets[id] ?? 0) },
-                                set: { model.setVolumeOffset(id, Int($0.rounded())) }
-                            ),
-                            in: -12...6,
-                            step: 1
-                        )
-                        .disabled(!controllable)
-                        .tint(PC.accent)
-                        Text(controllable ? "\(model.volumeOffsets[id] ?? 0) dB" : (reason ?? ""))
-                            .font(.system(size: 12))
-                            .foregroundStyle(PC.fg3)
-                            .frame(width: 62, alignment: .trailing)
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 10)
-                    .opacity(controllable ? 1 : 0.5)
-                    if i < model.resolverOrder.count - 1 { Divider().padding(.leading, 20) }
-                }
-            }
-        }
     }
 
     private func resolverRow(_ svc: PCService, index: Int) -> some View {
@@ -1059,6 +1014,17 @@ private struct PluginConfigSheet: View {
         .padding(.leading, nested ? 16 : 0)
     }
 
+    /// The sheet's "Playback quality" line, nested under the switches.
+    private func qualityLine(_ title: String, _ detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Playback quality").font(.system(size: 14))
+            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+            if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary) }
+        }
+        .padding(.leading, 16)
+        .accessibilityElement(children: .combine)
+    }
+
     /// "X account", the status line, and Sign in / Sign out (desktop's AccountRow).
     private func accountRow(_ sheet: IosPluginSheet) -> some View {
         let signedIn = model.pluginSignedIn(service.id)
@@ -1125,6 +1091,12 @@ private struct PluginConfigSheet: View {
                             switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
                                 model.setPluginSwitch("recommendations", service.id, $0)
                             }
+                        }
+                        // "Playback quality" (shared `PlaybackQualityLine`): on iOS
+                        // something else always sets it (iOS Settings for Apple
+                        // Music, the Spotify app, the service's player, the server).
+                        if active, let title = sheet.qualityTitle {
+                            qualityLine(title, sheet.qualityDetail)
                         }
                     }
                 }
@@ -1590,8 +1562,58 @@ private struct GeneralTab: View {
             }
             .tint(PC.accent)
             .padding(.horizontal, 20).padding(.top, 4)
+
+            volumeNormalizationSection
         }
         .padding(.bottom, 130)
+    }
+
+    /// Per-resolver loudness trim (desktop parity: -12…+6 dB sliders).
+    ///
+    /// Apple Music is listed but DISABLED, exactly as desktop does. iOS has no
+    /// per-app volume and `ApplicationMusicPlayer` follows the system, so a
+    /// working slider is impossible — showing one would be a placebo. Hiding
+    /// the row entirely would be worse: users would wonder why the loudest
+    /// source is missing from the loudness control.
+    @ViewBuilder private var volumeNormalizationSection: some View {
+        label("Volume Normalization")
+        Text("Balance loudness between different sources")
+            .font(.system(size: 12)).foregroundStyle(PC.fg3)
+            .padding(.horizontal, 20)
+        Text("Adjust each plug-in’s volume to balance loudness. Negative values reduce volume for louder sources.")
+            .font(.system(size: 12)).foregroundStyle(PC.fg3)
+            .padding(.horizontal, 20).padding(.top, 2).padding(.bottom, 6)
+        VStack(spacing: 0) {
+            ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
+                if let svc = model.resolverService(id) {
+                    let controllable = IosContainer.companion.shared.isResolverVolumeControllable(resolverId: id)
+                    let reason = IosContainer.companion.shared.resolverVolumeDisabledReason(resolverId: id)
+                    HStack(spacing: 12) {
+                        Text(svc.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(controllable ? PC.fg1 : PC.fg3)
+                            .frame(width: 92, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { Double(model.volumeOffsets[id] ?? 0) },
+                                set: { model.setVolumeOffset(id, Int($0.rounded())) }
+                            ),
+                            in: -12...6,
+                            step: 1
+                        )
+                        .disabled(!controllable)
+                        .tint(PC.accent)
+                        Text(controllable ? "\(model.volumeOffsets[id] ?? 0) dB" : (reason ?? ""))
+                            .font(.system(size: 12))
+                            .foregroundStyle(PC.fg3)
+                            .frame(width: 62, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .opacity(controllable ? 1 : 0.5)
+                    if i < model.resolverOrder.count - 1 { Divider().padding(.leading, 20) }
+                }
+            }
+        }
     }
 
     private func label(_ t: String) -> some View {

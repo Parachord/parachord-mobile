@@ -19,6 +19,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.coroutines.launch
+import com.parachord.shared.playback.drm.forDevice
 
 /**
  * The manifest half of a plugin DRM play (`getPlaybackManifest` refused or
@@ -110,7 +111,8 @@ class PluginDrmHandler(
             ?: throw PluginDrmPlaybackException("?", PluginDrmError(message = "the track has no resolver"))
         val source = sourceFor(track, resolverId)
         val trackJson = trackJson(track, resolverId, source)
-        val quality = settingsStore.getPlaybackQualitySettings()
+        // No Atmos preference where nothing here can decode E-AC-3, so spatial-on can't strand a play.
+        val quality = settingsStore.getPlaybackQualitySettings().forDevice(AudioDecoders.capabilities)
         var retries = 0
         var reply = PluginDrmReplies.open(js.open(resolverId, trackJson.toString(), PluginDrmContract.MANIFEST_BUDGET_MS))
         // The budget ran out while the plugin's call is still running in JS

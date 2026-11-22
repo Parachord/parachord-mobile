@@ -129,6 +129,7 @@ import androidx.compose.material3.Slider
 import com.parachord.android.ui.components.SettingsGroupLabel
 import androidx.compose.ui.draw.alpha
 import com.parachord.shared.playback.ResolverVolume
+import com.parachord.shared.playback.drm.settingsLabel
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.screens.sync.ProviderSyncConfigSheet
 import com.parachord.android.ui.screens.sync.SyncSetupSheet
@@ -281,6 +282,7 @@ fun SettingsScreen(
     val playbackQuality by viewModel.playbackQuality.collectAsStateWithLifecycle()
     val playbackAbr by viewModel.playbackAbr.collectAsStateWithLifecycle()
     val playbackSpatial by viewModel.playbackSpatial.collectAsStateWithLifecycle()
+    val playbackQualityCopy by viewModel.playbackQualityCopy.collectAsStateWithLifecycle()
     val libreFmAuthError by viewModel.libreFmAuthError.collectAsStateWithLifecycle()
     val listenBrainzAuthError by viewModel.listenBrainzAuthError.collectAsStateWithLifecycle()
     val disabledMetaProviders by viewModel.disabledMetaProviders.collectAsStateWithLifecycle()
@@ -308,12 +310,45 @@ fun SettingsScreen(
             windowInsets = WindowInsets(0),
         )
 
+        // Volume Normalization rows (General tab): enabled, connected resolver
+        // plug-ins in the user's resolver order, as the Plug-Ins tab's priority list.
+        val axePluginsForVolume by viewModel.loadedPlugins.collectAsStateWithLifecycle()
+        val disabledPluginsForVolume by viewModel.disabledPlugins.collectAsStateWithLifecycle()
+        val activeResolversForVolume by viewModel.activeResolvers.collectAsStateWithLifecycle()
+        val notPlayingForVolume by viewModel.notPlayingResolvers.collectAsStateWithLifecycle()
+        val spotifyClientIdForVolume by viewModel.spotifyClientId.collectAsStateWithLifecycle()
+        val volumeRows = remember(
+            axePluginsForVolume, disabledPluginsForVolume, activeResolversForVolume, notPlayingForVolume,
+            resolverOrder, spotifyConnected, spotifyClientIdForVolume, soundCloudConnected,
+            appleMusicConfigured, appleMusicAuthorized,
+        ) {
+            val resolvers = buildPluginList(axePluginsForVolume).filter { it.category == PluginCategory.RESOLVER }
+            fun connected(p: PluginInfo): Boolean = p.id !in disabledPluginsForVolume && when (p.id) {
+                "spotify" -> spotifyConnected && spotifyClientIdForVolume.isNotBlank()
+                "soundcloud" -> soundCloudConnected
+                "applemusic" -> appleMusicConfigured && appleMusicAuthorized
+                "local-files", "localfiles", "bandcamp" -> true
+                else -> axePluginsForVolume.any { it.id == p.id }
+            }
+            val on = resolvers.filter {
+                connected(it) && (activeResolversForVolume.isEmpty() || it.resolverId in activeResolversForVolume) &&
+                    it.resolverId !in notPlayingForVolume
+            }
+            val rank = { id: String -> resolverOrder.indexOf(id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+            on.sortedBy { rank(it.resolverId) }.map { VolumeRow(it.resolverId, it.name, it.shared?.capabilities) }
+        }
+
+        // A plug-in sheet's quality line opens General's Playback Quality.
+        var tabRequest by remember { mutableStateOf<Int?>(null) }
         SwipeableTabLayout(
             tabs = listOf("Plug-Ins", "Sync", "General", "About"),
             initialPage = settingsTabIndex(initialTab),
+            requestedPage = tabRequest,
+            onPageRequestHandled = { tabRequest = null },
         ) { page ->
             when (page) {
                 0 -> PlugInsTab(
+                    onOpenPlaybackQuality = { tabRequest = settingsTabIndex(com.parachord.shared.settings.SettingsTab.GENERAL) },
                     initialPluginId = pendingPluginId,
                     onInitialPluginOpened = { pendingPluginId = null },
                     spotifyConnected = spotifyConnected,
@@ -324,8 +359,6 @@ fun SettingsScreen(
                     libreFmConnected = libreFmConnected,
                     soundCloudConnected = soundCloudConnected,
                     resolverOrder = resolverOrder,
-                    resolverVolumeOffsets = resolverVolumeOffsets,
-                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                     onResolverOrderChanged = { viewModel.setResolverOrder(it) },
                     onSpotifyToggle = {
                         if (spotifyConnected) viewModel.disconnectSpotify()
@@ -400,6 +433,11 @@ fun SettingsScreen(
                     onPlaybackAbrChanged = { viewModel.setPlaybackAbr(it) },
                     playbackSpatial = playbackSpatial,
                     onPlaybackSpatialChanged = { viewModel.setPlaybackSpatial(it) },
+                    playbackQualityCopy = playbackQualityCopy,
+                    canPlayAtmos = viewModel.audioCapabilities.canPlayAtmos,
+                    volumeRows = volumeRows,
+                    resolverVolumeOffsets = resolverVolumeOffsets,
+                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                 )
                 3 -> AboutTab()
             }
@@ -407,11 +445,15 @@ fun SettingsScreen(
     }
 }
 
+/** One Volume Normalization row: the plug-in and what it declares (decides if its slider works). */
+private data class VolumeRow(val id: String, val name: String, val capabilities: Map<String, Boolean>?)
+
 // ── Plug-Ins Tab ───────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun PlugInsTab(
+    onOpenPlaybackQuality: () -> Unit = {},
     initialPluginId: String? = null,
     onInitialPluginOpened: () -> Unit = {},
     spotifyConnected: Boolean,
@@ -424,8 +466,6 @@ private fun PlugInsTab(
     onSpotifyToggle: () -> Unit,
     onLastFmToggle: () -> Unit,
     resolverOrder: List<String> = emptyList(),
-    resolverVolumeOffsets: Map<String, Int> = emptyMap(),
-    onResolverVolumeOffsetChanged: (String, Int) -> Unit = { _, _ -> },
     onResolverOrderChanged: (List<String>) -> Unit = {},
     soundCloudCredentialsSaved: Boolean = false,
     onSoundCloudSaveCredentials: (String, String) -> Unit = { _, _ -> },
@@ -506,6 +546,7 @@ private fun PlugInsTab(
     val playbackLimits by settingsViewModel.playbackLimits.collectAsStateWithLifecycle()
     val notPlaying by settingsViewModel.notPlayingResolvers.collectAsStateWithLifecycle()
     val pluginSessionBusy by settingsViewModel.pluginSessionBusy.collectAsStateWithLifecycle()
+    val playbackQualitySettings by settingsViewModel.playbackQualitySettings.collectAsStateWithLifecycle()
     val sessionContext = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
         settingsViewModel.refreshPluginStatus()
@@ -771,60 +812,6 @@ private fun PlugInsTab(
         item { Spacer(modifier = Modifier.height(24.dp)) }
 
         // Meta Services section
-        // Volume Balance — per-resolver loudness trim (desktop parity).
-        if (orderedEnabled.isNotEmpty()) {
-            item { SettingsGroupLabel("Volume Balance") }
-            item {
-                Text(
-                    text = "Trim louder sources so switching between them doesn't jump. " +
-                        "Negative values reduce volume.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            items(orderedEnabled.toList(), key = { "vol-$it" }) { id ->
-                val plugin = findPlugin(id)
-                // Apple Music is listed but DISABLED, as on desktop and iOS:
-                // MusicKit's `music.volume` is inert on Android WebView (DRM
-                // audio bypasses the JS pipeline), so a working slider is
-                // impossible. Hiding the row would be worse — users would ask
-                // why the loudest source is missing from the loudness control.
-                val controllable = ResolverVolume.isVolumeControllable(id)
-                val reason = ResolverVolume.uncontrollableReason(id)
-                val offset = resolverVolumeOffsets[id] ?: 0
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .alpha(if (controllable) 1f else 0.5f),
-                ) {
-                    Text(
-                        text = plugin?.name ?: id,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.width(96.dp),
-                    )
-                    Slider(
-                        value = offset.toFloat(),
-                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
-                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
-                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
-                        enabled = controllable,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = if (controllable) "$offset dB" else (reason ?: ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(72.dp),
-                        textAlign = TextAlign.End,
-                    )
-                }
-            }
-        }
-
         item { SettingsGroupLabel("Meta Services") }
         item {
             Text(
@@ -984,6 +971,16 @@ private fun PlugInsTab(
             metadataOff = plugin.id in metadataOff,
             recommendationsOff = plugin.id in recommendationsOff,
             playbackLimit = playbackLimits[plugin.id],
+            qualityLine = com.parachord.shared.playback.drm.PlaybackQualityLine.forPlugin(
+                plugin.sharedInfo,
+                com.parachord.shared.playback.drm.PlaybackPlatform.ANDROID,
+                playbackQualitySettings,
+                settingsViewModel.audioCapabilities,
+            ),
+            onOpenPlaybackQuality = {
+                selectedPlugin = null
+                onOpenPlaybackQuality()
+            },
             onPlaybackOn = { settingsViewModel.setPlaybackOn(plugin.id, it) },
             onMetadataOn = { settingsViewModel.setMetadataOn(plugin.id, it) },
             onRecommendationsOn = { settingsViewModel.setRecommendationsOn(plugin.id, it) },
@@ -1308,6 +1305,9 @@ private fun PluginConfigSheet(
     metadataOff: Boolean = false,
     recommendationsOff: Boolean = false,
     playbackLimit: com.parachord.shared.home.PlaybackLimit? = null,
+    /** The sheet's Playback quality line (shared rule); null for a plug-in with none. */
+    qualityLine: com.parachord.shared.playback.drm.PlaybackQualityLine? = null,
+    onOpenPlaybackQuality: () -> Unit = {},
     onPlaybackOn: (Boolean) -> Unit = {},
     onMetadataOn: (Boolean) -> Unit = {},
     onRecommendationsOn: (Boolean) -> Unit = {},
@@ -1485,6 +1485,11 @@ private fun PluginConfigSheet(
                     nested = isResolver,
                     onCheckedChange = onRecommendationsOn,
                 )
+            }
+            // "Playback quality": whether this plug-in follows Settings ›
+            // General › Playback Quality, or who sets its quality instead.
+            if (isResolver && resolverOn && qualityLine != null) {
+                PlaybackQualityLineRow(qualityLine, onOpenPlaybackQuality)
             }
 
             // The account row for a status-capable plugin (desktop's AccountRow,
@@ -3059,6 +3064,51 @@ private fun PluginSwitchRow(
     }
 }
 
+/** A music plug-in sheet's "Playback quality" line, nested under its switches. */
+@Composable
+private fun PlaybackQualityLineRow(
+    line: com.parachord.shared.playback.drm.PlaybackQualityLine,
+    onOpenPlaybackQuality: () -> Unit,
+) {
+    val follows = line as? com.parachord.shared.playback.drm.PlaybackQualityLine.Follows
+    val external = line as? com.parachord.shared.playback.drm.PlaybackQualityLine.ExternalControl
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (follows != null) Modifier.clickable(onClick = onOpenPlaybackQuality) else Modifier)
+            .padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Playback quality",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = follows?.summary ?: external?.title.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            external?.detail?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (follows != null) {
+            com.parachord.android.ui.components.ParachordIcon(
+                com.parachord.shared.ui.icons.AppIcon.ChevronRight,
+                contentDescription = "Open Playback Quality",
+                size = 16.dp,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 /**
  * A status-capable plugin's account (desktop's `account-row.js`): "X account",
  * the reply's status line (`pluginStatusRow`), and Sign in (filled with the
@@ -3375,6 +3425,11 @@ private fun GeneralTab(
     onPlaybackAbrChanged: (Boolean) -> Unit,
     playbackSpatial: Boolean,
     onPlaybackSpatialChanged: (Boolean) -> Unit,
+    playbackQualityCopy: com.parachord.shared.playback.drm.PlaybackQualityCopy,
+    canPlayAtmos: Boolean,
+    volumeRows: List<VolumeRow>,
+    resolverVolumeOffsets: Map<String, Int>,
+    onResolverVolumeOffsetChanged: (String, Int) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SettingsGroupLabel("Appearance") }
@@ -3412,13 +3467,12 @@ private fun GeneralTab(
             )
         }
         // Desktop's Settings → General → Playback Quality (desktop's keys).
-        // Only Amazon Music's stream reads it on Android; Apple Music's
-        // quality isn't Parachord's to set here, so desktop's Apple Music
-        // sentences are left out.
+        // Which services follow it comes from the same shared rule as each
+        // plug-in sheet's Playback quality line (`PlaybackQualityCopy`).
         item { SettingsGroupLabel("Playback Quality") }
         item {
             Text(
-                "Amazon Music uses these settings. Other services choose their own quality.",
+                playbackQualityCopy.description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -3427,7 +3481,7 @@ private fun GeneralTab(
         items(com.parachord.shared.playback.drm.PlaybackQualityTier.ORDERED.size) { i ->
             val tier = com.parachord.shared.playback.drm.PlaybackQualityTier.ORDERED[i]
             ListItem(
-                headlineContent = { Text(playbackQualityLabel(tier)) },
+                headlineContent = { Text(tier.settingsLabel) },
                 trailingContent = {
                     androidx.compose.material3.RadioButton(
                         selected = playbackQuality == tier,
@@ -3440,32 +3494,86 @@ private fun GeneralTab(
         item {
             ListItem(
                 headlineContent = { Text("Adjust to your connection") },
-                supportingContent = { Text("Amazon Music only. Lowers quality when your connection is slow, never above the level you chose.") },
+                supportingContent = { Text(playbackQualityCopy.adjustHint) },
                 trailingContent = { Switch(checked = playbackAbr, onCheckedChange = onPlaybackAbrChanged) },
             )
         }
         item {
-            ListItem(
-                headlineContent = { Text("Prefer Dolby Atmos mixes") },
-                supportingContent = {
+            if (canPlayAtmos) {
+                ListItem(
+                    headlineContent = { Text("Prefer Dolby Atmos mixes") },
+                    supportingContent = { Text(playbackQualityCopy.atmosHint) },
+                    trailingContent = { Switch(checked = playbackSpatial, onCheckedChange = onPlaybackSpatialChanged) },
+                )
+            } else {
+                // No E-AC-3 decoder here: the preference would do nothing.
+                ListItem(
+                    headlineContent = { Text(com.parachord.shared.playback.drm.PlaybackQualityCopy.NO_ATMOS_DECODER) },
+                    supportingContent = { Text("Dolby Atmos mixes need an E-AC-3 decoder, which this phone doesn’t have.") },
+                )
+            }
+        }
+        // Volume Normalization (desktop's General tab, after Playback Quality):
+        // per-plug-in loudness trim.
+        if (volumeRows.isNotEmpty()) {
+            item { SettingsGroupLabel("Volume Normalization") }
+            item {
+                Text(
+                    text = "Balance loudness between different sources",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Text(
+                    text = "Adjust each plug-in\u2019s volume to balance loudness. Negative values reduce volume for louder sources.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            items(volumeRows, key = { "vol-${it.id}" }) { (id, name, capabilities) ->
+                // Apple Music is listed but DISABLED, as on desktop and iOS:
+                // MusicKit's `music.volume` is inert on Android WebView (DRM
+                // audio bypasses the JS pipeline), so a working slider is
+                // impossible. Hiding the row would be worse.
+                val control = ResolverVolume.controllability(capabilities, embedVolumeApplies = true)
+                val controllable = control.controllable
+                val reason = control.reason
+                val offset = resolverVolumeOffsets[id] ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .alpha(if (controllable) 1f else 0.5f),
+                ) {
                     Text(
-                        "Amazon Music only. Plays the 5.1 core of a track’s Atmos mix when there is one. " +
-                            "This isn’t full Atmos: it’s mixed down on stereo output, and it plays instead of lossless FLAC when quality is Max.",
+                        text = name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.width(96.dp),
                     )
-                },
-                trailingContent = { Switch(checked = playbackSpatial, onCheckedChange = onPlaybackSpatialChanged) },
-            )
+                    Slider(
+                        value = offset.toFloat(),
+                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
+                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
+                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
+                        enabled = controllable,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = if (controllable) "$offset dB" else (reason ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(72.dp),
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
         }
     }
 }
 
-/** Desktop's Playback Quality labels. */
-private fun playbackQualityLabel(tier: com.parachord.shared.playback.drm.PlaybackQualityTier): String = when (tier) {
-    com.parachord.shared.playback.drm.PlaybackQualityTier.MAX -> "Max (best available, lossless where playable)"
-    com.parachord.shared.playback.drm.PlaybackQualityTier.HIGH -> "High (up to 500 kbps)"
-    com.parachord.shared.playback.drm.PlaybackQualityTier.STANDARD -> "Standard (up to 200 kbps)"
-    com.parachord.shared.playback.drm.PlaybackQualityTier.SAVER -> "Data saver (up to 100 kbps)"
-}
 
 // ── Sync Tab ───────────────────────────────────────────────────────
 

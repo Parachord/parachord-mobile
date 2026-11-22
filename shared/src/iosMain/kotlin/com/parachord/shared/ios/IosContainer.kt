@@ -882,11 +882,20 @@ class IosContainer private constructor() {
     /** Whether a slider should be offered at all — false for Apple Music
      *  (system volume) and browser-playback resolvers. */
     fun isResolverVolumeControllable(resolverId: String): Boolean =
-        ResolverVolume.isVolumeControllable(resolverId)
+        resolverVolumeControl(resolverId).controllable
 
     /** Short reason shown beside a disabled slider, or null when controllable. */
     fun resolverVolumeDisabledReason(resolverId: String): String? =
-        ResolverVolume.uncontrollableReason(resolverId)
+        resolverVolumeControl(resolverId).reason
+
+    /** Decided by the plug-in's declared capabilities (shared rule); embed
+     *  pages can't take a volume on iOS (WebKit ignores a media element's
+     *  `volume`), so `embedVolumeApplies` is false here. */
+    private fun resolverVolumeControl(resolverId: String): ResolverVolume.VolumeControl =
+        ResolverVolume.controllability(
+            pluginManager.plugins.value.firstOrNull { it.id == resolverId }?.capabilities,
+            embedVolumeApplies = false,
+        )
 
     suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
 
@@ -3236,6 +3245,15 @@ class IosContainer private constructor() {
             capabilities = if (isResolver) mapOf("resolve" to true) else emptyMap(),
         )
         val limit = pluginStatusStore.limits.value[id]
+        // iOS has no plugin DRM engine and its Apple Music follows iOS's own
+        // setting, so no line here follows Playback Quality: the settings
+        // passed don't change the answer.
+        val quality = com.parachord.shared.playback.drm.PlaybackQualityLine.forPlugin(
+            info,
+            com.parachord.shared.playback.drm.PlaybackPlatform.IOS,
+            com.parachord.shared.playback.drm.PlaybackQualitySettings(),
+            com.parachord.shared.playback.drm.DeviceAudioCapabilities.NONE,
+        )
         return IosPluginSheet(
             enableLabel = com.parachord.shared.plugin.enableSwitchLabel(name),
             enableHint = com.parachord.shared.plugin.enableSwitchHint(info),
@@ -3248,6 +3266,12 @@ class IosContainer private constructor() {
             hasStatus = info.capabilities["status"] == true,
             canSignIn = info.hasSignIn,
             canSignOut = info.hasSignOut,
+            qualityTitle = when (quality) {
+                is com.parachord.shared.playback.drm.PlaybackQualityLine.Follows -> quality.summary
+                is com.parachord.shared.playback.drm.PlaybackQualityLine.ExternalControl -> quality.title
+                null -> null
+            },
+            qualityDetail = (quality as? com.parachord.shared.playback.drm.PlaybackQualityLine.ExternalControl)?.detail,
         )
     }
 
@@ -4582,4 +4606,7 @@ data class IosPluginSheet(
     val hasStatus: Boolean,
     val canSignIn: Boolean,
     val canSignOut: Boolean,
+    /** The sheet's "Playback quality" line (shared `PlaybackQualityLine`): who sets it; null for none. */
+    val qualityTitle: String? = null,
+    val qualityDetail: String? = null,
 )

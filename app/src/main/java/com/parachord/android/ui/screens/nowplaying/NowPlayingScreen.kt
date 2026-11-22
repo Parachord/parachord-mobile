@@ -57,6 +57,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -531,6 +533,21 @@ fun NowPlayingScreen(
                             availableSources = sources,
                             onSwitchSource = { resolver -> viewModel.switchSource(resolver) },
                         )
+                        // What the player actually selected for a plugin DRM
+                        // stream ("Dolby Atmos", "Lossless"); nothing otherwise.
+                        playbackState.playingQualityLabel?.let { label ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = PlayerTextSecondary,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .border(1.dp, PlayerTextSecondary.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
                     }
                 }
 

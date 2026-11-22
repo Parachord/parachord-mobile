@@ -115,6 +115,9 @@ class PlaybackController constructor(
         /** How long an auto-skip waits before skipping past a track that can't play ([scheduleAutoSkip]). */
         internal const val AUTO_SKIP_DELAY_MS = 600L
 
+        /** Quiet time after a volume-offset change before it is applied to the playing track. */
+        internal const val VOLUME_REAPPLY_DEBOUNCE_MS = 250L
+
         /**
          * How long a plugin DRM play may take to become audible after its
          * manifest (licence budget plus the first segments), desktop's
@@ -2252,6 +2255,39 @@ class PlaybackController constructor(
      * Deliberately NOT applied to the silence keepalive (`ctrl.volume = 0f`),
      * which must stay silent whatever the offsets say.
      */
+    private var volumeReapplyJob: Job? = null
+
+    /**
+     * An offset changed in Settings: if the track now playing came from that
+     * resolver, apply it at once (desktop's use-volume.js re-applies live), not
+     * from the next play. Debounced ([VOLUME_REAPPLY_DEBOUNCE_MS]) so a slider
+     * drag sends one Spotify request, not one per step. ExoPlayer's gain is set
+     * only while it plays a real track: the silent keep-alive loop stays at 0.
+     */
+    fun onResolverVolumeOffsetChanged(resolverId: String) {
+        volumeReapplyJob?.cancel()
+        volumeReapplyJob = scope.launch {
+            delay(VOLUME_REAPPLY_DEBOUNCE_MS)
+            val current = stateHolder.state.value.currentTrack?.resolver
+            if (!ResolverVolume.reappliesLive(resolverId, current)) return@launch
+            val fraction = resolverVolumeFraction(current)
+            try {
+                if (!isExternalPlayback) {
+                    controller?.volume = fraction
+                } else {
+                    activeEmbedHandler?.let {
+                        it.volumeFraction = fraction
+                        it.setVolume(fraction)
+                    }
+                    if (current == "spotify") router.getSpotifyHandler().reapplyConnectVolume()
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.d(TAG, "Live volume not applied (harmless): ${e.message}")
+            }
+        }
+    }
+
     private suspend fun resolverVolumeFraction(resolverId: String?): Float {
         val id = resolverId ?: return 1f
         return try {

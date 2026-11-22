@@ -29,6 +29,8 @@ class BandcampPlaybackHandler constructor(
 
     @Volatile override var volumeFraction: Float = 1f
 
+    override suspend fun setVolume(fraction: Float) = embed.setVolume(fraction)
+
     override var onFinished: (() -> Unit)?
         get() = embed.onFinished
         set(value) { embed.onFinished = value }

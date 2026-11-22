@@ -27,6 +27,9 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
@@ -122,6 +125,33 @@ class MusicKitWebBridge constructor(
 
     private val _configured = MutableStateFlow(false)
     val configured: StateFlow<Boolean> = _configured.asStateFlow()
+
+    /**
+     * Apple Music follows Settings › General › Playback Quality, as on
+     * desktop (`musickit-web.js setQuality`): Data saver is MusicKit's
+     * standard bitrate, every other level its high one (shared
+     * [com.parachord.shared.playback.drm.MusicKitQuality]). Applied after
+     * every configure ([configureOrFailure]) and whenever the setting
+     * changes while MusicKit is configured. Never from the polling loop.
+     */
+    private val qualityScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main)
+    private var qualityWatch: kotlinx.coroutines.Job? = null
+
+    /** From the first configure on: a changed setting reaches MusicKit at once. */
+    private fun watchQuality() {
+        if (qualityWatch != null) return
+        qualityWatch = qualityScope.launch {
+            settingsStore.playbackQuality.distinctUntilChanged().drop(1).collect { tier ->
+                if (_configured.value && webView != null) applyBitrate(tier)
+            }
+        }
+    }
+
+    private suspend fun applyBitrate(tier: com.parachord.shared.playback.drm.PlaybackQualityTier) {
+        val kbps = com.parachord.shared.playback.drm.MusicKitQuality.bitrateFor(tier)
+        val result = evaluate("setBitrate($kbps)")
+        Log.d(TAG, "Bitrate for ${tier.key}: $kbps → $result")
+    }
 
     private val _authorized = MutableStateFlow(false)
     val authorized: StateFlow<Boolean> = _authorized.asStateFlow()
@@ -577,6 +607,8 @@ class MusicKitWebBridge constructor(
             if (!success) Log.w(TAG, "configure() failed: ${parsed.error}")
             if (success) {
                 _configured.value = true
+                applyBitrate(settingsStore.getPlaybackQualitySettings().tier)
+                watchQuality()
                 if (parsed.authorized) {
                     Log.d(TAG, "Restored auth from saved music user token")
                     _authorized.value = true
