@@ -64,7 +64,7 @@ class PluginSignInPromptTest {
     }
 
     @Test
-    fun `not now — declined, quiet for the queue's own plays but not for the person's`() = runTest {
+    fun `not now — declined — quiet for the queue's own plays but not for the person's`() = runTest {
         val f = Fixture()
         val result = async { f.prompt.afterRefusal("amazonmusic", "Amazon Music", true) }
         runCurrent()
