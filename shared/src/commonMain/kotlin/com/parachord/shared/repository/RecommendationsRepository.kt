@@ -62,7 +62,10 @@ import kotlinx.serialization.json.JsonPrimitive
  *   [providerIsOn] (the platform's `pluginIsOn`) and that aren't in
  *   `recommendations_off_resolvers`; Last.fm and ListenBrainz only with a
  *   username. Content resolvers first in the user's resolver order, then
- *   meta-services.
+ *   meta-services. When that set changes (desktop's provider-set effect), a
+ *   provider switched off leaves the page at once, and one switched on is
+ *   asked by a new load that Home's throttle doesn't hold back (providers
+ *   with a fresh answer show it without a request).
  * - **Per provider:** 20 s each ([PROVIDER_TIMEOUT_MS]; a late answer is still
  *   applied and saved); fresh for an hour, shown while it refreshes for 7
  *   days; keyed to the account. An empty answer replaces the stored one but is
@@ -150,6 +153,12 @@ class RecommendationsRepository(
     private var aiInFlight = false
     /** When Shuffleupagus was last asked; a non-forced load doesn't ask again within [AI_RETRY_MS]. */
     private var lastAiAttemptMs: Long? = null
+    /**
+     * `recommendations_off_resolvers` as the page last applied it: null until
+     * a load (or the saved answers) put something on screen, so a change
+     * before then asks nobody.
+     */
+    private var offApplied: Set<String>? = null
 
     private val _page = MutableStateFlow(RecommendationPageState())
     val page: StateFlow<RecommendationPageState> = _page.asStateFlow()
@@ -161,6 +170,41 @@ class RecommendationsRepository(
     init {
         scope.launch { releaseDates.changes.collect { rebuild() } }
         scope.launch { images.changes.collect { rebuild() } }
+        scope.launch { settingsStore.getRecommendationsOffResolversFlow().collect { onRecommendationsOffChanged(it) } }
+    }
+
+    /**
+     * A "Use recommendations from X" switch changed (desktop's provider-set
+     * effect, which reloads when `recommendationsOffResolvers` changes). A
+     * provider switched off leaves the page at once; one switched on is asked
+     * by a new load that doesn't wait for Home's throttle, and that asks only
+     * the providers whose answer isn't fresh (the others show from the cache).
+     */
+    private suspend fun onRecommendationsOffChanged(off: Set<String>) {
+        val (turnedOff, reload) = mutex.withLock {
+            val applied = offApplied ?: return
+            if (applied == off) return
+            offApplied = off
+            val dropped = off - applied
+            val hadSections = shown.any { it.sections.isNotEmpty() }
+            if (dropped.isNotEmpty()) shown = shown.filter { it.resolverId !in off }
+            // A switch turned on, or the last provider with sections went: a
+            // load decides what the page says now.
+            dropped to ((applied - off).isNotEmpty() || (hadSections && shown.none { it.sections.isNotEmpty() }))
+        }
+        if (turnedOff.isNotEmpty()) {
+            _page.update { it.copy(pendingProviders = it.pendingProviders - turnedOff) }
+            rebuild()
+        }
+        if (reload) {
+            try {
+                loadProviders(force = false, join = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Recommendations reload after a switch failed: ${e.message}")
+            }
+        }
     }
 
     // ── Public surface ───────────────────────────────────────────────
@@ -258,11 +302,15 @@ class RecommendationsRepository(
         var failed = 0
     }
 
-    /** A non-forced load joins one already running (both old flows share one fetch); a forced one starts anew. */
-    private suspend fun loadProviders(force: Boolean): LoadOutcome {
+    /**
+     * A non-forced load joins one already running (both old flows share one
+     * fetch); a forced one starts anew, as does one with [join] false (a
+     * switch changed which providers to ask).
+     */
+    private suspend fun loadProviders(force: Boolean, join: Boolean = true): LoadOutcome {
         val job = mutex.withLock {
             val running = inFlight
-            if (!force && running != null && running.isActive) running
+            if (!force && join && running != null && running.isActive) running
             else scope.async { runLoad(force) }.also { inFlight = it }
         }
         return job.await()
@@ -296,6 +344,7 @@ class RecommendationsRepository(
         if (lastFm == null && listenBrainz == null && providers.none { !it.isMetaService } && !aiPossible) {
             mutex.withLock {
                 generation++
+                if (offApplied == null) offApplied = off
                 shown = emptyList()
                 providerNames = names
             }
@@ -314,6 +363,8 @@ class RecommendationsRepository(
         val now = nowMs()
         val toFetch = mutableListOf<RecommendationProvider>()
         val run = mutex.withLock {
+            // After the first load the switch watcher keeps it current.
+            if (offApplied == null) offApplied = off
             val run = LoadRun(++generation, providers)
             for (p in providers) {
                 val cached = cache[p.id]?.takeIf { it.account == accountFor(p.id, lastFm, listenBrainz) }
@@ -453,7 +504,9 @@ class RecommendationsRepository(
     private suspend fun applyFresh(run: LoadRun) {
         val applied = mutex.withLock {
             if (generation != run.generation) return@withLock false
-            shown = run.providers.mapNotNull { p ->
+            // A provider switched off since this load began stays off the page.
+            val off = offApplied.orEmpty()
+            shown = run.providers.filter { it.id !in off }.mapNotNull { p ->
                 (run.fresh[p.id] ?: run.stale[p.id])?.let { ProviderRecommendations(p.id, p.name, it.sections, p.canExpand) }
             }
             true
@@ -668,6 +721,7 @@ class RecommendationsRepository(
         val changed = mutex.withLock {
             if (diskLoaded) return@withLock false
             diskLoaded = true
+            if (offApplied == null) offApplied = off
             saved?.answers?.forEach { (id, answer) -> if (id !in cache) cache[id] = answer }
             if (shown.isNotEmpty()) return@withLock false
             shown = cache.values
