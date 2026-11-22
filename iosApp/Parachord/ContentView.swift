@@ -3391,6 +3391,10 @@ final class QueuePlaybackCoordinator {
                 // native Achordion submit sends EVERY high-confidence per-service link
                 // (incl. Bandcamp), not just the flat-field trio (#276).
                 container.updateScrobbleSources(trackId: track.id, sources: ranked ?? [])
+                // A local file with no other source: find its others once (#769).
+                resolverCache.fillLocalPlay(artist: track.artist, title: track.title, album: track.album,
+                                            playedResolver: playedResolver, isrc: track.isrc,
+                                            recordingMbid: track.recordingMbid)
                 if let service = refusal.service, playedResolver != "soundcloud" {
                     notice = Notice(message: PlaybackMessages.shared.playingViaInstead(service: service, playedResolver: playedResolver),
                                     showInCar: false)
