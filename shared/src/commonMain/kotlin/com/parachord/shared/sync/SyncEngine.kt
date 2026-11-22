@@ -2731,15 +2731,19 @@ class SyncEngine constructor(
                         unchanged++
                     }
                     localModified && remoteSnapshotId != localSnapshotId -> {
-                        val localIsNewer = localPlaylist.lastModified > existingSource.syncedAt
-                        if (localIsNewer) {
+                        if (hasRealLocalEdits(localPlaylist, existingSource)) {
                             pushPlaylist(localPlaylist, spotifyProvider)
                         } else {
                             pullPlaylist(localPlaylist, remote)
                         }
                         updated++
                     }
-                    localModified -> {
+                    // The flag alone isn't a local edit: a pull sets it to carry the
+                    // pulled tracks to the other mirrors (rule 1). Pushing those back
+                    // to the source they came from re-sent the whole list; Apple Music
+                    // can only append, so every cycle added the tracks again (#802).
+                    // Without a real edit it falls through: pull a changed remote, else unchanged.
+                    localModified && hasRealLocalEdits(localPlaylist, existingSource) -> {
                         pushPlaylist(localPlaylist, spotifyProvider)
                         updated++
                     }
@@ -3180,15 +3184,19 @@ class SyncEngine constructor(
                         unchanged++
                     }
                     localModified && remoteSnapshotId != localSnapshotId -> {
-                        val localIsNewer = localPlaylist.lastModified > existingSource.syncedAt
-                        if (localIsNewer) {
+                        if (hasRealLocalEdits(localPlaylist, existingSource)) {
                             pushPlaylist(localPlaylist, provider)
                         } else {
                             pullPlaylist(localPlaylist, remote, provider)
                         }
                         updated++
                     }
-                    localModified -> {
+                    // The flag alone isn't a local edit: a pull sets it to carry the
+                    // pulled tracks to the other mirrors (rule 1). Pushing those back
+                    // to the source they came from re-sent the whole list; Apple Music
+                    // can only append, so every cycle added the tracks again (#802).
+                    // Without a real edit it falls through: pull a changed remote, else unchanged.
+                    localModified && hasRealLocalEdits(localPlaylist, existingSource) -> {
                         pushPlaylist(localPlaylist, provider)
                         updated++
                     }
@@ -3252,6 +3260,16 @@ class SyncEngine constructor(
 
         return TypeSyncResult(added = added, removed = removed, updated = updated, unchanged = unchanged)
     }
+
+    /**
+     * Whether a playlist was edited here since its pull source last agreed with it,
+     * desktop's `hasRealLocalEdits` fallback (`sync-engine/auto-pull.js`). The
+     * `locallyModified` flag alone doesn't say so: a pull sets it so the push loop
+     * carries the pulled tracks to the other mirrors. A pull stamps `lastModified`
+     * before the source's `syncedAt`, so only an edit made after the pull is newer.
+     */
+    private fun hasRealLocalEdits(playlist: Playlist, source: SyncSource): Boolean =
+        playlist.locallyModified && playlist.lastModified > source.syncedAt
 
     /**
      * Sweep `locallyModified` playlists and clear the flag iff every
