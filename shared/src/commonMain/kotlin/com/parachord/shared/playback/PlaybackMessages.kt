@@ -22,6 +22,20 @@ object PlaybackMessages {
     fun playingViaInstead(service: String, playedResolver: String): String =
         "$service can't play this track here. Playing via ${resolverDisplayName(playedResolver)}."
 
+    /**
+     * A source picked by hand in Now Playing's switcher couldn't start
+     * ([failedSwitchKeepsPlayback]): [pickedResolver] is the one picked,
+     * [currentResolver] the one the track stays on (null when it isn't known),
+     * [playing] whether it's still playing (else it stays paused).
+     */
+    fun couldNotSwitchTo(pickedResolver: String, currentResolver: String?, playing: Boolean): String {
+        val failed = "Couldn’t play from ${resolverDisplayName(pickedResolver)}."
+        val current = currentResolver?.takeIf { it.isNotBlank() && !it.equals(pickedResolver, ignoreCase = true) }
+            ?: return failed
+        val name = resolverDisplayName(current)
+        return if (playing) "$failed Still playing from $name." else "$failed Staying on $name."
+    }
+
     /** The action that opens the track's page on [service] after it refused the track. */
     fun openIn(service: String): String = "Open in $service"
 

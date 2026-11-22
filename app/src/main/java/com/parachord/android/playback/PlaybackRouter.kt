@@ -54,7 +54,19 @@ class PlaybackRouter constructor(
      * Determine how to play a track and return the appropriate action.
      * Returns null if no handler can play this track.
      */
-    suspend fun route(track: TrackEntity): PlaybackAction? {
+    suspend fun route(track: TrackEntity): PlaybackAction? = route(track, stopActive = true)
+
+    /**
+     * [route], for a manual source switch when [stopActive] is false: the
+     * external handler that's playing is left alone (still
+     * [activeExternalHandler] unless another external handler takes over), so
+     * a switch whose new source fails can keep it playing. The controller then
+     * stops it once the new source has started.
+     */
+    suspend fun route(track: TrackEntity, stopActive: Boolean): PlaybackAction? {
+        suspend fun stopExternalPlayback() {
+            if (stopActive) this.stopExternalPlayback()
+        }
         // Capability lookups below (the html5Stream handler's, the
         // stream:false browser check) read the loaded plugin list; a cold start
         // with no screen yet (Android Auto) must not route on an empty list.
@@ -117,6 +129,15 @@ class PlaybackRouter constructor(
 
         Log.w(TAG, "No handler found for track: ${track.title} (resolver=${track.resolver}, sourceType=${track.sourceType})")
         return null
+    }
+
+    /**
+     * Makes [handler] the active external handler again without starting or
+     * stopping anything: a manual source switch that failed hands the
+     * playback back to the engine that kept playing.
+     */
+    fun restoreActiveExternalHandler(handler: ExternalPlaybackHandler?) {
+        activeExternalHandler = handler
     }
 
     /** Stop any externally-managed playback. */

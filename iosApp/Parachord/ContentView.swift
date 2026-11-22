@@ -3453,8 +3453,17 @@ final class QueuePlaybackCoordinator {
                 }
                 // On a deck switch, DON'T stop or skip: the user asked to
                 // change source, not to leave the song, so the current
-                // playback stays as it is.
-                if deckSwitch { break }
+                // playback stays as it is (shared `failedSwitchKeepsPlayback`),
+                // with the shared message saying so.
+                if deckSwitch {
+                    let current = playingPick?.trackId == track.id ? playingPick?.resolver : track.resolver
+                    NSLog("QUEUE '\(track.title)': switch to \(forcedResolver ?? "?") didn't start; staying on \(current ?? "?")")
+                    if let picked = forcedResolver {
+                        notice = Notice(message: PlaybackMessages.shared.couldNotSwitchTo(
+                            pickedResolver: picked, currentResolver: current, playing: isPlaying))
+                    }
+                    break
+                }
                 // What failed. Nothing could start because nothing could reach
                 // the network or answer (Apple Music failed to start, the
                 // device has no network, or the resolvers couldn't answer,
