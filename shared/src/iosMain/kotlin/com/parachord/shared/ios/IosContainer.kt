@@ -3631,10 +3631,12 @@ class IosContainer private constructor() {
     }
 
     /** Whether a not-signed-in refusal from [resolverId] would be asked about now. */
+    @Throws(Throwable::class)
     suspend fun wouldAskSignIn(resolverId: String, personAsked: Boolean): Boolean =
         pluginSignInPrompt.wouldAsk(resolverId, personAsked)
 
     /** Asks to sign in to [resolverId]; true = play the track again. [onMessage] gets the sign-in's words. */
+    @Throws(Throwable::class)
     suspend fun promptPluginSignIn(resolverId: String, personAsked: Boolean, onMessage: (String) -> Unit): Boolean {
         val name = pluginManager.plugins.value.firstOrNull { it.id == resolverId }?.name
             ?: com.parachord.shared.playback.resolverDisplayName(resolverId)
