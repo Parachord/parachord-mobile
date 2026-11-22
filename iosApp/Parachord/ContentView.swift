@@ -2037,7 +2037,14 @@ final class QueuePlaybackCoordinator {
         /// why its plug-in refused the track.
         var startFailedMessage: String?
         var refusedMessage: String?
+        /// A plug-in refused the track as not signed in and the sign-in
+        /// prompt will ask (#775): the route stopped there.
+        var signInResolver: String?
     }
+
+    /// The track a sign-in prompt already played again once (#775): a second
+    /// not-signed-in refusal for it isn't asked about.
+    @ObservationIgnored private var signInRetriedTrackId: String?
 
     /// A track on screen that no engine holds (the shared `LoadOnPlay`, as
     /// Android's slot): a queue restored paused at launch or given back
@@ -3400,7 +3407,7 @@ final class QueuePlaybackCoordinator {
             // failed request stop on the track for Play with its words (shared
             // START_FAILED); a plug-in that won't play it is a refused source.
             router.onPluginStreamFailed = { kind, message, service in
-                if kind == IosPluginStream.companion.REFUSED {
+                if kind == IosPluginStream.companion.REFUSED || kind == IosPluginStream.companion.NOT_SIGNED_IN {
                     if refusal.service == nil {
                         refusal.service = service; refusal.pageUrl = nil; refusal.reason = "plugin"
                         refusal.refusedMessage = message
@@ -3408,6 +3415,20 @@ final class QueuePlaybackCoordinator {
                 } else if refusal.startFailure == nil {
                     refusal.startFailure = .startFailed
                     refusal.startFailedMessage = message
+                }
+            }
+            // Not signed in to a plug-in (#775, desktop parachord#1523): ask
+            // first, unless this is a deck switch or the track was already
+            // played again after a sign-in.
+            let signInAlreadyRetried = signInRetriedTrackId == track.id
+            if signInAlreadyRetried { signInRetriedTrackId = nil }
+            if !deckSwitch, !signInAlreadyRetried {
+                let personAsked = !advancing
+                router.signInFirst = { resolver in
+                    let ask = (try? await IosContainer.companion.shared.wouldAskSignIn(
+                        resolverId: resolver, personAsked: personAsked))?.boolValue ?? false
+                    if ask { refusal.signInResolver = resolver }
+                    return ask
                 }
             }
             // The embeds' lock screen / CarPlay art: the cover the phone shows
@@ -3529,6 +3550,18 @@ final class QueuePlaybackCoordinator {
                     awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
                     return
                 }
+                // A plug-in says it isn't signed in (#775): stop on the track
+                // for Play and ask to sign in; after a sign-in (or the plug-in's
+                // quiet retry) it plays again, once, if nothing else was played
+                // meanwhile. "Not now" leaves it stopped; Play asks again.
+                if let resolver = refusal.signInResolver {
+                    NSLog("QUEUE '\(track.title)': \(resolver) says not signed in; asking to sign in")
+                    await haltActiveEngine()
+                    notice = Notice(message: refusal.refusedMessage ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE)
+                    awaitLoadOnPlay(track, aimedAtSec: aimedAtSec, pickedResolver: pickedResolver)
+                    askToSignIn(resolver: resolver, track: track, personAsked: !advancing)
+                    return
+                }
                 // On a deck switch, DON'T stop or skip: the user asked to
                 // change source, not to leave the song, so the current
                 // playback stays as it is (shared `failedSwitchKeepsPlayback`),
@@ -3623,6 +3656,25 @@ final class QueuePlaybackCoordinator {
                 advance(.skippedUnplayable)
             }
             isStarting = false
+        }
+    }
+
+    /// Asks to sign in to [resolver] (the shared `PluginSignInPrompt`, through
+    /// `RootView`'s alert) and, on a sign-in, presses Play on [track] once.
+    @MainActor
+    private func askToSignIn(resolver: String, track: Track, personAsked: Bool) {
+        let requests = playRequestCount
+        Task { @MainActor [weak self] in
+            let retry = (try? await IosContainer.companion.shared.promptPluginSignIn(
+                resolverId: resolver, personAsked: personAsked,
+                onMessage: { message in
+                    Task { @MainActor in self?.notice = Notice(message: message) }
+                }))?.boolValue ?? false
+            guard let self, retry, self.currentTrack?.id == track.id, self.playRequestCount == requests,
+                  !self.isStarting, self.loadOnPlay?.track.id == track.id else { return }
+            NSLog("QUEUE '\(track.title)': signed in to \(resolver); playing it again")
+            self.signInRetriedTrackId = track.id
+            self.togglePlayPause()
         }
     }
 

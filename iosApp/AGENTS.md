@@ -1623,7 +1623,11 @@ shared; iOS supplies AVPlayer and the sheet.
   (`PluginManager.requestStreamUrl`, the unique-key poll) and answers an
   `IosPluginStream`: `play` with the URL, `settings` / `startFailed` (stop on
   the track for Play with its message; `EmbedRefusal.startFailedMessage`), or
-  `refused` (another source, else the plug-in's words; `refusedMessage`).
+  `refused` (another source, else the plug-in's words; `refusedMessage`), or
+  `notSignedIn`, which the router's `signInFirst` turns into the sign-in prompt
+  when the shared `PluginSignInPrompt` would ask (root `CLAUDE.md` → "A play
+  refused as not signed in asks to sign in"; `RootView`'s alert, the
+  coordinator's `askToSignIn`), else a refused source.
 - **The URL lives for one play.** It goes to `IosAVPlayer.load` and nowhere
   else: the track, the resolver cache and the saved queue carry only the
   placeholder (`subsonic:track:<id>`), and the log line is

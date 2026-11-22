@@ -513,6 +513,15 @@ val androidModule = module {
             trackResolverCache = get(),
             settingsStore = get(),
             statusStore = lazy { get<com.parachord.shared.plugin.PluginStatusStore>() },
+            signInPrompt = lazy { get<com.parachord.shared.plugin.PluginSignInPrompt>() },
+        )
+    }
+    // Desktop's "sign in to X?" prompt after a not-signed-in refusal (#775, parachord#1523).
+    single {
+        com.parachord.shared.plugin.PluginSignInPrompt.create(
+            pluginManager = get(),
+            statusStore = get(),
+            screenShowing = { com.parachord.android.app.CurrentActivityHolder.current != null },
         )
     }
     singleOf(::BandcampEmbedBridge)

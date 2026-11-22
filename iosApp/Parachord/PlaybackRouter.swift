@@ -75,6 +75,10 @@ struct PlaybackRouter {
     /// `settings` / `startFailed` stop on the track with [message], `refused`
     /// is a refused source named [service]). The walk then moves on.
     var onPluginStreamFailed: ((_ kind: String, _ message: String, _ service: String) -> Void)? = nil
+    /// A plug-in refused its stream as not signed in (#775): true stops the
+    /// route here so the coordinator can ask to sign in (no other source is
+    /// tried); false (or unset) treats it as any refused source.
+    var signInFirst: ((_ resolver: String) async -> Bool)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -157,6 +161,10 @@ struct PlaybackRouter {
                     return .played(.avPlayer, resolver: source.resolver)
                 }
                 if stream.kind == IosPluginStream.companion.SUPERSEDED { return .noPlayableSource }
+                if stream.kind == IosPluginStream.companion.NOT_SIGNED_IN, let signInFirst, await signInFirst(resolver) {
+                    onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
+                    return .noPlayableSource
+                }
                 onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
 
             case let resolver where Self.avPlayerResolvers.contains(resolver):

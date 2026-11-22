@@ -49,6 +49,9 @@ struct ContentView: View {
     /// awaiting confirmation (queue add / clear).
     @State private var dlToast: String?
     @State private var dlConfirm: IosDeepLinkCommand?
+    /// "Sign in to X?" after a play a plug-in refused as not signed in (#775).
+    @State private var signInPrompt = SignInPromptModel()
+    @Environment(\.scenePhase) private var rootScenePhase
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -243,6 +246,22 @@ struct ContentView: View {
         // Links here instead of through .onOpenURL (#124/#138).
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             if let url = activity.webpageURL { handleUniversalLink(url) }
+        }
+        // Desktop's sign-in prompt (#775, parachord#1523): the shared
+        // PluginSignInPrompt's question. It asks only while Parachord is in
+        // front on the phone (`phoneAppInFront`).
+        .onAppear { IosContainer.companion.shared.phoneAppInFront = rootScenePhase == .active }
+        .onChange(of: rootScenePhase) { _, phase in
+            IosContainer.companion.shared.phoneAppInFront = phase == .active
+        }
+        .task { signInPrompt.start() }
+        .alert(signInPrompt.request?.title ?? "",
+               isPresented: Binding(get: { signInPrompt.request != nil },
+                                    set: { if !$0 { signInPrompt.answer(false) } })) {
+            Button(SignInPromptCopy.shared.DECLINE, role: .cancel) { signInPrompt.answer(false) }
+            Button(SignInPromptCopy.shared.CONFIRM) { signInPrompt.answer(true) }
+        } message: {
+            Text(signInPrompt.request?.message ?? "")
         }
         // Deep-link queue-mutation confirmation (#228 — parity with Android's
         // QueueAdd/QueueClear confirm dialogs).
@@ -845,4 +864,26 @@ struct SettingsDestination: Identifiable {
     let id = UUID()
     var service: String? = nil
     var tab: String? = nil
+}
+
+
+/// The shared `PluginSignInPrompt`'s pending question, for `RootView`'s alert (#775).
+@MainActor @Observable
+final class SignInPromptModel {
+    private(set) var request: SignInPromptRequest?
+    @ObservationIgnored private var watch: Cancellable?
+
+    func start() {
+        guard watch == nil else { return }
+        watch = IosContainer.companion.shared.watchSignInPrompt { [weak self] value in
+            Task { @MainActor in self?.request = value }
+        }
+    }
+
+    /// The person's answer; the alert closes either way.
+    func answer(_ signIn: Bool) {
+        guard let r = request else { return }
+        request = nil
+        IosContainer.companion.shared.answerSignInPrompt(requestId: r.requestId, signIn: signIn)
+    }
 }
